@@ -295,7 +295,7 @@ impl Default for Config {
             raft_ready_size_limit: ReadableSize::mb(1),
             raft_write_size_limit: ReadableSize::mb(1),
             waterfall_metrics: false,
-            io_reschedule_concurrent_max_count: 0,
+            io_reschedule_concurrent_max_count: 4,
             io_reschedule_hotpot_duration: ReadableDuration::secs(5),
 
             // They are preserved for compatibility check.
