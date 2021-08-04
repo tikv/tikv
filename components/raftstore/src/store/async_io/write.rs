@@ -236,8 +236,17 @@ where
                 self.state_size += std::mem::size_of::<RaftLocalState>();
             }
         }
-        self.readies
-            .insert(task.region_id, (task.peer_id, task.ready_number));
+        if let Some(prev_readies) = self
+            .readies
+            .insert(task.region_id, (task.peer_id, task.ready_number))
+        {
+            // The peer id must be same if they belong to the same region because
+            // the peer must be destroyed after all write tasks have been finished.
+            assert_eq!(prev_readies.0, task.peer_id);
+            // The ready number should be monotonically increasing.
+            assert!(prev_readies.1 < task.ready_number);
+        }
+
         self.tasks.push(task);
     }
 

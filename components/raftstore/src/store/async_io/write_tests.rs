@@ -16,11 +16,6 @@ use tempfile::Builder;
 
 use super::*;
 
-fn create_engines(path: &str) -> Engines<KvTestEngine, KvTestEngine> {
-    let path = Builder::new().prefix(path).tempdir().unwrap();
-    new_temp_engine(&path)
-}
-
 fn must_have_entries_and_state(
     raft_engine: &KvTestEngine,
     entries_state: Vec<(u64, Vec<Entry>, RaftLocalState)>,
@@ -232,7 +227,8 @@ impl TestWriters {
 
 #[test]
 fn test_worker() {
-    let engines = create_engines("async-io-worker");
+    let path = Builder::new().prefix("async-io-worker").tempdir().unwrap();
+    let engines = new_temp_engine(&path);
     let mut t = TestWorker::new(&Config::default(), &engines);
 
     let mut task_1 = WriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 10);
@@ -315,7 +311,8 @@ fn test_worker() {
 
 #[test]
 fn test_basic_flow() {
-    let engines = create_engines("async-io-basic");
+    let path = Builder::new().prefix("async-io-basic").tempdir().unwrap();
+    let engines = new_temp_engine(&path);
     let mut cfg = Config::default();
     cfg.store_io_pool_size = 2;
     let mut t = TestWriters::new(&cfg, &engines);
@@ -353,7 +350,7 @@ fn test_basic_flow() {
     put_kv(&mut task_3.kv_wb, b"kv_k3", b"kv_v3");
     delete_kv(&mut task_3.kv_wb, b"kv_k1");
     put_kv(&mut task_3.raft_wb, b"raft_k3", b"raft_v3");
-    delete_kv(&mut task_3.raft_wb, b"raft_k2");
+    delete_kv(&mut task_3.raft_wb, b"raft_k1");
     task_3.entries.append(&mut vec![new_entry(6, 6)]);
     task_3.cut_logs = Some((7, 8));
     task_3.raft_state = Some(new_raft_state(6, 345, 6, 6));
@@ -364,6 +361,16 @@ fn test_basic_flow() {
     t.write_sender(0).send(WriteMsg::WriteTask(task_3)).unwrap();
 
     must_wait_same_notifies(vec![(1, (1, 15)), (2, (2, 20))], &t.notify_rx);
+
+    let snapshot = engines.kv.snapshot();
+    assert!(snapshot.get_value(b"kv_k1").unwrap().is_none());
+    assert_eq!(snapshot.get_value(b"kv_k2").unwrap().unwrap(), b"kv_v2");
+    assert_eq!(snapshot.get_value(b"kv_k3").unwrap().unwrap(), b"kv_v3");
+
+    let snapshot = engines.raft.snapshot();
+    assert!(snapshot.get_value(b"raft_k1").unwrap().is_none());
+    assert_eq!(snapshot.get_value(b"raft_k2").unwrap().unwrap(), b"raft_v2");
+    assert_eq!(snapshot.get_value(b"raft_k3").unwrap().unwrap(), b"raft_v3");
 
     must_have_entries_and_state(
         &engines.raft,
