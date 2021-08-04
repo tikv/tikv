@@ -90,7 +90,7 @@ impl<S: EngineSnapshot> OldValueReader<S> {
         let mut opts = ReadOptions::new();
         opts.set_fill_cache(false);
         self.snapshot
-            .get_cf_opt(opts, CF_DEFAULT, &key)
+            .get_cf_opt(opts, CF_DEFAULT, key)
             .unwrap()
             .map(|v| v.deref().to_vec())
     }

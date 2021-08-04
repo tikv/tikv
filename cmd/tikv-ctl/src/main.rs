@@ -1926,7 +1926,7 @@ fn main() {
 
     // Bypass the ldb command to RocksDB.
     if let Some(cmd) = matches.subcommand_matches("ldb") {
-        run_ldb_command(&cmd, &cfg);
+        run_ldb_command(cmd, &cfg);
         return;
     }
 
