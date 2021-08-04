@@ -8,8 +8,9 @@ use crate::Result;
 use collections::HashSet;
 use crossbeam::channel::unbounded;
 use engine_rocks::RocksWriteBatch;
-use engine_test::kv::{new_engine, KvTestEngine};
-use engine_traits::{Mutable, Peekable, WriteBatchExt, ALL_CFS};
+use engine_test::kv::KvTestEngine;
+use engine_test::new_temp_engine;
+use engine_traits::{Mutable, Peekable, WriteBatchExt};
 use kvproto::raft_serverpb::RaftMessage;
 use tempfile::Builder;
 
@@ -17,21 +18,7 @@ use super::*;
 
 fn create_engines(path: &str) -> Engines<KvTestEngine, KvTestEngine> {
     let path = Builder::new().prefix(path).tempdir().unwrap();
-    let kv_db = new_engine(
-        path.path().join("kv").to_str().unwrap(),
-        None,
-        ALL_CFS,
-        None,
-    )
-    .unwrap();
-    let raft_db = new_engine(
-        path.path().join("raft").to_str().unwrap(),
-        None,
-        ALL_CFS,
-        None,
-    )
-    .unwrap();
-    Engines::new(kv_db, raft_db)
+    new_temp_engine(&path)
 }
 
 fn must_have_entries_and_state(

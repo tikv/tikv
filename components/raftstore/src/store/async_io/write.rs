@@ -33,7 +33,7 @@ use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
 use raft::eraftpb::Entry;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Instant};
-use tikv_util::{box_err, debug, thd_name, warn};
+use tikv_util::{box_err, debug, info, thd_name, warn};
 
 const KV_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const KV_WB_DEFAULT_SIZE: usize = 16 * 1024;
@@ -262,8 +262,7 @@ where
 
     fn before_write_to_db(&mut self, metrics: &StoreWriteMetrics) {
         // Put raft state to raft writebatch
-        let raft_states = std::mem::take(&mut self.raft_states);
-        for (region_id, state) in raft_states {
+        for (region_id, state) in self.raft_states.drain() {
             self.raft_wb.put_raft_state(region_id, &state).unwrap();
         }
         self.state_size = 0;
@@ -582,6 +581,7 @@ where
                 trans.clone(),
                 cfg,
             );
+            info!("starting store writer {}", i);
             let t = thread::Builder::new().name(thd_name!(tag)).spawn(move || {
                 worker.run();
             })?;
@@ -594,6 +594,7 @@ where
     pub fn shutdown(&mut self) {
         assert_eq!(self.writers.len(), self.handlers.len());
         for (i, handler) in self.handlers.drain(..).enumerate() {
+            info!("stopping store writer {}", i);
             self.writers[i].send(WriteMsg::Shutdown).unwrap();
             handler.join().unwrap();
         }
