@@ -31,7 +31,7 @@ use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
 use raft::eraftpb::Entry;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Instant};
-use tikv_util::{box_err, debug, thd_name, warn};
+use tikv_util::{box_err, debug, info, thd_name, warn};
 
 const KV_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const KV_WB_DEFAULT_SIZE: usize = 16 * 1024;
@@ -234,8 +234,27 @@ where
                 self.state_size += std::mem::size_of::<RaftLocalState>();
             }
         }
-        self.readies
-            .insert(task.region_id, (task.peer_id, task.ready_number));
+        if let Some(prev_readies) = self
+            .readies
+            .insert(task.region_id, (task.peer_id, task.ready_number))
+        {
+            // The peer id must be same if they belong to the same region because
+            // the peer must be destroyed after all write tasks have been finished.
+            if task.peer_id != prev_readies.0 {
+                panic!(
+                    "task has a different peer id, region {} peer_id {} != prev_peer_id {}",
+                    task.region_id, task.peer_id, prev_readies.0
+                );
+            }
+            // The ready number must be monotonically increasing.
+            if task.ready_number <= prev_readies.1 {
+                panic!(
+                    "task has a smaller ready number, region {} peer_id {} ready_number {} <= prev_ready_number {}",
+                    task.region_id, task.peer_id, task.ready_number, prev_readies.1
+                );
+            }
+        }
+
         self.tasks.push(task);
     }
 
@@ -260,8 +279,7 @@ where
 
     fn before_write_to_db(&mut self, metrics: &StoreWriteMetrics) {
         // Put raft state to raft writebatch
-        let raft_states = std::mem::take(&mut self.raft_states);
-        for (region_id, state) in raft_states {
+        for (region_id, state) in self.raft_states.drain() {
             self.raft_wb.put_raft_state(region_id, &state).unwrap();
         }
         self.state_size = 0;
@@ -368,44 +386,26 @@ where
     fn run(&mut self) {
         let mut stopped = false;
         while !stopped {
-            let mut handle_begin = None;
+            let handle_begin = match self.receiver.recv() {
+                Ok(msg) => {
+                    let now = Instant::now();
+                    stopped |= self.handle_msg(msg);
+                    now
+                }
+                Err(_) => return,
+            };
 
-            let mut first_time = true;
             while self.batch.get_raft_size() < self.raft_write_size_limit {
-                let msg = if first_time {
-                    first_time = false;
-                    match self.receiver.recv() {
-                        Ok(msg) => {
-                            handle_begin = Some(Instant::now());
-                            msg
-                        }
-                        Err(_) => {
-                            stopped = true;
-                            break;
-                        }
+                match self.receiver.try_recv() {
+                    Ok(msg) => {
+                        stopped |= self.handle_msg(msg);
                     }
-                } else {
-                    match self.receiver.try_recv() {
-                        Ok(msg) => msg,
-                        Err(TryRecvError::Empty) => break,
-                        Err(TryRecvError::Disconnected) => {
-                            stopped = true;
-                            break;
-                        }
-                    }
-                };
-                match msg {
-                    WriteMsg::Shutdown => {
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
                         stopped = true;
                         break;
                     }
-                    WriteMsg::WriteTask(task) => {
-                        self.metrics
-                            .task_wait
-                            .observe(duration_to_sec(task.send_time.saturating_elapsed()));
-                        self.batch.add_write_task(task);
-                    }
-                }
+                };
             }
 
             if self.batch.is_empty() {
@@ -413,7 +413,7 @@ where
             }
 
             STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM
-                .observe(duration_to_sec(handle_begin.unwrap().saturating_elapsed()));
+                .observe(duration_to_sec(handle_begin.saturating_elapsed()));
 
             STORE_WRITE_TRIGGER_SIZE_HISTOGRAM.observe(self.batch.get_raft_size() as f64);
 
@@ -428,8 +428,22 @@ where
             }
 
             STORE_WRITE_LOOP_DURATION_HISTOGRAM
-                .observe(duration_to_sec(handle_begin.unwrap().saturating_elapsed()));
+                .observe(duration_to_sec(handle_begin.saturating_elapsed()));
         }
+    }
+
+    // Returns whether it's a shutdown msg.
+    fn handle_msg(&mut self, msg: WriteMsg<EK, ER>) -> bool {
+        match msg {
+            WriteMsg::Shutdown => return true,
+            WriteMsg::WriteTask(task) => {
+                self.metrics
+                    .task_wait
+                    .observe(duration_to_sec(task.send_time.saturating_elapsed()));
+                self.batch.add_write_task(task);
+            }
+        }
+        false
     }
 
     fn write_to_db(&mut self) {
@@ -441,6 +455,7 @@ where
             let now = Instant::now();
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
+            // TODO: Add perf context
             self.batch.kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!(
                     "store {}: {} failed to write to kv engine: {:?}",
@@ -580,6 +595,7 @@ where
                 trans.clone(),
                 cfg,
             );
+            info!("starting store writer {}", i);
             let t = thread::Builder::new().name(thd_name!(tag)).spawn(move || {
                 worker.run();
             })?;
@@ -592,6 +608,7 @@ where
     pub fn shutdown(&mut self) {
         assert_eq!(self.writers.len(), self.handlers.len());
         for (i, handler) in self.handlers.drain(..).enumerate() {
+            info!("stopping store writer {}", i);
             self.writers[i].send(WriteMsg::Shutdown).unwrap();
             handler.join().unwrap();
         }
