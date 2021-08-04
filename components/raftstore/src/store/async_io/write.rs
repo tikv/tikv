@@ -245,8 +245,9 @@ where
         // raft_wb doesn't have clear interface and it should be consumed by raft db before
         self.kv_wb.clear();
         self.raft_states.clear();
-        self.tasks.clear();
         self.state_size = 0;
+        self.tasks.clear();
+        self.readies.clear();
     }
 
     #[inline]
