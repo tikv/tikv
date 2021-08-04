@@ -409,8 +409,10 @@ impl<S: Snapshot> Drop for CmdEpochChecker<S> {
 
 #[derive(PartialEq, Debug)]
 pub struct SnapshotContext {
-    /// (The number of ready which has a snapshot, Whether this snapshot is scheduled)
-    pub ready_status: (u64, bool),
+    /// The number of ready which has a snapshot.
+    pub ready_number: u64,
+    /// Whether this snapshot is scheduled.
+    pub scheduled: bool,
     /// The message should be sent after snapshot is applied.
     pub msgs: Vec<RaftMessage>,
     pub persist_res: Option<PersistSnapshotResult>,
@@ -831,13 +833,33 @@ where
             }
         }
 
-        if self.get_store().is_applying_snapshot() && !self.mut_store().cancel_applying_snap() {
-            info!(
-                "stale peer is applying snapshot, will destroy next time";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-            return None;
+        if let Some(snap_ctx) = self.snap_ctx.as_ref() {
+            if !snap_ctx.scheduled {
+                info!(
+                    "stale peer is persisting snapshot, will destroy next time";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
+                return None;
+            }
+        }
+
+        if self.get_store().is_applying_snapshot() {
+            if !self.mut_store().cancel_applying_snap() {
+                info!(
+                    "stale peer is applying snapshot, will destroy next time";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
+                return None;
+            } else {
+                // The snapshot is canceled so the context should be None.
+                // Remember the snapshot should not be canceled and the context
+                // should be None only after applying snapshot in normal case.
+                // But here is safe becasue this peer is about to destroy and
+                // `pending_remove` will be true, namely no more ready will be fetched.
+                self.snap_ctx = None;
+            }
         }
 
         self.pending_remove = true;
@@ -1076,8 +1098,10 @@ where
         self.raft_group.mut_store()
     }
 
+    /// Whether the snapshot is handling.
+    /// See the comments of `check_snap_status` for more details.
     #[inline]
-    pub fn is_applying_snapshot(&self) -> bool {
+    pub fn is_handling_snapshot(&self) -> bool {
         self.snap_ctx.is_some() || self.get_store().is_applying_snapshot()
     }
 
@@ -1670,7 +1694,7 @@ where
             && self.pending_merge_state.is_none()
             // a peer which is applying snapshot will clean up its data and ingest a snapshot file,
             // during between the two operations a replica read could read empty data.
-            && !self.is_applying_snapshot()
+            && !self.is_handling_snapshot()
     }
 
     #[inline]
@@ -1705,7 +1729,7 @@ where
     /// Then it's valid to handle the next ready.
     fn check_snap_status<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
         if let Some(snap_ctx) = self.snap_ctx.as_ref() {
-            if !snap_ctx.ready_status.1 {
+            if !snap_ctx.scheduled {
                 // There is a snapshot from ready but it is not scheduled because the ready has
                 // not been persisted yet. We should wait for the notify of persisting ready and
                 // do not get a new ready.
@@ -1738,7 +1762,7 @@ where
 
                 if let Some(mut snap_ctx) = self.snap_ctx.take() {
                     // This snapshot must be scheduled
-                    assert!(snap_ctx.ready_status.1);
+                    assert!(snap_ctx.scheduled);
 
                     let raft_msgs = mem::take(&mut snap_ctx.msgs);
                     self.send_raft_msg(
@@ -2113,7 +2137,8 @@ where
                     raft_msgs: vec![],
                 });
                 self.snap_ctx = Some(SnapshotContext {
-                    ready_status: (ready.number(), false),
+                    ready_number: ready.number(),
+                    scheduled: false,
                     msgs,
                     persist_res: Some(PersistSnapshotResult {
                         prev_region: self.region().clone(),
@@ -2160,11 +2185,12 @@ where
         number: u64,
     ) -> PersistSnapshotResult {
         let snap_ctx = self.snap_ctx.as_mut().unwrap();
-        assert_eq!(snap_ctx.ready_status, (number, false));
-        // Schedule snapshot to apply
-        snap_ctx.ready_status.1 = true;
+        assert_eq!(snap_ctx.ready_number, number);
+        assert!(!snap_ctx.scheduled);
 
         let persist_res = snap_ctx.persist_res.take().unwrap();
+        // Schedule snapshot to apply
+        snap_ctx.scheduled = true;
         self.mut_store().persist_snapshot(&persist_res);
 
         // When applying snapshot, there is no log applied and not compacted yet.
@@ -2206,7 +2232,7 @@ where
         );
 
         assert!(
-            !self.is_applying_snapshot(),
+            !self.is_handling_snapshot(),
             "{} is applying snapshot when it is ready to handle committed entries",
             self.tag
         );
@@ -2562,7 +2588,7 @@ where
     ) -> bool {
         let mut has_ready = false;
 
-        if self.is_applying_snapshot() {
+        if self.is_handling_snapshot() {
             panic!("{} should not applying snapshot.", self.tag);
         }
 
@@ -3515,7 +3541,7 @@ where
         }
 
         #[allow(clippy::suspicious_operation_groupings)]
-        if self.is_applying_snapshot()
+        if self.is_handling_snapshot()
             || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
             // For followers whose disk is full.
