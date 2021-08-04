@@ -2648,7 +2648,10 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
             if start.starts_with(&[keys::DATA_PREFIX]) {
                 print_overlap_region(&pd_client, &start[1..], &end[1..]);
             } else if start.starts_with(&[keys::LOCAL_PREFIX]) {
-                println!("it isn't easy to handle local data, start key:{}", log_wrappers::Value(&start));
+                println!(
+                    "it isn't easy to handle local data, start key:{}",
+                    log_wrappers::Value(&start)
+                );
 
                 // consider the case that include both meta and user data
                 if end.starts_with(&[keys::DATA_PREFIX]) {
@@ -2667,11 +2670,11 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
     }
     println!("--------------------------------------------------------");
     println!("corruption analysis has completed");
-    println!("");
+    println!();
     println!("Maybe you are trying to start tikv-server without panic caused by file reading.");
-    println!("Then here is the method:");
-    println!("1.Use the subcommand `remove_sst_file` provided by ldb to delete the sst");
-    println!("2.Turn the related region into a tombstone");
+    println!("Here are the operations before starting tikv-server:");
+    println!("1. tikv-ctl ldb --db=<path/to/db> unsafe_remove_sst_file <xxx.sst>");
+    println!("2. tikv-ctl --db /path/to/tikv-data/db tombstone -r <region-id> --pd <endpoint>");
 }
 
 fn print_overlap_region(pd_client: &RpcClient, start: &[u8], end: &[u8]) {
