@@ -242,9 +242,19 @@ where
         {
             // The peer id must be same if they belong to the same region because
             // the peer must be destroyed after all write tasks have been finished.
-            assert_eq!(prev_readies.0, task.peer_id);
-            // The ready number should be monotonically increasing.
-            assert!(prev_readies.1 < task.ready_number);
+            if task.peer_id != prev_readies.0 {
+                panic!(
+                    "task has a different peer id, region {} peer_id {} != prev_peer_id {}",
+                    task.region_id, task.peer_id, prev_readies.0
+                );
+            }
+            // The ready number must be monotonically increasing.
+            if task.ready_number <= prev_readies.1 {
+                panic!(
+                    "task has a smaller ready number, region {} peer_id {} ready_number {} <= prev_ready_number {}",
+                    task.region_id, task.peer_id, task.ready_number, prev_readies.1
+                );
+            }
         }
 
         self.tasks.push(task);
@@ -378,44 +388,26 @@ where
     fn run(&mut self) {
         let mut stopped = false;
         while !stopped {
-            let mut handle_begin = None;
+            let handle_begin = match self.receiver.recv() {
+                Ok(msg) => {
+                    let now = Instant::now();
+                    stopped |= self.handle_msg(msg);
+                    now
+                }
+                Err(_) => return,
+            };
 
-            let mut first_time = true;
             while self.batch.get_raft_size() < self.raft_write_size_limit {
-                let msg = if first_time {
-                    first_time = false;
-                    match self.receiver.recv() {
-                        Ok(msg) => {
-                            handle_begin = Some(Instant::now());
-                            msg
-                        }
-                        Err(_) => {
-                            stopped = true;
-                            break;
-                        }
+                match self.receiver.try_recv() {
+                    Ok(msg) => {
+                        stopped |= self.handle_msg(msg);
                     }
-                } else {
-                    match self.receiver.try_recv() {
-                        Ok(msg) => msg,
-                        Err(TryRecvError::Empty) => break,
-                        Err(TryRecvError::Disconnected) => {
-                            stopped = true;
-                            break;
-                        }
-                    }
-                };
-                match msg {
-                    WriteMsg::Shutdown => {
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
                         stopped = true;
                         break;
                     }
-                    WriteMsg::WriteTask(task) => {
-                        self.metrics
-                            .task_wait
-                            .observe(duration_to_sec(task.send_time.saturating_elapsed()));
-                        self.batch.add_write_task(task);
-                    }
-                }
+                };
             }
 
             if self.batch.is_empty() {
@@ -423,7 +415,7 @@ where
             }
 
             STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM
-                .observe(duration_to_sec(handle_begin.unwrap().saturating_elapsed()));
+                .observe(duration_to_sec(handle_begin.saturating_elapsed()));
 
             STORE_WRITE_TRIGGER_SIZE_HISTOGRAM.observe(self.batch.get_raft_size() as f64);
 
@@ -438,8 +430,22 @@ where
             }
 
             STORE_WRITE_LOOP_DURATION_HISTOGRAM
-                .observe(duration_to_sec(handle_begin.unwrap().saturating_elapsed()));
+                .observe(duration_to_sec(handle_begin.saturating_elapsed()));
         }
+    }
+
+    // Returns whether it's a shutdown msg.
+    fn handle_msg(&mut self, msg: WriteMsg<EK, ER>) -> bool {
+        match msg {
+            WriteMsg::Shutdown => return true,
+            WriteMsg::WriteTask(task) => {
+                self.metrics
+                    .task_wait
+                    .observe(duration_to_sec(task.send_time.saturating_elapsed()));
+                self.batch.add_write_task(task);
+            }
+        }
+        false
     }
 
     fn write_to_db(&mut self) {
@@ -451,6 +457,7 @@ where
             let now = Instant::now();
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
+            // TODO: Add perf context
             self.batch.kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!(
                     "store {}: {} failed to write to kv engine: {:?}",
