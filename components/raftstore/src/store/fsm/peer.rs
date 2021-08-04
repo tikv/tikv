@@ -127,8 +127,6 @@ where
     // Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
 
-    max_inflight_msgs: usize,
-
     trace: PeerMemoryTrace,
 }
 
@@ -236,7 +234,6 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
-                max_inflight_msgs: cfg.raft_max_inflight_msgs,
                 trace: PeerMemoryTrace::default(),
             }),
         ))
@@ -281,7 +278,6 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
-                max_inflight_msgs: cfg.raft_max_inflight_msgs,
                 trace: PeerMemoryTrace::default(),
             }),
         ))
@@ -317,6 +313,9 @@ where
 
     pub fn reset_hibernate_state(&mut self, state: GroupState) {
         self.hibernate_state.reset(state);
+        if state == GroupState::Idle {
+            self.peer.raft_group.raft.maybe_free_inflight_buffers();
+        }
     }
 
     pub fn maybe_hibernate(&mut self) -> bool {
@@ -4343,8 +4342,8 @@ mod memtrace {
 
         pub fn raft_progress_size(&self) -> usize {
             let peer_cnt = self.peer.region().get_peers().len();
-            let inflight_size = self.max_inflight_msgs * mem::size_of::<u64>();
-            mem::size_of::<Progress>() * peer_cnt * 6 / 5 + inflight_size * peer_cnt
+            mem::size_of::<Progress>() * peer_cnt * 6 / 5
+                + self.peer.raft_group.raft.inflight_buffers_size()
         }
     }
 }
