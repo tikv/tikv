@@ -12,9 +12,7 @@ use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
 };
-use engine_rocks::{
-    RocksEngine, RocksMvccProperties, RocksUserCollectedPropertiesNoRc, RocksWriteBatch,
-};
+use engine_rocks::{RocksEngine, RocksMvccProperties, RocksWriteBatch};
 use engine_traits::{
     KvEngine, MiscExt, Mutable, MvccProperties, WriteBatch, WriteBatchExt, WriteOptions,
 };
@@ -538,7 +536,7 @@ impl Drop for WriteCompactionFilter {
 
         #[cfg(any(test, feature = "failpoints"))]
         for callback in &self.callbacks_on_drop {
-            callback(&self);
+            callback(self);
         }
     }
 }
@@ -634,10 +632,7 @@ fn check_need_gc(
     let (mut sum_props, mut needs_gc) = (MvccProperties::new(), 0);
     for i in 0..context.file_numbers().len() {
         let table_props = context.table_properties(i);
-        let user_props = unsafe {
-            &*(table_props.user_collected_properties() as *const _
-                as *const RocksUserCollectedPropertiesNoRc)
-        };
+        let user_props = table_props.user_collected_properties();
         if let Ok(props) = RocksMvccProperties::decode(user_props) {
             sum_props.add(&props);
             let (sst_needs_gc, skip_more_checks) = check_props(&props);

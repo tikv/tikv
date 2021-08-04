@@ -20,7 +20,6 @@ pub trait KvEngine:
     + CFOptionsExt
     + ImportExt
     + SstExt
-    + TablePropertiesExt
     + CompactExt
     + RangePropertiesExt
     + MvccPropertiesExt
