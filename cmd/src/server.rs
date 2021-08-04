@@ -544,7 +544,8 @@ impl TiKVServer {
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
         let import_path = self.store_path.join("import");
-        let mut importer = SSTImporter::new(import_path, self.encryption_key_manager.clone()).unwrap();
+        let mut importer =
+            SSTImporter::new(import_path, self.encryption_key_manager.clone()).unwrap();
         for (cf_name, compression_type) in &[
             (
                 CF_DEFAULT,

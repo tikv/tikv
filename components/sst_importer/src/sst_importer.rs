@@ -26,7 +26,6 @@ use engine_rocks::{encryption::get_env, RocksSstReader};
 use engine_traits::{
     CfName, EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey,
     SstCompressionType, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
-
 };
 use external_storage::{block_on_external_io, create_storage, url_of_backend, READ_BUF_SIZE};
 use tikv_util::file::sync_dir;
@@ -2002,7 +2001,10 @@ mod tests {
         let importer_dir = tempfile::tempdir().unwrap();
         let mut importer = SSTImporter::new(&importer_dir, None).unwrap();
         importer.set_compression_type(CF_DEFAULT, Some(SstCompressionType::Snappy));
-        assert_eq!(importer.get_compression_type(CF_DEFAULT), Some(SstCompressionType::Snappy));
+        assert_eq!(
+            importer.get_compression_type(CF_DEFAULT),
+            Some(SstCompressionType::Snappy),
+        );
         assert_eq!(importer.get_compression_type(CF_WRITE), None);
     }
 
