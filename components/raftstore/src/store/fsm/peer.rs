@@ -126,13 +126,12 @@ where
 
     /// Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
+
+    trace: PeerMemoryTrace,
+
     /// Destroy is delayed because of some unpersisted readies in Peer.
     /// Should call `destroy_peer` again after persisting all readies.
     delayed_destroy: Option<bool>,
-
-    max_inflight_msgs: usize,
-
-    trace: PeerMemoryTrace,
 }
 
 pub struct BatchRaftCmdRequestBuilder<E>
@@ -239,9 +238,8 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
-                delayed_destroy: None,
-                max_inflight_msgs: cfg.raft_max_inflight_msgs,
                 trace: PeerMemoryTrace::default(),
+                delayed_destroy: None,
             }),
         ))
     }
@@ -285,9 +283,8 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
-                delayed_destroy: None,
-                max_inflight_msgs: cfg.raft_max_inflight_msgs,
                 trace: PeerMemoryTrace::default(),
+                delayed_destroy: None,
             }),
         ))
     }
@@ -322,6 +319,9 @@ where
 
     pub fn reset_hibernate_state(&mut self, state: GroupState) {
         self.hibernate_state.reset(state);
+        if state == GroupState::Idle {
+            self.peer.raft_group.raft.maybe_free_inflight_buffers();
+        }
     }
 
     pub fn maybe_hibernate(&mut self) -> bool {
@@ -4428,8 +4428,8 @@ mod memtrace {
 
         pub fn raft_progress_size(&self) -> usize {
             let peer_cnt = self.peer.region().get_peers().len();
-            let inflight_size = self.max_inflight_msgs * mem::size_of::<u64>();
-            mem::size_of::<Progress>() * peer_cnt * 6 / 5 + inflight_size * peer_cnt
+            mem::size_of::<Progress>() * peer_cnt * 6 / 5
+                + self.peer.raft_group.raft.inflight_buffers_size()
         }
     }
 }
