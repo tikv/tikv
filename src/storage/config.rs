@@ -4,12 +4,14 @@
 
 use crate::server::ttl::TTLCheckerTask;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
+use crate::storage::txn::flow_controller::FlowController;
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use engine_rocks::RocksEngine;
-use engine_traits::{CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
+use engine_traits::{CFNamesExt, CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
 use libc::c_int;
 use std::error::Error;
+use std::sync::Arc;
 use tikv_util::config::{self, OptionReadableSize, ReadableDuration, ReadableSize};
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::worker::Scheduler;
@@ -55,7 +57,7 @@ pub struct Config {
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
 
-    pub disable_write_stall: bool,
+    pub enable_flow_control: bool,
     pub pending_compaction_bytes_soft_limit: u64,
     pub pending_compaction_bytes_hard_limit: u64,
     pub memtables_threshold: u64,
@@ -80,7 +82,7 @@ impl Default for Config {
             enable_ttl: false,
             ttl_check_poll_interval: ReadableDuration::hours(12),
             block_cache: BlockCacheConfig::default(),
-            disable_write_stall: true,
+            enable_flow_control: true,
             pending_compaction_bytes_soft_limit: ReadableSize::gb(128).0,
             pending_compaction_bytes_hard_limit: ReadableSize::gb(1024).0,
             memtables_threshold: 5,
@@ -110,6 +112,7 @@ pub struct StorageConfigManger {
     kvdb: RocksEngine,
     shared_block_cache: bool,
     ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
+    flow_controller: Arc<FlowController>,
 }
 
 impl StorageConfigManger {
@@ -117,11 +120,13 @@ impl StorageConfigManger {
         kvdb: RocksEngine,
         shared_block_cache: bool,
         ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
+        flow_controller: Arc<FlowController>,
     ) -> StorageConfigManger {
         StorageConfigManger {
             kvdb,
             shared_block_cache,
             ttl_checker_scheduler,
+            flow_controller,
         }
     }
 }
@@ -152,6 +157,23 @@ impl ConfigManager for StorageConfigManger {
             self.ttl_checker_scheduler
                 .schedule(TTLCheckerTask::UpdatePollInterval(interval.into()))
                 .unwrap();
+        } else if let Some(v) = change.remove("enable_flow_control") {
+            let enable: bool = v.into();
+            if enable {
+                for cf in self.kvdb.cf_names() {
+                    self.kvdb
+                        .set_options_cf(cf, &[("disable_write_stall", "true")])
+                        .unwrap();
+                }
+                self.flow_controller.enable();
+            } else {
+                for cf in self.kvdb.cf_names() {
+                    self.kvdb
+                        .set_options_cf(cf, &[("disable_write_stall", "false")])
+                        .unwrap();
+                }
+                self.flow_controller.disable();
+            }
         }
         Ok(())
     }

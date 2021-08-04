@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::f64::INFINITY;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
@@ -11,13 +11,12 @@ use std::u64;
 
 use collections::HashMap;
 use engine_rocks::FlowInfo;
-use engine_traits::{CFNamesExt, MiscExt};
+use engine_traits::{CFNamesExt, KvEngine, MiscExt};
 use rand::Rng;
 use tikv_util::time::{duration_to_sec, Consume, Instant, Limiter};
 
 use crate::storage::config::Config;
 use crate::storage::metrics::*;
-use crate::storage::Engine;
 
 const SPARE_TICK_DURATION: u64 = 1000; // 1000ms
 const RATIO_PRECISION: f64 = 10000000.0;
@@ -79,8 +78,14 @@ enum Trend {
 pub struct FlowController {
     discard_ratio: Arc<AtomicU64>,
     limiter: Arc<Limiter>,
-    tx: Sender<bool>,
+    tx: SyncSender<Msg>,
     handle: Option<std::thread::JoinHandle<()>>,
+}
+
+enum Msg {
+    Close,
+    Enable,
+    Disable,
 }
 
 impl Drop for FlowController {
@@ -90,7 +95,7 @@ impl Drop for FlowController {
             return;
         }
 
-        if let Err(e) = self.tx.send(true) {
+        if let Err(e) = self.tx.send(Msg::Close) {
             error!("send quit message for time monitor worker failed"; "err" => ?e);
             return;
         }
@@ -103,25 +108,39 @@ impl Drop for FlowController {
 }
 
 impl FlowController {
-    pub fn new<E: Engine>(
+    pub fn empty() -> Self {
+        let (tx, _rx) = mpsc::sync_channel(0);
+
+        Self {
+            discard_ratio: Arc::new(AtomicU64::new(0)),
+            limiter: Arc::new(Limiter::new(INFINITY)),
+            tx,
+            handle: None,
+        }
+    }
+
+    pub fn new<E: KvEngine>(
         config: &Config,
         engine: E,
-        flow_info_receiver: Option<Receiver<FlowInfo>>,
+        flow_info_receiver: Receiver<FlowInfo>,
     ) -> Self {
         let limiter = Arc::new(Limiter::new(INFINITY));
         let discard_ratio = Arc::new(AtomicU64::new(0));
         let checker = FlowChecker::new(config, engine, discard_ratio.clone(), limiter.clone());
-        let (tx, rx) = mpsc::channel();
-        let handle = if config.disable_write_stall {
-            Some(checker.start(rx, flow_info_receiver.unwrap()))
+        let (tx, rx) = mpsc::sync_channel(5);
+
+        tx.send(if config.enable_flow_control {
+            Msg::Enable
         } else {
-            None
-        };
+            Msg::Disable
+        })
+        .unwrap();
+
         Self {
             discard_ratio,
             limiter,
             tx,
-            handle,
+            handle: Some(checker.start(rx, flow_info_receiver)),
         }
     }
 
@@ -133,6 +152,14 @@ impl FlowController {
 
     pub fn consume(&self, bytes: usize) -> Consume {
         self.limiter.consume(bytes)
+    }
+
+    pub fn disable(&self) {
+        self.tx.send(Msg::Disable).unwrap();
+    }
+
+    pub fn enable(&self) {
+        self.tx.send(Msg::Enable).unwrap();
     }
 }
 
@@ -354,7 +381,7 @@ impl Default for CFFlowChecker {
     }
 }
 
-struct FlowChecker<E: Engine> {
+struct FlowChecker<E: KvEngine> {
     pending_compaction_bytes_soft_limit: u64,
     pending_compaction_bytes_hard_limit: u64,
     memtables_threshold: u64,
@@ -382,7 +409,7 @@ struct FlowChecker<E: Engine> {
     last_record_time: Instant,
 }
 
-impl<E: Engine> FlowChecker<E> {
+impl<E: KvEngine> FlowChecker<E> {
     pub fn new(
         config: &Config,
         engine: E,
@@ -391,7 +418,7 @@ impl<E: Engine> FlowChecker<E> {
     ) -> Self {
         let mut cf_checkers = map![];
 
-        for cf in engine.kv_engine().cf_names() {
+        for cf in engine.cf_names() {
             cf_checkers.insert(cf.to_owned(), CFFlowChecker::default());
         }
 
@@ -412,7 +439,7 @@ impl<E: Engine> FlowChecker<E> {
         }
     }
 
-    fn start(self, rx: Receiver<bool>, flow_info_receiver: Receiver<FlowInfo>) -> JoinHandle<()> {
+    fn start(self, rx: Receiver<Msg>, flow_info_receiver: Receiver<FlowInfo>) -> JoinHandle<()> {
         Builder::new()
             .name(thd_name!("flow-checker"))
             .spawn(move || {
@@ -420,7 +447,26 @@ impl<E: Engine> FlowChecker<E> {
                 let mut checker = self;
                 let mut deadline = std::time::Instant::now();
                 let mut spare_ticks = 0;
-                while rx.try_recv().is_err() {
+                let mut enabled = true;
+                loop {
+                    match rx.try_recv() {
+                        Ok(Msg::Close) => break,
+                        Ok(Msg::Disable) => {
+                            enabled = false;
+                            checker.reset_statistics();
+                        }
+                        Ok(Msg::Enable) => {
+                            enabled = true;
+                        }
+                        Err(_) => {}
+                    }
+
+                    if !enabled {
+                        // do nothing, just consume the flow info channel
+                        let _ = flow_info_receiver.recv();
+                        continue;
+                    }
+
                     match flow_info_receiver.recv_deadline(deadline) {
                         Ok(FlowInfo::L0(cf, l0_bytes)) => {
                             if let Some(throttle_cf) = checker.throttle_cf.as_ref() {
@@ -476,6 +522,32 @@ impl<E: Engine> FlowChecker<E> {
             .unwrap()
     }
 
+    fn reset_statistics(&mut self) {
+        SCHED_L0_TARGET_FLOW_GAUGE.set(0);
+        for (cf, _) in &self.cf_checkers {
+            SCHED_THROTTLE_CF_GAUGE.with_label_values(&[cf]).set(0);
+            SCHED_PENDING_COMPACTION_BYTES_GAUGE
+                .with_label_values(&[&cf])
+                .set(0);
+            SCHED_MEMTABLE_GAUGE.with_label_values(&[cf]).set(0);
+            SCHED_L0_GAUGE.with_label_values(&[&cf]).set(0);
+            SCHED_L0_AVG_GAUGE.with_label_values(&[&cf]).set(0);
+            SCHED_FLUSH_L0_GAUGE.with_label_values(&[&cf]).set(0);
+            SCHED_FLUSH_FLOW_GAUGE.with_label_values(&[&cf]).set(0);
+            SCHED_LONG_TERM_FLUSH_FLOW_GAUGE
+                .with_label_values(&[&cf])
+                .set(0);
+            SCHED_L0_FLOW_GAUGE.with_label_values(&[&cf]).set(0);
+            SCHED_UP_FLOW_GAUGE.set(0);
+            SCHED_DOWN_FLOW_GAUGE.set(0);
+        }
+        SCHED_WRITE_FLOW_GAUGE.set(0);
+        SCHED_THROTTLE_FLOW_GAUGE.set(0);
+        self.limiter.set_speed_limit(INFINITY);
+        SCHED_DISCARD_RATIO_GAUGE.set(0);
+        self.discard_ratio.store(0, Ordering::Relaxed);
+    }
+
     fn update_statistics(&mut self) {
         if self.last_target_file.is_some() {
             SCHED_L0_TARGET_FLOW_GAUGE.set(self.l0_target_flow as i64);
@@ -519,7 +591,6 @@ impl<E: Engine> FlowChecker<E> {
         // a relative small range
         let num = (self
             .engine
-            .kv_engine()
             .get_cf_pending_compaction_bytes(&cf)
             .unwrap_or(None)
             .unwrap_or(0) as f64)
@@ -574,7 +645,6 @@ impl<E: Engine> FlowChecker<E> {
     fn adjust_memtables(&mut self, cf: &String) {
         let num_memtables = self
             .engine
-            .kv_engine()
             .get_cf_num_memtables(cf)
             .unwrap_or(None)
             .unwrap_or(0);
@@ -690,7 +760,6 @@ impl<E: Engine> FlowChecker<E> {
     fn check_l0_files(&mut self, cf: String, l0_bytes: u64) {
         let num_l0_files = self
             .engine
-            .kv_engine()
             .get_cf_num_files_at_level(&cf, 0)
             .unwrap_or(None)
             .unwrap_or(0);
@@ -831,7 +900,6 @@ impl<E: Engine> FlowChecker<E> {
     fn check_flush_flow(&mut self, cf: String, flush_bytes: u64) {
         let num_l0_files = self
             .engine
-            .kv_engine()
             .get_cf_num_files_at_level(&cf, 0)
             .unwrap_or(None)
             .unwrap_or(0);
@@ -972,9 +1040,11 @@ impl<E: Engine> FlowChecker<E> {
 
 #[cfg(test)]
 mod tests {
+    use super::Smoother;
+
     #[test]
     fn test_smoother() {
-        let mut smoother = Smoother::<5>::new();
+        let mut smoother = Smoother::<5>::default();
         smoother.observe(1);
         smoother.observe(6);
         smoother.observe(2);

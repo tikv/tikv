@@ -75,7 +75,10 @@ use tikv::{
         ttl::TTLChecker,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
-    storage::{self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver, Engine},
+    storage::{
+        self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver,
+        txn::flow_controller::FlowController, Engine,
+    },
 };
 use tikv_util::{
     check_environment_variables,
@@ -497,6 +500,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let gc_worker = self.init_gc_worker();
         let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
         let ttl_scheduler = ttl_checker.scheduler();
+        let flow_controller = Arc::new(FlowController::new(
+            &self.config.storage,
+            self.engines.as_ref().unwrap().engine.kv_engine(),
+            self.flow_info_receiver.take().unwrap(),
+        ));
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
@@ -505,6 +513,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.engines.as_ref().unwrap().engine.kv_engine(),
                 self.config.storage.block_cache.shared,
                 ttl_scheduler,
+                flow_controller.clone(),
             )),
         );
 
@@ -571,7 +580,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             lock_mgr.clone(),
             self.concurrency_manager.clone(),
             lock_mgr.get_pipelined(),
-            self.flow_info_receiver.take(),
+            flow_controller,
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -974,9 +983,7 @@ impl TiKVServer<RocksEngine> {
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
-        if self.config.storage.disable_write_stall {
-            kv_db_opts.add_event_listener(self.create_flow_listener());
-        }
+        kv_db_opts.add_event_listener(self.create_flow_listener());
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
             &block_cache,
             Some(&self.region_info_accessor),

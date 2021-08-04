@@ -3,7 +3,7 @@
 //! Storage Transactions
 
 pub mod commands;
-mod flow_controller;
+pub mod flow_controller;
 pub mod sched_pool;
 pub mod scheduler;
 

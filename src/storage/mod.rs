@@ -64,6 +64,7 @@ use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::mvcc::MvccReader;
 use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSwap};
+use crate::storage::txn::flow_controller::FlowController;
 
 use crate::storage::{
     config::Config,
@@ -76,7 +77,6 @@ use crate::storage::{
     types::StorageCallbackType,
 };
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::FlowInfo;
 use engine_traits::{CfName, CF_DEFAULT, DATA_CFS};
 use futures::prelude::*;
 use kvproto::kvrpcpb::{
@@ -200,7 +200,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         lock_mgr: L,
         concurrency_manager: ConcurrencyManager,
         pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
-        flow_info_receiver: Option<std::sync::mpsc::Receiver<FlowInfo>>,
+        flow_controller: Arc<FlowController>,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -208,7 +208,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             concurrency_manager.clone(),
             config,
             pipelined_pessimistic_lock,
-            flow_info_receiver,
+            flow_controller,
         );
 
         info!("Storage started.");
@@ -1776,7 +1776,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             self.lock_mgr,
             ConcurrencyManager::new(1.into()),
             self.pipelined_pessimistic_lock,
-            None,
+            Arc::new(FlowController::empty()),
         )
     }
 }

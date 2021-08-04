@@ -436,12 +436,13 @@ checksum = "b700ce4376041dcd0a327fd0097c41095743c4c8af8887265942faf1100bd040"
 
 [[package]]
 name = "bzip2-sys"
-version = "0.1.8+1.0.8"
+version = "0.1.11+1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05305b41c5034ff0e93937ac64133d109b5a2660114ec45e9760bc6816d83038"
+checksum = "736a955f3fa7875102d57c82b8cac37ec45224a07fd32d58f9f7a186b6cd4cdc"
 dependencies = [
  "cc",
  "libc 0.2.86",
+ "pkg-config",
 ]
 
 [[package]]
@@ -2203,7 +2204,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=disable-intra#83c099ebf55a6a0186b6bb66c2c7d726f2b66e33"
+source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=disable-intra#6b848868531d03d0a34394f267cf897285b2bd3a"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2222,7 +2223,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=disable-intra#83c099ebf55a6a0186b6bb66c2c7d726f2b66e33"
+source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=disable-intra#6b848868531d03d0a34394f267cf897285b2bd3a"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3928,7 +3929,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=disable-intra#83c099ebf55a6a0186b6bb66c2c7d726f2b66e33"
+source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=disable-intra#6b848868531d03d0a34394f267cf897285b2bd3a"
 dependencies = [
  "libc 0.2.86",
  "librocksdb_sys",

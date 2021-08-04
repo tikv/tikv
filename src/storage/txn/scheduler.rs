@@ -23,13 +23,11 @@
 use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::u64;
 
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
-use engine_rocks::FlowInfo;
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
 use tikv_util::{callback::must_call, time::Instant};
 use txn_types::TimeStamp;
@@ -160,7 +158,7 @@ struct SchedulerInner<L: LockManager> {
     // used to control write flow
     running_write_bytes: CachePadded<AtomicUsize>,
 
-    flow_controller: FlowController,
+    flow_controller: Arc<FlowController>,
 
     lock_mgr: L,
 
@@ -261,7 +259,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         concurrency_manager: ConcurrencyManager,
         config: &Config,
         pipelined_pessimistic_lock: Arc<AtomicBool>,
-        flow_info_receiver: Option<Receiver<FlowInfo>>,
+        flow_controller: Arc<FlowController>,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -289,7 +287,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             concurrency_manager,
             pipelined_pessimistic_lock,
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
-            flow_controller: FlowController::new(config, engine.clone(), flow_info_receiver),
+            flow_controller,
         });
 
         slow_log!(t.elapsed(), "initialized the transaction scheduler");

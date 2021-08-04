@@ -51,6 +51,7 @@ use tikv::server::{
     Server, ServerTransport,
 };
 use tikv::storage;
+use tikv::storage::txn::flow_controller::FlowController;
 use tikv::{
     config::{ConfigController, TiKvConfig},
     server::raftkv::ReplicaReadLockChecker,
@@ -276,7 +277,7 @@ impl Simulator for ServerCluster {
             lock_mgr.clone(),
             concurrency_manager.clone(),
             lock_mgr.get_pipelined(),
-            None,
+            Arc::new(FlowController::empty()),
         )?;
         self.storages.insert(node_id, raft_engine);
 
