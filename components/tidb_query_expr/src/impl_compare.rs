@@ -106,7 +106,7 @@ impl<F: CmpOp> Comparer for UintIntComparer<F> {
                 let ordering = if *rhs < 0 || *lhs as u64 > std::i64::MAX as u64 {
                     Ordering::Greater
                 } else {
-                    lhs.cmp(&rhs)
+                    lhs.cmp(rhs)
                 };
                 Some(F::compare_order(ordering) as i64)
             }
@@ -130,7 +130,7 @@ impl<F: CmpOp> Comparer for IntUintComparer<F> {
                 let ordering = if *lhs < 0 || *rhs as u64 > std::i64::MAX as u64 {
                     Ordering::Less
                 } else {
-                    lhs.cmp(&rhs)
+                    lhs.cmp(rhs)
                 };
                 Some(F::compare_order(ordering) as i64)
             }
@@ -353,7 +353,7 @@ pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result
                             .map(|_| Ok(None))?;
                     }
                 };
-                match Time::parse_datetime(ctx, &s, Time::parse_fsp(&s), true) {
+                match Time::parse_datetime(ctx, s, Time::parse_fsp(s), true) {
                     Ok(t) => greatest = max(greatest, Some(t)),
                     Err(_) => {
                         return ctx
@@ -392,7 +392,7 @@ pub fn least_time(mut ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Resul
                             .map(|_| Ok(None))?;
                     }
                 };
-                match Time::parse_datetime(ctx, &s, Time::parse_fsp(&s), true) {
+                match Time::parse_datetime(ctx, s, Time::parse_fsp(s), true) {
                     Ok(t) => least = min(least, Some(t)),
                     Err(_) => {
                         return ctx

@@ -117,7 +117,7 @@ pub fn locate_2_args_utf8<C: Collator>(substr: BytesRef, s: BytesRef) -> Result<
     let offset = if C::IS_CASE_INSENSITIVE {
         find_str(&s.to_lowercase(), &substr.to_lowercase())
     } else {
-        find_str(&s, &substr)
+        find_str(s, substr)
     };
     Ok(Some(offset.map_or(0, |i| 1 + i as i64)))
 }
@@ -146,7 +146,7 @@ pub fn locate_3_args_utf8<C: Collator>(
     let offset = if C::IS_CASE_INSENSITIVE {
         find_str(&s[start..].to_lowercase(), &substr.to_lowercase())
     } else {
-        find_str(&s[start..], &substr)
+        find_str(&s[start..], substr)
     };
     Ok(Some(offset.map_or(0, |i| pos + i as i64)))
 }
@@ -260,14 +260,14 @@ pub fn lpad(arg: BytesRef, len: &Int, pad: BytesRef, writer: BytesWriter) -> Res
             // Write full pads
             let num_pads = (target_len - arg.len()) / pad.len();
             for _ in 0..num_pads {
-                writer.partial_write(&pad);
+                writer.partial_write(pad);
             }
 
             // Write last incomplete pad (might be none)
             let last_pad_len = (target_len - arg.len()) % pad.len();
             writer.partial_write(&pad[..last_pad_len]);
 
-            writer.partial_write(&arg);
+            writer.partial_write(arg);
             Ok(writer.finish())
         }
     }
@@ -323,12 +323,12 @@ pub fn rpad(arg: BytesRef, len: &Int, pad: BytesRef, writer: BytesWriter) -> Res
         }
         Some(target_len) => {
             let mut writer = writer.begin();
-            writer.partial_write(&arg);
+            writer.partial_write(arg);
 
             // Write full pads
             let num_pads = (target_len - arg.len()) / pad.len();
             for _ in 0..num_pads {
-                writer.partial_write(&pad);
+                writer.partial_write(pad);
             }
 
             // Write last incomplete pad (might be none)
@@ -497,7 +497,7 @@ pub fn insert(
     }
     let mut ret = Vec::with_capacity(newstr.len() + s.len());
     ret.extend_from_slice(&s[0..upos - 1]);
-    ret.extend_from_slice(&newstr);
+    ret.extend_from_slice(newstr);
     ret.extend_from_slice(&s[upos + ulen - 1..]);
     Ok(writer.write(Some(ret)))
 }
@@ -671,7 +671,7 @@ fn elt_validator(expr: &tipb::Expr) -> Result<()> {
     assert!(children.len() >= 2);
     super::function::validate_expr_return_type(&children[0], EvalType::Int)?;
     for child in children.iter().skip(1) {
-        super::function::validate_expr_return_type(&child, EvalType::Bytes)?;
+        super::function::validate_expr_return_type(child, EvalType::Bytes)?;
     }
     Ok(())
 }
@@ -711,7 +711,7 @@ pub fn substring_index(
     let mut remaining_pattern_count = count.abs();
     let mut bound = 0;
     while remaining_pattern_count > 0 {
-        if let Some(offset) = finder(&remaining, delim) {
+        if let Some(offset) = finder(remaining, delim) {
             if count > 0 {
                 bound += offset + delim.len();
                 remaining = &s[bound..];
@@ -750,7 +750,7 @@ pub fn strcmp<C: Collator>(left: BytesRef, right: BytesRef) -> Result<Option<i64
 #[rpn_fn]
 #[inline]
 pub fn instr(s: BytesRef, substr: BytesRef) -> Result<Option<Int>> {
-    Ok(twoway::find_bytes(&s, &substr)
+    Ok(twoway::find_bytes(s, substr)
         .map(|i| 1 + i as i64)
         .or(Some(0)))
 }

@@ -232,7 +232,7 @@ impl FixtureBuilder {
         let mut store = Store::new();
         for row_index in 0..self.rows {
             store.begin();
-            let mut si = store.insert_into(&table);
+            let mut si = store.insert_into(table);
             for col_index in 0..columns.len() {
                 si = si.set(
                     &table[columns[col_index]],

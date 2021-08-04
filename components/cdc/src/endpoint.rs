@@ -904,7 +904,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             for (region_id, _) in regions {
                 if let Some(region) = meta.regions.get(&region_id) {
                     if let Some((term, leader_id)) = meta.leaders.get(&region_id) {
-                        let leader_store_id = find_store_id(&region, *leader_id);
+                        let leader_store_id = find_store_id(region, *leader_id);
                         if leader_store_id.is_none() {
                             continue;
                         }
