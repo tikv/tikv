@@ -20,7 +20,7 @@ use tikv_util::worker::LazyWorker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
-use cdc::{CdcObserver, MemoryQuota, Task, FeatureGate};
+use cdc::{CdcObserver, FeatureGate, MemoryQuota, Task};
 static INIT: Once = Once::new();
 
 pub fn init() {
@@ -223,7 +223,8 @@ impl TestSuite {
         };
         req.set_region_epoch(self.get_context(region_id).take_region_epoch());
         // Enable batch resolved ts feature.
-        req.mut_header().set_ticdc_version(FeatureGate::batch_resolved_ts().to_string());
+        req.mut_header()
+            .set_ticdc_version(FeatureGate::batch_resolved_ts().to_string());
         req
     }
 
