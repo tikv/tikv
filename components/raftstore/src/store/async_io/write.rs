@@ -411,6 +411,9 @@ where
                 continue;
             }
 
+            STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM
+                .observe(duration_to_sec(handle_begin.unwrap().saturating_elapsed()));
+
             STORE_WRITE_TRIGGER_SIZE_HISTOGRAM.observe(self.batch.get_raft_size() as f64);
 
             self.write_to_db();
