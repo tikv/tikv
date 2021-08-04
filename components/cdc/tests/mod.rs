@@ -20,7 +20,7 @@ use tikv_util::worker::LazyWorker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
-use cdc::{CdcObserver, MemoryQuota, Task};
+use cdc::{CdcObserver, MemoryQuota, Task, FeatureGate};
 static INIT: Once = Once::new();
 
 pub fn init() {
@@ -222,10 +222,8 @@ impl TestSuite {
             ..Default::default()
         };
         req.set_region_epoch(self.get_context(region_id).take_region_epoch());
-        // Assume batch resolved ts will be release in v4.0.7
-        // For easy of testing (nightly CI), we lower the gate to v4.0.6
-        // TODO bump the version when cherry pick to release branch.
-        req.mut_header().set_ticdc_version("4.0.6".into());
+        // Enable batch resolved ts feature.
+        req.mut_header().set_ticdc_version(FeatureGate::batch_resolved_ts().to_string());
         req
     }
 

@@ -166,6 +166,13 @@ bitflags::bitflags! {
     }
 }
 
+impl FeatureGate {
+    // Returns the first version (v4.0.8) that supports batch resolved ts.
+    pub fn batch_resolved_ts() -> semver::Version {
+        semver::Version::new(4, 0, 8)
+    }
+}
+
 pub struct Conn {
     id: ConnID,
     sink: Sink,
@@ -188,11 +195,6 @@ impl Conn {
 
     // TODO refactor into Error::Version.
     pub fn check_version_and_set_feature(&mut self, ver: semver::Version) -> Option<Compatibility> {
-        // Assume batch resolved ts will be release in v4.0.7
-        // For easy of testing (nightly CI), we lower the gate to v4.0.6
-        // TODO bump the version when cherry pick to release branch.
-        let v407_batch_resolved_ts = semver::Version::new(4, 0, 6);
-
         match &self.version {
             Some((version, _)) => {
                 if version == &ver {
@@ -209,7 +211,7 @@ impl Conn {
             }
             None => {
                 let mut features = FeatureGate::empty();
-                if v407_batch_resolved_ts <= ver {
+                if FeatureGate::batch_resolved_ts() <= ver {
                     features.toggle(FeatureGate::BATCH_RESOLVED_TS);
                 }
                 info!("cdc connection version";
