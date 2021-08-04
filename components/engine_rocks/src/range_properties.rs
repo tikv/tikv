@@ -24,7 +24,7 @@ impl RangePropertiesExt for RocksEngine {
         let start = &range.start_key;
         let end = &range.end_key;
         let (_, keys) =
-            get_range_entries_and_versions(self, CF_WRITE, &start, &end).unwrap_or_default();
+            get_range_entries_and_versions(self, CF_WRITE, start, end).unwrap_or_default();
         Ok(keys)
     }
 
@@ -65,8 +65,8 @@ impl RangePropertiesExt for RocksEngine {
                 .join(", ");
             info!(
                 "range contains too many keys";
-                "start" => log_wrappers::Value::key(&range.start_key),
-                "end" => log_wrappers::Value::key(&range.end_key),
+                "start" => log_wrappers::Value::key(range.start_key),
+                "end" => log_wrappers::Value::key(range.end_key),
                 "total_keys" => total_keys,
                 "memtable" => mem_keys,
                 "ssts_keys" => ssts,
@@ -100,10 +100,10 @@ impl RangePropertiesExt for RocksEngine {
         let (_, mem_size) = box_try!(self.get_approximate_memtable_stats_cf(cfname, &range));
         total_size += mem_size;
 
-        let collection = box_try!(self.get_range_properties_cf(cfname, &start_key, &end_key));
+        let collection = box_try!(self.get_range_properties_cf(cfname, start_key, end_key));
         for (_, v) in collection.iter() {
             let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
-            total_size += props.get_approximate_size_in_range(&start_key, &end_key);
+            total_size += props.get_approximate_size_in_range(start_key, end_key);
         }
 
         if large_threshold != 0 && total_size > large_threshold {
@@ -111,7 +111,7 @@ impl RangePropertiesExt for RocksEngine {
                 .iter()
                 .map(|(k, v)| {
                     let props = RangeProperties::decode(v.user_collected_properties()).unwrap();
-                    let size = props.get_approximate_size_in_range(&start_key, &end_key);
+                    let size = props.get_approximate_size_in_range(start_key, end_key);
                     format!(
                         "{}:{}",
                         Path::new(&*k)
@@ -125,8 +125,8 @@ impl RangePropertiesExt for RocksEngine {
                 .join(", ");
             info!(
                 "range size is too large";
-                "start" => log_wrappers::Value::key(&range.start_key),
-                "end" => log_wrappers::Value::key(&range.end_key),
+                "start" => log_wrappers::Value::key(range.start_key),
+                "end" => log_wrappers::Value::key(range.end_key),
                 "total_size" => total_size,
                 "memtable" => mem_size,
                 "ssts_size" => ssts,
@@ -168,7 +168,7 @@ impl RangePropertiesExt for RocksEngine {
     ) -> Result<Vec<Vec<u8>>> {
         let start_key = &range.start_key;
         let end_key = &range.end_key;
-        let collection = box_try!(self.get_range_properties_cf(cfname, &start_key, &end_key));
+        let collection = box_try!(self.get_range_properties_cf(cfname, start_key, end_key));
 
         let mut keys = vec![];
         for (_, v) in collection.iter() {

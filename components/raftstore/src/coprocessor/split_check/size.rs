@@ -130,7 +130,7 @@ where
         let region_id = region.get_id();
         let region_size = match get_region_approximate_size(
             engine,
-            &region,
+            region,
             host.cfg.region_max_size.0 * host.cfg.batch_split_limit,
         ) {
             Ok(size) => size,
@@ -606,17 +606,20 @@ pub mod tests {
             engine.flush_cf(data_cf, true).unwrap();
         }
         let region = make_region(1, vec![], vec![]);
-        let split_keys = get_approximate_split_keys(&engine, &region, 0)
-            .unwrap()
-            .into_iter()
-            .map(|k| {
-                Key::from_encoded_slice(keys::origin_key(&k))
-                    .into_raw()
-                    .unwrap()
-            })
-            .collect::<Vec<Vec<u8>>>();
 
-        assert_eq!(split_keys.is_empty(), true);
+        assert_eq!(
+            get_approximate_split_keys(&engine, &region, 0)
+                .unwrap()
+                .into_iter()
+                .map(|k| {
+                    Key::from_encoded_slice(keys::origin_key(&k))
+                        .into_raw()
+                        .unwrap()
+                })
+                .next()
+                .is_none(),
+            true
+        );
         for i in 4..5 {
             let k = format!("key_{:03}", i).into_bytes();
             let k = keys::data_key(Key::from_raw(&k).as_encoded());

@@ -163,9 +163,9 @@ fn create_backend_inner(backend: &Backend) -> io::Result<Box<dyn ExternalStorage
         Backend::Gcs(config) => blob_store(GCSStorage::from_input(config.clone())?),
         Backend::CloudDynamic(dyn_backend) => match dyn_backend.provider_name.as_str() {
             #[cfg(feature = "cloud-aws")]
-            "aws" | "s3" => blob_store(S3Storage::from_cloud_dynamic(&dyn_backend)?),
+            "aws" | "s3" => blob_store(S3Storage::from_cloud_dynamic(dyn_backend)?),
             #[cfg(feature = "cloud-gcp")]
-            "gcp" | "gcs" => blob_store(GCSStorage::from_cloud_dynamic(&dyn_backend)?),
+            "gcp" | "gcs" => blob_store(GCSStorage::from_cloud_dynamic(dyn_backend)?),
             _ => {
                 return Err(bad_backend(Backend::CloudDynamic(dyn_backend.clone())));
             }
@@ -337,7 +337,7 @@ impl ExternalStorage for EncryptedExternalStorage {
         block_on_external_io(read_external_storage_into_file(
             &mut input,
             file_writer,
-            &speed_limiter,
+            speed_limiter,
             expected_length,
             min_read_speed,
         ))

@@ -188,7 +188,7 @@ mod tests {
             4:memory:/kubepods/burstable/poda2ebe2cd-64c7-11ea-8799-eeeeeeeeeeee/a026c487f1168b7f5442444ac8e35161dfcde87c175ef27d9a806270e267a575
             5:cpuacct,cpu:/kubepods/burstable/poda2ebe2cd-64c7-11ea-8799-eeeeeeeeeeee/a026c487f1168b7f5442444ac8e35161dfcde87c175ef27d9a806270e267a575
         "#;
-        let cgroups = parse_proc_cgroup_v1(&content);
+        let cgroups = parse_proc_cgroup_v1(content);
         assert_eq!(
             cgroups.get("memory").unwrap(),
             "/kubepods/burstable/poda2ebe2cd-64c7-11ea-8799-eeeeeeeeeeee/a026c487f1168b7f5442444ac8e35161dfcde87c175ef27d9a806270e267a575"
@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn test_parse_proc_cgroup_v2() {
         let content = "0::/test-all";
-        let cgroups = parse_proc_cgroup_v2(&content);
+        let cgroups = parse_proc_cgroup_v2(content);
         assert_eq!(cgroups.get("").unwrap(), "/test-all");
     }
 

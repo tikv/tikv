@@ -196,7 +196,7 @@ where
             // must execute after geting a snapshot from raftstore to make sure that the
             // current leader has applied to current term.
             for sst in ssts.iter() {
-                if !importer.exist(&sst) {
+                if !importer.exist(sst) {
                     warn!(
                         "sst [{:?}] not exist. we may retry an operation that has already succeeded",
                         sst

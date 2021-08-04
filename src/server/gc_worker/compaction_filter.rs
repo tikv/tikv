@@ -537,7 +537,7 @@ impl Drop for WriteCompactionFilter {
 
         #[cfg(any(test, feature = "failpoints"))]
         for callback in &self.callbacks_on_drop {
-            callback(&self);
+            callback(self);
         }
     }
 }
