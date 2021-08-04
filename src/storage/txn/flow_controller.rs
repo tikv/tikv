@@ -19,8 +19,9 @@ use crate::storage::config::Config;
 use crate::storage::metrics::*;
 
 const SPARE_TICK_DURATION: u64 = 1000; // 1000ms
-const RATIO_PRECISION: f64 = 10000000.0;
-const EMA_FACTOR: f64 = 0.6;
+const SPARE_TICKS_THRESHOLD: u64 = 10;
+const RATIO_SCALE_FACTOR: f64 = 10000000.0;
+const EMA_FACTOR: f64 = 0.6; // EMA stands for Exponential Moving Average
 const LIMIT_UP_PERCENT: f64 = 0.04; // 4%
 const LIMIT_DOWN_PERCENT: f64 = 0.02; // 2%
 const MIN_THROTTLE_SPEED: f64 = 16.0 * 1024.0; // 16KB
@@ -34,7 +35,6 @@ enum Trend {
     Increasing,
     Decreasing,
     NoTrend,
-    OnlyOne,
 }
 
 // Flow controller is used to throttle the write rate at scheduler level, aiming
@@ -145,9 +145,9 @@ impl FlowController {
     }
 
     pub fn should_drop(&self) -> bool {
-        let ratio = self.discard_ratio.load(Ordering::Relaxed) as f64 / RATIO_PRECISION;
+        let ratio = self.discard_ratio.load(Ordering::Relaxed);
         let mut rng = rand::thread_rng();
-        rng.gen::<f64>() < ratio
+        rng.gen::<f64>(ratio, RATIO_SCALE_FACTOR)
     }
 
     pub fn consume(&self, bytes: usize) -> Consume {
@@ -190,10 +190,10 @@ impl<const CAP: usize> Smoother<CAP> {
         self.total += record;
 
         self.records.push_back((record, Instant::now_coarse()));
-        self.clean_timeout();
+        self.remove_stale_records();
     }
 
-    fn clean_timeout(&mut self) {
+    fn remove_stale_records(&mut self) {
         // make sure there are two records left at least
         while self.records.len() > 2 {
             if self.records.front().unwrap().1.elapsed_secs() > SMOOTHER_STALE_RECORD_THRESHOLD {
@@ -245,16 +245,13 @@ impl<const CAP: usize> Smoother<CAP> {
         let mut left = 0.0;
         let mut right = 0.0;
         for (i, r) in self.records.iter().enumerate() {
-            if i + 1 < half {
+            if i < half {
                 left += r.0 as f64;
-            } else if i + 1 > half {
+            } else if self.records.len() - i - 1 < half {
                 right += r.0 as f64;
             } else {
-                if self.records.len() % 2 == 0 {
-                    left += r.0 as f64;
-                } else {
-                    continue;
-                }
+                left += r.0 as f64 / 2.0;
+                right += r.0 as f64 / 2.0;
             }
         }
         // use the two averages with the time span of oldest and latest records
@@ -270,10 +267,8 @@ impl<const CAP: usize> Smoother<CAP> {
     }
 
     pub fn trend(&self) -> Trend {
-        if self.records.len() == 0 {
+        if self.records.len() == 0 || self.records.len() == 1 {
             return Trend::NoTrend;
-        } else if self.records.len() == 1 {
-            return Trend::OnlyOne;
         }
 
         // calculate the average of left and right parts
@@ -281,20 +276,18 @@ impl<const CAP: usize> Smoother<CAP> {
         let mut left = 0;
         let mut right = 0;
         for (i, r) in self.records.iter().enumerate() {
-            if i + 1 < half {
-                left += r.0;
-            } else if i + 1 > half {
-                right += r.0;
+            if i < half {
+                left += r.0 as f64;
+            } else if self.records.len() - i - 1 < half {
+                right += r.0 as f64;
             } else {
-                if self.records.len() % 2 == 0 {
-                    left += r.0;
-                } else {
-                    continue;
-                }
+                left += r.0 as f64 / 2.0;
+                right += r.0 as f64 / 2.0;
             }
         }
 
         // decide if there is a trend by the two averages
+        // adding 2 here is to give a tolerance
         if right > left + 2 {
             Trend::Increasing
         } else if right < left - 2 {
@@ -380,6 +373,7 @@ impl Default for CFFlowChecker {
         }
     }
 }
+
 
 struct FlowChecker<E: KvEngine> {
     pending_compaction_bytes_soft_limit: u64,
@@ -503,7 +497,7 @@ impl<E: KvEngine> FlowChecker<E> {
                         }
                         Err(RecvTimeoutError::Timeout) => {
                             spare_ticks += 1;
-                            if spare_ticks == 30 {
+                            if spare_ticks == SPARE_TICKS_THRESHOLD {
                                 // there is no flush/compaction happens, we should speed up if throttled
                                 checker.tick_l0();
                                 spare_ticks = 0;
@@ -532,12 +526,12 @@ impl<E: KvEngine> FlowChecker<E> {
             SCHED_MEMTABLE_GAUGE.with_label_values(&[cf]).set(0);
             SCHED_L0_GAUGE.with_label_values(&[&cf]).set(0);
             SCHED_L0_AVG_GAUGE.with_label_values(&[&cf]).set(0);
+            SCHED_L0_FLOW_GAUGE.with_label_values(&[&cf]).set(0);
             SCHED_FLUSH_L0_GAUGE.with_label_values(&[&cf]).set(0);
             SCHED_FLUSH_FLOW_GAUGE.with_label_values(&[&cf]).set(0);
             SCHED_LONG_TERM_FLUSH_FLOW_GAUGE
                 .with_label_values(&[&cf])
                 .set(0);
-            SCHED_L0_FLOW_GAUGE.with_label_values(&[&cf]).set(0);
             SCHED_UP_FLOW_GAUGE.set(0);
             SCHED_DOWN_FLOW_GAUGE.set(0);
         }
@@ -573,6 +567,10 @@ impl<E: KvEngine> FlowChecker<E> {
         // calculate foreground write flow
         let rate =
             self.limiter.total_bytes_consumed() as f64 / self.last_record_time.elapsed_secs();
+        // don't record those write rate of 0. 
+        // For closed loop system, if all the requests are delayed(assume > 1s), 
+        // then in the next second, the write rate would be 0. But it doesn't 
+        // reflect the real write rate, so just ignore it.
         if self.limiter.total_bytes_consumed() != 0 {
             self.write_flow_recorder.observe(rate as u64);
         }
@@ -598,7 +596,7 @@ impl<E: KvEngine> FlowChecker<E> {
         let checker = self.cf_checkers.get_mut(&cf).unwrap();
         checker
             .long_term_pending_bytes
-            .observe((num * RATIO_PRECISION) as u64);
+            .observe((num * RATIO_SCALE_FACTOR) as u64);
         SCHED_PENDING_COMPACTION_BYTES_GAUGE
             .with_label_values(&[&cf])
             .set(checker.long_term_pending_bytes.get_avg() as i64);
@@ -615,11 +613,12 @@ impl<E: KvEngine> FlowChecker<E> {
             }
         }
 
-        let pending_compaction_bytes = checker.long_term_pending_bytes.get_avg() / RATIO_PRECISION;
+        let pending_compaction_bytes =
+            checker.long_term_pending_bytes.get_avg() / RATIO_SCALE_FACTOR;
         drop(checker);
 
         for (_, checker) in &self.cf_checkers {
-            if num < (checker.long_term_pending_bytes.get_recent() as f64) / RATIO_PRECISION {
+            if num < (checker.long_term_pending_bytes.get_recent() as f64) / RATIO_SCALE_FACTOR {
                 return;
             }
         }
@@ -633,10 +632,11 @@ impl<E: KvEngine> FlowChecker<E> {
             // Because pending compaction bytes changes up and down, so using
             // EMA(Exponential Moving Average) to smooth it.
             (if old_ratio != 0 {
-                EMA_FACTOR * (old_ratio as f64 / RATIO_PRECISION) + (1.0 - EMA_FACTOR) * new_ratio
+                EMA_FACTOR * (old_ratio as f64 / RATIO_SCALE_FACTOR)
+                    + (1.0 - EMA_FACTOR) * new_ratio
             } else {
                 new_ratio
-            } * RATIO_PRECISION) as u64
+            } * RATIO_SCALE_FACTOR) as u64
         };
         SCHED_DISCARD_RATIO_GAUGE.set(ratio as i64);
         self.discard_ratio.store(ratio, Ordering::Relaxed);
@@ -710,7 +710,7 @@ impl<E: KvEngine> FlowChecker<E> {
                 // keep, do nothing
                 0.0
             };
-            self.limiter.speed_limit() + diff
+            self.limiter.speed_limit() + diff * 1024 * 1024
         };
 
         self.update_speed_limit(throttle);
@@ -1009,7 +1009,7 @@ impl<E: KvEngine> FlowChecker<E> {
             } else if u < -self.limiter.speed_limit() * 3.0 * LIMIT_UP_PERCENT {
                 u = -self.limiter.speed_limit() * 3.0 * LIMIT_UP_PERCENT;
             };
-            SCHED_UP_FLOW_GAUGE.set((u * RATIO_PRECISION) as i64);
+            SCHED_UP_FLOW_GAUGE.set((u * RATIO_SCALE_FACTOR) as i64);
 
             self.limiter.speed_limit() + u
         };
@@ -1030,7 +1030,7 @@ impl<E: KvEngine> FlowChecker<E> {
             } else if u < -self.limiter.speed_limit() * LIMIT_DOWN_PERCENT {
                 u = -self.limiter.speed_limit() * LIMIT_DOWN_PERCENT;
             };
-            SCHED_DOWN_FLOW_GAUGE.set((u * RATIO_PRECISION) as i64);
+            SCHED_DOWN_FLOW_GAUGE.set((u * RATIO_SCALE_FACTOR) as i64);
 
             self.limiter.speed_limit() + u
         };
@@ -1051,11 +1051,14 @@ mod tests {
         smoother.observe(3);
         smoother.observe(4);
         smoother.observe(5);
+        assert_eq!(smoother.slope(), 1.0);
+
         smoother.observe(0);
 
         assert_eq!(smoother.get_avg(), 2.8);
         assert_eq!(smoother.get_recent(), 0);
         assert_eq!(smoother.get_max(), 5);
         assert_eq!(smoother.get_percentile_90(), 4);
+        assert_eq!(smoother.slope(), 0.0);
     }
 }
