@@ -53,7 +53,14 @@ impl CdcEvent {
                 // See https://play.golang.org/p/GFA9S-z_kUt
                 let approximate_region_id_bytes = 4;
                 let approximate_tso_bytes = 9;
-                r.regions.len() as u32 * approximate_region_id_bytes + approximate_tso_bytes
+                // Protobuf encoding adds a tag to every varints.
+                // protobuf::rt::tag_size(1 /* or 2, field number*/) yields 1.
+                let tag_bytes = 1;
+
+                // Byets of an array of region id.
+                r.regions.len() as u32 * (tag_bytes + approximate_region_id_bytes)
+                // Bytes of a TSO.
+                + (tag_bytes + approximate_tso_bytes)
             }
             CdcEvent::Event(ref e) => e.compute_size(),
             CdcEvent::Barrier(_) => 0,
@@ -583,5 +590,22 @@ mod tests {
         // though server should not be able to send messages infinitely.
         let window_size = must_fill_window();
         assert_ne!(window_size, 0);
+    }
+
+    #[test]
+    fn test_cdc_event_resolved_ts_size() {
+        // A typical region id.
+        let region_id = 4194304;
+        // A typical ts.
+        let ts = 426624231625982140;
+        for i in 0..17 {
+            let mut resolved_ts = ResolvedTs::default();
+            resolved_ts.ts = ts;
+            resolved_ts.regions = vec![region_id; 2usize.pow(i)];
+            assert_eq!(
+                resolved_ts.compute_size(),
+                CdcEvent::ResolvedTs(resolved_ts).size()
+            );
+        }
     }
 }
