@@ -111,14 +111,15 @@ impl Runnable for ResourceMeteringReporter {
     fn run(&mut self, task: Self::Task) {
         match task {
             Task::ConfigChange(new_config) => {
-                if !new_config.should_report() {
+                let old_config_enabled = self.config.enabled;
+                let old_config_agent_address = self.config.agent_address.clone();
+                self.config = new_config;
+                if !self.config.should_report() {
                     self.client.take();
                     self.cpu_records_collector.take();
-                    self.config = new_config;
-                } else if new_config.agent_address != self.config.agent_address
-                    || new_config.enabled != self.config.enabled
+                } else if self.config.agent_address != old_config_agent_address
+                    || self.config.enabled != old_config_enabled
                 {
-                    self.config = new_config;
                     self.init_client();
                 }
             }
