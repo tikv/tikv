@@ -17,6 +17,7 @@ use crate::store::metrics::*;
 use crossbeam::channel::{Sender, TrySendError};
 use engine_traits::{KvEngine, RaftEngine};
 
+use tikv_util::info;
 use tikv_util::time::Instant;
 
 const RETRY_SCHEDULE_MILLISECONS: u64 = 10;
@@ -75,6 +76,7 @@ where
         if self.should_send(ctx, last_unpersisted) {
             self.send(ctx, msg);
         } else {
+            STORE_IO_RESCHEDULE_PENDING_TASKS_TOTAL_GAUGE.inc();
             self.pending_write_msgs.push(msg);
         }
     }
@@ -97,6 +99,7 @@ where
 
         STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE.dec();
 
+        let pre_writer_id = self.writer_id;
         self.writer_id = rand::random::<usize>() % ctx.config().store_io_pool_size;
         self.chosen_time = Instant::now_coarse();
         self.next_retry_time = None;
@@ -104,6 +107,13 @@ where
 
         let msgs = mem::take(&mut self.pending_write_msgs);
 
+        info!(
+            "{} finishs io reschedule, from {} to {}, pending msg len {}",
+            self.tag,
+            pre_writer_id,
+            self.writer_id,
+            msgs.len()
+        );
         STORE_IO_RESCHEDULE_PENDING_TASKS_TOTAL_GAUGE.sub(msgs.len() as i64);
 
         for m in msgs {
@@ -180,6 +190,7 @@ where
             STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE.inc();
             // Rescheduling succeeds. The task should be pushed into `self.pending_write_msgs`.
             self.last_unpersisted = last_unpersisted;
+            info!("{} starts to io reschedule", self.tag);
             false
         } else {
             // Rescheduling fails at this time. Retry 10ms later.
