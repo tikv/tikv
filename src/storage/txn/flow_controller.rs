@@ -18,7 +18,7 @@ use tikv_util::time::{duration_to_sec, Consume, Instant, Limiter};
 use crate::storage::config::FlowControlConfig;
 use crate::storage::metrics::*;
 
-const SPARE_TICK_DURATION: u64 = 1000; // 1000ms
+const SPARE_TICK_DURATION: Duration = Duration::from_millis(1000);
 const SPARE_TICKS_THRESHOLD: u64 = 10;
 const RATIO_SCALE_FACTOR: f64 = 10000000.0;
 const EMA_FACTOR: f64 = 0.6; // EMA stands for Exponential Moving Average
@@ -316,7 +316,7 @@ impl<const CAP: usize> Smoother<CAP> {
 // And all of them are collected from the hook of RocksDB's event listener.
 struct CFFlowChecker {
     // Memtable related
-    last_num_memtables: Smoother<60>,
+    last_num_memtables: Smoother<20>,
     memtable_debt: f64,
     init_speed: bool,
 
@@ -513,8 +513,7 @@ impl<E: KvEngine> FlowChecker<E> {
                                 spare_ticks = 0;
                             }
                             checker.update_statistics();
-                            deadline = std::time::Instant::now()
-                                + Duration::from_millis(SPARE_TICK_DURATION);
+                            deadline = std::time::Instant::now() + SPARE_TICK_DURATION;
                         }
                         Err(e) => {
                             error!("failed to receive compaction info {:?}", e);
@@ -611,6 +610,7 @@ impl<E: KvEngine> FlowChecker<E> {
             .with_label_values(&[&cf])
             .set(checker.long_term_pending_bytes.get_avg() as i64);
 
+        // do special check on start, see the comment of the variable definition for detail.
         if checker.on_start_pending_bytes {
             if num < soft || checker.long_term_pending_bytes.trend() == Trend::Increasing {
                 // the write is accumulating, still need to throttle
@@ -642,7 +642,7 @@ impl<E: KvEngine> FlowChecker<E> {
                 EMA_FACTOR * (old_ratio as f64 / RATIO_SCALE_FACTOR)
                     + (1.0 - EMA_FACTOR) * new_ratio
             } else {
-                new_ratio
+                if new_ratio > 0.01 { 0.01 } else { new_ratio } // cap the initial discard ratio
             } * RATIO_SCALE_FACTOR) as u64
         };
         SCHED_DISCARD_RATIO_GAUGE.set(ratio as i64);
@@ -661,6 +661,8 @@ impl<E: KvEngine> FlowChecker<E> {
             .set(num_memtables as i64);
         let prev = checker.last_num_memtables.get_recent();
         checker.last_num_memtables.observe(num_memtables);
+
+        // do special check on start, see the comment of the variable definition for detail.
         if checker.on_start_memtable {
             if num_memtables < self.memtables_threshold
                 || checker.last_num_memtables.trend() == Trend::Increasing
@@ -787,6 +789,7 @@ impl<E: KvEngine> FlowChecker<E> {
             .with_label_values(&[&cf, "tick"])
             .inc();
 
+        // do special check on start, see the comment of the variable definition for detail.
         if checker.on_start_l0_files {
             if num_l0_files < self.l0_files_threshold
                 || checker.long_term_num_l0_files.trend() == Trend::Increasing
