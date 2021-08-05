@@ -396,6 +396,7 @@ mod tests {
                 lock_ttl: 2000,
                 min_commit_ts: 10.into(),
                 need_old_value: false,
+                is_retry_request: false,
             },
             Mutation::Put((k1.clone(), b"v4".to_vec())),
             &None,

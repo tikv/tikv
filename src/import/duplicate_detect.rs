@@ -127,7 +127,7 @@ impl<S: Snapshot> DuplicateDetector<S> {
                         end_commit_ts,
                     )?);
                 }
-                duplicate_pairs.push(self.make_kv_pair(&current_key, write_value, commit_ts)?);
+                duplicate_pairs.push(self.make_kv_pair(current_key, write_value, commit_ts)?);
             }
             if commit_ts <= self.min_commit_ts {
                 self.skip_all_version(&start_key)?;

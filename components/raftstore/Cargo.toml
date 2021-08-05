@@ -26,6 +26,7 @@ protobuf-codec = [
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
   "file_system/protobuf-codec",
+  "protobuf/bytes"
 ]
 prost-codec = [
   "prost",

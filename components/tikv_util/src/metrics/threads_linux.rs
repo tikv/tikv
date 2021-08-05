@@ -314,7 +314,7 @@ fn collect_metrics_by_name(
     let mut new_map: HashMap<String, u64> = HashMap::default();
     for (tid, name) in names {
         let new_value = new_map.entry(name.to_string()).or_insert(0);
-        if let Some(value) = values.get(&tid) {
+        if let Some(value) = values.get(tid) {
             *new_value += *value as u64;
         }
     }

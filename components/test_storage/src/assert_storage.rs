@@ -260,7 +260,7 @@ impl<E: Engine> AssertionStorage<E> {
     pub fn batch_get_command_ok(&self, keys: &[&[u8]], ts: u64, expect: Vec<&[u8]>) {
         let result: Vec<Option<Vec<u8>>> = self
             .store
-            .batch_get_command(self.ctx.clone(), &keys, ts)
+            .batch_get_command(self.ctx.clone(), keys, ts)
             .unwrap()
             .into_iter()
             .collect();
@@ -634,12 +634,12 @@ impl<E: Engine> AssertionStorage<E> {
         let start_key = if start_key.is_empty() {
             None
         } else {
-            Some(Key::from_raw(&start_key))
+            Some(Key::from_raw(start_key))
         };
         let end_key = if end_key.is_empty() {
             None
         } else {
-            Some(Key::from_raw(&end_key))
+            Some(Key::from_raw(end_key))
         };
 
         assert_eq!(

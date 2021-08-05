@@ -40,6 +40,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
+use prometheus::local::LocalHistogram;
 use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
 };
@@ -61,6 +62,7 @@ use crate::coprocessor::{
     Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
 };
 use crate::store::fsm::RaftPollerBuilder;
+use crate::store::local_metrics::RaftMetrics;
 use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
@@ -405,6 +407,9 @@ where
 
     /// The ssts waiting to be ingested in `write_to_db`.
     pending_ssts: Vec<SstMeta>,
+
+    apply_wait: LocalHistogram,
+    apply_time: LocalHistogram,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -455,6 +460,8 @@ where
             priority,
             yield_high_latency_operation: cfg.apply_batch_system.low_priority_pool_size > 0,
             pending_ssts: vec![],
+            apply_wait: APPLY_TASK_WAIT_TIME_HISTOGRAM.local(),
+            apply_time: APPLY_TIME_HISTOGRAM.local(),
         }
     }
 
@@ -547,9 +554,18 @@ where
         self.host
             .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
         // Invoke callbacks
+        let now = Instant::now();
         for (cb, resp) in cb_batch.drain(..) {
-            cb.invoke_with_response(resp)
+            if let Some(times) = cb.get_request_times() {
+                for t in times {
+                    self.apply_time
+                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
+                }
+            }
+            cb.invoke_with_response(resp);
         }
+        self.apply_time.flush();
+        self.apply_wait.flush();
         need_sync
     }
 
@@ -1207,7 +1223,7 @@ where
         ctx.exec_ctx = Some(self.new_ctx(index, term));
         ctx.kv_wb_mut().set_save_point();
         let mut origin_epoch = None;
-        let (resp, exec_result) = match self.exec_raft_cmd(ctx, &req) {
+        let (resp, exec_result) = match self.exec_raft_cmd(ctx, req) {
             Ok(a) => {
                 ctx.kv_wb_mut().pop_save_point().unwrap();
                 if req.has_admin_request() {
@@ -1523,7 +1539,7 @@ where
                     "{} failed to write ({}, {}) to cf {}: {:?}",
                     self.tag,
                     log_wrappers::Value::key(&key),
-                    log_wrappers::Value::value(&value),
+                    log_wrappers::Value::value(value),
                     cf,
                     e
                 )
@@ -1534,7 +1550,7 @@ where
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
                     log_wrappers::Value::key(&key),
-                    log_wrappers::Value::value(&value),
+                    log_wrappers::Value::value(value),
                     e
                 );
             });
@@ -2846,6 +2862,23 @@ impl<S: Snapshot> Apply<S> {
             cbs,
         }
     }
+
+    pub fn on_schedule(&mut self, metrics: &RaftMetrics) {
+        let mut now = None;
+        for cb in &mut self.cbs {
+            if let Callback::Write { request_times, .. } = &mut cb.cb {
+                if now.is_none() {
+                    now = Some(Instant::now());
+                }
+                for t in request_times {
+                    metrics
+                        .store_time
+                        .observe(duration_to_sec(now.unwrap().saturating_duration_since(*t)));
+                    *t = now.unwrap();
+                }
+            }
+        }
+    }
 }
 
 pub struct Registration {
@@ -2874,6 +2907,7 @@ impl Registration {
     }
 }
 
+#[derive(Debug)]
 pub struct Proposal<S>
 where
     S: Snapshot,
@@ -3507,7 +3541,9 @@ where
         loop {
             match drainer.next() {
                 Some(Msg::Apply { start, apply }) => {
-                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.saturating_elapsed_secs());
+                    apply_ctx
+                        .apply_wait
+                        .observe(start.saturating_elapsed_secs());
                     // If there is any apply task, we change this fsm to normal-priority.
                     // When it meets a ingest-request or a delete-range request, it will change to
                     // low-priority.

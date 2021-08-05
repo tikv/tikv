@@ -2,7 +2,7 @@
 
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::{Context, GetResponse, Mutation, Op};
+use kvproto::kvrpcpb::{Context, DiskFullOpt, GetResponse, Mutation, Op, PrewriteResponse};
 use kvproto::metapb::Peer;
 use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
@@ -12,13 +12,13 @@ use test_raftstore::*;
 use tikv_util::HandyRwLock;
 
 // A helpful wrapper to make the test logic clear
-struct PeerClient {
-    cli: TikvClient,
-    ctx: Context,
+pub struct PeerClient {
+    pub cli: TikvClient,
+    pub ctx: Context,
 }
 
 impl PeerClient {
-    fn new(cluster: &Cluster<ServerCluster>, region_id: u64, peer: Peer) -> PeerClient {
+    pub fn new(cluster: &Cluster<ServerCluster>, region_id: u64, peer: Peer) -> PeerClient {
         let cli = {
             let env = Arc::new(Environment::new(1));
             let channel =
@@ -40,16 +40,28 @@ impl PeerClient {
         kv_read(&self.cli, self.ctx.clone(), key, ts)
     }
 
-    fn must_kv_read_equal(&self, key: Vec<u8>, val: Vec<u8>, ts: u64) {
+    pub fn must_kv_read_equal(&self, key: Vec<u8>, val: Vec<u8>, ts: u64) {
         must_kv_read_equal(&self.cli, self.ctx.clone(), key, val, ts)
     }
 
-    fn must_kv_write(&self, pd_client: &TestPdClient, kvs: Vec<Mutation>, pk: Vec<u8>) -> u64 {
+    pub fn must_kv_write(&self, pd_client: &TestPdClient, kvs: Vec<Mutation>, pk: Vec<u8>) -> u64 {
         must_kv_write(pd_client, &self.cli, self.ctx.clone(), kvs, pk)
     }
 
-    fn must_kv_prewrite(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
+    pub fn must_kv_prewrite(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
         must_kv_prewrite(&self.cli, self.ctx.clone(), muts, pk, ts)
+    }
+
+    pub fn try_kv_prewrite(
+        &self,
+        muts: Vec<Mutation>,
+        pk: Vec<u8>,
+        ts: u64,
+        opt: DiskFullOpt,
+    ) -> PrewriteResponse {
+        let mut ctx = self.ctx.clone();
+        ctx.disk_full_opt = opt;
+        try_kv_prewrite(&self.cli, ctx, muts, pk, ts)
     }
 
     fn must_kv_prewrite_async_commit(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
@@ -60,7 +72,7 @@ impl PeerClient {
         must_kv_prewrite_with(&self.cli, self.ctx.clone(), muts, pk, ts, false, true)
     }
 
-    fn must_kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: u64, commit_ts: u64) {
+    pub fn must_kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: u64, commit_ts: u64) {
         must_kv_commit(
             &self.cli,
             self.ctx.clone(),
@@ -71,8 +83,16 @@ impl PeerClient {
         )
     }
 
-    fn must_kv_pessimistic_lock(&self, key: Vec<u8>, ts: u64) {
+    pub fn must_kv_rollback(&self, keys: Vec<Vec<u8>>, start_ts: u64) {
+        must_kv_rollback(&self.cli, self.ctx.clone(), keys, start_ts)
+    }
+
+    pub fn must_kv_pessimistic_lock(&self, key: Vec<u8>, ts: u64) {
         must_kv_pessimistic_lock(&self.cli, self.ctx.clone(), key, ts)
+    }
+
+    pub fn must_kv_pessimistic_rollback(&self, key: Vec<u8>, ts: u64) {
+        must_kv_pessimistic_rollback(&self.cli, self.ctx.clone(), key, ts)
     }
 }
 
@@ -104,7 +124,7 @@ fn prepare_for_stale_read_before_run(
     (cluster, pd_client, leader_client)
 }
 
-fn get_tso(pd_client: &TestPdClient) -> u64 {
+pub fn get_tso(pd_client: &TestPdClient) -> u64 {
     block_on(pd_client.get_tso()).unwrap().into_inner()
 }
 

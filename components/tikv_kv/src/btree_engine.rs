@@ -94,7 +94,7 @@ impl Engine for BTreeEngine {
         if batch.modifies.is_empty() {
             return Err(EngineError::from(EngineErrorInner::EmptyRequest));
         }
-        cb((CbContext::new(), write_modifies(&self, batch.modifies)));
+        cb((CbContext::new(), write_modifies(self, batch.modifies)));
 
         Ok(())
     }
@@ -105,7 +105,7 @@ impl Engine for BTreeEngine {
         _ctx: SnapContext<'_>,
         cb: EngineCallback<Self::Snap>,
     ) -> EngineResult<()> {
-        cb((CbContext::new(), Ok(BTreeEngineSnapshot::new(&self))));
+        cb((CbContext::new(), Ok(BTreeEngineSnapshot::new(self))));
         Ok(())
     }
 }

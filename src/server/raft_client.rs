@@ -849,7 +849,7 @@ where
             if self.last_hash.0 == 0 || msg.region_id != self.last_hash.0 {
                 self.last_hash = (
                     msg.region_id,
-                    seahash::hash(msg.region_id.as_ne_bytes())
+                    seahash::hash(&msg.region_id.to_ne_bytes())
                         % self.builder.cfg.grpc_raft_conn_num as u64,
                 );
             };

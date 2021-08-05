@@ -925,7 +925,7 @@ impl VargsRpnFn {
         }
 
         let fn_arg = item_fn.sig.inputs.iter().nth(attr.captures.len()).unwrap();
-        let arg_type = Self::get_args_type(&attr, &fn_arg)?;
+        let arg_type = Self::get_args_type(&attr, fn_arg)?;
         let arg_type_anonymous = arg_type.eval_type.get_type_with_lifetime(quote! { '_ });
 
         let ret_type = if attr.writer {
@@ -1343,7 +1343,7 @@ impl NormalRpnFn {
             .skip(attr.captures.len())
             .take(take_cnt);
         for fn_arg in fn_args {
-            let arg_type = Self::get_arg_type(&attr, &fn_arg)?;
+            let arg_type = Self::get_arg_type(&attr, fn_arg)?;
             arg_types.push(arg_type.eval_type.get_type_with_lifetime(quote! { 'arg_ }));
             arg_types_anonymous.push(arg_type.eval_type.get_type_with_lifetime(quote! { '_ }));
             arg_types_no_ref.push(arg_type.eval_type.get_type_with_lifetime(quote! {}));

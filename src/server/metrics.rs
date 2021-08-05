@@ -386,6 +386,11 @@ lazy_static! {
     .unwrap();
     pub static ref MEMORY_USAGE_GAUGE: IntGauge =
         register_int_gauge!("tikv_server_memory_usage", "Memory usage for the instance").unwrap();
+    pub static ref RAFT_APPEND_REJECTS: IntCounter = register_int_counter!(
+        "tikv_server_raft_append_rejects",
+        "Count for rejected Raft append messages"
+    )
+    .unwrap();
 }
 
 make_auto_flush_static_metric! {
