@@ -52,6 +52,7 @@ use crate::bytes_capacity;
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::store::config::Config;
+use crate::store::fsm::apply::ControlMsg;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
@@ -384,6 +385,7 @@ where
     pub perf_context: EK::PerfContext,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
+    pub pending_latency_inspect: Vec<util::LatencyInspector>,
     pub disk_usage: disk::DiskUsage,
     pub write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
     pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
@@ -586,6 +588,13 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
+                StoreMsg::LatencyInspect {
+                    send_time,
+                    mut inspector,
+                } => {
+                    inspector.record_store_wait(send_time.saturating_elapsed());
+                    self.ctx.pending_latency_inspect.push(inspector);
+                }
             }
         }
     }
@@ -798,6 +807,20 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             .observe(duration_to_sec(self.timer.saturating_elapsed()) as f64);
         self.poll_ctx.raft_metrics.flush();
         self.poll_ctx.store_stat.flush();
+
+        for mut inspector in std::mem::take(&mut self.poll_ctx.pending_latency_inspect) {
+            inspector.record_store_process(self.timer.saturating_elapsed());
+            if let Err(e) = self
+                .poll_ctx
+                .apply_router
+                .send_control(ControlMsg::LatencyInspect {
+                    send_time: TiInstant::now(),
+                    inspector,
+                })
+            {
+                warn!("send control msg to apply router failed"; "err" => ?e);
+            }
+        }
 
         for peer in peers {
             peer.update_memory_trace(&mut self.trace_event);
@@ -1049,6 +1072,7 @@ where
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
             feature_gate: self.feature_gate.clone(),
+            pending_latency_inspect: vec![],
             disk_usage: disk::DiskUsage::Normal,
             write_senders: self.write_senders.clone(),
             io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),

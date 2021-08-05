@@ -50,7 +50,6 @@ pub const INIT_EPOCH_VER: u64 = 1;
 /// The initial region epoch conf_version.
 pub const INIT_EPOCH_CONF_VER: u64 = 1;
 
-// One extra slot for VecDeque internal usage.
 const SHRINK_CACHE_CAPACITY: usize = 64;
 
 pub const JOB_STATUS_PENDING: usize = 0;
@@ -1144,6 +1143,10 @@ where
     }
 
     pub fn maybe_gc_cache(&mut self, replicated_idx: u64, apply_idx: u64) {
+        if self.engines.raft.has_builtin_entry_cache() {
+            let rid = self.get_region_id();
+            self.engines.raft.gc_entry_cache(rid, apply_idx + 1);
+        }
         if replicated_idx == apply_idx {
             // The region is inactive, clear the cache immediately.
             self.cache.compact_to(apply_idx + 1);
@@ -1163,10 +1166,6 @@ where
 
     /// Evict entries from the cache.
     pub fn evict_cache(&mut self, half: bool) {
-        if self.engines.raft.has_builtin_entry_cache() {
-            // TODO: unify entry cache.
-            return;
-        }
         if !self.cache.cache.is_empty() {
             let cache = &mut self.cache;
             let cache_len = cache.cache.len();
