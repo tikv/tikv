@@ -157,18 +157,21 @@ impl FlowController {
         self.limiter.consume(bytes)
     }
 
-    pub fn disable(&self) {
-        self.enabled.store(false, Ordering::Relaxed);
-        self.tx.send(Msg::Disable).unwrap();
-    }
-
-    pub fn enable(&self) {
-        self.enabled.store(true, Ordering::Relaxed);
-        self.tx.send(Msg::Enable).unwrap();
+    pub fn enable(&self, enable: bool) {
+        self.enabled.store(enable, Ordering::Relaxed);
+        if enable {
+            self.tx.send(Msg::Enable).unwrap();
+        } else {
+            self.tx.send(Msg::Disable).unwrap();
+        }
     }
 
     pub fn enabled(&self) -> bool {
         self.enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn is_unlimited(&self) -> bool {
+        self.limiter.speed_limit() == INFINITY
     }
 }
 

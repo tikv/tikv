@@ -99,10 +99,10 @@ memory-allocator = "nodump"
 
 [storage.flow-control]
 enable = false
-soft_pending_compaction_bytes_limit = 1
-hard_pending_compaction_bytes_limit = 1
-memtables_threshold = 10
-l0_files_threshold = 10
+soft-pending-compaction-bytes-limit = 1
+hard-pending-compaction-bytes-limit = 1
+memtables-threshold = 10
+l0-files-threshold = 10
 
 [storage.io-rate-limit]
 max-bytes-per-sec = "1000MB"

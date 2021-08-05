@@ -163,14 +163,14 @@ impl ConfigManager for StorageConfigManger {
                             .set_options_cf(cf, &[("disable_write_stall", "true")])
                             .unwrap();
                     }
-                    self.flow_controller.enable();
+                    self.flow_controller.enable(true);
                 } else {
                     for cf in self.kvdb.cf_names() {
                         self.kvdb
                             .set_options_cf(cf, &[("disable_write_stall", "false")])
                             .unwrap();
                     }
-                    self.flow_controller.disable();
+                    self.flow_controller.enable(false);
                 }
             }
         }

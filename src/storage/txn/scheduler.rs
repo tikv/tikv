@@ -858,8 +858,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             .unwrap()
                     });
 
-                    if self.inner.flow_controller.enabled() {
+                    if self.inner.flow_controller.enabled()
+                        && !self.inner.flow_controller.is_unlimited()
+                    {
                         let start = Instant::now_coarse();
+                        // Control mutex is used to ensure there is only one request consuming the budget.
+                        // The delay may exceed 1s, and the speed limit is changed every second.
+                        // If the speed of next second is larger than the one of first second,
+                        // without the mutex, the write flow can't throttled strictly.
                         let _guard = self.control_mutex.lock().await;
                         let delay = self.inner.flow_controller.consume(to_be_write.size());
                         delay.await;
