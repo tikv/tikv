@@ -217,28 +217,28 @@ impl<const CAP: usize> Smoother<CAP> {
     }
 
     pub fn get_recent(&self) -> u64 {
-        if self.records.len() == 0 {
+        if self.records.is_empty() {
             return 0;
         }
         self.records.back().unwrap().0
     }
 
     pub fn get_avg(&self) -> f64 {
-        if self.records.len() == 0 {
+        if self.records.is_empty() {
             return 0.0;
         }
         self.total as f64 / self.records.len() as f64
     }
 
     pub fn get_max(&self) -> u64 {
-        if self.records.len() == 0 {
+        if self.records.is_empty() {
             return 0;
         }
         self.records.iter().max_by_key(|(k, _)| k).unwrap().0
     }
 
     pub fn get_percentile_90(&mut self) -> u64 {
-        if self.records.len() == 0 {
+        if self.records.is_empty() {
             return 0;
         }
         let mut v = self.records.make_contiguous().to_vec();
@@ -260,9 +260,6 @@ impl<const CAP: usize> Smoother<CAP> {
                 left += r.0;
             } else if self.records.len() - i - 1 < half {
                 right += r.0;
-            } else {
-                left += r.0;
-                right += r.0;
             }
         }
         // use the two averages with the time span of oldest and latest records
@@ -278,7 +275,7 @@ impl<const CAP: usize> Smoother<CAP> {
     }
 
     pub fn trend(&self) -> Trend {
-        if self.records.len() == 0 || self.records.len() == 1 {
+        if self.records.is_empty() || self.records.len() == 1 {
             return Trend::NoTrend;
         }
 
@@ -528,19 +525,19 @@ impl<E: KvEngine> FlowChecker<E> {
 
     fn reset_statistics(&mut self) {
         SCHED_L0_TARGET_FLOW_GAUGE.set(0);
-        for (cf, _) in &self.cf_checkers {
+        for cf in self.cf_checkers.keys() {
             SCHED_THROTTLE_CF_GAUGE.with_label_values(&[cf]).set(0);
             SCHED_PENDING_COMPACTION_BYTES_GAUGE
-                .with_label_values(&[&cf])
+                .with_label_values(&[cf])
                 .set(0);
             SCHED_MEMTABLE_GAUGE.with_label_values(&[cf]).set(0);
-            SCHED_L0_GAUGE.with_label_values(&[&cf]).set(0);
-            SCHED_L0_AVG_GAUGE.with_label_values(&[&cf]).set(0);
-            SCHED_L0_FLOW_GAUGE.with_label_values(&[&cf]).set(0);
-            SCHED_FLUSH_L0_GAUGE.with_label_values(&[&cf]).set(0);
-            SCHED_FLUSH_FLOW_GAUGE.with_label_values(&[&cf]).set(0);
+            SCHED_L0_GAUGE.with_label_values(&[cf]).set(0);
+            SCHED_L0_AVG_GAUGE.with_label_values(&[cf]).set(0);
+            SCHED_L0_FLOW_GAUGE.with_label_values(&[cf]).set(0);
+            SCHED_FLUSH_L0_GAUGE.with_label_values(&[cf]).set(0);
+            SCHED_FLUSH_FLOW_GAUGE.with_label_values(&[cf]).set(0);
             SCHED_LONG_TERM_FLUSH_FLOW_GAUGE
-                .with_label_values(&[&cf])
+                .with_label_values(&[cf])
                 .set(0);
             SCHED_UP_FLOW_GAUGE.set(0);
             SCHED_DOWN_FLOW_GAUGE.set(0);
@@ -563,13 +560,13 @@ impl<E: KvEngine> FlowChecker<E> {
             SCHED_THROTTLE_CF_GAUGE
                 .with_label_values(&[throttle_cf])
                 .set(1);
-            for (cf, _) in &self.cf_checkers {
+            for cf in self.cf_checkers.keys() {
                 if cf != throttle_cf {
                     SCHED_THROTTLE_CF_GAUGE.with_label_values(&[cf]).set(0);
                 }
             }
         } else {
-            for (cf, _) in &self.cf_checkers {
+            for cf in self.cf_checkers.keys() {
                 SCHED_THROTTLE_CF_GAUGE.with_label_values(&[cf]).set(0);
             }
         }
@@ -612,9 +609,7 @@ impl<E: KvEngine> FlowChecker<E> {
             .set(checker.long_term_pending_bytes.get_avg() as i64);
 
         if checker.on_start_pending_bytes {
-            if num < soft {
-                checker.on_start_pending_bytes = false;
-            } else if checker.long_term_pending_bytes.trend() == Trend::Increasing {
+            if num < soft || checker.long_term_pending_bytes.trend() == Trend::Increasing {
                 // the write is accumulating, still need to throttle
                 checker.on_start_pending_bytes = false;
             } else {
@@ -625,9 +620,8 @@ impl<E: KvEngine> FlowChecker<E> {
 
         let pending_compaction_bytes =
             checker.long_term_pending_bytes.get_avg() / RATIO_SCALE_FACTOR;
-        drop(checker);
 
-        for (_, checker) in &self.cf_checkers {
+        for checker in self.cf_checkers.values() {
             if num < (checker.long_term_pending_bytes.get_recent() as f64) / RATIO_SCALE_FACTOR {
                 return;
             }
@@ -652,7 +646,7 @@ impl<E: KvEngine> FlowChecker<E> {
         self.discard_ratio.store(ratio, Ordering::Relaxed);
     }
 
-    fn adjust_memtables(&mut self, cf: &String) {
+    fn adjust_memtables(&mut self, cf: &str) {
         let num_memtables = self
             .engine
             .get_cf_num_immutable_mem_table(cf)
@@ -665,9 +659,9 @@ impl<E: KvEngine> FlowChecker<E> {
         let prev = checker.last_num_memtables.get_recent();
         checker.last_num_memtables.observe(num_memtables);
         if checker.on_start_memtable {
-            if num_memtables < self.memtables_threshold {
-                checker.on_start_memtable = false;
-            } else if checker.last_num_memtables.trend() == Trend::Increasing {
+            if num_memtables < self.memtables_threshold
+                || checker.last_num_memtables.trend() == Trend::Increasing
+            {
                 // the write is accumulating, still need to throttle
                 checker.on_start_memtable = false;
             } else {
@@ -675,9 +669,8 @@ impl<E: KvEngine> FlowChecker<E> {
                 return;
             }
         }
-        drop(checker);
 
-        for (_, c) in &self.cf_checkers {
+        for c in self.cf_checkers.values() {
             if num_memtables < c.last_num_memtables.get_recent() {
                 return;
             }
@@ -710,15 +703,19 @@ impl<E: KvEngine> FlowChecker<E> {
             }
         } else {
             // should throttle
-            let diff = if checker.last_num_memtables.get_recent() > prev {
-                checker.memtable_debt += 1.0;
-                -1.0
-            } else if checker.last_num_memtables.get_recent() < prev {
-                checker.memtable_debt -= 1.0;
-                1.0
-            } else {
-                // keep, do nothing
-                0.0
+            let diff = match checker.last_num_memtables.get_recent().cmp(&prev) {
+                std::cmp::Ordering::Greater => {
+                    checker.memtable_debt += 1.0;
+                    -1.0
+                }
+                std::cmp::Ordering::Less => {
+                    checker.memtable_debt -= 1.0;
+                    1.0
+                }
+                std::cmp::Ordering::Equal => {
+                    // keep, do nothing
+                    0.0
+                }
             };
             self.limiter.speed_limit() + diff * 1024.0 * 1024.0
         };
@@ -732,31 +729,31 @@ impl<E: KvEngine> FlowChecker<E> {
             let checker = self.cf_checkers.get_mut(cf).unwrap();
             if checker.last_num_l0_files <= self.l0_files_threshold {
                 SCHED_THROTTLE_ACTION_COUNTER
-                    .with_label_values(&[&cf, "tick2"])
+                    .with_label_values(&[cf, "tick2"])
                     .inc();
 
                 let throttle = if checker.long_term_num_l0_files.get_avg()
                     >= self.l0_files_threshold as f64 * 0.5
                 {
                     SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[&cf, "keep2"])
+                        .with_label_values(&[cf, "keep2"])
                         .inc();
                     self.limiter.speed_limit()
                 } else if checker.long_term_num_l0_files.get_recent() as f64
                     >= self.l0_files_threshold as f64 * 0.5
                 {
                     SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[&cf, "keep3"])
+                        .with_label_values(&[cf, "keep3"])
                         .inc();
                     self.limiter.speed_limit()
                 } else if checker.last_num_l0_files_from_flush >= self.l0_files_threshold {
                     SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[&cf, "keep4"])
+                        .with_label_values(&[cf, "keep4"])
                         .inc();
                     self.limiter.speed_limit()
                 } else {
                     SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[&cf, "up2"])
+                        .with_label_values(&[cf, "up2"])
                         .inc();
                     self.limiter.speed_limit() * (1.0 + 5.0 * LIMIT_UP_PERCENT)
                 };
@@ -788,9 +785,9 @@ impl<E: KvEngine> FlowChecker<E> {
             .inc();
 
         if checker.on_start_l0_files {
-            if num_l0_files < self.l0_files_threshold {
-                checker.on_start_l0_files = false;
-            } else if checker.long_term_num_l0_files.trend() == Trend::Increasing {
+            if num_l0_files < self.l0_files_threshold
+                || checker.long_term_num_l0_files.trend() == Trend::Increasing
+            {
                 // the write is accumulating, still need to throttle
                 checker.on_start_l0_files = false;
             } else {
@@ -798,7 +795,6 @@ impl<E: KvEngine> FlowChecker<E> {
                 return;
             }
         }
-        drop(checker);
 
         if let Some(throttle_cf) = self.throttle_cf.as_ref() {
             if &cf != throttle_cf {
@@ -839,14 +835,14 @@ impl<E: KvEngine> FlowChecker<E> {
         } else if is_throttled && should_throttle {
             // refresh down flow if last num l0 files
             if let Some(last_target_file) = self.last_target_file {
-                if checker.last_num_l0_files > last_target_file + 3 {
-                    if self.l0_target_flow > checker.short_term_l0_flow.get_avg() {
-                        self.l0_target_flow = checker.short_term_l0_flow.get_avg();
-                        self.last_target_file = Some(checker.last_num_l0_files);
-                        SCHED_THROTTLE_ACTION_COUNTER
-                            .with_label_values(&[&cf, "refresh_down_flow"])
-                            .inc();
-                    }
+                if checker.last_num_l0_files > last_target_file + 3
+                    && self.l0_target_flow > checker.short_term_l0_flow.get_avg()
+                {
+                    self.l0_target_flow = checker.short_term_l0_flow.get_avg();
+                    self.last_target_file = Some(checker.last_num_l0_files);
+                    SCHED_THROTTLE_ACTION_COUNTER
+                        .with_label_values(&[&cf, "refresh_down_flow"])
+                        .inc();
                 }
             } else {
                 self.last_target_file = Some(checker.last_num_l0_files);
@@ -865,16 +861,16 @@ impl<E: KvEngine> FlowChecker<E> {
                     .inc();
                 self.limiter.speed_limit()
             } else {
-                if self.last_target_file.is_some() {
-                    if checker.short_term_l0_flow.get_avg() > self.l0_target_flow {
-                        let new =
-                            0.5 * checker.short_term_l0_flow.get_avg() + 0.5 * self.l0_target_flow;
-                        if new > self.l0_target_flow {
-                            self.l0_target_flow = new;
-                            SCHED_THROTTLE_ACTION_COUNTER
-                                .with_label_values(&[&cf, "refresh_up_flow"])
-                                .inc();
-                        }
+                if self.last_target_file.is_some()
+                    && checker.short_term_l0_flow.get_avg() > self.l0_target_flow
+                {
+                    let new =
+                        0.5 * checker.short_term_l0_flow.get_avg() + 0.5 * self.l0_target_flow;
+                    if new > self.l0_target_flow {
+                        self.l0_target_flow = new;
+                        SCHED_THROTTLE_ACTION_COUNTER
+                            .with_label_values(&[&cf, "refresh_up_flow"])
+                            .inc();
                     }
                 }
                 SCHED_THROTTLE_ACTION_COUNTER
@@ -952,9 +948,9 @@ impl<E: KvEngine> FlowChecker<E> {
             checker.last_flush_bytes = 0;
 
             if checker.on_start_l0_files {
-                if num_l0_files < self.l0_files_threshold {
-                    checker.on_start_l0_files = false;
-                } else if checker.long_term_num_l0_files.trend() == Trend::Increasing {
+                if num_l0_files < self.l0_files_threshold
+                    || checker.long_term_num_l0_files.trend() == Trend::Increasing
+                {
                     // the write is accumulating, still need to throttle
                     checker.on_start_l0_files = false;
                 } else {
@@ -970,7 +966,7 @@ impl<E: KvEngine> FlowChecker<E> {
             }
 
             // adjust throttle speed based on flush flow and target flow
-            if let Some(last_target_file) = self.last_target_file {
+            if let Some(_last_target_file) = self.last_target_file {
                 if self.cf_checkers[&cf].long_term_flush_flow.get_avg() > self.l0_target_flow
                     && self.cf_checkers[&cf].short_term_flush_flow.get_recent() as f64
                         > self.l0_target_flow
@@ -1061,14 +1057,11 @@ mod tests {
         smoother.observe(3);
         smoother.observe(4);
         smoother.observe(5);
-        assert_eq!(smoother.slope(), 1.0);
-
         smoother.observe(0);
 
         assert_eq!(smoother.get_avg(), 2.8);
         assert_eq!(smoother.get_recent(), 0);
         assert_eq!(smoother.get_max(), 5);
         assert_eq!(smoother.get_percentile_90(), 4);
-        assert_eq!(smoother.slope(), 0.0);
     }
 }

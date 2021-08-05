@@ -207,7 +207,7 @@ impl TestWriters {
         writers
             .spawn(
                 1,
-                &engines,
+                engines,
                 &notifier,
                 &trans,
                 &Arc::new(VersionTrack::new(cfg.clone())),

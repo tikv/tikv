@@ -925,9 +925,9 @@ mod tests {
     };
     use futures_executor::block_on;
     use kvproto::kvrpcpb::{BatchRollbackRequest, Context};
+    use tikv_util::config::ReadableSize;
     use tikv_util::future::paired_future_callback;
     use txn_types::{Key, OldValues};
-    use tikv_util::config::ReadableSize;
 
     #[test]
     fn test_command_latches() {
