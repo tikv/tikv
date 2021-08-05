@@ -602,6 +602,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp) {
         let total_region_count = regions.len();
+        // TODO: figure out how to avoid create a hashset every time,
+        //       saving some CPU.
         let mut resolved_regions =
             HashSet::with_capacity_and_hasher(regions.len(), Default::default());
         self.min_resolved_ts = TimeStamp::max();
