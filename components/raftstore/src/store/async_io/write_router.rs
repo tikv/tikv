@@ -108,11 +108,11 @@ where
         let msgs = mem::take(&mut self.pending_write_msgs);
 
         info!(
-            "{} finishs io reschedule, from {} to {}, pending msg len {}",
-            self.tag,
-            pre_writer_id,
-            self.writer_id,
-            msgs.len()
+            "finishs io reschedule";
+            "tag" => &self.tag,
+            "pre_writer_id" => pre_writer_id,
+            "writer_id" => self.writer_id,
+            "msg_len" => msgs.len()
         );
         STORE_IO_RESCHEDULE_PENDING_TASKS_TOTAL_GAUGE.sub(msgs.len() as i64);
 
@@ -190,7 +190,7 @@ where
             STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE.inc();
             // Rescheduling succeeds. The task should be pushed into `self.pending_write_msgs`.
             self.last_unpersisted = last_unpersisted;
-            info!("{} starts to io reschedule", self.tag);
+            info!("starts io reschedule"; "tag" => &self.tag);
             false
         } else {
             // Rescheduling fails at this time. Retry 10ms later.
