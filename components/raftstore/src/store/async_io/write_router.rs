@@ -173,19 +173,16 @@ where
         // Try to add 1 to `io_reschedule_concurrent_count`.
         // The `cfg.io_reschedule_concurrent_max_count` is used for controlling the concurrent count
         // of rescheduling peer fsm because rescheduling will introduce performance penalty.
-        let success = loop {
-            let count = ctx.io_reschedule_concurrent_count().load(Ordering::SeqCst);
-            if count >= ctx.config().io_reschedule_concurrent_max_count {
-                break false;
-            }
-            if ctx
-                .io_reschedule_concurrent_count()
-                .compare_exchange(count, count + 1, Ordering::SeqCst, Ordering::Relaxed)
-                .is_ok()
-            {
-                break true;
-            }
-        };
+        let success = ctx
+            .io_reschedule_concurrent_count()
+            .fetch_update(Ordering::SeqCst, Ordering::Relaxed, |c| {
+                if c < ctx.config().io_reschedule_concurrent_max_count {
+                    Some(c + 1)
+                } else {
+                    None
+                }
+            })
+            .is_ok();
         if success {
             STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE.inc();
             // Rescheduling succeeds. The task should be pushed into `self.pending_write_msgs`.
