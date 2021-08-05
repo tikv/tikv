@@ -387,6 +387,12 @@
 ## Use how many threads to handle raft messages
 # store-pool-size = 2
 
+## Use how many threads to handle raft io tasks
+# store-io-pool-size = 2
+
+## When the size of raft db writebatch exceeds this value, write will be triggered.
+# raft-write-size-limit = "1MB"
+
 [coprocessor]
 ## When it is set to `true`, TiKV will try to split a Region with table prefix if that Region
 ## crosses tables.
