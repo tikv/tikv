@@ -7,13 +7,14 @@ use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
+use tikv_util::error;
 use tikv_util::time::ThreadReadId;
-use tikv_util::{deadline::Deadline, error};
 
 use crate::store::fsm::RaftRouter;
 use crate::store::transport::{CasualRouter, ProposalRouter, StoreRouter};
 use crate::store::{
-    Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
+    Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts, RaftCommand, SignificantMsg,
+    StoreMsg,
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 
@@ -47,17 +48,13 @@ where
     }
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
-        send_command_impl::<EK, _>(self, req, cb, None)
-    }
-
-    fn send_command_with_deadline(
+    fn send_command(
         &self,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
-        deadline: Deadline,
+        extra_opts: RaftCmdExtraOpts,
     ) -> RaftStoreResult<()> {
-        send_command_impl::<EK, _>(self, req, cb, Some(deadline))
+        send_command_impl::<EK, _>(self, req, cb, extra_opts)
     }
 
     /// Reports the peer being unreachable to the Region.
@@ -101,7 +98,7 @@ fn send_command_impl<EK, PR>(
     router: &PR,
     req: RaftCmdRequest,
     cb: Callback<EK::Snapshot>,
-    deadline: Option<Deadline>,
+    extra_opts: RaftCmdExtraOpts,
 ) -> RaftStoreResult<()>
 where
     EK: KvEngine,
@@ -109,7 +106,7 @@ where
 {
     let region_id = req.get_header().get_region_id();
     let mut cmd = RaftCommand::new(req, cb);
-    cmd.deadline = deadline;
+    cmd.extra_opts = extra_opts;
     router
         .send(cmd)
         .map_err(|e| handle_send_error(region_id, e))

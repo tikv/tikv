@@ -412,20 +412,24 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         if self.config.raft_store.capacity.0 > 0 {
             capacity = cmp::min(capacity, self.config.raft_store.capacity.0);
         }
-        //TODO after disk full readonly impl, such file should be removed.
-        file_system::reserve_space_for_recover(
-            &self.config.storage.data_dir,
-            if self.config.storage.reserve_space.0 == 0 {
-                0
-            } else {
-                // Max one of configured `reserve_space` and `storage.capacity * 5%`.
-                cmp::max(
-                    (capacity as f64 * 0.05) as u64,
-                    self.config.storage.reserve_space.0,
-                )
-            },
-        )
-        .unwrap();
+        let mut reserve_space = self.config.storage.reserve_space.0;
+        if self.config.storage.reserve_space.0 != 0 {
+            reserve_space = cmp::max(
+                (capacity as f64 * 0.05) as u64,
+                self.config.storage.reserve_space.0,
+            );
+        }
+        disk::set_disk_reserved_space(reserve_space);
+        let available = disk_stats.available_space();
+        if available > reserve_space / 2 {
+            file_system::reserve_space_for_recover(
+                &self.config.storage.data_dir,
+                reserve_space / 5,
+            )
+            .unwrap();
+        } else {
+            warn!("no enough disk space left to create the place holder file");
+        }
     }
 
     fn init_yatp(&self) {
@@ -1051,12 +1055,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let config_disk_capacity: u64 = self.config.raft_store.capacity.0;
         let store_path = self.store_path.clone();
         let snap_mgr = self.snap_mgr.clone().unwrap();
-        let disk_reserved = self.config.storage.reserve_space.0;
-        if disk_reserved == 0 {
+        let reserve_space = disk::get_disk_reserved_space();
+        if reserve_space == 0 {
             info!("disk space checker not enabled");
             return;
         }
-        //TODO wal size ignore?
+
+        let almost_full_threshold = reserve_space;
+        let already_full_threshold = reserve_space / 2;
         self.background_worker
             .spawn_interval_task(DEFAULT_STORAGE_STATS_INTERVAL, move || {
                 let disk_stats = match fs2::statvfs(&store_path) {
@@ -1092,19 +1098,28 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
                 let mut available = capacity.checked_sub(used_size).unwrap_or_default();
                 available = cmp::min(available, disk_stats.available_space());
-                if available <= disk_reserved {
+
+                let prev_disk_status = disk::get_disk_status(0); //0 no need care about failpoint.
+                let cur_disk_status = if available <= already_full_threshold {
+                    disk::DiskUsage::AlreadyFull
+                } else if available <= almost_full_threshold {
+                    disk::DiskUsage::AlmostFull
+                } else {
+                    disk::DiskUsage::Normal
+                };
+                if prev_disk_status != cur_disk_status {
                     warn!(
-                        "disk full, available={},snap={},engine={},capacity={}",
-                        available, snap_size, kv_size, capacity
+                        "disk usage {:?}->{:?}, available={},snap={},kv={},raft={},capacity={}",
+                        prev_disk_status,
+                        cur_disk_status,
+                        available,
+                        snap_size,
+                        kv_size,
+                        raft_size,
+                        capacity
                     );
-                    disk::set_disk_full();
-                } else if disk::is_disk_full() {
-                    info!(
-                        "disk normalized, available={},snap={},engine={},capacity={}",
-                        available, snap_size, kv_size, capacity
-                    );
-                    disk::clear_disk_full();
                 }
+                disk::set_disk_status(cur_disk_status);
             })
     }
 
