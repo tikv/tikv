@@ -1942,7 +1942,7 @@ mod tests {
     }
 
     fn validate_cache(store: &PeerStorage<KvTestEngine, RaftTestEngine>, exp_ents: &[Entry]) {
-        assert_eq!(store.cache.as_ref().unwrap().cache, exp_ents);
+        assert_eq!(store.cache.cache, exp_ents);
         for e in exp_ents {
             let key = keys::raft_log_key(store.get_region_id(), e.get_index());
             let bytes = store.engines.raft.get_value(&key).unwrap().unwrap();
@@ -2373,7 +2373,7 @@ mod tests {
         let worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
         let mut store = new_storage_from_ents(sched, &td, &ents);
-        store.cache.as_mut().unwrap().cache.clear();
+        store.cache.cache.clear();
         // empty cache should fetch data from rocksdb directly.
         let mut res = store.entries(4, 6, u64::max_value()).unwrap();
         assert_eq!(*res, ents[1..]);
@@ -2416,7 +2416,7 @@ mod tests {
         let worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
         let mut store = new_storage_from_ents(sched, &td, &ents);
-        store.cache.as_mut().unwrap().cache.clear();
+        store.cache.cache.clear();
 
         // initial cache
         let mut entries = vec![new_entry(6, 5), new_entry(7, 5)];
@@ -2473,20 +2473,20 @@ mod tests {
         validate_cache(&store, &exp_res);
 
         // compact shrink
-        assert!(store.cache.as_ref().unwrap().cache.capacity() >= cap as usize);
+        assert!(store.cache.cache.capacity() >= cap as usize);
         store.compact_to(cap * 2);
         exp_res = (cap * 2..cap * 2 + 7).map(|i| new_entry(i, 8)).collect();
         validate_cache(&store, &exp_res);
-        assert!(store.cache.as_ref().unwrap().cache.capacity() < cap as usize);
+        assert!(store.cache.cache.capacity() < cap as usize);
 
         // append shrink
         entries = (0..=cap).map(|i| new_entry(i, 8)).collect();
         append_ents(&mut store, &entries);
-        assert!(store.cache.as_ref().unwrap().cache.capacity() >= cap as usize);
+        assert!(store.cache.cache.capacity() >= cap as usize);
         append_ents(&mut store, &[new_entry(6, 8)]);
         exp_res = (1..7).map(|i| new_entry(i, 8)).collect();
         validate_cache(&store, &exp_res);
-        assert!(store.cache.as_ref().unwrap().cache.capacity() < cap as usize);
+        assert!(store.cache.cache.capacity() < cap as usize);
 
         // compact all
         store.compact_to(cap + 2);
