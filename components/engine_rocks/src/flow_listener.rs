@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use collections::hash_set_with_capacity;
 use rocksdb::{CompactionJobInfo, EventListener, FlushJobInfo, IngestionInfo};
 
 use std::sync::mpsc::Sender;
@@ -7,7 +8,7 @@ use std::sync::Mutex;
 
 pub enum FlowInfo {
     L0(String, u64),
-    L0Intra(String),
+    L0Intra(String, u64),
     Flush(String, u64),
     Compaction(String),
 }
@@ -64,22 +65,50 @@ impl EventListener for FlowListener {
         if info.base_input_level() == 0 {
             // L0 intra compaction
             if info.output_level() == 0 {
+                let mut input_files = hash_set_with_capacity(info.input_file_count());
+                let mut output_files = hash_set_with_capacity(info.output_file_count());
+                for i in 0..info.input_file_count() {
+                    info.input_file_at(i)
+                        .to_str()
+                        .map(|x| input_files.insert(x.to_owned()));
+                }
+                for i in 0..info.output_file_count() {
+                    info.output_file_at(i)
+                        .to_str()
+                        .map(|x| output_files.insert(x.to_owned()));
+                }
+                let mut input = 0;
+                let mut output = 0;
+                let iter = info.table_properties().into_iter();
+                for (file, prop) in iter {
+                    if input_files.contains(file) {
+                        input += prop.data_size() + prop.index_size() + prop.filter_size();
+                    } else if output_files.contains(file) {
+                        output += prop.data_size() + prop.index_size() + prop.filter_size();
+                    }
+                }
+
+                let diff = if output < input { input - output } else { 0 };
+
                 let _ = self
                     .flow_info_sender
                     .lock()
                     .unwrap()
-                    .send(FlowInfo::L0Intra(info.cf_name().to_owned()));
+                    .send(FlowInfo::L0Intra(info.cf_name().to_owned(), diff));
             } else {
                 let index = info.input_file_count() - info.num_input_files_at_output_level();
+                let mut files = hash_set_with_capacity(index);
                 let props = info.table_properties();
                 let mut read_bytes = 0;
                 for i in 0..index {
-                    let file = info.input_file_at(i);
-                    for (file_name, prop) in props.iter() {
-                        if file_name == file.to_str().unwrap() {
-                            read_bytes += prop.data_size() + prop.index_size() + prop.filter_size();
-                            break;
-                        }
+                    info.input_file_at(i)
+                        .to_str()
+                        .map(|x| files.insert(x.to_owned()));
+                }
+
+                for (file, prop) in props.iter() {
+                    if files.contains(file) {
+                        read_bytes += prop.data_size() + prop.index_size() + prop.filter_size();
                     }
                 }
 

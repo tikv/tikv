@@ -475,13 +475,16 @@ impl<E: KvEngine> FlowChecker<E> {
                             }
                             checker.check_l0_files(cf, l0_bytes)
                         }
-                        Ok(FlowInfo::L0Intra(cf)) => {
+                        Ok(FlowInfo::L0Intra(cf, diff_bytes)) => {
                             if let Some(throttle_cf) = checker.throttle_cf.as_ref() {
                                 if throttle_cf == &cf {
                                     spare_ticks = 0;
                                 }
                             }
-                            // do nothing for l0 intra compaction, it makes a bigger L0 file
+                            if diff_bytes > 0 {
+                                // Intra L0 merges some deletion records, so regard it as a L0 compaction.
+                                checker.check_l0_files(cf, diff_bytes)
+                            }
                         }
                         Ok(FlowInfo::Flush(cf, flush_bytes)) => {
                             if let Some(throttle_cf) = checker.throttle_cf.as_ref() {
