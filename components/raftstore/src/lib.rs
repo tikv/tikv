@@ -6,6 +6,7 @@
 #![feature(div_duration)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
+#![recursion_limit = "256"]
 
 #[cfg(test)]
 extern crate test;
