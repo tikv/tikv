@@ -1556,7 +1556,7 @@ where
         Ok((res, write_task))
     }
 
-    pub fn update_persisted(&mut self, persisted: u64) {
+    pub fn update_persist_index(&mut self, persisted: u64) {
         self.cache.persisted = persisted;
     }
 

@@ -2259,6 +2259,8 @@ where
         }
         self.persisted_number = persisted_number;
 
+        self.write_router.check_new_persisted(ctx, self.persisted_number);
+
         let pre_persist_index = self.raft_group.raft.raft_log.persisted;
         let pre_commit_index = self.raft_group.raft.raft_log.committed;
         self.raft_group.on_persist_ready(persisted_number);
@@ -2266,9 +2268,7 @@ where
         self.report_know_commit_duration(pre_commit_index, &ctx.raft_metrics);
 
         let persist_index = self.raft_group.raft.raft_log.persisted;
-        self.mut_store().update_persisted(persist_index);
-
-        self.write_router.check_new_persisted(ctx, persist_index);
+        self.mut_store().update_persist_index(persist_index);
 
         if self.snap_ctx.is_some() && self.unpersisted_readies.is_empty() {
             // Since the snapshot must belong to the last ready, so if `unpersisted_readies`
