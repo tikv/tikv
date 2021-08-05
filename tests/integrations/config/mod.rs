@@ -25,7 +25,7 @@ use tikv::server::config::GrpcCompressionType;
 use tikv::server::gc_worker::GcConfig;
 use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
+use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig, FlowControlConfig};
 use tikv_util::config::{LogFormat, OptionReadableSize, ReadableDuration, ReadableSize};
 
 mod dynamic;
@@ -648,11 +648,13 @@ fn test_serde_custom_tikv_config() {
         enable_async_apply_prewrite: true,
         enable_ttl: true,
         ttl_check_poll_interval: ReadableDuration::hours(0),
-        enable_flow_control: false,
-        l0_files_threshold: 10,
-        memtables_threshold: 10,
-        soft_pending_compaction_bytes_limit: 1,
-        hard_pending_compaction_bytes_limit: 1,
+        flow_control: FlowControlConfig {
+            enable: false,
+            l0_files_threshold: 10,
+            memtables_threshold: 10,
+            soft_pending_compaction_bytes_limit: 1,
+            hard_pending_compaction_bytes_limit: 1,
+        },
         block_cache: BlockCacheConfig {
             shared: true,
             capacity: OptionReadableSize(Some(ReadableSize::gb(40))),

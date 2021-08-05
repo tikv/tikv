@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 use std::f64::INFINITY;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
@@ -78,6 +78,7 @@ enum Trend {
 pub struct FlowController {
     discard_ratio: Arc<AtomicU64>,
     limiter: Arc<Limiter>,
+    enabled: Arc<AtomicBool>,
     tx: SyncSender<Msg>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -114,6 +115,7 @@ impl FlowController {
         Self {
             discard_ratio: Arc::new(AtomicU64::new(0)),
             limiter: Arc::new(Limiter::new(INFINITY)),
+            enabled: Arc::new(AtomicBool::new(false)),
             tx,
             handle: None,
         }
@@ -139,6 +141,7 @@ impl FlowController {
         Self {
             discard_ratio,
             limiter,
+            enabled: Arc::new(AtomicBool::new(config.enable)),
             tx,
             handle: Some(checker.start(rx, flow_info_receiver)),
         }
@@ -155,11 +158,17 @@ impl FlowController {
     }
 
     pub fn disable(&self) {
+        self.enabled.store(false, Ordering::Relaxed);
         self.tx.send(Msg::Disable).unwrap();
     }
 
     pub fn enable(&self) {
+        self.enabled.store(true, Ordering::Relaxed);
         self.tx.send(Msg::Enable).unwrap();
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
     }
 }
 
@@ -372,8 +381,8 @@ impl Default for CFFlowChecker {
 }
 
 struct FlowChecker<E: KvEngine> {
-    pending_compaction_bytes_soft_limit: u64,
-    pending_compaction_bytes_hard_limit: u64,
+    soft_pending_compaction_bytes_limit: u64,
+    hard_pending_compaction_bytes_limit: u64,
     memtables_threshold: u64,
     l0_files_threshold: u64,
 
@@ -413,8 +422,8 @@ impl<E: KvEngine> FlowChecker<E> {
         }
 
         Self {
-            pending_compaction_bytes_soft_limit: config.pending_compaction_bytes_soft_limit,
-            pending_compaction_bytes_hard_limit: config.pending_compaction_bytes_hard_limit,
+            soft_pending_compaction_bytes_limit: config.soft_pending_compaction_bytes_limit,
+            hard_pending_compaction_bytes_limit: config.hard_pending_compaction_bytes_limit,
             memtables_threshold: config.memtables_threshold,
             l0_files_threshold: config.l0_files_threshold,
             engine,
@@ -577,8 +586,8 @@ impl<E: KvEngine> FlowChecker<E> {
     }
 
     fn adjust_pending_compaction_bytes(&mut self, cf: String) {
-        let hard = (self.pending_compaction_bytes_hard_limit as f64).log2();
-        let soft = (self.pending_compaction_bytes_soft_limit as f64).log2();
+        let hard = (self.hard_pending_compaction_bytes_limit as f64).log2();
+        let soft = (self.soft_pending_compaction_bytes_limit as f64).log2();
 
         // Because pending compaction bytes changes dramatically, take the
         // logarithm of pending compaction bytes to make the values fall into

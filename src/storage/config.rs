@@ -150,22 +150,24 @@ impl ConfigManager for StorageConfigManger {
             self.ttl_checker_scheduler
                 .schedule(TTLCheckerTask::UpdatePollInterval(interval.into()))
                 .unwrap();
-        } else if let Some(v) = change.remove("enable_flow_control") {
-            let enable: bool = v.into();
-            if enable {
-                for cf in self.kvdb.cf_names() {
-                    self.kvdb
-                        .set_options_cf(cf, &[("disable_write_stall", "true")])
-                        .unwrap();
+        } else if let Some(ConfigValue::Module(mut flow_control)) = change.remove("flow_control") {
+            if let Some(v) = flow_control.remove("enable") {
+                let enable: bool = v.into();
+                if enable {
+                    for cf in self.kvdb.cf_names() {
+                        self.kvdb
+                            .set_options_cf(cf, &[("disable_write_stall", "true")])
+                            .unwrap();
+                    }
+                    self.flow_controller.enable();
+                } else {
+                    for cf in self.kvdb.cf_names() {
+                        self.kvdb
+                            .set_options_cf(cf, &[("disable_write_stall", "false")])
+                            .unwrap();
+                    }
+                    self.flow_controller.disable();
                 }
-                self.flow_controller.enable();
-            } else {
-                for cf in self.kvdb.cf_names() {
-                    self.kvdb
-                        .set_options_cf(cf, &[("disable_write_stall", "false")])
-                        .unwrap();
-                }
-                self.flow_controller.disable();
             }
         }
         Ok(())
@@ -177,8 +179,8 @@ impl ConfigManager for StorageConfigManger {
 #[serde(rename_all = "kebab-case")]
 pub struct FlowControlConfig {
     pub enable: bool,
-    pub pending_compaction_bytes_soft_limit: u64,
-    pub pending_compaction_bytes_hard_limit: u64,
+    pub soft_pending_compaction_bytes_limit: u64,
+    pub hard_pending_compaction_bytes_limit: u64,
     pub memtables_threshold: u64,
     pub l0_files_threshold: u64,
 }
@@ -187,8 +189,8 @@ impl Default for FlowControlConfig {
     fn default() -> FlowControlConfig {
         FlowControlConfig {
             enable: true,
-            pending_compaction_bytes_soft_limit: ReadableSize::gb(128).0,
-            pending_compaction_bytes_hard_limit: ReadableSize::gb(1024).0,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(128).0,
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(1024).0,
             memtables_threshold: 5,
             l0_files_threshold: 9,
         }

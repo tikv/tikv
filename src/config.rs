@@ -3119,6 +3119,7 @@ mod tests {
     use super::*;
     use crate::server::ttl::TTLCheckerTask;
     use crate::storage::config::StorageConfigManger;
+    use crate::storage::txn::flow_controller::FlowController;
     use engine_rocks::raw_util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
     use raft_log_engine::RecoveryMode;
@@ -3407,8 +3408,12 @@ mod tests {
             )
             .unwrap(),
         ));
-        let (tx, rx) = std::sync::mpsc::channel();
-        let flow_controller = Arc::new(FlowController::new(&cfg.storage, engine.clone(), rx));
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let flow_controller = Arc::new(FlowController::new(
+            &cfg.storage.flow_control,
+            engine.clone(),
+            rx,
+        ));
 
         let (shared, cfg_controller) = (cfg.storage.block_cache.shared, ConfigController::new(cfg));
         cfg_controller.register(
@@ -3432,8 +3437,35 @@ mod tests {
     fn test_change_flow_control() {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.validate().unwrap();
-        let (db, cfg_controller, ..) = new_engines(cfg);
+        let (db, cfg_controller, _, flow_controller) = new_engines(cfg);
 
+        assert_eq!(
+            db.get_options_cf(CF_DEFAULT)
+                .unwrap()
+                .get_disable_write_stall(),
+            true
+        );
+        assert_eq!(flow_controller.enabled(), true);
+        cfg_controller
+            .update_config("storage.flow-control.enable", "false")
+            .unwrap();
+        assert_eq!(
+            db.get_options_cf(CF_DEFAULT)
+                .unwrap()
+                .get_disable_write_stall(),
+            false
+        );
+        assert_eq!(flow_controller.enabled(), false);
+        cfg_controller
+            .update_config("storage.flow-control.enable", "true")
+            .unwrap();
+        assert_eq!(
+            db.get_options_cf(CF_DEFAULT)
+                .unwrap()
+                .get_disable_write_stall(),
+            true
+        );
+        assert_eq!(flow_controller.enabled(), true);
     }
 
     #[test]
