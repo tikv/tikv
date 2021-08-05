@@ -14,6 +14,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteBatch, WriteOp
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
+use kvproto::kvrpcpb::DiskFullOpt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
@@ -1074,43 +1075,17 @@ where
     {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
-            let i = self.send_raft_message(msg, trans) as usize;
-            match msg_type {
-                MessageType::MsgAppend => metrics.append[i] += 1,
-                MessageType::MsgAppendResponse => {
-                    metrics.append_resp[i] += 1;
-                }
-                MessageType::MsgRequestPreVote => metrics.prevote[i] += 1,
-                MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp[i] += 1,
-                MessageType::MsgRequestVote => metrics.vote[i] += 1,
-                MessageType::MsgRequestVoteResponse => metrics.vote_resp[i] += 1,
-                MessageType::MsgSnapshot => metrics.snapshot[i] += 1,
-                MessageType::MsgHeartbeat => metrics.heartbeat[i] += 1,
-                MessageType::MsgHeartbeatResponse => metrics.heartbeat_resp[i] += 1,
-                MessageType::MsgTransferLeader => metrics.transfer_leader[i] += 1,
-                MessageType::MsgReadIndex => metrics.read_index[i] += 1,
-                MessageType::MsgReadIndexResp => metrics.read_index_resp[i] += 1,
-                MessageType::MsgTimeoutNow => {
-                    // After a leader transfer procedure is triggered, the lease for
-                    // the old leader may be expired earlier than usual, since a new leader
-                    // may be elected and the old leader doesn't step down due to
-                    // network partition from the new leader.
-                    // For lease safety during leader transfer, transit `leader_lease`
-                    // to suspect.
-                    self.leader_lease.suspect(monotonic_raw_now());
-
-                    metrics.timeout_now[i] += 1;
-                }
-                // We do not care about these message types for metrics.
-                // Explicitly declare them so when we add new message types we are forced to
-                // decide.
-                MessageType::MsgHup
-                | MessageType::MsgBeat
-                | MessageType::MsgPropose
-                | MessageType::MsgUnreachable
-                | MessageType::MsgSnapStatus
-                | MessageType::MsgCheckQuorum => {}
+            if msg_type == MessageType::MsgTimeoutNow && self.is_leader() {
+                // After a leader transfer procedure is triggered, the lease for
+                // the old leader may be expired earlier than usual, since a new leader
+                // may be elected and the old leader doesn't step down due to
+                // network partition from the new leader.
+                // For lease safety during leader transfer, transit `leader_lease`
+                // to suspect.
+                self.leader_lease.suspect(monotonic_raw_now());
             }
+            let b = self.send_raft_message(msg, trans);
+            metrics.add(msg_type, b);
         }
     }
 
@@ -1917,13 +1892,14 @@ where
             } else {
                 vec![]
             };
-            let apply = Apply::new(
+            let mut apply = Apply::new(
                 self.peer_id(),
                 self.region_id,
                 self.term(),
                 committed_entries,
                 cbs,
             );
+            apply.on_schedule(&ctx.raft_metrics);
             self.mut_store().trace_cached_entries(apply.entries.clone());
             if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
                 // Compact all cached entries instead of half evict.
@@ -2314,6 +2290,7 @@ where
         mut cb: Callback<EK::Snapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
+        disk_full_opt: DiskFullOpt,
     ) -> bool {
         if self.pending_remove {
             return false;
@@ -2336,11 +2313,28 @@ where
             }
             Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
             Ok(RequestPolicy::ProposeNormal) => {
-                let store_id = ctx.store_id();
-                if disk::disk_full_precheck(store_id) || ctx.is_disk_full {
-                    Err(Error::Timeout("disk full".to_owned()))
-                } else {
+                let mut allowed = true;
+                match disk_full_opt {
+                    DiskFullOpt::AllowedOnAlreadyFull => allowed = true,
+                    DiskFullOpt::AllowedOnAlmostFull => {
+                        if matches!(ctx.disk_usage, disk::DiskUsage::AlreadyFull) {
+                            allowed = false;
+                        }
+                    }
+                    DiskFullOpt::NotAllowedOnFull => {
+                        if !matches!(ctx.disk_usage, disk::DiskUsage::Normal) {
+                            allowed = false
+                        }
+                    }
+                }
+
+                if allowed {
                     self.propose_normal(ctx, req)
+                } else {
+                    Err(Error::DiskFull(
+                        ctx.store.get_id(),
+                        String::from("propose failed: disk full"),
+                    ))
                 }
             }
             Ok(RequestPolicy::ProposeTransferLeader) => {
@@ -3119,7 +3113,7 @@ where
             || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
             // For followers whose disk is full.
-            || disk::disk_full_precheck(ctx.store_id()) || ctx.is_disk_full
+            || !matches!(ctx.disk_usage, disk::DiskUsage::Normal)
         {
             info!(
                 "reject transferring leader";
@@ -3213,10 +3207,7 @@ where
                 self.term()
             ));
         }
-        if let Some(index) = self
-            .cmd_epoch_checker
-            .propose_check_epoch(&req, self.term())
-        {
+        if let Some(index) = self.cmd_epoch_checker.propose_check_epoch(req, self.term()) {
             return Ok(Either::Right(index));
         }
 

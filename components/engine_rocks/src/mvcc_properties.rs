@@ -55,7 +55,7 @@ impl MvccPropertiesExt for RocksEngine {
         start_key: &[u8],
         end_key: &[u8],
     ) -> Option<MvccProperties> {
-        let collection = match self.get_range_properties_cf(cf, &start_key, &end_key) {
+        let collection = match self.get_range_properties_cf(cf, start_key, end_key) {
             Ok(c) if !c.is_empty() => c,
             _ => return None,
         };

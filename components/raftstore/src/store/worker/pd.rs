@@ -255,7 +255,7 @@ where
                 f,
                 "ask split region {} with key {}",
                 region.get_id(),
-                log_wrappers::Value::key(&split_key),
+                log_wrappers::Value::key(split_key),
             ),
             Task::AutoSplit { ref split_infos } => {
                 write!(f, "auto split split regions, num is {}", split_infos.len(),)
@@ -787,10 +787,14 @@ where
         let mut available = capacity.checked_sub(used_size).unwrap_or_default();
         // We only care about rocksdb SST file size, so we should check disk available here.
         available = cmp::min(available, disk_stats.available_space());
+        available = available
+            .checked_sub(disk::get_disk_reserved_space())
+            .unwrap_or_default();
 
         if disk::is_disk_full() {
             available = 0;
         }
+
         if available == 0 {
             warn!("no available space");
         }

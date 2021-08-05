@@ -87,7 +87,7 @@ impl Endpoint {
             .map_err(|e| CoprocessorError::Other(format!("{}", e)))?;
         let plugin_version = plugin.version();
 
-        if !version_req.matches(&plugin_version) {
+        if !version_req.matches(plugin_version) {
             return Err(CoprocessorError::Other(format!(
                 "The plugin '{}' with version '{}' does not satisfy the version constraint '{}'",
                 plugin.name(),

@@ -47,7 +47,7 @@ where
             &mut txn,
             &mut reader,
             &txn_props,
-            Mutation::Put((Key::from_raw(&k), v.clone())),
+            Mutation::Put((Key::from_raw(k), v.clone())),
             &None,
             false,
         )
@@ -55,7 +55,7 @@ where
     }
     let write_data = WriteData::from_modifies(txn.into_modifies());
     let _ = engine.write(&ctx, write_data);
-    let keys: Vec<Key> = kvs.iter().map(|(k, _)| Key::from_raw(&k)).collect();
+    let keys: Vec<Key> = kvs.iter().map(|(k, _)| Key::from_raw(k)).collect();
     keys
 }
 
@@ -69,7 +69,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
                 KvGenerator::new(config.key_length, config.value_length)
                     .generate(DEFAULT_ITERATIONS)
                     .iter()
-                    .map(|(k, v)| (Mutation::Put((Key::from_raw(&k), v.clone())), k.clone()))
+                    .map(|(k, v)| (Mutation::Put((Key::from_raw(k), v.clone())), k.clone()))
                     .collect();
             mutations
         },
@@ -103,7 +103,7 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
     let ctx = Context::default();
     let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
-        || setup_prewrite(&engine, &config, 1),
+        || setup_prewrite(&engine, config, 1),
         |keys| {
             for key in keys {
                 let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -123,7 +123,7 @@ fn txn_rollback_prewrote<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
     let ctx = Context::default();
     let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
-        || setup_prewrite(&engine, &config, 1),
+        || setup_prewrite(&engine, config, 1),
         |keys| {
             for key in keys {
                 let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -143,7 +143,7 @@ fn txn_rollback_conflict<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
     let ctx = Context::default();
     let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
-        || setup_prewrite(&engine, &config, 2),
+        || setup_prewrite(&engine, config, 2),
         |keys| {
             for key in keys {
                 let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -169,7 +169,7 @@ fn txn_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
         || {
             let kvs = KvGenerator::new(config.key_length, config.value_length)
                 .generate(DEFAULT_ITERATIONS);
-            let keys: Vec<Key> = kvs.iter().map(|(k, _)| Key::from_raw(&k)).collect();
+            let keys: Vec<Key> = kvs.iter().map(|(k, _)| Key::from_raw(k)).collect();
             keys
         },
         |keys| {
