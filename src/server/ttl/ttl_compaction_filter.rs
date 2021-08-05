@@ -60,7 +60,7 @@ impl CompactionFilter for TTLCompactionFilter {
             return CompactionFilterDecision::Keep;
         }
 
-        let expire_ts = get_expire_ts(&value).unwrap_or_else(|_| {
+        let expire_ts = get_expire_ts(value).unwrap_or_else(|_| {
             TTL_CHECKER_ACTIONS_COUNTER_VEC
                 .with_label_values(&["ts_error"])
                 .inc();

@@ -73,7 +73,7 @@ pub fn init_data_with_details<E: Engine>(
     store.begin();
     for &(id, name, count) in vals {
         store
-            .insert_into(&tbl)
+            .insert_into(tbl)
             .set(&tbl["id"], Datum::I64(id))
             .set(&tbl["name"], name.map(str::as_bytes).into())
             .set(&tbl["count"], Datum::I64(count))

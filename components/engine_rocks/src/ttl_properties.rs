@@ -72,7 +72,7 @@ impl TablePropertiesCollector for TtlPropertiesCollector {
             return;
         }
 
-        let expire_ts = match get_expire_ts(&value) {
+        let expire_ts = match get_expire_ts(value) {
             Ok(ts) => ts,
             Err(e) => {
                 error!("failed to get expire ts";

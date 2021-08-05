@@ -331,8 +331,8 @@ impl VectorValue {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
-                    Some(ref val) => {
-                        output.write_evaluable_datum_bytes(*val)?;
+                    Some(val) => {
+                        output.write_evaluable_datum_bytes(val)?;
                     }
                 }
                 Ok(())
@@ -403,7 +403,7 @@ impl VectorValue {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
-                    Some(ref val) => {
+                    Some(val) => {
                         let sort_key = match_template_collator! {
                             TT, match field_type.collation()? {
                                 Collation::TT => TT::sort_key(val)?
