@@ -57,11 +57,8 @@ pub struct Config {
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
 
-    pub enable_flow_control: bool,
-    pub pending_compaction_bytes_soft_limit: u64,
-    pub pending_compaction_bytes_hard_limit: u64,
-    pub memtables_threshold: u64,
-    pub l0_files_threshold: u64,
+    #[config(submodule)]
+    pub flow_control: FlowControlConfig,
 
     #[config(submodule)]
     pub block_cache: BlockCacheConfig,
@@ -81,12 +78,8 @@ impl Default for Config {
             enable_async_apply_prewrite: false,
             enable_ttl: false,
             ttl_check_poll_interval: ReadableDuration::hours(12),
+            flow_control: FlowControlConfig::default(),
             block_cache: BlockCacheConfig::default(),
-            enable_flow_control: true,
-            pending_compaction_bytes_soft_limit: ReadableSize::gb(128).0,
-            pending_compaction_bytes_hard_limit: ReadableSize::gb(1024).0,
-            memtables_threshold: 5,
-            l0_files_threshold: 9,
         }
     }
 }
@@ -176,6 +169,29 @@ impl ConfigManager for StorageConfigManger {
             }
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct FlowControlConfig {
+    pub enable: bool,
+    pub pending_compaction_bytes_soft_limit: u64,
+    pub pending_compaction_bytes_hard_limit: u64,
+    pub memtables_threshold: u64,
+    pub l0_files_threshold: u64,
+}
+
+impl Default for FlowControlConfig {
+    fn default() -> FlowControlConfig {
+        FlowControlConfig {
+            enable: true,
+            pending_compaction_bytes_soft_limit: ReadableSize::gb(128).0,
+            pending_compaction_bytes_hard_limit: ReadableSize::gb(1024).0,
+            memtables_threshold: 5,
+            l0_files_threshold: 9,
+        }
     }
 }
 

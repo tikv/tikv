@@ -58,7 +58,6 @@ use crate::server::ttl::TTLCompactionFilterFactory;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR};
-use crate::storage::txn::flow_controller::FlowController;
 
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 
@@ -2539,7 +2538,7 @@ impl TiKvConfig {
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
 
-        if self.storage.enable_flow_control {
+        if self.storage.flow_control.enable {
             self.raftdb.defaultcf.disable_write_stall = true;
             self.rocksdb.defaultcf.disable_write_stall = true;
             self.rocksdb.writecf.disable_write_stall = true;
@@ -3430,7 +3429,12 @@ mod tests {
     }
 
     #[test]
-    fn test_change_storage_config() {}
+    fn test_change_flow_control() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.validate().unwrap();
+        let (db, cfg_controller, ..) = new_engines(cfg);
+
+    }
 
     #[test]
     fn test_change_rocksdb_config() {

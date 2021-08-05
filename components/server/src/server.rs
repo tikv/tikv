@@ -501,7 +501,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
         let ttl_scheduler = ttl_checker.scheduler();
         let flow_controller = Arc::new(FlowController::new(
-            &self.config.storage,
+            &self.config.storage.flow_control,
             self.engines.as_ref().unwrap().engine.kv_engine(),
             self.flow_info_receiver.take().unwrap(),
         ));

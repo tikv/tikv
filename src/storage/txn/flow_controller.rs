@@ -11,11 +11,11 @@ use std::u64;
 
 use collections::HashMap;
 use engine_rocks::FlowInfo;
-use engine_traits::{CFNamesExt, KvEngine, MiscExt};
+use engine_traits::KvEngine;
 use rand::Rng;
 use tikv_util::time::{duration_to_sec, Consume, Instant, Limiter};
 
-use crate::storage::config::Config;
+use crate::storage::config::FlowControlConfig;
 use crate::storage::metrics::*;
 
 const SPARE_TICK_DURATION: u64 = 1000; // 1000ms
@@ -120,7 +120,7 @@ impl FlowController {
     }
 
     pub fn new<E: KvEngine>(
-        config: &Config,
+        config: &FlowControlConfig,
         engine: E,
         flow_info_receiver: Receiver<FlowInfo>,
     ) -> Self {
@@ -129,7 +129,7 @@ impl FlowController {
         let checker = FlowChecker::new(config, engine, discard_ratio.clone(), limiter.clone());
         let (tx, rx) = mpsc::sync_channel(5);
 
-        tx.send(if config.enable_flow_control {
+        tx.send(if config.enable {
             Msg::Enable
         } else {
             Msg::Disable
@@ -147,7 +147,7 @@ impl FlowController {
     pub fn should_drop(&self) -> bool {
         let ratio = self.discard_ratio.load(Ordering::Relaxed);
         let mut rng = rand::thread_rng();
-        rng.gen::<f64>(ratio, RATIO_SCALE_FACTOR)
+        rng.gen_ratio(ratio as u32, RATIO_SCALE_FACTOR as u32)
     }
 
     pub fn consume(&self, bytes: usize) -> Consume {
@@ -242,16 +242,16 @@ impl<const CAP: usize> Smoother<CAP> {
 
         // calculate the average of left and right parts
         let half = self.records.len() / 2;
-        let mut left = 0.0;
-        let mut right = 0.0;
+        let mut left = 0;
+        let mut right = 0;
         for (i, r) in self.records.iter().enumerate() {
             if i < half {
-                left += r.0 as f64;
+                left += r.0;
             } else if self.records.len() - i - 1 < half {
-                right += r.0 as f64;
+                right += r.0;
             } else {
-                left += r.0 as f64 / 2.0;
-                right += r.0 as f64 / 2.0;
+                left += r.0;
+                right += r.0;
             }
         }
         // use the two averages with the time span of oldest and latest records
@@ -263,7 +263,7 @@ impl<const CAP: usize> Smoother<CAP> {
                 .1
                 .duration_since(self.records.front().unwrap().1),
         );
-        (right - left) / half as f64 / (elapsed / 2.0)
+        (right - left) as f64 / half as f64 / (elapsed / 2.0)
     }
 
     pub fn trend(&self) -> Trend {
@@ -277,12 +277,9 @@ impl<const CAP: usize> Smoother<CAP> {
         let mut right = 0;
         for (i, r) in self.records.iter().enumerate() {
             if i < half {
-                left += r.0 as f64;
+                left += r.0;
             } else if self.records.len() - i - 1 < half {
-                right += r.0 as f64;
-            } else {
-                left += r.0 as f64 / 2.0;
-                right += r.0 as f64 / 2.0;
+                right += r.0;
             }
         }
 
@@ -374,7 +371,6 @@ impl Default for CFFlowChecker {
     }
 }
 
-
 struct FlowChecker<E: KvEngine> {
     pending_compaction_bytes_soft_limit: u64,
     pending_compaction_bytes_hard_limit: u64,
@@ -405,7 +401,7 @@ struct FlowChecker<E: KvEngine> {
 
 impl<E: KvEngine> FlowChecker<E> {
     pub fn new(
-        config: &Config,
+        config: &FlowControlConfig,
         engine: E,
         discard_ratio: Arc<AtomicU64>,
         limiter: Arc<Limiter>,
@@ -567,9 +563,9 @@ impl<E: KvEngine> FlowChecker<E> {
         // calculate foreground write flow
         let rate =
             self.limiter.total_bytes_consumed() as f64 / self.last_record_time.elapsed_secs();
-        // don't record those write rate of 0. 
-        // For closed loop system, if all the requests are delayed(assume > 1s), 
-        // then in the next second, the write rate would be 0. But it doesn't 
+        // don't record those write rate of 0.
+        // For closed loop system, if all the requests are delayed(assume > 1s),
+        // then in the next second, the write rate would be 0. But it doesn't
         // reflect the real write rate, so just ignore it.
         if self.limiter.total_bytes_consumed() != 0 {
             self.write_flow_recorder.observe(rate as u64);
@@ -710,7 +706,7 @@ impl<E: KvEngine> FlowChecker<E> {
                 // keep, do nothing
                 0.0
             };
-            self.limiter.speed_limit() + diff * 1024 * 1024
+            self.limiter.speed_limit() + diff * 1024.0 * 1024.0
         };
 
         self.update_speed_limit(throttle);
