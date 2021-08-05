@@ -321,7 +321,6 @@ mod tests {
         config.store_io_pool_size = 4;
         let mut t = TestWriteRouter::new(config);
         let mut r = WriteRouter::new("1".to_string());
-        r.send_write_msg(&mut t, None, WriteMsg::Shutdown);
 
         let last_chosen_time = r.chosen_time;
         thread::sleep(Duration::from_millis(10));
@@ -349,6 +348,8 @@ mod tests {
                 t.must_same_reschedule_count(1);
                 break;
             }
+
+            t.must_same_msg_count(r.writer_id, 1);
 
             if timer.saturating_elapsed() > Duration::from_secs(5) {
                 panic!("not schedule after 5 seconds")
@@ -382,16 +383,16 @@ mod tests {
 
         thread::sleep(Duration::from_millis(10));
         t.io_reschedule_concurrent_count.store(4, Ordering::Relaxed);
-        // Should retry reschedule next time.
+        // Should retry reschedule next time because the limitation of concurrent count.
         // However it's possible that it will not scheduled due to random
         // so using loop here.
         let timer = Instant::now();
         loop {
             r.send_write_msg(&mut t, Some(30), WriteMsg::Shutdown);
+            t.must_same_msg_count(r.writer_id, 1);
             if r.next_retry_time.is_some() {
                 assert_eq!(r.last_unpersisted, None);
                 assert!(r.pending_write_msgs.is_empty());
-                t.must_same_msg_count(r.writer_id, 1);
                 t.must_same_reschedule_count(4);
                 break;
             }
