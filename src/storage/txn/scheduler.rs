@@ -927,6 +927,7 @@ mod tests {
     use kvproto::kvrpcpb::{BatchRollbackRequest, Context};
     use tikv_util::future::paired_future_callback;
     use txn_types::{Key, OldValues};
+    use tikv_util::config::ReadableSize;
 
     #[test]
     fn test_command_latches() {
@@ -1046,15 +1047,20 @@ mod tests {
     #[test]
     fn test_acquire_latch_deadline() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let config = Config {
+            scheduler_concurrency: 1024,
+            scheduler_worker_pool_size: 1,
+            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
+            enable_async_apply_prewrite: false,
+            ..Default::default()
+        };
         let scheduler = Scheduler::new(
             engine,
             DummyLockManager,
             ConcurrencyManager::new(1.into()),
-            1024,
-            1,
-            100 * 1024 * 1024,
+            &config,
             Arc::new(AtomicBool::new(true)),
-            false,
+            Arc::new(FlowController::empty()),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1090,15 +1096,20 @@ mod tests {
     #[test]
     fn test_pool_available_deadline() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let config = Config {
+            scheduler_concurrency: 1024,
+            scheduler_worker_pool_size: 1,
+            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
+            enable_async_apply_prewrite: false,
+            ..Default::default()
+        };
         let scheduler = Scheduler::new(
             engine,
             DummyLockManager,
             ConcurrencyManager::new(1.into()),
-            1024,
-            1,
-            100 * 1024 * 1024,
+            &config,
             Arc::new(AtomicBool::new(true)),
-            false,
+            Arc::new(FlowController::empty()),
         );
 
         // Spawn a task that sleeps for 500ms to occupy the pool. The next request
@@ -1135,15 +1146,20 @@ mod tests {
     #[test]
     fn test_accumulate_many_expired_commands() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let config = Config {
+            scheduler_concurrency: 1024,
+            scheduler_worker_pool_size: 1,
+            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
+            enable_async_apply_prewrite: false,
+            ..Default::default()
+        };
         let scheduler = Scheduler::new(
             engine,
             DummyLockManager,
             ConcurrencyManager::new(1.into()),
-            1024,
-            1,
-            100 * 1024 * 1024,
+            &config,
             Arc::new(AtomicBool::new(true)),
-            false,
+            Arc::new(FlowController::empty()),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
