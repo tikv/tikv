@@ -2646,7 +2646,7 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
             let end = from_hex(matches.get(2).unwrap().as_str()).unwrap();
 
             if start.starts_with(&[keys::DATA_PREFIX]) {
-                print_overlap_region(&pd_client, &start[1..], &end[1..]);
+                print_overlap_region_and_suggestions(&pd_client, &start[1..], &end[1..], db, path);
             } else if start.starts_with(&[keys::LOCAL_PREFIX]) {
                 println!(
                     "it isn't easy to handle local data, start key:{}",
@@ -2655,7 +2655,7 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
 
                 // consider the case that include both meta and user data
                 if end.starts_with(&[keys::DATA_PREFIX]) {
-                    print_overlap_region(&pd_client, &[], &end[1..]);
+                    print_overlap_region_and_suggestions(&pd_client, &[], &end[1..], db, path);
                 }
             } else {
                 println!("unexpected key {}", log_wrappers::Value(&start));
@@ -2670,33 +2670,48 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
     }
     println!("--------------------------------------------------------");
     println!("corruption analysis has completed");
-    println!();
-    println!("Maybe you are trying to start tikv-server without panic caused by file reading.");
-    println!("Here are the operations before starting tikv-server:");
-    println!("1. tikv-ctl ldb --db=<path/to/db> unsafe_remove_sst_file <xxx.sst>");
-    println!("2. tikv-ctl --db /path/to/tikv-data/db tombstone -r <region-id> --pd <endpoint>");
 }
 
-fn print_overlap_region(pd_client: &RpcClient, start: &[u8], end: &[u8]) {
+fn print_overlap_region_and_suggestions(
+    pd_client: &RpcClient,
+    start: &[u8],
+    end: &[u8],
+    db: &str,
+    sst_path: &Path,
+) {
     let mut key = start.to_vec();
+    let mut regions_to_print = vec![];
     println!("\noverlap region:");
     loop {
         let region = match pd_client.get_region_info(&key) {
             Err(e) => {
                 println!(
                     "can not get the region of key {}: {}",
-                    log_wrappers::Value(&start),
+                    log_wrappers::Value(start),
                     e
                 );
                 return;
             }
             Ok(r) => r,
         };
+        regions_to_print.push(region.clone());
         println!("{:?}", region);
         if region.get_end_key() > end || region.get_end_key().is_empty() {
             break;
         }
         key = region.get_end_key().to_vec();
+    }
+
+    println!("\nsuggested operations:");
+    println!(
+        "tikv-ctl ldb --db={} unsafe_remove_sst_file {:?}",
+        db, sst_path
+    );
+    for region in regions_to_print {
+        println!(
+            "tikv-ctl --db={} tombstone -r {} --pd <endpoint>",
+            db, region.id
+        );
     }
 }
 
