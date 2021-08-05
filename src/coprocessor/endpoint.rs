@@ -32,7 +32,8 @@ use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
-use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
+use resource_metering::ResourceMeteringTag;
+use resource_metering::cpu::{FutureExt, StreamExt};
 use tikv_util::time::Instant;
 use txn_types::Lock;
 
@@ -588,12 +589,14 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
+        let resource_tag = ResourceMeteringTag::from_rpc_context(&req_ctx.context);
         let task_id = req_ctx.build_task_id();
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
         self.read_pool
             .spawn(
                 Self::handle_stream_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                    .in_resource_metering_tag(resource_tag)
                     .then(futures::future::ok::<_, mpsc::SendError>)
                     .forward(tx)
                     .unwrap_or_else(|e| {
