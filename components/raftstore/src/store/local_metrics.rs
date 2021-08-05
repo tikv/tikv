@@ -151,6 +151,7 @@ pub struct RaftMessageDropMetrics {
     pub region_tombstone_peer: u64,
     pub region_nonexistent: u64,
     pub applying_snap: u64,
+    pub disk_full: u64,
 }
 
 impl RaftMessageDropMetrics {
@@ -202,6 +203,12 @@ impl RaftMessageDropMetrics {
                 .applying_snap
                 .inc_by(self.applying_snap);
             self.applying_snap = 0;
+        }
+        if self.disk_full > 0 {
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .disk_full
+                .inc_by(self.disk_full);
+            self.disk_full = 0;
         }
     }
 }
