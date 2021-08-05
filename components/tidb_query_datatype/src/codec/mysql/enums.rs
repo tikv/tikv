@@ -162,7 +162,7 @@ impl<'a> PartialEq for EnumRef<'a> {
 
 impl<'a> Ord for EnumRef<'a> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.value.cmp(&other.value)
+        self.value.cmp(other.value)
     }
 }
 

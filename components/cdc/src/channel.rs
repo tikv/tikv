@@ -281,6 +281,7 @@ where
 mod tests {
     use super::*;
 
+    use std::assert_matches::assert_matches;
     use std::sync::mpsc;
     use std::time::Duration;
 

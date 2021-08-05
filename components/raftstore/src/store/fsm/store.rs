@@ -44,7 +44,7 @@ use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::sys::disk;
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
-use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
+use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 use tikv_util::{
     box_err, box_try, debug, defer, error, info, is_zero_duration, slow_log, sys as sys_util, warn,
     Either, RingQueue,
@@ -350,7 +350,7 @@ where
     pub processed_fsm_count: usize,
     pub cfg: Config,
     pub store: metapb::Store,
-    pub pd_scheduler: FutureScheduler<PdTask<EK>>,
+    pub pd_scheduler: Scheduler<PdTask<EK>>,
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     // handle Compact, CleanupSST task
@@ -391,7 +391,7 @@ where
     pub perf_context: EK::PerfContext,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
-    pub is_disk_full: bool,
+    pub disk_usage: disk::DiskUsage,
 }
 
 impl<EK, ER, T> HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch> for PollContext<EK, ER, T>
@@ -618,9 +618,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     self.on_store_unreachable(store_id);
                 }
                 StoreMsg::Start { store } => self.start(store),
+                StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
-                StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
             }
         }
     }
@@ -777,7 +777,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
-        self.poll_ctx.is_disk_full = disk::is_disk_full();
+        self.poll_ctx.disk_usage = disk::get_disk_status(self.poll_ctx.store.get_id());
         self.timer = TiInstant::now_coarse();
         // update config
         self.poll_ctx.perf_context.start_observe();
@@ -799,6 +799,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 _ => {}
             }
             self.poll_ctx.cfg = incoming.clone();
+            self.poll_ctx.raft_metrics.waterfall_metrics = self.poll_ctx.cfg.waterfall_metrics;
             self.poll_ctx.update_ticks_timeout();
         }
     }
@@ -906,7 +907,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
-    pd_scheduler: FutureScheduler<PdTask<EK>>,
+    pd_scheduler: Scheduler<PdTask<EK>>,
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
@@ -1118,7 +1119,7 @@ where
             importer: self.importer.clone(),
             store_meta: self.store_meta.clone(),
             pending_create_peers: self.pending_create_peers.clone(),
-            raft_metrics: RaftMetrics::default(),
+            raft_metrics: RaftMetrics::new(self.cfg.value().waterfall_metrics),
             snap_mgr: self.snap_mgr.clone(),
             coprocessor_host: self.coprocessor_host.clone(),
             timer: SteadyTimer::default(),
@@ -1141,7 +1142,7 @@ where
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
             feature_gate: self.feature_gate.clone(),
-            is_disk_full: false,
+            disk_usage: disk::DiskUsage::Normal,
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1160,7 +1161,7 @@ where
 }
 
 struct Workers<EK: KvEngine> {
-    pd_worker: FutureWorker<PdTask<EK>>,
+    pd_worker: LazyWorker<PdTask<EK>>,
     background_worker: Worker,
 
     // Both of cleanup tasks and region tasks get their own workers, instead of reusing
@@ -1198,7 +1199,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         trans: T,
         pd_client: Arc<C>,
         mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask<EK>>,
+        pd_worker: LazyWorker<PdTask<EK>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SSTImporter>,
@@ -1378,8 +1379,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             auto_split_controller,
             concurrency_manager,
             snap_mgr,
+            workers.pd_worker.remote(),
         );
-        box_try!(workers.pd_worker.start(pd_runner));
+        assert!(workers.pd_worker.start(pd_runner));
 
         if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
@@ -1396,7 +1398,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         }
         let mut workers = self.workers.take().unwrap();
         // Wait all workers finish.
-        let handle = workers.pd_worker.stop();
+        workers.pd_worker.stop();
 
         self.apply_system.shutdown();
         MEMTRACE_APPLY_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
@@ -1408,9 +1410,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         MEMTRACE_RAFT_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
         MEMTRACE_RAFT_ROUTER_LEAK.trace(TraceEvent::Reset(0));
 
-        if let Some(h) = handle {
-            h.join().unwrap();
-        }
         workers.coprocessor_host.shutdown();
         workers.cleanup_worker.stop();
         workers.region_worker.stop();
@@ -1422,7 +1421,7 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
     cfg: &Config,
 ) -> (RaftRouter<EK, ER>, RaftBatchSystem<EK, ER>) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
-    let (apply_router, apply_system) = create_apply_batch_system(&cfg);
+    let (apply_router, apply_system) = create_apply_batch_system(cfg);
     let (router, system) =
         batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm);
     let raft_router = RaftRouter { router };
@@ -1701,7 +1700,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             pending_create_peers.insert(region_id, (msg.get_to_peer().get_id(), false));
         }
 
-        let res = self.maybe_create_peer_internal(region_id, &msg, is_local_first);
+        let res = self.maybe_create_peer_internal(region_id, msg, is_local_first);
         // If failed, i.e. Err or Ok(false), remove this peer data from `pending_create_peers`.
         if res.as_ref().map_or(true, |b| !*b) && is_local_first {
             let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
@@ -1757,7 +1756,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             Excluded(data_key(msg.get_start_key())),
             Unbounded::<Vec<u8>>,
         )) {
-            let exist_region = &meta.regions[&id];
+            let exist_region = &meta.regions[id];
             if enc_start_key(exist_region) >= data_end_key(msg.get_end_key()) {
                 break;
             }

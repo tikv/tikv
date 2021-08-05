@@ -45,12 +45,13 @@ where
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
             need_old_value: false,
+            is_retry_request: false,
         };
         prewrite(
             &mut txn,
             &mut reader,
             &txn_props,
-            Mutation::Put((Key::from_raw(&k), v.clone())),
+            Mutation::Put((Key::from_raw(k), v.clone())),
             &None,
             false,
         )
@@ -58,7 +59,7 @@ where
     }
     let write_data = WriteData::from_modifies(txn.into_modifies());
     let _ = engine.async_write(&ctx, write_data, Box::new(move |(..)| {}));
-    let keys: Vec<Key> = kvs.iter().map(|(k, _)| Key::from_raw(&k)).collect();
+    let keys: Vec<Key> = kvs.iter().map(|(k, _)| Key::from_raw(k)).collect();
     let snapshot = engine.snapshot(Default::default()).unwrap();
     (snapshot, keys)
 }
@@ -75,7 +76,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
             )
             .generate(DEFAULT_ITERATIONS)
             .iter()
-            .map(|(k, v)| (Mutation::Put((Key::from_raw(&k), v.clone())), k.clone()))
+            .map(|(k, v)| (Mutation::Put((Key::from_raw(k), v.clone())), k.clone()))
             .collect();
             let snapshot = engine.snapshot(Default::default()).unwrap();
             (mutations, snapshot)
@@ -93,6 +94,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
                     lock_ttl: 0,
                     min_commit_ts: TimeStamp::default(),
                     need_old_value: false,
+                    is_retry_request: false,
                 };
                 prewrite(&mut txn, &mut reader, &txn_props, mutation, &None, false).unwrap();
             }
@@ -105,7 +107,7 @@ fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCo
     let engine = config.engine_factory.build();
     let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
-        || setup_prewrite(&engine, &config, 1),
+        || setup_prewrite(&engine, config, 1),
         |(snapshot, keys)| {
             for key in keys {
                 let mut txn = mvcc::MvccTxn::new(1.into(), cm.clone());
@@ -124,7 +126,7 @@ fn mvcc_rollback_prewrote<E: Engine, F: EngineFactory<E>>(
     let engine = config.engine_factory.build();
     let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
-        || setup_prewrite(&engine, &config, 1),
+        || setup_prewrite(&engine, config, 1),
         |(snapshot, keys)| {
             for key in keys {
                 let mut txn = mvcc::MvccTxn::new(1.into(), cm.clone());
@@ -150,7 +152,7 @@ fn mvcc_rollback_conflict<E: Engine, F: EngineFactory<E>>(
     let engine = config.engine_factory.build();
     let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
-        || setup_prewrite(&engine, &config, 2),
+        || setup_prewrite(&engine, config, 2),
         |(snapshot, keys)| {
             for key in keys {
                 let mut txn = mvcc::MvccTxn::new(1.into(), cm.clone());
@@ -183,7 +185,7 @@ fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
                 DEFAULT_KV_GENERATOR_SEED,
             )
             .generate(DEFAULT_ITERATIONS);
-            let keys: Vec<Key> = kvs.iter().map(|(k, _)| Key::from_raw(&k)).collect();
+            let keys: Vec<Key> = kvs.iter().map(|(k, _)| Key::from_raw(k)).collect();
             let snapshot = engine.snapshot(Default::default()).unwrap();
             (snapshot, keys)
         },
@@ -214,7 +216,7 @@ fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
     )
     .generate(DEFAULT_ITERATIONS)
     .iter()
-    .map(|(k, _)| Key::from_raw(&k))
+    .map(|(k, _)| Key::from_raw(k))
     .collect();
 
     b.iter_batched(
@@ -225,7 +227,7 @@ fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
         |(snapshot, test_kvs)| {
             for key in test_kvs {
                 let mut reader = MvccReader::new(snapshot.clone(), None, true);
-                black_box(reader.load_lock(&key).unwrap());
+                black_box(reader.load_lock(key).unwrap());
             }
         },
         BatchSize::SmallInput,
@@ -247,14 +249,14 @@ fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
             )
             .generate(DEFAULT_ITERATIONS)
             .iter()
-            .map(|(k, _)| Key::from_raw(&k))
+            .map(|(k, _)| Key::from_raw(k))
             .collect();
             (snapshot, test_keys)
         },
         |(snapshot, test_keys)| {
             for key in &test_keys {
                 let mut reader = MvccReader::new(snapshot.clone(), None, true);
-                black_box(reader.seek_write(&key, TimeStamp::max()).unwrap());
+                black_box(reader.seek_write(key, TimeStamp::max()).unwrap());
             }
         },
         BatchSize::SmallInput,

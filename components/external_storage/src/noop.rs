@@ -24,7 +24,7 @@ const STORAGE_NAME: &str = "noop";
 
 impl ExternalStorage for NoopStorage {
     fn name(&self) -> &'static str {
-        &STORAGE_NAME
+        STORAGE_NAME
     }
 
     fn url(&self) -> io::Result<url::Url> {

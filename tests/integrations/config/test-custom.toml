@@ -72,6 +72,7 @@ enable-request-batch = false
 background-thread-count = 999
 end-point-slow-log-threshold = "1s"
 forward-max-connections-per-address = 5
+reject-messages-on-memory-ratio = 0.8
 
 [server.labels]
 a = "b"
@@ -178,10 +179,16 @@ apply-yield-duration = "333ms"
 store-max-batch-size = 21
 store-pool-size = 3
 store-reschedule-duration = "2s"
+store-io-pool-size = 5
+store-io-notify-capacity = 123456
 future-poll-size = 2
 hibernate-regions = false
 dev-assert = true
 perf-level = 1
+evict-cache-on-memory-ratio = 0.8
+cmd-batch = false
+raft-write-size-limit = "34MB"
+waterfall-metrics = true
 
 [coprocessor]
 split-region-on-table = false

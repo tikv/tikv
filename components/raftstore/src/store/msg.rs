@@ -5,7 +5,6 @@ use std::fmt;
 
 use bitflags::bitflags;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
-use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
@@ -13,7 +12,9 @@ use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
+use kvproto::{import_sstpb::SstMeta, kvrpcpb::DiskFullOpt};
 use raft::SnapshotStatus;
+use smallvec::SmallVec;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
@@ -76,6 +77,7 @@ pub enum Callback<S: Snapshot> {
         /// `committed_cb` is called after a request is committed and before it's being applied, and
         /// it's guaranteed that the request will be successfully applied soon.
         committed_cb: Option<ExtCallback>,
+        request_times: SmallVec<[Instant; 4]>,
     },
 }
 
@@ -98,6 +100,14 @@ where
             cb,
             proposed_cb,
             committed_cb,
+            request_times: SmallVec::new(),
+        }
+    }
+
+    pub fn get_request_times(&self) -> Option<&SmallVec<[Instant; 4]>> {
+        match self {
+            Callback::Write { request_times, .. } => Some(request_times),
+            _ => None,
         }
     }
 
@@ -152,7 +162,7 @@ where
     S: Snapshot,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
+        match self {
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
             Callback::Write { .. } => write!(fmt, "Callback::Write(..)"),
@@ -345,6 +355,11 @@ pub enum CasualMessage<EK: KvEngine> {
         region: metapb::Region,
         leader: metapb::Peer,
     },
+
+    /// For drop raft messages at an upper layer.
+    RejectRaftAppend {
+        peer_id: u64,
+    },
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -358,7 +373,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
                 fmt,
                 "ComputeHashResult [index: {}, context: {}, hash: {}]",
                 index,
-                log_wrappers::Value::key(&context),
+                log_wrappers::Value::key(context),
                 escape(hash)
             ),
             CasualMessage::SplitRegion {
@@ -397,8 +412,18 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::ForceCompactRaftLogs => write!(fmt, "ForceCompactRaftLogs"),
             CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
             CasualMessage::QueryRegionLeaderResp { .. } => write!(fmt, "QueryRegionLeaderResp"),
+            CasualMessage::RejectRaftAppend { peer_id } => {
+                write!(fmt, "RejectRaftAppend(peer_id={})", peer_id)
+            }
         }
     }
+}
+
+/// control options for raftcmd.
+#[derive(Debug, Default)]
+pub struct RaftCmdExtraOpts {
+    pub deadline: Option<Deadline>,
+    pub disk_full_opt: DiskFullOpt,
 }
 
 /// Raft command is the command that is expected to be proposed by the
@@ -408,7 +433,7 @@ pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
-    pub deadline: Option<Deadline>,
+    pub extra_opts: RaftCmdExtraOpts,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
@@ -418,7 +443,23 @@ impl<S: Snapshot> RaftCommand<S> {
             request,
             callback,
             send_time: Instant::now(),
-            deadline: None,
+            extra_opts: RaftCmdExtraOpts::default(),
+        }
+    }
+
+    pub fn new_ext(
+        request: RaftCmdRequest,
+        callback: Callback<S>,
+        extra_opts: RaftCmdExtraOpts,
+    ) -> RaftCommand<S> {
+        RaftCommand {
+            request,
+            callback,
+            send_time: Instant::now(),
+            extra_opts: RaftCmdExtraOpts {
+                deadline: extra_opts.deadline,
+                disk_full_opt: extra_opts.disk_full_opt,
+            },
         }
     }
 }
@@ -452,6 +493,11 @@ pub enum PeerMsg<EK: KvEngine> {
     Start,
     /// A message only used to notify a peer.
     Noop,
+    Persisted {
+        peer_id: u64,
+        ready_number: u64,
+        send_time: Instant,
+    },
     /// Message that is not important and can be dropped occasionally.
     CasualMessage(CasualMessage<EK>),
     /// Ask region to report a heartbeat to PD.
@@ -475,6 +521,15 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::ApplyRes { res } => write!(fmt, "ApplyRes {:?}", res),
             PeerMsg::Start => write!(fmt, "Startup"),
             PeerMsg::Noop => write!(fmt, "Noop"),
+            PeerMsg::Persisted {
+                peer_id,
+                ready_number,
+                ..
+            } => write!(
+                fmt,
+                "Persisted peer_id {}, ready_number {}",
+                peer_id, ready_number
+            ),
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
@@ -509,11 +564,13 @@ where
     Start {
         store: metapb::Store,
     },
+
+    /// Asks the store to update replication mode.
+    UpdateReplicationMode(ReplicationStatus),
+
     /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
-    /// Asks the store to update replication mode.
-    UpdateReplicationMode(ReplicationStatus),
 }
 
 impl<EK> fmt::Debug for StoreMsg<EK>

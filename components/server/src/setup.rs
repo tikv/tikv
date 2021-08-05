@@ -58,7 +58,7 @@ fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> String {
     config::ensure_dir_exist(path).unwrap_or_else(|e| {
         fatal!("failed to create engine log dir: {}", e);
     });
-    config::canonicalize_log_dir(&path, filename).unwrap_or_else(|e| {
+    config::canonicalize_log_dir(path, filename).unwrap_or_else(|e| {
         fatal!("failed to canonicalize engine log dir {:?}: {}", path, e);
     })
 }
@@ -283,7 +283,7 @@ pub fn validate_and_persist_config(config: &mut TiKvConfig, persist: bool) {
     }
 
     if persist {
-        if let Err(e) = persist_config(&config) {
+        if let Err(e) = persist_config(config) {
             fatal!("persist critical config failed: {}", e);
         }
     }
