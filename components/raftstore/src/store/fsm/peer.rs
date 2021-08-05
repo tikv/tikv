@@ -29,12 +29,13 @@ use kvproto::raft_serverpb::{
 };
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use protobuf::Message;
-use raft::eraftpb::{ConfChangeType, EntryType, MessageType};
+use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, Progress, ReadState, Ready, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
 use smallvec::{smallvec, SmallVec};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::sys::{disk, memory_usage_reaches_high_water};
+use tikv_util::sys::disk::DiskUsage;
+use tikv_util::sys::memory_usage_reaches_high_water;
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::worker::{ScheduleError, Scheduler};
 use tikv_util::{box_err, debug, defer, error, info, trace, warn};
@@ -590,8 +591,7 @@ where
                     }
 
                     let req_size = cmd.request.compute_size();
-                    if self.ctx.cfg.cmd_batch
-                        && cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull
+                    if cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull
                         && self.fsm.batch_req_builder.can_batch(&cmd.request, req_size)
                     {
                         self.fsm.batch_req_builder.add(cmd, req_size);
@@ -746,11 +746,8 @@ where
                 msg.msg_type = MessageType::MsgUnreachable;
                 msg.to = peer_id;
                 msg.from = self.fsm.peer.peer_id();
-                self.fsm.peer.send(
-                    &mut self.ctx.trans,
-                    vec![msg],
-                    &mut self.ctx.raft_metrics.send_message,
-                );
+                let ctx = &mut self.ctx;
+                self.fsm.peer.send(ctx, vec![msg]);
             }
         }
     }
@@ -1297,6 +1294,21 @@ where
         }
     }
 
+    fn handle_reported_disk_usage(&mut self, msg: &RaftMessage) {
+        let store_id = msg.get_from_peer().get_store_id();
+        match msg.disk_usage {
+            DiskUsage::Normal => {
+                self.ctx.store_disk_usages.remove(&store_id);
+            }
+            x => {
+                self.ctx.store_disk_usages.insert(store_id, x);
+                let id = msg.get_from_peer().get_id();
+                let raft = &mut self.fsm.peer.raft_group.raft;
+                raft.adjust_max_inflight_msgs(id, 0);
+            }
+        }
+    }
+
     fn on_raft_message(&mut self, msg: InspectedRaftMessage) -> Result<()> {
         let InspectedRaftMessage { heap_size, mut msg } = msg;
         let stepped = Cell::new(false);
@@ -1322,31 +1334,15 @@ where
         );
 
         let msg_type = msg.get_message().get_msg_type();
+        self.handle_reported_disk_usage(&msg);
 
-        if !matches!(self.ctx.disk_usage, disk::DiskUsage::Normal) {
-            // only leader transfer and winning log are allowed.
-            let mut allowed = true;
-            if MessageType::MsgAppend == msg_type {
-                let entries = msg.get_message().get_entries();
-                for i in entries {
-                    let entry_type = i.get_entry_type();
-                    if EntryType::EntryNormal == entry_type && !i.get_data().is_empty() {
-                        allowed = false;
-                        break;
-                    }
-                }
-            } else if MessageType::MsgTimeoutNow == msg_type {
-                allowed = false;
-            }
-
-            if !allowed {
-                debug!(
-                    "skip {:?} because of disk full", msg_type;
-                    "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
-                );
-                self.ctx.raft_metrics.message_dropped.disk_full += 1;
-                return Ok(());
-            }
+        if matches!(self.ctx.self_disk_usage, DiskUsage::AlreadyFull) {
+            debug!(
+                "skip {:?} because of disk full", msg_type;
+                "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
+            );
+            self.ctx.raft_metrics.message_dropped.disk_full += 1;
+            return Ok(());
         }
 
         if !self.validate_raft_msg(&msg) {
