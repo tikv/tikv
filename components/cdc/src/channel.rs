@@ -260,7 +260,7 @@ impl Drop for Drain {
     }
 }
 
-#[cfg(test)]
+#[allow(clippy::result_unit_err)]
 pub fn recv_timeout<S, I>(s: &mut S, dur: std::time::Duration) -> Result<Option<I>, ()>
 where
     S: Stream<Item = I> + Unpin,
@@ -268,7 +268,6 @@ where
     poll_timeout(&mut s.next(), dur)
 }
 
-#[cfg(test)]
 pub fn poll_timeout<F, I>(fut: &mut F, dur: std::time::Duration) -> Result<I, ()>
 where
     F: std::future::Future<Output = I> + Unpin,

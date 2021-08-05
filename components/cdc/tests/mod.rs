@@ -6,8 +6,6 @@ use std::time::Duration;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use futures::executor::block_on;
-use futures::StreamExt;
 use grpcio::{ChannelBuilder, Environment};
 use grpcio::{ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver};
 use kvproto::cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest};
@@ -20,7 +18,7 @@ use tikv_util::worker::LazyWorker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
-use cdc::{CdcObserver, FeatureGate, MemoryQuota, Task};
+use cdc::{recv_timeout, CdcObserver, FeatureGate, MemoryQuota, Task};
 static INIT: Once = Once::new();
 
 pub fn init() {
@@ -57,16 +55,17 @@ pub fn new_event_feed(
             let mut event_feed = event_feed_wrap_clone.lock().unwrap();
             events = event_feed.take();
         }
-        let events_rx = if let Some(events_rx) = events.as_mut() {
+        let mut events_rx = if let Some(events_rx) = events.as_mut() {
             events_rx
         } else {
             return ChangeDataEvent::default();
         };
-        let change_data = if let Some(event) = block_on(events_rx.next()) {
-            event
-        } else {
-            return ChangeDataEvent::default();
-        };
+        let change_data =
+            if let Some(event) = recv_timeout(&mut events_rx, Duration::from_secs(5)).unwrap() {
+                event
+            } else {
+                return ChangeDataEvent::default();
+            };
         {
             let mut event_feed = event_feed_wrap_clone.lock().unwrap();
             *event_feed = events;
