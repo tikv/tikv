@@ -3,11 +3,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::*;
 use std::thread;
-use std::time::*;
+use std::time::Duration;
 
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::*;
-use kvproto::metapb::Region;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use kvproto::tikvpb::TikvClient;
 use raft::eraftpb::MessageType;
@@ -18,6 +17,7 @@ use pd_client::PdClient;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 /// Test if merge is rollback as expected.
@@ -522,123 +522,6 @@ fn test_node_merge_multiple_snapshots(together: bool) {
     must_get_equal(&cluster.get_engine(3), b"k9", b"v9");
 }
 
-fn prepare_request_snapshot_cluster() -> (Cluster<NodeCluster>, Region, Region) {
-    let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-
-    cluster.run();
-
-    let region = pd_client.get_region(b"k1").unwrap();
-    cluster.must_split(&region, b"k2");
-
-    cluster.must_put(b"k1", b"v1");
-    cluster.must_put(b"k3", b"v3");
-
-    let region = pd_client.get_region(b"k3").unwrap();
-    let target_region = pd_client.get_region(b"k1").unwrap();
-
-    // Make sure peer 1 is the leader.
-    cluster.must_transfer_leader(region.get_id(), new_peer(1, 1));
-
-    (cluster, region, target_region)
-}
-
-// Test if request snapshot is rejected during merging.
-#[test]
-fn test_node_merge_reject_request_snapshot() {
-    let (mut cluster, region, target_region) = prepare_request_snapshot_cluster();
-
-    let k = b"k3_for_apply_to_current_term";
-    cluster.must_put(k, b"value");
-    for i in 1..=3 {
-        must_get_equal(&cluster.get_engine(i), k, b"value");
-    }
-
-    let apply_prepare_merge_fp = "apply_before_prepare_merge";
-    fail::cfg(apply_prepare_merge_fp, "pause").unwrap();
-    let prepare_merge = new_prepare_merge(target_region);
-    let mut req = new_admin_request(region.get_id(), region.get_region_epoch(), prepare_merge);
-    req.mut_header().set_peer(new_peer(1, 1));
-    let (tx, rx) = mpsc::sync_channel(1);
-    cluster
-        .sim
-        .rl()
-        .async_command_on_node(
-            1,
-            req,
-            Callback::Write {
-                cb: Box::new(|_: WriteResponse| {}),
-                proposed_cb: Some(Box::new(move || tx.send(()).unwrap())),
-                committed_cb: None,
-            },
-        )
-        .unwrap();
-    // Proposing merge shouldn't fail.
-    assert!(rx.recv_timeout(Duration::from_millis(200)).is_ok());
-
-    // Install snapshot filter before requesting snapshot.
-    let (tx, rx) = mpsc::channel();
-    let notifier = Mutex::new(Some(tx));
-    cluster.sim.wl().add_recv_filter(
-        2,
-        Box::new(RecvSnapshotFilter {
-            notifier,
-            region_id: region.get_id(),
-        }),
-    );
-    cluster.must_request_snapshot(2, region.get_id());
-    // Leader should reject request snapshot while merging.
-    rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
-
-    // Transfer leader to peer 3, new leader should reject request snapshot too.
-    cluster.must_transfer_leader(region.get_id(), new_peer(3, 3));
-    rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
-    fail::remove(apply_prepare_merge_fp);
-}
-
-// Test if merge is rejected during requesting snapshot.
-#[test]
-fn test_node_request_snapshot_reject_merge() {
-    let (cluster, region, target_region) = prepare_request_snapshot_cluster();
-
-    // Pause generating snapshot.
-    let region_gen_snap_fp = "region_gen_snap";
-    fail::cfg(region_gen_snap_fp, "pause").unwrap();
-
-    // Install snapshot filter before requesting snapshot.
-    let (tx, rx) = mpsc::channel();
-    let notifier = Mutex::new(Some(tx));
-    cluster.sim.wl().add_recv_filter(
-        2,
-        Box::new(RecvSnapshotFilter {
-            notifier,
-            region_id: region.get_id(),
-        }),
-    );
-    cluster.must_request_snapshot(2, region.get_id());
-    // Leader can not generate a snapshot.
-    rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
-
-    let prepare_merge = new_prepare_merge(target_region.clone());
-    let mut req = new_admin_request(region.get_id(), region.get_region_epoch(), prepare_merge);
-    req.mut_header().set_peer(new_peer(1, 1));
-    cluster
-        .sim
-        .rl()
-        .async_command_on_node(1, req, Callback::None)
-        .unwrap();
-    sleep_ms(200);
-
-    // Merge will never happen.
-    let target = cluster.get_region(target_region.get_start_key());
-    assert_eq!(target, target_region);
-    fail::remove(region_gen_snap_fp);
-    // Drop cluster to ensure notifier will not send any message after rx is dropped.
-    drop(cluster);
-}
-
 // Test if compact log is ignored after premerge was applied and restart
 // I.e. is_merging flag should be set after restart
 #[test]
@@ -708,7 +591,7 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
         if apply_index >= last_index {
             break;
         }
-        if timer.elapsed() > Duration::from_secs(3) {
+        if timer.saturating_elapsed() > Duration::from_secs(3) {
             panic!("logs are not applied after 3 seconds");
         }
         thread::sleep(Duration::from_millis(20));
@@ -1287,7 +1170,7 @@ fn test_node_merge_crash_when_snapshot() {
         if local_state.get_state() == PeerState::Applying {
             break;
         }
-        if timer.elapsed() > Duration::from_secs(1) {
+        if timer.saturating_elapsed() > Duration::from_secs(1) {
             panic!("not become applying state after 1 seconds.");
         }
         sleep_ms(10);

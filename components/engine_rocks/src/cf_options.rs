@@ -50,6 +50,10 @@ impl ColumnFamilyOptions for RocksColumnFamilyOptions {
         RocksColumnFamilyOptions::from_raw(RawCFOptions::new())
     }
 
+    fn get_max_write_buffer_number(&self) -> u32 {
+        self.0.get_max_write_buffer_number()
+    }
+
     fn get_level_zero_slowdown_writes_trigger(&self) -> u32 {
         self.0.get_level_zero_slowdown_writes_trigger()
     }

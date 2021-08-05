@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::iter::repeat;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -673,14 +674,20 @@ pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String)
     let (mut cluster, mut store) =
         AssertionStorage::new_raft_storage_with_store_count(3, prefix.as_str());
     let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
-    for k in &keys {
-        store.put_ok_for_cluster(&mut cluster, k.as_bytes(), b"v1", 5, 10);
-        store.put_ok_for_cluster(&mut cluster, k.as_bytes(), b"v2", 15, 20);
+    if !keys.is_empty() {
+        store.batch_put_ok_for_cluster(&mut cluster, &keys, repeat(b"v1" as &[u8]), 5, 10);
+        store.batch_put_ok_for_cluster(&mut cluster, &keys, repeat(b"v2" as &[u8]), 15, 20);
     }
 
+    let mut last_region = cluster.get_region(b"");
+    store.gc_ok_for_cluster(&mut cluster, b"", 30);
     for k in &keys {
         // clear data whose commit_ts < 30
-        store.gc_ok_for_cluster(&mut cluster, k.as_bytes(), 30);
+        let region = cluster.get_region(k.as_bytes());
+        if last_region != region {
+            store.gc_ok_for_cluster(&mut cluster, k.as_bytes(), 30);
+            last_region = region;
+        }
     }
 
     for k in &keys {
@@ -853,7 +860,7 @@ struct Oracle {
 impl Oracle {
     fn new() -> Oracle {
         Oracle {
-            ts: AtomicUsize::new(1 as usize),
+            ts: AtomicUsize::new(1_usize),
         }
     }
 

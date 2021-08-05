@@ -6,7 +6,7 @@ use crate::storage::mvcc::{
 };
 use crate::storage::txn::actions::check_data_constraint::check_data_constraint;
 use crate::storage::Snapshot;
-use txn_types::{Key, Lock, LockType, TimeStamp, Value, WriteType};
+use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, Value, Write, WriteType};
 
 pub fn acquire_pessimistic_lock<S: Snapshot>(
     txn: &mut MvccTxn,
@@ -18,7 +18,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     for_update_ts: TimeStamp,
     need_value: bool,
     min_commit_ts: TimeStamp,
-) -> MvccResult<Option<Value>> {
+    need_old_value: bool,
+) -> MvccResult<(Option<Value>, OldValue)> {
     fail_point!("acquire_pessimistic_lock", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
@@ -42,6 +43,30 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         )
     }
 
+    fn load_old_value<S: Snapshot>(
+        need_old_value: bool,
+        need_value: bool,
+        val: Option<&Value>,
+        reader: &mut SnapshotReader<S>,
+        key: &Key,
+        for_update_ts: TimeStamp,
+        prev_write_loaded: bool,
+        prev_write: Option<Write>,
+    ) -> MvccResult<OldValue> {
+        if !need_old_value {
+            return Ok(OldValue::Unspecified);
+        }
+        if need_value {
+            // The old value must be loaded to `val` when `need_value` is set.
+            Ok(match val {
+                Some(val) => OldValue::Value { value: val.clone() },
+                None => OldValue::None,
+            })
+        } else {
+            reader.get_old_value(key, for_update_ts, prev_write_loaded, prev_write)
+        }
+    }
+
     let mut val = None;
     if let Some(lock) = reader.load_lock(&key)? {
         if lock.ts != reader.start_ts {
@@ -58,6 +83,19 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         if need_value {
             val = reader.get(&key, for_update_ts)?;
         }
+        // Pervious write is not loaded.
+        let (prev_write_loaded, prev_write) = (false, None);
+        let old_value = load_old_value(
+            need_old_value,
+            need_value,
+            val.as_ref(),
+            reader,
+            &key,
+            for_update_ts,
+            prev_write_loaded,
+            prev_write,
+        )?;
+
         // Overwrite the lock with small for_update_ts
         if for_update_ts > lock.for_update_ts {
             let lock = pessimistic_lock(
@@ -73,10 +111,17 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 .acquire_pessimistic_lock
                 .inc();
         }
-        return Ok(val);
+        return Ok((val, old_value));
     }
 
+    // Following seek_write read the previous write.
+    let (prev_write_loaded, mut prev_write) = (true, None);
     if let Some((commit_ts, write)) = reader.seek_write(&key, TimeStamp::max())? {
+        // Find a previous write.
+        if need_old_value {
+            prev_write = Some(write.clone());
+        }
+
         // The isolation level of pessimistic transactions is RC. `for_update_ts` is
         // the commit_ts of the data this transaction read. If exists a commit version
         // whose commit timestamp is larger than current `for_update_ts`, the
@@ -145,6 +190,16 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         }
     }
 
+    let old_value = load_old_value(
+        need_old_value,
+        need_value,
+        val.as_ref(),
+        reader,
+        &key,
+        for_update_ts,
+        prev_write_loaded,
+        prev_write,
+    )?;
     let lock = pessimistic_lock(
         primary,
         reader.start_ts,
@@ -155,7 +210,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     txn.put_lock(key, &lock);
     // TODO don't we need to commit the modifies in txn?
 
-    Ok(val)
+    Ok((val, old_value))
 }
 
 pub mod tests {
@@ -169,7 +224,13 @@ pub mod tests {
 
     #[cfg(test)]
     use crate::storage::{
-        mvcc::tests::*, txn::commands::pessimistic_rollback, txn::tests::*, TestEngineBuilder,
+        mvcc::tests::*,
+        txn::actions::prewrite::tests::{
+            old_value_put_delete_lock_insert, old_value_random, OldValueRandomTest,
+        },
+        txn::commands::pessimistic_rollback,
+        txn::tests::*,
+        TestEngineBuilder,
     };
 
     pub fn must_succeed_impl<E: Engine>(
@@ -200,6 +261,7 @@ pub mod tests {
             for_update_ts.into(),
             need_value,
             min_commit_ts,
+            false,
         )
         .unwrap();
         let modifies = txn.into_modifies();
@@ -208,7 +270,7 @@ pub mod tests {
                 .write(&ctx, WriteData::from_modifies(modifies))
                 .unwrap();
         }
-        res
+        res.0
     }
 
     pub fn must_succeed<E: Engine>(
@@ -352,6 +414,7 @@ pub mod tests {
             for_update_ts.into(),
             need_value,
             min_commit_ts,
+            false,
         )
         .unwrap_err()
     }
@@ -767,11 +830,10 @@ pub mod tests {
             if expected_value.is_none() {
                 assert!(must_succeed_impl(&engine, key, key, 50, true, 0, 50, false, 51).is_none());
                 must_pessimistic_rollback(&engine, key, 50, 51);
-                must_unlocked(&engine, key);
             } else {
                 must_err_impl(&engine, key, key, 50, true, 50, false, 51);
-                must_unlocked(&engine, key);
             }
+            must_unlocked(&engine, key);
 
             // Test getting value.
             let res = must_succeed_impl(&engine, key, key, 50, false, 0, 50, true, 51);
@@ -784,5 +846,166 @@ pub mod tests {
             assert_eq!(res2, expected_value.map(|v| v.to_vec()));
             must_pessimistic_rollback(&engine, key, 50, 51);
         }
+    }
+
+    #[test]
+    fn test_old_value_put_delete_lock_insert() {
+        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let start_ts = old_value_put_delete_lock_insert(&engine, b"k1");
+        let key = Key::from_raw(b"k1");
+        for should_not_exist in &[true, false] {
+            for need_value in &[true, false] {
+                let snapshot = engine.snapshot(Default::default()).unwrap();
+                let cm = ConcurrencyManager::new(start_ts);
+                let mut txn = MvccTxn::new(start_ts, cm);
+                let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+                let need_old_value = true;
+                let lock_ttl = 0;
+                let for_update_ts = start_ts;
+                let min_commit_ts = 0.into();
+                let (_, old_value) = acquire_pessimistic_lock(
+                    &mut txn,
+                    &mut reader,
+                    key.clone(),
+                    key.as_encoded(),
+                    *should_not_exist,
+                    lock_ttl,
+                    for_update_ts,
+                    *need_value,
+                    min_commit_ts,
+                    need_old_value,
+                )
+                .unwrap();
+                assert_eq!(old_value, OldValue::None);
+            }
+        }
+    }
+
+    #[test]
+    fn test_old_value_for_update_ts() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let k = b"k1";
+        let v1 = b"v1";
+
+        // Put v1 @ start ts 1, commit ts 2
+        must_succeed(&engine, k, k, 1, 1);
+        must_pessimistic_prewrite_put(&engine, k, v1, k, 1, 1, true);
+        must_commit(&engine, k, 1, 2);
+
+        let v2 = b"v2";
+        // Put v2 @ start ts 10, commit ts 11
+        must_succeed(&engine, k, k, 10, 10);
+        must_pessimistic_prewrite_put(&engine, k, v2, k, 10, 10, true);
+        must_commit(&engine, k, 10, 11);
+
+        // Lock @ start ts 9, for update ts 12, commit ts 13
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let min_commit_ts = TimeStamp::zero();
+        let cm = ConcurrencyManager::new(min_commit_ts);
+        let start_ts = TimeStamp::new(9);
+        let for_update_ts = TimeStamp::new(12);
+        let need_old_value = true;
+        // Force to read old via reader.
+        let need_value = false;
+        let mut txn = MvccTxn::new(start_ts, cm.clone());
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+        let res = acquire_pessimistic_lock(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(k),
+            k,
+            false,
+            0,
+            for_update_ts,
+            need_value,
+            min_commit_ts,
+            need_old_value,
+        )
+        .unwrap();
+        assert_eq!(
+            res.1,
+            OldValue::Value {
+                value: b"v2".to_vec()
+            }
+        );
+
+        // Write the lock.
+        let modifies = txn.into_modifies();
+        if !modifies.is_empty() {
+            engine
+                .write(&Default::default(), WriteData::from_modifies(modifies))
+                .unwrap();
+        }
+
+        // Lock again.
+        let mut txn = MvccTxn::new(start_ts, cm);
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+        let res = acquire_pessimistic_lock(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(k),
+            k,
+            false,
+            0,
+            for_update_ts,
+            false,
+            min_commit_ts,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            res.1,
+            OldValue::Value {
+                value: b"v2".to_vec()
+            }
+        );
+    }
+
+    #[test]
+    fn test_old_value_random() {
+        let key = b"k1";
+        let mut tests: Vec<OldValueRandomTest> = vec![];
+        let mut tests_require_old_value_none: Vec<OldValueRandomTest> = vec![];
+
+        for should_not_exist in &[true, false] {
+            for need_value in &[true, false] {
+                let should_not_exist = *should_not_exist;
+                let need_value = *need_value;
+                let t = Box::new(move |snapshot, start_ts| {
+                    let key = Key::from_raw(key);
+                    let cm = ConcurrencyManager::new(start_ts);
+                    let mut txn = MvccTxn::new(start_ts, cm);
+                    let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+                    let need_old_value = true;
+                    let lock_ttl = 0;
+                    let for_update_ts = start_ts;
+                    let min_commit_ts = 0.into();
+                    let (_, old_value) = acquire_pessimistic_lock(
+                        &mut txn,
+                        &mut reader,
+                        key.clone(),
+                        key.as_encoded(),
+                        should_not_exist,
+                        lock_ttl,
+                        for_update_ts,
+                        need_value,
+                        min_commit_ts,
+                        need_old_value,
+                    )?;
+                    Ok(old_value)
+                });
+                if should_not_exist {
+                    tests_require_old_value_none.push(t);
+                } else {
+                    tests.push(t);
+                }
+            }
+        }
+        let require_old_value_none = false;
+        old_value_random(key, require_old_value_none, tests);
+        let require_old_value_none = true;
+        old_value_random(key, require_old_value_none, tests_require_old_value_none);
     }
 }

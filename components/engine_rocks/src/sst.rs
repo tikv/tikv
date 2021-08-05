@@ -5,7 +5,9 @@ use crate::options::RocksReadOptions;
 use engine_traits::Error;
 use engine_traits::IterOptions;
 use engine_traits::CF_DEFAULT;
-use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder};
+use engine_traits::{
+    ExternalSstFileInfo, SSTMetaInfo, SstCompressionType, SstWriter, SstWriterBuilder,
+};
 use engine_traits::{Iterable, Result, SstExt, SstReader};
 use engine_traits::{Iterator, SeekKey};
 use fail::fail_point;
@@ -21,6 +23,7 @@ use std::sync::Arc;
 // FIXME: Move RocksSeekKey into a common module since
 // it's shared between multiple iterators
 use crate::engine_iterator::RocksSeekKey;
+use kvproto::import_sstpb::SstMeta;
 use std::path::PathBuf;
 
 impl SstExt for RocksEngine {
@@ -37,6 +40,19 @@ pub struct RocksSstReader {
 }
 
 impl RocksSstReader {
+    pub fn sst_meta_info(&self, sst: SstMeta) -> SSTMetaInfo {
+        let mut meta = SSTMetaInfo {
+            total_kvs: 0,
+            total_bytes: 0,
+            meta: sst,
+        };
+        self.inner.read_table_properties(|p| {
+            meta.total_kvs = p.num_entries();
+            meta.total_bytes = p.raw_key_size() + p.raw_value_size();
+        });
+        meta
+    }
+
     pub fn open_with_env(path: &str, env: Option<Arc<Env>>) -> Result<Self> {
         let mut cf_options = ColumnFamilyOptions::new();
         if let Some(env) = env {
@@ -46,6 +62,14 @@ impl RocksSstReader {
         reader.open(path)?;
         let inner = Rc::new(reader);
         Ok(RocksSstReader { inner })
+    }
+
+    pub fn compression_name(&self) -> String {
+        let mut result = String::new();
+        self.inner.read_table_properties(|p| {
+            result = p.compression_name().to_owned();
+        });
+        result
     }
 }
 
@@ -98,10 +122,18 @@ impl Iterator for RocksSstIterator {
     }
 
     fn prev(&mut self) -> Result<bool> {
+        #[cfg(not(feature = "nortcheck"))]
+        if !self.valid()? {
+            return Err(Error::Engine("Iterator invalid".to_string()));
+        }
         self.0.prev().map_err(Error::Engine)
     }
 
     fn next(&mut self) -> Result<bool> {
+        #[cfg(not(feature = "nortcheck"))]
+        if !self.valid()? {
+            return Err(Error::Engine("Iterator invalid".to_string()));
+        }
         self.0.next().map_err(Error::Engine)
     }
 
@@ -318,6 +350,15 @@ fn to_rocks_compression_type(ct: SstCompressionType) -> DBCompressionType {
         SstCompressionType::Lz4 => DBCompressionType::Lz4,
         SstCompressionType::Snappy => DBCompressionType::Snappy,
         SstCompressionType::Zstd => DBCompressionType::Zstd,
+    }
+}
+
+pub fn from_rocks_compression_type(ct: DBCompressionType) -> Option<SstCompressionType> {
+    match ct {
+        DBCompressionType::Lz4 => Some(SstCompressionType::Lz4),
+        DBCompressionType::Snappy => Some(SstCompressionType::Snappy),
+        DBCompressionType::Zstd => Some(SstCompressionType::Zstd),
+        _ => None,
     }
 }
 

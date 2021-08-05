@@ -12,8 +12,6 @@ extern crate derive_more;
 #[macro_use(fail_point)]
 extern crate fail;
 #[macro_use]
-extern crate quick_error;
-#[macro_use]
 extern crate slog_derive;
 #[macro_use]
 extern crate tikv_util;
@@ -28,23 +26,26 @@ mod rocksdb_engine;
 mod stats;
 
 use std::cell::UnsafeCell;
-use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
 use engine_traits::util::append_expire_ts;
 use engine_traits::{CfName, CF_DEFAULT};
-use engine_traits::{IterOptions, KvEngine as LocalEngine, MvccProperties, ReadOptions};
+use engine_traits::{
+    IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions, WriteBatch,
+};
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp, KeyRange};
+use kvproto::kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange};
+use thiserror::Error;
+use tikv_util::{deadline::Deadline, escape};
 use txn_types::{Key, TimeStamp, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
 pub use self::mock_engine::{ExpectedWrite, MockEngineBuilder};
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
-pub use self::rocksdb_engine::{write_modifies, RocksEngine, RocksSnapshot};
+pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary, TTL_TOMBSTONE,
 };
@@ -109,11 +110,18 @@ impl Modify {
 pub struct WriteData {
     pub modifies: Vec<Modify>,
     pub extra: TxnExtra,
+    pub deadline: Option<Deadline>,
+    pub disk_full_opt: DiskFullOpt,
 }
 
 impl WriteData {
     pub fn new(modifies: Vec<Modify>, extra: TxnExtra) -> Self {
-        Self { modifies, extra }
+        Self {
+            modifies,
+            extra,
+            deadline: None,
+            disk_full_opt: DiskFullOpt::NotAllowedOnFull,
+        }
     }
 
     pub fn from_modifies(modifies: Vec<Modify>) -> Self {
@@ -127,15 +135,27 @@ impl WriteData {
         }
         total
     }
+
+    pub fn set_allowed_on_disk_almost_full(&mut self) {
+        self.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull
+    }
+
+    pub fn set_allowed_on_disk_already_full(&mut self) {
+        self.disk_full_opt = DiskFullOpt::AllowedOnAlreadyFull
+    }
+
+    pub fn set_disk_full_opt(&mut self, level: DiskFullOpt) {
+        self.disk_full_opt = level
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct SnapContext<'a> {
     pub pb_ctx: &'a Context,
     pub read_id: Option<ThreadReadId>,
-    // `start_ts` and `key_ranges` are used in replica read. They are sent to
-    // the leader via raft "read index" to check memory locks.
     pub start_ts: TimeStamp,
+    // `key_ranges` is used in replica read. It will send to
+    // the leader via raft "read index" to check memory locks.
     pub key_ranges: Vec<KeyRange>,
 }
 
@@ -303,34 +323,29 @@ pub enum ScanMode {
     Mixed,
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum ErrorInner {
-        Request(err: ErrorHeader) {
-            from()
-            description(err.get_message())
-            display("{:?}", err)
-        }
-        Timeout(d: Duration) {
-            display("timeout after {:?}", d)
-        }
-        EmptyRequest {
-            display("an empty request")
-        }
-        KeyIsLocked(info: kvproto::kvrpcpb::LockInfo) {
-            display("key is locked (backoff or cleanup) {:?}", info)
-        }
-        Other(err: Box<dyn error::Error + Send + Sync>) {
-            from()
-            cause(err.as_ref())
-            display("unknown error {:?}", err)
-        }
+#[derive(Debug, Error)]
+pub enum ErrorInner {
+    #[error("{0:?}")]
+    Request(ErrorHeader),
+    #[error("timeout after {0:?}")]
+    Timeout(Duration),
+    #[error("an empty requets")]
+    EmptyRequest,
+    #[error("key is locked (backoff or cleanup) {0:?}")]
+    KeyIsLocked(kvproto::kvrpcpb::LockInfo),
+    #[error("unknown error {0:?}")]
+    Other(#[from] Box<dyn error::Error + Send + Sync>),
+}
+
+impl From<ErrorHeader> for ErrorInner {
+    fn from(err: ErrorHeader) -> Self {
+        Self::Request(err)
     }
 }
 
 impl From<engine_traits::Error> for ErrorInner {
-    fn from(err: engine_traits::Error) -> ErrorInner {
-        ErrorInner::Request(err.into_other())
+    fn from(err: engine_traits::Error) -> Self {
+        Self::Request(err.into_other())
     }
 }
 
@@ -346,29 +361,13 @@ impl ErrorInner {
     }
 }
 
-pub struct Error(pub Box<ErrorInner>);
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct Error(#[from] pub Box<ErrorInner>);
 
 impl Error {
     pub fn maybe_clone(&self) -> Option<Error> {
         self.0.maybe_clone().map(Error::from)
-    }
-}
-
-impl fmt::Debug for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.0, f)
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        std::error::Error::source(&self.0)
     }
 }
 
@@ -480,6 +479,55 @@ pub fn drop_snapshot_callback<E: Engine>() -> (CbContext, Result<E::Snap>) {
     (CbContext::new(), Err(Error::from(ErrorInner::Request(err))))
 }
 
+/// Write modifications into a `BaseRocksEngine` instance.
+pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Result<()> {
+    fail_point!("rockskv_write_modifies", |_| Err(box_err!("write failed")));
+
+    let mut wb = kv_engine.write_batch();
+    for rev in modifies {
+        let res = match rev {
+            Modify::Delete(cf, k) => {
+                if cf == CF_DEFAULT {
+                    trace!("RocksEngine: delete"; "key" => %k);
+                    wb.delete(k.as_encoded())
+                } else {
+                    trace!("RocksEngine: delete_cf"; "cf" => cf, "key" => %k);
+                    wb.delete_cf(cf, k.as_encoded())
+                }
+            }
+            Modify::Put(cf, k, v) => {
+                if cf == CF_DEFAULT {
+                    trace!("RocksEngine: put"; "key" => %k, "value" => escape(&v));
+                    wb.put(k.as_encoded(), &v)
+                } else {
+                    trace!("RocksEngine: put_cf"; "cf" => cf, "key" => %k, "value" => escape(&v));
+                    wb.put_cf(cf, k.as_encoded(), &v)
+                }
+            }
+            Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
+                trace!(
+                    "RocksEngine: delete_range_cf";
+                    "cf" => cf,
+                    "start_key" => %start_key,
+                    "end_key" => %end_key,
+                    "notify_only" => notify_only,
+                );
+                if !notify_only {
+                    wb.delete_range_cf(cf, start_key.as_encoded(), end_key.as_encoded())
+                } else {
+                    Ok(())
+                }
+            }
+        };
+        // TODO: turn the error into an engine error.
+        if let Err(msg) = res {
+            return Err(box_err!("{}", msg));
+        }
+    }
+    wb.write()?;
+    Ok(())
+}
+
 pub mod tests {
     use super::*;
     use tikv_util::codec::bytes;
@@ -567,6 +615,7 @@ pub mod tests {
             cursor
                 .near_seek(&Key::from_raw(key), &mut statistics)
                 .unwrap(),
+            "{}",
             log_wrappers::hex_encode_upper(key)
         );
         assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
@@ -583,6 +632,7 @@ pub mod tests {
             cursor
                 .near_reverse_seek(&Key::from_raw(key), &mut statistics)
                 .unwrap(),
+            "{}",
             log_wrappers::hex_encode_upper(key)
         );
         assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));

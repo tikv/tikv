@@ -74,7 +74,7 @@ mod json_merge;
 mod json_modify;
 mod json_remove;
 mod json_type;
-mod json_unquote;
+pub mod json_unquote;
 
 pub use self::jcodec::{JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder};
 pub use self::json_modify::ModifyType;
@@ -145,7 +145,7 @@ impl<'a> JsonRef<'a> {
 
     /// Returns the underlying value slice
     pub fn value(&self) -> &'a [u8] {
-        &self.value
+        self.value
     }
 
     // Returns the JSON value as u64

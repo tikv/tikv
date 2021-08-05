@@ -130,6 +130,10 @@ impl Collation {
             n => Err(DataTypeError::UnsupportedCollation { code: n }),
         }
     }
+
+    pub fn is_bin_collation(&self) -> bool {
+        matches!(self, Collation::Utf8Mb4Bin | Collation::Latin1Bin)
+    }
 }
 
 impl fmt::Display for Collation {
@@ -154,6 +158,9 @@ bitflags! {
 
         /// Internal: Used for telling boolean literal from integer.
         const IS_BOOLEAN = 1 << 19;
+
+        /// Internal: Used for inferring enum eval type.
+        const ENUM_SET_AS_INT = 1 << 21;
     }
 }
 
@@ -286,7 +293,7 @@ pub trait FieldTypeAccessor {
         self.is_non_binary_string_like()
             && (!self
                 .collation()
-                .map(|col| col == Collation::Utf8Mb4Bin)
+                .map(|col| col.is_bin_collation())
                 .unwrap_or(false)
                 || self.is_varchar_like())
     }

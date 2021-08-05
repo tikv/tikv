@@ -29,11 +29,12 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{fsm::store::StoreMeta, AutoSplitController, SnapManager};
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
+use tikv::import::Config as ImportConfig;
 use tikv::import::SSTImporter;
 use tikv::server;
 use tikv::server::gc_worker::sync_gc;
 use tikv::server::service::{batch_commands_request, batch_commands_response};
-use tikv_util::worker::{dummy_scheduler, FutureWorker};
+use tikv_util::worker::{dummy_scheduler, LazyWorker};
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
@@ -232,7 +233,7 @@ fn test_rawkv_ttl() {
     let mut put_req = RawPutRequest::default();
     put_req.set_context(ctx.clone());
     put_req.key = k.clone();
-    put_req.value = v.clone();
+    put_req.value = v;
     put_req.ttl = 1;
     let put_resp = client.raw_put(&put_req).unwrap();
     assert!(!put_resp.has_region_error());
@@ -241,8 +242,8 @@ fn test_rawkv_ttl() {
     std::thread::sleep(Duration::from_secs(1));
 
     let mut get_req = RawGetRequest::default();
-    get_req.set_context(ctx.clone());
-    get_req.key = k.clone();
+    get_req.set_context(ctx);
+    get_req.key = k;
     let get_resp = client.raw_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(get_resp.error.is_empty());
@@ -293,6 +294,11 @@ fn test_mvcc_basic() {
     let get_resp = client.kv_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(!get_resp.has_error());
+    assert!(get_resp.get_exec_details_v2().has_time_detail());
+    let scan_detail_v2 = get_resp.get_exec_details_v2().get_scan_detail_v2();
+    assert_eq!(scan_detail_v2.get_total_versions(), 1);
+    assert_eq!(scan_detail_v2.get_processed_versions(), 1);
+    assert!(scan_detail_v2.get_processed_versions_size() > 0);
     assert_eq!(get_resp.value, v);
 
     // Scan
@@ -320,6 +326,11 @@ fn test_mvcc_basic() {
     batch_get_req.set_keys(vec![k.clone()].into_iter().collect());
     batch_get_req.version = batch_get_version;
     let batch_get_resp = client.kv_batch_get(&batch_get_req).unwrap();
+    assert!(batch_get_resp.get_exec_details_v2().has_time_detail());
+    let scan_detail_v2 = batch_get_resp.get_exec_details_v2().get_scan_detail_v2();
+    assert_eq!(scan_detail_v2.get_total_versions(), 1);
+    assert_eq!(scan_detail_v2.get_processed_versions(), 1);
+    assert!(scan_detail_v2.get_processed_versions_size() > 0);
     assert_eq!(batch_get_resp.pairs.len(), 1);
     for kv in batch_get_resp.pairs.into_iter() {
         assert!(!kv.has_error());
@@ -675,7 +686,7 @@ fn test_debug_get() {
     req.set_key(b"foo".to_vec());
     match debug_client.get(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
+            assert_eq!(status.code(), RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -693,7 +704,7 @@ fn test_debug_raft_log() {
     entry.set_term(1);
     entry.set_index(1);
     entry.set_entry_type(eraftpb::EntryType::EntryNormal);
-    entry.set_data(vec![42]);
+    entry.set_data(vec![42].into());
     engine.c().put_msg(&key, &entry).unwrap();
     assert_eq!(
         engine.c().get_msg::<eraftpb::Entry>(&key).unwrap().unwrap(),
@@ -712,7 +723,7 @@ fn test_debug_raft_log() {
     req.set_log_index(region_id + 1);
     match debug_client.raft_log(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
+            assert_eq!(status.code(), RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -785,7 +796,7 @@ fn test_debug_region_info() {
     req.set_region_id(region_id + 1);
     match debug_client.region_info(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
+            assert_eq!(status.code(), RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -820,7 +831,7 @@ fn test_debug_region_size() {
 
     let mut req = debugpb::RegionSizeRequest::default();
     req.set_region_id(region_id);
-    req.set_cfs(cfs.iter().map(|s| (*s).to_string()).collect());
+    req.set_cfs(cfs.iter().map(|s| s.to_string()).collect());
     let entries: Vec<_> = debug_client
         .region_size(&req)
         .unwrap()
@@ -835,7 +846,7 @@ fn test_debug_region_size() {
     req.set_region_id(region_id + 1);
     match debug_client.region_size(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
+            assert_eq!(status.code(), RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -930,14 +941,14 @@ fn test_double_run_node() {
     let router = cluster.sim.rl().get_router(id).unwrap();
     let mut sim = cluster.sim.wl();
     let node = sim.get_node(id).unwrap();
-    let pd_worker = FutureWorker::new("test-pd-worker");
+    let pd_worker = LazyWorker::new("test-pd-worker");
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
-        Arc::new(SSTImporter::new(dir, None).unwrap())
+        Arc::new(SSTImporter::new(&ImportConfig::default(), dir, None, false).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
@@ -1450,15 +1461,14 @@ fn setup_cluster() -> (Cluster<ServerCluster>, TikvClient, CallOption, Context) 
     let follower = region
         .get_peers()
         .iter()
-        .filter(|p| **p != leader)
-        .next()
+        .find(|p| **p != leader)
         .unwrap()
         .clone();
     let follower_addr = cluster.sim.rl().get_addr(follower.get_store_id());
     let epoch = cluster.get_region_epoch(region_id);
     let mut ctx = Context::default();
     ctx.set_region_id(region_id);
-    ctx.set_peer(leader.clone());
+    ctx.set_peer(leader);
     ctx.set_region_epoch(epoch);
 
     let env = Arc::new(Environment::new(1));
@@ -1600,7 +1610,7 @@ fn test_tikv_forwarding() {
     // Test if duplex can be redirect correctly.
     let cases = vec![
         (CallOption::default().timeout(Duration::from_secs(3)), false),
-        (call_opt.clone(), true),
+        (call_opt, true),
     ];
     for (opt, success) in cases {
         let (mut sender, receiver) = client.batch_commands_opt(opt).unwrap();
@@ -1649,21 +1659,21 @@ fn test_forwarding_reconnect() {
     cluster.stop_node(leader.get_store_id());
 
     let mut req = RawGetRequest::default();
-    req.set_context(ctx.clone());
+    req.set_context(ctx);
     // Large timeout value to ensure the error is from proxy instead of client.
-    let timer = std::time::Instant::now();
+    let timer = tikv_util::time::Instant::now();
     let timeout = Duration::from_secs(5);
     let res = client.raw_get_opt(&req, call_opt.clone().timeout(timeout));
-    let elapsed = timer.elapsed();
+    let elapsed = timer.saturating_elapsed();
     assert!(elapsed < timeout, "{:?}", elapsed);
     // Because leader server is shutdown, reconnecting has to be timeout.
     match res {
-        Err(grpcio::Error::RpcFailure(s)) => assert_eq!(s.status, RpcStatusCode::CANCELLED),
+        Err(grpcio::Error::RpcFailure(s)) => assert_eq!(s.code(), RpcStatusCode::CANCELLED),
         _ => panic!("unexpected result {:?}", res),
     }
 
     cluster.run_node(leader.get_store_id()).unwrap();
-    let resp = client.raw_get_opt(&req, call_opt.clone()).unwrap();
+    let resp = client.raw_get_opt(&req, call_opt).unwrap();
     assert!(!resp.get_region_error().has_store_not_match(), "{:?}", resp);
 }
 
@@ -1682,8 +1692,47 @@ fn test_health_check() {
         ..Default::default()
     };
     let resp = client.check(&req).unwrap();
-    assert_eq!(ServingStatus::Serving, resp.status.into());
+    assert_eq!(ServingStatus::Serving, resp.status);
 
     cluster.shutdown();
     client.check(&req).unwrap_err();
+}
+
+#[test]
+fn test_get_lock_wait_info_api() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let client2 = client.clone();
+
+    let mut ctx1 = ctx.clone();
+    ctx1.set_resource_group_tag(b"resource_group_tag1".to_vec());
+    kv_pessimistic_lock_with_ttl(&client, ctx1, vec![b"a".to_vec()], 20, 20, false, 5000);
+    let mut ctx2 = ctx.clone();
+    let handle = thread::spawn(move || {
+        ctx2.set_resource_group_tag(b"resource_group_tag2".to_vec());
+        kv_pessimistic_lock_with_ttl(&client2, ctx2, vec![b"a".to_vec()], 30, 30, false, 5000);
+    });
+
+    let mut entries = None;
+    for _retry in 0..200 {
+        thread::sleep(Duration::from_millis(25));
+        // The lock should be in waiting state here.
+        let req = GetLockWaitInfoRequest::default();
+        let resp = client.get_lock_wait_info(&req).unwrap();
+        if resp.entries.len() != 0 {
+            entries = Some(resp.entries.to_vec());
+            break;
+        }
+    }
+
+    let entries = entries.unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].txn, 30);
+    assert_eq!(entries[0].wait_for_txn, 20);
+    assert_eq!(entries[0].key, b"a".to_vec());
+    assert_eq!(
+        entries[0].resource_group_tag,
+        b"resource_group_tag2".to_vec()
+    );
+    must_kv_pessimistic_rollback(&client, ctx, b"a".to_vec(), 20);
+    handle.join().unwrap();
 }

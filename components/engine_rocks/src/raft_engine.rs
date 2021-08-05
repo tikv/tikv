@@ -1,11 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{RocksEngine, RocksWriteBatch};
+use crate::{util, RocksEngine, RocksWriteBatch};
 
-use engine_traits::{Error, RaftEngine, RaftLogBatch, Result};
 use engine_traits::{
-    Iterable, KvEngine, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt,
-    WriteOptions, CF_DEFAULT,
+    Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineReadOnly,
+    RaftLogBatch, Result, SyncMutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
@@ -14,20 +13,7 @@ use tikv_util::{box_err, box_try};
 
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
-// FIXME: RaftEngine should probably be implemented generically
-// for all KvEngines, but is currently implemented separately for
-// every engine.
-impl RaftEngine for RocksEngine {
-    type LogBatch = RocksWriteBatch;
-
-    fn log_batch(&self, capacity: usize) -> Self::LogBatch {
-        RocksWriteBatch::with_capacity(self.as_inner().clone(), capacity)
-    }
-
-    fn sync(&self) -> Result<()> {
-        self.sync_wal()
-    }
-
+impl RaftEngineReadOnly for RocksEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
         let key = keys::raft_state_key(raft_group_id);
         self.get_msg_cf(CF_DEFAULT, &key)
@@ -108,6 +94,21 @@ impl RaftEngine for RocksEngine {
 
         // Here means we don't fetch enough entries.
         Err(Error::EntriesUnavailable)
+    }
+}
+
+// FIXME: RaftEngine should probably be implemented generically
+// for all KvEngines, but is currently implemented separately for
+// every engine.
+impl RaftEngine for RocksEngine {
+    type LogBatch = RocksWriteBatch;
+
+    fn log_batch(&self, capacity: usize) -> Self::LogBatch {
+        RocksWriteBatch::with_capacity(self.as_inner().clone(), capacity)
+    }
+
+    fn sync(&self) -> Result<()> {
+        self.sync_wal()
     }
 
     fn consume(&self, batch: &mut Self::LogBatch, sync_log: bool) -> Result<usize> {
@@ -220,6 +221,13 @@ impl RaftEngine for RocksEngine {
     fn dump_stats(&self) -> Result<String> {
         MiscExt::dump_stats(self)
     }
+
+    fn get_engine_size(&self) -> Result<u64> {
+        let handle = util::get_cf_handle(self.as_inner(), CF_DEFAULT)?;
+        let used_size = util::get_engine_cf_used_size(self.as_inner(), handle);
+
+        Ok(used_size)
+    }
 }
 
 impl RaftLogBatch for RocksWriteBatch {
@@ -242,8 +250,16 @@ impl RaftLogBatch for RocksWriteBatch {
         self.put_msg(&keys::raft_state_key(raft_group_id), state)
     }
 
+    fn persist_size(&self) -> usize {
+        self.data_size()
+    }
+
     fn is_empty(&self) -> bool {
         WriteBatch::is_empty(self)
+    }
+
+    fn merge(&mut self, src: Self) {
+        WriteBatch::<RocksEngine>::merge(self, src);
     }
 }
 

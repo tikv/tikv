@@ -1,5 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::error::Error as StdError;
+use std::marker::PhantomData;
+use std::net::SocketAddr;
+use std::pin::Pin;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::thread;
+use std::time::{Duration, Instant};
+
 use async_stream::stream;
 use engine_traits::KvEngine;
 use futures::compat::Compat01As03;
@@ -14,7 +24,7 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{self, header, Body, Client, Method, Request, Response, Server, StatusCode, Uri};
 use hyper_openssl::HttpsConnector;
 use openssl::ssl::{
-    SslAcceptor, SslConnector, SslConnectorBuilder, SslFiletype, SslMethod, SslVerifyMode,
+    Ssl, SslAcceptor, SslConnector, SslConnectorBuilder, SslFiletype, SslMethod, SslVerifyMode,
 };
 use openssl::x509::X509;
 use pin_project::pin_project;
@@ -28,26 +38,17 @@ use tokio::runtime::{Builder, Runtime};
 use tokio::sync::oneshot::{self, Receiver, Sender};
 use tokio_openssl::SslStream;
 
-use std::error::Error as StdError;
-use std::marker::PhantomData;
-use std::net::SocketAddr;
-use std::pin::Pin;
-use std::str::FromStr;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::thread;
-use std::time::{Duration, Instant};
-
-use super::Result;
-use crate::config::{log_level_serde, ConfigController};
 use collections::HashMap;
-use configuration::Configuration;
+use online_config::OnlineConfig;
 use pd_client::{RpcClient, REQUEST_RECONNECT_INTERVAL};
 use security::{self, SecurityConfig};
 use tikv_alloc::error::ProfError;
 use tikv_util::logger::set_log_level;
 use tikv_util::metrics::dump;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+
+use super::Result;
+use crate::config::{log_level_serde, ConfigController};
 
 pub mod region_meta;
 
@@ -160,10 +161,9 @@ where
         security_config: Arc<SecurityConfig>,
         router: R,
     ) -> Result<Self> {
-        let thread_pool = Builder::new()
-            .threaded_scheduler()
+        let thread_pool = Builder::new_multi_thread()
             .enable_all()
-            .core_threads(status_thread_pool_size)
+            .worker_threads(status_thread_pool_size)
             .thread_name("status-server")
             .on_thread_start(|| {
                 debug!("Status server started");
@@ -784,7 +784,10 @@ where
     pub fn start(&mut self, status_addr: String, advertise_status_addr: String) -> Result<()> {
         let addr = SocketAddr::from_str(&status_addr)?;
 
-        let incoming = self.thread_pool.enter(|| AddrIncoming::bind(&addr))?;
+        let incoming = {
+            let _enter = self.thread_pool.enter();
+            AddrIncoming::bind(&addr)
+        }?;
         self.addr = Some(incoming.local_addr());
         if !self.security_config.cert_path.is_empty()
             && !self.security_config.key_path.is_empty()
@@ -859,6 +862,7 @@ fn tls_incoming(
     acceptor: SslAcceptor,
     mut incoming: AddrIncoming,
 ) -> impl Accept<Conn = SslStream<AddrStream>, Error = std::io::Error> {
+    let context = acceptor.into_context();
     let s = stream! {
         loop {
             let stream = match poll_fn(|cx| Pin::new(&mut incoming).poll_accept(cx)).await {
@@ -869,15 +873,28 @@ fn tls_incoming(
                 }
                 None => break,
             };
-            match tokio_openssl::accept(&acceptor, stream).await {
-                Err(_) => {
-                    error!("Status server error: TLS handshake error");
+            let ssl = match Ssl::new(&context) {
+                Ok(ssl) => ssl,
+                Err(err) => {
+                    error!("Status server error: {}", err);
                     continue;
-                },
-                Ok(ssl_stream) => {
-                    yield Ok(ssl_stream);
-                },
-            }
+                }
+            };
+            match tokio_openssl::SslStream::new(ssl, stream) {
+                Ok(mut ssl_stream) => match Pin::new(&mut ssl_stream).accept().await {
+                    Err(_) => {
+                        error!("Status server error: TLS handshake error");
+                        continue;
+                    },
+                    Ok(()) => {
+                        yield Ok(ssl_stream);
+                    },
+                }
+                Err(err) => {
+                    error!("Status server error: {}", err);
+                    continue;
+                }
+            };
         }
     };
     TlsIncoming(s)
@@ -1022,8 +1039,8 @@ mod tests {
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::{LogLevelRequest, StatusServer};
     use collections::HashSet;
-    use configuration::Configuration;
     use engine_test::kv::KvTestEngine;
+    use online_config::OnlineConfig;
     use raftstore::store::transport::CasualRouter;
     use raftstore::store::CasualMessage;
     use security::SecurityConfig;

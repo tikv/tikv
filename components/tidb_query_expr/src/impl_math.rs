@@ -24,7 +24,7 @@ pub fn pi() -> Result<Option<Real>> {
 #[rpn_fn]
 #[inline]
 pub fn crc32(arg: BytesRef) -> Result<Option<Int>> {
-    Ok(Some(i64::from(file_system::calc_crc32_bytes(&arg))))
+    Ok(Some(i64::from(file_system::calc_crc32_bytes(arg))))
 }
 
 #[inline]
@@ -221,7 +221,7 @@ impl Floor for FloorIntToInt {
 #[rpn_fn]
 #[inline]
 fn abs_int(arg: &Int) -> Result<Option<Int>> {
-    match (*arg).checked_abs() {
+    match arg.checked_abs() {
         None => Err(Error::overflow("BIGINT", &format!("abs({})", *arg)).into()),
         Some(arg_abs) => Ok(Some(arg_abs)),
     }

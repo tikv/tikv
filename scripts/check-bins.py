@@ -11,9 +11,9 @@ import sys, json, os, time, re
 # NB: The fuzzer bins here are just placeholders due to the workspace
 # structure; they are not actual fuzzers.
 WHITE_LIST = {
-    "configuration", "configuration_derive", "match_template", "tidb_query_codegen",
+    "online_config", "online_config_derive", "match_template", "tidb_query_codegen",
     "panic_hook", "fuzz", "fuzzer_afl", "fuzzer_honggfuzz", "fuzzer_libfuzzer",
-    "rusoto_util", "coprocessor_plugin_api", "example_plugin",
+    "coprocessor_plugin_api", "example_plugin", "memory_trace_macros",
 }
 
 JEMALLOC_SYMBOL = ["je_arena_boot", " malloc"]

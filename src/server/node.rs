@@ -14,7 +14,7 @@ use crate::storage::txn::flow_controller::FlowController;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use engine_traits::{Engines, Peekable, RaftEngine};
+use engine_traits::{Engines, KvEngine, Peekable, RaftEngine};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
@@ -27,24 +27,25 @@ use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
 use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::{FutureWorker, Scheduler, Worker};
+use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<S>(
-    engine: RaftKv<S>,
+pub fn create_raft_storage<S, EK>(
+    engine: RaftKv<EK, S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
     lock_mgr: LockManager,
     concurrency_manager: ConcurrencyManager,
     pipelined_pessimistic_lock: Arc<AtomicBool>,
     flow_controller: Arc<FlowController>,
-) -> Result<Storage<RaftKv<S>, LockManager>>
+) -> Result<Storage<RaftKv<EK, S>, LockManager>>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
+    EK: KvEngine,
 {
     let store = Storage::from_engine(
         engine,
@@ -134,6 +135,20 @@ where
         }
     }
 
+    pub fn try_bootstrap_store(&mut self, engines: Engines<RocksEngine, ER>) -> Result<()> {
+        let mut store_id = self.check_store(&engines)?;
+        if store_id == INVALID_ID {
+            store_id = self.alloc_id()?;
+            debug!("alloc store id"; "store_id" => store_id);
+            store::bootstrap_store(&engines, self.cluster_id, store_id)?;
+            fail_point!("node_after_bootstrap_store", |_| Err(box_err!(
+                "injected error: node_after_bootstrap_store"
+            )));
+        }
+        self.store.set_id(store_id);
+        Ok(())
+    }
+
     /// Starts the Node. It tries to bootstrap cluster if the cluster is not
     /// bootstrapped yet. Then it spawns a thread to run the raftstore in
     /// background.
@@ -143,7 +158,7 @@ where
         engines: Engines<RocksEngine, ER>,
         trans: T,
         snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask<RocksEngine>>,
+        pd_worker: LazyWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
@@ -154,14 +169,7 @@ where
     where
         T: Transport + 'static,
     {
-        let mut store_id = self.check_store(&engines)?;
-        if store_id == INVALID_ID {
-            store_id = self.bootstrap_store(&engines)?;
-            fail_point!("node_after_bootstrap_store", |_| Err(box_err!(
-                "injected error: node_after_bootstrap_store"
-            )));
-        }
-        self.store.set_id(store_id);
+        let store_id = self.id();
         {
             let mut meta = store_meta.lock().unwrap();
             meta.store_id = Some(store_id);
@@ -259,15 +267,6 @@ where
         }
     }
 
-    fn bootstrap_store(&self, engines: &Engines<RocksEngine, ER>) -> Result<u64> {
-        let store_id = self.alloc_id()?;
-        debug!("alloc store id"; "store_id" => store_id);
-
-        store::bootstrap_store(&engines, self.cluster_id, store_id)?;
-
-        Ok(store_id)
-    }
-
     // Exported for tests.
     #[doc(hidden)]
     pub fn prepare_bootstrap_cluster(
@@ -290,7 +289,7 @@ where
         );
 
         let region = initial_region(store_id, region_id, peer_id);
-        store::prepare_bootstrap_cluster(&engines, &region)?;
+        store::prepare_bootstrap_cluster(engines, &region)?;
         Ok(region)
     }
 
@@ -325,19 +324,18 @@ where
                     fail_point!("node_after_bootstrap_cluster", |_| Err(box_err!(
                         "injected error: node_after_bootstrap_cluster"
                     )));
-                    store::clear_prepare_bootstrap_key(&engines)?;
+                    store::clear_prepare_bootstrap_key(engines)?;
                     return Ok(());
                 }
                 Err(PdError::ClusterBootstrapped(_)) => match self.pd_client.get_region(b"") {
                     Ok(region) => {
                         if region == first_region {
-                            store::clear_prepare_bootstrap_key(&engines)?;
-                            return Ok(());
+                            store::clear_prepare_bootstrap_key(engines)?;
                         } else {
                             info!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
-                            store::clear_prepare_bootstrap_cluster(&engines, region_id)?;
-                            return Ok(());
+                            store::clear_prepare_bootstrap_cluster(engines, region_id)?;
                         }
+                        return Ok(());
                     }
                     Err(e) => {
                         warn!("get the first region failed"; "err" => ?e);
@@ -376,7 +374,7 @@ where
         engines: Engines<RocksEngine, ER>,
         trans: T,
         snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask<RocksEngine>>,
+        pd_worker: LazyWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,

@@ -1,15 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use kvproto::replication_modepb::ReplicationMode;
 use pd_client::{take_peer_address, PdClient};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::GlobalReplicationState;
+use tikv_util::time::Instant;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::metrics::*;
@@ -18,6 +19,12 @@ use super::Result;
 const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
 pub type Callback = Box<dyn FnOnce(Result<String>) + Send>;
+
+pub fn store_address_refresh_interval_secs() -> u64 {
+    fail_point!("mock_store_refresh_interval_secs", |arg| arg
+        .map_or(0, |e| e.parse().unwrap()));
+    STORE_ADDRESS_REFRESH_SECONDS
+}
 
 /// A trait for resolving store addresses.
 pub trait StoreAddrResolver: Send + Clone {
@@ -43,27 +50,30 @@ struct StoreAddr {
 }
 
 /// A runner for resolving store addresses.
-struct Runner<T, RR>
+struct Runner<T, RR, E>
 where
     T: PdClient,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E>,
+    E: KvEngine,
 {
     pd_client: Arc<T>,
     store_addrs: HashMap<u64, StoreAddr>,
     state: Arc<Mutex<GlobalReplicationState>>,
     router: RR,
+    engine: PhantomData<E>,
 }
 
-impl<T, RR> Runner<T, RR>
+impl<T, RR, E> Runner<T, RR, E>
 where
     T: PdClient,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E>,
+    E: KvEngine,
 {
     fn resolve(&mut self, store_id: u64) -> Result<String> {
         if let Some(s) = self.store_addrs.get(&store_id) {
             let now = Instant::now();
-            let elapsed = now.duration_since(s.last_update);
-            if elapsed.as_secs() < STORE_ADDRESS_REFRESH_SECONDS {
+            let elapsed = now.saturating_duration_since(s.last_update);
+            if elapsed.as_secs() < store_address_refresh_interval_secs() {
                 return Ok(s.addr.clone());
             }
         }
@@ -116,10 +126,11 @@ where
     }
 }
 
-impl<T, RR> Runnable for Runner<T, RR>
+impl<T, RR, E> Runnable for Runner<T, RR, E>
 where
     T: PdClient,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E>,
+    E: KvEngine,
 {
     type Task = Task;
     fn run(&mut self, task: Task) {
@@ -142,14 +153,15 @@ impl PdStoreAddrResolver {
 }
 
 /// Creates a new `PdStoreAddrResolver`.
-pub fn new_resolver<T, RR: 'static>(
+pub fn new_resolver<T, RR: 'static, E>(
     pd_client: Arc<T>,
     worker: &Worker,
     router: RR,
 ) -> (PdStoreAddrResolver, Arc<Mutex<GlobalReplicationState>>)
 where
     T: PdClient + 'static,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E>,
+    E: KvEngine,
 {
     let state = Arc::new(Mutex::new(GlobalReplicationState::default()));
     let runner = Runner {
@@ -157,6 +169,7 @@ where
         store_addrs: HashMap::default(),
         state: state.clone(),
         router,
+        engine: PhantomData,
     };
     let scheduler = worker.start("addr-resolver", runner);
     let resolver = PdStoreAddrResolver::new(scheduler);
@@ -174,14 +187,16 @@ impl StoreAddrResolver for PdStoreAddrResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::marker::PhantomData;
     use std::net::SocketAddr;
     use std::ops::Sub;
     use std::str::FromStr;
     use std::sync::Arc;
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use collections::HashMap;
+    use engine_test::kv::KvTestEngine;
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
     use raftstore::router::RaftStoreBlackHole;
@@ -205,7 +220,7 @@ mod tests {
             // The store address will be changed every millisecond.
             let mut store = self.store.clone();
             let mut sock = SocketAddr::from_str(store.get_address()).unwrap();
-            sock.set_port(tikv_util::time::duration_to_ms(self.start.elapsed()) as u16);
+            sock.set_port(tikv_util::time::duration_to_ms(self.start.saturating_elapsed()) as u16);
             store.set_address(format!("{}:{}", sock.ip(), sock.port()));
             Ok(store)
         }
@@ -219,7 +234,7 @@ mod tests {
         store
     }
 
-    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, RaftStoreBlackHole> {
+    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, RaftStoreBlackHole, KvTestEngine> {
         let client = MockPdClient {
             start: Instant::now(),
             store,
@@ -229,6 +244,7 @@ mod tests {
             store_addrs: HashMap::default(),
             state: Default::default(),
             router: RaftStoreBlackHole,
+            engine: PhantomData,
         }
     }
 

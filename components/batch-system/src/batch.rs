@@ -6,17 +6,19 @@
 //! that controls how the former is created or metrics are collected.
 
 use crate::config::Config;
-use crate::fsm::{Fsm, FsmScheduler};
+use crate::fsm::{Fsm, FsmScheduler, Priority};
 use crate::mailbox::BasicMailbox;
 use crate::router::Router;
 use crossbeam::channel::{self, SendError};
 use file_system::{set_io_type, IOType};
 use std::borrow::Cow;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tikv_util::mpsc;
 use tikv_util::time::Instant;
-use tikv_util::{debug, error, info, thd_name, warn};
+use tikv_util::{debug, error, info, safe_panic, thd_name, warn};
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 enum FsmTypes<N, C> {
@@ -31,6 +33,7 @@ macro_rules! impl_sched {
     ($name:ident, $ty:path, Fsm = $fsm:tt) => {
         pub struct $name<N, C> {
             sender: channel::Sender<FsmTypes<N, C>>,
+            low_sender: channel::Sender<FsmTypes<N, C>>,
         }
 
         impl<N, C> Clone for $name<N, C> {
@@ -38,6 +41,7 @@ macro_rules! impl_sched {
             fn clone(&self) -> $name<N, C> {
                 $name {
                     sender: self.sender.clone(),
+                    low_sender: self.low_sender.clone(),
                 }
             }
         }
@@ -50,7 +54,11 @@ macro_rules! impl_sched {
 
             #[inline]
             fn schedule(&self, fsm: Box<Self::Fsm>) {
-                match self.sender.send($ty(fsm)) {
+                let sender = match fsm.get_priority() {
+                    Priority::Normal => &self.sender,
+                    Priority::Low => &self.low_sender,
+                };
+                match sender.send($ty(fsm)) {
                     Ok(()) => {}
                     // TODO: use debug instead.
                     Err(SendError($ty(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
@@ -63,6 +71,7 @@ macro_rules! impl_sched {
                 // Magic number, actually any number greater than poll pool size works.
                 for _ in 0..100 {
                     let _ = self.sender.send(FsmTypes::Empty);
+                    let _ = self.low_sender.send(FsmTypes::Empty);
                 }
             }
         }
@@ -230,6 +239,11 @@ pub trait PollHandler<N, C> {
 
     /// This function is called when batch system is going to sleep.
     fn pause(&mut self) {}
+
+    /// This function returns the priority of this handler.
+    fn get_priority(&self) -> Priority {
+        Priority::Normal
+    }
 }
 
 /// Internal poller that fetches batch and call handler hooks for readiness.
@@ -296,8 +310,10 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 let len = self.handler.handle_normal(p);
                 if p.is_stopped() {
                     reschedule_fsms.push((i, ReschedulePolicy::Remove));
+                } else if p.get_priority() != self.handler.get_priority() {
+                    reschedule_fsms.push((i, ReschedulePolicy::Schedule));
                 } else {
-                    if batch.timers[i].elapsed() >= self.reschedule_duration {
+                    if batch.timers[i].saturating_elapsed() >= self.reschedule_duration {
                         hot_fsm_count += 1;
                         // We should only reschedule a half of the hot regions, otherwise,
                         // it's possible all the hot regions are fetched in a batch the
@@ -351,7 +367,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
 pub trait HandlerBuilder<N, C> {
     type Handler: PollHandler<N, C>;
 
-    fn build(&mut self) -> Self::Handler;
+    fn build(&mut self, priority: Priority) -> Self::Handler;
 }
 
 /// A system that can poll FSMs concurrently and in batch.
@@ -363,10 +379,12 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     name_prefix: Option<String>,
     router: BatchRouter<N, C>,
     receiver: channel::Receiver<FsmTypes<N, C>>,
+    low_receiver: channel::Receiver<FsmTypes<N, C>>,
     pool_size: usize,
     max_batch_size: usize,
     workers: Vec<JoinHandle<()>>,
     reschedule_duration: Duration,
+    low_priority_pool_size: usize,
 }
 
 impl<N, C> BatchSystem<N, C>
@@ -378,6 +396,35 @@ where
         &self.router
     }
 
+    fn start_poller<B>(&mut self, name: String, priority: Priority, builder: &mut B)
+    where
+        B: HandlerBuilder<N, C>,
+        B::Handler: Send + 'static,
+    {
+        let handler = builder.build(priority);
+        let receiver = match priority {
+            Priority::Normal => self.receiver.clone(),
+            Priority::Low => self.low_receiver.clone(),
+        };
+        let mut poller = Poller {
+            router: self.router.clone(),
+            fsm_receiver: receiver,
+            handler,
+            max_batch_size: self.max_batch_size,
+            reschedule_duration: self.reschedule_duration,
+        };
+        let props = tikv_util::thread_group::current_properties();
+        let t = thread::Builder::new()
+            .name(name)
+            .spawn(move || {
+                tikv_util::thread_group::set_properties(props);
+                set_io_type(IOType::ForegroundWrite);
+                poller.poll();
+            })
+            .unwrap();
+        self.workers.push(t);
+    }
+
     /// Start the batch system.
     pub fn spawn<B>(&mut self, name_prefix: String, mut builder: B)
     where
@@ -385,22 +432,18 @@ where
         B::Handler: Send + 'static,
     {
         for i in 0..self.pool_size {
-            let handler = builder.build();
-            let mut poller = Poller {
-                router: self.router.clone(),
-                fsm_receiver: self.receiver.clone(),
-                handler,
-                max_batch_size: self.max_batch_size,
-                reschedule_duration: self.reschedule_duration,
-            };
-            let t = thread::Builder::new()
-                .name(thd_name!(format!("{}-{}", name_prefix, i)))
-                .spawn(move || {
-                    set_io_type(IOType::ForegroundWrite);
-                    poller.poll()
-                })
-                .unwrap();
-            self.workers.push(t);
+            self.start_poller(
+                thd_name!(format!("{}-{}", name_prefix, i)),
+                Priority::Normal,
+                &mut builder,
+            );
+        }
+        for i in 0..self.low_priority_pool_size {
+            self.start_poller(
+                thd_name!(format!("{}-low-{}", name_prefix, i)),
+                Priority::Low,
+                &mut builder,
+            );
         }
         self.name_prefix = Some(name_prefix);
     }
@@ -422,9 +465,7 @@ where
             }
         }
         if let Some(e) = last_error {
-            if !thread::panicking() {
-                panic!("failed to join worker thread: {:?}", e);
-            }
+            safe_panic!("failed to join worker thread: {:?}", e);
         }
         info!("batch system {} is stopped.", name_prefix);
     }
@@ -440,19 +481,29 @@ pub fn create_system<N: Fsm, C: Fsm>(
     sender: mpsc::LooseBoundedSender<C::Message>,
     controller: Box<C>,
 ) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
-    let control_box = BasicMailbox::new(sender, controller);
+    let state_cnt = Arc::new(AtomicUsize::new(0));
+    let control_box = BasicMailbox::new(sender, controller, state_cnt.clone());
     let (tx, rx) = channel::unbounded();
-    let normal_scheduler = NormalScheduler { sender: tx.clone() };
-    let control_scheduler = ControlScheduler { sender: tx };
-    let router = Router::new(control_box, normal_scheduler, control_scheduler);
+    let (tx2, rx2) = channel::unbounded();
+    let normal_scheduler = NormalScheduler {
+        sender: tx.clone(),
+        low_sender: tx2.clone(),
+    };
+    let control_scheduler = ControlScheduler {
+        sender: tx,
+        low_sender: tx2,
+    };
+    let router = Router::new(control_box, normal_scheduler, control_scheduler, state_cnt);
     let system = BatchSystem {
         name_prefix: None,
         router: router.clone(),
         receiver: rx,
+        low_receiver: rx2,
         pool_size: cfg.pool_size,
         max_batch_size: cfg.max_batch_size(),
         reschedule_duration: cfg.reschedule_duration.0,
         workers: vec![],
+        low_priority_pool_size: cfg.low_priority_pool_size,
     };
     (router, system)
 }

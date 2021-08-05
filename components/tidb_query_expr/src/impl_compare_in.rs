@@ -7,12 +7,12 @@ use std::marker::{PhantomData, Send, Sized};
 use codec::prelude::NumberDecoder;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
-use tipb::{Expr, ExprType};
+use tipb::{Expr, ExprType, FieldType};
 
 use tidb_query_common::{Error, Result};
 use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::mysql::{Decimal, MAX_FSP};
+use tidb_query_datatype::codec::mysql::{Decimal, EnumDecoder, MAX_FSP};
 
 pub trait InByHash {
     type Key: EvaluableRet + Extract + Eq;
@@ -55,7 +55,7 @@ impl<C: Collator> InByHash for CollationAwareBytesInByHash<C> {
 }
 
 pub trait Extract: Sized {
-    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self>;
+    fn extract(expr_tp: ExprType, val: Vec<u8>, field_type: &FieldType) -> Result<Self>;
 }
 
 #[inline]
@@ -69,14 +69,14 @@ fn type_error(eval_type: EvalType, expr_type: ExprType) -> Error {
 
 impl Extract for Int {
     #[inline]
-    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self> {
+    fn extract(expr_tp: ExprType, val: Vec<u8>, _field_type: &FieldType) -> Result<Self> {
         if expr_tp == ExprType::Int64 {
             let value = val
                 .as_slice()
                 .read_i64()
                 .map_err(|_| other_err!("Unable to decode int64 from the request"))?;
             Ok(value)
-        } else if expr_tp == ExprType::Uint64 {
+        } else if expr_tp == ExprType::Uint64 || expr_tp == ExprType::MysqlEnum {
             let value = val
                 .as_slice()
                 .read_u64()
@@ -90,7 +90,7 @@ impl Extract for Int {
 
 impl Extract for Real {
     #[inline]
-    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self> {
+    fn extract(expr_tp: ExprType, val: Vec<u8>, _field_type: &FieldType) -> Result<Self> {
         if expr_tp != ExprType::Float32 && expr_tp != ExprType::Float64 {
             return Err(type_error(<Real as Evaluable>::EVAL_TYPE, expr_tp));
         }
@@ -104,17 +104,24 @@ impl Extract for Real {
 
 impl Extract for Bytes {
     #[inline]
-    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self> {
-        if expr_tp != ExprType::Bytes && expr_tp != ExprType::String {
-            return Err(type_error(Bytes::EVAL_TYPE, expr_tp));
+    fn extract(expr_tp: ExprType, val: Vec<u8>, field_type: &FieldType) -> Result<Self> {
+        match expr_tp {
+            ExprType::Bytes | ExprType::String => Ok(val),
+            ExprType::MysqlEnum => {
+                let value = val
+                    .as_slice()
+                    .read_enum_uint(field_type)
+                    .map_err(|_| other_err!("Unable to decode enum from the request"))?;
+                Ok(value.name().into())
+            }
+            _ => Err(type_error(Bytes::EVAL_TYPE, expr_tp)),
         }
-        Ok(val)
     }
 }
 
 impl Extract for Decimal {
     #[inline]
-    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self> {
+    fn extract(expr_tp: ExprType, val: Vec<u8>, _field_type: &FieldType) -> Result<Self> {
         if expr_tp != ExprType::MysqlDecimal {
             return Err(type_error(<Decimal as Evaluable>::EVAL_TYPE, expr_tp));
         }
@@ -129,7 +136,7 @@ impl Extract for Decimal {
 
 impl Extract for Duration {
     #[inline]
-    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self> {
+    fn extract(expr_tp: ExprType, val: Vec<u8>, _field_type: &FieldType) -> Result<Self> {
         if expr_tp != ExprType::MysqlDuration {
             return Err(type_error(<Duration as Evaluable>::EVAL_TYPE, expr_tp));
         }
@@ -311,7 +318,8 @@ fn init_compare_in_data<T: InByHash>(expr: &mut Expr) -> Result<CompareInMeta<T:
                 has_null = true;
             }
             expr_type => {
-                let val = T::Key::extract(expr_type, tree_node.take_val())?;
+                let val =
+                    T::Key::extract(expr_type, tree_node.take_val(), tree_node.get_field_type())?;
                 let val = T::map(val)?;
                 lookup_map.insert(val, is_unsigned);
             }
@@ -813,11 +821,130 @@ mod tests {
                 black_box(&mut ctx),
                 black_box(schema),
                 black_box(&mut columns),
-                black_box(&logical_rows),
+                black_box(logical_rows),
                 black_box(1024),
             );
             assert!(result.is_ok());
         });
         profiler::stop();
+    }
+
+    use codec::prelude::NumberEncoder;
+    #[test]
+    fn test_enum() {
+        let mut enum_expr = Expr::default();
+        enum_expr.set_tp(ExprType::MysqlEnum);
+        enum_expr.mut_val().write_u64(2u64).unwrap();
+        let mut field_type = FieldType::new();
+        field_type.set_tp(FieldTypeTp::Enum.to_u8().unwrap() as i32);
+        let elems = protobuf::RepeatedField::from_slice(&[
+            String::from("c"),
+            String::from("b"),
+            String::from("a"),
+        ]);
+        field_type.set_elems(elems);
+        enum_expr.set_field_type(field_type);
+
+        // string in(enum,...)
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::InString, FieldTypeTp::LongLong)
+            .push_child(ExprDefBuilder::constant_bytes("b".into()))
+            .push_child(enum_expr.clone())
+            .build();
+
+        let expr = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+            node,
+            map_expr_node_to_rpn_func,
+            2,
+        )
+        .unwrap();
+        let mut ctx = EvalContext::default();
+        let schema = &[FieldTypeTp::LongLong.into()];
+        let log_rows = vec![0];
+        let mut rows = LazyBatchColumnVec::empty();
+
+        let result = expr.eval(&mut ctx, schema, &mut rows, &log_rows, 1);
+        let val = result.unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().to_int_vec(),
+            &[Some(1)]
+        );
+
+        // int in(enum,...)
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::InInt, FieldTypeTp::LongLong)
+            .push_child(ExprDefBuilder::constant_uint(2))
+            .push_child(enum_expr.clone())
+            .build();
+
+        let expr = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+            node,
+            map_expr_node_to_rpn_func,
+            2,
+        )
+        .unwrap();
+        let mut ctx = EvalContext::default();
+        let schema = &[FieldTypeTp::LongLong.into()];
+        let log_rows = vec![0];
+        let mut rows = LazyBatchColumnVec::empty();
+
+        let result = expr.eval(&mut ctx, schema, &mut rows, &log_rows, 1);
+        let val = result.unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().to_int_vec(),
+            &[Some(1)]
+        );
+
+        // enum in(string, enum,...)
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::InString, FieldTypeTp::LongLong)
+            .push_child(enum_expr.clone())
+            .push_child(ExprDefBuilder::constant_bytes("a".into()))
+            .push_child(enum_expr.clone())
+            .build();
+
+        let expr = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+            node,
+            map_expr_node_to_rpn_func,
+            2,
+        )
+        .unwrap();
+        let mut ctx = EvalContext::default();
+        let schema = &[FieldTypeTp::LongLong.into()];
+        let log_rows = vec![0];
+        let mut rows = LazyBatchColumnVec::empty();
+
+        let result = expr.eval(&mut ctx, schema, &mut rows, &log_rows, 1);
+        let val = result.unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().to_int_vec(),
+            &[Some(1)]
+        );
+
+        // enum in(int, enum,...)
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::InInt, FieldTypeTp::LongLong)
+            .push_child(enum_expr.clone())
+            .push_child(ExprDefBuilder::constant_uint(1))
+            .push_child(enum_expr)
+            .build();
+
+        let expr = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+            node,
+            map_expr_node_to_rpn_func,
+            2,
+        )
+        .unwrap();
+        let mut ctx = EvalContext::default();
+        let schema = &[FieldTypeTp::LongLong.into()];
+        let log_rows = vec![0];
+        let mut rows = LazyBatchColumnVec::empty();
+
+        let result = expr.eval(&mut ctx, schema, &mut rows, &log_rows, 1);
+        let val = result.unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().to_int_vec(),
+            &[Some(1)]
+        );
     }
 }

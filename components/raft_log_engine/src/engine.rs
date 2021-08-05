@@ -3,7 +3,9 @@
 use std::fs;
 use std::path::Path;
 
-use engine_traits::{CacheStats, RaftEngine, RaftLogBatch as RaftLogBatchTrait, Result};
+use engine_traits::{
+    CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, Result,
+};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
 use raft_engine::{EntryExt, Error as RaftEngineError, LogBatch, RaftLogEngine as RawRaftEngine};
@@ -35,6 +37,18 @@ impl RaftLogEngine {
         }
         fs::read_dir(&path).unwrap().next().is_some()
     }
+
+    pub fn raft_groups(&self) -> Vec<u64> {
+        self.0.raft_groups()
+    }
+
+    pub fn first_index(&self, raft_id: u64) -> Option<u64> {
+        self.0.first_index(raft_id)
+    }
+
+    pub fn last_index(&self, raft_id: u64) -> Option<u64> {
+        self.0.last_index(raft_id)
+    }
 }
 
 #[derive(Default)]
@@ -60,23 +74,20 @@ impl RaftLogBatchTrait for RaftLogBatch {
         Ok(())
     }
 
+    fn persist_size(&self) -> usize {
+        panic!("persist_size is not implemented for raft engine");
+    }
+
     fn is_empty(&self) -> bool {
         self.0.items.is_empty()
     }
+
+    fn merge(&mut self, _: Self) {
+        panic!("merge is not implemented for raft engine");
+    }
 }
 
-impl RaftEngine for RaftLogEngine {
-    type LogBatch = RaftLogBatch;
-
-    fn log_batch(&self, _capacity: usize) -> Self::LogBatch {
-        RaftLogBatch::default()
-    }
-
-    fn sync(&self) -> Result<()> {
-        box_try!(self.0.sync());
-        Ok(())
-    }
-
+impl RaftEngineReadOnly for RaftLogEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
         let state = box_try!(self.0.get_msg(raft_group_id, RAFT_LOG_STATE_KEY));
         Ok(state)
@@ -99,6 +110,19 @@ impl RaftEngine for RaftLogEngine {
         self.0
             .fetch_entries_to(raft_group_id, begin, end, max_size, to)
             .map_err(transfer_error)
+    }
+}
+
+impl RaftEngine for RaftLogEngine {
+    type LogBatch = RaftLogBatch;
+
+    fn log_batch(&self, _capacity: usize) -> Self::LogBatch {
+        RaftLogBatch::default()
+    }
+
+    fn sync(&self) -> Result<()> {
+        box_try!(self.0.sync());
+        Ok(())
     }
 
     fn consume(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize> {
@@ -172,6 +196,11 @@ impl RaftEngine for RaftLogEngine {
     fn dump_stats(&self) -> Result<String> {
         // Raft engine won't dump anything.
         Ok("".to_owned())
+    }
+
+    fn get_engine_size(&self) -> Result<u64> {
+        //TODO impl this when RaftLogEngine is ready to go online.
+        Ok(0)
     }
 }
 

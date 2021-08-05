@@ -24,6 +24,9 @@ impl ColumnFamilyOptions for PanicColumnFamilyOptions {
     fn new() -> Self {
         panic!()
     }
+    fn get_max_write_buffer_number(&self) -> u32 {
+        panic!()
+    }
     fn get_level_zero_slowdown_writes_trigger(&self) -> u32 {
         panic!()
     }

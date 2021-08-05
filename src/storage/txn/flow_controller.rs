@@ -205,7 +205,9 @@ impl<const CAP: usize> Smoother<CAP> {
     fn remove_stale_records(&mut self) {
         // make sure there are two records left at least
         while self.records.len() > 2 {
-            if self.records.front().unwrap().1.elapsed_secs() > SMOOTHER_STALE_RECORD_THRESHOLD {
+            if self.records.front().unwrap().1.saturating_elapsed_secs()
+                > SMOOTHER_STALE_RECORD_THRESHOLD
+            {
                 let v = self.records.pop_front().unwrap().0;
                 self.total -= v;
             } else {
@@ -573,8 +575,8 @@ impl<E: KvEngine> FlowChecker<E> {
         }
 
         // calculate foreground write flow
-        let rate =
-            self.limiter.total_bytes_consumed() as f64 / self.last_record_time.elapsed_secs();
+        let rate = self.limiter.total_bytes_consumed() as f64
+            / self.last_record_time.saturating_elapsed_secs();
         // don't record those write rate of 0.
         // For closed loop system, if all the requests are delayed(assume > 1s),
         // then in the next second, the write rate would be 0. But it doesn't
@@ -653,7 +655,7 @@ impl<E: KvEngine> FlowChecker<E> {
     fn adjust_memtables(&mut self, cf: &String) {
         let num_memtables = self
             .engine
-            .get_cf_num_memtables(cf)
+            .get_cf_num_immutable_mem_table(cf)
             .unwrap_or(None)
             .unwrap_or(0);
         let checker = self.cf_checkers.get_mut(cf).unwrap();
@@ -921,10 +923,10 @@ impl<E: KvEngine> FlowChecker<E> {
             .with_label_values(&[&cf])
             .set(num_l0_files as i64);
 
-        if checker.last_flush_bytes_time.elapsed_secs() > 5.0 {
+        if checker.last_flush_bytes_time.saturating_elapsed_secs() > 5.0 {
             // update flush flow
-            let flush_flow =
-                checker.last_flush_bytes as f64 / checker.last_flush_bytes_time.elapsed_secs();
+            let flush_flow = checker.last_flush_bytes as f64
+                / checker.last_flush_bytes_time.saturating_elapsed_secs();
             checker.short_term_flush_flow.observe(flush_flow as u64);
             checker.long_term_flush_flow.observe(flush_flow as u64);
             SCHED_FLUSH_FLOW_GAUGE
@@ -936,8 +938,8 @@ impl<E: KvEngine> FlowChecker<E> {
 
             // update l0 flow
             if checker.last_l0_bytes != 0 {
-                let l0_flow =
-                    checker.last_l0_bytes as f64 / checker.last_l0_bytes_time.elapsed_secs();
+                let l0_flow = checker.last_l0_bytes as f64
+                    / checker.last_l0_bytes_time.saturating_elapsed_secs();
                 checker.last_l0_bytes_time = Instant::now_coarse();
                 checker.short_term_l0_flow.observe(l0_flow as u64);
                 SCHED_L0_FLOW_GAUGE

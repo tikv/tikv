@@ -159,6 +159,13 @@ impl MvccTxn {
         lock.rollback_ts.push(self.start_ts);
         self.put_lock(key.clone(), &lock);
     }
+
+    pub(crate) fn clear(&mut self) {
+        self.write_size = 0;
+        self.modifies.clear();
+        self.locks_for_1pc.clear();
+        self.guards.clear();
+    }
 }
 
 impl fmt::Debug for MvccTxn {
@@ -218,6 +225,7 @@ pub(crate) fn make_txn_error(
                 lock_ts: TimeStamp::zero(),
                 lock_key: key.to_raw().unwrap(),
                 deadlock_key_hash: 0,
+                wait_chain: vec![],
             },
             "alreadyexist" => ErrorInner::AlreadyExist {
                 key: key.to_raw().unwrap(),
@@ -708,6 +716,7 @@ pub(crate) mod tests {
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
             need_old_value: false,
+            is_retry_request: false,
         }
     }
 
@@ -1002,6 +1011,7 @@ pub(crate) mod tests {
                     expected_lock_info.get_txn_size(),
                     TimeStamp::zero(),
                     TimeStamp::zero(),
+                    false,
                 );
             } else {
                 expected_lock_info.set_lock_type(Op::PessimisticLock);

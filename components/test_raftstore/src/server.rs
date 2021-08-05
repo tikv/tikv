@@ -25,17 +25,22 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{PerfLevel, RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
-use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::errors::Error as RaftError;
 use raftstore::router::{
     LocalReadRouter, RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter,
 };
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
+use raftstore::store::SnapManager;
 use raftstore::store::{
-    AutoSplitController, Callback, LocalReader, SnapManagerBuilder, SplitCheckRunner,
+    AutoSplitController, Callback, CheckLeaderRunner, LocalReader, SnapManagerBuilder,
+    SplitCheckRunner, SplitConfigManager,
 };
 use raftstore::Result;
+use raftstore::{
+    coprocessor::{CoprocessorHost, RegionInfoAccessor},
+    store::msg::RaftCmdExtraOpts,
+};
 use security::SecurityManager;
 use tikv::coprocessor;
 use tikv::coprocessor_v2;
@@ -58,15 +63,15 @@ use tikv::{
 };
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
-use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker};
+use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker};
 use tikv_util::HandyRwLock;
 use txn_types::TxnExtraScheduler;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>;
 type SimulateServerTransport =
-    SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
+    SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver, RocksEngine>>;
 
-pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
+pub type SimulateEngine = RaftKv<RocksEngine, SimulateStoreTransport>;
 
 #[derive(Default, Clone)]
 pub struct AddressMap {
@@ -104,12 +109,13 @@ impl StoreAddrResolver for AddressMap {
 
 struct ServerMeta {
     node: Node<TestPdClient, RocksEngine>,
-    server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
+    server: Server<SimulateStoreTransport, PdStoreAddrResolver, SimulateEngine>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
-    gc_worker: GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport>,
+    gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport>,
+    rts_worker: Option<LazyWorker<resolved_ts::Task<RocksSnapshot>>>,
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
@@ -126,8 +132,9 @@ pub struct ServerCluster {
     pub security_mgr: Arc<SecurityManager>,
     pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
     snap_paths: HashMap<u64, TempDir>,
+    snap_mgrs: HashMap<u64, SnapManager>,
     pd_client: Arc<TestPdClient>,
-    raft_client: RaftClient<AddressMap, RaftStoreBlackHole>,
+    raft_client: RaftClient<AddressMap, RaftStoreBlackHole, RocksEngine>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
 }
@@ -162,6 +169,7 @@ impl ServerCluster {
             region_info_accessors: HashMap::default(),
             importers: HashMap::default(),
             snap_paths: HashMap::default(),
+            snap_mgrs: HashMap::default(),
             pending_services: HashMap::default(),
             coprocessor_hooks: HashMap::default(),
             raft_client,
@@ -187,7 +195,7 @@ impl ServerCluster {
     pub fn get_gc_worker(
         &self,
         node_id: u64,
-    ) -> &GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport> {
+    ) -> &GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport> {
         &self.metas.get(&node_id).unwrap().gc_worker
     }
 
@@ -217,12 +225,14 @@ impl Simulator for ServerCluster {
 
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
 
-        // Now we cache the store address, so here we should re-use last
-        // listening address for the same store.
-        if let Some(addr) = self.addrs.get(node_id) {
-            cfg.server.addr = addr;
-        } else {
-            cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
+        if cfg.server.addr == "127.0.0.1:0" {
+            // Now we cache the store address, so here we should re-use last
+            // listening address for the same store.
+            if let Some(addr) = self.addrs.get(node_id) {
+                cfg.server.addr = addr;
+            } else {
+                cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
+            }
         }
 
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
@@ -243,9 +253,11 @@ impl Simulator for ServerCluster {
         }
 
         // Create storage.
-        let pd_worker = FutureWorker::new("test-pd-worker");
-        let storage_read_pool = ReadPool::from(storage::build_read_pool_for_test(
+        let pd_worker = LazyWorker::new("test-pd-worker");
+        let pd_sender = pd_worker.scheduler();
+        let storage_read_pool = ReadPool::from(storage::build_read_pool(
             &tikv::config::StorageReadPoolConfig::default_for_test(),
+            pd_sender,
             raft_engine.clone(),
         ));
 
@@ -269,6 +281,33 @@ impl Simulator for ServerCluster {
             .start_observe_lock_apply(&mut coprocessor_host, concurrency_manager.clone())
             .unwrap();
 
+        let rts_worker = if cfg.resolved_ts.enable {
+            // Resolved ts worker
+            let mut rts_worker = LazyWorker::new("resolved-ts");
+            let rts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
+            rts_ob.register_to(&mut coprocessor_host);
+            // Resolved ts endpoint
+            let rts_endpoint = resolved_ts::Endpoint::new(
+                &cfg.resolved_ts,
+                rts_worker.scheduler(),
+                raft_router.clone(),
+                store_meta.clone(),
+                self.pd_client.clone(),
+                concurrency_manager.clone(),
+                self.env.clone(),
+                self.security_mgr.clone(),
+                resolved_ts::DummySinker::new(),
+            );
+            // Start the worker
+            rts_worker.start(rts_endpoint);
+            Some(rts_worker)
+        } else {
+            None
+        };
+
+        let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
+        let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
+
         let mut lock_mgr = LockManager::new(cfg.pessimistic_txn.pipelined);
         let store = create_raft_storage(
             engine,
@@ -286,7 +325,7 @@ impl Simulator for ServerCluster {
         // Create import service.
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(dir, key_manager.clone()).unwrap())
+            Arc::new(SSTImporter::new(&cfg.import, dir, key_manager.clone(), false).unwrap())
         };
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
@@ -302,28 +341,30 @@ impl Simulator for ServerCluster {
         let (resolver, state) =
             resolve::new_resolver(Arc::clone(&self.pd_client), &bg_worker, router.clone());
         let snap_mgr = SnapManagerBuilder::default()
+            .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
+            .max_total_size(cfg.server.snap_max_total_size.0)
             .encryption_key_manager(key_manager)
             .build(tmp_str);
-        let server_cfg = Arc::new(cfg.server.clone());
+        self.snap_mgrs.insert(node_id, snap_mgr.clone());
+        let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
             &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
         ));
-        let cop = coprocessor::Endpoint::new(
-            &server_cfg,
+        let copr = coprocessor::Endpoint::new(
+            &server_cfg.value().clone(),
             cop_read_pool.handle(),
             concurrency_manager.clone(),
             PerfLevel::EnableCount,
         );
-        let coprv2 = coprocessor_v2::Endpoint::new();
+        let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;
         // Create Debug service.
         let debug_thread_pool = Arc::new(
-            TokioBuilder::new()
-                .threaded_scheduler()
+            TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
-                .core_threads(1)
+                .worker_threads(1)
                 .build()
                 .unwrap(),
         );
@@ -335,17 +376,34 @@ impl Simulator for ServerCluster {
             ConfigController::default(),
         );
 
+        let apply_router = system.apply_router();
+        // Create node.
+        let mut raft_store = cfg.raft_store.clone();
+        raft_store.validate().unwrap();
+        let mut node = Node::new(
+            system,
+            &server_cfg.value().clone(),
+            Arc::new(VersionTrack::new(raft_store)),
+            Arc::clone(&self.pd_client),
+            state,
+            bg_worker.clone(),
+        );
+        node.try_bootstrap_store(engines.clone())?;
+        let node_id = node.id();
+
         for _ in 0..100 {
             let mut svr = Server::new(
+                node_id,
                 &server_cfg,
                 &security_mgr,
                 store.clone(),
-                cop.clone(),
-                coprv2.clone(),
+                copr.clone(),
+                copr_v2.clone(),
                 sim_router.clone(),
                 resolver.clone(),
                 snap_mgr.clone(),
                 gc_worker.clone(),
+                check_leader_scheduler.clone(),
                 self.env.clone(),
                 None,
                 debug_thread_pool.clone(),
@@ -378,20 +436,7 @@ impl Simulator for ServerCluster {
         cfg.server.addr = format!("{}", addr);
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans);
-        let server_cfg = Arc::new(cfg.server.clone());
-        let apply_router = system.apply_router();
-
-        // Create node.
-        let mut raft_store = cfg.raft_store.clone();
-        raft_store.validate().unwrap();
-        let mut node = Node::new(
-            system,
-            &cfg.server,
-            Arc::new(VersionTrack::new(raft_store)),
-            Arc::clone(&self.pd_client),
-            state,
-            bg_worker.clone(),
-        );
+        let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
 
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
@@ -401,7 +446,8 @@ impl Simulator for ServerCluster {
         let split_check_runner =
             SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
-
+        let split_config_manager = SplitConfigManager(Arc::new(VersionTrack::new(cfg.split)));
+        let auto_split_controller = AutoSplitController::new(split_config_manager);
         node.start(
             engines,
             simulate_trans.clone(),
@@ -411,7 +457,7 @@ impl Simulator for ServerCluster {
             coprocessor_host,
             importer.clone(),
             split_check_scheduler,
-            AutoSplitController::default(),
+            auto_split_controller,
             concurrency_manager.clone(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
@@ -445,6 +491,7 @@ impl Simulator for ServerCluster {
                 sim_router,
                 sim_trans: simulate_trans,
                 gc_worker,
+                rts_worker,
             },
         );
         self.addrs.insert(node_id, format!("{}", addr));
@@ -462,10 +509,18 @@ impl Simulator for ServerCluster {
             .to_owned()
     }
 
+    fn get_snap_mgr(&self, node_id: u64) -> &SnapManager {
+        self.snap_mgrs.get(&node_id).unwrap()
+    }
+
     fn stop_node(&mut self, node_id: u64) {
         if let Some(mut meta) = self.metas.remove(&node_id) {
             meta.server.stop().unwrap();
             meta.node.stop();
+            // resolved ts worker started, let's stop it
+            if let Some(worker) = meta.rts_worker {
+                worker.stop_worker();
+            }
         }
     }
 
@@ -483,7 +538,7 @@ impl Simulator for ServerCluster {
             None => return Err(box_err!("missing sender for store {}", node_id)),
             Some(meta) => meta.sim_router.clone(),
         };
-        router.send_command(request, cb)
+        router.send_command(request, cb, RaftCmdExtraOpts::default())
     }
 
     fn async_read(
@@ -561,20 +616,23 @@ pub fn new_incompatible_server_cluster(id: u64, count: usize) -> Cluster<ServerC
     Cluster::new(id, count, sim, pd_client)
 }
 
-pub fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
-    must_new_and_configure_cluster(|_| ())
+pub fn must_new_cluster_mul(count: usize) -> (Cluster<ServerCluster>, metapb::Peer, Context) {
+    must_new_and_configure_cluster_mul(count, |_| ())
 }
 
 pub fn must_new_and_configure_cluster(
+    configure: impl FnMut(&mut Cluster<ServerCluster>),
+) -> (Cluster<ServerCluster>, metapb::Peer, Context) {
+    must_new_and_configure_cluster_mul(1, configure)
+}
+
+fn must_new_and_configure_cluster_mul(
+    count: usize,
     mut configure: impl FnMut(&mut Cluster<ServerCluster>),
-) -> (Cluster<ServerCluster>, metapb::Peer, Context)
-where
-{
-    let count = 1;
+) -> (Cluster<ServerCluster>, metapb::Peer, Context) {
     let mut cluster = new_server_cluster(0, count);
     configure(&mut cluster);
     cluster.run();
-
     let region_id = 1;
     let leader = cluster.leader_of_region(region_id).unwrap();
     let epoch = cluster.get_region_epoch(region_id);
@@ -587,7 +645,13 @@ where
 }
 
 pub fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster>, TikvClient, Context) {
-    let (cluster, leader, ctx) = must_new_cluster();
+    must_new_cluster_and_kv_client_mul(1)
+}
+
+pub fn must_new_cluster_and_kv_client_mul(
+    count: usize,
+) -> (Cluster<ServerCluster>, TikvClient, Context) {
+    let (cluster, leader, ctx) = must_new_cluster_mul(count);
 
     let env = Arc::new(Environment::new(1));
     let channel =
@@ -598,7 +662,7 @@ pub fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster>, TikvClient, 
 }
 
 pub fn must_new_cluster_and_debug_client() -> (Cluster<ServerCluster>, DebugClient, u64) {
-    let (cluster, leader, _) = must_new_cluster();
+    let (cluster, leader, _) = must_new_cluster_mul(1);
 
     let env = Arc::new(Environment::new(1));
     let channel =
@@ -606,4 +670,17 @@ pub fn must_new_cluster_and_debug_client() -> (Cluster<ServerCluster>, DebugClie
     let client = DebugClient::new(channel);
 
     (cluster, client, leader.get_store_id())
+}
+
+pub fn must_new_and_configure_cluster_and_kv_client(
+    configure: impl FnMut(&mut Cluster<ServerCluster>),
+) -> (Cluster<ServerCluster>, TikvClient, Context) {
+    let (cluster, leader, ctx) = must_new_and_configure_cluster(configure);
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    (cluster, client, ctx)
 }

@@ -3,34 +3,23 @@
 #[macro_use]
 extern crate clap;
 #[macro_use]
-extern crate vlog;
-
-use std::borrow::ToOwned;
-use std::cmp::Ordering;
-use std::error::Error;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader};
-use std::path::{Path, PathBuf};
-use std::string::ToString;
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
-use std::{process, str, u64};
+extern crate log;
 
 use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
-use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
-use grpcio::{CallOption, ChannelBuilder, Environment};
-use protobuf::Message;
-
 use encryption_export::{
     create_backend, data_key_manager_from_config, encryption_method_from_db_encryption_method,
     DataKeyManager, DecrypterReader, Iv,
 };
-use engine_rocks::encryption::get_env;
+use engine_rocks::get_env;
+use engine_rocks::raw_util::new_engine_opt;
 use engine_rocks::RocksEngine;
-use engine_traits::{EncryptionKeyManager, Engines, RaftEngine};
-use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{
+    EncryptionKeyManager, Engines, Error as EngineError, RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
+};
 use file_system::calc_crc32;
+use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
+use grpcio::{CallOption, ChannelBuilder, Environment};
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
@@ -39,13 +28,27 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb::TikvClient;
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
+use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raft_log_engine::RaftLogEngine;
 use raftstore::store::INIT_EPOCH_CONF_VER;
 use security::{SecurityConfig, SecurityManager};
+use server::setup::initial_logger;
+use std::borrow::ToOwned;
+use std::cmp::Ordering;
+use std::error::Error;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use tikv::config::{ConfigController, TiKvConfig};
+use std::str::FromStr;
+use std::string::ToString;
+use std::sync::Arc;
+use std::time::Duration;
+use std::{process, str, thread, u64};
+use tikv::config::{ConfigController, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
+use tikv_util::config::canonicalize_sub_path;
 use tikv_util::{escape, unescape};
 use txn_types::Key;
 
@@ -54,78 +57,94 @@ const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
 const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 const METRICS_JEMALLOC: &str = "jemalloc";
 
+const LOCK_FILE_ERROR: &str = "IO error: While lock file";
+
 type MvccInfoStream = Pin<Box<dyn Stream<Item = Result<(Vec<u8>, MvccInfo), String>>>>;
 
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
-    ve1!("{}: {}", prefix, e);
+    println!("{}: {}", prefix, e);
+    process::exit(-1);
+}
+
+fn init_ctl_logger(level: &str) {
+    let mut cfg = TiKvConfig::default();
+    cfg.log_level = slog::Level::from_str(level).unwrap();
+    cfg.rocksdb.info_log_dir = "./ctl-engine-info-log".to_owned();
+    cfg.raftdb.info_log_dir = "./ctl-engine-info-log".to_owned();
+    initial_logger(&cfg);
+}
+
+fn handle_engine_error(err: EngineError) -> ! {
+    error!("error while open kvdb: {}", err);
+    if let EngineError::Engine(msg) = err {
+        if msg.starts_with(LOCK_FILE_ERROR) {
+            error!(
+                "LOCK file conflict indicates TiKV process is running. \
+                Do NOT delete the LOCK file and force the command to run. \
+                Doing so could cause data corruption."
+            );
+        }
+    }
     process::exit(-1);
 }
 
 fn new_debug_executor(
-    db: Option<&str>,
-    raft_db: Option<&str>,
+    cfg: &TiKvConfig,
+    data_dir: Option<&str>,
     skip_paranoid_checks: bool,
     host: Option<&str>,
-    cfg: &TiKvConfig,
     mgr: Arc<SecurityManager>,
 ) -> Box<dyn DebugExecutor> {
-    match (host, db) {
-        (None, Some(kv_path)) => {
-            let key_manager =
-                data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
-                    .unwrap()
-                    .map(Arc::new);
-            let cache = cfg.storage.block_cache.build_shared_cache();
-            let shared_block_cache = cache.is_some();
-            let env = get_env(key_manager, None).unwrap();
+    if let Some(remote) = host {
+        return Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>;
+    }
 
-            let mut kv_db_opts = cfg.rocksdb.build_opt();
-            kv_db_opts.set_env(env.clone());
-            kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
-            let kv_cfs_opts = cfg
-                .rocksdb
-                .build_cf_opts(&cache, None, cfg.storage.enable_ttl);
-            let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
-            let kv_path = kv_path.to_str().unwrap();
-            let kv_db =
-                engine_rocks::raw_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
-            let mut kv_db = RocksEngine::from_db(Arc::new(kv_db));
-            kv_db.set_shared_block_cache(shared_block_cache);
+    let data_dir = data_dir.unwrap();
+    let kv_path = canonicalize_sub_path(data_dir, DEFAULT_ROCKSDB_SUB_DIR).unwrap();
 
-            let mut raft_path = raft_db
-                .map(ToString::to_string)
-                .unwrap_or_else(|| format!("{}/../raft", kv_path));
-            raft_path = PathBuf::from(raft_path)
-                .canonicalize()
-                .unwrap()
-                .to_str()
-                .map(ToString::to_string)
-                .unwrap();
+    let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+        .unwrap()
+        .map(Arc::new);
 
-            let cfg_controller = ConfigController::default();
-            if !cfg.raft_engine.enable {
-                let mut raft_db_opts = cfg.raftdb.build_opt();
-                raft_db_opts.set_env(env);
-                let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
-                let raft_db = engine_rocks::raw_util::new_engine_opt(
-                    &raft_path,
-                    raft_db_opts,
-                    raft_db_cf_opts,
-                )
-                .unwrap();
-                let mut raft_db = RocksEngine::from_db(Arc::new(raft_db));
-                raft_db.set_shared_block_cache(shared_block_cache);
-                let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
-                Box::new(debugger) as Box<dyn DebugExecutor>
-            } else {
-                let config = cfg.raft_engine.config();
-                let raft_db = RaftLogEngine::new(config);
-                let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
-                Box::new(debugger) as Box<dyn DebugExecutor>
-            }
-        }
-        (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>,
-        _ => unreachable!(),
+    let cache = cfg.storage.block_cache.build_shared_cache();
+    let shared_block_cache = cache.is_some();
+    let env = get_env(key_manager, None /*io_rate_limiter*/).unwrap();
+
+    let mut kv_db_opts = cfg.rocksdb.build_opt();
+    kv_db_opts.set_env(env.clone());
+    kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
+    let kv_cfs_opts = cfg
+        .rocksdb
+        .build_cf_opts(&cache, None, cfg.storage.enable_ttl);
+    let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
+    let kv_path = kv_path.to_str().unwrap();
+    let kv_db = match new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts) {
+        Ok(db) => db,
+        Err(e) => handle_engine_error(e),
+    };
+    let mut kv_db = RocksEngine::from_db(Arc::new(kv_db));
+    kv_db.set_shared_block_cache(shared_block_cache);
+
+    let cfg_controller = ConfigController::default();
+    if !cfg.raft_engine.enable {
+        let mut raft_db_opts = cfg.raftdb.build_opt();
+        raft_db_opts.set_env(env);
+        let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
+        let raft_path = canonicalize_sub_path(data_dir, &cfg.raft_store.raftdb_path).unwrap();
+        let raft_db = match new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts) {
+            Ok(db) => db,
+            Err(e) => handle_engine_error(e),
+        };
+        let mut raft_db = RocksEngine::from_db(Arc::new(raft_db));
+        raft_db.set_shared_block_cache(shared_block_cache);
+        let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
+        Box::new(debugger) as Box<dyn DebugExecutor>
+    } else {
+        let mut config = cfg.raft_engine.config();
+        config.dir = canonicalize_sub_path(data_dir, &config.dir).unwrap();
+        let raft_db = RaftLogEngine::new(config);
+        let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
+        Box::new(debugger) as Box<dyn DebugExecutor>
     }
 }
 
@@ -144,15 +163,15 @@ fn new_debug_client(host: &str, mgr: Arc<SecurityManager>) -> DebugClient {
 trait DebugExecutor {
     fn dump_value(&self, cf: &str, key: Vec<u8>) {
         let value = self.get_value_by_key(cf, key);
-        v1!("value: {}", escape(&value));
+        println!("value: {}", escape(&value));
     }
 
     fn dump_region_size(&self, region: u64, cfs: Vec<&str>) -> usize {
         let sizes = self.get_region_size(region, cfs);
         let mut total_size = 0;
-        v1!("region id: {}", region);
+        println!("region id: {}", region);
         for (cf, size) in sizes {
-            v1!("cf {} region size: {}", cf, convert_gbmb(size as u64));
+            println!("cf {} region size: {}", cf, convert_gbmb(size as u64));
             total_size += size;
         }
         total_size
@@ -165,8 +184,8 @@ trait DebugExecutor {
         for region in regions {
             total_size += self.dump_region_size(region, cfs.clone());
         }
-        v1!("total region number: {}", regions_number);
-        v1!("total region size: {}", convert_gbmb(total_size as u64));
+        println!("total region number: {}", regions_number);
+        println!("total region size: {}", convert_gbmb(total_size as u64));
     }
 
     fn dump_region_info(&self, region: u64, skip_tombstone: bool) {
@@ -180,13 +199,13 @@ trait DebugExecutor {
         let region_state_key = keys::region_state_key(region);
         let raft_state_key = keys::raft_state_key(region);
         let apply_state_key = keys::apply_state_key(region);
-        v1!("region id: {}", region);
-        v1!("region state key: {}", escape(&region_state_key));
-        v1!("region state: {:?}", r.region_local_state);
-        v1!("raft state key: {}", escape(&raft_state_key));
-        v1!("raft state: {:?}", r.raft_local_state);
-        v1!("apply state key: {}", escape(&apply_state_key));
-        v1!("apply state: {:?}", r.raft_apply_state);
+        println!("region id: {}", region);
+        println!("region state key: {}", escape(&region_state_key));
+        println!("region state: {:?}", r.region_local_state);
+        println!("raft state key: {}", escape(&raft_state_key));
+        println!("raft state: {:?}", r.raft_local_state);
+        println!("apply state key: {}", escape(&apply_state_key));
+        println!("apply state: {:?}", r.raft_apply_state);
     }
 
     fn dump_all_region_info(&self, skip_tombstone: bool) {
@@ -197,14 +216,14 @@ trait DebugExecutor {
 
     fn dump_raft_log(&self, region: u64, index: u64) {
         let idx_key = keys::raft_log_key(region, index);
-        v1!("idx_key: {}", escape(&idx_key));
-        v1!("region: {}", region);
-        v1!("log index: {}", index);
+        println!("idx_key: {}", escape(&idx_key));
+        println!("region: {}", region);
+        println!("log index: {}", index);
 
         let mut entry = self.get_raft_log(region, index);
         let data = entry.take_data();
-        v1!("entry {:?}", entry);
-        v1!("msg len: {}", data.len());
+        println!("entry {:?}", entry);
+        println!("msg len: {}", data.len());
 
         if data.is_empty() {
             return;
@@ -214,25 +233,25 @@ trait DebugExecutor {
             EntryType::EntryNormal => {
                 let mut msg = RaftCmdRequest::default();
                 msg.merge_from_bytes(&data).unwrap();
-                v1!("Normal: {:#?}", msg);
+                println!("Normal: {:#?}", msg);
             }
             EntryType::EntryConfChange => {
                 let mut msg = ConfChange::new();
                 msg.merge_from_bytes(&data).unwrap();
                 let ctx = msg.take_context();
-                v1!("ConfChange: {:?}", msg);
+                println!("ConfChange: {:?}", msg);
                 let mut cmd = RaftCmdRequest::default();
                 cmd.merge_from_bytes(&ctx).unwrap();
-                v1!("ConfChange.RaftCmdRequest: {:#?}", cmd);
+                println!("ConfChange.RaftCmdRequest: {:#?}", cmd);
             }
             EntryType::EntryConfChangeV2 => {
                 let mut msg = ConfChangeV2::new();
                 msg.merge_from_bytes(&data).unwrap();
                 let ctx = msg.take_context();
-                v1!("ConfChangeV2: {:?}", msg);
+                println!("ConfChangeV2: {:?}", msg);
                 let mut cmd = RaftCmdRequest::default();
                 cmd.merge_from_bytes(&ctx).unwrap();
-                v1!("ConfChangeV2.RaftCmdRequest: {:#?}", cmd);
+                println!("ConfChangeV2.RaftCmdRequest: {:#?}", cmd);
             }
         }
     }
@@ -250,11 +269,11 @@ trait DebugExecutor {
         commit_ts: Option<u64>,
     ) {
         if !from.starts_with(b"z") || (!to.is_empty() && !to.starts_with(b"z")) {
-            ve1!("from and to should start with \"z\"");
+            println!("from and to should start with \"z\"");
             process::exit(-1);
         }
         if !to.is_empty() && to < from {
-            ve1!("\"to\" must be greater than \"from\"");
+            println!("\"to\" must be greater than \"from\"");
             process::exit(-1);
         }
 
@@ -267,21 +286,21 @@ trait DebugExecutor {
             self.get_mvcc_infos(from.clone(), to, limit)
                 .try_for_each(move |(key, mvcc)| {
                     if point_query && key != from {
-                        v1!("no mvcc infos for {}", escape(&from));
+                        println!("no mvcc infos for {}", escape(&from));
                         return future::err::<(), String>("no mvcc infos".to_owned());
                     }
 
-                    v1!("key: {}", escape(&key));
+                    println!("key: {}", escape(&key));
                     if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
                         let lock_info = mvcc.get_lock();
                         if start_ts.map_or(true, |ts| lock_info.get_start_ts() == ts) {
-                            v1!("\tlock cf value: {:?}", lock_info);
+                            println!("\tlock cf value: {:?}", lock_info);
                         }
                     }
                     if cfs.contains(&CF_DEFAULT) {
                         for value_info in mvcc.get_values() {
                             if commit_ts.map_or(true, |ts| value_info.get_start_ts() == ts) {
-                                v1!("\tdefault cf value: {:?}", value_info);
+                                println!("\tdefault cf value: {:?}", value_info);
                             }
                         }
                     }
@@ -290,15 +309,15 @@ trait DebugExecutor {
                             if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts)
                                 && commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
                             {
-                                v1!("\t write cf value: {:?}", write_info);
+                                println!("\t write cf value: {:?}", write_info);
                             }
                         }
                     }
-                    v1!("");
+                    println!();
                     future::ok::<(), String>(())
                 });
         if let Err(e) = block_on(scan_future) {
-            ve1!("{}", e);
+            println!("{}", e);
             process::exit(-1);
         }
     }
@@ -327,34 +346,33 @@ trait DebugExecutor {
     fn diff_region(
         &self,
         region: u64,
-        db: Option<&str>,
-        raft_db: Option<&str>,
-        host: Option<&str>,
-        cfg: &TiKvConfig,
+        to_host: Option<&str>,
+        to_data_dir: Option<&str>,
+        to_config: &TiKvConfig,
         mgr: Arc<SecurityManager>,
     ) {
-        let rhs_debug_executor = new_debug_executor(db, raft_db, false, host, cfg, mgr);
+        let rhs_debug_executor = new_debug_executor(to_config, to_data_dir, false, to_host, mgr);
 
         let r1 = self.get_region_info(region);
         let r2 = rhs_debug_executor.get_region_info(region);
-        v1!("region id: {}", region);
-        v1!("db1 region state: {:?}", r1.region_local_state);
-        v1!("db2 region state: {:?}", r2.region_local_state);
-        v1!("db1 apply state: {:?}", r1.raft_apply_state);
-        v1!("db2 apply state: {:?}", r2.raft_apply_state);
+        println!("region id: {}", region);
+        println!("db1 region state: {:?}", r1.region_local_state);
+        println!("db2 region state: {:?}", r2.region_local_state);
+        println!("db1 apply state: {:?}", r1.raft_apply_state);
+        println!("db2 apply state: {:?}", r2.raft_apply_state);
 
         match (r1.region_local_state, r2.region_local_state) {
             (None, None) => {}
             (Some(_), None) | (None, Some(_)) => {
-                v1!("db1 and db2 don't have same region local_state");
+                println!("db1 and db2 don't have same region local_state");
             }
             (Some(region_local_1), Some(region_local_2)) => {
                 let region1 = region_local_1.get_region();
                 let region2 = region_local_2.get_region();
                 if region1 != region2 {
-                    v1!("db1 and db2 have different region:");
-                    v1!("db1 region: {:?}", region1);
-                    v1!("db2 region: {:?}", region2);
+                    println!("db1 and db2 have different region:");
+                    println!("db1 region: {:?}", region1);
+                    println!("db2 region: {:?}", region2);
                     return;
                 }
                 let start_key = keys::data_key(region1.get_start_key());
@@ -372,7 +390,7 @@ trait DebugExecutor {
                     };
                     match wait? {
                         Err(e) => {
-                            v1!("db{} scan data in region {} fail: {}", i, region, e);
+                            println!("db{} scan data in region {} fail: {}", i, region, e);
                             process::exit(-1);
                         }
                         Ok(s) => Some(s),
@@ -380,7 +398,7 @@ trait DebugExecutor {
                 };
 
                 let show_only = |i: usize, k: &[u8]| {
-                    v1!("only db{} has: {}", i, escape(k));
+                    println!("only db{} has: {}", i, escape(k));
                 };
 
                 let (mut item1, mut item2) = (take_item(1), take_item(2));
@@ -406,7 +424,7 @@ trait DebugExecutor {
                         }
                         _ => {
                             if t1.1 != t2.1 {
-                                v1!("diff mvcc on key: {}", escape(&t1.0));
+                                println!("diff mvcc on key: {}", escape(&t1.0));
                                 has_diff = true;
                             }
                             item1 = take_item(1);
@@ -422,12 +440,11 @@ trait DebugExecutor {
                     item = take_item(i).map(|t| (i, t));
                 }
                 if !has_diff {
-                    v1!("db1 and db2 have same data in region: {}", region);
+                    println!("db1 and db2 have same data in region: {}", region);
                 }
-                v1!(
+                println!(
                     "db1 has {} keys, db2 has {} keys",
-                    key_counts[0],
-                    key_counts[1]
+                    key_counts[0], key_counts[1]
                 );
             }
         }
@@ -446,7 +463,7 @@ trait DebugExecutor {
         let from = from.unwrap_or_default();
         let to = to.unwrap_or_default();
         self.do_compaction(db, cf, &from, &to, threads, bottommost);
-        v1!(
+        println!(
             "store:{:?} compact db:{:?} cf:{} range:[{:?}, {:?}) success!",
             address.unwrap_or("local"),
             db,
@@ -470,7 +487,7 @@ trait DebugExecutor {
         let from = keys::data_key(r.get_start_key());
         let to = keys::data_end_key(r.get_end_key());
         self.do_compaction(db, cf, &from, &to, threads, bottommost);
-        v1!(
+        println!(
             "store:{:?} compact_region db:{:?} cf:{} range:[{:?}, {:?}) success!",
             address.unwrap_or("local"),
             db,
@@ -500,7 +517,7 @@ trait DebugExecutor {
                 {
                     return region;
                 }
-                ve1!("no such region in pd: {}", region_id);
+                println!("no such region in pd: {}", region_id);
                 process::exit(-1);
             })
             .collect();
@@ -541,7 +558,7 @@ trait DebugExecutor {
                 {
                     return region;
                 }
-                ve1!("no such region in pd: {}", region_id);
+                println!("no such region in pd: {}", region_id);
                 process::exit(-1);
             })
             .collect();
@@ -600,7 +617,7 @@ trait DebugExecutor {
 
 impl DebugExecutor for DebugClient {
     fn check_local_mode(&self) {
-        ve1!("This command is only for local mode");
+        println!("This command is only for local mode");
         process::exit(-1);
     }
 
@@ -707,7 +724,7 @@ impl DebugExecutor for DebugClient {
             .get_metrics(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::metrics", e));
         for tag in tags {
-            v1!("tag:{}", tag);
+            println!("tag:{}", tag);
             let metrics = match tag {
                 METRICS_ROCKSDB_KV => resp.take_rocksdb_kv(),
                 METRICS_ROCKSDB_RAFT => resp.take_rocksdb_raft(),
@@ -717,7 +734,7 @@ impl DebugExecutor for DebugClient {
                     "unsupported tag, should be one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv",
                 ),
             };
-            v1!("{}", metrics);
+            println!("{}", metrics);
         }
     }
 
@@ -754,7 +771,7 @@ impl DebugExecutor for DebugClient {
         req.set_region_id(region_id);
         self.check_region_consistency(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::check_region_consistency", e));
-        v1!("success!");
+        println!("success!");
     }
 
     fn modify_tikv_config(&self, config_name: &str, config_value: &str) {
@@ -763,7 +780,7 @@ impl DebugExecutor for DebugClient {
         req.set_config_value(config_value.to_owned());
         self.modify_tikv_config(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::modify_tikv_config", e));
-        v1!("success");
+        println!("success");
     }
 
     fn dump_region_properties(&self, region_id: u64) {
@@ -773,7 +790,7 @@ impl DebugExecutor for DebugClient {
             .get_region_properties(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_region_properties", e));
         for prop in resp.get_props() {
-            v1!("{}: {}", prop.get_name(), prop.get_value());
+            println!("{}: {}", prop.get_name(), prop.get_value());
         }
     }
 
@@ -786,7 +803,7 @@ impl DebugExecutor for DebugClient {
         let resp = self
             .get_store_info(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_store_info", e));
-        v1!("{}", resp.get_store_id())
+        println!("{}", resp.get_store_id())
     }
 
     fn dump_cluster_info(&self) {
@@ -794,7 +811,7 @@ impl DebugExecutor for DebugClient {
         let resp = self
             .get_cluster_info(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_cluster_info", e));
-        v1!("{}", resp.get_cluster_id())
+        println!("{}", resp.get_cluster_id())
     }
 }
 
@@ -867,11 +884,11 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
             .set_region_tombstone(regions)
             .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e));
         if ret.is_empty() {
-            v1!("success!");
+            println!("success!");
             return;
         }
         for (region_id, error) in ret {
-            ve1!("region: {}, error: {}", region_id, error);
+            println!("region: {}, error: {}", region_id, error);
         }
     }
 
@@ -880,11 +897,11 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
             .set_region_tombstone_by_id(region_ids)
             .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone_by_id", e));
         if ret.is_empty() {
-            v1!("success!");
+            println!("success!");
             return;
         }
         for (region_id, error) in ret {
-            ve1!("region: {}, error: {}", region_id, error);
+            println!("region: {}, error: {}", region_id, error);
         }
     }
 
@@ -893,11 +910,11 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
             .recover_regions(regions, read_only)
             .unwrap_or_else(|e| perror_and_exit("Debugger::recover regions", e));
         if ret.is_empty() {
-            v1!("success!");
+            println!("success!");
             return;
         }
         for (region_id, error) in ret {
-            ve1!("region: {}, error: {}", region_id, error);
+            println!("region: {}, error: {}", region_id, error);
         }
     }
 
@@ -912,18 +929,18 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
             .unwrap_or_else(|e| perror_and_exit("Debugger::bad_regions", e));
         if !bad_regions.is_empty() {
             for (region_id, error) in bad_regions {
-                v1!("{}: {}", region_id, error);
+                println!("{}: {}", region_id, error);
             }
             return;
         }
-        v1!("all regions are healthy")
+        println!("all regions are healthy")
     }
 
     fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>) {
-        v1!("removing stores {:?} from configurations...", store_ids);
+        println!("removing stores {:?} from configurations...", store_ids);
         self.remove_failed_stores(store_ids, region_ids)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
-        v1!("success");
+        println!("success");
     }
 
     fn recreate_region(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
@@ -933,7 +950,7 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         let mut region = match block_on(rpc_client.get_region_by_id(region_id)) {
             Ok(Some(region)) => region,
             Ok(None) => {
-                ve1!("no such region {} on PD", region_id);
+                println!("no such region {} on PD", region_id);
                 process::exit(-1)
             }
             Err(e) => perror_and_exit("RpcClient::get_region_by_id", e),
@@ -959,14 +976,13 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         peer.set_store_id(store_id);
         region.mut_peers().push(peer);
 
-        v1!(
+        println!(
             "initing empty region {} with peer_id {}...",
-            new_region_id,
-            new_peer_id
+            new_region_id, new_peer_id
         );
         self.recreate_region(region)
             .unwrap_or_else(|e| perror_and_exit("Debugger::recreate_region", e));
-        v1!("success");
+        println!("success");
     }
 
     fn dump_metrics(&self, _tags: Vec<&str>) {
@@ -974,12 +990,12 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     }
 
     fn check_region_consistency(&self, _: u64) {
-        ve1!("only support remote mode");
+        println!("only support remote mode");
         process::exit(-1);
     }
 
     fn modify_tikv_config(&self, _: &str, _: &str) {
-        ve1!("only support remote mode");
+        println!("only support remote mode");
         process::exit(-1);
     }
 
@@ -988,7 +1004,7 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
             .get_region_properties(region_id)
             .unwrap_or_else(|e| perror_and_exit("Debugger::get_region_properties", e));
         for (name, value) in props {
-            v1!("{}: {}", name, value);
+            println!("{}: {}", name, value);
         }
     }
 
@@ -997,21 +1013,21 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
             .get_range_properties(&start, &end)
             .unwrap_or_else(|e| perror_and_exit("Debugger::get_range_properties", e));
         for (name, value) in props {
-            v1!("{}: {}", name, value);
+            println!("{}: {}", name, value);
         }
     }
 
     fn dump_store_info(&self) {
         let store_id = self.get_store_id();
         if let Ok(id) = store_id {
-            v1!("store id: {}", id);
+            println!("store id: {}", id);
         }
     }
 
     fn dump_cluster_info(&self) {
         let cluster_id = self.get_cluster_id();
         if let Ok(id) = cluster_id {
-            v1!("cluster id: {}", id);
+            println!("cluster id: {}", id);
         }
     }
 }
@@ -1033,8 +1049,6 @@ fn warning_prompt(message: &str) -> bool {
 }
 
 fn main() {
-    vlog::set_verbosity_level(1);
-
     let raw_key_hint: &'static str = "Raw key (generally starts with \"z\") in escaped form";
     let build_timestamp = option_env!("TIKV_BUILD_TIME");
     let version_info = tikv::tikv_version_info(build_timestamp);
@@ -1045,31 +1059,21 @@ fn main() {
         .version(version_info.as_ref())
         .long_version(version_info.as_ref())
         .setting(AppSettings::AllowExternalSubcommands)
+        // Some general arguments.
         .arg(
-            Arg::with_name("db")
-                .long("db")
+            Arg::with_name("pd")
+                .long("pd")
                 .takes_value(true)
-                .help("Set the rocksdb path"),
+                .help("Set the address of pd"),
         )
         .arg(
-            Arg::with_name("raftdb")
-                .long("raftdb")
+            Arg::with_name("log_level")
+                .long("log-level")
                 .takes_value(true)
-                .help("Set the raft rocksdb path"),
+                .default_value("info")
+                .help("Set the log level"),
         )
-        .arg(
-            Arg::with_name("skip-paranoid-checks")
-                .required(false)
-                .long("skip-paranoid-checks")
-                .takes_value(false)
-                .help("Skip paranoid checks when open rocksdb"),
-        )
-        .arg(
-            Arg::with_name("config")
-                .long("config")
-                .takes_value(true)
-                .help("Set the config for rocksdb"),
-        )
+        // Arguments for remote mode.
         .arg(
             Arg::with_name("host")
                 .long("host")
@@ -1097,6 +1101,42 @@ fn main() {
                 .takes_value(true)
                 .help("Set the private key path"),
         )
+        // Arguments for local mode.
+        .arg(
+            Arg::with_name("config")
+                .long("config")
+                .takes_value(true)
+                .help("TiKV config path, by default it's <deploy-dir>/conf/tikv.toml"),
+        )
+        .arg(
+            Arg::with_name("data_dir")
+                .long("data-dir")
+                .takes_value(true)
+                .help("TiKV data-dir, check <deploy-dir>/scripts/run.sh to get it"),
+        )
+        .arg(
+            Arg::with_name("skip-paranoid-checks")
+                .required(false)
+                .long("skip-paranoid-checks")
+                .takes_value(false)
+                .help("Skip paranoid checks when open rocksdb"),
+        )
+        // Deprecated arguments.
+        .arg(
+            Arg::with_name("db")
+                .long("db")
+                .takes_value(true)
+                .help("Set the rocksdb path")
+                .validator(|_| Err("DEPRECATED!!! Use --data-dir and --config instead".to_owned())),
+        )
+        .arg(
+            Arg::with_name("raftdb")
+                .long("raftdb")
+                .takes_value(true)
+                .help("Set the raft rocksdb path")
+                .validator(|_| Err("DEPRECATED!!! Use --data-dir and --config instead".to_owned())),
+        )
+        // Encode & decode keys.
         .arg(
             Arg::with_name("hex-to-escaped")
                 .conflicts_with("escaped-to-hex")
@@ -1124,12 +1164,6 @@ fn main() {
                 .long("encode")
                 .takes_value(true)
                 .help("Encode a key in escaped format"),
-        )
-        .arg(
-            Arg::with_name("pd")
-                .long("pd")
-                .takes_value(true)
-                .help("Set the address of pd"),
         )
         .subcommand(
             SubCommand::with_name("raft")
@@ -1352,15 +1386,29 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("to_db")
-                        .required_unless("to_host")
                         .conflicts_with("to_host")
                         .long("to-db")
                         .takes_value(true)
-                        .help("To which db path"),
+                        .help("To which db path")
+                        .validator(|_| Err("DEPRECATED!!! Use --to-data-dir and --to-config instead".to_owned())),
+                )
+                .arg(
+                    Arg::with_name("to_data_dir")
+                        .conflicts_with("to_host")
+                        .long("to-data-dir")
+                        .takes_value(true)
+                        .help("data-dir of the target TiKV"),
+                )
+                .arg(
+                    Arg::with_name("to_config")
+                        .conflicts_with("to_host")
+                        .long("to-config")
+                        .takes_value(true)
+                        .help("config of the target TiKV"),
                 )
                 .arg(
                     Arg::with_name("to_host")
-                        .required_unless("to_db")
+                        .required_unless("to_data_dir")
                         .conflicts_with("to_db")
                         .long("to-host")
                         .takes_value(true)
@@ -1830,6 +1878,9 @@ fn main() {
 
     let matches = app.clone().get_matches();
 
+    // Initialize logger.
+    init_ctl_logger(matches.value_of("log_level").unwrap());
+
     // Initialize configuration and security manager.
     let cfg_path = matches.value_of("config");
     let cfg = cfg_path.map_or_else(TiKvConfig::default, |path| {
@@ -1840,7 +1891,7 @@ fn main() {
 
     // Bypass the ldb command to RocksDB.
     if let Some(cmd) = matches.subcommand_matches("ldb") {
-        run_ldb_command(&cmd, &cfg);
+        run_ldb_command(cmd, &cfg);
         return;
     }
 
@@ -1853,25 +1904,25 @@ fn main() {
 
     if matches.args.is_empty() {
         let _ = app.print_help();
-        v1!("");
+        println!();
         return;
     }
 
     // Deal with arguments about key utils.
     if let Some(hex) = matches.value_of("hex-to-escaped") {
-        v1!("{}", escape(&from_hex(hex).unwrap()));
+        println!("{}", escape(&from_hex(hex).unwrap()));
         return;
     } else if let Some(escaped) = matches.value_of("escaped-to-hex") {
-        v1!("{}", log_wrappers::hex_encode_upper(unescape(escaped)));
+        println!("{}", log_wrappers::hex_encode_upper(unescape(escaped)));
         return;
     } else if let Some(encoded) = matches.value_of("decode") {
         match Key::from_encoded(unescape(encoded)).into_raw() {
-            Ok(k) => v1!("{}", escape(&k)),
-            Err(e) => ve1!("decode meets error: {}", e),
+            Ok(k) => println!("{}", escape(&k)),
+            Err(e) => println!("decode meets error: {}", e),
         };
         return;
     } else if let Some(decoded) = matches.value_of("encode") {
-        v1!("{}", Key::from_raw(&unescape(decoded)));
+        println!("{}", Key::from_raw(&unescape(decoded)));
         return;
     }
 
@@ -1882,7 +1933,7 @@ fn main() {
         }
         let infile = matches.value_of("file").unwrap();
         let outfile = matches.value_of("out-file").unwrap();
-        v1!("infile: {}, outfile: {}", infile, outfile);
+        println!("infile: {}, outfile: {}", infile, outfile);
 
         let key_manager =
             match data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
@@ -1890,8 +1941,8 @@ fn main() {
             {
                 Some(mgr) => mgr,
                 None => {
-                    v1!("Encryption is disabled");
-                    v1!("crc32: {}", calc_crc32(infile).unwrap());
+                    println!("Encryption is disabled");
+                    println!("crc32: {}", calc_crc32(infile).unwrap());
                     return;
                 }
             };
@@ -1901,12 +1952,11 @@ fn main() {
 
         let mthd = encryption_method_from_db_encryption_method(file_info.method);
         if mthd == EncryptionMethod::Plaintext {
-            v1!(
+            println!(
                 "{} is not encrypted, skip to decrypt it into {}",
-                infile,
-                outfile
+                infile, outfile
             );
-            v1!("crc32: {}", calc_crc32(infile).unwrap());
+            println!("crc32: {}", calc_crc32(infile).unwrap());
             return;
         }
 
@@ -1922,7 +1972,7 @@ fn main() {
         let mut reader = DecrypterReader::new(f, mthd, &file_info.key, iv).unwrap();
 
         io::copy(&mut reader, &mut outf).unwrap();
-        v1!("crc32: {}", calc_crc32(outfile).unwrap());
+        println!("crc32: {}", calc_crc32(outfile).unwrap());
         return;
     }
 
@@ -1950,7 +2000,7 @@ fn main() {
                     .map(|path| fs::canonicalize(path).unwrap().to_str().unwrap().to_owned());
                 DataKeyManager::dump_file_dict(&cfg.storage.data_dir, path.as_deref()).unwrap();
             }
-            _ => ve1!("{}", matches.usage()),
+            _ => println!("{}", matches.usage()),
         }
         return;
     }
@@ -1981,19 +2031,12 @@ fn main() {
     }
 
     // Deal with all subcommands about db or host.
-    let db = matches.value_of("db");
+    let data_dir = matches.value_of("data_dir");
     let skip_paranoid_checks = matches.is_present("skip-paranoid-checks");
-    let raft_db = matches.value_of("raftdb");
     let host = matches.value_of("host");
 
-    let debug_executor = new_debug_executor(
-        db,
-        raft_db,
-        skip_paranoid_checks,
-        host,
-        &cfg,
-        Arc::clone(&mgr),
-    );
+    let debug_executor =
+        new_debug_executor(&cfg, data_dir, skip_paranoid_checks, host, Arc::clone(&mgr));
 
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf = matches.value_of("cf").unwrap();
@@ -2035,7 +2078,7 @@ fn main() {
             .value_of("limit")
             .map_or(0, |s| s.parse().expect("parse u64"));
         if to.is_empty() && limit == 0 {
-            ve1!(r#"please pass "to" or "limit""#);
+            println!(r#"please pass "to" or "limit""#);
             process::exit(-1);
         }
         let cfs = matches.values_of("show-cf").unwrap().collect();
@@ -2056,9 +2099,15 @@ fn main() {
         debug_executor.dump_mvccs_infos(from, vec![], 0, cfs, start_ts, commit_ts);
     } else if let Some(matches) = matches.subcommand_matches("diff") {
         let region = matches.value_of("region").unwrap().parse().unwrap();
-        let to_db = matches.value_of("to_db");
+        let to_data_dir = matches.value_of("to_data_dir");
         let to_host = matches.value_of("to_host");
-        debug_executor.diff_region(region, to_db, None, to_host, &cfg, mgr);
+        let to_config = matches
+            .value_of("to_config")
+            .map_or_else(TiKvConfig::default, |path| {
+                let s = fs::read_to_string(&path).unwrap();
+                toml::from_str(&s).unwrap()
+            });
+        debug_executor.diff_region(region, to_host, to_data_dir, &to_config, mgr);
     } else if let Some(matches) = matches.subcommand_matches("compact") {
         let db = matches.value_of("db").unwrap();
         let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
@@ -2111,10 +2160,9 @@ fn main() {
             if threads == 0 {
                 panic!("Number of threads can't be 0");
             }
-            v1!(
+            println!(
                 "Recover all, threads: {}, read_only: {}",
-                threads,
-                read_only
+                threads, read_only
             );
             debug_executor.recover_mvcc_all(threads, read_only);
         } else {
@@ -2130,11 +2178,9 @@ fn main() {
                 .map(ToOwned::to_owned)
                 .collect();
             let mut cfg = PdConfig::default();
-            v1!(
+            println!(
                 "Recover regions: {:?}, pd: {:?}, read_only: {}",
-                regions,
-                pd_urls,
-                read_only
+                regions, pd_urls, read_only
             );
             cfg.endpoints = pd_urls;
             if let Err(e) = cfg.validate() {
@@ -2152,7 +2198,7 @@ fn main() {
             });
             debug_executor.remove_fail_stores(store_ids, region_ids);
         } else {
-            ve1!("{}", matches.usage());
+            println!("{}", matches.usage());
         }
     } else if let Some(matches) = matches.subcommand_matches("recreate-region") {
         let pd_cfg = PdConfig {
@@ -2186,7 +2232,7 @@ fn main() {
         debug_executor.dump_range_properties(start_key, end_key);
     } else if let Some(matches) = matches.subcommand_matches("fail") {
         if host.is_none() {
-            ve1!("command fail requires host");
+            println!("command fail requires host");
             process::exit(-1);
         }
         let client = new_debug_client(host.unwrap(), mgr);
@@ -2205,7 +2251,7 @@ fn main() {
             }
             for (name, actions) in list {
                 if actions.is_empty() {
-                    v1!("No action for fail point {}", name);
+                    println!("No action for fail point {}", name);
                     continue;
                 }
                 let mut inject_req = InjectFailPointRequest::default();
@@ -2234,7 +2280,7 @@ fn main() {
             let list_req = ListFailPointsRequest::default();
             let option = CallOption::default().timeout(Duration::from_secs(10));
             let resp = client.list_fail_points_opt(&list_req, option).unwrap();
-            v1!("{:?}", resp.get_entries());
+            println!("{:?}", resp.get_entries());
         }
     } else if matches.subcommand_matches("store").is_some() {
         debug_executor.dump_store_info();
@@ -2253,21 +2299,21 @@ fn from_hex(key: &str) -> Result<Vec<u8>, hex::FromHexError> {
 }
 
 fn convert_gbmb(mut bytes: u64) -> String {
-    const GB: u64 = 1024 * 1024 * 1024;
-    const MB: u64 = 1024 * 1024;
-    if bytes < MB {
-        return format!("{} B", bytes);
+    const GIB: u64 = 1024 * 1024 * 1024;
+    const MIB: u64 = 1024 * 1024;
+    if bytes < MIB {
+        return format!("{}B", bytes);
     }
-    let mb = if bytes % GB == 0 {
+    let mb = if bytes % GIB == 0 {
         String::from("")
     } else {
-        format!("{:.3} MB", (bytes % GB) as f64 / MB as f64)
+        format!("{:.3}MiB", (bytes % GIB) as f64 / MIB as f64)
     };
-    bytes /= GB;
+    bytes /= GIB;
     let gb = if bytes == 0 {
         String::from("")
     } else {
-        format!("{} GB ", bytes)
+        format!("{}GiB ", bytes)
     };
     format!("{}{}", gb, mb)
 }
@@ -2301,11 +2347,9 @@ fn dump_snap_meta_file(path: &str) {
     meta.merge_from_bytes(&content)
         .unwrap_or_else(|e| panic!("parse from bytes error {:?}", e));
     for cf_file in meta.get_cf_files() {
-        v1!(
+        println!(
             "cf {}, size {}, checksum: {}",
-            cf_file.cf,
-            cf_file.size,
-            cf_file.checksum
+            cf_file.cf, cf_file.size, cf_file.checksum
         );
     }
 }
@@ -2348,11 +2392,11 @@ fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64
         .split_region(&req)
         .expect("split_region should success");
     if resp.has_region_error() {
-        ve1!("split_region internal error: {:?}", resp.get_region_error());
+        println!("split_region internal error: {:?}", resp.get_region_error());
         return;
     }
 
-    v1!(
+    println!(
         "split region {} success, left: {}, right: {}",
         region_id,
         resp.get_left().get_id(),
@@ -2381,12 +2425,12 @@ fn compact_whole_cluster(
         let mgr = Arc::clone(&mgr);
         let addr = s.address.clone();
         let (from, to) = (from.clone(), to.clone());
-        let cfs: Vec<String> = cfs.iter().map(|cf| (*cf).to_string()).collect();
+        let cfs: Vec<String> = cfs.iter().map(|cf| cf.to_string()).collect();
         let h = thread::Builder::new()
             .name(format!("compact-{}", addr))
             .spawn(move || {
                 tikv_alloc::add_thread_memory_accessor();
-                let debug_executor = new_debug_executor(None, None, false, Some(&addr), &cfg, mgr);
+                let debug_executor = new_debug_executor(&cfg, None, false, Some(&addr), mgr);
                 for cf in cfs {
                     debug_executor.compact(
                         Some(&addr),
@@ -2434,7 +2478,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
         .map(Arc::new);
-    let env = get_env(key_manager, None).unwrap();
+    let env = get_env(key_manager, None /*io_rate_limiter*/).unwrap();
     let mut opts = cfg.rocksdb.build_opt();
     opts.set_env(env);
 

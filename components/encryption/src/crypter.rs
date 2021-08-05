@@ -162,7 +162,7 @@ impl<'k> AesGcmCrypter<'k> {
             &self.key.0,
             Some(self.iv.as_slice()),
             &[], /* AAD */
-            &pt,
+            pt,
             &mut tag.0,
         )?;
         Ok((ciphertext, tag))
@@ -175,7 +175,7 @@ impl<'k> AesGcmCrypter<'k> {
             &self.key.0,
             Some(self.iv.as_slice()),
             &[], /* AAD */
-            &ct,
+            ct,
             &tag.0,
         )?;
         Ok(plaintext)
@@ -249,7 +249,7 @@ mod tests {
         assert_eq!(ivs.len(), 100);
 
         for iv in ivs {
-            let iv1 = Iv::from_slice(&iv.as_slice()[..]).unwrap();
+            let iv1 = Iv::from_slice(iv.as_slice()).unwrap();
             assert_eq!(iv.as_slice(), iv1.as_slice());
         }
     }

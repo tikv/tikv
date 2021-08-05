@@ -1,14 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::RocksEngine;
-use crate::import::RocksIngestExternalFileOptions;
 use crate::rocks_metrics_defs::*;
 use crate::sst::RocksSstWriterBuilder;
 use crate::{util, RocksSstWriter};
 use engine_traits::{
-    CFNamesExt, DeleteStrategy, ImportExt, IngestExternalFileOptions, IterOptions, Iterable,
-    Iterator, MiscExt, Mutable, Range, Result, SstWriter, SstWriterBuilder, WriteBatch,
-    WriteBatchExt, ALL_CFS,
+    CFNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
+    Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, ALL_CFS,
 };
 use rocksdb::Range as RocksRange;
 use tikv_util::box_try;
@@ -83,9 +81,7 @@ impl RocksEngine {
 
         if let Some(writer) = writer_wrapper {
             writer.finish()?;
-            let mut opt = RocksIngestExternalFileOptions::new();
-            opt.move_files(true);
-            self.ingest_external_file_cf(cf, &opt, &[sst_path.as_str()])?;
+            self.ingest_external_file_cf(cf, &[sst_path.as_str()])?;
         } else {
             let mut wb = self.write_batch();
             for key in data.iter() {
@@ -184,7 +180,7 @@ impl MiscExt for RocksEngine {
             }
             DeleteStrategy::DeleteByKey => {
                 for r in ranges {
-                    self.delete_all_in_range_cf_by_key(cf, &r)?;
+                    self.delete_all_in_range_cf_by_key(cf, r)?;
                 }
             }
             DeleteStrategy::DeleteByWriter { sst_path } => {
@@ -324,23 +320,25 @@ impl MiscExt for RocksEngine {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
         Ok(crate::util::get_cf_num_files_at_level(
             self.as_inner(),
-            &handle,
+            handle,
             level,
+        ))
+    }
+
+    fn get_cf_num_immutable_mem_table(&self, cf: &str) -> Result<Option<u64>> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(crate::util::get_cf_num_immutable_mem_table(
+            self.as_inner(),
+            handle,
         ))
     }
 
     fn get_cf_pending_compaction_bytes(&self, cf: &str) -> Result<Option<u64>> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        Ok(self
-            .as_inner()
-            .get_property_int_cf(handle, ROCKSDB_PENDING_COMPACTION_BYTES))
-    }
-
-    fn get_cf_num_memtables(&self, cf: &str) -> Result<Option<u64>> {
-        let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        Ok(self
-            .as_inner()
-            .get_property_int_cf(handle, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE))
+        Ok(crate::util::get_cf_pending_compaction_bytes(
+            self.as_inner(),
+            handle,
+        ))
     }
 
     fn is_stalled_or_stopped(&self) -> bool {

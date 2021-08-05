@@ -36,7 +36,7 @@ impl BTreeEngine {
         let mut cf_contents = vec![];
 
         // create default cf if missing
-        if cfs.iter().find(|&&c| c == CF_DEFAULT).is_none() {
+        if !cfs.iter().any(|&c| c == CF_DEFAULT) {
             cf_names.push(CF_DEFAULT);
             cf_contents.push(Arc::new(RwLock::new(BTreeMap::new())))
         }
@@ -94,7 +94,7 @@ impl Engine for BTreeEngine {
         if batch.modifies.is_empty() {
             return Err(EngineError::from(EngineErrorInner::EmptyRequest));
         }
-        cb((CbContext::new(), write_modifies(&self, batch.modifies)));
+        cb((CbContext::new(), write_modifies(self, batch.modifies)));
 
         Ok(())
     }
@@ -105,7 +105,7 @@ impl Engine for BTreeEngine {
         _ctx: SnapContext<'_>,
         cb: EngineCallback<Self::Snap>,
     ) -> EngineResult<()> {
-        cb((CbContext::new(), Ok(BTreeEngineSnapshot::new(&self))));
+        cb((CbContext::new(), Ok(BTreeEngineSnapshot::new(self))));
         Ok(())
     }
 }

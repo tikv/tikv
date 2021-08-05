@@ -1,5 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use crate::{new_event_feed, TestSuite};
+use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 use futures::executor::block_on;
 use futures::sink::SinkExt;
 use grpcio::WriteFlags;
@@ -113,7 +113,7 @@ fn test_stale_resolver() {
                     assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
                 }
                 _ => {
-                    panic!("unexepected event length {:?}", es);
+                    panic!("unexpected event length {:?}", es);
                 }
             },
             Event_oneof_event::Error(e) => panic!("{:?}", e),
@@ -129,7 +129,7 @@ fn test_stale_resolver() {
 fn test_region_error() {
     let mut cluster = new_server_cluster(1, 1);
     cluster.cfg.cdc.min_ts_interval = ReadableDuration::millis(100);
-    let mut suite = TestSuite::with_cluster(1, cluster);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
 
     let multi_batch_fp = "cdc_before_handle_multi_batch";
     fail::cfg(multi_batch_fp, "return").unwrap();
@@ -183,7 +183,7 @@ fn test_joint_confchange() {
     let mut cluster = new_server_cluster(1, 3);
     cluster.cfg.cdc.min_ts_interval = ReadableDuration::millis(100);
     cluster.cfg.cdc.hibernate_regions_compatible = true;
-    let mut suite = TestSuite::with_cluster(3, cluster);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
 
     let receive_resolved_ts = |receive_event: &(dyn Fn(bool) -> ChangeDataEvent + Send)| {
         let mut last_resolved_ts = 0;
@@ -192,7 +192,7 @@ fn test_joint_confchange() {
             let event = receive_event(true);
             if let Some(resolved_ts) = event.resolved_ts.as_ref() {
                 let ts = resolved_ts.ts;
-                assert!(ts > last_resolved_ts);
+                assert!(ts >= last_resolved_ts);
                 last_resolved_ts = ts;
                 i += 1;
             }

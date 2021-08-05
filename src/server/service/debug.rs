@@ -19,16 +19,16 @@ use tokio::runtime::Handle;
 use crate::config::ConfigController;
 use crate::server::debug::{Debugger, Error, Result};
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::msg::Callback;
+use raftstore::store::msg::{Callback, RaftCmdExtraOpts};
 use tikv_util::metrics;
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
-        Error::NotFound(msg) => (RpcStatusCode::NOT_FOUND, Some(msg)),
-        Error::InvalidArgument(msg) => (RpcStatusCode::INVALID_ARGUMENT, Some(msg)),
-        Error::Other(e) => (RpcStatusCode::UNKNOWN, Some(format!("{:?}", e))),
+        Error::NotFound(msg) => (RpcStatusCode::NOT_FOUND, msg),
+        Error::InvalidArgument(msg) => (RpcStatusCode::INVALID_ARGUMENT, msg),
+        Error::Other(e) => (RpcStatusCode::UNKNOWN, format!("{:?}", e)),
     };
-    RpcStatus::new(code, msg)
+    RpcStatus::with_message(code, msg)
 }
 
 fn on_grpc_error(tag: &'static str, e: &GrpcError) {
@@ -505,7 +505,7 @@ fn region_detail<T: RaftStoreRouter<RocksEngine>>(
 
     async move {
         raft_router
-            .send_command(raft_cmd, cb)
+            .send_command(raft_cmd, cb, RaftCmdExtraOpts::default())
             .map_err(|e| Error::Other(Box::new(e)))?;
 
         let mut r = rx.map_err(|e| Error::Other(Box::new(e))).await?;
@@ -545,7 +545,7 @@ fn consistency_check<T: RaftStoreRouter<RocksEngine>>(
 
     async move {
         raft_router
-            .send_command(raft_cmd, cb)
+            .send_command(raft_cmd, cb, RaftCmdExtraOpts::default())
             .map_err(|e| Error::Other(Box::new(e)))?;
 
         let r = rx.map_err(|e| Error::Other(Box::new(e))).await?;

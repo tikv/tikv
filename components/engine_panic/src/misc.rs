@@ -73,11 +73,11 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn get_cf_pending_compaction_bytes(&self, cf: &str) -> Result<Option<u64>> {
+    fn get_cf_num_immutable_mem_table(&self, cf: &str) -> Result<Option<u64>> {
         panic!()
     }
 
-    fn get_cf_num_memtables(&self, cf: &str) -> Result<Option<u64>> {
+    fn get_cf_pending_compaction_bytes(&self, cf: &str) -> Result<Option<u64>> {
         panic!()
     }
 

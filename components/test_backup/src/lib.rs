@@ -1,11 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::*;
 use std::thread;
 use std::time::Duration;
-use std::time::Instant;
+use std::{cmp, fs};
 
 use futures::channel::mpsc as future_mpsc;
 use grpcio::{ChannelBuilder, Environment};
@@ -14,7 +13,7 @@ use backup::Task;
 use collections::HashMap;
 use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
-use external_storage::*;
+use external_storage_export::make_local_backend;
 use kvproto::backup::*;
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
@@ -28,6 +27,7 @@ use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
 use tikv::{config::BackupConfig, storage::kv::SnapContext};
 use tikv_util::config::ReadableSize;
+use tikv_util::time::Instant;
 use tikv_util::worker::{LazyWorker, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
@@ -49,7 +49,7 @@ macro_rules! retry_req {
         let start = Instant::now();
         let timeout = Duration::from_millis($timeout);
         let mut tried_times = 0;
-        while tried_times < $retry || start.elapsed() < timeout {
+        while tried_times < $retry || start.saturating_elapsed() < timeout {
             if $check_resp {
                 break;
             } else {
@@ -76,8 +76,8 @@ impl TestSuite {
             let sim = cluster.sim.rl();
             let backup_endpoint = backup::Endpoint::new(
                 *id,
-                sim.storages[&id].clone(),
-                sim.region_info_accessors[&id].clone(),
+                sim.storages[id].clone(),
+                sim.region_info_accessors[id].clone(),
                 engines.kv.as_inner().clone(),
                 BackupConfig {
                     num_threads: 4,
@@ -202,19 +202,32 @@ impl TestSuite {
     }
 
     pub fn must_kv_put(&mut self, key_count: usize, versions: usize) {
+        let mut batch = Vec::with_capacity(1024);
+        let mut keys = Vec::with_capacity(1024);
+        // Write 50 times to include more different ts.
+        let batch_size = cmp::min(cmp::max(key_count / 50, 1), 1024);
         for _ in 0..versions {
-            for i in 0..key_count {
-                let (k, v) = (format!("key_{}", i), format!("value_{}", i));
-                // Prewrite
+            let mut j = 0;
+            while j < key_count {
                 let start_ts = self.alloc_ts();
-                let mut mutation = Mutation::default();
-                mutation.set_op(Op::Put);
-                mutation.key = k.clone().into_bytes();
-                mutation.value = v.clone().into_bytes();
-                self.must_kv_prewrite(vec![mutation], k.clone().into_bytes(), start_ts);
+                let limit = cmp::min(key_count, j + batch_size);
+                batch.clear();
+                keys.clear();
+                for i in j..limit {
+                    let (k, v) = (format!("key_{}", i), format!("value_{}", i));
+                    keys.push(k.clone().into_bytes());
+                    // Prewrite
+                    let mut mutation = Mutation::default();
+                    mutation.set_op(Op::Put);
+                    mutation.key = k.clone().into_bytes();
+                    mutation.value = v.clone().into_bytes();
+                    batch.push(mutation);
+                }
+                self.must_kv_prewrite(batch.split_off(0), keys[0].clone(), start_ts);
                 // Commit
                 let commit_ts = self.alloc_ts();
-                self.must_kv_commit(vec![k.clone().into_bytes()], start_ts, commit_ts);
+                self.must_kv_commit(keys.split_off(0), start_ts, commit_ts);
+                j = limit;
             }
         }
     }
@@ -339,7 +352,7 @@ impl TestSuite {
     }
 }
 
-// Extrat CF name from sst name.
+// Extract CF name from sst name.
 pub fn name_to_cf(name: &str) -> CfName {
     if name.contains(CF_DEFAULT) {
         CF_DEFAULT

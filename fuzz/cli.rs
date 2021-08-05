@@ -121,7 +121,7 @@ fn write_fuzz_target_source_file(fuzzer: Fuzzer, target: &str) -> Result<()> {
             target_file_path.display()
         ))?;
 
-    let source = template.replace("__FUZZ_CLI_TARGET__", &target).replace(
+    let source = template.replace("__FUZZ_CLI_TARGET__", target).replace(
         "__FUZZ_GENERATE_COMMENT__",
         "NOTE: AUTO GENERATED FROM `template.rs`",
     );
@@ -132,7 +132,7 @@ fn write_fuzz_target_source_file(fuzzer: Fuzzer, target: &str) -> Result<()> {
 
 /// Run one target fuzz test with specific fuzzer
 fn run(fuzzer: Fuzzer, target: &str) -> Result<()> {
-    if FUZZ_TARGETS.iter().find(|x| *x == target).is_none() {
+    if !FUZZ_TARGETS.iter().any(|x| x == target) {
         panic!(
             "Unknown fuzz target `{}`. Run `list-targets` command to see available fuzz targets.",
             target
@@ -318,7 +318,7 @@ fn run_libfuzzer(target: &str) -> Result<()> {
     asan_options.push_str(" detect_odr_violation=0");
 
     let fuzzer_bin = Command::new("cargo")
-        .args(&["run", "--target", &target_platform, "--bin", target, "--"])
+        .args(&["run", "--target", target_platform, "--bin", target, "--"])
         .arg(&corpus_dir)
         .arg(&seed_dir)
         .env("RUSTFLAGS", &rust_flags)

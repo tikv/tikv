@@ -120,6 +120,13 @@ impl<'a> ConvertTo<Bytes> for JsonRef<'a> {
     }
 }
 
+impl<'a> ConvertTo<Bytes> for EnumRef<'a> {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
+        Ok(self.to_string().into_bytes())
+    }
+}
+
 /// Returns the max u64 values of different mysql types
 ///
 /// # Panics
@@ -279,7 +286,7 @@ impl ToInt for f64 {
     /// It handles overflows using `ctx` so that the caller would not handle it anymore.
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         #![allow(clippy::float_cmp)]
-        let val = (*self).round();
+        let val = self.round();
         let lower_bound = integer_signed_lower_bound(tp);
         if val < lower_bound as f64 {
             ctx.handle_overflow_err(overflow(val, tp))?;
@@ -290,12 +297,10 @@ impl ToInt for f64 {
         let ub_f64 = upper_bound as f64;
         // according to https://github.com/pingcap/tidb/pull/5247
         if val >= ub_f64 {
-            if val == ub_f64 {
-                return Ok(upper_bound);
-            } else {
+            if val != ub_f64 {
                 ctx.handle_overflow_err(overflow(val, tp))?;
-                return Ok(upper_bound);
             }
+            return Ok(upper_bound);
         }
         Ok(val as i64)
     }
@@ -308,7 +313,7 @@ impl ToInt for f64 {
     /// It handles overflows using `ctx` so that the caller would not handle it anymore.
     #[allow(clippy::float_cmp)]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
-        let val = (*self).round();
+        let val = self.round();
         if val < 0f64 {
             ctx.handle_overflow_err(overflow(val, tp))?;
             if ctx.should_clip_to_zero() {
@@ -460,7 +465,7 @@ impl ToInt for DateTime {
 impl ToInt for Duration {
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
-        let dur = (*self).round_frac(DEFAULT_FSP)?;
+        let dur = self.round_frac(DEFAULT_FSP)?;
         let dec: Decimal = dur.convert(ctx)?;
         let val = dec.as_i64_with_ctx(ctx)?;
         val.to_int(ctx, tp)
@@ -468,7 +473,7 @@ impl ToInt for Duration {
 
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
-        let dur = (*self).round_frac(DEFAULT_FSP)?;
+        let dur = self.round_frac(DEFAULT_FSP)?;
         let dec: Decimal = dur.convert(ctx)?;
         decimal_as_u64(ctx, dec, tp)
     }
@@ -974,7 +979,7 @@ fn exp_float_str_to_int_str<'a>(
     let int_cnt: i64;
     match dot_idx {
         None => {
-            digits.extend_from_slice(&valid_float[..e_idx].as_bytes());
+            digits.extend_from_slice(valid_float[..e_idx].as_bytes());
             // if digits.len() > i64::MAX,
             // then the input str has at least 9223372036854775808 chars,
             // which make the str >= 8388608.0 TB,
@@ -982,9 +987,9 @@ fn exp_float_str_to_int_str<'a>(
             int_cnt = digits.len() as i64;
         }
         Some(dot_idx) => {
-            digits.extend_from_slice(&valid_float[..dot_idx].as_bytes());
+            digits.extend_from_slice(valid_float[..dot_idx].as_bytes());
             int_cnt = digits.len() as i64;
-            digits.extend_from_slice(&valid_float[(dot_idx + 1)..e_idx].as_bytes());
+            digits.extend_from_slice(valid_float[(dot_idx + 1)..e_idx].as_bytes());
         }
     }
     // make `digits` immutable

@@ -7,7 +7,7 @@ pub use self::storage_impl::TiKVStorage;
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-use tidb_query_common::storage::IntervalRange;
+use tidb_query_common::{execute_stats::ExecSummary, storage::IntervalRange};
 use tipb::{DagRequest, SelectResponse, StreamResponse};
 
 use crate::coprocessor::metrics::*;
@@ -100,7 +100,6 @@ impl BatchDAGHandler {
 
 #[async_trait]
 impl RequestHandler for BatchDAGHandler {
-    #[minitrace::trace_async(tipb::Event::TiKvCoprExecuteBatchDagRunner as u32)]
     async fn handle_request(&mut self) -> Result<Response> {
         let result = self.runner.handle_request().await;
         handle_qe_response(result, self.runner.can_be_cached(), self.data_version)
@@ -112,6 +111,10 @@ impl RequestHandler for BatchDAGHandler {
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
         self.runner.collect_storage_stats(dest);
+    }
+
+    fn collect_scan_summary(&mut self, dest: &mut ExecSummary) {
+        self.runner.collect_scan_summary(dest);
     }
 }
 
