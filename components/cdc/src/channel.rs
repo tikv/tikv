@@ -83,7 +83,6 @@ impl MemoryQuota {
 pub fn channel(buffer: usize, memory_quota: MemoryQuota) -> (Sink, Drain) {
     let (unbounded_sender, unbounded_receiver) = unbounded();
     let (bounded_sender, bounded_receiver) = bounded(buffer);
-
     (
         Sink {
             unbounded_sender,

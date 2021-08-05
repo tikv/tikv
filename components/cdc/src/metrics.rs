@@ -111,7 +111,7 @@ lazy_static! {
     )
     .unwrap();
     pub static ref CDC_GRPC_ACCUMULATE_MESSAGE_BYTES: IntCounterVec = register_int_counter_vec!(
-        "tikv_cdc_grpc_accumulate_message_bytes",
+        "tikv_cdc_grpc_message_sent_bytes",
         "Accumulated bytes of sent CDC gRPC messages",
         &["type"]
     )
