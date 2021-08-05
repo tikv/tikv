@@ -141,7 +141,8 @@ where
         if last_unpersisted.is_none() {
             // If no previous pending ready, we can randomly select a new writer worker.
             self.writer_id = rand::random::<usize>() % ctx.config().store_io_pool_size;
-            self.next_retry_time = Instant::now_coarse() + ctx.config().io_reschedule_hotpot_duration.0;
+            self.next_retry_time =
+                Instant::now_coarse() + ctx.config().io_reschedule_hotpot_duration.0;
             self.next_writer_id = None;
             return true;
         }
