@@ -62,9 +62,10 @@ where
 {
     tag: String,
     writer_id: usize,
-    chosen_time: Instant,
     /// Next retry time of rescheduling.
-    next_retry_time: Option<Instant>,
+    next_retry_time: Instant,
+    /// Next writer id after recheduling done.
+    next_writer_id: Option<usize>,
     /// Number of last unpersisted ready since rescheduling if not None.
     last_unpersisted: Option<u64>,
     /// Pending write msgs since rescheduling.
@@ -80,8 +81,8 @@ where
         Self {
             tag,
             writer_id: 0,
-            chosen_time: Instant::now_coarse(),
-            next_retry_time: None,
+            next_retry_time: Instant::now_coarse(),
+            next_writer_id: None,
             last_unpersisted: None,
             pending_write_msgs: vec![],
         }
@@ -121,19 +122,18 @@ where
         STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE.dec();
 
         let pre_writer_id = self.writer_id;
-        self.writer_id = rand::random::<usize>() % ctx.config().store_io_pool_size;
-        self.chosen_time = Instant::now_coarse();
-        self.next_retry_time = None;
+        self.writer_id = self.next_writer_id.take().unwrap();
+        self.next_retry_time = Instant::now_coarse() + ctx.config().io_reschedule_hotpot_duration.0;
         self.last_unpersisted = None;
 
         let msgs = mem::take(&mut self.pending_write_msgs);
 
         info!(
-            "{} finishs io reschedule, from {} to {}, pending msg len {}",
-            self.tag,
-            pre_writer_id,
-            self.writer_id,
-            msgs.len()
+            "finishs io reschedule";
+            "tag" => &self.tag,
+            "pre_writer_id" => pre_writer_id,
+            "writer_id" => self.writer_id,
+            "msg_len" => msgs.len()
         );
         STORE_IO_RESCHEDULE_PENDING_TASKS_TOTAL_GAUGE.sub(msgs.len() as i64);
 
@@ -162,8 +162,9 @@ where
         if last_unpersisted.is_none() {
             // If no previous pending ready, we can randomly select a new writer worker.
             self.writer_id = rand::random::<usize>() % ctx.config().store_io_pool_size;
-            self.chosen_time = Instant::now_coarse();
-            self.next_retry_time = None;
+            self.next_retry_time =
+                Instant::now_coarse() + ctx.config().io_reschedule_hotpot_duration.0;
+            self.next_writer_id = None;
             return true;
         }
         if ctx.config().io_reschedule_concurrent_max_count == 0 {
@@ -171,52 +172,45 @@ where
             return true;
         }
         let now = Instant::now_coarse();
-        let rechedule_time = if let Some(t) = self.next_retry_time {
-            t
-        } else {
-            self.chosen_time + ctx.config().io_reschedule_hotpot_duration.0
-        };
-        // Whether the duration doesn't exceed the rechedule time
-        if now <= rechedule_time {
+        // Whether the time is later than `next_retry_time`.
+        if now <= self.next_retry_time {
             return true;
         }
-        if self.next_retry_time.is_none() {
+        if self.next_writer_id.is_none() {
             // The hot write peers should not be rescheduled entirely.
             // So it will not be rescheduled if the random id is the same as the original one.
             let new_id = rand::random::<usize>() % ctx.config().store_io_pool_size;
             if new_id == self.writer_id {
                 // Reset the time
-                self.chosen_time = now;
+                self.next_retry_time = now + ctx.config().io_reschedule_hotpot_duration.0;
                 return true;
             }
+            self.next_writer_id = Some(new_id);
         }
         // This peer should be rescheduled.
         // Try to add 1 to `io_reschedule_concurrent_count`.
         // The `cfg.io_reschedule_concurrent_max_count` is used for controlling the concurrent count
         // of rescheduling peer fsm because rescheduling will introduce performance penalty.
-        let success = loop {
-            let count = ctx.io_reschedule_concurrent_count().load(Ordering::SeqCst);
-            if count >= ctx.config().io_reschedule_concurrent_max_count {
-                break false;
-            }
-            if ctx
-                .io_reschedule_concurrent_count()
-                .compare_exchange(count, count + 1, Ordering::SeqCst, Ordering::Relaxed)
-                .is_ok()
-            {
-                break true;
-            }
-        };
+        let success = ctx
+            .io_reschedule_concurrent_count()
+            .fetch_update(Ordering::SeqCst, Ordering::Relaxed, |c| {
+                if c < ctx.config().io_reschedule_concurrent_max_count {
+                    Some(c + 1)
+                } else {
+                    None
+                }
+            })
+            .is_ok();
         if success {
             STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE.inc();
             // Rescheduling succeeds. The task should be pushed into `self.pending_write_msgs`.
             self.last_unpersisted = last_unpersisted;
-            info!("{} starts to io reschedule", self.tag);
+            info!("starts io reschedule"; "tag" => &self.tag);
             false
         } else {
             // Rescheduling fails at this time. Retry 10ms later.
             // The task should be sent to the original write worker.
-            self.next_retry_time = Some(now + Duration::from_millis(RETRY_SCHEDULE_MILLISECONS));
+            self.next_retry_time = now + Duration::from_millis(RETRY_SCHEDULE_MILLISECONS);
             true
         }
     }
@@ -343,12 +337,12 @@ mod tests {
         let mut t = TestWriteRouter::new(config);
         let mut r = WriteRouter::new("1".to_string());
 
-        let last_chosen_time = r.chosen_time;
+        let last_time = r.next_retry_time;
         thread::sleep(Duration::from_millis(10));
         // `writer_id` will be chosen randomly due to `last_unpersisted` is None
         r.send_write_msg(&mut t, None, WriteMsg::Shutdown);
-        assert!(r.chosen_time > last_chosen_time);
-        assert_eq!(r.next_retry_time, None);
+        assert!(r.next_retry_time > last_time);
+        assert_eq!(r.next_writer_id, None);
         assert_eq!(r.last_unpersisted, None);
         assert!(r.pending_write_msgs.is_empty());
         t.must_same_msg_count(r.writer_id, 1);
@@ -358,12 +352,13 @@ mod tests {
         // Should reschedule due to `last_unpersisted` is not None.
         // However it's possible that it will not scheduled due to random
         // so using loop here.
+        let writer_id = r.writer_id;
         let timer = Instant::now();
         loop {
             r.send_write_msg(&mut t, Some(10), WriteMsg::Shutdown);
-            assert_eq!(r.next_retry_time, None);
-            if let Some(last) = r.last_unpersisted {
-                assert_eq!(last, 10);
+            if let Some(id) = r.next_writer_id {
+                assert!(writer_id != id);
+                assert_eq!(r.last_unpersisted, Some(10));
                 assert_eq!(r.pending_write_msgs.len(), 1);
                 t.must_same_msg_count(r.writer_id, 0);
                 t.must_same_reschedule_count(1);
@@ -379,7 +374,7 @@ mod tests {
         }
 
         r.send_write_msg(&mut t, Some(20), WriteMsg::Shutdown);
-        assert_eq!(r.next_retry_time, None);
+        assert!(r.next_writer_id.is_some());
         // `last_unpersisted` should not change
         assert_eq!(r.last_unpersisted, Some(10));
         assert_eq!(r.pending_write_msgs.len(), 2);
@@ -388,7 +383,7 @@ mod tests {
 
         // No effect due to 9 < `last_unpersisted`(10)
         r.check_new_persisted(&mut t, 9);
-        assert_eq!(r.next_retry_time, None);
+        assert!(r.next_writer_id.is_some());
         assert_eq!(r.last_unpersisted, Some(10));
         assert_eq!(r.pending_write_msgs.len(), 2);
         t.must_same_msg_count(r.writer_id, 0);
@@ -396,7 +391,7 @@ mod tests {
 
         // Should reschedule and send msg
         r.check_new_persisted(&mut t, 10);
-        assert_eq!(r.next_retry_time, None);
+        assert_eq!(r.next_writer_id, None);
         assert_eq!(r.last_unpersisted, None);
         assert!(r.pending_write_msgs.is_empty());
         t.must_same_msg_count(r.writer_id, 2);
@@ -411,7 +406,7 @@ mod tests {
         loop {
             r.send_write_msg(&mut t, Some(30), WriteMsg::Shutdown);
             t.must_same_msg_count(r.writer_id, 1);
-            if r.next_retry_time.is_some() {
+            if r.next_writer_id.is_some() {
                 assert_eq!(r.last_unpersisted, None);
                 assert!(r.pending_write_msgs.is_empty());
                 t.must_same_reschedule_count(4);
@@ -428,6 +423,7 @@ mod tests {
         thread::sleep(Duration::from_millis(RETRY_SCHEDULE_MILLISECONS + 2));
         // Should reschedule now
         r.send_write_msg(&mut t, Some(40), WriteMsg::Shutdown);
+        assert!(r.next_writer_id.is_some());
         assert_eq!(r.last_unpersisted, Some(40));
         t.must_same_msg_count(r.writer_id, 0);
         t.must_same_reschedule_count(4);
