@@ -298,6 +298,9 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
+        if key[0] == table::GLOBAL_PARTITION_FIRST_BYTE {
+            key = &key[table::GLOBAL_PARTITION_PREFIX_LEN..]
+        }
         check_index_key(key)?;
         key = &key[table::PREFIX_LEN + table::ID_LEN..];
         if self.index_version == -1 {

@@ -402,7 +402,7 @@ mod tests {
         ER: RaftEngine,
     {
         let (sched, _) = worker::dummy_scheduler();
-        PeerStorage::new(engines, r, sched, 0, "".to_owned()).unwrap()
+        PeerStorage::new(engines, r, sched, 0, false, "".to_owned()).unwrap()
     }
 
     fn load_default_dataset<EK, ER>(engines: Engines<EK, ER>) -> (PeerStorage<EK, ER>, DataSet)

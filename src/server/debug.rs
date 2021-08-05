@@ -502,23 +502,23 @@ impl<ER: RaftEngine> Debugger<ER> {
             let region = local_state.get_region();
             let store_id = self.get_store_id()?;
 
-            let peer_id = raftstore_util::find_peer(region, store_id)
-                .map(|peer| peer.get_id())
+            let peer = raftstore_util::find_peer(region, store_id)
                 .ok_or_else(|| {
                     Error::Other("RegionLocalState doesn't contains peer itself".into())
                 })?;
 
-            let tag = format!("[region {}] {}", region.get_id(), peer_id);
+            let tag = format!("[region {}] {}", region.get_id(), peer.get_id());
             let peer_storage = box_try!(PeerStorage::<RocksEngine, ER>::new(
                 self.engines.clone(),
                 region,
                 fake_snap_worker.scheduler(),
-                peer_id,
+                peer.get_id(),
+                peer.get_witness(),
                 tag,
             ));
 
             let raft_cfg = raft::Config {
-                id: peer_id,
+                id: peer.get_id(),
                 election_tick: 10,
                 heartbeat_tick: 2,
                 max_size_per_msg: ReadableSize::mb(1).0,

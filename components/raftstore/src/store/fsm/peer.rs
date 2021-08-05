@@ -1349,10 +1349,20 @@ where
         }
 
         let from_peer_id = msg.get_from_peer().get_id();
+        let from_peer_witness = msg.get_from_peer().get_witness();
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
 
         let result = self.fsm.peer.step(self.ctx, msg.take_message());
         stepped.set(result.is_ok());
+        if self.fsm.peer.is_leader() && self.fsm.peer.peer.get_witness() && !from_peer_witness {
+            info!(
+                "witness transfer leader";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer.peer_id(),
+                "to_peer_id" => from_peer_id,
+            );
+            self.fsm.peer.raft_group.transfer_leader(from_peer_id);
+        }
 
         if is_snapshot {
             if !self.fsm.peer.has_pending_snapshot() {
@@ -3636,7 +3646,7 @@ where
     }
 
     fn on_split_region_check_tick(&mut self) {
-        if !self.fsm.peer.is_leader() {
+        if !self.fsm.peer.is_leader() || self.fsm.peer.peer.get_witness() {
             return;
         }
 
@@ -3841,7 +3851,7 @@ where
             "policy" => ?policy,
             "source" => source,
         );
-        if !self.fsm.peer.is_leader() {
+        if !self.fsm.peer.is_leader() || self.fsm.peer.peer.get_witness() {
             // region on this store is no longer leader, skipped.
             warn!(
                 "not leader, skip";

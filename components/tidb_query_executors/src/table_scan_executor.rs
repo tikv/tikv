@@ -305,6 +305,10 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use tidb_query_datatype::codec::{datum, table};
+        let mut key = key;
+        if key[0] == table::GLOBAL_PARTITION_FIRST_BYTE {
+            key = &key[table::GLOBAL_PARTITION_PREFIX_LEN..]
+        }
 
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;

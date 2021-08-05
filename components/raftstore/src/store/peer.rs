@@ -545,7 +545,7 @@ where
 
         let tag = format!("[region {}] {}", region.get_id(), peer.get_id());
 
-        let ps = PeerStorage::new(engines, region, sched, peer.get_id(), tag.clone())?;
+        let ps = PeerStorage::new(engines, region, sched, peer.get_id(), peer.get_witness(), tag.clone())?;
 
         let applied_index = ps.applied_index();
 
@@ -1385,6 +1385,9 @@ where
         if let Some(ss) = ready.ss() {
             match ss.raft_state {
                 StateRole::Leader => {
+                    if self.peer.get_witness() {
+                        return
+                    }
                     // The local read can only be performed after a new leader has applied
                     // the first empty entry on its term. After that the lease expiring time
                     // should be updated to
@@ -1919,6 +1922,7 @@ where
             };
             let apply = Apply::new(
                 self.peer_id(),
+                self.peer.get_witness(),
                 self.region_id,
                 self.term(),
                 committed_entries,

@@ -42,6 +42,9 @@ pub const INDEX_VALUE_RESTORED_DATA_FLAG: u8 = crate::codec::row::v2::CODEC_VERS
 /// ID for partition column, see <https://github.com/pingcap/parser/pull/1010>
 pub const EXTRA_PARTITION_ID_COL_ID: i64 = -2;
 
+pub const GLOBAL_PARTITION_PREFIX_LEN: usize = 9;
+pub const GLOBAL_PARTITION_FIRST_BYTE: u8 = 'p' as u8;
+
 /// `TableEncoder` encodes the table record/index prefix.
 trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
@@ -62,6 +65,10 @@ impl<T: BufferWriter> TableEncoder for T {}
 /// Extracts table prefix from table record or index.
 #[inline]
 pub fn extract_table_prefix(key: &[u8]) -> Result<&[u8]> {
+    let mut key = key;
+    if key[0] == GLOBAL_PARTITION_FIRST_BYTE && key.len() > GLOBAL_PARTITION_PREFIX_LEN {
+        key = &key[GLOBAL_PARTITION_PREFIX_LEN..]
+    }
     if !key.starts_with(TABLE_PREFIX) || key.len() < TABLE_PREFIX_KEY_LEN {
         Err(invalid_type!(
             "record key or index key expected, but got {:?}",
