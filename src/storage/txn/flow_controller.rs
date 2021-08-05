@@ -861,9 +861,9 @@ impl<E: KvEngine> FlowChecker<E> {
                 self.limiter.speed_limit()
             } else {
                 if self.last_target_file.is_some() {
-                    if self.cf_checkers[&cf].short_term_l0_flow.get_avg() > self.l0_target_flow {
-                        let new = 0.5 * self.cf_checkers[&cf].short_term_l0_flow.get_avg()
-                            + 0.5 * self.l0_target_flow;
+                    if checker.short_term_l0_flow.get_avg() > self.l0_target_flow {
+                        let new =
+                            0.5 * checker.short_term_l0_flow.get_avg() + 0.5 * self.l0_target_flow;
                         if new > self.l0_target_flow {
                             self.l0_target_flow = new;
                             SCHED_THROTTLE_ACTION_COUNTER

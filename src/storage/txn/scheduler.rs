@@ -747,7 +747,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             .unwrap()
                     });
 
-                    {
+                    if self.inner.flow_controller.enabled() {
                         let start = Instant::now_coarse();
                         let _guard = self.control_mutex.lock().await;
                         let delay = self.inner.flow_controller.consume(to_be_write.size());
