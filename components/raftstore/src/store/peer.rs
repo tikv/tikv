@@ -2259,7 +2259,8 @@ where
         }
         self.persisted_number = persisted_number;
 
-        self.write_router.check_new_persisted(ctx, self.persisted_number);
+        self.write_router
+            .check_new_persisted(ctx, self.persisted_number);
 
         let pre_persist_index = self.raft_group.raft.raft_log.persisted;
         let pre_commit_index = self.raft_group.raft.raft_log.committed;

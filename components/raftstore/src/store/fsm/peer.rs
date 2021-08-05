@@ -2031,7 +2031,7 @@ where
         if self.fsm.peer.has_unpersisted_ready() {
             assert_eq!(self.fsm.delayed_destroy, None);
             self.fsm.delayed_destroy = Some(merged_by_target);
-            // TODO: The destroy process can be asynchronous as snapshot process,
+            // TODO: The destroy process can also be asynchronous as snapshot process,
             // if so, all of the write db behavior is removed in store thread.
             info!(
                 "delays destroy";
