@@ -48,6 +48,12 @@ impl EventListener for FlowListener {
                 .unwrap()
                 .send(FlowInfo::Flush(info.cf_name().to_owned(), total));
         }
+        // ingestion may change the pending bytes.
+        let _ = self
+            .flow_info_sender
+            .lock()
+            .unwrap()
+            .send(FlowInfo::Compaction(info.cf_name().to_owned()));
     }
 
     fn on_compaction_completed(&self, info: &CompactionJobInfo) {

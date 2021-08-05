@@ -662,7 +662,7 @@ impl<E: KvEngine> FlowChecker<E> {
         if checker.on_start_memtable {
             if num_memtables < self.memtables_threshold {
                 checker.on_start_memtable = false;
-            } else if checker.long_term_pending_bytes.trend() == Trend::Increasing {
+            } else if checker.last_num_memtables.trend() == Trend::Increasing {
                 // the write is accumulating, still need to throttle
                 checker.on_start_memtable = false;
             } else {
