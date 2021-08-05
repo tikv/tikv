@@ -78,6 +78,7 @@ make_auto_flush_static_metric! {
         region_tombstone_peer,
         region_nonexistent,
         applying_snap,
+        disk_full,
     }
 
     pub label_enum SnapValidationType {

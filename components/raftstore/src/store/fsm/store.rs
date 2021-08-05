@@ -384,7 +384,7 @@ where
     pub perf_context: EK::PerfContext,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
-    pub is_disk_full: bool,
+    pub disk_usage: disk::DiskUsage,
     pub write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
     pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
 }
@@ -690,7 +690,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.poll_ctx.ready_count = 0;
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
-        self.poll_ctx.is_disk_full = disk::is_disk_full();
+        self.poll_ctx.disk_usage = disk::get_disk_status(self.poll_ctx.store.get_id());
         self.timer = TiInstant::now();
         // update config
         if let Some(incoming) = self.cfg_tracker.any_new() {
@@ -1051,7 +1051,7 @@ where
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
             feature_gate: self.feature_gate.clone(),
-            is_disk_full: false,
+            disk_usage: disk::DiskUsage::Normal,
             write_senders: self.write_senders.clone(),
             io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
         };
