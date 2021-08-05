@@ -255,20 +255,20 @@ impl CpuRecorder {
             );
 
             if let Some(cur_tag) = cur_tag {
-                if let Ok(stat) = pid::stat_task(*PID, *tid) {
+                if let Ok(cur_stat) = pid::stat_task(*PID, *tid) {
                     STAT_TASK_COUNT.inc();
 
-                    let prev_cpu_ticks =
-                        (thread_stat.stat.utime as u64).wrapping_add(thread_stat.stat.stime as u64);
-                    let current_cpu_ticks = (stat.utime as u64).wrapping_add(stat.stime as u64);
-                    let delta_ms =
-                        current_cpu_ticks.wrapping_sub(prev_cpu_ticks) * 1_000 / (*CLK_TCK as u64);
+                    let last_stat = &thread_stat.stat;
+                    let last_cpu_tick = last_stat.utime.wrapping_add(last_stat.stime);
+                    let cur_cpu_tick = cur_stat.utime.wrapping_add(cur_stat.stime);
+                    let delta_ticks = cur_cpu_tick.wrapping_sub(last_cpu_tick);
 
-                    if delta_ms != 0 {
+                    if delta_ticks > 0 {
+                        let delta_ms = (delta_ticks * 1_000 / *CLK_TCK) as u64;
                         *records.entry(cur_tag).or_insert(0) += delta_ms;
                     }
 
-                    thread_stat.stat = stat;
+                    thread_stat.stat = cur_stat;
                 }
             }
         });
