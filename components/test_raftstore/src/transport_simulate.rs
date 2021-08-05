@@ -204,6 +204,10 @@ impl<C: Transport> Transport for SimulateTransport<C> {
         self.ch.need_flush()
     }
 
+    fn delay_flush(&mut self) {
+        self.ch.flush();
+    }
+
     fn flush(&mut self) {
         self.ch.flush();
     }

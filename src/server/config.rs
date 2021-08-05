@@ -88,11 +88,16 @@ pub struct Config {
     pub max_grpc_send_msg_len: i32,
 
     // When merge raft messages into a batch message, leave a buffer.
+    #[online_config(skip)]
     pub raft_client_grpc_send_msg_buffer: usize,
 
     #[online_config(skip)]
     pub raft_client_queue_size: usize,
 
+    #[online_config(skip)]
+    pub raft_client_delay_flush_time: ReadableDuration,
+
+    #[online_config(skip)]
     pub raft_msg_max_batch_size: usize,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
@@ -206,6 +211,7 @@ impl Default for Config {
             max_grpc_send_msg_len: DEFAULT_MAX_GRPC_SEND_MSG_LEN,
             raft_client_grpc_send_msg_buffer: 512 * 1024,
             raft_client_queue_size: 8192,
+            raft_client_delay_flush_time: ReadableDuration::millis(1),
             raft_msg_max_batch_size: 128,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,

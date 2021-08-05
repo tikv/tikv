@@ -2263,14 +2263,18 @@ where
         self.write_router
             .check_new_persisted(ctx, self.persisted_number);
 
-        let pre_persist_index = self.raft_group.raft.raft_log.persisted;
-        let pre_commit_index = self.raft_group.raft.raft_log.committed;
-        self.raft_group.on_persist_ready(persisted_number);
-        self.report_know_persist_duration(pre_persist_index, &ctx.raft_metrics);
-        self.report_know_commit_duration(pre_commit_index, &ctx.raft_metrics);
+        if !self.pending_remove {
+            // If this peer is removed by conf change, `RawNode::on_persist_ready`
+            // will panic because the progress of itself doesn't exist.
+            let pre_persist_index = self.raft_group.raft.raft_log.persisted;
+            let pre_commit_index = self.raft_group.raft.raft_log.committed;
+            self.raft_group.on_persist_ready(persisted_number);
+            self.report_know_persist_duration(pre_persist_index, &ctx.raft_metrics);
+            self.report_know_commit_duration(pre_commit_index, &ctx.raft_metrics);
 
-        let persist_index = self.raft_group.raft.raft_log.persisted;
-        self.mut_store().update_persist_index(persist_index);
+            let persist_index = self.raft_group.raft.raft_log.persisted;
+            self.mut_store().update_persist_index(persist_index);
+        }
 
         if self.snap_ctx.is_some() && self.unpersisted_readies.is_empty() {
             // Since the snapshot must belong to the last ready, so if `unpersisted_readies`

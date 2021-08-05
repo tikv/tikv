@@ -74,6 +74,7 @@ fn test_serde_custom_tikv_config() {
         max_grpc_send_msg_len: 6 * (1 << 20),
         raft_client_grpc_send_msg_buffer: 1234 * 1024,
         raft_client_queue_size: 1234,
+        raft_client_delay_flush_time: ReadableDuration::secs(5),
         raft_msg_max_batch_size: 123,
         concurrent_send_snap_limit: 4,
         concurrent_recv_snap_limit: 4,

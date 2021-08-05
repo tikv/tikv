@@ -30,6 +30,9 @@ impl Transport for MockTransport {
     fn need_flush(&self) -> bool {
         false
     }
+    fn delay_flush(&mut self) {
+        unimplemented!()
+    }
     fn flush(&mut self) {
         unimplemented!()
     }
