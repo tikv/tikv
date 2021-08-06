@@ -522,6 +522,9 @@ where
     /// The number of the last unpersisted ready.
     last_unpersisted_number: u64,
 
+    /// `max_inflight_msgs` can be changed dynamically. This field indicates the current value.
+    pub max_inflight_msgs: usize,
+
     pub read_progress: Arc<RegionReadProgress>,
 
     pub memtrace_raft_entries: usize,
@@ -619,6 +622,7 @@ where
             max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             cmd_epoch_checker: Default::default(),
             last_unpersisted_number: 0,
+            max_inflight_msgs: cfg.raft_max_inflight_msgs,
             read_progress: Arc::new(RegionReadProgress::new(
                 region,
                 applied_index,
@@ -3396,6 +3400,7 @@ where
                                 && usage.is_some()
                             {
                                 // Allow to send append to the peer although its disk is full.
+                                self.max_inflight_msgs = 1;
                                 raft.adjust_max_inflight_msgs(peer_id, 1);
                             }
                         }

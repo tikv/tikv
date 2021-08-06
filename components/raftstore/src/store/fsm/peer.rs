@@ -1302,24 +1302,31 @@ where
         let id = msg.get_from_peer().get_id();
         let store_id = msg.get_from_peer().get_store_id();
         let raft = &mut self.fsm.peer.raft_group.raft;
-        match msg.disk_usage {
+        let max_inflight_msgs = match msg.disk_usage {
             DiskUsage::Normal => {
                 self.ctx.store_disk_usages.remove(&store_id);
-                raft.adjust_max_inflight_msgs(id, self.ctx.cfg.raft_max_inflight_msgs);
+                self.ctx.cfg.raft_max_inflight_msgs
             }
             x => {
                 self.ctx.store_disk_usages.insert(store_id, x);
                 if let Some(pr) = raft.prs().get(id) {
                     if pr.next_idx == pr.matched + 1 {
-                        raft.adjust_max_inflight_msgs(id, 0);
+                        // Disable the progress because the target meets a disk full problem.
+                        0
                     } else {
                         // It's possible that the leader has something to send to the target
                         // even if its disk is full, in which case slow down the progress
                         // instead of disable it directly.
-                        raft.adjust_max_inflight_msgs(id, 1);
+                        1
                     }
+                } else {
+                    return;
                 }
             }
+        };
+        if self.fsm.peer.max_inflight_msgs != max_inflight_msgs {
+            self.fsm.peer.max_inflight_msgs = max_inflight_msgs;
+            raft.adjust_max_inflight_msgs(id, 1);
         }
     }
 
