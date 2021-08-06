@@ -3340,7 +3340,6 @@ where
         // Propose can be rejected if of the store's disk is full.
         let self_allowed = match disk_full_opt {
             DiskFullOpt::NotAllowedOnFull => matches!(ctx.self_disk_usage, DiskUsage::Normal),
-            // FIXME: maybe `AllowedOnAlreadyFull` is not necessary really?
             _ => !matches!(ctx.self_disk_usage, DiskUsage::AlreadyFull),
         };
         if !self_allowed {
@@ -3372,7 +3371,6 @@ where
             let raft = &mut self.raft_group.raft;
             match disk_full_opt {
                 DiskFullOpt::NotAllowedOnFull => !raft.prs().has_quorum(&disk_full_peers),
-                // FIXME: maybe `AllowedOnAlreadyFull` is not necessary really?
                 _ => {
                     if !raft.prs().has_quorum(&disk_full_peers) {
                         return true;
