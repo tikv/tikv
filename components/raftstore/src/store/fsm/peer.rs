@@ -593,6 +593,9 @@ where
                     let req_size = cmd.request.compute_size();
                     if self.ctx.cfg.cmd_batch
                         && self.fsm.batch_req_builder.can_batch(&cmd.request, req_size)
+                        // Avoid to merge requests with different `DiskFullOpt`s into one,
+                        // so that normal writes can be rejected when proposing if the
+                        // store's disk is full.
                         && cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull
                     {
                         self.fsm.batch_req_builder.add(cmd, req_size);
