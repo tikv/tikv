@@ -617,8 +617,8 @@ fn test_serde_custom_tikv_config() {
             enable: false,
             l0_files_threshold: 10,
             memtables_threshold: 10,
-            soft_pending_compaction_bytes_limit: 1,
-            hard_pending_compaction_bytes_limit: 1,
+            soft_pending_compaction_bytes_limit: ReadableSize(1),
+            hard_pending_compaction_bytes_limit: ReadableSize(1),
         },
         block_cache: BlockCacheConfig {
             shared: true,

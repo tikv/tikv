@@ -2571,7 +2571,12 @@ impl TiKvConfig {
         self.resource_metering.validate()?;
 
         if self.storage.flow_control.enable {
-            self.raftdb.defaultcf.disable_write_stall = true;
+            // using raftdb write stall to control memtables as a safety net
+            self.raftdb.defaultcf.level0_slowdown_writes_trigger = 10000;
+            self.raftdb.defaultcf.level0_stop_writes_trigger = 10000;
+            self.raftdb.defaultcf.soft_pending_compaction_bytes_limit = ReadableSize(0);
+            self.raftdb.defaultcf.hard_pending_compaction_bytes_limit = ReadableSize(0);
+
             self.rocksdb.defaultcf.disable_write_stall = true;
             self.rocksdb.writecf.disable_write_stall = true;
             self.rocksdb.lockcf.disable_write_stall = true;
