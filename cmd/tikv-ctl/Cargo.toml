@@ -91,7 +91,13 @@ error_code = { path = "../../components/error_code", default-features = false }
 file_system = { path = "../../components/file_system", default-features = false }
 fs2 = "0.4"
 futures = "0.3"
+<<<<<<< HEAD
 tokio = { version = "0.2", features = ["rt-threaded", "time"] }
+=======
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
+gag = "0.1"
+>>>>>>> 864900681... cmd: Add bad ssts command for tikv-ctl (#10259)
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 keys = { path = "../../components/keys", default-features = false }
@@ -107,7 +113,12 @@ protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
 raft_log_engine = { path = "../../components/raft_log_engine", default-features = false }
 raftstore = { path = "../../components/raftstore", default-features = false }
+<<<<<<< HEAD
 rand = "0.7"
+=======
+rand = "0.8"
+regex = "1"
+>>>>>>> 864900681... cmd: Add bad ssts command for tikv-ctl (#10259)
 security = { path = "../../components/security", default-features = false }
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
