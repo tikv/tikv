@@ -3334,7 +3334,7 @@ where
     }
 
     // Check disk usages for the peer itself and other peers in the raft group.
-    // The return value indicates whether the propose is allowed or not.
+    // The return value indicates whether the proposal is allowed or not.
     fn check_disk_usages_before_propose_normal<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
@@ -3351,7 +3351,7 @@ where
         }
 
         // Then if majority peers for the raft group meets the disk full problem,
-        // reject the propose.
+        // reject the proposal.
         let mut check_majority_disk_full = || {
             let self_peer_id = self.peer_id();
             let peers_len = self.get_store().region().get_peers().len();

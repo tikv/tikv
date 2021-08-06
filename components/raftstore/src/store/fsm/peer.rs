@@ -1326,7 +1326,7 @@ where
         };
         if self.fsm.peer.max_inflight_msgs != max_inflight_msgs {
             self.fsm.peer.max_inflight_msgs = max_inflight_msgs;
-            raft.adjust_max_inflight_msgs(id, 1);
+            raft.adjust_max_inflight_msgs(id, max_inflight_msgs);
         }
     }
 
