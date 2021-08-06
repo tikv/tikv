@@ -882,15 +882,13 @@ where
         if let Some(e) = self.cache.entry(idx) {
             Ok(e.get_term())
         } else {
-            let mut entries = vec![];
-            self.engines.raft.fetch_entries_to(
-                self.get_region_id(),
-                idx,
-                idx + 1,
-                None,
-                &mut entries,
-            )?;
-            Ok(entries[0].get_term())
+            Ok(self
+                .engines
+                .raft
+                .get_entry(self.get_region_id(), idx)
+                .unwrap()
+                .unwrap()
+                .get_term())
         }
     }
 
