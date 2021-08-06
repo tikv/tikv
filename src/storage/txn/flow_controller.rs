@@ -59,9 +59,9 @@ enum Trend {
 // It uses 95th write rate of the last few seconds as the initial throttle speed.
 // Then as we can imagine, the consumption ability of L0 wouldn't change
 // dramatically corresponding to the ability of hardware. So we can record the
-// flush flow when reaching the threshold as target flow, and increase or
-// decrease the throttle speed based on whether current flush flow is smaller or
-// larger than target flow.
+// flush flow(L0 production flow) when reaching the threshold as target flow, and
+// increase or decrease the throttle speed based on whether current flush flow is
+// smaller or larger than target flow.
 
 // For compaction pending bytes, we use discardable ratio to do flow control
 // which is separated mechanism from throttle speed. Compaction pending bytes is
@@ -308,11 +308,11 @@ impl<const CAP: usize> Smoother<CAP> {
 }
 
 // CFFlowChecker records some statistics and states related to one CF.
-// These statistics falls into five categories:
+// These statistics fall into five categories:
 //   * memtable
 //   * L0 files
-//   * L0 proflush flow
-//   * L0 flow (compaction read flow of L0)
+//   * L0 production flow (flush flow)
+//   * L0 consumption flow (compaction read flow of L0)
 //   * pending compaction bytes
 // And all of them are collected from the hook of RocksDB's event listener.
 struct CFFlowChecker {
@@ -334,16 +334,16 @@ struct CFFlowChecker {
     // of L0 files right after L0 compactions.
     long_term_num_l0_files: Smoother<20>,
 
-    // Flush flow related
+    // L0 production flow related
     last_flush_bytes_time: Instant,
     last_flush_bytes: u64,
-    short_term_flush_flow: Smoother<10>,
-    long_term_flush_flow: Smoother<60>,
+    short_term_l0_production_flow: Smoother<10>,
+    long_term_l0_production_flow: Smoother<60>,
 
-    // L0 input flow related
+    // L0 consumption flow related
     last_l0_bytes: u64,
     last_l0_bytes_time: Instant,
-    short_term_l0_flow: Smoother<3>,
+    short_term_l0_consumption_flow: Smoother<3>,
 
     // Pending compaction bytes related
     long_term_pending_bytes: Smoother<60>,
@@ -369,11 +369,11 @@ impl Default for CFFlowChecker {
             last_num_l0_files_from_flush: 0,
             last_flush_bytes: 0,
             last_flush_bytes_time: Instant::now_coarse(),
-            short_term_flush_flow: Smoother::default(),
-            long_term_flush_flow: Smoother::default(),
+            short_term_l0_production_flow: Smoother::default(),
+            long_term_l0_production_flow: Smoother::default(),
             last_l0_bytes: 0,
             last_l0_bytes_time: Instant::now_coarse(),
-            short_term_l0_flow: Smoother::default(),
+            short_term_l0_consumption_flow: Smoother::default(),
             memtable_debt: 0.0,
             init_speed: false,
             on_start_memtable: true,
@@ -476,7 +476,7 @@ impl<E: KvEngine> FlowChecker<E> {
                                     spare_ticks = 0;
                                 }
                             }
-                            checker.check_l0_files(cf, l0_bytes)
+                            checker.on_l0_decr(cf, l0_bytes)
                         }
                         Ok(FlowInfo::L0Intra(cf, diff_bytes)) => {
                             if let Some(throttle_cf) = checker.throttle_cf.as_ref() {
@@ -486,7 +486,7 @@ impl<E: KvEngine> FlowChecker<E> {
                             }
                             if diff_bytes > 0 {
                                 // Intra L0 merges some deletion records, so regard it as a L0 compaction.
-                                checker.check_l0_files(cf, diff_bytes)
+                                checker.on_l0_decr(cf, diff_bytes)
                             }
                         }
                         Ok(FlowInfo::Flush(cf, flush_bytes)) => {
@@ -495,8 +495,8 @@ impl<E: KvEngine> FlowChecker<E> {
                                     spare_ticks = 0;
                                 }
                             }
-                            checker.adjust_memtables(&cf);
-                            checker.check_flush_flow(cf, flush_bytes)
+                            checker.on_memtable_decrs(&cf);
+                            checker.on_l0_incr(cf, flush_bytes)
                         }
                         Ok(FlowInfo::Compaction(cf)) => {
                             if let Some(throttle_cf) = checker.throttle_cf.as_ref() {
@@ -504,7 +504,7 @@ impl<E: KvEngine> FlowChecker<E> {
                                     spare_ticks = 0;
                                 }
                             }
-                            checker.adjust_pending_compaction_bytes(cf);
+                            checker.on_pending_compaction_bytes_change(cf);
                         }
                         Err(RecvTimeoutError::Timeout) => {
                             spare_ticks += 1;
@@ -590,7 +590,7 @@ impl<E: KvEngine> FlowChecker<E> {
         self.limiter.reset_statistics();
     }
 
-    fn adjust_pending_compaction_bytes(&mut self, cf: String) {
+    fn on_pending_compaction_bytes_change(&mut self, cf: String) {
         let hard = (self.hard_pending_compaction_bytes_limit as f64).log2();
         let soft = (self.soft_pending_compaction_bytes_limit as f64).log2();
 
@@ -650,7 +650,7 @@ impl<E: KvEngine> FlowChecker<E> {
         self.discard_ratio.store(ratio, Ordering::Relaxed);
     }
 
-    fn adjust_memtables(&mut self, cf: &str) {
+    fn on_memtable_decrs(&mut self, cf: &str) {
         let num_memtables = self
             .engine
             .get_cf_num_immutable_mem_table(cf)
@@ -761,7 +761,7 @@ impl<E: KvEngine> FlowChecker<E> {
     }
 
     // Check the number of l0 files to decide whether need to adjust target flow
-    fn check_l0_files(&mut self, cf: String, l0_bytes: u64) {
+    fn on_l0_decr(&mut self, cf: String, l0_bytes: u64) {
         let num_l0_files = self
             .engine
             .get_cf_num_files_at_level(&cf, 0)
@@ -809,7 +809,9 @@ impl<E: KvEngine> FlowChecker<E> {
                         .inc();
                     self.throttle_cf = Some(cf.clone());
                     self.num_l0_for_last_update_target_flow = Some(num_l0_files);
-                    self.l0_target_flow = self.cf_checkers[&cf].short_term_flush_flow.get_avg();
+                    self.l0_target_flow = self.cf_checkers[&cf]
+                        .short_term_l0_production_flow
+                        .get_avg();
                 } else {
                     return;
                 }
@@ -827,7 +829,7 @@ impl<E: KvEngine> FlowChecker<E> {
                 .inc();
             self.throttle_cf = Some(cf.clone());
             self.num_l0_for_last_update_target_flow = Some(checker.last_num_l0_files);
-            self.l0_target_flow = checker.short_term_flush_flow.get_avg();
+            self.l0_target_flow = checker.short_term_l0_production_flow.get_avg();
             let x = self.write_flow_recorder.get_percentile_90();
             if x == 0 { INFINITY } else { x as f64 }
         } else if is_throttled && should_throttle {
@@ -836,9 +838,9 @@ impl<E: KvEngine> FlowChecker<E> {
                 self.num_l0_for_last_update_target_flow
             {
                 if checker.last_num_l0_files > num_l0_for_last_update_target_flow + 3
-                    && self.l0_target_flow > checker.short_term_l0_flow.get_avg()
+                    && self.l0_target_flow > checker.short_term_l0_consumption_flow.get_avg()
                 {
-                    self.l0_target_flow = checker.short_term_l0_flow.get_avg();
+                    self.l0_target_flow = checker.short_term_l0_consumption_flow.get_avg();
                     self.num_l0_for_last_update_target_flow = Some(checker.last_num_l0_files);
                     SCHED_THROTTLE_ACTION_COUNTER
                         .with_label_values(&[&cf, "refresh_down_flow"])
@@ -846,7 +848,7 @@ impl<E: KvEngine> FlowChecker<E> {
                 }
             } else {
                 self.num_l0_for_last_update_target_flow = Some(checker.last_num_l0_files);
-                self.l0_target_flow = checker.short_term_flush_flow.get_avg();
+                self.l0_target_flow = checker.short_term_l0_production_flow.get_avg();
             }
             self.limiter.speed_limit()
         } else if is_throttled && !should_throttle {
@@ -859,10 +861,10 @@ impl<E: KvEngine> FlowChecker<E> {
                 self.limiter.speed_limit()
             } else {
                 if self.num_l0_for_last_update_target_flow.is_some()
-                    && checker.short_term_l0_flow.get_avg() > self.l0_target_flow
+                    && checker.short_term_l0_consumption_flow.get_avg() > self.l0_target_flow
                 {
-                    let new =
-                        0.5 * checker.short_term_l0_flow.get_avg() + 0.5 * self.l0_target_flow;
+                    let new = 0.5 * checker.short_term_l0_consumption_flow.get_avg()
+                        + 0.5 * self.l0_target_flow;
                     if new > self.l0_target_flow {
                         self.l0_target_flow = new;
                         SCHED_THROTTLE_ACTION_COUNTER
@@ -900,7 +902,7 @@ impl<E: KvEngine> FlowChecker<E> {
     }
 
     // Check flush flow to compare with target flow to decide whether need to adjust throttle speed
-    fn check_flush_flow(&mut self, cf: String, flush_bytes: u64) {
+    fn on_l0_incr(&mut self, cf: String, flush_bytes: u64) {
         let num_l0_files = self
             .engine
             .get_cf_num_files_at_level(&cf, 0)
@@ -920,24 +922,30 @@ impl<E: KvEngine> FlowChecker<E> {
             // update flush flow
             let flush_flow = checker.last_flush_bytes as f64
                 / checker.last_flush_bytes_time.saturating_elapsed_secs();
-            checker.short_term_flush_flow.observe(flush_flow as u64);
-            checker.long_term_flush_flow.observe(flush_flow as u64);
+            checker
+                .short_term_l0_production_flow
+                .observe(flush_flow as u64);
+            checker
+                .long_term_l0_production_flow
+                .observe(flush_flow as u64);
             SCHED_FLUSH_FLOW_GAUGE
                 .with_label_values(&[&cf])
-                .set(checker.short_term_flush_flow.get_avg() as i64);
+                .set(checker.short_term_l0_production_flow.get_avg() as i64);
             SCHED_LONG_TERM_FLUSH_FLOW_GAUGE
                 .with_label_values(&[&cf])
-                .set(checker.long_term_flush_flow.get_avg() as i64);
+                .set(checker.long_term_l0_production_flow.get_avg() as i64);
 
             // update l0 flow
             if checker.last_l0_bytes != 0 {
                 let l0_flow = checker.last_l0_bytes as f64
                     / checker.last_l0_bytes_time.saturating_elapsed_secs();
                 checker.last_l0_bytes_time = Instant::now_coarse();
-                checker.short_term_l0_flow.observe(l0_flow as u64);
+                checker
+                    .short_term_l0_consumption_flow
+                    .observe(l0_flow as u64);
                 SCHED_L0_FLOW_GAUGE
                     .with_label_values(&[&cf])
-                    .set(checker.short_term_l0_flow.get_avg() as i64);
+                    .set(checker.short_term_l0_consumption_flow.get_avg() as i64);
             }
 
             checker.last_flush_bytes_time = Instant::now_coarse();
@@ -966,17 +974,24 @@ impl<E: KvEngine> FlowChecker<E> {
             if let Some(_num_l0_for_last_update_target_flow) =
                 self.num_l0_for_last_update_target_flow
             {
-                if self.cf_checkers[&cf].long_term_flush_flow.get_avg() > self.l0_target_flow
-                    && self.cf_checkers[&cf].short_term_flush_flow.get_recent() as f64
+                if self.cf_checkers[&cf].long_term_l0_production_flow.get_avg()
+                    > self.l0_target_flow
+                    && self.cf_checkers[&cf]
+                        .short_term_l0_production_flow
+                        .get_recent() as f64
                         > self.l0_target_flow
                 {
                     SCHED_THROTTLE_ACTION_COUNTER
                         .with_label_values(&[&cf, "down_flow"])
                         .inc();
-                    self.down_flow(cf);
-                } else if (self.cf_checkers[&cf].short_term_flush_flow.get_avg()
+                    self.decrease_speed_limit(cf);
+                } else if (self.cf_checkers[&cf]
+                    .short_term_l0_production_flow
+                    .get_avg()
                     < self.l0_target_flow
-                    || (self.cf_checkers[&cf].short_term_flush_flow.get_recent() as f64)
+                    || (self.cf_checkers[&cf]
+                        .short_term_l0_production_flow
+                        .get_recent() as f64)
                         < self.l0_target_flow)
                     && self.write_flow_recorder.get_recent() as f64
                         > self.limiter.speed_limit() * 0.95
@@ -984,7 +999,7 @@ impl<E: KvEngine> FlowChecker<E> {
                     SCHED_THROTTLE_ACTION_COUNTER
                         .with_label_values(&[&cf, "up_flow"])
                         .inc();
-                    self.up_flow(cf);
+                    self.increase_speed_limit(cf);
                 } else {
                     SCHED_THROTTLE_ACTION_COUNTER
                         .with_label_values(&[&cf, "keep_flow"])
@@ -998,7 +1013,7 @@ impl<E: KvEngine> FlowChecker<E> {
         }
     }
 
-    fn up_flow(&mut self, cf: String) {
+    fn increase_speed_limit(&mut self, cf: String) {
         let throttle = if self.limiter.speed_limit() == INFINITY {
             self.throttle_cf = Some(cf);
             let x = self.write_flow_recorder.get_percentile_90();
@@ -1007,8 +1022,11 @@ impl<E: KvEngine> FlowChecker<E> {
             // Use PID algorithm to change the flow so up flow can be increased
             // rapidly when the target flow is quite larger than flush flow.
             let mut u = PID_KP_FACTOR
-                * (self.l0_target_flow - self.cf_checkers[&cf].short_term_flush_flow.get_avg()
-                    + PID_KD_FACTOR * -self.cf_checkers[&cf].short_term_flush_flow.slope());
+                * (self.l0_target_flow
+                    - self.cf_checkers[&cf]
+                        .short_term_l0_production_flow
+                        .get_avg()
+                    + PID_KD_FACTOR * -self.cf_checkers[&cf].short_term_l0_production_flow.slope());
             if u > self.limiter.speed_limit() {
                 u = self.limiter.speed_limit();
             } else if u < 0.0 {
@@ -1021,7 +1039,7 @@ impl<E: KvEngine> FlowChecker<E> {
         self.update_speed_limit(throttle)
     }
 
-    fn down_flow(&mut self, cf: String) {
+    fn decrease_speed_limit(&mut self, cf: String) {
         let throttle = if self.limiter.speed_limit() == INFINITY {
             self.throttle_cf = Some(cf);
             let x = self.write_flow_recorder.get_percentile_90();
