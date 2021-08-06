@@ -1010,8 +1010,8 @@ impl<E: KvEngine> FlowChecker<E> {
                     + PID_KD_FACTOR * -self.cf_checkers[&cf].short_term_flush_flow.slope());
             if u > self.limiter.speed_limit() {
                 u = self.limiter.speed_limit();
-            } else if u < -self.limiter.speed_limit() * 3.0 * LIMIT_UP_PERCENT {
-                u = -self.limiter.speed_limit() * 3.0 * LIMIT_UP_PERCENT;
+            } else if u < 0.0 {
+                u = 0.0;
             };
             SCHED_UP_FLOW_GAUGE.set((u * RATIO_SCALE_FACTOR) as i64);
 
@@ -1026,17 +1026,7 @@ impl<E: KvEngine> FlowChecker<E> {
             let x = self.write_flow_recorder.get_percentile_90();
             if x == 0 { INFINITY } else { x as f64 }
         } else {
-            let mut u = PID_KP_FACTOR
-                * (self.l0_target_flow - self.cf_checkers[&cf].long_term_flush_flow.get_avg()
-                    + PID_KD_FACTOR * -self.cf_checkers[&cf].long_term_flush_flow.slope());
-            if u > self.limiter.speed_limit() * LIMIT_DOWN_PERCENT {
-                u = self.limiter.speed_limit() * LIMIT_DOWN_PERCENT;
-            } else if u < -self.limiter.speed_limit() * LIMIT_DOWN_PERCENT {
-                u = -self.limiter.speed_limit() * LIMIT_DOWN_PERCENT;
-            };
-            SCHED_DOWN_FLOW_GAUGE.set((u * RATIO_SCALE_FACTOR) as i64);
-
-            self.limiter.speed_limit() + u
+            self.limiter.speed_limit() * (1.0 - LIMIT_DOWN_PERCENT)
         };
         self.update_speed_limit(throttle)
     }
