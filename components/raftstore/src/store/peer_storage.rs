@@ -225,10 +225,13 @@ impl EntryCache {
         mem_size_change
     }
 
-    pub fn term(&self, idx: u64) -> u64 {
-        let cache_low = self.cache.front().unwrap().get_index();
-        let start_idx = idx.checked_sub(cache_low).unwrap() as usize;
-        self.cache[start_idx].get_term()
+    pub fn entry(&self, idx: u64) -> Option<&Entry> {
+        let cache_low = self.cache.front()?.get_index();
+        if idx >= cache_low {
+            Some(&self.cache[(idx - cache_low) as usize])
+        } else {
+            None
+        }
     }
 
     pub fn compact_to(&mut self, mut idx: u64) -> u64 {
@@ -876,9 +879,8 @@ where
         if self.truncated_term() == self.last_term || idx == self.last_index() {
             return Ok(self.last_term);
         }
-        let cache_low = self.cache.first_index().unwrap_or(u64::MAX);
-        if idx >= cache_low {
-            Ok(self.cache.term(idx))
+        if let Some(e) = self.cache.entry(idx) {
+            Ok(e.get_term())
         } else {
             let mut entries = vec![];
             self.engines.raft.fetch_entries_to(
@@ -2548,6 +2550,25 @@ mod tests {
 
         drop(cache);
         assert_eq!(rx.try_recv().unwrap(), -896);
+    }
+
+    #[test]
+    fn test_storage_cache_entry() {
+        let mut cache = EntryCache::default();
+        let ents = vec![
+            new_entry(3, 3),
+            new_entry(4, 4),
+            new_entry(5, 4),
+            new_entry(6, 6),
+        ];
+        cache.append("", &ents);
+        assert!(cache.entry(1).is_none());
+        assert!(cache.entry(2).is_none());
+        for e in &ents {
+            assert_eq!(e, cache.entry(e.get_index()).unwrap());
+        }
+        let res = panic_hook::recover_safe(|| cache.entry(7));
+        assert!(res.is_err());
     }
 
     #[test]
