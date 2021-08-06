@@ -424,8 +424,8 @@ impl<E: KvEngine> FlowChecker<E> {
         }
 
         Self {
-            soft_pending_compaction_bytes_limit: config.soft_pending_compaction_bytes_limit,
-            hard_pending_compaction_bytes_limit: config.hard_pending_compaction_bytes_limit,
+            soft_pending_compaction_bytes_limit: config.soft_pending_compaction_bytes_limit.0,
+            hard_pending_compaction_bytes_limit: config.hard_pending_compaction_bytes_limit.0,
             memtables_threshold: config.memtables_threshold,
             l0_files_threshold: config.l0_files_threshold,
             engine,

@@ -201,8 +201,8 @@ impl ConfigManager for StorageConfigManger {
 #[serde(rename_all = "kebab-case")]
 pub struct FlowControlConfig {
     pub enable: bool,
-    pub soft_pending_compaction_bytes_limit: u64,
-    pub hard_pending_compaction_bytes_limit: u64,
+    pub soft_pending_compaction_bytes_limit: ReadableSize,
+    pub hard_pending_compaction_bytes_limit: ReadableSize,
     pub memtables_threshold: u64,
     pub l0_files_threshold: u64,
 }
@@ -211,8 +211,8 @@ impl Default for FlowControlConfig {
     fn default() -> FlowControlConfig {
         FlowControlConfig {
             enable: true,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(192).0,
-            hard_pending_compaction_bytes_limit: ReadableSize::gb(1024).0,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(1024),
             memtables_threshold: 5,
             l0_files_threshold: 9,
         }
