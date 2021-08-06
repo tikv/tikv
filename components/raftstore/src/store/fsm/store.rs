@@ -396,6 +396,8 @@ where
 
     /// Disk usage for the store itself.
     pub self_disk_usage: DiskUsage,
+
+    // TODO: how to remove offlined stores?
     /// Disk usage for other stores. The store itself is not included.
     /// Only contains items which is not `DiskUsage::Normal`.
     pub store_disk_usages: HashMap<u64, DiskUsage>,
