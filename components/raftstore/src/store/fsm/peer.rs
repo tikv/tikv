@@ -591,8 +591,9 @@ where
                     }
 
                     let req_size = cmd.request.compute_size();
-                    if cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull
+                    if self.ctx.cfg.cmd_batch
                         && self.fsm.batch_req_builder.can_batch(&cmd.request, req_size)
+                        && cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull
                     {
                         self.fsm.batch_req_builder.add(cmd, req_size);
                         if self.fsm.batch_req_builder.should_finish() {

@@ -225,5 +225,4 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
 #[test]
 fn test_disk_full_for_txn_operations() {
     test_disk_full_txn_behaviors(DiskUsage::AlmostFull);
-    // test_disk_full_txn_behaviors(DiskUsage::AlreadyFull);
 }
