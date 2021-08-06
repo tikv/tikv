@@ -510,7 +510,7 @@ fn hotspot_query_num_report_threshold() -> u64 {
 // Slow score is a value that represents the speed of a store and ranges in [1, 100].
 // It is maintained in the AIMD way.
 // If there are some inpspecting requests timeout during a round, by default the score
-//will be increased at most 1x when above 10% inspecting requests timeout. 
+// will be increased at most 1x when above 10% inspecting requests timeout.
 // If there is not any timeout inspecting requests, the score will go back to 1 in at least 5min.
 struct SlowScore {
     value: OrderedFloat<f64>,
