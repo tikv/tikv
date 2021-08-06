@@ -1333,10 +1333,17 @@ where
             "to_peer_id" => msg.get_to_peer().get_id(),
         );
 
-        let msg_type = msg.get_message().get_msg_type();
         self.handle_reported_disk_usage(&msg);
 
-        if matches!(self.ctx.self_disk_usage, DiskUsage::AlreadyFull) {
+        let msg_type = msg.get_message().get_msg_type();
+        if matches!(self.ctx.self_disk_usage, DiskUsage::AlreadyFull)
+            && [
+                MessageType::MsgSnapshot,
+                MessageType::MsgAppend,
+                MessageType::MsgTimeoutNow,
+            ]
+            .contains(&msg_type)
+        {
             debug!(
                 "skip {:?} because of disk full", msg_type;
                 "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()

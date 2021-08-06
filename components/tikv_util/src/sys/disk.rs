@@ -35,6 +35,9 @@ pub fn get_disk_status(_store_id: u64) -> DiskUsage {
     fail_point!("disk_almost_full_peer_2", _store_id == 2, |_| {
         DiskUsage::AlmostFull
     });
+    fail_point!("disk_almost_full_peer_3", _store_id == 3, |_| {
+        DiskUsage::AlmostFull
+    });
     fail_point!("disk_already_full_peer_1", _store_id == 1, |_| {
         DiskUsage::AlreadyFull
     });
