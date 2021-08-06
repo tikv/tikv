@@ -158,7 +158,7 @@ where
         engines: Engines<RocksEngine, ER>,
         trans: T,
         snap_mgr: SnapManager,
-        pd_worker: LazyWorker<PdTask<RocksEngine>>,
+        pd_worker: LazyWorker<PdTask<RocksEngine, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,

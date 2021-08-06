@@ -74,9 +74,10 @@ pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
     fn report_read_stats(&self, read_stats: ReadStats);
 }
 
-impl<E> FlowStatsReporter for Scheduler<Task<E>>
+impl<EK, ER> FlowStatsReporter for Scheduler<Task<EK, ER>>
 where
-    E: KvEngine,
+    EK: KvEngine,
+    ER: RaftEngine,
 {
     fn report_read_stats(&self, read_stats: ReadStats) {
         if let Err(e) = self.schedule(Task::ReadStats { read_stats }) {
@@ -100,9 +101,10 @@ pub struct HeartbeatTask {
 }
 
 /// Uses an asynchronous thread to tell PD something.
-pub enum Task<E>
+pub enum Task<EK, ER>
 where
-    E: KvEngine,
+    EK: KvEngine,
+    ER: RafeEngine,
 {
     AskSplit {
         region: metapb::Region,
@@ -110,7 +112,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback<E::Snapshot>,
+        callback: Callback<EK::Snapshot>,
     },
     AskBatchSplit {
         region: metapb::Region,
@@ -118,7 +120,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback<E::Snapshot>,
+        callback: Callback<EK::Snapshot>,
     },
     AutoSplit {
         split_infos: Vec<SplitInfo>,
@@ -126,7 +128,7 @@ where
     Heartbeat(HeartbeatTask),
     StoreHeartbeat {
         stats: pdpb::StoreStats,
-        store_info: StoreInfo<E>,
+        store_info: StoreInfo<EK, ER>,
     },
     ReportBatchSplit {
         regions: Vec<metapb::Region>,
@@ -249,9 +251,10 @@ impl PartialOrd for PeerCmpReadStat {
     }
 }
 
-impl<E> Display for Task<E>
+impl<EK, ER> Display for Task<EK, ER>
 where
-    E: KvEngine,
+    EK: KvEngine,
+    ER: RaftEngine,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
@@ -343,11 +346,12 @@ fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
         .collect()
 }
 
-struct StatsMonitor<E>
+struct StatsMonitor<EK, ER>
 where
-    E: KvEngine,
+    EK: KvEngine,
+    ER: RaftEngine,
 {
-    scheduler: Scheduler<Task<E>>,
+    scheduler: Scheduler<Task<EK, ER>>,
     handle: Option<JoinHandle<()>>,
     timer: Option<Sender<bool>>,
     sender: Option<Sender<ReadStats>>,
@@ -356,11 +360,12 @@ where
     collect_interval: Duration,
 }
 
-impl<E> StatsMonitor<E>
+impl<EK, ER> StatsMonitor<EK, ER>
 where
-    E: KvEngine,
+    EK: KvEngine,
+    ER: RaftEngine,
 {
-    pub fn new(interval: Duration, scheduler: Scheduler<Task<E>>) -> Self {
+    pub fn new(interval: Duration, scheduler: Scheduler<Task<EK, ER>>) -> Self {
         StatsMonitor {
             scheduler,
             handle: None,
@@ -619,8 +624,8 @@ where
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
     // calls Runner's run() on Task received.
-    scheduler: Scheduler<Task<EK>>,
-    stats_monitor: StatsMonitor<EK>,
+    scheduler: Scheduler<Task<EK, ER>>,
+    stats_monitor: StatsMonitor<EK, ER>,
 
     concurrency_manager: ConcurrencyManager,
     snap_mgr: SnapManager,
@@ -840,11 +845,11 @@ where
     }
 
     fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats, store_info: StoreInfo<EK>) {
-        let disk_stats = match fs2::statvfs(store_info.engine.path()) {
+        let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
             Err(e) => {
                 error!(
                     "get disk stat for rocksdb failed";
-                    "engine_path" => store_info.engine.path(),
+                    "engine_path" => store_info.kv_engine.path(),
                     "err" => ?e
                 );
                 return;
@@ -889,7 +894,7 @@ where
         stats.set_capacity(capacity);
 
         let used_size = self.snap_mgr.get_total_snap_size().unwrap()
-            + store_info.engine.get_engine_used_size().expect("cf");
+            + store_info.kv_engine.get_engine_used_size().expect("cf");
         stats.set_used_size(used_size);
 
         let mut available = capacity.checked_sub(used_size).unwrap_or_default();
@@ -959,6 +964,48 @@ where
                 Ok(mut resp) => {
                     if let Some(status) = resp.replication_status.take() {
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
+                    }
+                    if resp.send_detailed_report_in_next_heartbeat {
+                        let mut local_states = Vec::new();
+                        store_info.kv_engine.scan_cf(
+                            CF_RAFT,
+                            keys::REGION_META_MIN_KEY,
+                            keys::REGION_META_MAX_KEY,
+                            false,
+                            |key, value| {
+                                let (region_id, suffix) =
+                                    box_try!(keys::decode_region_meta_key(key));
+                                if suffic != keys::REGION_STATE_SUFFIX {
+                                    return Ok(true);
+                                }
+
+                                let mut region_local_state = RegionLocalState::default();
+                                region_local_state.merge_from_bytes(value)?;
+                                if region_local_state.get_state() == PeerState::Tombstone {
+                                    return Ok(true);
+                                }
+                                let raft_local_state = match store_info
+                                    .raft_engine
+                                    .get_raft_state(region_local_state.get_region().get_id())
+                                    .unwrap()
+                                {
+                                    None => return Ok(true),
+                                    Some(value) => value,
+                                };
+				let replica_state = pdpb::ReplicaState::new();
+				replica_state.set_region_state(region_local_state);
+				replica_state.set_raft_state(raft_local_state);
+                                local_states.push(replica_state);
+                            },
+                        );
+
+                        let resp = self.pd_client.store_heartbeat(stats, states);
+                        let f = async move {
+                            if let Err(e) = resp.await {
+                                error!("store heartbeat failed"; "err" => ?e);
+                            }
+                        };
+                        spawn_local(f);
                     }
                 }
                 Err(e) => {
