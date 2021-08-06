@@ -460,6 +460,7 @@ dependencies = [
  "bitflags",
  "collections",
  "concurrency_manager",
+ "criterion",
  "crossbeam",
  "engine_rocks",
  "engine_traits",
