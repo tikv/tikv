@@ -1312,9 +1312,6 @@ where
     }
 
     fn on_raft_message(&mut self, msg: InspectedRaftMessage) -> Result<()> {
-        if self.fsm.peer.pending_remove || self.fsm.stopped {
-            return Ok(());
-        }
         let InspectedRaftMessage { heap_size, mut msg } = msg;
         let stepped = Cell::new(false);
         let memtrace_raft_entries = &mut self.fsm.peer.memtrace_raft_entries as *mut usize;
@@ -1337,6 +1334,10 @@ where
             "from_peer_id" => msg.get_from_peer().get_id(),
             "to_peer_id" => msg.get_to_peer().get_id(),
         );
+
+        if self.fsm.peer.pending_remove || self.fsm.stopped {
+            return Ok(());
+        }
 
         let msg_type = msg.get_message().get_msg_type();
 
