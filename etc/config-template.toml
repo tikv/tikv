@@ -270,10 +270,10 @@
 # enable = true
 
 ## When the number of immutable memtables reaches the threshold, the flow controller begins to work
-# memtables_threshold = 5
+# memtables-threshold = 5
 
 ## When the number of SST files of level-0 reaches the threshold, the flow controller begins to work
-# l0_files_threshold = 9
+# l0-files-threshold = 9
 
 ## When the number of pending compaction bytes reaches the threshold, the flow controller begins to 
 ## reject some write requests with `ServerIsBusy` error. 
