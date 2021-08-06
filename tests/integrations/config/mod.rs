@@ -214,6 +214,7 @@ fn test_serde_custom_tikv_config() {
         cmd_batch: false,
         raft_write_size_limit: ReadableSize::mb(34),
         waterfall_metrics: true,
+        inspect_interval: ReadableDuration::millis(444),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
