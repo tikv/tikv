@@ -566,6 +566,7 @@ impl SlowScore {
         self.value.into()
     }
 
+    // Update the score in a AIMD way.
     fn update_impl(&mut self, elapsed: Duration) -> OrderedFloat<f64> {
         if self.timeout_requests == 0 {
             let desc = 100.0 * (elapsed.as_millis() as f64 / self.min_ttr.as_millis() as f64);
