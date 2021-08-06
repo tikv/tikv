@@ -507,6 +507,11 @@ fn hotspot_query_num_report_threshold() -> u64 {
     HOTSPOT_QUERY_RATE_THRESHOLD * 10
 }
 
+// Slow score is a value that represents the speed of a store and ranges in [1, 100].
+// It is maintained in the AIMD way.
+// If there are some inpspecting requests timeout during a round, by default the score
+//will be increased at most 1x when above 10% inspecting requests timeout. 
+// If there is not any timeout inspecting requests, the score will go back to 1 in at least 5min.
 struct SlowScore {
     value: OrderedFloat<f64>,
     last_update_time: Instant,
@@ -555,6 +560,12 @@ impl SlowScore {
         if duration >= self.inspect_interval {
             self.timeout_requests += 1;
         }
+    }
+
+    fn record_timeout(&mut self) {
+        self.last_tick_finished = true;
+        self.total_requests += 1;
+        self.timeout_requests += 1;
     }
 
     fn update(&mut self) -> f64 {
@@ -1455,10 +1466,7 @@ where
 {
     fn on_timeout(&mut self) {
         if !self.slow_score.last_tick_finished {
-            self.slow_score.record(
-                self.slow_score.last_tick_id,
-                self.slow_score.inspect_interval,
-            );
+            self.slow_score.record_timeout();
         }
         let scheduler = self.scheduler.clone();
         let id = self.slow_score.last_tick_id + 1;
