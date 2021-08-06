@@ -202,6 +202,9 @@ pub struct Config {
 
     pub waterfall_metrics: bool,
 
+    pub io_reschedule_concurrent_max_count: usize,
+    pub io_reschedule_hotpot_duration: ReadableDuration,
+
     // Deprecated! These configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
@@ -288,6 +291,8 @@ impl Default for Config {
             cmd_batch: true,
             raft_write_size_limit: ReadableSize::mb(1),
             waterfall_metrics: false,
+            io_reschedule_concurrent_max_count: 4,
+            io_reschedule_hotpot_duration: ReadableDuration::secs(5),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -671,6 +676,12 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["waterfall_metrics"])
             .set((self.waterfall_metrics as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["io_reschedule_concurrent_max_count"])
+            .set((self.io_reschedule_concurrent_max_count as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["io_reschedule_hotpot_duration"])
+            .set(self.io_reschedule_hotpot_duration.as_secs() as f64);
     }
 
     fn write_change_into_metrics(change: ConfigChange) {
