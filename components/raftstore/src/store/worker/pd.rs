@@ -21,19 +21,22 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::RegionReplicationStatus;
 use kvproto::{metapb, pdpb};
+use ordered_float::OrderedFloat;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 use yatp::Remote;
-use ordered_float::OrderedFloat;
 
 use crate::store::cmd_resp::new_error;
 use crate::store::metrics::*;
-use crate::store::util::{is_epoch_stale, ConfChangeKind, KeysInfoFormatter, RaftstoreDuration, LatencyInspector};
+use crate::store::util::{
+    is_epoch_stale, ConfChangeKind, KeysInfoFormatter, LatencyInspector, RaftstoreDuration,
+};
 use crate::store::worker::query_stats::QueryStats;
 use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
 use crate::store::{
-    Callback, CasualMessage, PeerMsg, RaftCommand, RaftRouter, SnapManager, StoreInfo, StoreMsg, Config,
+    Callback, CasualMessage, Config, PeerMsg, RaftCommand, RaftRouter, SnapManager, StoreInfo,
+    StoreMsg,
 };
 
 use collections::HashMap;
@@ -47,7 +50,7 @@ use tikv_util::sys::disk;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::topn::TopN;
-use tikv_util::worker::{Runnable, ScheduleError, Scheduler, RunnableWithTimer};
+use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tikv_util::{box_err, debug, error, info, thd_name, warn};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
@@ -161,7 +164,7 @@ pub struct StoreStat {
     pub engine_total_bytes_read: u64,
     pub engine_total_keys_read: u64,
     pub engine_total_query_num: QueryStats,
-    
+
     pub engine_last_total_bytes_read: u64,
     pub engine_last_total_keys_read: u64,
     pub engine_last_query_num: QueryStats,
@@ -313,7 +316,7 @@ where
             ),
             Task::QueryRegionLeader { region_id } => {
                 write!(f, "query the leader of region {}", region_id)
-            },
+            }
             Task::UpdateSlowScore { id, ref duration } => {
                 write!(f, "compute slow score: id {}, duration {:?}", id, duration)
             }
@@ -653,7 +656,7 @@ where
             concurrency_manager,
             snap_mgr,
             remote,
-            slow_score: SlowScore::new(cfg.inspect_interval.0)
+            slow_score: SlowScore::new(cfg.inspect_interval.0),
         }
     }
 
@@ -934,7 +937,7 @@ where
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["available"])
             .set(available as i64);
-        
+
         let slow_score = self.slow_score.get();
         stats.set_slow_score(slow_score as u64);
 
@@ -1497,7 +1500,10 @@ where
                 }
             }),
         );
-        let msg = StoreMsg::LatencyInspect{send_time: tikv_util::time::Instant::now(), inspector};
+        let msg = StoreMsg::LatencyInspect {
+            send_time: tikv_util::time::Instant::now(),
+            inspector,
+        };
         if let Err(e) = self.router.send_control(msg) {
             warn!("pd worker send latency inspecter failed"; "err" => ?e);
         }
