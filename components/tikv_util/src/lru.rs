@@ -314,8 +314,8 @@ where
         if new_cap == 0 {
             new_cap = 1;
         }
-        if new_cap < self.capacity && self.map.len() > new_cap {
-            for _ in new_cap..self.map.len() {
+        if new_cap < self.capacity && self.size() > new_cap {
+            while self.size() > new_cap {
                 let key = self.trace.remove_tail();
                 let entry = self.map.remove(&key).unwrap();
                 self.size_policy.on_remove(&key, &entry.value);
