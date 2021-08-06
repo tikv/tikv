@@ -47,7 +47,24 @@ pub enum CdcEvent {
 impl CdcEvent {
     pub fn size(&self) -> u32 {
         match self {
-            CdcEvent::ResolvedTs(ref r) => r.compute_size(),
+            CdcEvent::ResolvedTs(ref r) => {
+                // For region id, it is unlikely to exceed 100,000,000 which is
+                // encoded into 4 bytes.
+                // For TSO, it is likely to be encoded into 9 bytes,
+                // e.g., 426624231625982140.
+                //
+                // See https://play.golang.org/p/GFA9S-z_kUt
+                let approximate_region_id_bytes = 4;
+                let approximate_tso_bytes = 9;
+                // Protobuf encoding adds a tag to every varints.
+                // protobuf::rt::tag_size(1 /* or 2, field number*/) yields 1.
+                let tag_bytes = 1;
+
+                // Byets of an array of region id.
+                r.regions.len() as u32 * (tag_bytes + approximate_region_id_bytes)
+                // Bytes of a TSO.
+                + (tag_bytes + approximate_tso_bytes)
+            }
             CdcEvent::Event(ref e) => e.compute_size(),
             CdcEvent::Barrier(_) => 0,
         }
@@ -109,6 +126,10 @@ impl fmt::Debug for CdcEvent {
 pub struct EventBatcher {
     buffer: Vec<ChangeDataEvent>,
     last_size: u32,
+
+    // statistics
+    total_event_bytes: usize,
+    total_resolved_ts_bytes: usize,
 }
 
 impl EventBatcher {
@@ -116,6 +137,9 @@ impl EventBatcher {
         EventBatcher {
             buffer: Vec::with_capacity(cap),
             last_size: 0,
+
+            total_event_bytes: 0,
+            total_resolved_ts_bytes: 0,
         }
     }
 
@@ -134,6 +158,7 @@ impl EventBatcher {
                 }
                 self.last_size += size;
                 self.buffer.last_mut().unwrap().mut_events().push(e);
+                self.total_resolved_ts_bytes += size as usize;
             }
             CdcEvent::ResolvedTs(r) => {
                 let mut change_data_event = ChangeDataEvent::default();
@@ -142,6 +167,7 @@ impl EventBatcher {
 
                 // Make sure the next message is not batched with ResolvedTs.
                 self.last_size = CDC_MAX_RESP_SIZE;
+                self.total_event_bytes += size as usize;
             }
             CdcEvent::Barrier(_) => {
                 // Barrier requires events must be batched accross the barrier.
@@ -153,6 +179,10 @@ impl EventBatcher {
     pub fn build(self) -> Vec<ChangeDataEvent> {
         self.buffer
     }
+
+    pub fn statistics(&self) -> (usize, usize) {
+        (self.total_event_bytes, self.total_resolved_ts_bytes)
+    }
 }
 
 bitflags::bitflags! {
@@ -163,9 +193,17 @@ bitflags::bitflags! {
     }
 }
 
+impl FeatureGate {
+    // Returns the first version (v4.0.8) that supports batch resolved ts.
+    pub fn batch_resolved_ts() -> semver::Version {
+        semver::Version::new(4, 0, 8)
+    }
+}
+
 pub struct Conn {
     id: ConnID,
     sink: Sink,
+    // region id -> DownstreamID
     downstreams: HashMap<u64, DownstreamID>,
     peer: String,
     version: Option<(semver::Version, FeatureGate)>,
@@ -184,8 +222,11 @@ impl Conn {
 
     // TODO refactor into Error::Version.
     pub fn check_version_and_set_feature(&mut self, ver: semver::Version) -> Option<Compatibility> {
+<<<<<<< HEAD
         let v408_bacth_resoled_ts = semver::Version::new(4, 0, 8);
 
+=======
+>>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
         match &self.version {
             Some((version, _)) => {
                 if version == &ver {
@@ -201,7 +242,11 @@ impl Conn {
             }
             None => {
                 let mut features = FeatureGate::empty();
+<<<<<<< HEAD
                 if v408_bacth_resoled_ts <= ver {
+=======
+                if FeatureGate::batch_resolved_ts() <= ver {
+>>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
                     features.toggle(FeatureGate::BATCH_RESOLVED_TS);
                 }
                 info!("cdc connection version";
@@ -224,6 +269,10 @@ impl Conn {
 
     pub fn get_id(&self) -> ConnID {
         self.id
+    }
+
+    pub fn get_downstreams(&self) -> &HashMap<u64, DownstreamID> {
+        &self.downstreams
     }
 
     pub fn take_downstreams(self) -> HashMap<u64, DownstreamID> {
@@ -570,5 +619,22 @@ mod tests {
         // though server should not be able to send messages infinitely.
         let window_size = must_fill_window();
         assert_ne!(window_size, 0);
+    }
+
+    #[test]
+    fn test_cdc_event_resolved_ts_size() {
+        // A typical region id.
+        let region_id = 4194304;
+        // A typical ts.
+        let ts = 426624231625982140;
+        for i in 0..17 {
+            let mut resolved_ts = ResolvedTs::default();
+            resolved_ts.ts = ts;
+            resolved_ts.regions = vec![region_id; 2usize.pow(i)];
+            assert_eq!(
+                resolved_ts.compute_size(),
+                CdcEvent::ResolvedTs(resolved_ts).size()
+            );
+        }
     }
 }

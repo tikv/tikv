@@ -21,8 +21,13 @@ mod metrics;
 mod observer;
 mod service;
 
+<<<<<<< HEAD
 pub use channel::MemoryQuota;
 pub use endpoint::{Endpoint, OldValueStats, Task, Validate};
+=======
+pub use channel::{recv_timeout, MemoryQuota};
+pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task, Validate};
+>>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
 pub use errors::{Error, Result};
 pub use observer::CdcObserver;
-pub use service::Service;
+pub use service::{CdcEvent, FeatureGate, Service};

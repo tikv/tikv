@@ -91,4 +91,18 @@ lazy_static! {
         exponential_buckets(0.0001, 2.0, 20).unwrap()
     )
     .unwrap();
+<<<<<<< HEAD
+=======
+    pub static ref CDC_RESOLVED_TS_ADVANCE_METHOD: IntGauge = register_int_gauge!(
+        "tikv_cdc_resolved_ts_advance_method",
+        "Resolved Ts advance method, 0 = advanced through raft command, 1 = advanced through store RPC"
+    )
+    .unwrap();
+    pub static ref CDC_GRPC_ACCUMULATE_MESSAGE_BYTES: IntCounterVec = register_int_counter_vec!(
+        "tikv_cdc_grpc_message_sent_bytes",
+        "Accumulated bytes of sent CDC gRPC messages",
+        &["type"]
+    )
+    .unwrap();
+>>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
 }

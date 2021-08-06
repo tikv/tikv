@@ -3,9 +3,13 @@
 use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::time::Duration;
 
+<<<<<<< HEAD
 use tikv_util::time::Instant;
 
 use futures03::{
+=======
+use futures::{
+>>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
     channel::mpsc::{
         channel as bounded, unbounded, Receiver, SendError as FuturesSendError, Sender,
         TrySendError, UnboundedReceiver, UnboundedSender,
@@ -16,8 +20,14 @@ use futures03::{
 use grpcio::WriteFlags;
 use kvproto::cdcpb::ChangeDataEvent;
 
+<<<<<<< HEAD
 use tikv_util::warn;
+=======
+use tikv_util::time::Instant;
+use tikv_util::{impl_display_as_debug, warn};
+>>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
 
+use crate::metrics::*;
 use crate::service::{CdcEvent, EventBatcher};
 
 const CDC_MSG_MAX_BATCH_SIZE: usize = 128;
@@ -211,6 +221,10 @@ impl<'a> Drain {
     where
         S: futures03::Sink<(ChangeDataEvent, WriteFlags), Error = E> + Unpin,
     {
+        let total_event_bytes = CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["event"]);
+        let total_resolved_ts_bytes =
+            CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["resolved_ts"]);
+
         let memory_quota = self.memory_quota.clone();
         let mut chunks = self.drain().ready_chunks(CDC_MSG_MAX_BATCH_SIZE);
         while let Some(events) = chunks.next().await {
@@ -220,6 +234,7 @@ impl<'a> Drain {
                 bytes += size;
                 batcher.push(e);
             });
+            let (event_bytes, resolved_ts_bytes) = batcher.statistics();
             let resps = batcher.build();
             let last_idx = resps.len() - 1;
             // Events are about to be sent, free pending events memory counter.
@@ -230,6 +245,8 @@ impl<'a> Drain {
                 sink.feed((e, write_flags)).await?;
             }
             sink.flush().await?;
+            total_event_bytes.inc_by(event_bytes as u64);
+            total_resolved_ts_bytes.inc_by(resolved_ts_bytes as u64);
         }
         Ok(())
     }
@@ -257,7 +274,7 @@ impl Drop for Drain {
     }
 }
 
-#[cfg(test)]
+#[allow(clippy::result_unit_err)]
 pub fn recv_timeout<S, I>(s: &mut S, dur: std::time::Duration) -> Result<Option<I>, ()>
 where
     S: Stream<Item = I> + Unpin,
@@ -265,7 +282,6 @@ where
     poll_timeout(&mut s.next(), dur)
 }
 
-#[cfg(test)]
 pub fn poll_timeout<F, I>(fut: &mut F, dur: std::time::Duration) -> Result<I, ()>
 where
     F: std::future::Future<Output = I> + Unpin,

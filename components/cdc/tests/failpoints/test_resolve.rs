@@ -129,6 +129,8 @@ fn test_stale_resolver() {
     suite.stop();
 }
 
+// Resolved ts can still advance even if some regions are merged (it drops
+// callback that is used to advance resolved ts).
 #[test]
 fn test_region_error() {
     let mut cluster = new_server_cluster(1, 1);
@@ -148,7 +150,11 @@ fn test_region_error() {
     let mut req = suite.new_changedata_request(region.get_id());
     req.region_id = source.get_id();
     req.set_region_epoch(source.get_region_epoch().clone());
+<<<<<<< HEAD
     let (source_tx, source_wrap, source_event) =
+=======
+    let (mut source_tx, source_wrap, _source_event) =
+>>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
         new_event_feed(suite.get_region_cdc_client(source.get_id()));
     let _source_tx = source_tx
         .send((req.clone(), WriteFlags::default()))
@@ -158,7 +164,11 @@ fn test_region_error() {
     let target = suite.cluster.get_region(b"k2");
     req.region_id = target.get_id();
     req.set_region_epoch(target.get_region_epoch().clone());
+<<<<<<< HEAD
     let (target_tx, target_wrap, _target_event) =
+=======
+    let (mut target_tx, target_wrap, target_event) =
+>>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
         new_event_feed(suite.get_region_cdc_client(target.get_id()));
     let _target_tx = target_tx.send((req, WriteFlags::default())).wait().unwrap();
     sleep_ms(200);
@@ -171,7 +181,7 @@ fn test_region_error() {
 
     let mut last_resolved_ts = 0;
     for _ in 0..5 {
-        let event = source_event(true);
+        let event = target_event(true);
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
             let ts = resolved_ts.ts;
             assert!(ts > last_resolved_ts);
