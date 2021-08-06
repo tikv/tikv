@@ -12931,7 +12931,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Rocksdb's detailed flow",
+          "title": "Flush/L0 flow",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -13243,7 +13243,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Number files at each level",
+          "title": "Number files at L0",
           "tooltip": {
             "shared": true,
             "sort": 0,

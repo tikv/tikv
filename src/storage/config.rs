@@ -211,7 +211,7 @@ impl Default for FlowControlConfig {
     fn default() -> FlowControlConfig {
         FlowControlConfig {
             enable: true,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(128).0,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(192).0,
             hard_pending_compaction_bytes_limit: ReadableSize::gb(1024).0,
             memtables_threshold: 5,
             l0_files_threshold: 9,
