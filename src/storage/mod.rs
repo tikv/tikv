@@ -418,6 +418,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
         let concurrency_manager = self.concurrency_manager.clone();
+
+        // The resource tags of these batched requests are not the same, and it is quite expensive
+        // to distinguish them, so we can find random one of them as a representative.
         let rand_index = rand::thread_rng().gen_range(0, requests.len());
         let resource_tag =
             ResourceMeteringTag::from_rpc_context(requests[rand_index].get_context());
@@ -1070,9 +1073,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = gets[0].get_context().get_priority();
         let priority_tag = get_priority_tag(priority);
+        let enable_ttl = self.enable_ttl;
+
+        // The resource tags of these batched requests are not the same, and it is quite expensive
+        // to distinguish them, so we can find random one of them as a representative.
         let rand_index = rand::thread_rng().gen_range(0, gets.len());
         let resource_tag = ResourceMeteringTag::from_rpc_context(gets[rand_index].get_context());
-        let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
             async move {
