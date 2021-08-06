@@ -623,7 +623,7 @@ lazy_static! {
 
     pub static ref STORE_INSPECT_DURTION_HISTOGRAM: HistogramVec =
         register_histogram_vec!(
-            "tikv_raftstore_slow_score_duration_seconds",
+            "tikv_raftstore_inspect_duration_seconds",
             "Bucketed histogram of inspect duration.",
             &["type"],
             exponential_buckets(0.0005, 2.0, 20).unwrap()
