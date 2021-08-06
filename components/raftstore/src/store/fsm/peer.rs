@@ -1312,6 +1312,9 @@ where
     }
 
     fn on_raft_message(&mut self, msg: InspectedRaftMessage) -> Result<()> {
+        if self.fsm.peer.pending_remove || self.fsm.stopped {
+            return Ok(());
+        }
         let InspectedRaftMessage { heap_size, mut msg } = msg;
         let stepped = Cell::new(false);
         let memtrace_raft_entries = &mut self.fsm.peer.memtrace_raft_entries as *mut usize;
@@ -1364,9 +1367,6 @@ where
         }
 
         if !self.validate_raft_msg(&msg) {
-            return Ok(());
-        }
-        if self.fsm.peer.pending_remove || self.fsm.stopped {
             return Ok(());
         }
 
@@ -2037,6 +2037,9 @@ where
         self.fsm.peer.pending_remove = true;
 
         if self.fsm.peer.has_unpersisted_ready() {
+            // The destroy must be destroyed if there are some unpersisted readies.
+            // Otherwise there is a race of writting kv db and raft db between here
+            // and write worker.
             assert_eq!(self.fsm.delayed_destroy, None);
             self.fsm.delayed_destroy = Some(merged_by_target);
             // TODO: The destroy process can also be asynchronous as snapshot process,
@@ -2305,13 +2308,25 @@ where
                     "remove" => remove_self,
                     "demote" => demote_self,
                 );
-                if demote_self {
-                    self.fsm
-                        .peer
-                        .raft_group
-                        .raft
-                        .become_follower(self.fsm.peer.term(), raft::INVALID_ID);
-                }
+                // If demote_self is true, there is no doubt to become follower.
+                // If remove_self is true, we also choose to become follower for the
+                // following reasons.
+                // There are some functions in raft-rs using `unwrap` to get itself
+                // progress which will panic when calling them.
+                // Before introduing async io, this peer will destroy immediately so
+                // there is no chance to call these functions.
+                // But maybe it's not true due to delay destroy.
+                // Most of these functions are only called when the peer is a leader.
+                // (it's pretty reasonable because progress is used to track others' status)
+                // The only exception is `Raft::restore` at the time of writing, which is ok
+                // because the raft msgs(including snapshot) don't be handled when `pending_remove`
+                // is true(it will be set in `destroy_peer`).
+                // TODO: totally avoid calling these raft-rs functions when `pending_remove` is true.
+                self.fsm
+                    .peer
+                    .raft_group
+                    .raft
+                    .become_follower(self.fsm.peer.term(), raft::INVALID_ID);
                 // Don't ping to speed up leader election
                 need_ping = false;
             }

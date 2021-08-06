@@ -2264,8 +2264,8 @@ where
             .check_new_persisted(ctx, self.persisted_number);
 
         if !self.pending_remove {
-            // If this peer is removed by conf change, `RawNode::on_persist_ready`
-            // may panic because the progress of itself doesn't exist.
+            // If `pending_remove` is true, no need to call `on_persist_ready` to
+            // update persist index.
             let pre_persist_index = self.raft_group.raft.raft_log.persisted;
             let pre_commit_index = self.raft_group.raft.raft_log.committed;
             self.raft_group.on_persist_ready(persisted_number);
