@@ -499,7 +499,12 @@ dependencies = [
  "bitflags",
  "collections",
  "concurrency_manager",
+<<<<<<< HEAD
  "crossbeam 0.8.0",
+=======
+ "criterion",
+ "crossbeam",
+>>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
  "engine_rocks",
  "engine_traits",
  "fail",
