@@ -5,7 +5,6 @@ use std::fmt;
 
 use bitflags::bitflags;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
-use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
@@ -13,13 +12,14 @@ use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
+use kvproto::{import_sstpb::SstMeta, kvrpcpb::DiskFullOpt};
 use raft::SnapshotStatus;
 use smallvec::SmallVec;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
-use crate::store::util::KeysInfoFormatter;
+use crate::store::util::{KeysInfoFormatter, LatencyInspector};
 use crate::store::SnapKey;
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 
@@ -419,6 +419,13 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
     }
 }
 
+/// control options for raftcmd.
+#[derive(Debug, Default)]
+pub struct RaftCmdExtraOpts {
+    pub deadline: Option<Deadline>,
+    pub disk_full_opt: DiskFullOpt,
+}
+
 /// Raft command is the command that is expected to be proposed by the
 /// leader of the target raft group.
 #[derive(Debug)]
@@ -426,7 +433,7 @@ pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
-    pub deadline: Option<Deadline>,
+    pub extra_opts: RaftCmdExtraOpts,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
@@ -436,7 +443,23 @@ impl<S: Snapshot> RaftCommand<S> {
             request,
             callback,
             send_time: Instant::now(),
-            deadline: None,
+            extra_opts: RaftCmdExtraOpts::default(),
+        }
+    }
+
+    pub fn new_ext(
+        request: RaftCmdRequest,
+        callback: Callback<S>,
+        extra_opts: RaftCmdExtraOpts,
+    ) -> RaftCommand<S> {
+        RaftCommand {
+            request,
+            callback,
+            send_time: Instant::now(),
+            extra_opts: RaftCmdExtraOpts {
+                deadline: extra_opts.deadline,
+                disk_full_opt: extra_opts.disk_full_opt,
+            },
         }
     }
 }
@@ -545,6 +568,12 @@ where
     /// Asks the store to update replication mode.
     UpdateReplicationMode(ReplicationStatus),
 
+    /// Inspect the latency of raftstore.
+    LatencyInspect {
+        send_time: Instant,
+        inspector: LatencyInspector,
+    },
+
     /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
@@ -575,6 +604,7 @@ where
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
+            StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
         }
     }
 }
