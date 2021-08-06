@@ -216,6 +216,7 @@ fn test_serde_custom_tikv_config() {
         waterfall_metrics: true,
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
+        inspect_interval: ReadableDuration::millis(444),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

@@ -1403,6 +1403,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .spawn("apply".to_owned(), apply_poller_builder);
 
         let pd_runner = PdRunner::new(
+            &cfg,
             store.get_id(),
             Arc::clone(&pd_client),
             self.router.clone(),
@@ -1413,7 +1414,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             snap_mgr,
             workers.pd_worker.remote(),
         );
-        assert!(workers.pd_worker.start(pd_runner));
+        assert!(workers.pd_worker.start_with_timer(pd_runner));
 
         if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
             warn!("set thread priority for raftstore failed"; "error" => ?e);

@@ -21,18 +21,22 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::RegionReplicationStatus;
 use kvproto::{metapb, pdpb};
+use ordered_float::OrderedFloat;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 use yatp::Remote;
 
 use crate::store::cmd_resp::new_error;
 use crate::store::metrics::*;
-use crate::store::util::{is_epoch_stale, ConfChangeKind, KeysInfoFormatter};
+use crate::store::util::{
+    is_epoch_stale, ConfChangeKind, KeysInfoFormatter, LatencyInspector, RaftstoreDuration,
+};
 use crate::store::worker::query_stats::QueryStats;
 use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
 use crate::store::{
-    Callback, CasualMessage, PeerMsg, RaftCommand, RaftRouter, SnapManager, StoreInfo, StoreMsg,
+    Callback, CasualMessage, Config, PeerMsg, RaftCommand, RaftRouter, SnapManager, StoreInfo,
+    StoreMsg,
 };
 
 use collections::HashMap;
@@ -46,7 +50,7 @@ use tikv_util::sys::disk;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::topn::TopN;
-use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
+use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tikv_util::{box_err, debug, error, info, thd_name, warn};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
@@ -149,6 +153,10 @@ where
     },
     QueryRegionLeader {
         region_id: u64,
+    },
+    UpdateSlowScore {
+        id: u64,
+        duration: RaftstoreDuration,
     },
 }
 
@@ -307,6 +315,9 @@ where
             ),
             Task::QueryRegionLeader { region_id } => {
                 write!(f, "query the leader of region {}", region_id)
+            }
+            Task::UpdateSlowScore { id, ref duration } => {
+                write!(f, "compute slow score: id {}, duration {:?}", id, duration)
             }
         }
     }
@@ -496,6 +507,100 @@ fn hotspot_query_num_report_threshold() -> u64 {
     HOTSPOT_QUERY_RATE_THRESHOLD * 10
 }
 
+// Slow score is a value that represents the speed of a store and ranges in [1, 100].
+// It is maintained in the AIMD way.
+// If there are some inpspecting requests timeout during a round, by default the score
+// will be increased at most 1x when above 10% inspecting requests timeout.
+// If there is not any timeout inspecting requests, the score will go back to 1 in at least 5min.
+struct SlowScore {
+    value: OrderedFloat<f64>,
+    last_update_time: Instant,
+
+    timeout_requests: usize,
+    total_requests: usize,
+
+    inspect_interval: Duration,
+    // The maximal tolerated timeout ratio.
+    ratio_thresh: OrderedFloat<f64>,
+    // Minimal time that the score could be decreased from 100 to 1.
+    min_ttr: Duration,
+
+    // After how many ticks the value need to be updated.
+    round_ticks: u64,
+    // Indentify every ticks.
+    last_tick_id: u64,
+    // If the last tick does not finished, it would be recorded as a timeout.
+    last_tick_finished: bool,
+}
+
+impl SlowScore {
+    fn new(inspect_interval: Duration) -> SlowScore {
+        SlowScore {
+            value: OrderedFloat(1.0),
+
+            timeout_requests: 0,
+            total_requests: 0,
+
+            inspect_interval,
+            ratio_thresh: OrderedFloat(0.1),
+            min_ttr: Duration::from_secs(5 * 60),
+            last_update_time: Instant::now(),
+            round_ticks: 30,
+            last_tick_id: 0,
+            last_tick_finished: true,
+        }
+    }
+
+    fn record(&mut self, id: u64, duration: Duration) {
+        if id != self.last_tick_id {
+            return;
+        }
+        self.last_tick_finished = true;
+        self.total_requests += 1;
+        if duration >= self.inspect_interval {
+            self.timeout_requests += 1;
+        }
+    }
+
+    fn record_timeout(&mut self) {
+        self.last_tick_finished = true;
+        self.total_requests += 1;
+        self.timeout_requests += 1;
+    }
+
+    fn update(&mut self) -> f64 {
+        let elapsed = self.last_update_time.elapsed();
+        self.update_impl(elapsed).into()
+    }
+
+    fn get(&self) -> f64 {
+        self.value.into()
+    }
+
+    // Update the score in a AIMD way.
+    fn update_impl(&mut self, elapsed: Duration) -> OrderedFloat<f64> {
+        if self.timeout_requests == 0 {
+            let desc = 100.0 * (elapsed.as_millis() as f64 / self.min_ttr.as_millis() as f64);
+            if OrderedFloat(desc) > self.value {
+                self.value = 1.0.into();
+            } else {
+                self.value -= desc;
+            }
+        } else {
+            let timeout_ratio = self.timeout_requests as f64 / self.total_requests as f64;
+            let near_thresh =
+                cmp::min(OrderedFloat(timeout_ratio), self.ratio_thresh) / self.ratio_thresh;
+            let value = self.value * (OrderedFloat(1.0) + near_thresh);
+            self.value = cmp::min(OrderedFloat(100.0), value);
+        }
+
+        self.total_requests = 0;
+        self.timeout_requests = 0;
+        self.last_update_time = Instant::now();
+        self.value
+    }
+}
+
 pub struct Runner<EK, ER, T>
 where
     EK: KvEngine,
@@ -520,6 +625,7 @@ where
     concurrency_manager: ConcurrencyManager,
     snap_mgr: SnapManager,
     remote: Remote<yatp::task::future::TaskCell>,
+    slow_score: SlowScore,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -531,6 +637,7 @@ where
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
+        cfg: &Config,
         store_id: u64,
         pd_client: Arc<T>,
         router: RaftRouter<EK, ER>,
@@ -560,6 +667,7 @@ where
             concurrency_manager,
             snap_mgr,
             remote,
+            slow_score: SlowScore::new(cfg.inspect_interval.0),
         }
     }
 
@@ -840,6 +948,9 @@ where
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["available"])
             .set(available as i64);
+
+        let slow_score = self.slow_score.get();
+        stats.set_slow_score(slow_score as u64);
 
         let router = self.router.clone();
         let resp = self.pd_client.store_heartbeat(stats);
@@ -1338,11 +1449,78 @@ where
                 max_ts_sync_status,
             } => self.handle_update_max_timestamp(region_id, initial_status, max_ts_sync_status),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
+            Task::UpdateSlowScore { id, duration } => self.slow_score.record(id, duration.sum()),
         };
     }
 
     fn shutdown(&mut self) {
         self.stats_monitor.stop();
+    }
+}
+
+impl<EK, ER, T> RunnableWithTimer for Runner<EK, ER, T>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+    T: PdClient + 'static,
+{
+    fn on_timeout(&mut self) {
+        if !self.slow_score.last_tick_finished {
+            self.slow_score.record_timeout();
+        }
+        let scheduler = self.scheduler.clone();
+        let id = self.slow_score.last_tick_id + 1;
+        self.slow_score.last_tick_id += 1;
+        self.slow_score.last_tick_finished = false;
+        if self.slow_score.last_tick_id % self.slow_score.round_ticks == 0 {
+            let slow_score = self.slow_score.update();
+            STORE_SLOW_SCORE_GAUGE.set(slow_score);
+        }
+
+        let inspector = LatencyInspector::new(
+            id,
+            Box::new(move |id, duration| {
+                let dur = duration.sum();
+
+                STORE_INSPECT_DURTION_HISTOGRAM
+                    .with_label_values(&["store_process"])
+                    .observe(tikv_util::time::duration_to_sec(
+                        duration.store_process_duration.unwrap(),
+                    ));
+                STORE_INSPECT_DURTION_HISTOGRAM
+                    .with_label_values(&["store_wait"])
+                    .observe(tikv_util::time::duration_to_sec(
+                        duration.store_wait_duration.unwrap(),
+                    ));
+                STORE_INSPECT_DURTION_HISTOGRAM
+                    .with_label_values(&["apply_process"])
+                    .observe(tikv_util::time::duration_to_sec(
+                        duration.apply_process_duration.unwrap(),
+                    ));
+                STORE_INSPECT_DURTION_HISTOGRAM
+                    .with_label_values(&["apply_wait"])
+                    .observe(tikv_util::time::duration_to_sec(
+                        duration.apply_wait_duration.unwrap(),
+                    ));
+                STORE_INSPECT_DURTION_HISTOGRAM
+                    .with_label_values(&["all"])
+                    .observe(tikv_util::time::duration_to_sec(dur));
+                if let Err(e) = scheduler.schedule(Task::UpdateSlowScore { id, duration }) {
+                    warn!("schedule pd task failed"; "err" => ?e);
+                }
+            }),
+        );
+        let msg = StoreMsg::LatencyInspect {
+            send_time: tikv_util::time::Instant::now(),
+            inspector,
+        };
+        if let Err(e) = self.router.send_control(msg) {
+            warn!("pd worker send latency inspecter failed"; "err" => ?e);
+        }
+    }
+
+    fn get_interval(&self) -> Duration {
+        self.slow_score.inspect_interval
     }
 }
 
@@ -1643,5 +1821,51 @@ mod tests {
         let mut store_stats = pdpb::StoreStats::default();
         store_stats = collect_report_read_peer_stats(1, report_stats, store_stats);
         assert_eq!(store_stats.peer_stats.len(), 3)
+    }
+
+    #[test]
+    fn test_slow_score() {
+        let mut slow_score = SlowScore::new(Duration::from_millis(500));
+        slow_score.timeout_requests = 5;
+        slow_score.total_requests = 100;
+        assert_eq!(
+            OrderedFloat(1.5),
+            slow_score.update_impl(Duration::from_secs(10))
+        );
+
+        slow_score.timeout_requests = 10;
+        slow_score.total_requests = 100;
+        assert_eq!(
+            OrderedFloat(3.0),
+            slow_score.update_impl(Duration::from_secs(10))
+        );
+
+        slow_score.timeout_requests = 20;
+        slow_score.total_requests = 100;
+        assert_eq!(
+            OrderedFloat(6.0),
+            slow_score.update_impl(Duration::from_secs(10))
+        );
+
+        slow_score.timeout_requests = 100;
+        slow_score.total_requests = 100;
+        assert_eq!(
+            OrderedFloat(12.0),
+            slow_score.update_impl(Duration::from_secs(10))
+        );
+
+        slow_score.timeout_requests = 11;
+        slow_score.total_requests = 100;
+        assert_eq!(
+            OrderedFloat(24.0),
+            slow_score.update_impl(Duration::from_secs(10))
+        );
+
+        slow_score.timeout_requests = 0;
+        slow_score.total_requests = 100;
+        assert_eq!(
+            OrderedFloat(19.0),
+            slow_score.update_impl(Duration::from_secs(15))
+        );
     }
 }
