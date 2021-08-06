@@ -245,7 +245,7 @@ impl<const CAP: usize> Smoother<CAP> {
         if self.records.is_empty() {
             return 0;
         }
-        let mut v = self.records.make_contiguous().to_vec();
+        let mut v: Vec<_> = self.records.iter().collect();
         v.sort_by_key(|k| k.0);
         v[((self.records.len() - 1) as f64 * 0.90) as usize].0
     }
