@@ -1456,7 +1456,7 @@ where
     fn on_timeout(&mut self) {
         if !self.slow_score.last_tick_finished {
             self.slow_score
-                .record(self.slow_score.last_tick_id, Duration::from_secs(1));
+                .record(self.slow_score.last_tick_id, self.slow_score.inspect_interval);
         }
         let scheduler = self.scheduler.clone();
         let id = self.slow_score.last_tick_id + 1;
