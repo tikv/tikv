@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 use std::f64::INFINITY;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
@@ -21,12 +21,12 @@ use crate::storage::metrics::*;
 const SPARE_TICK_DURATION: Duration = Duration::from_millis(1000);
 const SPARE_TICKS_THRESHOLD: u64 = 10;
 const RATIO_SCALE_FACTOR: f64 = 10000000.0;
-const EMA_FACTOR: f64 = 0.6; // EMA stands for Exponential Moving Average
 const LIMIT_UP_PERCENT: f64 = 0.04; // 4%
 const LIMIT_DOWN_PERCENT: f64 = 0.02; // 2%
 const MIN_THROTTLE_SPEED: f64 = 16.0 * 1024.0; // 16KB
 const MAX_THROTTLE_SPEED: f64 = 200.0 * 1024.0 * 1024.0; // 200MB
 
+const EMA_FACTOR: f64 = 0.6; // EMA stands for Exponential Moving Average
 const PID_KP_FACTOR: f64 = 0.15;
 const PID_KD_FACTOR: f64 = 5.0;
 
@@ -76,7 +76,7 @@ enum Trend {
 // grpc -> check should drop(discardable ratio) -> limiter -> async write to raftstore
 //
 pub struct FlowController {
-    discard_ratio: Arc<AtomicU64>,
+    discard_ratio: Arc<AtomicU32>,
     limiter: Arc<Limiter>,
     enabled: Arc<AtomicBool>,
     tx: SyncSender<Msg>,
@@ -109,11 +109,12 @@ impl Drop for FlowController {
 }
 
 impl FlowController {
+    // only for test
     pub fn empty() -> Self {
         let (tx, _rx) = mpsc::sync_channel(0);
 
         Self {
-            discard_ratio: Arc::new(AtomicU64::new(0)),
+            discard_ratio: Arc::new(AtomicU32::new(0)),
             limiter: Arc::new(Limiter::new(INFINITY)),
             enabled: Arc::new(AtomicBool::new(false)),
             tx,
@@ -127,7 +128,7 @@ impl FlowController {
         flow_info_receiver: Receiver<FlowInfo>,
     ) -> Self {
         let limiter = Arc::new(Limiter::new(INFINITY));
-        let discard_ratio = Arc::new(AtomicU64::new(0));
+        let discard_ratio = Arc::new(AtomicU32::new(0));
         let checker = FlowChecker::new(config, engine, discard_ratio.clone(), limiter.clone());
         let (tx, rx) = mpsc::sync_channel(5);
 
@@ -150,7 +151,7 @@ impl FlowController {
     pub fn should_drop(&self) -> bool {
         let ratio = self.discard_ratio.load(Ordering::Relaxed);
         let mut rng = rand::thread_rng();
-        rng.gen_ratio(ratio as u32, RATIO_SCALE_FACTOR as u32)
+        rng.gen_ratio(ratio, RATIO_SCALE_FACTOR as u32)
     }
 
     pub fn consume(&self, bytes: usize) -> Consume {
@@ -310,7 +311,7 @@ impl<const CAP: usize> Smoother<CAP> {
 // These statistics falls into five categories:
 //   * memtable
 //   * L0 files
-//   * flush flow
+//   * L0 proflush flow
 //   * L0 flow (compaction read flow of L0)
 //   * pending compaction bytes
 // And all of them are collected from the hook of RocksDB's event listener.
@@ -401,7 +402,7 @@ struct FlowChecker<E: KvEngine> {
     num_l0_for_last_update_target_flow: Option<u64>,
     // Discard ratio is decided by pending compaction bytes, it's the ratio to
     // drop write requests(return ServerIsBusy to TiDB) randomly.
-    discard_ratio: Arc<AtomicU64>,
+    discard_ratio: Arc<AtomicU32>,
 
     engine: E,
     limiter: Arc<Limiter>,
@@ -414,7 +415,7 @@ impl<E: KvEngine> FlowChecker<E> {
     pub fn new(
         config: &FlowControlConfig,
         engine: E,
-        discard_ratio: Arc<AtomicU64>,
+        discard_ratio: Arc<AtomicU32>,
         limiter: Arc<Limiter>,
     ) -> Self {
         let mut cf_checkers = map![];
@@ -643,7 +644,7 @@ impl<E: KvEngine> FlowChecker<E> {
                     + (1.0 - EMA_FACTOR) * new_ratio
             } else {
                 if new_ratio > 0.01 { 0.01 } else { new_ratio } // cap the initial discard ratio
-            } * RATIO_SCALE_FACTOR) as u64
+            } * RATIO_SCALE_FACTOR) as u32
         };
         SCHED_DISCARD_RATIO_GAUGE.set(ratio as i64);
         self.discard_ratio.store(ratio, Ordering::Relaxed);
@@ -704,7 +705,7 @@ impl<E: KvEngine> FlowChecker<E> {
             if checker.init_speed {
                 INFINITY
             } else {
-                self.limiter.speed_limit() + checker.memtable_debt
+                self.limiter.speed_limit() + checker.memtable_debt * 1024.0 * 1024.0
             }
         } else {
             // should throttle

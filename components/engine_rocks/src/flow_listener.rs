@@ -48,13 +48,14 @@ impl EventListener for FlowListener {
                 .lock()
                 .unwrap()
                 .send(FlowInfo::Flush(info.cf_name().to_owned(), total));
+        } else {
+            // ingestion may change the pending bytes.
+            let _ = self
+                .flow_info_sender
+                .lock()
+                .unwrap()
+                .send(FlowInfo::Compaction(info.cf_name().to_owned()));
         }
-        // ingestion may change the pending bytes.
-        let _ = self
-            .flow_info_sender
-            .lock()
-            .unwrap()
-            .send(FlowInfo::Compaction(info.cf_name().to_owned()));
     }
 
     fn on_compaction_completed(&self, info: &CompactionJobInfo) {
@@ -96,11 +97,12 @@ impl EventListener for FlowListener {
                     .unwrap()
                     .send(FlowInfo::L0Intra(info.cf_name().to_owned(), diff));
             } else {
-                let index = info.input_file_count() - info.num_input_files_at_output_level();
-                let mut files = hash_set_with_capacity(index);
+                let l0_input_file_at_input_level =
+                    info.input_file_count() - info.num_input_files_at_output_level();
+                let mut files = hash_set_with_capacity(l0_input_file_at_input_level);
                 let props = info.table_properties();
                 let mut read_bytes = 0;
-                for i in 0..index {
+                for i in 0..l0_input_file_at_input_level {
                     info.input_file_at(i)
                         .to_str()
                         .map(|x| files.insert(x.to_owned()));

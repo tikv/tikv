@@ -266,20 +266,20 @@
 ##   * better control on the throttle rate to avoid QPS drop under heavy write
 ##
 ## Support change dynamically. 
-## When enabled, it disables RocksDB's write stall and vice versa.
+## When enabled, it disables kvdb's write stall and raftdb's write stall(except memtable) and vice versa.
 # enable = true
 
-## When the number of immutable memtables reaches the threshold, the flow controller begins to work
+## When the number of immutable memtables of kvdb reaches the threshold, the flow controller begins to work
 # memtables-threshold = 5
 
-## When the number of SST files of level-0 reaches the threshold, the flow controller begins to work
+## When the number of SST files of level-0 of kvdb reaches the threshold, the flow controller begins to work
 # l0-files-threshold = 9
 
-## When the number of pending compaction bytes reaches the threshold, the flow controller begins to 
+## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to 
 ## reject some write requests with `ServerIsBusy` error. 
 # soft-pending-compaction-bytes-limit = "192GB"
 
-## When the number of pending compaction bytes reaches the threshold, the flow controller begins to 
+## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to 
 ## reject all write requests with `ServerIsBusy` error. 
 # hard-pending-compaction-bytes-limit = "1024GB"
 
