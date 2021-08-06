@@ -7,7 +7,7 @@
 //! crate, but only until the engine interface is completely abstracted.
 
 pub use rocksdb::{
-    new_compaction_filter_raw, run_ldb_tool, BlockBasedOptions, CFHandle, Cache,
+    new_compaction_filter_raw, run_ldb_tool, run_sst_dump_tool, BlockBasedOptions, CFHandle, Cache,
     ColumnFamilyOptions, CompactOptions, CompactionFilter, CompactionFilterContext,
     CompactionFilterDecision, CompactionFilterFactory, CompactionFilterValueType,
     CompactionJobInfo, CompactionOptions, CompactionPriority, DBBottommostLevelCompaction,
