@@ -278,7 +278,7 @@ impl<const CAP: usize> Smoother<CAP> {
     }
 
     pub fn trend(&self) -> Trend {
-        if self.records.is_empty() || self.records.len() == 1 {
+        if self.records.len() <= 1 {
             return Trend::NoTrend;
         }
 
