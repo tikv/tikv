@@ -21,6 +21,7 @@ prost-codec = [
 test-cgroup = []
 
 [dependencies]
+nix = "0.19"
 async-speed-limit = "0.3"
 backtrace = "0.3.9"
 byteorder = "1.2"
@@ -82,4 +83,3 @@ utime = "0.2"
 
 [target.'cfg(unix)'.dev-dependencies]
 gag = "0.1.10"
-nix = "0.11"
