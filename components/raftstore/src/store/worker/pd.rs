@@ -164,7 +164,6 @@ pub struct StoreStat {
     pub engine_total_bytes_read: u64,
     pub engine_total_keys_read: u64,
     pub engine_total_query_num: QueryStats,
-
     pub engine_last_total_bytes_read: u64,
     pub engine_last_total_keys_read: u64,
     pub engine_last_query_num: QueryStats,
