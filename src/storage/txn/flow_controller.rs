@@ -398,7 +398,7 @@ struct FlowChecker<E: KvEngine> {
     // to L0 target flow.
     l0_target_flow: f64,
     // The number of L0 files when the last update of L0 target flow.
-    last_target_file: Option<u64>,
+    num_l0_for_last_update_target_flow: Option<u64>,
     // Discard ratio is decided by pending compaction bytes, it's the ratio to
     // drop write requests(return ServerIsBusy to TiDB) randomly.
     discard_ratio: Arc<AtomicU64>,
@@ -435,7 +435,7 @@ impl<E: KvEngine> FlowChecker<E> {
             cf_checkers,
             throttle_cf: None,
             l0_target_flow: 0.0,
-            last_target_file: None,
+            num_l0_for_last_update_target_flow: None,
             last_record_time: Instant::now_coarse(),
         }
     }
@@ -552,7 +552,7 @@ impl<E: KvEngine> FlowChecker<E> {
     }
 
     fn update_statistics(&mut self) {
-        if self.last_target_file.is_some() {
+        if self.num_l0_for_last_update_target_flow.is_some() {
             SCHED_L0_TARGET_FLOW_GAUGE.set(self.l0_target_flow as i64);
         } else {
             SCHED_L0_TARGET_FLOW_GAUGE.set(0);
@@ -734,31 +734,22 @@ impl<E: KvEngine> FlowChecker<E> {
             let checker = self.cf_checkers.get_mut(cf).unwrap();
             if checker.last_num_l0_files <= self.l0_files_threshold {
                 SCHED_THROTTLE_ACTION_COUNTER
-                    .with_label_values(&[cf, "tick2"])
+                    .with_label_values(&[cf, "tick_spare"])
                     .inc();
 
                 let throttle = if checker.long_term_num_l0_files.get_avg()
                     >= self.l0_files_threshold as f64 * 0.5
+                    || checker.long_term_num_l0_files.get_recent() as f64
+                        >= self.l0_files_threshold as f64 * 0.5
+                    || checker.last_num_l0_files_from_flush >= self.l0_files_threshold
                 {
                     SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[cf, "keep2"])
-                        .inc();
-                    self.limiter.speed_limit()
-                } else if checker.long_term_num_l0_files.get_recent() as f64
-                    >= self.l0_files_threshold as f64 * 0.5
-                {
-                    SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[cf, "keep3"])
-                        .inc();
-                    self.limiter.speed_limit()
-                } else if checker.last_num_l0_files_from_flush >= self.l0_files_threshold {
-                    SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[cf, "keep4"])
+                        .with_label_values(&[cf, "keep_spare"])
                         .inc();
                     self.limiter.speed_limit()
                 } else {
                     SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[cf, "up2"])
+                        .with_label_values(&[cf, "up_spare"])
                         .inc();
                     self.limiter.speed_limit() * (1.0 + 5.0 * LIMIT_UP_PERCENT)
                 };
@@ -816,7 +807,7 @@ impl<E: KvEngine> FlowChecker<E> {
                         .with_label_values(&[&cf, "change_throttle_cf"])
                         .inc();
                     self.throttle_cf = Some(cf.clone());
-                    self.last_target_file = Some(num_l0_files);
+                    self.num_l0_for_last_update_target_flow = Some(num_l0_files);
                     self.l0_target_flow = self.cf_checkers[&cf].short_term_flush_flow.get_avg();
                 } else {
                     return;
@@ -834,40 +825,39 @@ impl<E: KvEngine> FlowChecker<E> {
                 .with_label_values(&[&cf, "init"])
                 .inc();
             self.throttle_cf = Some(cf.clone());
-            self.last_target_file = Some(checker.last_num_l0_files);
+            self.num_l0_for_last_update_target_flow = Some(checker.last_num_l0_files);
             self.l0_target_flow = checker.short_term_flush_flow.get_avg();
             let x = self.write_flow_recorder.get_percentile_90();
             if x == 0 { INFINITY } else { x as f64 }
         } else if is_throttled && should_throttle {
             // refresh down flow if last num l0 files
-            if let Some(last_target_file) = self.last_target_file {
-                if checker.last_num_l0_files > last_target_file + 3
+            if let Some(num_l0_for_last_update_target_flow) =
+                self.num_l0_for_last_update_target_flow
+            {
+                if checker.last_num_l0_files > num_l0_for_last_update_target_flow + 3
                     && self.l0_target_flow > checker.short_term_l0_flow.get_avg()
                 {
                     self.l0_target_flow = checker.short_term_l0_flow.get_avg();
-                    self.last_target_file = Some(checker.last_num_l0_files);
+                    self.num_l0_for_last_update_target_flow = Some(checker.last_num_l0_files);
                     SCHED_THROTTLE_ACTION_COUNTER
                         .with_label_values(&[&cf, "refresh_down_flow"])
                         .inc();
                 }
             } else {
-                self.last_target_file = Some(checker.last_num_l0_files);
+                self.num_l0_for_last_update_target_flow = Some(checker.last_num_l0_files);
                 self.l0_target_flow = checker.short_term_flush_flow.get_avg();
             }
             self.limiter.speed_limit()
         } else if is_throttled && !should_throttle {
-            if checker.long_term_num_l0_files.get_avg() >= self.l0_files_threshold as f64 * 0.5 {
+            if checker.long_term_num_l0_files.get_avg() >= self.l0_files_threshold as f64 * 0.5
+                || checker.last_num_l0_files_from_flush >= self.l0_files_threshold
+            {
                 SCHED_THROTTLE_ACTION_COUNTER
-                    .with_label_values(&[&cf, "keep2"])
-                    .inc();
-                self.limiter.speed_limit()
-            } else if checker.last_num_l0_files_from_flush >= self.l0_files_threshold {
-                SCHED_THROTTLE_ACTION_COUNTER
-                    .with_label_values(&[&cf, "keep4"])
+                    .with_label_values(&[&cf, "keep"])
                     .inc();
                 self.limiter.speed_limit()
             } else {
-                if self.last_target_file.is_some()
+                if self.num_l0_for_last_update_target_flow.is_some()
                     && checker.short_term_l0_flow.get_avg() > self.l0_target_flow
                 {
                     let new =
@@ -897,7 +887,7 @@ impl<E: KvEngine> FlowChecker<E> {
         }
         if throttle > MAX_THROTTLE_SPEED {
             self.throttle_cf = None;
-            self.last_target_file = None;
+            self.num_l0_for_last_update_target_flow = None;
             throttle = INFINITY;
         }
         SCHED_THROTTLE_FLOW_GAUGE.set(if throttle == INFINITY {
@@ -972,7 +962,9 @@ impl<E: KvEngine> FlowChecker<E> {
             }
 
             // adjust throttle speed based on flush flow and target flow
-            if let Some(_last_target_file) = self.last_target_file {
+            if let Some(_num_l0_for_last_update_target_flow) =
+                self.num_l0_for_last_update_target_flow
+            {
                 if self.cf_checkers[&cf].long_term_flush_flow.get_avg() > self.l0_target_flow
                     && self.cf_checkers[&cf].short_term_flush_flow.get_recent() as f64
                         > self.l0_target_flow
