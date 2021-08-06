@@ -222,11 +222,6 @@ impl Conn {
 
     // TODO refactor into Error::Version.
     pub fn check_version_and_set_feature(&mut self, ver: semver::Version) -> Option<Compatibility> {
-<<<<<<< HEAD
-        let v408_bacth_resoled_ts = semver::Version::new(4, 0, 8);
-
-=======
->>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
         match &self.version {
             Some((version, _)) => {
                 if version == &ver {
@@ -242,11 +237,7 @@ impl Conn {
             }
             None => {
                 let mut features = FeatureGate::empty();
-<<<<<<< HEAD
-                if v408_bacth_resoled_ts <= ver {
-=======
                 if FeatureGate::batch_resolved_ts() <= ver {
->>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
                     features.toggle(FeatureGate::BATCH_RESOLVED_TS);
                 }
                 info!("cdc connection version";

@@ -7,11 +7,6 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-<<<<<<< HEAD
-=======
-use collections::{HashMap, HashSet};
-use concurrency_manager::ConcurrencyManager;
->>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::RocksEngine;
 use futures::future::Future;
@@ -42,7 +37,7 @@ use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
 use tikv::storage::Statistics;
-use tikv_util::collections::HashMap;
+use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::{Instant, Limiter};
 use tikv_util::timer::{SteadyTimer, Timer};
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
@@ -642,14 +637,6 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         self.broadcast_resolved_ts(resolved_regions);
     }
 
-<<<<<<< HEAD
-    fn broadcast_resolved_ts(&self, regions: Vec<u64>) {
-        let mut resolved_ts = ResolvedTs::default();
-        resolved_ts.regions = regions;
-        resolved_ts.ts = self.min_resolved_ts.into_inner();
-
-        let send_cdc_event = |conn: &Conn, event| {
-=======
     fn broadcast_resolved_ts(&self, regions: HashSet<u64>) {
         let min_resolved_ts = self.min_resolved_ts.into_inner();
         let send_cdc_event = |regions: &HashSet<u64>, min_resolved_ts: u64, conn: &Conn| {
@@ -667,7 +654,6 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                 // Skip empty resolved ts message.
                 return;
             }
->>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
             // No need force send, as resolved ts messages is sent regularly.
             // And errors can be ignored.
             let force_send = false;
@@ -1594,11 +1580,7 @@ mod tests {
             request: req.clone(),
             downstream,
             conn_id,
-<<<<<<< HEAD
-            version: semver::Version::new(4, 0, 8),
-=======
             version: version.clone(),
->>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
         });
         assert_eq!(ep.capture_regions.len(), 1);
         task_rx
@@ -1611,11 +1593,7 @@ mod tests {
             request: req.clone(),
             downstream,
             conn_id,
-<<<<<<< HEAD
-            version: semver::Version::new(4, 0, 8),
-=======
             version: version.clone(),
->>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
         });
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
@@ -1681,11 +1659,7 @@ mod tests {
             request: req.clone(),
             downstream,
             conn_id,
-<<<<<<< HEAD
-            version: semver::Version::new(4, 0, 8),
-=======
             version: version.clone(),
->>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
         });
         // Region 100 is inserted into capture_regions.
         assert_eq!(ep.capture_regions.len(), 2);
@@ -1706,11 +1680,7 @@ mod tests {
             request: req,
             downstream,
             conn_id,
-<<<<<<< HEAD
-            version: semver::Version::new(4, 0, 8),
-=======
             version,
->>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
         });
         // Drop CaptureChange message, it should cause scan task failure.
         let _ = raft_rx.recv_timeout(Duration::from_millis(100)).unwrap();
@@ -1765,11 +1735,7 @@ mod tests {
             request: req.clone(),
             downstream,
             conn_id,
-<<<<<<< HEAD
-            version: semver::Version::new(4, 0, 8),
-=======
             version: version.clone(),
->>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
         });
         let mut resolver = Resolver::new(1);
         resolver.init();
@@ -1796,11 +1762,7 @@ mod tests {
             request: req.clone(),
             downstream,
             conn_id,
-<<<<<<< HEAD
-            version: semver::Version::new(4, 0, 8),
-=======
             version,
->>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
         });
         let mut resolver = Resolver::new(2);
         resolver.init();
@@ -1852,17 +1814,10 @@ mod tests {
             .unwrap()
             .unwrap();
         if let CdcEvent::ResolvedTs(mut r) = cdc_event.0 {
-<<<<<<< HEAD
             r.regions.as_mut_slice().sort();
-            // Although region 3 is not register in the first conn, batch resolved ts
-            // sends all region ids.
-            assert_eq!(r.regions, vec![1, 2, 3]);
-=======
-            r.regions.as_mut_slice().sort_unstable();
             // Region 3 resolved ts must not be send to the first conn when
             // batch resolved ts is enabled.
             assert_eq!(r.regions, vec![1, 2]);
->>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
             assert_eq!(r.ts, 3);
         } else {
             panic!("unknown cdc event {:?}", cdc_event);
@@ -2033,15 +1988,27 @@ mod tests {
 
     #[test]
     fn test_broadcast_resolved_ts() {
-        let (mut ep, raft_router, _task_rx) = mock_endpoint(&CdcConfig {
-            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
-            ..Default::default()
-        });
+        let (task_sched, _task_rx) = dummy_scheduler();
+        let raft_router = MockRaftStoreRouter::new();
+        let observer = CdcObserver::new(task_sched.clone());
+        let pd_client = Arc::new(TestPdClient::new(0, true));
+        let mut ep = Endpoint::new(
+            &CdcConfig {
+                min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+                ..Default::default()
+            },
+            pd_client,
+            task_sched,
+            raft_router.clone(),
+            observer,
+            Arc::new(Mutex::new(StoreMeta::new(0))),
+            MemoryQuota::new(std::usize::MAX),
+        );
 
         // Open two connections a and b, registers region 1, 2 to conn a and
         // region 3 to conn b.
         let mut conn_rxs = vec![];
-        let quota = channel::MemoryQuota::new(usize::MAX);
+        let quota = channel::MemoryQuota::new(std::usize::MAX);
         // Hold raft_rxs to avoid SendError panic.
         let mut raft_rxs = vec![];
         for region_ids in vec![vec![1, 2], vec![3]] {
@@ -2067,8 +2034,9 @@ mod tests {
                     conn_id,
                     version: FeatureGate::batch_resolved_ts(),
                 });
-                let resolver = Resolver::new(region_id);
-                let observe_id = ep.capture_regions[&region_id].handle.id;
+                let mut resolver = Resolver::new(region_id);
+                resolver.init();
+                let observe_id = ep.capture_regions[&region_id].id;
                 let mut region = Region::default();
                 region.set_id(region_id);
                 ep.on_region_ready(observe_id, resolver, region);
