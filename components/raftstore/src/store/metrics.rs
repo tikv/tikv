@@ -270,6 +270,12 @@ lazy_static! {
             "Bucketed histogram of store write loop duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
+    pub static ref STORE_WRITE_MSG_BLOCK_WAIT_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_msg_block_wait_duration_seconds",
+            "Bucketed histogram of write msg block wait duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
 
     /// Waterfall Metrics
     pub static ref STORE_BATCH_WAIT_DURATION_HISTOGRAM: Histogram =
@@ -619,6 +625,16 @@ lazy_static! {
         "tikv_raftstore_hibernated_peer_state",
         "Number of peers in hibernated state.",
         &["state"],
+    ).unwrap();
+
+    pub static ref STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_raftstore_io_reschedule_region_total",
+        "Total number of io rescheduling peers"
+    ).unwrap();
+
+    pub static ref STORE_IO_RESCHEDULE_PENDING_TASKS_TOTAL_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_raftstore_io_reschedule_pending_tasks_total",
+        "Total number of pending write tasks from io rescheduling peers"
     ).unwrap();
 
     pub static ref STORE_INSPECT_DURTION_HISTOGRAM: HistogramVec =
