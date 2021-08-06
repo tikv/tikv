@@ -217,6 +217,9 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub clean_stale_peer_delay: ReadableDuration,
+
+    // Interval to inspect the latency of raftstore for slow store detection.
+    pub inspect_interval: ReadableDuration,
 }
 
 impl Default for Config {
@@ -293,6 +296,7 @@ impl Default for Config {
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
+            inspect_interval: ReadableDuration::millis(500),
         }
     }
 }

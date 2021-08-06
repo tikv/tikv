@@ -2788,6 +2788,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ordered-float"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "039f02eb0f69271f26abe3202189275d7aa2258b903cb0281b5de710a2570ff3"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "page_size"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3428,6 +3437,7 @@ dependencies = [
  "memory_trace_macros",
  "online_config",
  "openssl",
+ "ordered-float 2.7.0",
  "panic_hook",
  "pd_client",
  "prometheus",
@@ -5026,7 +5036,7 @@ dependencies = [
  "num",
  "num-derive",
  "num-traits",
- "ordered-float",
+ "ordered-float 1.1.1",
  "protobuf",
  "regex",
  "serde",

@@ -620,4 +620,15 @@ lazy_static! {
         "Number of peers in hibernated state.",
         &["state"],
     ).unwrap();
+
+    pub static ref STORE_INSPECT_DURTION_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_slow_score_duration_seconds",
+            "Bucketed histogram of inspect duration.",
+            &["type"],
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref STORE_SLOW_SCORE_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_score", "Slow score of the store.").unwrap();
 }

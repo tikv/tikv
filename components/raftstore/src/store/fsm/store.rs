@@ -1395,6 +1395,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .spawn("apply".to_owned(), apply_poller_builder);
 
         let pd_runner = PdRunner::new(
+            &cfg,
             store.get_id(),
             Arc::clone(&pd_client),
             self.router.clone(),
