@@ -1,7 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp::PartialOrd;
 use std::collections::VecDeque;
 use std::f64::INFINITY;
+use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
@@ -12,6 +14,7 @@ use std::u64;
 use collections::HashMap;
 use engine_rocks::FlowInfo;
 use engine_traits::KvEngine;
+use num_traits::cast::{AsPrimitive, FromPrimitive};
 use rand::Rng;
 use tikv_util::time::{duration_to_sec, Consume, Instant, Limiter};
 
@@ -30,7 +33,7 @@ const EMA_FACTOR: f64 = 0.6; // EMA stands for Exponential Moving Average
 const PID_KP_FACTOR: f64 = 0.15;
 const PID_KD_FACTOR: f64 = 5.0;
 
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Debug)]
 enum Trend {
     Increasing,
     Decreasing,
@@ -178,22 +181,54 @@ impl FlowController {
 const SMOOTHER_STALE_RECORD_THRESHOLD: f64 = 300.0; // 5min
 
 // Smoother is a sliding window used to provide steadier flow statistics.
-struct Smoother<const CAP: usize> {
-    records: VecDeque<(u64, Instant)>,
-    total: u64,
+struct Smoother<
+    T: Default
+        + Add<Output = T>
+        + Sub<Output = T>
+        + AddAssign
+        + SubAssign
+        + PartialOrd
+        + AsPrimitive<f64>
+        + FromPrimitive,
+    const CAP: usize,
+> {
+    records: VecDeque<(T, Instant)>,
+    total: T,
 }
 
-impl<const CAP: usize> Default for Smoother<CAP> {
+impl<
+    T: Default
+        + Add<Output = T>
+        + Sub<Output = T>
+        + AddAssign
+        + SubAssign
+        + PartialOrd
+        + AsPrimitive<f64>
+        + FromPrimitive,
+    const CAP: usize,
+> Default for Smoother<T, CAP>
+{
     fn default() -> Self {
         Self {
             records: VecDeque::with_capacity(CAP),
-            total: 0,
+            total: Default::default(),
         }
     }
 }
 
-impl<const CAP: usize> Smoother<CAP> {
-    pub fn observe(&mut self, record: u64) {
+impl<
+    T: Default
+        + Add<Output = T>
+        + Sub<Output = T>
+        + AddAssign
+        + SubAssign
+        + PartialOrd
+        + AsPrimitive<f64>
+        + FromPrimitive,
+    const CAP: usize,
+> Smoother<T, CAP>
+{
+    pub fn observe(&mut self, record: T) {
         if self.records.len() == CAP {
             let v = self.records.pop_front().unwrap().0;
             self.total -= v;
@@ -219,9 +254,9 @@ impl<const CAP: usize> Smoother<CAP> {
         }
     }
 
-    pub fn get_recent(&self) -> u64 {
+    pub fn get_recent(&self) -> T {
         if self.records.is_empty() {
-            return 0;
+            return T::default();
         }
         self.records.back().unwrap().0
     }
@@ -230,22 +265,26 @@ impl<const CAP: usize> Smoother<CAP> {
         if self.records.is_empty() {
             return 0.0;
         }
-        self.total as f64 / self.records.len() as f64
+        self.total.as_() / self.records.len() as f64
     }
 
-    pub fn get_max(&self) -> u64 {
+    pub fn get_max(&self) -> T {
         if self.records.is_empty() {
-            return 0;
+            return T::default();
         }
-        self.records.iter().max_by_key(|(k, _)| k).unwrap().0
+        self.records
+            .iter()
+            .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+            .unwrap()
+            .0
     }
 
-    pub fn get_percentile_90(&mut self) -> u64 {
+    pub fn get_percentile_90(&mut self) -> T {
         if self.records.is_empty() {
-            return 0;
+            return FromPrimitive::from_u64(0).unwrap();
         }
         let mut v: Vec<_> = self.records.iter().collect();
-        v.sort_by_key(|k| k.0);
+        v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         v[((self.records.len() - 1) as f64 * 0.90) as usize].0
     }
 
@@ -256,8 +295,8 @@ impl<const CAP: usize> Smoother<CAP> {
 
         // calculate the average of left and right parts
         let half = self.records.len() / 2;
-        let mut left = 0;
-        let mut right = 0;
+        let mut left = T::default();
+        let mut right = T::default();
         for (i, r) in self.records.iter().enumerate() {
             if i < half {
                 left += r.0;
@@ -274,7 +313,7 @@ impl<const CAP: usize> Smoother<CAP> {
                 .1
                 .duration_since(self.records.front().unwrap().1),
         );
-        (right - left) as f64 / half as f64 / (elapsed / 2.0)
+        (right - left).as_() / half as f64 / (elapsed / 2.0)
     }
 
     pub fn trend(&self) -> Trend {
@@ -284,8 +323,8 @@ impl<const CAP: usize> Smoother<CAP> {
 
         // calculate the average of left and right parts
         let half = self.records.len() / 2;
-        let mut left = 0;
-        let mut right = 0;
+        let mut left = T::default();
+        let mut right = T::default();
         for (i, r) in self.records.iter().enumerate() {
             if i < half {
                 left += r.0;
@@ -296,9 +335,9 @@ impl<const CAP: usize> Smoother<CAP> {
 
         // decide if there is a trend by the two averages
         // adding 2 here is to give a tolerance
-        if right > left + 2 {
+        if right > left + FromPrimitive::from_u64(2).unwrap() {
             Trend::Increasing
-        } else if right < left - 2 {
+        } else if left > right + FromPrimitive::from_u64(2).unwrap() {
             Trend::Decreasing
         } else {
             Trend::NoTrend
@@ -316,7 +355,7 @@ impl<const CAP: usize> Smoother<CAP> {
 // And all of them are collected from the hook of RocksDB's event listener.
 struct CFFlowChecker {
     // Memtable related
-    last_num_memtables: Smoother<20>,
+    last_num_memtables: Smoother<u64, 20>,
     memtable_debt: f64,
     init_speed: bool,
 
@@ -331,21 +370,21 @@ struct CFFlowChecker {
     // considering L0 compactions nearly includes all L0 files in a round.
     // So to evaluate the accumulation of L0 files, here only records the number
     // of L0 files right after L0 compactions.
-    long_term_num_l0_files: Smoother<20>,
+    long_term_num_l0_files: Smoother<u64, 20>,
 
     // L0 production flow related
     last_flush_bytes_time: Instant,
     last_flush_bytes: u64,
-    short_term_l0_production_flow: Smoother<10>,
-    long_term_l0_production_flow: Smoother<60>,
+    short_term_l0_production_flow: Smoother<u64, 10>,
+    long_term_l0_production_flow: Smoother<u64, 60>,
 
     // L0 consumption flow related
     last_l0_bytes: u64,
     last_l0_bytes_time: Instant,
-    short_term_l0_consumption_flow: Smoother<3>,
+    short_term_l0_consumption_flow: Smoother<u64, 3>,
 
     // Pending compaction bytes related
-    long_term_pending_bytes: Smoother<60>,
+    long_term_pending_bytes: Smoother<f64, 60>,
 
     // On start related markers. Because after restart, the memtable, l0 files
     // and compaction pending bytes may be high on start. If throttle on start
@@ -406,7 +445,7 @@ struct FlowChecker<E: KvEngine> {
     engine: E,
     limiter: Arc<Limiter>,
     // Records the foreground write flow at scheduler level of last few seconds.
-    write_flow_recorder: Smoother<30>,
+    write_flow_recorder: Smoother<u64, 30>,
     last_record_time: Instant,
 }
 
@@ -603,9 +642,7 @@ impl<E: KvEngine> FlowChecker<E> {
             .unwrap_or(0) as f64)
             .log2();
         let checker = self.cf_checkers.get_mut(&cf).unwrap();
-        checker
-            .long_term_pending_bytes
-            .observe((num * RATIO_SCALE_FACTOR) as u64);
+        checker.long_term_pending_bytes.observe(num);
         SCHED_PENDING_COMPACTION_BYTES_GAUGE
             .with_label_values(&[&cf])
             .set(checker.long_term_pending_bytes.get_avg() as i64);
@@ -621,11 +658,10 @@ impl<E: KvEngine> FlowChecker<E> {
             }
         }
 
-        let pending_compaction_bytes =
-            checker.long_term_pending_bytes.get_avg() / RATIO_SCALE_FACTOR;
+        let pending_compaction_bytes = checker.long_term_pending_bytes.get_avg();
 
         for checker in self.cf_checkers.values() {
-            if num < (checker.long_term_pending_bytes.get_recent() as f64) / RATIO_SCALE_FACTOR {
+            if num < checker.long_term_pending_bytes.get_recent() {
                 return;
             }
         }
@@ -641,8 +677,10 @@ impl<E: KvEngine> FlowChecker<E> {
             (if old_ratio != 0 {
                 EMA_FACTOR * (old_ratio as f64 / RATIO_SCALE_FACTOR)
                     + (1.0 - EMA_FACTOR) * new_ratio
+            } else if new_ratio > 0.01 {
+                0.01
             } else {
-                if new_ratio > 0.01 { 0.01 } else { new_ratio } // cap the initial discard ratio
+                new_ratio
             } * RATIO_SCALE_FACTOR) as u32
         };
         SCHED_DISCARD_RATIO_GAUGE.set(ratio as i64);
@@ -1053,10 +1091,11 @@ impl<E: KvEngine> FlowChecker<E> {
 #[cfg(test)]
 mod tests {
     use super::Smoother;
+    use super::Trend;
 
     #[test]
     fn test_smoother() {
-        let mut smoother = Smoother::<5>::default();
+        let mut smoother = Smoother::<u64, 5>::default();
         smoother.observe(1);
         smoother.observe(6);
         smoother.observe(2);
@@ -1069,5 +1108,21 @@ mod tests {
         assert_eq!(smoother.get_recent(), 0);
         assert_eq!(smoother.get_max(), 5);
         assert_eq!(smoother.get_percentile_90(), 4);
+        // assert!(smoother.slope() - 0.0 < f64::EPSILON);
+        assert_eq!(smoother.trend(), Trend::NoTrend);
+
+        let mut smoother = Smoother::<f64, 5>::default();
+        smoother.observe(1.0);
+        smoother.observe(6.0);
+        smoother.observe(2.0);
+        smoother.observe(3.0);
+        smoother.observe(4.0);
+        smoother.observe(5.0);
+        smoother.observe(9.0);
+        assert_eq!(smoother.get_avg(), 4.6);
+        assert_eq!(smoother.get_recent(), 9.0);
+        assert_eq!(smoother.get_max(), 9.0);
+        assert_eq!(smoother.get_percentile_90(), 5.0);
+        assert_eq!(smoother.trend(), Trend::Increasing);
     }
 }
