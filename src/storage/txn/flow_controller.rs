@@ -37,44 +37,43 @@ enum Trend {
     NoTrend,
 }
 
-// Flow controller is used to throttle the write rate at scheduler level, aiming
-// to substitute the write stall mechanism of RocksDB. It features in two points:
-//   * throttle at scheduler, so raftstore and apply won't be blocked anymore
-//   * better control on the throttle rate to avoid QPS drop under heavy write
-//
-// When write stall happens, the max speed of write rate max_delayed_write_rate
-// is limited to 16MB/s by default which doesn't take real disk ability into
-// account. It may underestimate the disk's throughout that 16MB/s is too small
-// at once, causing a very large jitter on the write duration.
-// Also, it decreases the delayed write rate further if the factors still exceed
-// the threshold. So under heavy write load, the write rate may be throttled to
-// a very low rate from time to time, causing QPS drop eventually.
-//
-// The main idea of this flow controller is to throttle at a steady write rate
-// so that the number of L0 keeps around the threshold. When it falls below the
-// threshold, the throttle state wouldn't exit right away. Instead, it may keep
-// or increase the throttle speed depending on some statistics.
-//
-// How can we decide the throttle speed?
-// It uses 95th write rate of the last few seconds as the initial throttle speed.
-// Then as we can imagine, the consumption ability of L0 wouldn't change
-// dramatically corresponding to the ability of hardware. So we can record the
-// flush flow(L0 production flow) when reaching the threshold as target flow, and
-// increase or decrease the throttle speed based on whether current flush flow is
-// smaller or larger than target flow.
+/// Flow controller is used to throttle the write rate at scheduler level, aiming
+/// to substitute the write stall mechanism of RocksDB. It features in two points:
+///   * throttle at scheduler, so raftstore and apply won't be blocked anymore
+///   * better control on the throttle rate to avoid QPS drop under heavy write
+///
+/// When write stall happens, the max speed of write rate max_delayed_write_rate
+/// is limited to 16MB/s by default which doesn't take real disk ability into
+/// account. It may underestimate the disk's throughout that 16MB/s is too small
+/// at once, causing a very large jitter on the write duration.
+/// Also, it decreases the delayed write rate further if the factors still exceed
+/// the threshold. So under heavy write load, the write rate may be throttled to
+/// a very low rate from time to time, causing QPS drop eventually.
+///
+/// The main idea of this flow controller is to throttle at a steady write rate
+/// so that the number of L0 keeps around the threshold. When it falls below the
+/// threshold, the throttle state wouldn't exit right away. Instead, it may keep
+/// or increase the throttle speed depending on some statistics.
+///
+/// How can we decide the throttle speed?
+/// It uses 95th write rate of the last few seconds as the initial throttle speed.
+/// Then as we can imagine, the consumption ability of L0 wouldn't change
+/// dramatically corresponding to the ability of hardware. So we can record the
+/// flush flow(L0 production flow) when reaching the threshold as target flow, and
+/// increase or decrease the throttle speed based on whether current flush flow is
+/// smaller or larger than target flow.
 
-// For compaction pending bytes, we use discardable ratio to do flow control
-// which is separated mechanism from throttle speed. Compaction pending bytes is
-// a approximate value, usually, changes up and down dramatically, so it's unwise
-// to map compaction pending bytes to a specified throttle speed. Instead,
-// mapping it from soft limit to hard limit as 0% to 100% discardable ratio. With
-// this, there must be a point that foreground write rate is equal to the
-// background compaction pending bytes consuming rate so that compaction pending
-// bytes is kept around a steady level.
-//
-// Here is a brief flow showing where the mechanism works:
-// grpc -> check should drop(discardable ratio) -> limiter -> async write to raftstore
-//
+/// For compaction pending bytes, we use discardable ratio to do flow control
+/// which is separated mechanism from throttle speed. Compaction pending bytes is
+/// a approximate value, usually, changes up and down dramatically, so it's unwise
+/// to map compaction pending bytes to a specified throttle speed. Instead,
+/// mapping it from soft limit to hard limit as 0% to 100% discardable ratio. With
+/// this, there must be a point that foreground write rate is equal to the
+/// background compaction pending bytes consuming rate so that compaction pending
+/// bytes is kept around a steady level.
+///
+/// Here is a brief flow showing where the mechanism works:
+/// grpc -> check should drop(discardable ratio) -> limiter -> async write to raftstore
 pub struct FlowController {
     discard_ratio: Arc<AtomicU32>,
     limiter: Arc<Limiter>,
