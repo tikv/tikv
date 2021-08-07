@@ -522,8 +522,7 @@ where
     /// The number of the last unpersisted ready.
     last_unpersisted_number: u64,
 
-    /// `max_inflight_msgs` can be changed dynamically. This field indicates the current value.
-    pub max_inflight_msgs: usize,
+    pub disk_full_peers: DiskFullPeers,
 
     pub read_progress: Arc<RegionReadProgress>,
 
@@ -622,7 +621,7 @@ where
             max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             cmd_epoch_checker: Default::default(),
             last_unpersisted_number: 0,
-            max_inflight_msgs: cfg.raft_max_inflight_msgs,
+            disk_full_peers: DiskFullPeers::default(),
             read_progress: Arc::new(RegionReadProgress::new(
                 region,
                 applied_index,
@@ -2312,23 +2311,28 @@ where
                 return false;
             }
             Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
-            Ok(RequestPolicy::ProposeNormal) => {
-                let mut disk_full_stores = Vec::new();
-                if self.check_disk_usages_before_propose_normal(
-                    ctx,
-                    disk_full_opt,
-                    &mut disk_full_stores,
-                ) {
-                    self.propose_normal(ctx, req)
-                } else {
-                    let errmsg = String::from("propose failed: disk full");
-                    Err(Error::DiskFull(disk_full_stores, errmsg))
-                }
-            }
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(ctx, req, cb);
             }
-            Ok(RequestPolicy::ProposeConfChange) => self.propose_conf_change(ctx, &req),
+            Ok(RequestPolicy::ProposeNormal) => {
+                let mut stores = Vec::new();
+                if self.check_disk_usages_before_propose(ctx, disk_full_opt, &mut stores) {
+                    self.propose_normal(ctx, req)
+                } else {
+                    let errmsg = String::from("propose failed: disk full");
+                    Err(Error::DiskFull(stores, errmsg))
+                }
+            }
+            Ok(RequestPolicy::ProposeConfChange) => {
+                let mut stores = Vec::new();
+                let disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
+                if self.check_disk_usages_before_propose(ctx, disk_full_opt, &mut stores) {
+                    self.propose_conf_change(ctx, &req)
+                } else {
+                    let errmsg = String::from("propose failed: disk full");
+                    Err(Error::DiskFull(stores, errmsg))
+                }
+            }
             Err(e) => Err(e),
         };
 
@@ -3333,86 +3337,114 @@ where
         self.want_rollback_merge_peers.insert(peer_id);
     }
 
+    fn maybe_refill_disk_full_peers<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+        if !self.disk_full_peers.any || !self.disk_full_peers.peers.is_empty() {
+            return;
+        }
+
+        // Collect disk full peers and all peers' `next_idx` to find a potential quorum.
+        let peers_len = self.get_store().region().get_peers().len();
+        let mut disk_full_peers = HashSet::default();
+        let mut next_idxs = Vec::with_capacity(peers_len);
+        for peer in self.get_store().region().get_peers() {
+            let (peer_id, store_id) = (peer.get_id(), peer.get_store_id());
+            let usage = ctx.store_disk_usages.get(&store_id);
+            if let Some(ref usage) = usage {
+                assert!(!matches!(usage, DiskUsage::Normal));
+                disk_full_peers.insert(peer_id);
+            }
+            let raft = &self.raft_group.raft;
+            if let Some(pr) = raft.prs().get(peer_id) {
+                next_idxs.push((peer_id, pr.next_idx, usage));
+            }
+        }
+
+        if disk_full_peers.is_empty() {
+            self.disk_full_peers = DiskFullPeers::default();
+            return;
+        }
+
+        let raft = &mut self.raft_group.raft;
+        self.disk_full_peers.majority = raft.prs().has_quorum(&disk_full_peers);
+        for &(peer, _, usage) in &next_idxs {
+            if let Some(usage) = usage {
+                self.disk_full_peers.peers.insert(peer, (*usage, false));
+                raft.adjust_max_inflight_msgs(peer, 0);
+            }
+        }
+
+        if !self.disk_full_peers.majority {
+            // Less than majority peers are in disk full status.
+            return;
+        }
+
+        // Reverse sort peers based on `next_idx`, then try to get a potential quorum.
+        next_idxs.sort_by(|x, y| y.1.cmp(&x.1));
+        let (mut potential_quorum, mut quorum_ok) = (HashSet::default(), false);
+        for &(peer_id, _, usage) in &next_idxs {
+            if matches!(usage, Some(DiskUsage::AlreadyFull)) {
+                continue;
+            }
+            potential_quorum.insert(peer_id);
+            if raft.prs().has_quorum(&potential_quorum) {
+                quorum_ok = true;
+                break;
+            }
+        }
+
+        if quorum_ok {
+            for peer in potential_quorum {
+                if let Some(x) = self.disk_full_peers.peers.get_mut(&peer) {
+                    // It can help to establish a quorum.
+                    x.1 = true;
+                    raft.adjust_max_inflight_msgs(peer, 1);
+                }
+            }
+        }
+    }
+
     // Check disk usages for the peer itself and other peers in the raft group.
     // The return value indicates whether the proposal is allowed or not.
-    fn check_disk_usages_before_propose_normal<T>(
+    fn check_disk_usages_before_propose<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         disk_full_opt: DiskFullOpt,
         disk_full_stores: &mut Vec<u64>,
     ) -> bool {
-        // Propose can be rejected if of the store's disk is full.
+        self.maybe_refill_disk_full_peers(ctx);
+
+        // Propose can be rejected if the store itself's disk is full.
         let self_allowed = match disk_full_opt {
             DiskFullOpt::NotAllowedOnFull => matches!(ctx.self_disk_usage, DiskUsage::Normal),
             _ => !matches!(ctx.self_disk_usage, DiskUsage::AlreadyFull),
         };
         if !self_allowed {
             disk_full_stores.push(ctx.store.id);
+            return false;
         }
 
-        // Then if majority peers for the raft group meets the disk full problem,
-        // reject the proposal.
-        let mut check_majority_disk_full = || {
-            let self_peer_id = self.peer_id();
-            let peers_len = self.get_store().region().get_peers().len();
+        if !self.disk_full_peers.any || !self.disk_full_peers.majority {
+            return true;
+        }
 
-            let mut disk_full_peers = HashSet::default();
-            let mut next_idxs = Vec::with_capacity(peers_len);
-            for peer in self.get_store().region().get_peers() {
-                let (peer_id, store_id) = (peer.get_id(), peer.get_store_id());
-                let usage = ctx.store_disk_usages.get(&store_id);
-                if let Some(ref usage) = usage {
-                    assert!(!matches!(usage, DiskUsage::Normal));
-                    disk_full_peers.insert(peer_id);
-                    disk_full_stores.push(store_id);
-                }
-                let raft = &self.raft_group.raft;
-                if let Some(pr) = raft.prs().get(peer_id) {
-                    next_idxs.push((peer_id, pr.next_idx, usage));
-                }
-            }
+        if matches!(disk_full_opt, DiskFullOpt::AllowedOnAlmostFull)
+            && self.disk_full_peers.peers.values().any(|x| x.1)
+        {
+            // Majority peers are in disk full status but the request carries a special flag.
+            return true;
+        }
 
-            let raft = &mut self.raft_group.raft;
-            match disk_full_opt {
-                DiskFullOpt::NotAllowedOnFull => !raft.prs().has_quorum(&disk_full_peers),
-                _ => {
-                    if !raft.prs().has_quorum(&disk_full_peers) {
-                        return true;
-                    }
-
-                    // Reverse sort peers based on `next_idx`, then try to get a potential quorum.
-                    next_idxs.sort_by(|x, y| y.1.cmp(&x.1));
-                    let (mut potential_quorum, mut quorum_ok) = (HashSet::default(), false);
-                    for &(peer_id, _, usage) in &next_idxs {
-                        if matches!(usage, Some(DiskUsage::AlreadyFull)) {
-                            continue;
-                        }
-                        potential_quorum.insert(peer_id);
-                        if raft.prs().has_quorum(&potential_quorum) {
-                            quorum_ok = true;
-                            break;
-                        }
-                    }
-                    if quorum_ok {
-                        for &(peer_id, _, usage) in &next_idxs {
-                            if potential_quorum.contains(&peer_id)
-                                && self_peer_id != peer_id
-                                && usage.is_some()
-                            {
-                                // Allow to send append to the peer although its disk is full.
-                                self.max_inflight_msgs = 1;
-                                raft.adjust_max_inflight_msgs(peer_id, 1);
-                            }
-                        }
-                        return true;
-                    }
-                    false
-                }
-            }
-        };
-
-        self_allowed && (ctx.store_disk_usages.is_empty() || check_majority_disk_full())
+        disk_full_stores.extend(ctx.store_disk_usages.keys());
+        false
     }
+}
+
+#[derive(Default)]
+pub struct DiskFullPeers {
+    pub any: bool,
+    pub majority: bool,
+    // Indicates whether a peer can help to establish a quorum.
+    pub peers: HashMap<u64, (DiskUsage, bool)>,
 }
 
 impl<EK, ER> Peer<EK, ER>

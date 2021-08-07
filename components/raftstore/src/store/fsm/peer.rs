@@ -1299,34 +1299,27 @@ where
     }
 
     fn handle_reported_disk_usage(&mut self, msg: &RaftMessage) {
-        let id = msg.get_from_peer().get_id();
+        let peer_id = msg.get_from_peer().get_id();
         let store_id = msg.get_from_peer().get_store_id();
-        let raft = &mut self.fsm.peer.raft_group.raft;
-        let max_inflight_msgs = match msg.disk_usage {
-            DiskUsage::Normal => {
-                self.ctx.store_disk_usages.remove(&store_id);
-                self.ctx.cfg.raft_max_inflight_msgs
+        let disk_full_peers = &mut self.fsm.peer.disk_full_peers;
+
+        if matches!(msg.disk_usage, DiskUsage::Normal) {
+            self.ctx.store_disk_usages.remove(&store_id);
+            if disk_full_peers.any && disk_full_peers.peers.contains_key(&peer_id) {
+                disk_full_peers.peers = HashMap::default();
             }
-            x => {
-                self.ctx.store_disk_usages.insert(store_id, x);
-                if let Some(pr) = raft.prs().get(id) {
-                    if pr.next_idx == pr.matched + 1 {
-                        // Disable the progress because the target meets a disk full problem.
-                        0
-                    } else {
-                        // It's possible that the leader has something to send to the target
-                        // even if its disk is full, in which case slow down the progress
-                        // instead of disable it directly.
-                        1
-                    }
-                } else {
-                    return;
-                }
-            }
-        };
-        if self.fsm.peer.max_inflight_msgs != max_inflight_msgs {
-            self.fsm.peer.max_inflight_msgs = max_inflight_msgs;
-            raft.adjust_max_inflight_msgs(id, max_inflight_msgs);
+            return;
+        }
+
+        self.ctx.store_disk_usages.insert(store_id, msg.disk_usage);
+        if !disk_full_peers.any {
+            disk_full_peers.any = true;
+        } else if disk_full_peers
+            .peers
+            .get(&peer_id)
+            .map_or(true, |x| x.0 != msg.disk_usage)
+        {
+            disk_full_peers.peers = HashMap::default();
         }
     }
 
