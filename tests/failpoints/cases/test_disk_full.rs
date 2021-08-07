@@ -64,13 +64,15 @@ fn test_disk_full_leader_behaviors(usage: DiskUsage) {
     cluster.must_transfer_leader(1, new_peer(1, 1));
     fail::cfg(get_fp(usage, 1), "return").unwrap();
 
-    // Test remove peer should be allowed.
-    cluster.pd_client.must_remove_peer(1, new_peer(3, 3));
-    must_get_none(&cluster.get_engine(3), b"k1");
+    if matches!(usage, DiskUsage::AlmostFull) {
+        // Test remove peer should be allowed.
+        cluster.pd_client.must_remove_peer(1, new_peer(3, 3));
+        must_get_none(&cluster.get_engine(3), b"k1");
 
-    // Test add peer should be allowed.
-    cluster.pd_client.must_add_peer(1, new_peer(3, 3));
-    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+        // Test add peer should be allowed.
+        cluster.pd_client.must_add_peer(1, new_peer(3, 3));
+        must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    }
 
     fail::remove(get_fp(usage, 1));
 }
