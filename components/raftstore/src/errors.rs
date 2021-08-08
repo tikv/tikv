@@ -55,8 +55,8 @@ pub enum Error {
     #[error("peer is not leader for region {0}, leader may {1:?}")]
     NotLeader(u64, Option<metapb::Peer>),
 
-    #[error("store id {0}, errmsg {1}")]
-    DiskFull(u64, String),
+    #[error("store ids {0:?}, errmsg {1}")]
+    DiskFull(Vec<u64>, String),
 
     #[error(
         "key {} is not in region key range [{}, {}) for region {}",

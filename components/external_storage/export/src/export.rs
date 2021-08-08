@@ -13,12 +13,12 @@ pub use aws::{Config as S3Config, S3Storage};
 pub use gcp::{Config as GCSConfig, GCSStorage};
 
 #[cfg(feature = "prost-codec")]
-pub use kvproto::backup::storage_backend::Backend;
-use kvproto::backup::CloudDynamic;
+pub use kvproto::brpb::storage_backend::Backend;
+use kvproto::brpb::CloudDynamic;
 #[cfg(feature = "protobuf-codec")]
-pub use kvproto::backup::StorageBackend_oneof_backend as Backend;
+pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 #[cfg(any(feature = "cloud-gcp", feature = "cloud-aws"))]
-use kvproto::backup::{Gcs, S3};
+use kvproto::brpb::{Gcs, S3};
 
 #[cfg(feature = "cloud-storage-dylib")]
 use crate::dylib;
@@ -35,7 +35,7 @@ pub use external_storage::{
     read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage,
 };
 use futures_io::AsyncRead;
-use kvproto::backup::{Noop, StorageBackend};
+use kvproto::brpb::{Noop, StorageBackend};
 use tikv_util::stream::block_on_external_io;
 use tikv_util::time::{Instant, Limiter};
 #[cfg(feature = "cloud-storage-dylib")]
