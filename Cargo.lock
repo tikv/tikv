@@ -2195,7 +2195,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#2cd2f5a2baaab9fd74fcddc2a0874d81354912cc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#98a4d149a1437a98453486f91809c4320166353c"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2214,7 +2214,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#2cd2f5a2baaab9fd74fcddc2a0874d81354912cc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#98a4d149a1437a98453486f91809c4320166353c"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2682,9 +2682,9 @@ dependencies = [
 
 [[package]]
 name = "num-traits"
-version = "0.2.12"
+version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac267bcc07f48ee5f8935ab0d24f316fb722d7a1292e2913f0cc196b29ffd611"
+checksum = "9a64b1ec5cda2586e284722486d802acf1f7dbdc623e2bfc57e65ca1cd099290"
 dependencies = [
  "autocfg",
 ]
@@ -3844,7 +3844,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#2cd2f5a2baaab9fd74fcddc2a0874d81354912cc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#98a4d149a1437a98453486f91809c4320166353c"
 dependencies = [
  "libc 0.2.86",
  "librocksdb_sys",
@@ -5171,6 +5171,7 @@ dependencies = [
  "murmur3",
  "nom 5.1.0",
  "notify",
+ "num-traits",
  "num_cpus",
  "online_config",
  "openssl",

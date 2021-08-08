@@ -19,7 +19,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU32, AtomicU64, Ordering},
-        Arc, Mutex,
+        mpsc, Arc, Mutex,
     },
     time::Duration,
     u64,
@@ -28,7 +28,7 @@ use std::{
 use cdc::MemoryQuota;
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
-use engine_rocks::{from_rocks_compression_type, get_env, RocksEngine};
+use engine_rocks::{from_rocks_compression_type, get_env, FlowInfo, RocksEngine};
 use engine_traits::{
     compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, MiscExt,
     RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -81,7 +81,10 @@ use tikv::{
         ttl::TTLChecker,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
-    storage::{self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver, Engine},
+    storage::{
+        self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver,
+        txn::flow_controller::FlowController, Engine,
+    },
 };
 use tikv_util::{
     check_environment_variables,
@@ -168,6 +171,7 @@ struct TiKVServer<ER: RaftEngine> {
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
     router: RaftRouter<RocksEngine, ER>,
+    flow_info_receiver: Option<mpsc::Receiver<FlowInfo>>,
     system: Option<RaftBatchSystem<RocksEngine, ER>>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
@@ -270,6 +274,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             concurrency_manager,
             env,
             background_worker,
+            flow_info_receiver: None,
         }
     }
 
@@ -482,6 +487,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
     }
 
+    fn create_flow_listener(&mut self) -> engine_rocks::FlowListener {
+        let (tx, rx) = mpsc::channel();
+        self.flow_info_receiver = Some(rx);
+        engine_rocks::FlowListener::new(tx)
+    }
+
     fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let engine = RaftKv::new(
@@ -535,6 +546,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let gc_worker = self.init_gc_worker();
         let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
         let ttl_scheduler = ttl_checker.scheduler();
+        let flow_controller = Arc::new(FlowController::new(
+            &self.config.storage.flow_control,
+            self.engines.as_ref().unwrap().engine.kv_engine(),
+            self.flow_info_receiver.take().unwrap(),
+        ));
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
@@ -543,6 +559,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.engines.as_ref().unwrap().engine.kv_engine(),
                 self.config.storage.block_cache.shared,
                 ttl_scheduler,
+                flow_controller.clone(),
             )),
         );
 
@@ -612,6 +629,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             lock_mgr.clone(),
             self.concurrency_manager.clone(),
             lock_mgr.get_pipelined(),
+            flow_controller,
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -1206,6 +1224,7 @@ impl TiKVServer<RocksEngine> {
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
+        kv_db_opts.add_event_listener(self.create_flow_listener());
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
             &block_cache,
             Some(&self.region_info_accessor),
@@ -1486,7 +1505,7 @@ impl EnginesResourceInfo {
 
         fn fetch_engine_cf(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {
             if let Ok(cf_opts) = engine.get_options_cf(cf) {
-                if let Ok(Some(b)) = engine.get_cf_compaction_pending_bytes(cf) {
+                if let Ok(Some(b)) = engine.get_cf_pending_compaction_bytes(cf) {
                     if cf_opts.get_soft_pending_compaction_bytes_limit() > 0 {
                         *normalized_pending_bytes = std::cmp::max(
                             *normalized_pending_bytes,

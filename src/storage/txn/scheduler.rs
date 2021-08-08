@@ -35,21 +35,19 @@ use tikv_util::{callback::must_call, deadline::Deadline, time::Instant};
 use txn_types::TimeStamp;
 
 use crate::server::lock_manager::waiter_manager;
+use crate::storage::config::Config;
 use crate::storage::kv::{
     drop_snapshot_callback, with_tls_engine, Engine, ExtCallback, Result as EngineResult,
     SnapContext, Statistics,
 };
 use crate::storage::lock_manager::{self, DiagnosticContext, LockManager, WaitTimeout};
-use crate::storage::metrics::{
-    self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC,
-    SCHED_CONTEX_GAUGE, SCHED_HISTOGRAM_VEC_STATIC, SCHED_LATCH_HISTOGRAM_VEC,
-    SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC, SCHED_WRITING_BYTES_GAUGE,
-};
+use crate::storage::metrics::{self, *};
 use crate::storage::txn::commands::{
     ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo,
 };
 use crate::storage::txn::{
     commands::Command,
+    flow_controller::FlowController,
     latch::{Latches, Lock},
     sched_pool::{tls_collect_read_duration, tls_collect_scan_details, SchedPool},
     Error, ProcessResult,
@@ -178,6 +176,8 @@ struct SchedulerInner<L: LockManager> {
     // used to control write flow
     running_write_bytes: CachePadded<AtomicUsize>,
 
+    flow_controller: Arc<FlowController>,
+
     lock_mgr: L,
 
     concurrency_manager: ConcurrencyManager,
@@ -241,6 +241,7 @@ impl<L: LockManager> SchedulerInner<L> {
     fn too_busy(&self) -> bool {
         fail_point!("txn_scheduler_busy", |_| true);
         self.running_write_bytes.load(Ordering::Acquire) >= self.sched_pending_write_threshold
+            || self.flow_controller.should_drop()
     }
 
     /// Tries to acquire all the required latches for a command when waken up by
@@ -274,10 +275,12 @@ impl<L: LockManager> SchedulerInner<L> {
 }
 
 /// Scheduler which schedules the execution of `storage::Command`s.
+#[derive(Clone)]
 pub struct Scheduler<E: Engine, L: LockManager> {
     // `engine` is `None` means currently the program is in scheduler worker threads.
     engine: Option<E>,
     inner: Arc<SchedulerInner<L>>,
+    control_mutex: Arc<tokio::sync::Mutex<bool>>,
 }
 
 unsafe impl<E: Engine, L: LockManager> Send for Scheduler<E, L> {}
@@ -287,13 +290,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     pub(in crate::storage) fn new(
         engine: E,
         lock_mgr: L,
-
         concurrency_manager: ConcurrencyManager,
-        concurrency: usize,
-        worker_pool_size: usize,
-        sched_pending_write_threshold: usize,
+        config: &Config,
         pipelined_pessimistic_lock: Arc<AtomicBool>,
-        enable_async_apply_prewrite: bool,
+        flow_controller: Arc<FlowController>,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -304,19 +304,24 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let inner = Arc::new(SchedulerInner {
             task_slots,
             id_alloc: AtomicU64::new(0).into(),
-            latches: Latches::new(concurrency),
+            latches: Latches::new(config.scheduler_concurrency),
             running_write_bytes: AtomicUsize::new(0).into(),
-            sched_pending_write_threshold,
-            worker_pool: SchedPool::new(engine.clone(), worker_pool_size, "sched-worker-pool"),
+            sched_pending_write_threshold: config.scheduler_pending_write_threshold.0 as usize,
+            worker_pool: SchedPool::new(
+                engine.clone(),
+                config.scheduler_worker_pool_size,
+                "sched-worker-pool",
+            ),
             high_priority_pool: SchedPool::new(
                 engine.clone(),
-                std::cmp::max(1, worker_pool_size / 2),
+                std::cmp::max(1, config.scheduler_worker_pool_size / 2),
                 "sched-high-pri-pool",
             ),
             lock_mgr,
             concurrency_manager,
             pipelined_pessimistic_lock,
-            enable_async_apply_prewrite,
+            enable_async_apply_prewrite: config.enable_async_apply_prewrite,
+            flow_controller,
         });
 
         slow_log!(
@@ -326,6 +331,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         Scheduler {
             engine: Some(engine),
             inner,
+            control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
         }
     }
 
@@ -642,12 +648,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     if task.cmd.readonly() {
                         self.process_read(snapshot, task, &mut statistics);
                     } else {
-                        // Safety: `self.sched_pool` ensures a TLS engine exists.
-                        unsafe {
-                            with_tls_engine(|engine| {
-                                self.process_write(engine, snapshot, task, &mut statistics)
-                            });
-                        }
+                        self.process_write(snapshot, task, &mut statistics).await;
                     };
                     tls_collect_scan_details(tag.get_str(), &statistics);
                     let elapsed = timer.saturating_elapsed();
@@ -683,7 +684,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Processes a write command within a worker thread, then posts either a `WriteFinished`
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
-    fn process_write(self, engine: &E, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
+    async fn process_write(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_write");
         let tag = task.cmd.tag();
         let cid = task.cid;
@@ -696,19 +697,20 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .load(Ordering::Relaxed);
         let pipelined = pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
 
-        let context = WriteContext {
-            lock_mgr: &self.inner.lock_mgr,
-            concurrency_manager: self.inner.concurrency_manager.clone(),
-            extra_op: task.extra_op,
-            statistics,
-            async_apply_prewrite: self.inner.enable_async_apply_prewrite,
-        };
-
         let deadline = task.deadline;
-        let write_result = task
-            .cmd
-            .process_write(snapshot, context)
-            .map_err(StorageError::from);
+        let write_result = {
+            let context = WriteContext {
+                lock_mgr: &self.inner.lock_mgr,
+                concurrency_manager: self.inner.concurrency_manager.clone(),
+                extra_op: task.extra_op,
+                statistics,
+                async_apply_prewrite: self.inner.enable_async_apply_prewrite,
+            };
+
+            task.cmd
+                .process_write(snapshot, context)
+                .map_err(StorageError::from)
+        };
         match deadline
             .check()
             .map_err(StorageError::from)
@@ -856,18 +858,40 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             .unwrap()
                     });
 
-                    to_be_write.deadline = Some(deadline);
-                    if let Err(e) = engine.async_write_ext(
-                        &ctx,
-                        to_be_write,
-                        engine_cb,
-                        proposed_cb,
-                        committed_cb,
-                    ) {
-                        SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
+                    if self.inner.flow_controller.enabled() {
+                        if self.inner.flow_controller.is_unlimited() {
+                            // no need to delay if unthrottled, just call consume to record write flow
+                            let _ = self.inner.flow_controller.consume(to_be_write.size());
+                        } else {
+                            let start = Instant::now_coarse();
+                            // Control mutex is used to ensure there is only one request consuming the budget.
+                            // The delay may exceed 1s, and the speed limit is changed every second.
+                            // If the speed of next second is larger than the one of first second,
+                            // without the mutex, the write flow can't throttled strictly.
+                            let _guard = self.control_mutex.lock().await;
+                            let delay = self.inner.flow_controller.consume(to_be_write.size());
+                            delay.await;
+                            SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
+                        }
+                    }
 
-                        info!("engine async_write failed"; "cid" => cid, "err" => ?e);
-                        scheduler.finish_with_err(cid, e);
+                    to_be_write.deadline = Some(deadline);
+                    // Safety: `self.sched_pool` ensures a TLS engine exists.
+                    unsafe {
+                        with_tls_engine(|engine: &E| {
+                            if let Err(e) = engine.async_write_ext(
+                                &ctx,
+                                to_be_write,
+                                engine_cb,
+                                proposed_cb,
+                                committed_cb,
+                            ) {
+                                SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
+
+                                info!("engine async_write failed"; "cid" => cid, "err" => ?e);
+                                scheduler.finish_with_err(cid, e);
+                            }
+                        })
                     }
                 }
             }
@@ -894,15 +918,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 }
 
-impl<E: Engine, L: LockManager> Clone for Scheduler<E, L> {
-    fn clone(&self) -> Self {
-        Scheduler {
-            engine: self.engine.clone(),
-            inner: self.inner.clone(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::thread;
@@ -919,6 +934,7 @@ mod tests {
     };
     use futures_executor::block_on;
     use kvproto::kvrpcpb::{BatchRollbackRequest, Context};
+    use tikv_util::config::ReadableSize;
     use tikv_util::future::paired_future_callback;
     use txn_types::{Key, OldValues};
 
@@ -1040,15 +1056,20 @@ mod tests {
     #[test]
     fn test_acquire_latch_deadline() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let config = Config {
+            scheduler_concurrency: 1024,
+            scheduler_worker_pool_size: 1,
+            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
+            enable_async_apply_prewrite: false,
+            ..Default::default()
+        };
         let scheduler = Scheduler::new(
             engine,
             DummyLockManager,
             ConcurrencyManager::new(1.into()),
-            1024,
-            1,
-            100 * 1024 * 1024,
+            &config,
             Arc::new(AtomicBool::new(true)),
-            false,
+            Arc::new(FlowController::empty()),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1084,15 +1105,20 @@ mod tests {
     #[test]
     fn test_pool_available_deadline() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let config = Config {
+            scheduler_concurrency: 1024,
+            scheduler_worker_pool_size: 1,
+            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
+            enable_async_apply_prewrite: false,
+            ..Default::default()
+        };
         let scheduler = Scheduler::new(
             engine,
             DummyLockManager,
             ConcurrencyManager::new(1.into()),
-            1024,
-            1,
-            100 * 1024 * 1024,
+            &config,
             Arc::new(AtomicBool::new(true)),
-            false,
+            Arc::new(FlowController::empty()),
         );
 
         // Spawn a task that sleeps for 500ms to occupy the pool. The next request
@@ -1129,15 +1155,20 @@ mod tests {
     #[test]
     fn test_accumulate_many_expired_commands() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let config = Config {
+            scheduler_concurrency: 1024,
+            scheduler_worker_pool_size: 1,
+            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
+            enable_async_apply_prewrite: false,
+            ..Default::default()
+        };
         let scheduler = Scheduler::new(
             engine,
             DummyLockManager,
             ConcurrencyManager::new(1.into()),
-            1024,
-            1,
-            100 * 1024 * 1024,
+            &config,
             Arc::new(AtomicBool::new(true)),
-            false,
+            Arc::new(FlowController::empty()),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
