@@ -42,7 +42,7 @@ use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use kvproto::{
-    backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
+    brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
 };
 use pd_client::{PdClient, RpcClient};
