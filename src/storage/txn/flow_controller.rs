@@ -181,7 +181,8 @@ impl FlowController {
 const SMOOTHER_STALE_RECORD_THRESHOLD: f64 = 300.0; // 5min
 
 // Smoother is a sliding window used to provide steadier flow statistics.
-struct Smoother<
+struct Smoother<T, const CAP: usize>
+where
     T: Default
         + Add<Output = T>
         + Sub<Output = T>
@@ -190,13 +191,13 @@ struct Smoother<
         + PartialOrd
         + AsPrimitive<f64>
         + FromPrimitive,
-    const CAP: usize,
-> {
+{
     records: VecDeque<(T, Instant)>,
     total: T,
 }
 
-impl<
+impl<T, const CAP: usize> Default for Smoother<T, CAP>
+where
     T: Default
         + Add<Output = T>
         + Sub<Output = T>
@@ -205,8 +206,6 @@ impl<
         + PartialOrd
         + AsPrimitive<f64>
         + FromPrimitive,
-    const CAP: usize,
-> Default for Smoother<T, CAP>
 {
     fn default() -> Self {
         Self {
@@ -216,7 +215,8 @@ impl<
     }
 }
 
-impl<
+impl<T, const CAP: usize> Smoother<T, CAP>
+where
     T: Default
         + Add<Output = T>
         + Sub<Output = T>
@@ -225,8 +225,6 @@ impl<
         + PartialOrd
         + AsPrimitive<f64>
         + FromPrimitive,
-    const CAP: usize,
-> Smoother<T, CAP>
 {
     pub fn observe(&mut self, record: T) {
         if self.records.len() == CAP {
