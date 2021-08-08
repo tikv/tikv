@@ -23,7 +23,6 @@ use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 use crate::store::fsm::GenSnapTask;
 use crate::store::memory::*;
 use crate::store::util;
-use crate::store::ProposalContext;
 use crate::{bytes_capacity, Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
@@ -224,6 +223,15 @@ impl EntryCache {
         }
 
         mem_size_change
+    }
+
+    pub fn entry(&self, idx: u64) -> Option<&Entry> {
+        let cache_low = self.cache.front()?.get_index();
+        if idx >= cache_low {
+            Some(&self.cache[(idx - cache_low) as usize])
+        } else {
+            None
+        }
     }
 
     pub fn compact_to(&mut self, mut idx: u64) -> u64 {
@@ -696,8 +704,7 @@ where
     region_sched: Scheduler<RegionTask<EK::Snapshot>>,
     snap_tried_cnt: RefCell<usize>,
 
-    // Entry cache if `ER doesn't have an internal entry cache.
-    cache: Option<EntryCache>,
+    cache: EntryCache,
 
     pub tag: String,
 }
@@ -763,12 +770,6 @@ where
         let last_term = init_last_term(&engines, region, &raft_state, &apply_state)?;
         let applied_index_term = init_applied_index_term(&engines, region, &apply_state)?;
 
-        let cache = if engines.raft.has_builtin_entry_cache() {
-            None
-        } else {
-            Some(EntryCache::default())
-        };
-
         Ok(PeerStorage {
             engines,
             peer_id,
@@ -782,7 +783,7 @@ where
             tag,
             applied_index_term,
             last_term,
-            cache,
+            cache: EntryCache::default(),
         })
     }
 
@@ -834,40 +835,9 @@ where
             return Ok(ents);
         }
         let region_id = self.get_region_id();
-        if let Some(ref cache) = self.cache {
-            let cache_low = cache.first_index().unwrap_or(u64::MAX);
-            if high <= cache_low {
-                cache.miss.update(|m| m + 1);
-                self.engines.raft.fetch_entries_to(
-                    region_id,
-                    low,
-                    high,
-                    Some(max_size as usize),
-                    &mut ents,
-                )?;
-                return Ok(ents);
-            }
-            let begin_idx = if low < cache_low {
-                cache.miss.update(|m| m + 1);
-                let fetched_count = self.engines.raft.fetch_entries_to(
-                    region_id,
-                    low,
-                    cache_low,
-                    Some(max_size as usize),
-                    &mut ents,
-                )?;
-                if fetched_count < (cache_low - low) as usize {
-                    // Less entries are fetched than expected.
-                    return Ok(ents);
-                }
-                cache_low
-            } else {
-                low
-            };
-            cache.hit.update(|h| h + 1);
-            let fetched_size = ents.iter().fold(0, |acc, e| acc + e.compute_size());
-            cache.fetch_entries_to(begin_idx, high, fetched_size as u64, max_size, &mut ents);
-        } else {
+        let cache_low = self.cache.first_index().unwrap_or(u64::MAX);
+        if high <= cache_low {
+            self.cache.miss.update(|m| m + 1);
             self.engines.raft.fetch_entries_to(
                 region_id,
                 low,
@@ -875,7 +845,29 @@ where
                 Some(max_size as usize),
                 &mut ents,
             )?;
+            return Ok(ents);
         }
+        let begin_idx = if low < cache_low {
+            self.cache.miss.update(|m| m + 1);
+            let fetched_count = self.engines.raft.fetch_entries_to(
+                region_id,
+                low,
+                cache_low,
+                Some(max_size as usize),
+                &mut ents,
+            )?;
+            if fetched_count < (cache_low - low) as usize {
+                // Less entries are fetched than expected.
+                return Ok(ents);
+            }
+            cache_low
+        } else {
+            low
+        };
+        self.cache.hit.update(|h| h + 1);
+        let fetched_size = ents.iter().fold(0, |acc, e| acc + e.compute_size());
+        self.cache
+            .fetch_entries_to(begin_idx, high, fetched_size as u64, max_size, &mut ents);
         Ok(ents)
     }
 
@@ -887,8 +879,17 @@ where
         if self.truncated_term() == self.last_term || idx == self.last_index() {
             return Ok(self.last_term);
         }
-        let entries = self.entries(idx, idx + 1, raft::NO_LIMIT)?;
-        Ok(entries[0].get_term())
+        if let Some(e) = self.cache.entry(idx) {
+            Ok(e.get_term())
+        } else {
+            Ok(self
+                .engines
+                .raft
+                .get_entry(self.get_region_id(), idx)
+                .unwrap()
+                .unwrap()
+                .get_term())
+        }
     }
 
     #[inline]
@@ -1145,9 +1146,7 @@ where
         // WARNING: This code is correct based on the assumption that
         // if this function returns error, the TiKV will panic soon,
         // otherwise, the entry cache may be wrong and break correctness.
-        if let Some(ref mut cache) = self.cache {
-            cache.append(&self.tag, &entries);
-        }
+        self.cache.append(&self.tag, &entries);
 
         ready_ctx.raft_wb_mut().append(region_id, entries)?;
 
@@ -1164,44 +1163,35 @@ where
     }
 
     pub fn compact_to(&mut self, idx: u64) {
-        if let Some(ref mut cache) = self.cache {
-            cache.compact_to(idx);
-        } else {
-            let rid = self.get_region_id();
-            self.engines.raft.gc_entry_cache(rid, idx);
-        }
+        self.compact_cache_to(idx);
 
         self.cancel_generating_snap(Some(idx));
     }
 
     pub fn compact_cache_to(&mut self, idx: u64) {
-        if let Some(ref mut cache) = self.cache {
-            cache.compact_to(idx);
-        } else {
-            let rid = self.get_region_id();
+        self.cache.compact_to(idx);
+        let rid = self.get_region_id();
+        if self.engines.raft.has_builtin_entry_cache() {
             self.engines.raft.gc_entry_cache(rid, idx);
         }
     }
 
     #[inline]
     pub fn is_cache_empty(&self) -> bool {
-        self.cache.as_ref().map_or(true, |c| c.is_empty())
+        self.cache.is_empty()
     }
 
     pub fn maybe_gc_cache(&mut self, replicated_idx: u64, apply_idx: u64) {
         if self.engines.raft.has_builtin_entry_cache() {
             let rid = self.get_region_id();
             self.engines.raft.gc_entry_cache(rid, apply_idx + 1);
-            return;
         }
-
-        let cache = self.cache.as_mut().unwrap();
         if replicated_idx == apply_idx {
             // The region is inactive, clear the cache immediately.
-            cache.compact_to(apply_idx + 1);
+            self.cache.compact_to(apply_idx + 1);
             return;
         }
-        let cache_first_idx = match cache.first_index() {
+        let cache_first_idx = match self.cache.first_index() {
             None => return,
             Some(idx) => idx,
         };
@@ -1209,19 +1199,14 @@ where
             // Catching up log requires accessing fs already, let's optimize for
             // the common case.
             // Maybe gc to second least replicated_idx is better.
-            cache.compact_to(apply_idx + 1);
+            self.cache.compact_to(apply_idx + 1);
         }
     }
 
     /// Evict entries from the cache.
     pub fn evict_cache(&mut self, half: bool) {
-        if self.engines.raft.has_builtin_entry_cache() {
-            // TODO: unify entry cache.
-            return;
-        }
-        let cache = self.cache.as_mut().unwrap();
-        if !cache.cache.is_empty() {
-            let cache = self.cache.as_mut().unwrap();
+        if !self.cache.cache.is_empty() {
+            let cache = &mut self.cache;
             let cache_len = cache.cache.len();
             let drain_to = if half { cache_len / 2 } else { cache_len - 1 };
             let idx = cache.cache[drain_to].index;
@@ -1231,22 +1216,19 @@ where
     }
 
     pub fn cache_is_empty(&self) -> bool {
-        self.cache
-            .as_ref()
-            .map_or_else(|| true, |c| c.cache.is_empty())
+        self.cache.cache.is_empty()
     }
 
     #[inline]
     pub fn flush_cache_metrics(&mut self) {
-        if let Some(ref mut cache) = self.cache {
-            // NOTE: memory usage of entry cache is flushed realtime.
-            cache.flush_stats();
-            return;
-        }
-        if let Some(stats) = self.engines.raft.flush_stats() {
-            RAFT_ENTRIES_CACHES_GAUGE.set(stats.cache_size as i64);
-            RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as u64);
-            RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as u64);
+        // NOTE: memory usage of entry cache is flushed realtime.
+        self.cache.flush_stats();
+        if self.engines.raft.has_builtin_entry_cache() {
+            if let Some(stats) = self.engines.raft.flush_stats() {
+                RAFT_ENTRIES_CACHES_GAUGE.set(stats.cache_size as i64);
+                RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as u64);
+                RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as u64);
+            }
         }
     }
 
@@ -1322,9 +1304,7 @@ where
     ) -> Result<()> {
         let region_id = self.get_region_id();
         clear_meta(&self.engines, kv_wb, raft_wb, region_id, &self.raft_state)?;
-        if !self.engines.raft.has_builtin_entry_cache() {
-            self.cache = Some(EntryCache::default());
-        }
+        self.cache = EntryCache::default();
         Ok(())
     }
 
@@ -1634,27 +1614,8 @@ where
     }
 
     pub fn trace_cached_entries(&mut self, entries: CachedEntries) {
-        if let Some(ref mut cache) = self.cache {
-            cache.trace_cached_entries(entries);
-        }
+        self.cache.trace_cached_entries(entries);
     }
-}
-
-#[allow(dead_code)]
-fn get_sync_log_from_entry(entry: &Entry) -> bool {
-    if entry.get_sync_log() {
-        return true;
-    }
-
-    let ctx = entry.get_context();
-    if !ctx.is_empty() {
-        let ctx = ProposalContext::from_bytes(ctx);
-        if ctx.contains(ProposalContext::SYNC_LOG) {
-            return true;
-        }
-    }
-
-    false
 }
 
 /// Delete all meta belong to the region. Results are stored in `wb`.
@@ -1981,7 +1942,7 @@ mod tests {
     }
 
     fn validate_cache(store: &PeerStorage<KvTestEngine, RaftTestEngine>, exp_ents: &[Entry]) {
-        assert_eq!(store.cache.as_ref().unwrap().cache, exp_ents);
+        assert_eq!(store.cache.cache, exp_ents);
         for e in exp_ents {
             let key = keys::raft_log_key(store.get_region_id(), e.get_index());
             let bytes = store.engines.raft.get_value(&key).unwrap().unwrap();
@@ -2412,7 +2373,7 @@ mod tests {
         let worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
         let mut store = new_storage_from_ents(sched, &td, &ents);
-        store.cache.as_mut().unwrap().cache.clear();
+        store.cache.cache.clear();
         // empty cache should fetch data from rocksdb directly.
         let mut res = store.entries(4, 6, u64::max_value()).unwrap();
         assert_eq!(*res, ents[1..]);
@@ -2455,7 +2416,7 @@ mod tests {
         let worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
         let mut store = new_storage_from_ents(sched, &td, &ents);
-        store.cache.as_mut().unwrap().cache.clear();
+        store.cache.cache.clear();
 
         // initial cache
         let mut entries = vec![new_entry(6, 5), new_entry(7, 5)];
@@ -2512,20 +2473,20 @@ mod tests {
         validate_cache(&store, &exp_res);
 
         // compact shrink
-        assert!(store.cache.as_ref().unwrap().cache.capacity() >= cap as usize);
+        assert!(store.cache.cache.capacity() >= cap as usize);
         store.compact_to(cap * 2);
         exp_res = (cap * 2..cap * 2 + 7).map(|i| new_entry(i, 8)).collect();
         validate_cache(&store, &exp_res);
-        assert!(store.cache.as_ref().unwrap().cache.capacity() < cap as usize);
+        assert!(store.cache.cache.capacity() < cap as usize);
 
         // append shrink
         entries = (0..=cap).map(|i| new_entry(i, 8)).collect();
         append_ents(&mut store, &entries);
-        assert!(store.cache.as_ref().unwrap().cache.capacity() >= cap as usize);
+        assert!(store.cache.cache.capacity() >= cap as usize);
         append_ents(&mut store, &[new_entry(6, 8)]);
         exp_res = (1..7).map(|i| new_entry(i, 8)).collect();
         validate_cache(&store, &exp_res);
-        assert!(store.cache.as_ref().unwrap().cache.capacity() < cap as usize);
+        assert!(store.cache.cache.capacity() < cap as usize);
 
         // compact all
         store.compact_to(cap + 2);
@@ -2587,6 +2548,25 @@ mod tests {
 
         drop(cache);
         assert_eq!(rx.try_recv().unwrap(), -896);
+    }
+
+    #[test]
+    fn test_storage_cache_entry() {
+        let mut cache = EntryCache::default();
+        let ents = vec![
+            new_entry(3, 3),
+            new_entry(4, 4),
+            new_entry(5, 4),
+            new_entry(6, 6),
+        ];
+        cache.append("", &ents);
+        assert!(cache.entry(1).is_none());
+        assert!(cache.entry(2).is_none());
+        for e in &ents {
+            assert_eq!(e, cache.entry(e.get_index()).unwrap());
+        }
+        let res = panic_hook::recover_safe(|| cache.entry(7));
+        assert!(res.is_err());
     }
 
     #[test]
@@ -2758,31 +2738,6 @@ mod tests {
         ))));
         let res = panic_hook::recover_safe(|| s.check_applying_snap());
         assert!(res.is_err());
-    }
-
-    #[test]
-    fn test_sync_log() {
-        // Do not sync empty entrise.
-        let mut tbl = vec![(Entry::default(), false)];
-
-        // Sync if sync_log is set.
-        let mut e = Entry::default();
-        e.set_sync_log(true);
-        tbl.push((e, true));
-
-        // Sync if context is marked sync.
-        let context = ProposalContext::SYNC_LOG.to_vec();
-        let mut e = Entry::default();
-        e.set_context(context.into());
-        tbl.push((e.clone(), true));
-
-        // Sync if sync_log is set and context is marked sync_log.
-        e.set_sync_log(true);
-        tbl.push((e, true));
-
-        for (e, sync) in tbl {
-            assert_eq!(get_sync_log_from_entry(&e), sync, "{:?}", e);
-        }
     }
 
     #[test]
