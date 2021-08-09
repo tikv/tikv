@@ -161,7 +161,6 @@ impl TestSuite {
                 sim.security_mgr.clone(),
                 MemoryQuota::new(usize::MAX),
             );
-            cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
             cdc_endpoint.set_max_scan_batch_size(2);
             concurrency_managers.insert(*id, cm);
             worker.start(cdc_endpoint);
