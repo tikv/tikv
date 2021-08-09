@@ -460,6 +460,7 @@ dependencies = [
  "bitflags",
  "collections",
  "concurrency_manager",
+ "criterion",
  "crossbeam",
  "engine_rocks",
  "engine_traits",
@@ -2108,7 +2109,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#62630088ebc1aabcba3038ede6e775d89d38c98b"
+source = "git+https://github.com/pingcap/kvproto.git#317f69fb54b44619271df82ec163764032184a85"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2194,7 +2195,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#12a953bc942c60a00ffb44d3907bdf2193d6be0d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#98a4d149a1437a98453486f91809c4320166353c"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2213,7 +2214,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#12a953bc942c60a00ffb44d3907bdf2193d6be0d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#98a4d149a1437a98453486f91809c4320166353c"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2681,9 +2682,9 @@ dependencies = [
 
 [[package]]
 name = "num-traits"
-version = "0.2.12"
+version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac267bcc07f48ee5f8935ab0d24f316fb722d7a1292e2913f0cc196b29ffd611"
+checksum = "9a64b1ec5cda2586e284722486d802acf1f7dbdc623e2bfc57e65ca1cd099290"
 dependencies = [
  "autocfg",
 ]
@@ -2783,6 +2784,15 @@ name = "ordered-float"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3305af35278dd29f46fcdd139e0b1fbfae2153f0e5928b39b035542dd31e37b7"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "ordered-float"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "039f02eb0f69271f26abe3202189275d7aa2258b903cb0281b5de710a2570ff3"
 dependencies = [
  "num-traits",
 ]
@@ -3330,7 +3340,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#15b988a80aa91d3e83317006e3489647bc69fd16"
+source = "git+https://github.com/tikv/raft-rs?branch=master#e6d28ef0f509c072e13288409835d5764a3b175e"
 dependencies = [
  "bytes 1.0.1",
  "fxhash",
@@ -3364,7 +3374,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#15b988a80aa91d3e83317006e3489647bc69fd16"
+source = "git+https://github.com/tikv/raft-rs?branch=master#e6d28ef0f509c072e13288409835d5764a3b175e"
 dependencies = [
  "bytes 1.0.1",
  "lazy_static",
@@ -3428,6 +3438,7 @@ dependencies = [
  "memory_trace_macros",
  "online_config",
  "openssl",
+ "ordered-float 2.7.0",
  "panic_hook",
  "pd_client",
  "prometheus",
@@ -3833,7 +3844,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#12a953bc942c60a00ffb44d3907bdf2193d6be0d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#98a4d149a1437a98453486f91809c4320166353c"
 dependencies = [
  "libc 0.2.86",
  "librocksdb_sys",
@@ -5026,7 +5037,7 @@ dependencies = [
  "num",
  "num-derive",
  "num-traits",
- "ordered-float",
+ "ordered-float 1.1.1",
  "protobuf",
  "regex",
  "serde",
@@ -5160,6 +5171,7 @@ dependencies = [
  "murmur3",
  "nom 5.1.0",
  "notify",
+ "num-traits",
  "num_cpus",
  "online_config",
  "openssl",
@@ -5238,6 +5250,7 @@ dependencies = [
  "file_system",
  "fs2",
  "futures 0.3.15",
+ "gag",
  "grpcio",
  "hex 0.4.2",
  "keys",
@@ -5254,6 +5267,7 @@ dependencies = [
  "raft_log_engine",
  "raftstore",
  "rand 0.8.3",
+ "regex",
  "security",
  "serde_json",
  "server",
@@ -5388,7 +5402,7 @@ dependencies = [
  "libc 0.2.86",
  "log",
  "log_wrappers",
- "nix 0.11.1",
+ "nix 0.19.0",
  "num_cpus",
  "online_config",
  "openssl",

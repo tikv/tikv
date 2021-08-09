@@ -186,6 +186,7 @@ raftstore = { path = "components/raftstore", default-features = false }
 raft_log_engine = { path = "components/raft_log_engine", default-features = false }
 rand = "0.7.3"
 regex = "1.3"
+num-traits = "0.2.14"
 rev_lines = "0.2.1"
 security = { path = "components/security", default-features = false }
 semver = "0.11"

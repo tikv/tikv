@@ -110,4 +110,10 @@ lazy_static! {
         "Resolved Ts advance method, 0 = advanced through raft command, 1 = advanced through store RPC"
     )
     .unwrap();
+    pub static ref CDC_GRPC_ACCUMULATE_MESSAGE_BYTES: IntCounterVec = register_int_counter_vec!(
+        "tikv_cdc_grpc_message_sent_bytes",
+        "Accumulated bytes of sent CDC gRPC messages",
+        &["type"]
+    )
+    .unwrap();
 }
