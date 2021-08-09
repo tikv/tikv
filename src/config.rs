@@ -2212,23 +2212,19 @@ impl Default for BackupConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
     pub hibernate_regions_compatible: bool,
-    // TODO(hi-rustin): Consider resizing the thread pool based on `incremental_scan_threads`.
-    #[online_config(skip)]
     pub incremental_scan_threads: usize,
     pub incremental_scan_concurrency: usize,
     pub incremental_scan_speed_limit: ReadableSize,
     pub sink_memory_quota: ReadableSize,
     pub old_value_cache_memory_quota: ReadableSize,
     // Deprecated! preserved for compatibility check.
-    #[online_config(skip)]
     #[doc(hidden)]
-    #[serde(skip_serializing)]
     pub old_value_cache_size: usize,
 }
 
@@ -2255,7 +2251,7 @@ impl Default for CdcConfig {
 }
 
 impl CdcConfig {
-    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         if self.min_ts_interval == ReadableDuration::secs(0) {
             return Err("cdc.min-ts-interval can't be 0s".into());
         }
@@ -2405,7 +2401,7 @@ pub struct TiKvConfig {
     #[online_config(submodule)]
     pub split: SplitConfig,
 
-    #[online_config(submodule)]
+    #[online_config(skip)]
     pub cdc: CdcConfig,
 
     #[online_config(submodule)]

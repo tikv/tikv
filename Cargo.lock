@@ -471,7 +471,6 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
- "online_config",
  "panic_hook",
  "pd_client",
  "prometheus",
