@@ -1301,25 +1301,21 @@ where
     fn handle_reported_disk_usage(&mut self, msg: &RaftMessage) {
         let peer_id = msg.get_from_peer().get_id();
         let store_id = msg.get_from_peer().get_store_id();
-        let disk_full_peers = &mut self.fsm.peer.disk_full_peers;
-
-        if matches!(msg.disk_usage, DiskUsage::Normal) {
+        let refill_disk_usages = if matches!(msg.disk_usage, DiskUsage::Normal) {
             self.ctx.store_disk_usages.remove(&store_id);
-            if disk_full_peers.any && disk_full_peers.peers.contains_key(&peer_id) {
-                disk_full_peers.peers = HashMap::default();
-            }
-            return;
-        }
+            self.fsm.peer.disk_full_peers.has(peer_id)
+        } else {
+            debug!("{} reports disk usage: {:?}", peer_id, msg.disk_usage);
+            self.ctx.store_disk_usages.insert(store_id, msg.disk_usage);
 
-        self.ctx.store_disk_usages.insert(store_id, msg.disk_usage);
-        if !disk_full_peers.any {
-            disk_full_peers.any = true;
-        } else if disk_full_peers
-            .peers
-            .get(&peer_id)
-            .map_or(true, |x| x.0 != msg.disk_usage)
-        {
-            disk_full_peers.peers = HashMap::default();
+            let disk_full_peers = &self.fsm.peer.disk_full_peers;
+            disk_full_peers.is_empty()
+                || disk_full_peers
+                    .get(peer_id)
+                    .map_or(true, |x| x != msg.disk_usage)
+        };
+        if refill_disk_usages {
+            self.fsm.peer.refill_disk_full_peers(self.ctx);
         }
     }
 
@@ -2276,6 +2272,15 @@ where
                 "region" => ?self.fsm.peer.region(),
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
+
+            if !self.fsm.peer.disk_full_peers.is_empty() {
+                self.fsm.peer.refill_disk_full_peers(self.ctx);
+                debug!(
+                    "conf change refill disk full peers to {:?}",
+                    self.fsm.peer.disk_full_peers;
+                    "region_id" => self.fsm.region_id(),
+                );
+            }
 
             // Remove or demote leader will cause this raft group unavailable
             // until new leader elected, but we can't revert this operation
