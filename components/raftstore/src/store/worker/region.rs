@@ -934,10 +934,16 @@ mod tests {
         )
         .unwrap();
 
-        for cf_name in &["default","write","lock"] {
+        for cf_name in &["default", "write", "lock"] {
             for i in 0..7 {
-                engine.kv.put_cf(cf_name, &data_key(i.to_string().as_bytes()), &[i]).unwrap();
-                engine.kv.put_cf(cf_name, &data_key((i + 1).to_string().as_bytes()), &[i + 1]).unwrap();
+                engine
+                    .kv
+                    .put_cf(cf_name, &data_key(i.to_string().as_bytes()), &[i])
+                    .unwrap();
+                engine
+                    .kv
+                    .put_cf(cf_name, &data_key((i + 1).to_string().as_bytes()), &[i + 1])
+                    .unwrap();
                 engine.kv.flush_cf(cf_name, true).unwrap();
                 // check level 0 files
                 assert_eq!(
@@ -1030,7 +1036,7 @@ mod tests {
         };
         let destroy_region = |id: u64| {
             let start_key = data_key(id.to_string().as_bytes());
-            let end_key = data_key((id+1).to_string().as_bytes());
+            let end_key = data_key((id + 1).to_string().as_bytes());
             // destroy region
             sched
                 .schedule(Task::Destroy {
