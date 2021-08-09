@@ -1029,16 +1029,8 @@ mod tests {
                 .unwrap();
         };
         let destroy_region = |id: u64| {
-            // construct snapshot
-            let region_key = keys::region_state_key(id);
-            let region_state = engine
-                .kv
-                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
-                .unwrap()
-                .unwrap();
-            let region = region_state.get_region().clone();
-            let start_key = keys::enc_start_key(&region);
-            let end_key = keys::enc_end_key(&region);
+            let start_key = data_key(id.to_string().as_bytes());
+            let end_key = data_key((id+1).to_string().as_bytes());
             // destroy region
             sched
                 .schedule(Task::Destroy {

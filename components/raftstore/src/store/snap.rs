@@ -875,7 +875,6 @@ impl Snapshot {
         for cf_file in &mut self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty cf file.
-                println!("skip empty cf: {}", cf_file.cf);
                 continue;
             }
 
@@ -1664,8 +1663,8 @@ pub mod tests {
         peer.set_id(peer_id);
         let mut region = Region::default();
         region.set_id(region_id);
-        region.set_start_key(region_id.to_string().into_bytes());
-        region.set_end_key((region_id+1).to_string().into_bytes());
+        region.set_start_key(b"a".to_vec());
+        region.set_end_key(b"z".to_vec());
         region.mut_region_epoch().set_version(INIT_EPOCH_VER);
         region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
         region.mut_peers().push(peer);
