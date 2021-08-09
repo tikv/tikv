@@ -85,7 +85,7 @@ pub trait MiscExt: CFNamesExt {
 
     fn get_cf_num_immutable_mem_table(&self, cf: &str) -> Result<Option<u64>>;
 
-    fn get_cf_compaction_pending_bytes(&self, cf: &str) -> Result<Option<u64>>;
+    fn get_cf_pending_compaction_bytes(&self, cf: &str) -> Result<Option<u64>>;
 
     fn is_stalled_or_stopped(&self) -> bool;
 }

@@ -19,16 +19,16 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU32, AtomicU64, Ordering},
-        Arc, Mutex,
+        mpsc, Arc, Mutex,
     },
     time::Duration,
     u64,
 };
 
-use cdc::MemoryQuota;
+use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
-use engine_rocks::{from_rocks_compression_type, get_env, RocksEngine};
+use engine_rocks::{from_rocks_compression_type, get_env, FlowInfo, RocksEngine};
 use engine_traits::{
     compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, MiscExt,
     RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -42,7 +42,7 @@ use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use kvproto::{
-    backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
+    brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
 };
 use pd_client::{PdClient, RpcClient};
@@ -81,7 +81,10 @@ use tikv::{
         ttl::TTLChecker,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
-    storage::{self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver, Engine},
+    storage::{
+        self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver,
+        txn::flow_controller::FlowController, Engine,
+    },
 };
 use tikv_util::{
     check_environment_variables,
@@ -168,6 +171,7 @@ struct TiKVServer<ER: RaftEngine> {
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
     router: RaftRouter<RocksEngine, ER>,
+    flow_info_receiver: Option<mpsc::Receiver<FlowInfo>>,
     system: Option<RaftBatchSystem<RocksEngine, ER>>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
@@ -270,6 +274,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             concurrency_manager,
             env,
             background_worker,
+            flow_info_receiver: None,
         }
     }
 
@@ -412,20 +417,24 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         if self.config.raft_store.capacity.0 > 0 {
             capacity = cmp::min(capacity, self.config.raft_store.capacity.0);
         }
-        //TODO after disk full readonly impl, such file should be removed.
-        file_system::reserve_space_for_recover(
-            &self.config.storage.data_dir,
-            if self.config.storage.reserve_space.0 == 0 {
-                0
-            } else {
-                // Max one of configured `reserve_space` and `storage.capacity * 5%`.
-                cmp::max(
-                    (capacity as f64 * 0.05) as u64,
-                    self.config.storage.reserve_space.0,
-                )
-            },
-        )
-        .unwrap();
+        let mut reserve_space = self.config.storage.reserve_space.0;
+        if self.config.storage.reserve_space.0 != 0 {
+            reserve_space = cmp::max(
+                (capacity as f64 * 0.05) as u64,
+                self.config.storage.reserve_space.0,
+            );
+        }
+        disk::set_disk_reserved_space(reserve_space);
+        let available = disk_stats.available_space();
+        if available > reserve_space / 2 {
+            file_system::reserve_space_for_recover(
+                &self.config.storage.data_dir,
+                reserve_space / 5,
+            )
+            .unwrap();
+        } else {
+            warn!("no enough disk space left to create the place holder file");
+        }
     }
 
     fn init_yatp(&self) {
@@ -476,6 +485,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 }
             });
         engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
+    }
+
+    fn create_flow_listener(&mut self) -> engine_rocks::FlowListener {
+        let (tx, rx) = mpsc::channel();
+        self.flow_info_receiver = Some(rx);
+        engine_rocks::FlowListener::new(tx)
     }
 
     fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
@@ -531,6 +546,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let gc_worker = self.init_gc_worker();
         let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
         let ttl_scheduler = ttl_checker.scheduler();
+        let flow_controller = Arc::new(FlowController::new(
+            &self.config.storage.flow_control,
+            self.engines.as_ref().unwrap().engine.kv_engine(),
+            self.flow_info_receiver.take().unwrap(),
+        ));
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
@@ -539,6 +559,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.engines.as_ref().unwrap().engine.kv_engine(),
                 self.config.storage.block_cache.shared,
                 ttl_scheduler,
+                flow_controller.clone(),
             )),
         );
 
@@ -608,6 +629,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             lock_mgr.clone(),
             self.concurrency_manager.clone(),
             lock_mgr.get_pipelined(),
+            flow_controller,
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -642,11 +664,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             ));
             cop_read_pools.handle()
         };
-
-        // Register cdc
-        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
-        cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-        // TODO: register a cdc config manager here to support dynamically change cdc config
 
         // Create resolved ts worker
         let rts_worker = if self.config.resolved_ts.enable {
@@ -822,6 +839,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Start CDC.
+        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
+        cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         let cdc_memory_quota = MemoryQuota::new(self.config.cdc.sink_memory_quota.0 as _);
         let cdc_endpoint = cdc::Endpoint::new(
             &self.config.cdc,
@@ -834,6 +853,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             server.env(),
             self.security_mgr.clone(),
             cdc_memory_quota.clone(),
+        );
+        // Register cdc
+        cfg_controller.register(
+            tikv::config::Module::CDC,
+            Box::new(CdcConfigManager(cdc_worker.scheduler())),
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.to_stop.push(cdc_worker);
@@ -1051,12 +1075,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let config_disk_capacity: u64 = self.config.raft_store.capacity.0;
         let store_path = self.store_path.clone();
         let snap_mgr = self.snap_mgr.clone().unwrap();
-        let disk_reserved = self.config.storage.reserve_space.0;
-        if disk_reserved == 0 {
+        let reserve_space = disk::get_disk_reserved_space();
+        if reserve_space == 0 {
             info!("disk space checker not enabled");
             return;
         }
-        //TODO wal size ignore?
+
+        let almost_full_threshold = reserve_space;
+        let already_full_threshold = reserve_space / 2;
         self.background_worker
             .spawn_interval_task(DEFAULT_STORAGE_STATS_INTERVAL, move || {
                 let disk_stats = match fs2::statvfs(&store_path) {
@@ -1092,19 +1118,28 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
                 let mut available = capacity.checked_sub(used_size).unwrap_or_default();
                 available = cmp::min(available, disk_stats.available_space());
-                if available <= disk_reserved {
+
+                let prev_disk_status = disk::get_disk_status(0); //0 no need care about failpoint.
+                let cur_disk_status = if available <= already_full_threshold {
+                    disk::DiskUsage::AlreadyFull
+                } else if available <= almost_full_threshold {
+                    disk::DiskUsage::AlmostFull
+                } else {
+                    disk::DiskUsage::Normal
+                };
+                if prev_disk_status != cur_disk_status {
                     warn!(
-                        "disk full, available={},snap={},engine={},capacity={}",
-                        available, snap_size, kv_size, capacity
+                        "disk usage {:?}->{:?}, available={},snap={},kv={},raft={},capacity={}",
+                        prev_disk_status,
+                        cur_disk_status,
+                        available,
+                        snap_size,
+                        kv_size,
+                        raft_size,
+                        capacity
                     );
-                    disk::set_disk_full();
-                } else if disk::is_disk_full() {
-                    info!(
-                        "disk normalized, available={},snap={},engine={},capacity={}",
-                        available, snap_size, kv_size, capacity
-                    );
-                    disk::clear_disk_full();
                 }
+                disk::set_disk_status(cur_disk_status);
             })
     }
 
@@ -1191,6 +1226,7 @@ impl TiKVServer<RocksEngine> {
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
+        kv_db_opts.add_event_listener(self.create_flow_listener());
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
             &block_cache,
             Some(&self.region_info_accessor),
@@ -1472,7 +1508,7 @@ impl EnginesResourceInfo {
 
         fn fetch_engine_cf(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {
             if let Ok(cf_opts) = engine.get_options_cf(cf) {
-                if let Ok(Some(b)) = engine.get_cf_compaction_pending_bytes(cf) {
+                if let Ok(Some(b)) = engine.get_cf_pending_compaction_bytes(cf) {
                     if cf_opts.get_soft_pending_compaction_bytes_limit() > 0 {
                         *normalized_pending_bytes = std::cmp::max(
                             *normalized_pending_bytes,
