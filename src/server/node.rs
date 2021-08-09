@@ -10,6 +10,7 @@ use crate::import::SSTImporter;
 use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
+use crate::storage::txn::flow_controller::FlowController;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
@@ -40,6 +41,7 @@ pub fn create_raft_storage<S, EK>(
     lock_mgr: LockManager,
     concurrency_manager: ConcurrencyManager,
     pipelined_pessimistic_lock: Arc<AtomicBool>,
+    flow_controller: Arc<FlowController>,
 ) -> Result<Storage<RaftKv<EK, S>, LockManager>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
@@ -52,6 +54,7 @@ where
         lock_mgr,
         concurrency_manager,
         pipelined_pessimistic_lock,
+        flow_controller,
     )?;
     Ok(store)
 }
