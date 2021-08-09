@@ -224,16 +224,15 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
     lead_client.must_kv_pessimistic_lock(b"k7".to_vec(), start_ts);
 
     // Test pessimistic commit is allowed.
-    // FIXME: the case can't pass.
-    // fail::cfg(get_fp(usage, 1), "return").unwrap();
-    // let res = lead_client.try_kv_prewrite(
-    //     vec![new_mutation(Op::Put, b"k5", b"v5")],
-    //     b"k4".to_vec(),
-    //     start_ts,
-    //     DiskFullOpt::NotAllowedOnFull,
-    // );
-    // assert!(!res.get_region_error().has_disk_full());
-    // lead_client.must_kv_commit(vec![b"k7".to_vec()], start_ts, get_tso(&pd_client));
+    fail::cfg(get_fp(usage, 1), "return").unwrap();
+    let res = lead_client.try_kv_prewrite(
+        vec![new_mutation(Op::Put, b"k5", b"v5")],
+        b"k4".to_vec(),
+        start_ts,
+        DiskFullOpt::AllowedOnAlmostFull,
+    );
+    assert!(!res.get_region_error().has_disk_full());
+    lead_client.must_kv_commit(vec![b"k7".to_vec()], start_ts, get_tso(&pd_client));
 
     fail::remove(get_fp(usage, 1));
     let lock_ts = get_tso(&pd_client);

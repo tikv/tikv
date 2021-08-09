@@ -63,7 +63,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
             txn_status: TxnStatus::committed(self.commit_ts),
         };
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
-        write_data.set_allowed_on_disk_already_full();
+        write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write: write_data,
