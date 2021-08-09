@@ -105,18 +105,6 @@ impl From<Error> for kv::Error {
     }
 }
 
-/// `RaftKv` is a storage engine base on `RaftStore`.
-#[derive(Clone)]
-pub struct RaftKv<E, S>
-where
-    E: KvEngine,
-    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
-{
-    router: S,
-    engine: E,
-    txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
-}
-
 pub enum CmdRes<S>
 where
     S: Snapshot,
@@ -179,6 +167,18 @@ where
     } else {
         (cb_ctx, Ok(CmdRes::Resp(resps.into())))
     }
+}
+
+/// `RaftKv` is a storage engine base on `RaftStore`.
+#[derive(Clone)]
+pub struct RaftKv<E, S>
+where
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
+{
+    router: S,
+    engine: E,
+    txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
 }
 
 impl<E, S> RaftKv<E, S>

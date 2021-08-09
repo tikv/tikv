@@ -980,7 +980,7 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
 
         // Pending compaction bytes
         if let Some(pending_compaction_bytes) =
-            crate::util::get_cf_compaction_pending_bytes(engine, handle)
+            crate::util::get_cf_pending_compaction_bytes(engine, handle)
         {
             STORE_ENGINE_PENDING_COMPACTION_BYTES_VEC
                 .with_label_values(&[name, cf])
@@ -1306,6 +1306,12 @@ lazy_static! {
         "tikv_engine_compaction_reason",
         "Number of compaction reason",
         &["db", "cf", "reason"]
+    ).unwrap();
+    pub static ref STORE_ENGINE_INGESTION_PICKED_LEVEL_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_engine_ingestion_picked_level",
+        "Histogram of ingestion picked level",
+        &["db", "cf"],
+        linear_buckets(0.0, 1.0, 7).unwrap()
     ).unwrap();
     pub static ref STORE_ENGINE_LOCATE_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_locate",

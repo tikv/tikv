@@ -26,7 +26,9 @@ use tikv::server::config::GrpcCompressionType;
 use tikv::server::gc_worker::GcConfig;
 use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig, IORateLimitConfig};
+use tikv::storage::config::{
+    BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IORateLimitConfig,
+};
 use tikv_util::config::{LogFormat, OptionReadableSize, ReadableDuration, ReadableSize};
 
 mod dynamic;
@@ -309,6 +311,7 @@ fn test_serde_custom_tikv_config() {
             max_bytes_for_level_multiplier: 8,
             compaction_style: DBCompactionStyle::Universal,
             disable_auto_compactions: true,
+            disable_write_stall: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             force_consistency_checks: true,
@@ -359,6 +362,7 @@ fn test_serde_custom_tikv_config() {
             max_bytes_for_level_multiplier: 8,
             compaction_style: DBCompactionStyle::Universal,
             disable_auto_compactions: true,
+            disable_write_stall: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             force_consistency_checks: true,
@@ -423,6 +427,7 @@ fn test_serde_custom_tikv_config() {
             max_bytes_for_level_multiplier: 8,
             compaction_style: DBCompactionStyle::Universal,
             disable_auto_compactions: true,
+            disable_write_stall: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             force_consistency_checks: true,
@@ -487,6 +492,7 @@ fn test_serde_custom_tikv_config() {
             max_bytes_for_level_multiplier: 8,
             compaction_style: DBCompactionStyle::Universal,
             disable_auto_compactions: true,
+            disable_write_stall: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             force_consistency_checks: true,
@@ -580,6 +586,7 @@ fn test_serde_custom_tikv_config() {
             max_bytes_for_level_multiplier: 8,
             compaction_style: DBCompactionStyle::Universal,
             disable_auto_compactions: true,
+            disable_write_stall: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             force_consistency_checks: true,
@@ -609,6 +616,13 @@ fn test_serde_custom_tikv_config() {
         enable_async_apply_prewrite: true,
         enable_ttl: true,
         ttl_check_poll_interval: ReadableDuration::hours(0),
+        flow_control: FlowControlConfig {
+            enable: false,
+            l0_files_threshold: 10,
+            memtables_threshold: 10,
+            soft_pending_compaction_bytes_limit: ReadableSize(1),
+            hard_pending_compaction_bytes_limit: ReadableSize(1),
+        },
         block_cache: BlockCacheConfig {
             shared: true,
             capacity: OptionReadableSize(Some(ReadableSize::gb(40))),
