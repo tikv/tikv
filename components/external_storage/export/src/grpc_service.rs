@@ -7,7 +7,7 @@ use crate::request::{restore_receiver, write_receiver};
 use anyhow::Context;
 use external_storage::request::anyhow_to_io_log_error;
 use grpcio::{self};
-use kvproto::backup as proto;
+use kvproto::brpb as proto;
 use slog_global::{error, info};
 use tokio::runtime::{Builder, Runtime};
 

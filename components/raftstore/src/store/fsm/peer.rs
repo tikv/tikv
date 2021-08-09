@@ -16,6 +16,7 @@ use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SwitchMode;
+use kvproto::kvrpcpb::DiskFullOpt;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
@@ -28,12 +29,14 @@ use kvproto::raft_serverpb::{
 };
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use protobuf::Message;
-use raft::eraftpb::{ConfChangeType, EntryType, MessageType};
+use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, Progress, ReadState, Ready, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
+use smallvec::{smallvec, SmallVec};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::sys::{disk, memory_usage_reaches_high_water};
-use tikv_util::time::duration_to_sec;
+use tikv_util::sys::disk::DiskUsage;
+use tikv_util::sys::memory_usage_reaches_high_water;
+use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::worker::{ScheduleError, Scheduler};
 use tikv_util::{box_err, debug, defer, error, info, trace, warn};
 use tikv_util::{escape, is_zero_duration, Either};
@@ -48,7 +51,7 @@ use crate::store::fsm::{
     ExecResult,
 };
 use crate::store::hibernate_state::{GroupState, HibernateState};
-use crate::store::local_metrics::RaftProposeMetrics;
+use crate::store::local_metrics::RaftMetrics;
 use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
@@ -124,10 +127,8 @@ where
     /// `skip_gc_raft_log_ticks`.
     skip_gc_raft_log_ticks: usize,
 
-    // Batch raft command which has the same header into an entry
+    /// Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
-
-    max_inflight_msgs: usize,
 
     trace: PeerMemoryTrace,
 }
@@ -139,7 +140,7 @@ where
     raft_entry_max_size: f64,
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
-    callbacks: Vec<(Callback<E::Snapshot>, usize)>,
+    callbacks: Vec<(Callback<E::Snapshot>, usize, TiInstant)>,
 }
 
 impl<EK, ER> Drop for PeerFsm<EK, ER>
@@ -236,7 +237,6 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
-                max_inflight_msgs: cfg.raft_max_inflight_msgs,
                 trace: PeerMemoryTrace::default(),
             }),
         ))
@@ -281,7 +281,6 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
-                max_inflight_msgs: cfg.raft_max_inflight_msgs,
                 trace: PeerMemoryTrace::default(),
             }),
         ))
@@ -317,6 +316,9 @@ where
 
     pub fn reset_hibernate_state(&mut self, state: GroupState) {
         self.hibernate_state.reset(state);
+        if state == GroupState::Idle {
+            self.peer.raft_group.raft.maybe_free_inflight_buffers();
+        }
     }
 
     pub fn maybe_hibernate(&mut self) -> bool {
@@ -377,6 +379,7 @@ where
     fn add(&mut self, cmd: RaftCommand<E::Snapshot>, req_size: u32) {
         let req_num = cmd.request.get_requests().len();
         let RaftCommand {
+            send_time,
             mut request,
             callback,
             ..
@@ -389,7 +392,7 @@ where
         } else {
             self.request = Some(request);
         };
-        self.callbacks.push((callback, req_num));
+        self.callbacks.push((callback, req_num, send_time));
         self.batch_req_size += req_size;
     }
 
@@ -407,14 +410,22 @@ where
         false
     }
 
-    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<E::Snapshot>> {
+    fn build(&mut self, metric: &mut RaftMetrics) -> Option<RaftCommand<E::Snapshot>> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
-                let (cb, _) = self.callbacks.pop().unwrap();
+                let (mut cb, _, send_time) = self.callbacks.pop().unwrap();
+                if let Callback::Write { request_times, .. } = &mut cb {
+                    if metric.waterfall_metrics {
+                        metric
+                            .batch_wait
+                            .observe(send_time.saturating_elapsed_secs());
+                    }
+                    *request_times = smallvec![send_time];
+                }
                 return Some(RaftCommand::new(req, cb));
             }
-            metric.batch += self.callbacks.len() - 1;
+            metric.propose.batch += self.callbacks.len() - 1;
             let mut cbs = std::mem::take(&mut self.callbacks);
             let proposed_cbs: Vec<ExtCallback> = cbs
                 .iter_mut()
@@ -454,11 +465,29 @@ where
                     }
                 }))
             };
-            let cb = Callback::write_ext(
+
+            let now = TiInstant::now();
+            let times: SmallVec<[TiInstant; 4]> = cbs
+                .iter_mut()
+                .filter_map(|cb| {
+                    if let Callback::Write { .. } = &mut cb.0 {
+                        if metric.waterfall_metrics {
+                            metric
+                                .batch_wait
+                                .observe(duration_to_sec(now.saturating_duration_since(cb.2)));
+                        }
+                        Some(cb.2)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let mut cb = Callback::write_ext(
                 Box::new(move |resp| {
                     let mut last_index = 0;
                     let has_error = resp.response.get_header().has_error();
-                    for (cb, req_num) in cbs {
+                    for (cb, req_num, _) in cbs {
                         let next_index = last_index + req_num;
                         let mut cmd_resp = RaftCmdResponse::default();
                         cmd_resp.set_header(resp.response.get_header().clone());
@@ -474,6 +503,11 @@ where
                 proposed_cb,
                 committed_cb,
             );
+
+            if let Callback::Write { request_times, .. } = &mut cb {
+                *request_times = times;
+            }
+
             return Some(RaftCommand::new(req, cb));
         }
         None
@@ -551,20 +585,30 @@ where
                         .propose
                         .request_wait_time
                         .observe(duration_to_sec(cmd.send_time.saturating_elapsed()) as f64);
-                    if let Some(Err(e)) = cmd.deadline.map(|deadline| deadline.check()) {
+                    if let Some(Err(e)) = cmd.extra_opts.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));
                         continue;
                     }
 
                     let req_size = cmd.request.compute_size();
-                    if self.fsm.batch_req_builder.can_batch(&cmd.request, req_size) {
+                    if self.ctx.cfg.cmd_batch
+                        && self.fsm.batch_req_builder.can_batch(&cmd.request, req_size)
+                        // Avoid to merge requests with different `DiskFullOpt`s into one,
+                        // so that normal writes can be rejected when proposing if the
+                        // store's disk is full.
+                        && cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull
+                    {
                         self.fsm.batch_req_builder.add(cmd, req_size);
                         if self.fsm.batch_req_builder.should_finish() {
                             self.propose_batch_raft_command();
                         }
                     } else {
                         self.propose_batch_raft_command();
-                        self.propose_raft_command(cmd.request, cmd.callback)
+                        self.propose_raft_command(
+                            cmd.request,
+                            cmd.callback,
+                            cmd.extra_opts.disk_full_opt,
+                        )
                     }
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
@@ -580,6 +624,11 @@ where
                     }
                 }
                 PeerMsg::Noop => {}
+                PeerMsg::Persisted {
+                    peer_id,
+                    ready_number,
+                    send_time,
+                } => self.on_persisted_msg(peer_id, ready_number, send_time),
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
                 PeerMsg::Destroy(peer_id) => {
                     if self.fsm.peer.peer_id() == peer_id {
@@ -598,12 +647,8 @@ where
     }
 
     fn propose_batch_raft_command(&mut self) {
-        if let Some(cmd) = self
-            .fsm
-            .batch_req_builder
-            .build(&mut self.ctx.raft_metrics.propose)
-        {
-            self.propose_raft_command(cmd.request, cmd.callback)
+        if let Some(cmd) = self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics) {
+            self.propose_raft_command(cmd.request, cmd.callback, DiskFullOpt::NotAllowedOnFull)
         }
     }
 
@@ -705,11 +750,8 @@ where
                 msg.msg_type = MessageType::MsgUnreachable;
                 msg.to = peer_id;
                 msg.from = self.fsm.peer.peer_id();
-                self.fsm.peer.send(
-                    &mut self.ctx.trans,
-                    vec![msg],
-                    &mut self.ctx.raft_metrics.send_message,
-                );
+                let ctx = &mut self.ctx;
+                self.fsm.peer.send(ctx, vec![msg]);
             }
         }
     }
@@ -871,6 +913,7 @@ where
                     },
                 )
             })),
+            DiskFullOpt::NotAllowedOnFull,
         );
     }
 
@@ -937,6 +980,19 @@ where
         }
     }
 
+    fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64, _send_time: TiInstant) {
+        if peer_id != self.fsm.peer_id() {
+            error!(
+                "peer id not match";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "persisted_peer_id" => peer_id,
+                "persisted_number" => ready_number,
+            );
+        }
+        // TODO: add truly async io logic
+    }
+
     fn report_snapshot_status(&mut self, to_peer_id: u64, status: SnapshotStatus) {
         let to_peer = match self.fsm.peer.get_peer_from_cache(to_peer_id) {
             Some(peer) => peer,
@@ -968,7 +1024,7 @@ where
             self.region().get_region_epoch().clone(),
             self.fsm.peer.peer.clone(),
         );
-        self.propose_raft_command(msg, cb);
+        self.propose_raft_command(msg, cb, DiskFullOpt::NotAllowedOnFull);
     }
 
     fn on_role_changed(&mut self, ready: &Ready) {
@@ -1242,6 +1298,31 @@ where
         }
     }
 
+    fn handle_reported_disk_usage(&mut self, msg: &RaftMessage) {
+        let peer_id = msg.get_from_peer().get_id();
+        let store_id = msg.get_from_peer().get_store_id();
+        let disk_full_peers = &mut self.fsm.peer.disk_full_peers;
+
+        if matches!(msg.disk_usage, DiskUsage::Normal) {
+            self.ctx.store_disk_usages.remove(&store_id);
+            if disk_full_peers.any && disk_full_peers.peers.contains_key(&peer_id) {
+                disk_full_peers.peers = HashMap::default();
+            }
+            return;
+        }
+
+        self.ctx.store_disk_usages.insert(store_id, msg.disk_usage);
+        if !disk_full_peers.any {
+            disk_full_peers.any = true;
+        } else if disk_full_peers
+            .peers
+            .get(&peer_id)
+            .map_or(true, |x| x.0 != msg.disk_usage)
+        {
+            disk_full_peers.peers = HashMap::default();
+        }
+    }
+
     fn on_raft_message(&mut self, msg: InspectedRaftMessage) -> Result<()> {
         let InspectedRaftMessage { heap_size, mut msg } = msg;
         let stepped = Cell::new(false);
@@ -1266,31 +1347,23 @@ where
             "to_peer_id" => msg.get_to_peer().get_id(),
         );
 
+        self.handle_reported_disk_usage(&msg);
+
         let msg_type = msg.get_message().get_msg_type();
-        let store_id = self.ctx.store_id();
-
-        if disk::disk_full_precheck(store_id) || self.ctx.is_disk_full {
-            let mut flag = false;
-            if MessageType::MsgAppend == msg_type {
-                let entries = msg.get_message().get_entries();
-                for i in entries {
-                    let entry_type = i.get_entry_type();
-                    if EntryType::EntryNormal == entry_type && !i.get_data().is_empty() {
-                        flag = true;
-                        break;
-                    }
-                }
-            } else if MessageType::MsgTimeoutNow == msg_type {
-                flag = true;
-            }
-
-            if flag {
-                debug!(
-                    "skip {:?} because of disk full", msg_type;
-                    "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
-                );
-                return Err(Error::Timeout("disk full".to_owned()));
-            }
+        if matches!(self.ctx.self_disk_usage, DiskUsage::AlreadyFull)
+            && [
+                MessageType::MsgSnapshot,
+                MessageType::MsgAppend,
+                MessageType::MsgTimeoutNow,
+            ]
+            .contains(&msg_type)
+        {
+            debug!(
+                "skip {:?} because of disk full", msg_type;
+                "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
+            );
+            self.ctx.raft_metrics.message_dropped.disk_full += 1;
+            return Ok(());
         }
 
         if !self.validate_raft_msg(&msg) {
@@ -2681,7 +2754,7 @@ where
             request.set_admin_request(admin);
             request
         };
-        self.propose_raft_command(req, Callback::None);
+        self.propose_raft_command(req, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
     }
 
     fn on_check_merge(&mut self) {
@@ -3380,7 +3453,12 @@ where
         }
     }
 
-    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback<EK::Snapshot>) {
+    fn propose_raft_command(
+        &mut self,
+        mut msg: RaftCmdRequest,
+        cb: Callback<EK::Snapshot>,
+        diskfullopt: DiskFullOpt,
+    ) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);
@@ -3426,7 +3504,7 @@ where
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
-        if self.fsm.peer.propose(self.ctx, cb, msg, resp) {
+        if self.fsm.peer.propose(self.ctx, cb, msg, resp, diskfullopt) {
             self.fsm.has_ready = true;
         }
 
@@ -3601,7 +3679,7 @@ where
         let peer = self.fsm.peer.peer.clone();
         let term = self.fsm.peer.get_index_term(compact_idx);
         let request = new_compact_log_request(region_id, peer, compact_idx, term);
-        self.propose_raft_command(request, Callback::None);
+        self.propose_raft_command(request, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
 
         self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
@@ -4040,7 +4118,7 @@ where
             self.fsm.peer.peer.clone(),
             &self.fsm.peer.consistency_state,
         );
-        self.propose_raft_command(req, Callback::None);
+        self.propose_raft_command(req, Callback::None, DiskFullOpt::NotAllowedOnFull);
     }
 
     fn on_ingest_sst_result(&mut self, ssts: Vec<SSTMetaInfo>) {
@@ -4343,8 +4421,8 @@ mod memtrace {
 
         pub fn raft_progress_size(&self) -> usize {
             let peer_cnt = self.peer.region().get_peers().len();
-            let inflight_size = self.max_inflight_msgs * mem::size_of::<u64>();
-            mem::size_of::<Progress>() * peer_cnt * 6 / 5 + inflight_size * peer_cnt
+            mem::size_of::<Progress>() * peer_cnt * 6 / 5
+                + self.peer.raft_group.raft.inflight_buffers_size()
         }
     }
 }
@@ -4352,7 +4430,7 @@ mod memtrace {
 #[cfg(test)]
 mod tests {
     use super::BatchRaftCmdRequestBuilder;
-    use crate::store::local_metrics::RaftProposeMetrics;
+    use crate::store::local_metrics::RaftMetrics;
     use crate::store::msg::{Callback, ExtCallback, RaftCommand};
 
     use engine_test::kv::KvTestEngine;
@@ -4369,7 +4447,7 @@ mod tests {
         let max_batch_size = 1000.0;
         let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new(max_batch_size);
         let mut q = Request::default();
-        let mut metric = RaftProposeMetrics::default();
+        let mut metric = RaftMetrics::new(true);
 
         let mut req = RaftCmdRequest::default();
         req.set_admin_request(AdminRequest::default());

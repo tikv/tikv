@@ -224,7 +224,7 @@ pub fn check_and_dump_raft_engine(config: &TiKvConfig, engine: &RocksEngine, thr
     // Clean the target engine if it exists.
     clear_raft_db(engine).expect("clear_raft_db");
 
-    let src_engine = RaftLogEngine::new(raft_engine_config.clone());
+    let src_engine = RaftLogEngine::new(raft_engine_config.clone()).expect("open raft engine");
 
     let count_size = Arc::new(AtomicUsize::new(0));
     let mut count_region = 0;
@@ -333,7 +333,7 @@ mod tests {
         }
 
         // Dump logs from RocksEngine to RaftLogEngine.
-        let raft_engine = RaftLogEngine::new(cfg.raft_engine.config());
+        let raft_engine = RaftLogEngine::new(cfg.raft_engine.config()).expect("open raft engine");
         if continue_on_aborted {
             let mut batch = raft_engine.log_batch(0);
             set_write_batch(25, &mut batch);
