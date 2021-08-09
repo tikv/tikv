@@ -9,7 +9,7 @@ use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWrite
 use external_storage_export::ExternalStorage;
 use file_system::Sha256Reader;
 use futures_util::io::AllowStdIo;
-use kvproto::backup::File;
+use kvproto::brpb::File;
 use kvproto::metapb::Region;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;

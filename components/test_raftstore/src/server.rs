@@ -25,7 +25,6 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{PerfLevel, RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
-use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::errors::Error as RaftError;
 use raftstore::router::{
     LocalReadRouter, RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter,
@@ -38,6 +37,10 @@ use raftstore::store::{
     SplitCheckRunner, SplitConfigManager,
 };
 use raftstore::Result;
+use raftstore::{
+    coprocessor::{CoprocessorHost, RegionInfoAccessor},
+    store::msg::RaftCmdExtraOpts,
+};
 use security::SecurityManager;
 use tikv::coprocessor;
 use tikv::coprocessor_v2;
@@ -53,6 +56,7 @@ use tikv::server::{
     Server, ServerTransport,
 };
 use tikv::storage;
+use tikv::storage::txn::flow_controller::FlowController;
 use tikv::{
     config::{ConfigController, TiKvConfig},
     server::raftkv::ReplicaReadLockChecker,
@@ -312,6 +316,7 @@ impl Simulator for ServerCluster {
             lock_mgr.clone(),
             concurrency_manager.clone(),
             lock_mgr.get_pipelined(),
+            Arc::new(FlowController::empty()),
         )?;
         self.storages.insert(node_id, raft_engine);
 
@@ -533,7 +538,7 @@ impl Simulator for ServerCluster {
             None => return Err(box_err!("missing sender for store {}", node_id)),
             Some(meta) => meta.sim_router.clone(),
         };
-        router.send_command(request, cb)
+        router.send_command(request, cb, RaftCmdExtraOpts::default())
     }
 
     fn async_read(

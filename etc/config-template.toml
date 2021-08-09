@@ -259,6 +259,30 @@
 ## If it's not set, 45% of available system memory will be used.
 # capacity = "1GB"
 
+[storage.flow-control]
+## Flow controller is used to throttle the write rate at scheduler level, aiming
+## to substitute the write stall mechanism of RocksDB. It features in two points:
+##   * throttle at scheduler, so raftstore and apply won't be blocked anymore
+##   * better control on the throttle rate to avoid QPS drop under heavy write
+##
+## Support change dynamically. 
+## When enabled, it disables kvdb's write stall and raftdb's write stall(except memtable) and vice versa.
+# enable = true
+
+## When the number of immutable memtables of kvdb reaches the threshold, the flow controller begins to work
+# memtables-threshold = 5
+
+## When the number of SST files of level-0 of kvdb reaches the threshold, the flow controller begins to work
+# l0-files-threshold = 9
+
+## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to 
+## reject some write requests with `ServerIsBusy` error. 
+# soft-pending-compaction-bytes-limit = "192GB"
+
+## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to 
+## reject all write requests with `ServerIsBusy` error. 
+# hard-pending-compaction-bytes-limit = "1024GB"
+
 [storage.io-rate-limit]
 ## Maximum I/O bytes that this server can write to or read from disk (determined by mode)
 ## in one second. Internally it prefers throttling background operations over foreground

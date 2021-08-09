@@ -27,5 +27,6 @@ pub trait ColumnFamilyOptions {
     fn get_target_file_size_base(&self) -> u64;
     fn set_disable_auto_compactions(&mut self, v: bool);
     fn get_disable_auto_compactions(&self) -> bool;
+    fn get_disable_write_stall(&self) -> bool;
     fn set_sst_partitioner_factory<F: SstPartitionerFactory>(&mut self, factory: F);
 }
