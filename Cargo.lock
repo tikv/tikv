@@ -3345,17 +3345,19 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=master#a657f1336e23bc6cb1e059179da3e8f214670167"
+source = "git+https://github.com/tikv/raft-engine?branch=master#a21012f921d848eb02e86eb722462f1db9cacd73"
 dependencies = [
  "byteorder",
  "crc32fast",
  "crossbeam",
+ "fail",
  "fxhash",
  "hex 0.4.2",
  "lazy_static",
  "log",
  "lz4-sys",
  "nix 0.18.0",
+ "parking_lot",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",

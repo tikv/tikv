@@ -1254,7 +1254,8 @@ impl TiKVServer<RaftLogEngine> {
 
         // Create raft engine.
         let raft_config = self.config.raft_engine.config();
-        let raft_engine = RaftLogEngine::new(raft_config);
+        let raft_engine = RaftLogEngine::new(raft_config)
+            .unwrap_or_else(|e| fatal!("failed to create kv engine: {}", e));
 
         // Try to dump and recover raft data.
         check_and_dump_raft_db(&self.config, &raft_engine, &env, 8);
