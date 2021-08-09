@@ -140,10 +140,6 @@ impl WriteData {
         self.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull
     }
 
-    pub fn set_allowed_on_disk_already_full(&mut self) {
-        self.disk_full_opt = DiskFullOpt::AllowedOnAlreadyFull
-    }
-
     pub fn set_disk_full_opt(&mut self, level: DiskFullOpt) {
         self.disk_full_opt = level
     }
