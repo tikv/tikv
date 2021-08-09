@@ -144,7 +144,7 @@ fn new_debug_executor(
     } else {
         let mut config = cfg.raft_engine.config();
         config.dir = canonicalize_sub_path(data_dir, &config.dir).unwrap();
-        let raft_db = RaftLogEngine::new(config);
+        let raft_db = RaftLogEngine::new(config).unwrap();
         let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
         Box::new(debugger) as Box<dyn DebugExecutor>
     }
