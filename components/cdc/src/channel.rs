@@ -231,8 +231,8 @@ impl<'a> Drain {
                 sink.feed((e, write_flags)).await?;
             }
             sink.flush().await?;
-            total_event_bytes.inc_by(event_bytes as u64);
-            total_resolved_ts_bytes.inc_by(resolved_ts_bytes as u64);
+            total_event_bytes.inc_by(event_bytes as i64);
+            total_resolved_ts_bytes.inc_by(resolved_ts_bytes as i64);
         }
         Ok(())
     }
