@@ -1,9 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use procfs::process::Process;
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::mem::MaybeUninit;
-use std::process;
+use std::path::PathBuf;
 
 // ## Differences between cgroup v1 and v2:
 // ### memory subsystem, memory limitation
@@ -31,31 +32,45 @@ use std::process;
 // For more details about cgrop v2, PTAL
 // https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html.
 
+const CONTROLLERS: &[&str] = &["memory", "cpuset", "cpu"];
+
 pub struct CGroupSys {
+    // map[controller] -> path.
     cgroups: HashMap<String, String>,
+    // map[controller] -> (root, mount_point).
+    mount_points: HashMap<String, (String, PathBuf)>,
     is_v2: bool,
 }
 
 impl CGroupSys {
     pub fn new() -> Self {
-        let lines = read_to_string(&format!("/proc/{}/cgroup", process::id())).unwrap();
+        let lines = read_to_string("/proc/self/cgroup").unwrap();
         let is_v2 = is_cgroup2_unified_mode();
-        let cgroups = if !is_v2 {
-            parse_proc_cgroup_v1(&lines)
+        let (cgroups, mount_points) = if !is_v2 {
+            (parse_proc_cgroup_v1(&lines), cgroup_mountinfos_v1())
         } else {
-            parse_proc_cgroup_v2(&lines)
+            (parse_proc_cgroup_v2(&lines), cgroup_mountinfos_v2())
         };
-        CGroupSys { cgroups, is_v2 }
+
+        CGroupSys {
+            cgroups,
+            mount_points,
+            is_v2,
+        }
     }
 
     /// -1 means no limit.
     pub fn memory_limit_in_bytes(&self) -> i64 {
         let path = if self.is_v2 {
             let group = self.cgroups.get("").unwrap();
-            format!("/sys/fs/cgroup/{}/memory.max", group)
+            let (root, mount_point) = self.mount_points.get("").unwrap();
+            let path = build_path(group, &root, mount_point);
+            format!("{}/memory.max", path.to_str().unwrap())
         } else {
             let group = self.cgroups.get("memory").unwrap();
-            format!("/sys/fs/cgroup/memory/{}/memory.limit_in_bytes", group)
+            let (root, mount_point) = self.mount_points.get("memory").unwrap();
+            let path = build_path(group, &root, mount_point);
+            format!("{}/memory.limit_in_bytes", path.to_str().unwrap())
         };
         read_to_string(&path).map_or(-1, |x| parse_memory_max(x.trim()))
     }
@@ -63,10 +78,14 @@ impl CGroupSys {
     pub fn cpuset_cores(&self) -> HashSet<usize> {
         let path = if self.is_v2 {
             let group = self.cgroups.get("").unwrap();
-            format!("/sys/fs/cgroup/{}/cpuset.cpus", group)
+            let (root, mount_point) = self.mount_points.get("").unwrap();
+            let path = build_path(group, &root, mount_point);
+            format!("{}/cpuset.cpus", path.to_str().unwrap())
         } else {
             let group = self.cgroups.get("cpuset").unwrap();
-            format!("/sys/fs/cgroup/cpuset/{}/cpuset.cpus", group)
+            let (root, mount_point) = self.mount_points.get("cpuset").unwrap();
+            let path = build_path(group, &root, mount_point);
+            format!("{}/cpuset.cpus", path.to_str().unwrap())
         };
         read_to_string(&path).map_or_else(|_| HashSet::new(), |x| parse_cpu_cores(x.trim()))
     }
@@ -75,14 +94,18 @@ impl CGroupSys {
     pub fn cpu_quota(&self) -> Option<f64> {
         if self.is_v2 {
             let group = self.cgroups.get("").unwrap();
-            let path = format!("/sys/fs/cgroup/{}/cpu.max", group);
+            let (root, mount_point) = self.mount_points.get("").unwrap();
+            let path = build_path(group, &root, mount_point);
+            let path = format!("{}/cpu.max", path.to_str().unwrap());
             if let Ok(buffer) = read_to_string(&path) {
                 return parse_cpu_quota_v2(buffer.trim());
             }
         } else {
             let group = self.cgroups.get("cpu").unwrap();
-            let path1 = format!("/sys/fs/cgroup/cpu/{}/cpu.cfs_quota_us", group);
-            let path2 = format!("/sys/fs/cgroup/cpu/{}/cpu.cfs_period_us", group);
+            let (root, mount_point) = self.mount_points.get("cpu").unwrap();
+            let path = build_path(group, &root, mount_point);
+            let path1 = format!("{}/cpu.cfs_quota_us", path.to_str().unwrap());
+            let path2 = format!("{}/cpu.cfs_period_us", path.to_str().unwrap());
             if let (Ok(buffer1), Ok(buffer2)) = (read_to_string(&path1), read_to_string(&path2)) {
                 return parse_cpu_quota_v1(buffer1.trim(), buffer2.trim());
             }
@@ -127,6 +150,43 @@ fn parse_proc_cgroup_v2(lines: &str) -> HashMap<String, String> {
     assert_eq!(subsystems.len(), 1);
     assert_eq!(subsystems.keys().next().unwrap(), "");
     subsystems
+}
+
+fn cgroup_mountinfos_v1() -> HashMap<String, (String, PathBuf)> {
+    let mut ret = HashMap::new();
+    let infos = Process::myself().and_then(|x| x.mountinfo()).unwrap();
+    for cg_info in infos.into_iter().filter(|x| x.fs_type == "cgroup") {
+        for controller in CONTROLLERS {
+            if cg_info.super_options.contains_key(*controller) {
+                let key = controller.to_string();
+                let value = (cg_info.root, cg_info.mount_point);
+                assert!(ret.insert(key, value).is_none());
+                break;
+            }
+        }
+    }
+    for controller in CONTROLLERS {
+        assert!(ret.contains_key(*controller));
+    }
+    ret
+}
+
+fn cgroup_mountinfos_v2() -> HashMap<String, (String, PathBuf)> {
+    let mut ret = HashMap::new();
+    let infos = Process::myself().and_then(|x| x.mountinfo()).unwrap();
+    let mut cg_infos = infos.into_iter().filter(|x| x.fs_type == "cgroup2");
+    let cg_info = cg_infos.next().unwrap();
+    assert!(cg_infos.next().is_none()); // Only one item for cgroup-2.
+    ret.insert("".to_string(), (cg_info.root, cg_info.mount_point));
+    ret
+}
+
+fn build_path(path: &str, root: &str, mount_point: &PathBuf) -> PathBuf {
+    assert!(path.starts_with('/') && root.starts_with('/'));
+    let relative = path.strip_prefix(root).unwrap();
+    let mut absolute = mount_point.clone();
+    absolute.push(relative);
+    absolute
 }
 
 fn parse_memory_max(line: &str) -> i64 {
