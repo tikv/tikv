@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::Arc;
 
-use collections::HashMap;
+use collections::{hash_map_with_capacity, HashMap};
 use futures::SinkExt;
 use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
 use kvproto::resource_usage_agent::{CpuTimeRecord, ResourceUsageAgentClient};
@@ -69,9 +69,6 @@ pub struct ResourceMeteringReporter {
     // timestamp_secs -> cpu_time_ms
     others_ts: Vec<u64>,
     others_cpu_time: Vec<u32>,
-
-    tmp_group_map: HashMap<Vec<u8>, u32>,
-    tmp_top_vec: Vec<u32>,
 }
 
 impl ResourceMeteringReporter {
@@ -86,8 +83,6 @@ impl ResourceMeteringReporter {
             records: HashMap::default(),
             others_ts: Vec::default(),
             others_cpu_time: Vec::default(),
-            tmp_group_map: HashMap::default(),
-            tmp_top_vec: Vec::default(),
         };
 
         if reporter.config.should_report() {
@@ -132,27 +127,21 @@ impl Runnable for ResourceMeteringReporter {
                 }
             }
             Task::CpuRecords(records) => {
-                let max_resource_groups = self.config.max_resource_groups;
-                let tmp_group_map = &mut self.tmp_group_map;
-                let tmp_top_vec = &mut self.tmp_top_vec;
-                tmp_group_map.clear();
-                tmp_top_vec.clear();
-
-                // Sum the CPU time by tag
+                // SELECT tag, SUM(ms) FROM records WHERE tag != "" GROUP BY (tag)
+                let mut tmp_group_map = hash_map_with_capacity(records.records.len());
                 for (tag, ms) in &records.records {
                     let tag = &tag.infos.extra_attachment;
-                    if tag.is_empty() {
-                        continue;
+                    // This reporter doesn't care about records without a set tag.
+                    if !tag.is_empty() {
+                        *tmp_group_map.entry(tag).or_insert(0) += *ms as u32;
                     }
-
-                    *tmp_group_map.entry(tag.clone()).or_insert(0) += *ms as u32;
                 }
                 if tmp_group_map.is_empty() {
                     return;
                 }
 
                 // If the number of records is greater than `max_resource_groups` in this round, we
-                // needs to evict records with little CPU time.
+                // needs to evict records with little CPU time in order to save memory.
                 //
                 // To implement it, a `threshold` to filter out those records will be calculated. It
                 // will be either:
@@ -171,7 +160,7 @@ impl Runnable for ResourceMeteringReporter {
                 //   |          | CPU Time |   90  |   60  |   50  |   30  |   10  |
                 //   +----------+----------+-------+-------+-------+-------+-------+
                 //   | Threshold           |   0                                   |
-                //   +----------+----------+-------+-------+-------+-------+-------+
+                //   +---------------------+-------+-------+-------+-------+-------+
                 //   | Will be Saved       |   Y   |   Y   |   Y   |   Y   |   Y   |
                 //   +---------------------+-------+-------+-------+-------+-------+
                 //
@@ -184,30 +173,37 @@ impl Runnable for ResourceMeteringReporter {
                 //   |          | CPU Time |   90  |   60  |   50  |   30  |   10  |
                 //   +----------+----------+-------+-------+-------+-------+-------+
                 //   | Threshold           |   30                      ^           |
-                //   +----------+----------+-------+-------+-------+-------+-------+
+                //   +---------------------+-------+-------+-------+-------+-------+
                 //   | Will be Saved       |   Y   |   Y   |   Y   |   N   |   N   |
                 //   +---------------------+-------+-------+-------+-------+-------+
-                let threshold = (tmp_group_map.len() > max_resource_groups)
-                    .then(|| {
-                        tmp_top_vec.extend(tmp_group_map.values());
-                        let (_, threshold, _) = tmp_top_vec
-                            .select_nth_unstable_by(max_resource_groups, |a, b| b.cmp(a));
-                        *threshold
-                    })
-                    .unwrap_or(0);
+                let limit = self.config.max_resource_groups;
+                let threshold = if tmp_group_map.len() <= limit {
+                    0
+                } else {
+                    let mut tmp_top_vec = tmp_group_map.values().collect::<Vec<_>>();
+                    **tmp_top_vec.select_nth_unstable_by(limit, |a, b| b.cmp(a)).1
+                };
 
-                let timestamp_secs = records.begin_unix_time_secs;
+                // For the records that are filtered out, their CPU times are accumulated in `other`.
                 let mut other = 0;
+                let timestamp_secs = records.begin_unix_time_secs;
                 for (tag, ms) in tmp_group_map.drain() {
-                    if ms > threshold {
-                        let (ts, cpu) = self.records.entry(tag).or_insert((vec![], vec![]));
+                    if ms <= threshold {
+                        other += ms;
+                        continue;
+                    }
+
+                    // Push `ts` and `cpu` to records with associated tag.
+                    // To save some `clone`s, the `HashMap::entry` API is not used.
+                    if let Some((ts, cpu)) = self.records.get_mut(tag) {
                         ts.push(timestamp_secs);
                         cpu.push(ms);
                     } else {
-                        other += ms;
+                        self.records
+                            .insert(tag.clone(), (vec![timestamp_secs], vec![ms]));
                     }
                 }
-                if other > 0 {
+                if other != 0 {
                     self.others_ts.push(timestamp_secs);
                     self.others_cpu_time.push(other);
                 }
