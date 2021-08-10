@@ -665,6 +665,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cop_read_pools.handle()
         };
 
+        // Register cdc.
+        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
+        cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        cfg_controller.register(
+            tikv::config::Module::Raftstore,
+            Box::new(RaftstoreConfigManager(raft_store)),
+        );
+
         // Create resolved ts worker
         let rts_worker = if self.config.resolved_ts.enable {
             let worker = Box::new(LazyWorker::new("resolved-ts"));
@@ -773,11 +781,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             Box::new(SplitCheckConfigManager(split_check_scheduler.clone())),
         );
 
-        cfg_controller.register(
-            tikv::config::Module::Raftstore,
-            Box::new(RaftstoreConfigManager(raft_store)),
-        );
-
         let split_config_manager =
             SplitConfigManager(Arc::new(VersionTrack::new(self.config.split.clone())));
         cfg_controller.register(
@@ -839,8 +842,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Start CDC.
-        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
-        cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         let cdc_memory_quota = MemoryQuota::new(self.config.cdc.sink_memory_quota.0 as _);
         let cdc_endpoint = cdc::Endpoint::new(
             &self.config.cdc,
@@ -854,7 +855,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.security_mgr.clone(),
             cdc_memory_quota.clone(),
         );
-        // Register cdc
         cfg_controller.register(
             tikv::config::Module::CDC,
             Box::new(CdcConfigManager(cdc_worker.scheduler())),
