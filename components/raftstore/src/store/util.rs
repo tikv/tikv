@@ -1235,6 +1235,62 @@ impl RegionReadProgressCore {
     }
 }
 
+/// Represent the duration of all stages of raftstore recorded by one inspecting.
+#[derive(Default, Debug)]
+pub struct RaftstoreDuration {
+    pub store_wait_duration: Option<std::time::Duration>,
+    pub store_process_duration: Option<std::time::Duration>,
+    pub apply_wait_duration: Option<std::time::Duration>,
+    pub apply_process_duration: Option<std::time::Duration>,
+}
+
+impl RaftstoreDuration {
+    pub fn sum(&self) -> std::time::Duration {
+        self.store_wait_duration.unwrap_or_default()
+            + self.store_process_duration.unwrap_or_default()
+            + self.apply_wait_duration.unwrap_or_default()
+            + self.apply_process_duration.unwrap_or_default()
+    }
+}
+
+/// Used to inspect the latency of all stages of raftstore.
+pub struct LatencyInspector {
+    id: u64,
+    duration: RaftstoreDuration,
+    cb: Box<dyn FnOnce(u64, RaftstoreDuration) + Send>,
+}
+
+impl LatencyInspector {
+    pub fn new(id: u64, cb: Box<dyn FnOnce(u64, RaftstoreDuration) + Send>) -> Self {
+        Self {
+            id,
+            cb,
+            duration: RaftstoreDuration::default(),
+        }
+    }
+
+    pub fn record_store_wait(&mut self, duration: std::time::Duration) {
+        self.duration.store_wait_duration = Some(duration);
+    }
+
+    pub fn record_store_process(&mut self, duration: std::time::Duration) {
+        self.duration.store_process_duration = Some(duration);
+    }
+
+    pub fn record_apply_wait(&mut self, duration: std::time::Duration) {
+        self.duration.apply_wait_duration = Some(duration);
+    }
+
+    pub fn record_apply_process(&mut self, duration: std::time::Duration) {
+        self.duration.apply_process_duration = Some(duration);
+    }
+
+    /// Call the callback.
+    pub fn finish(self) {
+        (self.cb)(self.id, self.duration);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::thread;

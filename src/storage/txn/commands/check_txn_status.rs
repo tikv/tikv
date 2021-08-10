@@ -120,7 +120,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         }
 
         let pr = ProcessResult::TxnStatus { txn_status };
-        let write_data = WriteData::from_modifies(txn.into_modifies());
+        let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_allowed_on_disk_already_full();
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write: write_data,
@@ -921,6 +922,7 @@ pub mod tests {
             1,
             /* min_commit_ts */ TimeStamp::zero(),
             /* max_commit_ts */ TimeStamp::zero(),
+            false,
         );
         must_success(
             &engine,
@@ -1042,6 +1044,7 @@ pub mod tests {
             1,
             /* min_commit_ts */ TimeStamp::zero(),
             /* max_commit_ts */ TimeStamp::zero(),
+            false,
         );
         must_success(
             &engine,

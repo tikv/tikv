@@ -19,7 +19,7 @@ use tokio::runtime::Handle;
 use crate::config::ConfigController;
 use crate::server::debug::{Debugger, Error, Result};
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::msg::Callback;
+use raftstore::store::msg::{Callback, RaftCmdExtraOpts};
 use tikv_util::metrics;
 
 fn error_to_status(e: Error) -> RpcStatus {
@@ -505,7 +505,7 @@ fn region_detail<T: RaftStoreRouter<RocksEngine>>(
 
     async move {
         raft_router
-            .send_command(raft_cmd, cb)
+            .send_command(raft_cmd, cb, RaftCmdExtraOpts::default())
             .map_err(|e| Error::Other(Box::new(e)))?;
 
         let mut r = rx.map_err(|e| Error::Other(Box::new(e))).await?;
@@ -545,7 +545,7 @@ fn consistency_check<T: RaftStoreRouter<RocksEngine>>(
 
     async move {
         raft_router
-            .send_command(raft_cmd, cb)
+            .send_command(raft_cmd, cb, RaftCmdExtraOpts::default())
             .map_err(|e| Error::Other(Box::new(e)))?;
 
         let r = rx.map_err(|e| Error::Other(Box::new(e))).await?;

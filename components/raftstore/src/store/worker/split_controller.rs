@@ -56,7 +56,7 @@ where
     let mut pre_sum = vec![];
     let mut sum = 0;
     for item in iter {
-        sum += read(&item);
+        sum += read(item);
         pre_sum.push(sum);
     }
     pre_sum
@@ -208,7 +208,7 @@ impl Recorder {
         let mut samples: Vec<Sample> = self.convert(sampled_key_ranges);
         for key_ranges in &self.key_ranges {
             for key_range in key_ranges {
-                Recorder::sample(&mut samples, &key_range);
+                Recorder::sample(&mut samples, key_range);
             }
         }
         Recorder::split_key(

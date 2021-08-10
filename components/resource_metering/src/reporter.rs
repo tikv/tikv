@@ -76,7 +76,7 @@ pub struct ResourceMeteringReporter {
 
 impl ResourceMeteringReporter {
     pub fn new(config: Config, scheduler: Scheduler<Task>, env: Arc<Environment>) -> Self {
-        Self {
+        let mut reporter = Self {
             config,
             env,
             scheduler,
@@ -88,15 +88,21 @@ impl ResourceMeteringReporter {
             others_cpu_time: Vec::default(),
             tmp_group_map: HashMap::default(),
             tmp_top_vec: Vec::default(),
+        };
+
+        if reporter.config.should_report() {
+            reporter.init_client();
         }
+
+        reporter
     }
 
-    pub fn init_client(&mut self, addr: &str) {
+    pub fn init_client(&mut self) {
         let channel = {
             let cb = ChannelBuilder::new(self.env.clone())
                 .keepalive_time(Duration::from_secs(10))
                 .keepalive_timeout(Duration::from_secs(3));
-            cb.connect(addr)
+            cb.connect(&self.config.agent_address)
         };
         self.client = Some(ResourceUsageAgentClient::new(channel));
         if self.cpu_records_collector.is_none() {
@@ -113,16 +119,17 @@ impl Runnable for ResourceMeteringReporter {
     fn run(&mut self, task: Self::Task) {
         match task {
             Task::ConfigChange(new_config) => {
-                if !new_config.should_report() {
+                let old_config_enabled = self.config.enabled;
+                let old_config_agent_address = self.config.agent_address.clone();
+                self.config = new_config;
+                if !self.config.should_report() {
                     self.client.take();
                     self.cpu_records_collector.take();
-                } else if new_config.agent_address != self.config.agent_address
-                    || new_config.enabled != self.config.enabled
+                } else if self.config.agent_address != old_config_agent_address
+                    || self.config.enabled != old_config_enabled
                 {
-                    self.init_client(&new_config.agent_address);
+                    self.init_client();
                 }
-
-                self.config = new_config;
             }
             Task::CpuRecords(records) => {
                 let max_resource_groups = self.config.max_resource_groups;

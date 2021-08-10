@@ -17,7 +17,7 @@ use rusoto_s3::{util::AddressingStyle, *};
 use tokio::time::{sleep, timeout};
 
 use cloud::blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, StringNonEmpty};
-pub use kvproto::backup::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
+pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
 use tikv_util::debug;
 use tikv_util::stream::{block_on_external_io, error_stream, retry};
 
@@ -131,7 +131,7 @@ impl Config {
 
 impl BlobConfig for Config {
     fn name(&self) -> &'static str {
-        &STORAGE_NAME
+        STORAGE_NAME
     }
 
     fn url(&self) -> io::Result<url::Url> {

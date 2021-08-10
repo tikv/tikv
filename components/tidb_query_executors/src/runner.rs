@@ -77,30 +77,30 @@ impl BatchExecutorsRunner<()> {
             match ed.get_tp() {
                 ExecType::TypeTableScan => {
                     let descriptor = ed.get_tbl_scan();
-                    BatchTableScanExecutor::check_supported(&descriptor)
+                    BatchTableScanExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchTableScanExecutor: {}", e))?;
                 }
                 ExecType::TypeIndexScan => {
                     let descriptor = ed.get_idx_scan();
-                    BatchIndexScanExecutor::check_supported(&descriptor)
+                    BatchIndexScanExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchIndexScanExecutor: {}", e))?;
                 }
                 ExecType::TypeSelection => {
                     let descriptor = ed.get_selection();
-                    BatchSelectionExecutor::check_supported(&descriptor)
+                    BatchSelectionExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchSelectionExecutor: {}", e))?;
                 }
                 ExecType::TypeAggregation | ExecType::TypeStreamAgg
                     if ed.get_aggregation().get_group_by().is_empty() =>
                 {
                     let descriptor = ed.get_aggregation();
-                    BatchSimpleAggregationExecutor::check_supported(&descriptor)
+                    BatchSimpleAggregationExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchSimpleAggregationExecutor: {}", e))?;
                 }
                 ExecType::TypeAggregation => {
                     let descriptor = ed.get_aggregation();
-                    if BatchFastHashAggregationExecutor::check_supported(&descriptor).is_err() {
-                        BatchSlowHashAggregationExecutor::check_supported(&descriptor)
+                    if BatchFastHashAggregationExecutor::check_supported(descriptor).is_err() {
+                        BatchSlowHashAggregationExecutor::check_supported(descriptor)
                             .map_err(|e| other_err!("BatchSlowHashAggregationExecutor: {}", e))?;
                     }
                 }
@@ -108,13 +108,13 @@ impl BatchExecutorsRunner<()> {
                     // Note: We won't check whether the source of stream aggregation is in order.
                     //       It is undefined behavior if the source is unordered.
                     let descriptor = ed.get_aggregation();
-                    BatchStreamAggregationExecutor::check_supported(&descriptor)
+                    BatchStreamAggregationExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchStreamAggregationExecutor: {}", e))?;
                 }
                 ExecType::TypeLimit => {}
                 ExecType::TypeTopN => {
                     let descriptor = ed.get_top_n();
-                    BatchTopNExecutor::check_supported(&descriptor)
+                    BatchTopNExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchTopNExecutor: {}", e))?;
                 }
                 ExecType::TypeJoin => {
@@ -247,8 +247,7 @@ pub fn build_executors<S: Storage + 'static>(
                 )
             }
             ExecType::TypeAggregation => {
-                if BatchFastHashAggregationExecutor::check_supported(&ed.get_aggregation()).is_ok()
-                {
+                if BatchFastHashAggregationExecutor::check_supported(ed.get_aggregation()).is_ok() {
                     EXECUTOR_COUNT_METRICS.batch_fast_hash_aggr.inc();
 
                     Box::new(

@@ -55,6 +55,9 @@ pub enum Error {
     #[error("peer is not leader for region {0}, leader may {1:?}")]
     NotLeader(u64, Option<metapb::Peer>),
 
+    #[error("store ids {0:?}, errmsg {1}")]
+    DiskFull(Vec<u64>, String),
+
     #[error(
         "key {} is not in region key range [{}, {}) for region {}",
         log_wrappers::Value::key(.0),
@@ -147,6 +150,10 @@ impl From<Error> for errorpb::Error {
                     errorpb.mut_not_leader().set_leader(leader);
                 }
                 errorpb.mut_not_leader().set_region_id(region_id);
+            }
+            Error::DiskFull(store_id, reason) => {
+                errorpb.mut_disk_full().set_store_id(store_id);
+                errorpb.mut_disk_full().set_reason(reason)
             }
             Error::RaftEntryTooLarge {
                 region_id,
@@ -265,6 +272,7 @@ impl ErrorCodeExt for Error {
             Error::StoreNotMatch { .. } => error_code::raftstore::STORE_NOT_MATCH,
             Error::RegionNotFound(_) => error_code::raftstore::REGION_NOT_FOUND,
             Error::NotLeader(..) => error_code::raftstore::NOT_LEADER,
+            Error::DiskFull(..) => error_code::raftstore::DISK_FULL,
             Error::StaleCommand => error_code::raftstore::STALE_COMMAND,
             Error::RegionNotInitialized(_) => error_code::raftstore::REGION_NOT_INITIALIZED,
             Error::KeyNotInRegion(..) => error_code::raftstore::KEY_NOT_IN_REGION,

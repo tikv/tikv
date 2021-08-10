@@ -47,9 +47,9 @@ impl<'a> JsonRef<'a> {
         for (expr, value) in path_expr_list.iter().zip(values.into_iter()) {
             let modifier = BinaryModifier::new(res.as_ref());
             res = match mt {
-                ModifyType::Insert => modifier.insert(&expr, value)?,
-                ModifyType::Replace => modifier.replace(&expr, value)?,
-                ModifyType::Set => modifier.set(&expr, value)?,
+                ModifyType::Insert => modifier.insert(expr, value)?,
+                ModifyType::Replace => modifier.replace(expr, value)?,
+                ModifyType::Set => modifier.set(expr, value)?,
             };
         }
         Ok(res)
