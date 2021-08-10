@@ -1,11 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
-<<<<<<< HEAD
-use std::time::{Duration, Instant};
-=======
 use std::time::Duration;
->>>>>>> 0718f5da2... cdc: reduce resolved ts message size (#10666)
 
 use futures::{
     channel::mpsc::{
@@ -235,8 +231,8 @@ impl<'a> Drain {
                 sink.feed((e, write_flags)).await?;
             }
             sink.flush().await?;
-            total_event_bytes.inc_by(event_bytes as u64);
-            total_resolved_ts_bytes.inc_by(resolved_ts_bytes as u64);
+            total_event_bytes.inc_by(event_bytes as i64);
+            total_resolved_ts_bytes.inc_by(resolved_ts_bytes as i64);
         }
         Ok(())
     }

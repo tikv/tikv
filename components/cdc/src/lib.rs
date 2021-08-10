@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(box_patterns)]
+#![allow(clippy::field_reassign_with_default)]
 
 #[macro_use]
 extern crate failure;

@@ -6,6 +6,7 @@ use protobuf::Message;
 
 use cdc::CdcEvent;
 
+#[allow(clippy::field_reassign_with_default)]
 fn bench_cdc_event_size(c: &mut Criterion) {
     let mut group = c.benchmark_group("bench_cdc_event_size");
 

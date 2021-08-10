@@ -2236,8 +2236,9 @@ mod tests {
                     conn_id,
                     version: FeatureGate::batch_resolved_ts(),
                 });
-                let resolver = Resolver::new(region_id);
-                let observe_id = ep.capture_regions[&region_id].handle.id;
+                let mut resolver = Resolver::new(region_id);
+                resolver.init();
+                let observe_id = ep.capture_regions[&region_id].id;
                 let mut region = Region::default();
                 region.set_id(region_id);
                 ep.on_region_ready(observe_id, resolver, region);
