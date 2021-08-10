@@ -8,6 +8,7 @@ use kvproto::raft_cmdpb::*;
 use raft::eraftpb::MessageType;
 use raftstore::store::msg::*;
 use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 use test_raftstore::*;
 
@@ -336,4 +337,30 @@ fn test_majority_disk_full() {
         fail::remove(get_fp(DiskUsage::AlreadyFull, i + 1));
         fail::remove(get_fp(DiskUsage::AlmostFull, i + 1));
     }
+}
+
+#[test]
+fn test_disk_full_followers_with_hibernate_regions() {
+    let mut cluster = new_node_cluster(0, 2);
+    // To ensure the thread has full store disk usage infomation.
+    cluster.cfg.raft_store.store_batch_system.pool_size = 1;
+    cluster.pd_client.disable_default_operator();
+    let _ = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+
+    // Add a peer which is almost disk full should be allowed.
+    fail::cfg(get_fp(DiskUsage::AlmostFull, 2), "return").unwrap();
+    cluster.pd_client.must_add_peer(1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    let tick_dur = cluster.cfg.raft_store.raft_base_tick_interval.0;
+    let election_timeout = cluster.cfg.raft_store.raft_election_timeout_ticks;
+
+    thread::sleep(tick_dur * 2 * election_timeout as u32);
+    fail::remove(get_fp(DiskUsage::AlmostFull, 2));
+    thread::sleep(tick_dur * 2);
+
+    // The leader should know peer 2's disk usage changes, because it's keeping to tick.
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
 }
