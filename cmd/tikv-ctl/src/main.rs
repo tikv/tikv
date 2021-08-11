@@ -1932,7 +1932,7 @@ fn main() {
 
     // Bypass the sst dump command to RocksDB.
     if let Some(cmd) = matches.subcommand_matches("sst_dump") {
-        run_sst_dump_command(&cmd, &cfg);
+        run_sst_dump_command(cmd, &cfg);
         return;
     }
 
