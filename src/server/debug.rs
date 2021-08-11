@@ -502,10 +502,9 @@ impl<ER: RaftEngine> Debugger<ER> {
             let region = local_state.get_region();
             let store_id = self.get_store_id()?;
 
-            let peer = raftstore_util::find_peer(region, store_id)
-                .ok_or_else(|| {
-                    Error::Other("RegionLocalState doesn't contains peer itself".into())
-                })?;
+            let peer = raftstore_util::find_peer(region, store_id).ok_or_else(|| {
+                Error::Other("RegionLocalState doesn't contains peer itself".into())
+            })?;
 
             let tag = format!("[region {}] {}", region.get_id(), peer.get_id());
             let peer_storage = box_try!(PeerStorage::<RocksEngine, ER>::new(

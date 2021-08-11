@@ -1358,9 +1358,7 @@ where
         if req.has_admin_request() {
             self.exec_admin_cmd(ctx, req)
         } else {
-            if self.witness {
-
-            }
+            if self.witness {}
             self.exec_write_cmd(ctx, req)
         }
     }

@@ -2806,7 +2806,14 @@ mod tests {
         let region = initial_region(1, 1, 1);
         prepare_bootstrap_cluster(&engines, &region).unwrap();
         let build_storage = || -> Result<PeerStorage<KvTestEngine, RaftTestEngine>> {
-            PeerStorage::new(engines.clone(), &region, sched.clone(), 0, false, "".to_owned())
+            PeerStorage::new(
+                engines.clone(),
+                &region,
+                sched.clone(),
+                0,
+                false,
+                "".to_owned(),
+            )
         };
         let mut s = build_storage().unwrap();
         let mut raft_state = RaftLocalState::default();
