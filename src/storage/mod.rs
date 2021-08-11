@@ -64,6 +64,7 @@ use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::mvcc::MvccReader;
 use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSwap};
+use crate::storage::txn::flow_controller::FlowController;
 
 use crate::server::lock_manager::waiter_manager;
 use crate::storage::{
@@ -203,16 +204,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         lock_mgr: L,
         concurrency_manager: ConcurrencyManager,
         pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
+        flow_controller: Arc<FlowController>,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
             lock_mgr,
             concurrency_manager.clone(),
-            config.scheduler_concurrency,
-            config.scheduler_worker_pool_size,
-            config.scheduler_pending_write_threshold.0 as usize,
+            config,
             pipelined_pessimistic_lock,
-            config.enable_async_apply_prewrite,
+            flow_controller,
         );
 
         info!("Storage started.");
@@ -1939,6 +1939,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             self.lock_mgr,
             ConcurrencyManager::new(1.into()),
             self.pipelined_pessimistic_lock,
+            Arc::new(FlowController::empty()),
         )
     }
 }

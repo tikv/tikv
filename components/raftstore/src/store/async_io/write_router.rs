@@ -272,7 +272,7 @@ mod tests {
         }
 
         fn must_same_msg_count(&self, id: usize, mut count: usize) {
-            while let Ok(_) = self.receivers[id].try_recv() {
+            while self.receivers[id].try_recv().is_ok() {
                 if count == 0 {
                     panic!("msg count is smaller");
                 }
