@@ -2395,11 +2395,7 @@ pub struct TiKvConfig {
     #[config(submodule)]
     pub split: SplitConfig,
 
-<<<<<<< HEAD
-    #[config(skip)]
-=======
     #[online_config(submodule)]
->>>>>>> d3761d610... cdc: Support changing CDC configs dynamically (#10651)
     pub cdc: CdcConfig,
 
     #[config(submodule)]

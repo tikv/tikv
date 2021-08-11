@@ -272,38 +272,20 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let workers = Builder::new()
             .threaded_scheduler()
             .thread_name("cdcwkr")
-<<<<<<< HEAD
-            .core_threads(cfg.incremental_scan_threads)
-            .build()
-            .unwrap();
-        let scan_concurrency_semaphore = Arc::new(Semaphore::new(cfg.incremental_scan_concurrency));
-        let tso_worker = Builder::new()
-            .threaded_scheduler()
-=======
             .worker_threads(config.incremental_scan_threads)
             .build()
             .unwrap();
         let tso_worker = Builder::new_multi_thread()
->>>>>>> d3761d610... cdc: Support changing CDC configs dynamically (#10651)
             .thread_name("tso")
             .core_threads(1)
             .build()
             .unwrap();
-<<<<<<< HEAD
-        CDC_SINK_CAP.set(sink_memory_quota.cap() as i64);
-        CDC_OLD_VALUE_CACHE_MEMORY_QUOTA.set(cfg.old_value_cache_memory_quota.0 as i64);
-        let old_value_cache = OldValueCache::new(cfg.old_value_cache_memory_quota);
-        let speed_limter = Limiter::new(if cfg.incremental_scan_speed_limit.0 > 0 {
-            cfg.incremental_scan_speed_limit.0 as f64
-=======
-
         // Initialized for the first time, subsequent adjustments will be made based on configuration updates.
         let scan_concurrency_semaphore =
             Arc::new(Semaphore::new(config.incremental_scan_concurrency));
         let old_value_cache = OldValueCache::new(config.old_value_cache_memory_quota);
         let speed_limiter = Limiter::new(if config.incremental_scan_speed_limit.0 > 0 {
             config.incremental_scan_speed_limit.0 as f64
->>>>>>> d3761d610... cdc: Support changing CDC configs dynamically (#10651)
         } else {
             INFINITY
         });
