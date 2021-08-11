@@ -13,7 +13,7 @@ mod observer;
 mod old_value;
 mod service;
 
-pub use channel::{recv_timeout, MemoryQuota};
+pub use channel::MemoryQuota;
 pub use config::CdcConfigManager;
 pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task, Validate};
 pub use errors::{Error, Result};

@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
+use configuration::{ConfigChange, Configuration};
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use fail::fail_point;
@@ -25,7 +26,6 @@ use kvproto::cdcpb::{
 use kvproto::kvrpcpb::{CheckLeaderRequest, ExtraOp as TxnExtraOp, LeaderInfo};
 use kvproto::metapb::{PeerRole, Region, RegionEpoch};
 use kvproto::tikvpb::TikvClient;
-use online_config::{ConfigChange, OnlineConfig};
 use pd_client::{Feature, PdClient};
 use raftstore::coprocessor::CmdBatch;
 use raftstore::coprocessor::ObserveID;
@@ -272,10 +272,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let workers = Builder::new()
             .threaded_scheduler()
             .thread_name("cdcwkr")
-            .worker_threads(config.incremental_scan_threads)
+            .core_threads(config.incremental_scan_threads)
             .build()
             .unwrap();
-        let tso_worker = Builder::new_multi_thread()
+        let tso_worker = Builder::new()
+            .threaded_scheduler()
             .thread_name("tso")
             .core_threads(1)
             .build()
