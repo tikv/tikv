@@ -1402,7 +1402,7 @@ where
                 StateRole::Follower => {
                     self.leader_lease.expire();
                     self.mut_store().cancel_generating_snap(None);
-                    self.disk_full_peers = Default::default();
+                    self.clear_disk_full_peers(ctx);
                 }
                 _ => {}
             }
@@ -3347,12 +3347,16 @@ where
         self.want_rollback_merge_peers.insert(peer_id);
     }
 
-    pub fn refill_disk_full_peers<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
-        // Before refill `disk_full_peers`, reset `max_inflight_msgs` for them.
-        for peer in mem::take(&mut self.disk_full_peers).peers.into_keys() {
-            let raft = &mut self.raft_group.raft;
+    pub fn clear_disk_full_peers<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+        let disk_full_peers = mem::take(&mut self.disk_full_peers);
+        let raft = &mut self.raft_group.raft;
+        for peer in disk_full_peers.peers.into_keys() {
             raft.adjust_max_inflight_msgs(peer, ctx.cfg.raft_max_inflight_msgs);
         }
+    }
+
+    pub fn refill_disk_full_peers<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+        self.clear_disk_full_peers(ctx);
 
         // Collect disk full peers and all peers' `next_idx` to find a potential quorum.
         let peers_len = self.get_store().region().get_peers().len();
