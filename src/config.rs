@@ -2256,8 +2256,8 @@ impl Default for CdcConfig {
 
 impl CdcConfig {
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        if self.min_ts_interval == ReadableDuration::secs(0) {
-            return Err("cdc.min-ts-interval can't be 0s".into());
+        if self.min_ts_interval.is_zero() {
+            return Err("cdc.min-ts-interval can't be 0".into());
         }
         if self.incremental_scan_threads == 0 {
             return Err("cdc.incremental-scan-threads can't be 0".into());
