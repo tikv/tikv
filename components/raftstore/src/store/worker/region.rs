@@ -572,10 +572,13 @@ where
     fn delete_all_in_range(&self, ranges: &[Range]) -> Result<()> {
         for cf in self.engine.cf_names() {
             let strategy = if cf == CF_LOCK {
+                CLEAN_COUNTER_VEC.with_label_values(&["key"]).inc_by(ranges.len());
                 DeleteStrategy::DeleteByKey
             } else if self.use_delete_range {
+                CLEAN_COUNTER_VEC.with_label_values(&["range"]).inc_by(ranges.len());
                 DeleteStrategy::DeleteByRange
             } else {
+                CLEAN_COUNTER_VEC.with_label_values(&["ingest"]).inc_by(1);
                 DeleteStrategy::DeleteByWriter {
                     sst_path: self.mgr.get_temp_path_for_ingest(),
                 }
