@@ -18,7 +18,9 @@ use futures::task::Context;
 use futures::task::Poll;
 use futures::task::Waker;
 
-use super::{metrics::*, Config, Error, FeatureGate, PdFuture, Result, REQUEST_TIMEOUT};
+use super::{
+    metrics::*, tso::TimestampOracle, Config, Error, FeatureGate, PdFuture, Result, REQUEST_TIMEOUT,
+};
 use collections::HashSet;
 use fail::fail_point;
 use grpcio::{
@@ -89,6 +91,7 @@ pub struct Inner {
     security_mgr: Arc<SecurityManager>,
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
     pub pending_heartbeat: Arc<AtomicU64>,
+    pub tso: TimestampOracle,
 
     last_try_reconnect: Instant,
 }
@@ -152,6 +155,7 @@ impl Client {
         client_stub: PdClientStub,
         members: GetMembersResponse,
         target: TargetInfo,
+        tso: TimestampOracle,
         enable_forwarding: bool,
     ) -> Client {
         if !target.direct_connected() {
@@ -175,17 +179,19 @@ impl Client {
                 on_reconnect: None,
                 pending_heartbeat: Arc::default(),
                 last_try_reconnect: Instant::now(),
+                tso,
             }),
             feature_gate: FeatureGate::default(),
             enable_forwarding,
         }
     }
 
-    pub fn update_client(
+    fn update_client(
         &self,
         client_stub: PdClientStub,
         target: TargetInfo,
         members: GetMembersResponse,
+        tso: TimestampOracle,
     ) {
         let start_refresh = Instant::now();
         let mut inner = self.inner.wl();
@@ -204,6 +210,7 @@ impl Client {
         let _ = prev_receiver.right().map(|t| t.wake());
         inner.client_stub = client_stub;
         inner.members = members;
+        inner.tso = tso;
         if let Some(ref on_reconnect) = inner.on_reconnect {
             on_reconnect();
         }
@@ -327,7 +334,7 @@ impl Client {
         }
 
         slow_log!(start.elapsed(), "try reconnect pd");
-        let (client, target_info, members) = match future.await {
+        let (client, target_info, members, tso) = match future.await {
             Err(e) => {
                 PD_RECONNECT_COUNTER_VEC
                     .with_label_values(&["failure"])
@@ -350,7 +357,7 @@ impl Client {
 
         fail_point!("pd_client_reconnect", |_| Ok(()));
 
-        self.update_client(client, target_info, members);
+        self.update_client(client, target_info, members, tso);
         info!("trying to update PD client done"; "spend" => ?start.elapsed());
         Ok(())
     }
@@ -469,7 +476,12 @@ where
     }
 }
 
-pub type StubTuple = (PdClientStub, TargetInfo, GetMembersResponse);
+pub type StubTuple = (
+    PdClientStub,
+    TargetInfo,
+    GetMembersResponse,
+    TimestampOracle,
+);
 
 pub struct PdConnector {
     env: Arc<Environment>,
@@ -616,7 +628,12 @@ impl PdConnector {
         match res {
             Some((client, target_url)) => {
                 let info = TargetInfo::new(target_url, "");
-                return Ok(Some((client, info, resp)));
+                let tso = TimestampOracle::new(
+                    resp.get_header().get_cluster_id(),
+                    &client,
+                    info.call_option(),
+                )?;
+                return Ok(Some((client, info, resp, tso)));
             }
             None => {
                 // If the force is false, we could have already forwarded the requests.
@@ -626,7 +643,12 @@ impl PdConnector {
                 }
                 if enable_forwarding && has_network_error {
                     if let Ok(Some((client, info))) = self.try_forward(members, leader).await {
-                        return Ok(Some((client, info, resp)));
+                        let tso = TimestampOracle::new(
+                            resp.get_header().get_cluster_id(),
+                            &client,
+                            info.call_option(),
+                        )?;
+                        return Ok(Some((client, info, resp, tso)));
                     }
                 }
             }
