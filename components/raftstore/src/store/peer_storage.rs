@@ -234,6 +234,7 @@ impl EntryCache {
         }
     }
 
+    /// Compact all entries whose indexes are less than `idx`.
     pub fn compact_to(&mut self, mut idx: u64) -> u64 {
         let mut mem_size_change = 0;
 
@@ -242,7 +243,7 @@ impl EntryCache {
         // is called, only [20, 30) will still be kept in cache.
         let old_trace_cap = self.trace.capacity();
         while let Some(cached_entries) = self.trace.pop_front() {
-            if cached_entries.range.start > idx {
+            if cached_entries.range.start >= idx {
                 self.trace.push_front(cached_entries);
                 let trace_len = self.trace.len();
                 let trace_cap = self.trace.capacity();
@@ -253,13 +254,13 @@ impl EntryCache {
             }
             let (_, dangle_size) = cached_entries.take_entries();
             mem_size_change -= dangle_size as i64;
-            idx = cmp::max(cached_entries.range.end - 1, idx);
+            idx = cmp::max(cached_entries.range.end, idx);
         }
         let new_trace_cap = self.trace.capacity();
         mem_size_change += Self::get_trace_vec_mem_size_change(new_trace_cap, old_trace_cap);
 
         let cache_first_idx = self.first_index().unwrap_or(u64::MAX);
-        if cache_first_idx > idx {
+        if cache_first_idx >= idx {
             self.flush_mem_size_change(mem_size_change);
             assert!(mem_size_change <= 0);
             return -mem_size_change as u64;
