@@ -894,14 +894,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         let response_retriever = BatchReceiver::new(
             rx,
             GRPC_MSG_MAX_BATCH_SIZE,
-            || (BatchCommandsResponse::default(), vec![]),
+            BatchCommandsResponse::default,
             BatchRespCollector,
         );
 
         let response_retriever = response_retriever
-            .map(move |(mut r, timers)| {
-                GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64);
-                drop(timers);
+            .inspect(|r| GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64))
+            .map(move |mut r| {
                 r.set_transport_layer_load(thread_load.load() as u64);
                 (r, WriteFlags::default().buffer_hint(false))
             })
@@ -922,17 +921,17 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
 fn response_batch_commands_request<F>(
     id: u64,
     resp: F,
-    tx: Sender<(u64, batch_commands_response::Response, Arc<HistogramTimer>)>,
+    tx: Sender<(u64, batch_commands_response::Response)>,
     timer: HistogramTimer,
 ) where
     F: Future<Item = batch_commands_response::Response, Error = ()> + Send + 'static,
 {
-    let timer = Arc::new(timer);
     let f = resp.and_then(move |resp| {
-        if tx.send_and_notify((id, resp, timer)).is_err() {
+        if tx.send_and_notify((id, resp)).is_err() {
             error!("KvService response batch commands fail");
             return Err(());
         }
+        timer.observe_duration();
         Ok(())
     });
     poll_future_notify(f);
@@ -945,7 +944,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     peer: &str,
     id: u64,
     req: batch_commands_request::Request,
-    tx: Sender<(u64, batch_commands_response::Response, Arc<HistogramTimer>)>,
+    tx: Sender<(u64, batch_commands_response::Response)>,
 ) {
     // To simplify code and make the logic more clear.
     macro_rules! oneof {
@@ -1035,9 +1034,6 @@ fn future_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: GetRequest,
 ) -> impl Future<Item = GetResponse, Error = Error> {
-    if !req.get_key().is_empty() && req.get_key()[0] == b'm' {
-        warn!("meta get request, ts: {}", req.get_version());
-    }
     storage
         .get(
             req.take_context(),
@@ -1061,7 +1057,7 @@ fn future_get<E: Engine, L: LockManager>(
 
 pub fn future_batch_get_command<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    tx: Sender<(u64, batch_commands_response::Response, Arc<HistogramTimer>)>,
+    tx: Sender<(u64, batch_commands_response::Response)>,
     requests: Vec<u64>,
     commands: Vec<PointGetCommand>,
 ) -> impl Future<Item = (), Error = ()> {
@@ -1069,7 +1065,6 @@ pub fn future_batch_get_command<E: Engine, L: LockManager>(
         .kv_batch_get_command
         .start_coarse_timer();
     storage.batch_get_command(commands).then(move |v| {
-        let timer = Arc::new(timer);
         match v {
             Ok(v) => {
                 if requests.len() != v.len() {
@@ -1088,7 +1083,7 @@ pub fn future_batch_get_command<E: Engine, L: LockManager>(
                     }
                     let mut res = batch_commands_response::Response::default();
                     res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
-                    if tx.send_and_notify((req, res, timer.clone())).is_err() {
+                    if tx.send_and_notify((req, res)).is_err() {
                         error!("KvService response batch commands fail");
                     }
                 }
@@ -1103,15 +1098,13 @@ pub fn future_batch_get_command<E: Engine, L: LockManager>(
                 let mut res = batch_commands_response::Response::default();
                 res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
                 for req in requests {
-                    if tx
-                        .send_and_notify((req, res.clone(), timer.clone()))
-                        .is_err()
-                    {
+                    if tx.send_and_notify((req, res.clone())).is_err() {
                         error!("KvService response batch commands fail");
                     }
                 }
             }
         }
+        timer.observe_duration();
         Ok(())
     })
 }
@@ -1230,7 +1223,7 @@ fn future_raw_get<E: Engine, L: LockManager>(
 
 pub fn future_raw_batch_get_command<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    tx: Sender<(u64, batch_commands_response::Response, Arc<HistogramTimer>)>,
+    tx: Sender<(u64, batch_commands_response::Response)>,
     requests: Vec<u64>,
     cf: String,
     commands: Vec<PointGetCommand>,
@@ -1239,7 +1232,6 @@ pub fn future_raw_batch_get_command<E: Engine, L: LockManager>(
         .raw_batch_get_command
         .start_coarse_timer();
     storage.raw_batch_get_command(cf, commands).then(move |v| {
-        let timer = Arc::new(timer);
         match v {
             Ok(v) => {
                 if requests.len() != v.len() {
@@ -1258,7 +1250,7 @@ pub fn future_raw_batch_get_command<E: Engine, L: LockManager>(
                     }
                     let mut res = batch_commands_response::Response::default();
                     res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
-                    if tx.send_and_notify((req, res, timer.clone())).is_err() {
+                    if tx.send_and_notify((req, res)).is_err() {
                         error!("KvService response batch commands fail");
                     }
                 }
@@ -1273,15 +1265,13 @@ pub fn future_raw_batch_get_command<E: Engine, L: LockManager>(
                 let mut res = batch_commands_response::Response::default();
                 res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
                 for req in requests {
-                    if tx
-                        .send_and_notify((req, res.clone(), timer.clone()))
-                        .is_err()
-                    {
+                    if tx.send_and_notify((req, res.clone())).is_err() {
                         error!("KvService response batch commands fail");
                     }
                 }
             }
         }
+        timer.observe_duration();
         Ok(())
     })
 }
@@ -1632,20 +1622,16 @@ pub use kvproto::tikvpb::batch_commands_request;
 pub use kvproto::tikvpb::batch_commands_response;
 
 struct BatchRespCollector;
-impl
-    BatchCollector<
-        (BatchCommandsResponse, Vec<Arc<HistogramTimer>>),
-        (u64, batch_commands_response::Response, Arc<HistogramTimer>),
-    > for BatchRespCollector
+impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Response)>
+    for BatchRespCollector
 {
     fn collect(
         &mut self,
-        v: &mut (BatchCommandsResponse, Vec<Arc<HistogramTimer>>),
-        e: (u64, batch_commands_response::Response, Arc<HistogramTimer>),
-    ) -> Option<(u64, batch_commands_response::Response, Arc<HistogramTimer>)> {
-        v.0.mut_request_ids().push(e.0);
-        v.0.mut_responses().push(e.1);
-        v.1.push(e.2);
+        v: &mut BatchCommandsResponse,
+        e: (u64, batch_commands_response::Response),
+    ) -> Option<(u64, batch_commands_response::Response)> {
+        v.mut_request_ids().push(e.0);
+        v.mut_responses().push(e.1);
         None
     }
 }
