@@ -6,7 +6,6 @@
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
 
 #[cfg(feature = "cloud-aws")]
 pub use aws::{Config as S3Config, S3Storage};
@@ -14,12 +13,12 @@ pub use aws::{Config as S3Config, S3Storage};
 pub use gcp::{Config as GCSConfig, GCSStorage};
 
 #[cfg(feature = "prost-codec")]
-pub use kvproto::backup::storage_backend::Backend;
-use kvproto::backup::CloudDynamic;
+pub use kvproto::brpb::storage_backend::Backend;
+use kvproto::brpb::CloudDynamic;
 #[cfg(feature = "protobuf-codec")]
-pub use kvproto::backup::StorageBackend_oneof_backend as Backend;
+pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 #[cfg(any(feature = "cloud-gcp", feature = "cloud-aws"))]
-use kvproto::backup::{Gcs, S3};
+use kvproto::brpb::{Gcs, S3};
 
 #[cfg(feature = "cloud-storage-dylib")]
 use crate::dylib;
@@ -36,9 +35,9 @@ pub use external_storage::{
     read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage,
 };
 use futures_io::AsyncRead;
-use kvproto::backup::{Noop, StorageBackend};
+use kvproto::brpb::{Noop, StorageBackend};
 use tikv_util::stream::block_on_external_io;
-use tikv_util::time::Limiter;
+use tikv_util::time::{Instant, Limiter};
 #[cfg(feature = "cloud-storage-dylib")]
 use tikv_util::warn;
 
@@ -164,9 +163,9 @@ fn create_backend_inner(backend: &Backend) -> io::Result<Box<dyn ExternalStorage
         Backend::Gcs(config) => blob_store(GCSStorage::from_input(config.clone())?),
         Backend::CloudDynamic(dyn_backend) => match dyn_backend.provider_name.as_str() {
             #[cfg(feature = "cloud-aws")]
-            "aws" | "s3" => blob_store(S3Storage::from_cloud_dynamic(&dyn_backend)?),
+            "aws" | "s3" => blob_store(S3Storage::from_cloud_dynamic(dyn_backend)?),
             #[cfg(feature = "cloud-gcp")]
-            "gcp" | "gcs" => blob_store(GCSStorage::from_cloud_dynamic(&dyn_backend)?),
+            "gcp" | "gcs" => blob_store(GCSStorage::from_cloud_dynamic(dyn_backend)?),
             _ => {
                 return Err(bad_backend(Backend::CloudDynamic(dyn_backend.clone())));
             }
@@ -338,7 +337,7 @@ impl ExternalStorage for EncryptedExternalStorage {
         block_on_external_io(read_external_storage_into_file(
             &mut input,
             file_writer,
-            &speed_limiter,
+            speed_limiter,
             expected_length,
             min_read_speed,
         ))

@@ -133,6 +133,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "atomic"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3410529e8288c463bedb5930f82833bc0c90e5d2fe639a56582a4d09220b281"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "atty"
 version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -388,12 +397,13 @@ dependencies = [
 
 [[package]]
 name = "bzip2-sys"
-version = "0.1.8+1.0.8"
+version = "0.1.11+1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05305b41c5034ff0e93937ac64133d109b5a2660114ec45e9760bc6816d83038"
+checksum = "736a955f3fa7875102d57c82b8cac37ec45224a07fd32d58f9f7a186b6cd4cdc"
 dependencies = [
  "cc",
  "libc 0.2.86",
+ "pkg-config",
 ]
 
 [[package]]
@@ -450,6 +460,7 @@ dependencies = [
  "bitflags",
  "collections",
  "concurrency_manager",
+ "criterion",
  "crossbeam",
  "engine_rocks",
  "engine_traits",
@@ -460,6 +471,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
+ "online_config",
  "panic_hook",
  "pd_client",
  "prometheus",
@@ -623,6 +635,7 @@ name = "coprocessor_plugin_api"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "atomic",
  "rustc_version 0.3.3",
 ]
 
@@ -757,10 +770,11 @@ dependencies = [
 [[package]]
 name = "crossbeam-epoch"
 version = "0.9.3"
-source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2584f639eb95fea8c798496315b297cf81b9b58b6d30ab066a75455333cf4b12"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.3 (git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0)",
+ "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static",
  "memoffset",
  "scopeguard",
@@ -769,11 +783,10 @@ dependencies = [
 [[package]]
 name = "crossbeam-epoch"
 version = "0.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2584f639eb95fea8c798496315b297cf81b9b58b6d30ab066a75455333cf4b12"
+source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-utils 0.8.3 (git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0)",
  "lazy_static",
  "memoffset",
  "scopeguard",
@@ -814,7 +827,8 @@ dependencies = [
 [[package]]
 name = "crossbeam-utils"
 version = "0.8.3"
-source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7e9d99fa91428effe99c5c6d4634cdeba32b8cf784fc428a2a687f61a952c49"
 dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
@@ -824,8 +838,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-utils"
 version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7e9d99fa91428effe99c5c6d4634cdeba32b8cf784fc428a2a687f61a952c49"
+source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
 dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
@@ -1133,6 +1146,7 @@ name = "engine_traits"
 version = "0.0.1"
 dependencies = [
  "error_code",
+ "fail",
  "file_system",
  "kvproto",
  "log_wrappers",
@@ -1303,6 +1317,7 @@ dependencies = [
  "libc 0.2.86",
  "maligned",
  "nix 0.19.0",
+ "online_config",
  "openssl",
  "parking_lot",
  "prometheus",
@@ -2095,7 +2110,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?rev=dda0a102bc6ac7371e1f99cd2797825aa210b4a0#dda0a102bc6ac7371e1f99cd2797825aa210b4a0"
+source = "git+https://github.com/pingcap/kvproto.git#317f69fb54b44619271df82ec163764032184a85"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2181,7 +2196,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#46b7a1da47e626ae35158a51a3c90babafbd8ff2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#98a4d149a1437a98453486f91809c4320166353c"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2200,7 +2215,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#46b7a1da47e626ae35158a51a3c90babafbd8ff2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#98a4d149a1437a98453486f91809c4320166353c"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2668,9 +2683,9 @@ dependencies = [
 
 [[package]]
 name = "num-traits"
-version = "0.2.12"
+version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac267bcc07f48ee5f8935ab0d24f316fb722d7a1292e2913f0cc196b29ffd611"
+checksum = "9a64b1ec5cda2586e284722486d802acf1f7dbdc623e2bfc57e65ca1cd099290"
 dependencies = [
  "autocfg",
 ]
@@ -2775,6 +2790,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ordered-float"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "039f02eb0f69271f26abe3202189275d7aa2258b903cb0281b5de710a2570ff3"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "page_size"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2870,6 +2894,7 @@ dependencies = [
  "thiserror",
  "tikv_alloc",
  "tikv_util",
+ "tokio",
  "tokio-timer",
  "txn_types",
  "yatp",
@@ -3315,8 +3340,8 @@ dependencies = [
 
 [[package]]
 name = "raft"
-version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#b84afe99b5e54b10a306ec844d1b83ae8a7a3c31"
+version = "0.6.0"
+source = "git+https://github.com/tikv/raft-rs?branch=master#e6d28ef0f509c072e13288409835d5764a3b175e"
 dependencies = [
  "bytes 1.0.1",
  "fxhash",
@@ -3331,17 +3356,21 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=master#8d559deaf53a3d1daf482f4523f71d33f4cd715f"
+source = "git+https://github.com/tikv/raft-engine?branch=master#a21012f921d848eb02e86eb722462f1db9cacd73"
 dependencies = [
  "byteorder",
  "crc32fast",
  "crossbeam",
+ "fail",
  "fxhash",
  "hex 0.4.2",
  "lazy_static",
  "log",
  "lz4-sys",
  "nix 0.18.0",
+ "parking_lot",
+ "prometheus",
+ "prometheus-static-metric",
  "protobuf",
  "serde",
  "thiserror",
@@ -3349,8 +3378,8 @@ dependencies = [
 
 [[package]]
 name = "raft-proto"
-version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#b84afe99b5e54b10a306ec844d1b83ae8a7a3c31"
+version = "0.6.0"
+source = "git+https://github.com/tikv/raft-rs?branch=master#e6d28ef0f509c072e13288409835d5764a3b175e"
 dependencies = [
  "bytes 1.0.1",
  "lazy_static",
@@ -3393,6 +3422,7 @@ dependencies = [
  "crossbeam",
  "derivative",
  "encryption",
+ "encryption_export",
  "engine_panic",
  "engine_rocks",
  "engine_test",
@@ -3404,6 +3434,7 @@ dependencies = [
  "futures 0.3.15",
  "futures-util",
  "into_other",
+ "itertools 0.10.0",
  "keys",
  "kvproto",
  "lazy_static",
@@ -3412,6 +3443,7 @@ dependencies = [
  "memory_trace_macros",
  "online_config",
  "openssl",
+ "ordered-float 2.7.0",
  "panic_hook",
  "pd_client",
  "prometheus",
@@ -3760,6 +3792,7 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "crossbeam",
+ "fail",
  "futures 0.3.15",
  "grpcio",
  "kvproto",
@@ -3816,7 +3849,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#41d7180df72cf5aae97fbae9a18aec52ad29dfcc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#98a4d149a1437a98453486f91809c4320166353c"
 dependencies = [
  "libc 0.2.86",
  "librocksdb_sys",
@@ -4754,6 +4787,7 @@ dependencies = [
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
+ "backtrace",
  "collections",
  "concurrency_manager",
  "crossbeam",
@@ -4980,6 +5014,7 @@ dependencies = [
  "log_wrappers",
  "prometheus",
  "prometheus-static-metric",
+ "serde_json",
  "thiserror",
  "tikv_util",
  "time",
@@ -5007,7 +5042,7 @@ dependencies = [
  "num",
  "num-derive",
  "num-traits",
- "ordered-float",
+ "ordered-float 1.1.1",
  "protobuf",
  "regex",
  "serde",
@@ -5072,6 +5107,8 @@ dependencies = [
  "rand 0.8.3",
  "regex",
  "safemem",
+ "serde",
+ "serde_json",
  "static_assertions",
  "tidb_query_codegen",
  "tidb_query_common",
@@ -5139,6 +5176,7 @@ dependencies = [
  "murmur3",
  "nom 5.1.0",
  "notify",
+ "num-traits",
  "num_cpus",
  "online_config",
  "openssl",
@@ -5171,6 +5209,7 @@ dependencies = [
  "slog",
  "slog-global",
  "sst_importer",
+ "strum",
  "sysinfo",
  "tempfile",
  "test_sst_importer",
@@ -5216,6 +5255,7 @@ dependencies = [
  "file_system",
  "fs2",
  "futures 0.3.15",
+ "gag",
  "grpcio",
  "hex 0.4.2",
  "keys",
@@ -5232,6 +5272,7 @@ dependencies = [
  "raft_log_engine",
  "raftstore",
  "rand 0.8.3",
+ "regex",
  "security",
  "serde_json",
  "server",
@@ -5366,7 +5407,7 @@ dependencies = [
  "libc 0.2.86",
  "log",
  "log_wrappers",
- "nix 0.11.1",
+ "nix 0.19.0",
  "num_cpus",
  "online_config",
  "openssl",

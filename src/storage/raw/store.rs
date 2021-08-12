@@ -2,15 +2,15 @@
 
 use super::ttl::TTLSnapshot;
 
-use crate::storage::kv::{Cursor, ScanMode, Snapshot};
+use crate::storage::kv::{Cursor, Iterator, ScanMode, Snapshot};
 use crate::storage::Statistics;
 use crate::storage::{Error, Result};
 
 use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
-use txn_types::{Key, KvPair};
-
+use kvproto::kvrpcpb::KeyRange;
 use std::time::Duration;
 use tikv_util::time::Instant;
+use txn_types::{Key, KvPair};
 use yatp::task::future::reschedule;
 
 const MAX_TIME_SLICE: Duration = Duration::from_millis(2);
@@ -162,7 +162,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
     ) -> Result<Vec<Result<KvPair>>> {
         let mut cursor = Cursor::new(self.snapshot.iter_cf(cf, option)?, ScanMode::Forward, false);
         let statistics = statistics.mut_cf_statistics(cf);
-        if !cursor.seek(&start_key, statistics)? {
+        if !cursor.seek(start_key, statistics)? {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
@@ -171,7 +171,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         while cursor.valid()? && pairs.len() < limit {
             row_count += 1;
             if row_count >= MAX_BATCH_SIZE {
-                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
                     reschedule().await;
                     time_slice_start = Instant::now();
                 }
@@ -210,7 +210,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
             false,
         );
         let statistics = statistics.mut_cf_statistics(cf);
-        if !cursor.reverse_seek(&start_key, statistics)? {
+        if !cursor.reverse_seek(start_key, statistics)? {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
@@ -219,7 +219,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         while cursor.valid()? && pairs.len() < limit {
             row_count += 1;
             if row_count >= MAX_BATCH_SIZE {
-                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
                     reschedule().await;
                     time_slice_start = Instant::now();
                 }
@@ -237,4 +237,39 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         }
         Ok(pairs)
     }
+}
+
+pub async fn raw_checksum_ranges<S: Snapshot>(
+    snapshot: S,
+    ranges: Vec<KeyRange>,
+) -> Result<(u64, u64, u64)> {
+    let mut total_bytes = 0;
+    let mut total_kvs = 0;
+    let mut digest = crc64fast::Digest::new();
+    let mut row_count = 0;
+    let mut time_slice_start = Instant::now();
+    for r in ranges {
+        let mut opts = IterOptions::new(None, None, false);
+        opts.set_upper_bound(r.get_end_key(), DATA_KEY_PREFIX_LEN);
+        let mut iter = snapshot.iter(opts)?;
+        iter.seek(&Key::from_encoded(r.get_start_key().to_vec()))?;
+        while iter.valid()? {
+            row_count += 1;
+            if row_count >= MAX_BATCH_SIZE {
+                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
+                    reschedule().await;
+                    time_slice_start = Instant::now();
+                }
+                row_count = 0;
+            }
+            let k = iter.key();
+            let v = iter.value();
+            digest.write(k);
+            digest.write(v);
+            total_kvs += 1;
+            total_bytes += k.len() + v.len();
+            iter.next()?;
+        }
+    }
+    Ok((digest.sum64(), total_kvs, total_bytes as u64))
 }

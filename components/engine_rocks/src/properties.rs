@@ -6,10 +6,8 @@ use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
-use engine_traits::{
-    DecodeProperties, IndexHandle, IndexHandles, KvEngine, MvccProperties, Range, TableProperties,
-    TablePropertiesCollection,
-};
+use crate::decode_properties::{DecodeProperties, IndexHandle, IndexHandles};
+use engine_traits::{MvccProperties, Range};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
@@ -524,15 +522,12 @@ impl TablePropertiesCollectorFactory for MvccPropertiesCollectorFactory {
     }
 }
 
-pub fn get_range_entries_and_versions<E>(
-    engine: &E,
+pub fn get_range_entries_and_versions(
+    engine: &crate::RocksEngine,
     cf: &str,
     start: &[u8],
     end: &[u8],
-) -> Option<(u64, u64)>
-where
-    E: KvEngine,
-{
+) -> Option<(u64, u64)> {
     let range = Range::new(start, end);
     let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
         Ok(v) => v,
@@ -547,7 +542,7 @@ where
     let mut props = MvccProperties::new();
     let mut num_entries = 0;
     for (_, v) in collection.iter() {
-        let mvcc = match RocksMvccProperties::decode(&v.user_collected_properties()) {
+        let mvcc = match RocksMvccProperties::decode(v.user_collected_properties()) {
             Ok(v) => v,
             Err(_) => return None,
         };

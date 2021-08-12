@@ -9,7 +9,7 @@ use futures_util::{
 };
 use hyper::{client::HttpConnector, Body, Client, Request, Response, StatusCode};
 use hyper_tls::HttpsConnector;
-pub use kvproto::backup::{Bucket as InputBucket, CloudDynamic, Gcs as InputConfig};
+pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, Gcs as InputConfig};
 use tame_gcs::{
     common::{PredefinedAcl, StorageClass},
     objects::{InsertObjectOptional, Metadata, Object},
@@ -111,7 +111,7 @@ fn deserialize_service_account_info(
 
 impl BlobConfig for Config {
     fn name(&self) -> &'static str {
-        &STORAGE_NAME
+        STORAGE_NAME
     }
 
     fn url(&self) -> io::Result<url::Url> {

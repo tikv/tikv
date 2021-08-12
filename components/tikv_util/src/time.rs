@@ -37,6 +37,17 @@ pub fn duration_to_nanos(d: Duration) -> u64 {
     d.as_secs() * 1_000_000_000 + nanos
 }
 
+pub trait InstantExt {
+    fn saturating_elapsed(&self) -> Duration;
+}
+
+impl InstantExt for std::time::Instant {
+    #[inline]
+    fn saturating_elapsed(&self) -> Duration {
+        std::time::Instant::now().saturating_duration_since(*self)
+    }
+}
+
 /// A time in seconds since the start of the Unix epoch.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct UnixSecs(u64);
@@ -89,12 +100,12 @@ impl SlowTimer {
         SlowTimer::from(Duration::from_millis(millis))
     }
 
-    pub fn elapsed(&self) -> Duration {
-        self.t.elapsed()
+    pub fn saturating_elapsed(&self) -> Duration {
+        self.t.saturating_elapsed()
     }
 
     pub fn is_slow(&self) -> bool {
-        self.elapsed() >= self.slow_time
+        self.saturating_elapsed() >= self.slow_time
     }
 }
 
@@ -266,21 +277,29 @@ impl Instant {
         Instant::MonotonicCoarse(monotonic_coarse_now())
     }
 
-    pub fn elapsed(&self) -> Duration {
+    // This function may panic if the current time is earlier than this
+    // instant. Deprecated.
+    // pub fn elapsed(&self) -> Duration;
+
+    pub fn saturating_elapsed(&self) -> Duration {
         match *self {
             Instant::Monotonic(t) => {
                 let now = monotonic_now();
-                Instant::elapsed_duration(now, t)
+                Instant::saturating_elapsed_duration(now, t)
             }
             Instant::MonotonicCoarse(t) => {
                 let now = monotonic_coarse_now();
-                Instant::elapsed_duration_coarse(now, t)
+                Instant::saturating_elapsed_duration_coarse(now, t)
             }
         }
     }
 
-    pub fn elapsed_secs(&self) -> f64 {
-        duration_to_sec(self.elapsed())
+    // This function may panic if the current time is earlier than this
+    // instant. Deprecated.
+    // pub fn elapsed_secs(&self) -> f64;
+
+    pub fn saturating_elapsed_secs(&self) -> f64 {
+        duration_to_sec(self.saturating_elapsed())
     }
 
     pub fn duration_since(&self, earlier: Instant) -> Duration {
@@ -289,7 +308,21 @@ impl Instant {
                 Instant::elapsed_duration(later, earlier)
             }
             (Instant::MonotonicCoarse(later), Instant::MonotonicCoarse(earlier)) => {
-                Instant::elapsed_duration_coarse(later, earlier)
+                Instant::saturating_elapsed_duration_coarse(later, earlier)
+            }
+            _ => {
+                panic!("duration between different types of Instants");
+            }
+        }
+    }
+
+    pub fn saturating_duration_since(&self, earlier: Instant) -> Duration {
+        match (*self, earlier) {
+            (Instant::Monotonic(later), Instant::Monotonic(earlier)) => {
+                Instant::saturating_elapsed_duration(later, earlier)
+            }
+            (Instant::MonotonicCoarse(later), Instant::MonotonicCoarse(earlier)) => {
+                Instant::saturating_elapsed_duration_coarse(later, earlier)
             }
             _ => {
                 panic!("duration between different types of Instants");
@@ -309,7 +342,7 @@ impl Instant {
         }
     }
 
-    pub fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
+    pub(crate) fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
         if later >= earlier {
             (later - earlier).to_std().unwrap()
         } else {
@@ -321,12 +354,28 @@ impl Instant {
         }
     }
 
+    pub(crate) fn saturating_elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
+        if later >= earlier {
+            (later - earlier).to_std().unwrap()
+        } else {
+            error!(
+                "monotonic time jumped back, {:.3} -> {:.3}",
+                earlier.sec as f64 + f64::from(earlier.nsec) / NANOSECONDS_PER_SECOND as f64,
+                later.sec as f64 + f64::from(later.nsec) / NANOSECONDS_PER_SECOND as f64
+            );
+            Duration::from_millis(0)
+        }
+    }
+
     // It is different from `elapsed_duration`, the resolution here is millisecond.
     // The processors in an SMP system do not start all at exactly the same time
     // and therefore the timer registers are typically running at an offset.
     // Use millisecond resolution for ignoring the error.
     // See more: https://linux.die.net/man/2/clock_gettime
-    fn elapsed_duration_coarse(later: Timespec, earlier: Timespec) -> Duration {
+    pub(crate) fn saturating_elapsed_duration_coarse(
+        later: Timespec,
+        earlier: Timespec,
+    ) -> Duration {
         let later_ms = later.sec * MILLISECOND_PER_SECOND
             + i64::from(later.nsec) / NANOSECONDS_PER_MILLISECOND;
         let earlier_ms = earlier.sec * MILLISECOND_PER_SECOND
@@ -409,8 +458,10 @@ impl SubAssign<Duration> for Instant {
 impl Sub<Instant> for Instant {
     type Output = Duration;
 
+    // TODO: For safety in production code, `sub` actually does saturating_sub.
+    // We should remove this operator from public scope.
     fn sub(self, other: Instant) -> Duration {
-        self.duration_since(other)
+        self.saturating_duration_since(other)
     }
 }
 
@@ -439,6 +490,7 @@ impl BlockingClock for CoarseClock {
 
 /// A limiter which uses the coarse clock for measurement.
 pub type Limiter = async_speed_limit::Limiter<CoarseClock>;
+pub type Consume = async_speed_limit::limiter::Consume<CoarseClock, ()>;
 
 /// ReadId to judge whether the read requests come from the same GRPC stream.
 #[derive(Eq, PartialEq, Clone, Debug)]
@@ -532,8 +584,8 @@ mod tests {
     #[test]
     #[allow(clippy::eq_op)]
     fn test_instant() {
-        Instant::now().elapsed();
-        Instant::now_coarse().elapsed();
+        Instant::now().saturating_elapsed();
+        Instant::now_coarse().saturating_elapsed();
 
         // Ordering.
         let early_raw = Instant::now();
@@ -556,8 +608,8 @@ mod tests {
 
         let zero = Duration::new(0, 0);
         // Sub Instant.
-        assert!(late_raw - early_raw >= zero);
-        assert!(late_coarse - early_coarse >= zero);
+        assert!(late_raw.duration_since(early_raw) >= zero);
+        assert!(late_coarse.duration_since(early_coarse) >= zero);
 
         // Sub Duration.
         assert_eq!(late_raw - zero, late_raw);
@@ -607,8 +659,8 @@ mod tests {
             if i % 100 == 0 {
                 thread::yield_now();
             }
-            assert!(now.elapsed() >= zero);
-            assert!(now_coarse.elapsed() >= zero);
+            assert!(now.saturating_elapsed() >= zero);
+            assert!(now_coarse.saturating_elapsed() >= zero);
         }
     }
 }

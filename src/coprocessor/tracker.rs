@@ -209,6 +209,7 @@ impl Tracker {
 
         let mut detail_v2 = ScanDetailV2::default();
         detail_v2.set_processed_versions(self.total_storage_stats.write.processed_keys as u64);
+        detail_v2.set_processed_versions_size(self.total_storage_stats.processed_size as u64);
         detail_v2.set_total_versions(self.total_storage_stats.write.total_op_count() as u64);
         detail_v2.set_rocksdb_delete_skipped_count(
             self.total_perf_stats.0.internal_delete_skipped_count as u64,
@@ -267,6 +268,7 @@ impl Tracker {
                 "tag" => self.req_ctx.tag.get_str(),
                 "scan.is_desc" => self.req_ctx.is_desc_scan,
                 "scan.processed" => total_storage_stats.write.processed_keys,
+                "scan.processed_size" => total_storage_stats.processed_size,
                 "scan.total" => total_storage_stats.write.total_op_count(),
                 "scan.ranges" => self.req_ctx.ranges.len(),
                 "scan.range.first" => ?first_range,

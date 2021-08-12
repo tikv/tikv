@@ -25,7 +25,6 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{PerfLevel, RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
-use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::errors::Error as RaftError;
 use raftstore::router::{
     LocalReadRouter, RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter,
@@ -35,9 +34,13 @@ use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::SnapManager;
 use raftstore::store::{
     AutoSplitController, Callback, CheckLeaderRunner, LocalReader, SnapManagerBuilder,
-    SplitCheckRunner,
+    SplitCheckRunner, SplitConfigManager,
 };
 use raftstore::Result;
+use raftstore::{
+    coprocessor::{CoprocessorHost, RegionInfoAccessor},
+    store::msg::RaftCmdExtraOpts,
+};
 use security::SecurityManager;
 use tikv::coprocessor;
 use tikv::coprocessor_v2;
@@ -53,13 +56,14 @@ use tikv::server::{
     Server, ServerTransport,
 };
 use tikv::storage;
+use tikv::storage::txn::flow_controller::FlowController;
 use tikv::{
     config::{ConfigController, TiKvConfig},
     server::raftkv::ReplicaReadLockChecker,
 };
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
-use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker};
+use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker};
 use tikv_util::HandyRwLock;
 use txn_types::TxnExtraScheduler;
 
@@ -105,7 +109,7 @@ impl StoreAddrResolver for AddressMap {
 
 struct ServerMeta {
     node: Node<TestPdClient, RocksEngine>,
-    server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
+    server: Server<SimulateStoreTransport, PdStoreAddrResolver, SimulateEngine>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
@@ -249,7 +253,7 @@ impl Simulator for ServerCluster {
         }
 
         // Create storage.
-        let pd_worker = FutureWorker::new("test-pd-worker");
+        let pd_worker = LazyWorker::new("test-pd-worker");
         let pd_sender = pd_worker.scheduler();
         let storage_read_pool = ReadPool::from(storage::build_read_pool(
             &tikv::config::StorageReadPoolConfig::default_for_test(),
@@ -312,6 +316,7 @@ impl Simulator for ServerCluster {
             lock_mgr.clone(),
             concurrency_manager.clone(),
             lock_mgr.get_pipelined(),
+            Arc::new(FlowController::empty()),
         )?;
         self.storages.insert(node_id, raft_engine);
 
@@ -320,7 +325,7 @@ impl Simulator for ServerCluster {
         // Create import service.
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(&cfg.import, dir, key_manager.clone()).unwrap())
+            Arc::new(SSTImporter::new(&cfg.import, dir, key_manager.clone(), false).unwrap())
         };
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
@@ -441,7 +446,8 @@ impl Simulator for ServerCluster {
         let split_check_runner =
             SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
-
+        let split_config_manager = SplitConfigManager(Arc::new(VersionTrack::new(cfg.split)));
+        let auto_split_controller = AutoSplitController::new(split_config_manager);
         node.start(
             engines,
             simulate_trans.clone(),
@@ -451,7 +457,7 @@ impl Simulator for ServerCluster {
             coprocessor_host,
             importer.clone(),
             split_check_scheduler,
-            AutoSplitController::default(),
+            auto_split_controller,
             concurrency_manager.clone(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
@@ -532,7 +538,7 @@ impl Simulator for ServerCluster {
             None => return Err(box_err!("missing sender for store {}", node_id)),
             Some(meta) => meta.sim_router.clone(),
         };
-        router.send_command(request, cb)
+        router.send_command(request, cb, RaftCmdExtraOpts::default())
     }
 
     fn async_read(
@@ -627,7 +633,6 @@ fn must_new_and_configure_cluster_mul(
     let mut cluster = new_server_cluster(0, count);
     configure(&mut cluster);
     cluster.run();
-
     let region_id = 1;
     let leader = cluster.leader_of_region(region_id).unwrap();
     let epoch = cluster.get_region_epoch(region_id);

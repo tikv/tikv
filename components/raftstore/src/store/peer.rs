@@ -14,6 +14,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteBatch, WriteOp
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
+use kvproto::kvrpcpb::DiskFullOpt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
@@ -44,7 +45,7 @@ use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
 use crate::store::hibernate_state::GroupState;
-use crate::store::memory::needs_evict_entry_cache;
+use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
 use crate::store::msg::RaftCommand;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
 use crate::store::worker::{
@@ -56,16 +57,18 @@ use crate::store::{
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
 use pd_client::INVALID_ID;
+use tikv_alloc::trace::TraceEvent;
 use tikv_util::codec::number::decode_u64;
+use tikv_util::sys::disk::DiskUsage;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
-use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
-use tikv_util::worker::{FutureScheduler, Scheduler};
+use tikv_util::time::{Instant as TiInstant, InstantExt, ThreadReadId};
+use tikv_util::worker::Scheduler;
 use tikv_util::Either;
 use tikv_util::{box_err, debug, error, info, warn};
 use txn_types::WriteBatchFlags;
 
 use super::cmd_resp;
-use super::local_metrics::{RaftReadyMetrics, RaftSendMessageMetrics};
+use super::local_metrics::RaftReadyMetrics;
 use super::metrics::*;
 use super::peer_storage::{
     write_peer_state, ApplySnapResult, CheckApplyingSnapStatus, InvokeContext, PeerStorage,
@@ -467,8 +470,6 @@ where
     /// Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
 
-    /// The index of the latest proposed prepare merge command.
-    last_proposed_prepare_merge_idx: u64,
     /// The index of the latest committed prepare merge command.
     last_committed_prepare_merge_idx: u64,
     /// The merge related state. It indicates this Peer is in merging.
@@ -486,7 +487,7 @@ where
     pub peer_stat: PeerStat,
 
     /// Time of the last attempt to wake up inactive leader.
-    pub bcast_wake_up_time: Option<UtilInstant>,
+    pub bcast_wake_up_time: Option<TiInstant>,
     /// Current replication mode version.
     pub replication_mode_version: u64,
     /// The required replication state at current version.
@@ -521,7 +522,11 @@ where
     /// The number of the last unpersisted ready.
     last_unpersisted_number: u64,
 
+    pub disk_full_peers: DiskFullPeers,
+
     pub read_progress: Arc<RegionReadProgress>,
+
+    pub memtrace_raft_entries: usize,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -587,7 +592,6 @@ where
             pending_merge_state: None,
             want_rollback_merge_peers: HashSet::default(),
             pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),
-            last_proposed_prepare_merge_idx: 0,
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
             tag: tag.clone(),
@@ -617,12 +621,14 @@ where
             max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             cmd_epoch_checker: Default::default(),
             last_unpersisted_number: 0,
+            disk_full_peers: DiskFullPeers::default(),
             read_progress: Arc::new(RegionReadProgress::new(
                 region,
                 applied_index,
                 REGION_READ_PROGRESS_CAP,
                 tag,
             )),
+            memtrace_raft_entries: 0,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -801,7 +807,7 @@ where
     /// 3. Notify all pending requests.
     pub fn destroy<T>(&mut self, ctx: &PollContext<EK, ER, T>, keep_data: bool) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
-        let t = Instant::now();
+        let t = TiInstant::now();
 
         let region = self.region().clone();
         info!(
@@ -848,7 +854,7 @@ where
             "peer destroy itself";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
-            "takes" => ?t.elapsed(),
+            "takes" => ?t.saturating_elapsed(),
         );
 
         Ok(())
@@ -1061,54 +1067,24 @@ where
     }
 
     #[inline]
-    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftSendMessageMetrics)
+    pub(crate) fn send<T, I>(&mut self, ctx: &mut PollContext<EK, ER, T>, msgs: I)
     where
         T: Transport,
         I: IntoIterator<Item = eraftpb::Message>,
     {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
-            let snapshot_index = msg.get_request_snapshot();
-            let i = self.send_raft_message(msg, trans) as usize;
-            match msg_type {
-                MessageType::MsgAppend => metrics.append[i] += 1,
-                MessageType::MsgAppendResponse => {
-                    if snapshot_index != raft::INVALID_INDEX {
-                        metrics.request_snapshot[i] += 1;
-                    }
-                    metrics.append_resp[i] += 1;
-                }
-                MessageType::MsgRequestPreVote => metrics.prevote[i] += 1,
-                MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp[i] += 1,
-                MessageType::MsgRequestVote => metrics.vote[i] += 1,
-                MessageType::MsgRequestVoteResponse => metrics.vote_resp[i] += 1,
-                MessageType::MsgSnapshot => metrics.snapshot[i] += 1,
-                MessageType::MsgHeartbeat => metrics.heartbeat[i] += 1,
-                MessageType::MsgHeartbeatResponse => metrics.heartbeat_resp[i] += 1,
-                MessageType::MsgTransferLeader => metrics.transfer_leader[i] += 1,
-                MessageType::MsgReadIndex => metrics.read_index[i] += 1,
-                MessageType::MsgReadIndexResp => metrics.read_index_resp[i] += 1,
-                MessageType::MsgTimeoutNow => {
-                    // After a leader transfer procedure is triggered, the lease for
-                    // the old leader may be expired earlier than usual, since a new leader
-                    // may be elected and the old leader doesn't step down due to
-                    // network partition from the new leader.
-                    // For lease safety during leader transfer, transit `leader_lease`
-                    // to suspect.
-                    self.leader_lease.suspect(monotonic_raw_now());
-
-                    metrics.timeout_now[i] += 1;
-                }
-                // We do not care about these message types for metrics.
-                // Explicitly declare them so when we add new message types we are forced to
-                // decide.
-                MessageType::MsgHup
-                | MessageType::MsgBeat
-                | MessageType::MsgPropose
-                | MessageType::MsgUnreachable
-                | MessageType::MsgSnapStatus
-                | MessageType::MsgCheckQuorum => {}
+            if msg_type == MessageType::MsgTimeoutNow && self.is_leader() {
+                // After a leader transfer procedure is triggered, the lease for
+                // the old leader may be expired earlier than usual, since a new leader
+                // may be elected and the old leader doesn't step down due to
+                // network partition from the new leader.
+                // For lease safety during leader transfer, transit `leader_lease`
+                // to suspect.
+                self.leader_lease.suspect(monotonic_raw_now());
             }
+            let b = self.send_raft_message(msg, ctx);
+            ctx.raft_metrics.send_message.add(msg_type, b);
         }
     }
 
@@ -1218,11 +1194,13 @@ where
             if p.get_id() == self.peer.get_id() {
                 continue;
             }
+            // TODO
             if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
-                if instant.elapsed() >= max_duration {
+                let elapsed = instant.saturating_elapsed();
+                if elapsed >= max_duration {
                     let mut stats = PeerStats::default();
                     stats.set_peer(p.clone());
-                    stats.set_down_seconds(instant.elapsed().as_secs());
+                    stats.set_down_seconds(elapsed.as_secs());
                     down_peers.push(stats);
                     down_peer_ids.push(p.get_id());
                 }
@@ -1244,7 +1222,7 @@ where
 
         for i in 0..self.peers_start_pending_time.len() {
             let (_, pending_after) = self.peers_start_pending_time[i];
-            let elapsed = duration_to_sec(pending_after.elapsed());
+            let elapsed = duration_to_sec(pending_after.saturating_elapsed());
             RAFT_PEER_PENDING_DURATION.observe(elapsed);
         }
 
@@ -1316,7 +1294,7 @@ where
             if let Some(progress) = self.raft_group.raft.prs().get(peer_id) {
                 if progress.matched >= truncated_idx {
                     let (_, pending_after) = self.peers_start_pending_time.swap_remove(i);
-                    let elapsed = duration_to_sec(pending_after.elapsed());
+                    let elapsed = duration_to_sec(pending_after.saturating_elapsed());
                     RAFT_PEER_PENDING_DURATION.observe(elapsed);
                     debug!(
                         "peer has caught up logs";
@@ -1355,14 +1333,16 @@ where
                 self.leader_missing_time = Instant::now().into();
                 StaleState::Valid
             }
-            Some(instant) if instant.elapsed() >= ctx.cfg.max_leader_missing_duration.0 => {
+            Some(instant)
+                if instant.saturating_elapsed() >= ctx.cfg.max_leader_missing_duration.0 =>
+            {
                 // Resets the `leader_missing_time` to avoid sending the same tasks to
                 // PD worker continuously during the leader missing timeout.
                 self.leader_missing_time = Instant::now().into();
                 StaleState::ToValidate
             }
             Some(instant)
-                if instant.elapsed() >= ctx.cfg.abnormal_leader_missing_duration.0
+                if instant.saturating_elapsed() >= ctx.cfg.abnormal_leader_missing_duration.0
                     && !naive_peer =>
             {
                 // A peer is considered as in the leader missing state
@@ -1570,45 +1550,6 @@ where
             || self.pending_merge_state.is_some()
     }
 
-    // Checks merge strictly, it checks whether there is any ongoing merge by
-    // tracking last proposed prepare merge.
-    // TODO: There is a false positives, proposed prepare merge may never be
-    //       committed.
-    fn is_merging_strict(&self) -> bool {
-        self.last_proposed_prepare_merge_idx > self.get_store().applied_index() || self.is_merging()
-    }
-
-    // Check if this peer can handle request_snapshot.
-    pub fn ready_to_handle_request_snapshot(&mut self, request_index: u64) -> bool {
-        let reject_reason = if !self.is_leader() {
-            // Only leader can handle request snapshot.
-            "not_leader"
-        } else if self.get_store().applied_index_term() != self.term()
-            || self.get_store().applied_index() < request_index
-        {
-            // Reject if there are any unapplied raft log.
-            // We don't want to handle request snapshot if there is any ongoing
-            // merge, because it is going to be destroyed. This check prevents
-            // handling request snapshot after leadership being transferred.
-            "stale_apply"
-        } else if self.is_merging_strict() || self.is_splitting() {
-            // Reject if it is merging or splitting.
-            // `is_merging_strict` also checks last proposed prepare merge, it
-            // prevents handling request snapshot while a prepare merge going
-            // to be committed.
-            "split_merge"
-        } else {
-            return true;
-        };
-
-        info!("can not handle request snapshot";
-            "reason" => reject_reason,
-            "region_id" => self.region().get_id(),
-            "peer_id" => self.peer_id(),
-            "request_index" => request_index);
-        false
-    }
-
     /// Checks if leader needs to keep sending logs for follower.
     ///
     /// In DrAutoSync mode, if leader goes to sleep before the region is sync,
@@ -1666,7 +1607,7 @@ where
                 self.read_progress.update_applied(self.last_applying_idx);
                 if !self.pending_messages.is_empty() {
                     let msgs = mem::take(&mut self.pending_messages);
-                    self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
+                    self.send(ctx, msgs);
                 }
             }
             CheckApplyingSnapStatus::Idle => {
@@ -1747,6 +1688,14 @@ where
 
         let mut ready = self.raft_group.ready();
 
+        // Update it after unstable entries pagination is introduced.
+        debug_assert!(ready.entries().last().map_or_else(
+            || true,
+            |entry| entry.index == self.raft_group.raft.raft_log.last_index()
+        ));
+        MEMTRACE_RAFT_ENTRIES.trace(TraceEvent::Sub(self.memtrace_raft_entries));
+        self.memtrace_raft_entries = 0;
+
         self.last_unpersisted_number = ready.number();
 
         if !ready.must_sync() {
@@ -1777,7 +1726,7 @@ where
                 fail_point!("raft_before_follower_send");
             }
             let msgs = ready.take_messages();
-            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
+            self.send(ctx, msgs);
         }
 
         self.apply_reads(ctx, &ready);
@@ -1855,7 +1804,7 @@ where
                 .insert(self.region_id, ReadDelegate::from_peer(self));
         } else if has_msg {
             let msgs = ready.take_persisted_messages();
-            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
+            self.send(ctx, msgs);
         }
 
         apply_snap_result
@@ -1942,15 +1891,16 @@ where
             } else {
                 vec![]
             };
-            let apply = Apply::new(
+            let mut apply = Apply::new(
                 self.peer_id(),
                 self.region_id,
                 self.term(),
                 committed_entries,
                 cbs,
             );
+            apply.on_schedule(&ctx.raft_metrics);
             self.mut_store().trace_cached_entries(apply.entries.clone());
-            if needs_evict_entry_cache() {
+            if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
                 // Compact all cached entries instead of half evict.
                 self.mut_store().evict_cache(false);
             }
@@ -2000,7 +1950,7 @@ where
                 fail_point!("raft_before_follower_send");
             }
             let msgs = light_rd.take_messages();
-            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
+            self.send(ctx, msgs);
         }
 
         if !light_rd.committed_entries().is_empty() {
@@ -2036,10 +1986,20 @@ where
                 continue;
             }
             if !replica_read {
-                if read_index.is_none() {
-                    // Actually, the read_index is none if and only if it's the first one in read.cmds.
-                    // Starting from the second, all the following ones' read_index is not none.
-                    read_index = read.read_index;
+                match (read_index, read.read_index) {
+                    (Some(local_responsed_index), Some(batch_index)) => {
+                        // `read_index` could be less than `read.read_index` because the former is
+                        // filled with `committed index` when proposed, and the latter is filled
+                        // after a read-index procedure finished.
+                        read_index = Some(cmp::max(local_responsed_index, batch_index));
+                    }
+                    (None, _) => {
+                        // Actually, the read_index is none if and only if it's the first one in
+                        // read.cmds. Starting from the second, all the following ones' read_index
+                        // is not none.
+                        read_index = read.read_index;
+                    }
+                    _ => {}
                 }
                 cb.invoke_read(self.handle_read(ctx, req, true, read_index));
                 continue;
@@ -2329,6 +2289,7 @@ where
         mut cb: Callback<EK::Snapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
+        disk_full_opt: DiskFullOpt,
     ) -> bool {
         if self.pending_remove {
             return false;
@@ -2350,11 +2311,28 @@ where
                 return false;
             }
             Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
-            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(ctx, req),
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(ctx, req, cb);
             }
-            Ok(RequestPolicy::ProposeConfChange) => self.propose_conf_change(ctx, &req),
+            Ok(RequestPolicy::ProposeNormal) => {
+                let mut stores = Vec::new();
+                if self.check_disk_usages_before_propose(ctx, disk_full_opt, &mut stores) {
+                    self.propose_normal(ctx, req)
+                } else {
+                    let errmsg = String::from("propose failed: disk full");
+                    Err(Error::DiskFull(stores, errmsg))
+                }
+            }
+            Ok(RequestPolicy::ProposeConfChange) => {
+                let mut stores = Vec::new();
+                let disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
+                if self.check_disk_usages_before_propose(ctx, disk_full_opt, &mut stores) {
+                    self.propose_conf_change(ctx, &req)
+                } else {
+                    let errmsg = String::from("propose failed: disk full");
+                    Err(Error::DiskFull(stores, errmsg))
+                }
+            }
             Err(e) => Err(e),
         };
 
@@ -2768,11 +2746,15 @@ where
             poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
             // The leader may be hibernated, send a message for trying to awaken the leader.
             if self.bcast_wake_up_time.is_none()
-                || self.bcast_wake_up_time.as_ref().unwrap().elapsed()
+                || self
+                    .bcast_wake_up_time
+                    .as_ref()
+                    .unwrap()
+                    .saturating_elapsed()
                     >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL)
             {
                 self.bcast_wake_up_message(poll_ctx);
-                self.bcast_wake_up_time = Some(UtilInstant::now_coarse());
+                self.bcast_wake_up_time = Some(TiInstant::now_coarse());
 
                 let task = PdTask::QueryRegionLeader {
                     region_id: self.region_id,
@@ -3079,10 +3061,6 @@ where
             return Err(Error::NotLeader(self.region_id, None));
         }
 
-        if ctx.contains(ProposalContext::PREPARE_MERGE) {
-            self.last_proposed_prepare_merge_idx = propose_index;
-        }
-
         Ok(Either::Left(propose_index))
     }
 
@@ -3126,6 +3104,8 @@ where
         if self.is_applying_snapshot()
             || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
+            // For followers whose disk is full.
+            || !matches!(ctx.self_disk_usage, DiskUsage::Normal)
         {
             info!(
                 "reject transferring leader";
@@ -3219,10 +3199,7 @@ where
                 self.term()
             ));
         }
-        if let Some(index) = self
-            .cmd_epoch_checker
-            .propose_check_epoch(&req, self.term())
-        {
+        if let Some(index) = self.cmd_epoch_checker.propose_check_epoch(req, self.term()) {
             return Ok(Either::Right(index));
         }
 
@@ -3359,6 +3336,115 @@ where
         assert!(self.pending_merge_state.is_some());
         self.want_rollback_merge_peers.insert(peer_id);
     }
+
+    fn maybe_refill_disk_full_peers<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+        if !self.disk_full_peers.any || !self.disk_full_peers.peers.is_empty() {
+            return;
+        }
+
+        // Collect disk full peers and all peers' `next_idx` to find a potential quorum.
+        let peers_len = self.get_store().region().get_peers().len();
+        let mut disk_full_peers = HashSet::default();
+        let mut next_idxs = Vec::with_capacity(peers_len);
+        for peer in self.get_store().region().get_peers() {
+            let (peer_id, store_id) = (peer.get_id(), peer.get_store_id());
+            let usage = ctx.store_disk_usages.get(&store_id);
+            if let Some(ref usage) = usage {
+                assert!(!matches!(usage, DiskUsage::Normal));
+                disk_full_peers.insert(peer_id);
+            }
+            let raft = &self.raft_group.raft;
+            if let Some(pr) = raft.prs().get(peer_id) {
+                next_idxs.push((peer_id, pr.next_idx, usage));
+            }
+        }
+
+        if disk_full_peers.is_empty() {
+            self.disk_full_peers = DiskFullPeers::default();
+            return;
+        }
+
+        let raft = &mut self.raft_group.raft;
+        self.disk_full_peers.majority = raft.prs().has_quorum(&disk_full_peers);
+        for &(peer, _, usage) in &next_idxs {
+            if let Some(usage) = usage {
+                self.disk_full_peers.peers.insert(peer, (*usage, false));
+                raft.adjust_max_inflight_msgs(peer, 0);
+            }
+        }
+
+        if !self.disk_full_peers.majority {
+            // Less than majority peers are in disk full status.
+            return;
+        }
+
+        // Reverse sort peers based on `next_idx`, then try to get a potential quorum.
+        next_idxs.sort_by(|x, y| y.1.cmp(&x.1));
+        let (mut potential_quorum, mut quorum_ok) = (HashSet::default(), false);
+        for &(peer_id, _, usage) in &next_idxs {
+            if matches!(usage, Some(DiskUsage::AlreadyFull)) {
+                continue;
+            }
+            potential_quorum.insert(peer_id);
+            if raft.prs().has_quorum(&potential_quorum) {
+                quorum_ok = true;
+                break;
+            }
+        }
+
+        if quorum_ok {
+            for peer in potential_quorum {
+                if let Some(x) = self.disk_full_peers.peers.get_mut(&peer) {
+                    // It can help to establish a quorum.
+                    x.1 = true;
+                    raft.adjust_max_inflight_msgs(peer, 1);
+                }
+            }
+        }
+    }
+
+    // Check disk usages for the peer itself and other peers in the raft group.
+    // The return value indicates whether the proposal is allowed or not.
+    fn check_disk_usages_before_propose<T>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+        disk_full_opt: DiskFullOpt,
+        disk_full_stores: &mut Vec<u64>,
+    ) -> bool {
+        self.maybe_refill_disk_full_peers(ctx);
+
+        // Propose can be rejected if the store itself's disk is full.
+        let self_allowed = match disk_full_opt {
+            DiskFullOpt::NotAllowedOnFull => matches!(ctx.self_disk_usage, DiskUsage::Normal),
+            _ => !matches!(ctx.self_disk_usage, DiskUsage::AlreadyFull),
+        };
+        if !self_allowed {
+            disk_full_stores.push(ctx.store.id);
+            return false;
+        }
+
+        if !self.disk_full_peers.any || !self.disk_full_peers.majority {
+            return true;
+        }
+
+        if matches!(disk_full_opt, DiskFullOpt::AllowedOnAlmostFull)
+            && self.disk_full_peers.peers.values().any(|x| x.1)
+        {
+            // Majority peers are in disk full status but the request carries a special flag.
+            return true;
+        }
+
+        disk_full_stores.extend(ctx.store_disk_usages.keys());
+        false
+    }
+}
+
+#[derive(Default)]
+pub struct DiskFullPeers {
+    pub any: bool,
+    pub majority: bool,
+    // Indicates whether a peer can help to establish a quorum.
+    pub peers: HashMap<u64, (DiskUsage, bool)>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -3502,8 +3588,13 @@ where
         }
     }
 
-    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) -> bool {
+    fn send_raft_message<T: Transport>(
+        &mut self,
+        msg: eraftpb::Message,
+        ctx: &mut PollContext<EK, ER, T>,
+    ) -> bool {
         let mut send_msg = self.prepare_raft_message();
+        send_msg.disk_usage = ctx.self_disk_usage;
 
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
             Some(p) => p,
@@ -3548,7 +3639,7 @@ where
 
         send_msg.set_message(msg);
 
-        if let Err(e) = trans.send(send_msg) {
+        if let Err(e) = ctx.trans.send(send_msg) {
             // We use metrics to observe failure on production.
             debug!(
                 "failed to send msg to other peer";
@@ -3644,7 +3735,7 @@ where
         self.send_extra_message(extra_msg, &mut ctx.trans, &to_peer);
     }
 
-    pub fn require_updating_max_ts(&self, pd_scheduler: &FutureScheduler<PdTask<EK>>) {
+    pub fn require_updating_max_ts(&self, pd_scheduler: &Scheduler<PdTask<EK>>) {
         let epoch = self.region().get_region_epoch();
         let term_low_bits = self.term() & ((1 << 32) - 1); // 32 bits
         let version_lot_bits = epoch.get_version() & ((1 << 31) - 1); // 31 bits
@@ -3867,7 +3958,6 @@ pub trait AbstractPeer {
     fn apply_state(&self) -> &RaftApplyState;
     fn raft_status(&self) -> raft::Status;
     fn raft_commit_index(&self) -> u64;
-    fn raft_request_snapshot(&mut self, index: u64);
     fn pending_merge_state(&self) -> Option<&MergeState>;
 }
 

@@ -12,8 +12,9 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::{
-    cmd_resp, util, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand,
-    ReadResponse, RegionSnapshot, SignificantMsg, StoreMsg, StoreRouter, WriteResponse,
+    cmd_resp, util, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter,
+    RaftCmdExtraOpts, RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg, StoreMsg,
+    StoreRouter, WriteResponse,
 };
 use raftstore::Result;
 use tempfile::{Builder, TempDir};
@@ -101,8 +102,13 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
 
     fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {}
 
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksSnapshot>) -> Result<()> {
-        self.invoke(RaftCommand::new(req, cb));
+    fn send_command(
+        &self,
+        req: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+        extra_opts: RaftCmdExtraOpts,
+    ) -> Result<()> {
+        self.invoke(RaftCommand::new_ext(req, cb, extra_opts));
         Ok(())
     }
 }
@@ -114,7 +120,7 @@ impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
     ) -> Result<()> {
-        self.send_command(req, cb)
+        self.send_command(req, cb, RaftCmdExtraOpts::default())
     }
 
     fn release_snapshot_cache(&self) {}

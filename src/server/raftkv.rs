@@ -30,7 +30,8 @@ use raftstore::{
     errors::Error as RaftServerError,
     router::{LocalReadRouter, RaftStoreRouter},
     store::{
-        Callback as StoreCallback, ReadIndexContext, ReadResponse, RegionSnapshot, WriteResponse,
+        Callback as StoreCallback, RaftCmdExtraOpts, ReadIndexContext, ReadResponse,
+        RegionSnapshot, WriteResponse,
     },
 };
 use tikv_util::codec::number::NumberEncoder;
@@ -104,18 +105,6 @@ impl From<Error> for kv::Error {
     }
 }
 
-/// `RaftKv` is a storage engine base on `RaftStore`.
-#[derive(Clone)]
-pub struct RaftKv<E, S>
-where
-    E: KvEngine,
-    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
-{
-    router: S,
-    engine: E,
-    txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
-}
-
 pub enum CmdRes<S>
 where
     S: Snapshot,
@@ -178,6 +167,18 @@ where
     } else {
         (cb_ctx, Ok(CmdRes::Resp(resps.into())))
     }
+}
+
+/// `RaftKv` is a storage engine base on `RaftStore`.
+#[derive(Clone)]
+pub struct RaftKv<E, S>
+where
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
+{
+    router: S,
+    engine: E,
+    txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
 }
 
 impl<E, S> RaftKv<E, S>
@@ -293,11 +294,12 @@ where
             proposed_cb,
             committed_cb,
         );
-        if let Some(deadline) = batch.deadline {
-            self.router.send_command_with_deadline(cmd, cb, deadline)?;
-        } else {
-            self.router.send_command(cmd, cb)?;
-        }
+        let extra_opts = RaftCmdExtraOpts {
+            deadline: batch.deadline,
+            disk_full_opt: batch.disk_full_opt,
+        };
+        self.router.send_command(cmd, cb, extra_opts)?;
+
         Ok(())
     }
 }
@@ -408,7 +410,7 @@ where
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .write
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     fail_point!("raftkv_async_write_finish");
                     write_cb((cb_ctx, Ok(())))
                 }
@@ -466,7 +468,7 @@ where
                 Ok(CmdRes::Snap(s)) => {
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .snapshot
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
                     cb((cb_ctx, Ok(s)))
                 }
@@ -560,11 +562,11 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                     rctx.locked = Some(lock);
                     REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC
                         .locked
-                        .observe(begin_instant.elapsed().as_secs_f64());
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
                 } else {
                     REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC
                         .unlocked
-                        .observe(begin_instant.elapsed().as_secs_f64());
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
                 }
             }
             msg.mut_entries()[0].set_data(rctx.to_bytes().into());

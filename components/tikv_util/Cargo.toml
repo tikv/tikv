@@ -18,8 +18,10 @@ prost-codec = [
   "grpcio/prost-codec",
   "kvproto/prost-codec",
 ]
+test-cgroup = []
 
 [dependencies]
+nix = "0.19"
 async-speed-limit = "0.3"
 backtrace = "0.3.9"
 byteorder = "1.2"
@@ -62,7 +64,7 @@ tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-executor = "0.1"
 tokio-timer = "0.2"
 url = "2"
-kvproto = { rev = "dda0a102bc6ac7371e1f99cd2797825aa210b4a0", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 protobuf = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
@@ -81,4 +83,3 @@ utime = "0.2"
 
 [target.'cfg(unix)'.dev-dependencies]
 gag = "0.1.10"
-nix = "0.11"

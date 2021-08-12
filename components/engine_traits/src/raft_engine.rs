@@ -80,6 +80,8 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     fn stop(&self) {}
 
     fn dump_stats(&self) -> Result<String>;
+
+    fn get_engine_size(&self) -> Result<u64>;
 }
 
 pub trait RaftLogBatch: Send {
@@ -91,7 +93,14 @@ pub trait RaftLogBatch: Send {
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
 
+    /// The data size of this RaftLogBatch.
+    fn persist_size(&self) -> usize;
+
+    /// Whether it is empty or not.
     fn is_empty(&self) -> bool;
+
+    /// Merge another RaftLogBatch to itself.
+    fn merge(&mut self, _: Self);
 }
 
 #[derive(Clone, Copy, Default)]

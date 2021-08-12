@@ -128,12 +128,13 @@ fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
 
 fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize) {
     cluster.run();
+    let leader = cluster.leader_of_region(1);
 
     let half = (count as u64 + 1) / 2;
     for i in 1..=half {
         cluster.stop_node(i);
     }
-    if let Some(leader) = cluster.leader_of_region(1) {
+    if let Some(leader) = leader {
         if leader.get_store_id() > half {
             cluster.stop_node(leader.get_store_id());
         }
@@ -469,6 +470,7 @@ fn test_node_leader_change_with_log_overlap() {
                 assert!(resp.response.get_header().has_error());
                 assert!(resp.response.get_header().get_error().has_stale_command());
             })),
+            RaftCmdExtraOpts::default(),
         )
         .unwrap();
 
@@ -719,6 +721,7 @@ fn test_node_dropped_proposal() {
             Callback::write(Box::new(move |resp: WriteResponse| {
                 let _ = tx.send(resp.response);
             })),
+            RaftCmdExtraOpts::default(),
         )
         .unwrap();
 

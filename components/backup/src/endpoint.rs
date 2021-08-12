@@ -1,12 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::f64::INFINITY;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{borrow::Cow, time::*};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::DB;
@@ -14,7 +14,7 @@ use engine_traits::{name_to_cf, CfName, SstCompressionType};
 use external_storage_export::{create_storage, ExternalStorage};
 use file_system::{IOType, WithIOType};
 use futures::channel::mpsc::*;
-use kvproto::backup::*;
+use kvproto::brpb::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
 use online_config::OnlineConfig;
@@ -28,7 +28,7 @@ use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
 use tikv::storage::Statistics;
-use tikv_util::time::Limiter;
+use tikv_util::time::{Instant, Limiter};
 use tikv_util::worker::Runnable;
 use tikv_util::{
     box_err, debug, defer, error, error_unknown, impl_display_as_debug, info, thd_name, warn,
@@ -169,7 +169,7 @@ impl BackupRange {
                 |key, lock| {
                     Lock::check_ts_conflict(
                         Cow::Borrowed(lock),
-                        &key,
+                        key,
                         backup_ts,
                         &Default::default(),
                     )
@@ -196,7 +196,7 @@ impl BackupRange {
         };
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["snapshot"])
-            .observe(start_snapshot.elapsed().as_secs_f64());
+            .observe(start_snapshot.saturating_elapsed().as_secs_f64());
         let snap_store = SnapshotStore::new(
             snapshot,
             backup_ts,
@@ -285,7 +285,7 @@ impl BackupRange {
         }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["scan"])
-            .observe(start_scan.elapsed().as_secs_f64());
+            .observe(start_scan.saturating_elapsed().as_secs_f64());
 
         if writer.need_flush_keys() {
             match writer.save(&storage.storage) {
@@ -368,7 +368,7 @@ impl BackupRange {
         }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["raw_scan"])
-            .observe(start.elapsed().as_secs_f64());
+            .observe(start.saturating_elapsed().as_secs_f64());
         Ok(statistics)
     }
 
@@ -507,8 +507,8 @@ impl<R: RegionInfoProvider> Progress<R> {
                         }
                     }
                     if info.role == StateRole::Leader {
-                        let ekey = get_min_end_key(end_key.as_ref(), &region);
-                        let skey = get_max_start_key(start_key.as_ref(), &region);
+                        let ekey = get_min_end_key(end_key.as_ref(), region);
+                        let skey = get_max_start_key(start_key.as_ref(), region);
                         assert!(!(skey == ekey && ekey.is_some()), "{:?} {:?}", skey, ekey);
                         let leader = find_peer(region, store_id).unwrap().to_owned();
                         let backup_range = BackupRange {
@@ -907,6 +907,7 @@ fn to_sst_compression_type(ct: CompressionType) -> Option<SstCompressionType> {
 pub mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     use engine_traits::MiscExt;
     use external_storage_export::{make_local_backend, make_noop_backend};

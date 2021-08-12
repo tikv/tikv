@@ -44,13 +44,14 @@ pub use resolve_lock::RESOLVE_LOCK_BATCH_SIZE;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::iter;
 use std::marker::PhantomData;
+use std::ops::{Deref, DerefMut};
 
 use kvproto::kvrpcpb::*;
 use txn_types::{Key, OldValues, TimeStamp, Value, Write};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
-use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock};
+use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader};
 use crate::storage::txn::latch;
 use crate::storage::txn::{ProcessResult, Result};
 use crate::storage::types::{
@@ -493,6 +494,37 @@ pub struct WriteContext<'a, L: LockManager> {
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
     pub async_apply_prewrite: bool,
+}
+
+pub struct ReaderWithStats<'a, S: Snapshot> {
+    reader: SnapshotReader<S>,
+    statistics: &'a mut Statistics,
+}
+
+impl<'a, S: Snapshot> ReaderWithStats<'a, S> {
+    fn new(reader: SnapshotReader<S>, statistics: &'a mut Statistics) -> Self {
+        Self { reader, statistics }
+    }
+}
+
+impl<'a, S: Snapshot> Deref for ReaderWithStats<'a, S> {
+    type Target = SnapshotReader<S>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.reader
+    }
+}
+
+impl<'a, S: Snapshot> DerefMut for ReaderWithStats<'a, S> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.reader
+    }
+}
+
+impl<'a, S: Snapshot> Drop for ReaderWithStats<'a, S> {
+    fn drop(&mut self) {
+        self.statistics.add(&self.reader.take_statistics())
+    }
 }
 
 impl Command {

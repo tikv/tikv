@@ -246,6 +246,7 @@ impl ObserveRegion {
 
 pub struct Endpoint<T, E: KvEngine, C> {
     cfg: ResolvedTsConfig,
+    cfg_version: usize,
     store_meta: Arc<Mutex<StoreMeta>>,
     region_read_progress: RegionReadProgressRegistry,
     regions: HashMap<u64, ObserveRegion>,
@@ -286,6 +287,7 @@ where
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, raft_router);
         let ep = Self {
             cfg: cfg.clone(),
+            cfg_version: 0,
             scheduler,
             store_meta,
             region_read_progress,
@@ -295,7 +297,7 @@ where
             regions: HashMap::default(),
             _phantom: PhantomData::default(),
         };
-        ep.register_advance_event();
+        ep.register_advance_event(ep.cfg_version);
         ep
     }
 
@@ -472,7 +474,7 @@ where
 
         let mut min_ts = TimeStamp::max();
         for region_id in regions.iter() {
-            if let Some(observe_region) = self.regions.get_mut(&region_id) {
+            if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
                     let resolved_ts = observe_region.resolver.resolve(ts);
                     if resolved_ts < min_ts {
@@ -548,10 +550,32 @@ where
         }
     }
 
-    fn register_advance_event(&self) {
+    fn register_advance_event(&self, cfg_version: usize) {
+        // Ignore advance event that registered with previous `advance_ts_interval` config
+        if self.cfg_version != cfg_version {
+            return;
+        }
         let regions = self.regions.keys().into_iter().copied().collect();
+        self.advance_worker.advance_ts_for_regions(regions);
         self.advance_worker
-            .register_advance_event(self.cfg.advance_ts_interval.0, regions);
+            .register_next_event(self.cfg.advance_ts_interval.0, self.cfg_version);
+    }
+
+    fn handle_change_config(&mut self, change: ConfigChange) {
+        let prev = format!("{:?}", self.cfg);
+        let prev_advance_ts_interval = self.cfg.advance_ts_interval;
+        self.cfg.update(change);
+        if self.cfg.advance_ts_interval != prev_advance_ts_interval {
+            // Increase the `cfg_version` to reject advance event that registered before
+            self.cfg_version += 1;
+            // Advance `resolved-ts` immediately after `advance_ts_interval` changed
+            self.register_advance_event(self.cfg_version);
+        }
+        info!(
+            "resolved-ts config changed";
+            "prev" => prev,
+            "current" => ?self.cfg,
+        );
     }
 }
 
@@ -569,7 +593,9 @@ pub enum Task<S: Snapshot> {
         observe_id: ObserveID,
         cause: String,
     },
-    RegisterAdvanceEvent,
+    RegisterAdvanceEvent {
+        cfg_version: usize,
+    },
     AdvanceResolvedTs {
         regions: Vec<u64>,
         ts: TimeStamp,
@@ -639,7 +665,9 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
                 .field("observe_id", &observe_id)
                 .field("apply_index", &apply_index)
                 .finish(),
-            Task::RegisterAdvanceEvent => de.field("name", &"register_advance_event").finish(),
+            Task::RegisterAdvanceEvent { .. } => {
+                de.field("name", &"register_advance_event").finish()
+            }
             Task::ChangeConfig { ref change } => de
                 .field("name", &"change_config")
                 .field("change", &change)
@@ -685,16 +713,8 @@ where
                 entries,
                 apply_index,
             } => self.handle_scan_locks(region_id, observe_id, entries, apply_index),
-            Task::RegisterAdvanceEvent => self.register_advance_event(),
-            Task::ChangeConfig { change } => {
-                let prev = format!("{:?}", self.cfg);
-                self.cfg.update(change);
-                info!(
-                    "resolved-ts config changed";
-                    "prev" => prev,
-                    "current" => ?self.cfg,
-                );
-            }
+            Task::RegisterAdvanceEvent { cfg_version } => self.register_advance_event(cfg_version),
+            Task::ChangeConfig { change } => self.handle_change_config(change),
         }
     }
 }

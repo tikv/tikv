@@ -56,7 +56,7 @@ where
     let mut pre_sum = vec![];
     let mut sum = 0;
     for item in iter {
-        sum += read(&item);
+        sum += read(item);
         pre_sum.push(sum);
     }
     pre_sum
@@ -208,7 +208,7 @@ impl Recorder {
         let mut samples: Vec<Sample> = self.convert(sampled_key_ranges);
         for key_ranges in &self.key_ranges {
             for key_range in key_ranges {
-                Recorder::sample(&mut samples, &key_range);
+                Recorder::sample(&mut samples, key_range);
             }
         }
         Recorder::split_key(
@@ -252,6 +252,9 @@ impl Recorder {
         let mut best_index: i32 = -1;
         let mut best_score = 2.0;
         for (index, sample) in samples.iter().enumerate() {
+            if sample.key.is_empty() {
+                continue;
+            }
             let sampled = sample.contained + sample.left + sample.right;
             if (sample.left + sample.right) == 0 || sampled < sample_threshold {
                 continue;

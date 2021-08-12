@@ -23,8 +23,8 @@ pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);
 
 impl<S: Snapshot> ScannerBuilder<S> {
     /// Initialize a new `ScannerBuilder`
-    pub fn new(snapshot: S, ts: TimeStamp, desc: bool) -> Self {
-        Self(ScannerConfig::new(snapshot, ts, desc))
+    pub fn new(snapshot: S, ts: TimeStamp) -> Self {
+        Self(ScannerConfig::new(snapshot, ts))
     }
 
     /// Set whether or not read operations should fill the cache.
@@ -54,6 +54,15 @@ impl<S: Snapshot> ScannerBuilder<S> {
     #[inline]
     pub fn isolation_level(mut self, isolation_level: IsolationLevel) -> Self {
         self.0.isolation_level = isolation_level;
+        self
+    }
+
+    /// Set the desc.
+    ///
+    /// Default is 'false'.
+    #[inline]
+    pub fn desc(mut self, desc: bool) -> Self {
+        self.0.desc = desc;
         self
     }
 
@@ -224,7 +233,7 @@ pub struct ScannerConfig<S: Snapshot> {
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
-    fn new(snapshot: S, ts: TimeStamp, desc: bool) -> Self {
+    fn new(snapshot: S, ts: TimeStamp) -> Self {
         Self {
             snapshot,
             fill_cache: true,
@@ -235,7 +244,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             hint_min_ts: None,
             hint_max_ts: None,
             ts,
-            desc,
+            desc: false,
             bypass_locks: Default::default(),
             check_has_newer_ts_data: false,
         }
@@ -513,7 +522,8 @@ mod tests {
             move |engine: &RocksEngine, expected_result: Vec<(Vec<u8>, Option<Vec<u8>>)>| {
                 let snapshot = engine.snapshot(Default::default()).unwrap();
 
-                let scanner = ScannerBuilder::new(snapshot, SCAN_TS, desc)
+                let scanner = ScannerBuilder::new(snapshot, SCAN_TS)
+                    .desc(desc)
                     .build()
                     .unwrap();
                 check_scan_result(scanner, &expected_result);
@@ -605,17 +615,20 @@ mod tests {
             expected_result = expected_result.into_iter().rev().collect();
         }
 
-        let scanner = ScannerBuilder::new(snapshot.clone(), 30.into(), desc)
+        let scanner = ScannerBuilder::new(snapshot.clone(), 30.into())
+            .desc(desc)
             .build()
             .unwrap();
         check_scan_result(scanner, &expected_result);
 
-        let scanner = ScannerBuilder::new(snapshot.clone(), 70.into(), desc)
+        let scanner = ScannerBuilder::new(snapshot.clone(), 70.into())
+            .desc(desc)
             .build()
             .unwrap();
         check_scan_result(scanner, &expected_result);
 
-        let scanner = ScannerBuilder::new(snapshot.clone(), 103.into(), desc)
+        let scanner = ScannerBuilder::new(snapshot.clone(), 103.into())
+            .desc(desc)
             .build()
             .unwrap();
         check_scan_result(scanner, &expected_result);
@@ -626,7 +639,8 @@ mod tests {
         } else {
             expected_result[4].1 = None;
         }
-        let scanner = ScannerBuilder::new(snapshot, 106.into(), desc)
+        let scanner = ScannerBuilder::new(snapshot, 106.into())
+            .desc(desc)
             .build()
             .unwrap();
         check_scan_result(scanner, &expected_result);
@@ -673,7 +687,8 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let scanner = ScannerBuilder::new(snapshot, 65.into(), desc)
+        let scanner = ScannerBuilder::new(snapshot, 65.into())
+            .desc(desc)
             .bypass_locks(bypass_locks)
             .build()
             .unwrap();
@@ -697,8 +712,8 @@ mod tests {
         let mut scanner = ScannerBuilder::new(
             engine.snapshot(Default::default()).unwrap(),
             scanner_ts.into(),
-            desc,
         )
+        .desc(desc)
         .range(Some(Key::from_raw(key)), None)
         .check_has_newer_ts_data(true)
         .build()

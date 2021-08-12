@@ -4,7 +4,6 @@ use coprocessor_plugin_api::*;
 use kvproto::kvrpcpb;
 use semver::VersionReq;
 use std::future::Future;
-use std::ops::Not;
 use std::sync::Arc;
 
 use super::config::Config;
@@ -87,18 +86,15 @@ impl Endpoint {
         let version_req = VersionReq::parse(&req.copr_version_req)
             .map_err(|e| CoprocessorError::Other(format!("{}", e)))?;
         let plugin_version = plugin.version();
-        version_req
-            .matches(&plugin_version)
-            .not()
-            .then(|| {})
-            .ok_or_else(|| {
-                CoprocessorError::Other(format!(
-                    "The plugin '{}' with version '{}' does not satisfy the version constraint '{}'",
-                    plugin.name(),
-                    plugin_version,
-                    version_req,
-                ))
-            })?;
+
+        if !version_req.matches(plugin_version) {
+            return Err(CoprocessorError::Other(format!(
+                "The plugin '{}' with version '{}' does not satisfy the version constraint '{}'",
+                plugin.name(),
+                plugin_version,
+                version_req,
+            )));
+        }
 
         let raw_storage_api = RawStorageImpl::new(req.take_context(), storage);
         let ranges = req

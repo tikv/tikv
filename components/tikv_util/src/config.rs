@@ -1149,7 +1149,11 @@ impl<T> Tracker<T> {
                 Err(_) => {
                     let t = Instant::now_coarse();
                     let value = self.inner.value.read().unwrap();
-                    slow_log!(t.elapsed(), "{} tracker get updated value", self.tag);
+                    slow_log!(
+                        t.saturating_elapsed(),
+                        "{} tracker get updated value",
+                        self.tag
+                    );
                     Some(value)
                 }
             }
@@ -1251,7 +1255,7 @@ impl TomlWriter {
 
     pub fn write_change(&mut self, src: String, mut change: HashMap<String, String>) {
         for line in src.lines() {
-            match TomlLine::parse(&line) {
+            match TomlLine::parse(line) {
                 TomlLine::Table(keys) => {
                     self.write_current_table(&mut change);
                     self.write(line.as_bytes());

@@ -2397,7 +2397,7 @@ mod tests {
     use std::cmp::Ordering;
     use std::collections::hash_map::DefaultHasher;
     use std::f64::EPSILON;
-    use std::iter::repeat;
+
     use std::sync::Arc;
 
     #[test]
@@ -3199,9 +3199,9 @@ mod tests {
 
     #[test]
     fn test_add() {
-        let a = "2".to_owned() + &repeat('1').take(71).collect::<String>();
-        let b: String = repeat('8').take(81).collect();
-        let c = "8888888890".to_owned() + &repeat('9').take(71).collect::<String>();
+        let a = "2".to_owned() + &"1".repeat(71);
+        let b: String = "8".repeat(81);
+        let c = "8888888890".to_owned() + &"9".repeat(71);
         let cases = vec![
             (
                 ".00012345000098765",
@@ -3294,8 +3294,8 @@ mod tests {
 
     #[test]
     fn test_mul() {
-        let a = "1".to_owned() + &repeat('0').take(60).collect::<String>();
-        let b = "1".to_owned() + &repeat("0").take(60).collect::<String>();
+        let a = "1".to_owned() + &"0".repeat(60);
+        let b = "1".to_owned() + &"0".repeat(60);
         let cases = vec![
             ("12", "10", Res::Ok("120")),
             ("0", "-1.1", Res::Ok("0")),

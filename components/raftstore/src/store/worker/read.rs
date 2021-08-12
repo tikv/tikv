@@ -603,7 +603,7 @@ where
             Ok(None) => self.redirect(RaftCommand::new(req, cb)),
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
-                if let Some(ref delegate) = self.delegates.get(&req.get_header().get_region_id()) {
+                if let Some(delegate) = self.delegates.get(&req.get_header().get_region_id()) {
                     cmd_resp::bind_term(&mut response, delegate.term);
                 }
                 cb.invoke_read(ReadResponse {
@@ -736,7 +736,9 @@ impl Default for ReadMetrics {
 
 impl ReadMetrics {
     pub fn maybe_flush(&mut self) {
-        if self.last_flush_time.elapsed() >= Duration::from_millis(METRICS_FLUSH_INTERVAL) {
+        if self.last_flush_time.saturating_elapsed()
+            >= Duration::from_millis(METRICS_FLUSH_INTERVAL)
+        {
             self.flush();
             self.last_flush_time = Instant::now();
         }

@@ -18,7 +18,7 @@ use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::server::Node;
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::{dummy_scheduler, Builder as WorkerBuilder, FutureWorker};
+use tikv_util::worker::{dummy_scheduler, Builder as WorkerBuilder, LazyWorker};
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // assume that there is a node  bootstrap the cluster and add region in pd successfully
@@ -67,7 +67,7 @@ fn test_node_bootstrap_with_prepared_data() {
         bg_worker,
     );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap());
-    let pd_worker = FutureWorker::new("test-pd-worker");
+    let pd_worker = LazyWorker::new("test-pd-worker");
 
     // assume there is a node has bootstrapped the cluster and add region in pd successfully
     bootstrap_with_first_region(Arc::clone(&pd_client)).unwrap();
@@ -97,7 +97,7 @@ fn test_node_bootstrap_with_prepared_data() {
 
     let importer = {
         let dir = tmp_path.path().join("import-sst");
-        Arc::new(SSTImporter::new(&cfg.import, dir, None).unwrap())
+        Arc::new(SSTImporter::new(&cfg.import, dir, None, false).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 

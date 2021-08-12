@@ -97,7 +97,7 @@ pub fn check_and_dump_raft_db(
     let mut raft_db_opts = config_raftdb.build_opt();
     raft_db_opts.set_env(env.clone());
     let raft_db_cf_opts = config_raftdb.build_cf_opts(&None);
-    let db = engine_rocks::raw_util::new_engine_opt(&raftdb_path, raft_db_opts, raft_db_cf_opts)
+    let db = engine_rocks::raw_util::new_engine_opt(raftdb_path, raft_db_opts, raft_db_cf_opts)
         .unwrap_or_else(|s| fatal!("failed to create origin raft db: {}", s));
     let src_engine = RocksEngine::from_db(Arc::new(db));
 
@@ -117,7 +117,7 @@ pub fn check_and_dump_raft_db(
     }
 
     info!("Start to scan raft log from RocksEngine and dump into RaftLogEngine");
-    let consumed_time = std::time::Instant::now();
+    let consumed_time = tikv_util::time::Instant::now();
     // Seek all region id from raftdb and send them to workers.
     let mut it = src_engine.iterator().unwrap();
     let mut valid = it.seek(SeekKey::Key(keys::REGION_RAFT_MIN_KEY)).unwrap();
@@ -144,7 +144,7 @@ pub fn check_and_dump_raft_db(
         "Finished dump, total regions: {}; Total bytes: {}; Consumed time: {:?}",
         count_region,
         count_size.load(Ordering::Relaxed),
-        consumed_time.elapsed(),
+        consumed_time.saturating_elapsed(),
     );
 
     rename_to_tmp_dir(&raftdb_path, &dirty_raftdb_path);
@@ -176,12 +176,12 @@ fn run_dump_raftdb_worker(
                             match suffix {
                                 keys::RAFT_LOG_SUFFIX => {
                                     let mut entry = Entry::default();
-                                    entry.merge_from_bytes(&value)?;
+                                    entry.merge_from_bytes(value)?;
                                     entries.push(entry);
                                 }
                                 keys::RAFT_STATE_SUFFIX => {
                                     let mut state = RaftLocalState::default();
-                                    state.merge_from_bytes(&value)?;
+                                    state.merge_from_bytes(value)?;
                                     batch.put_raft_state(region_id, &state).unwrap();
                                     // Assume that we always scan entry first and raft state at the end.
                                     batch
@@ -224,7 +224,7 @@ pub fn check_and_dump_raft_engine(config: &TiKvConfig, engine: &RocksEngine, thr
     // Clean the target engine if it exists.
     clear_raft_db(engine).expect("clear_raft_db");
 
-    let src_engine = RaftLogEngine::new(raft_engine_config.clone());
+    let src_engine = RaftLogEngine::new(raft_engine_config.clone()).expect("open raft engine");
 
     let count_size = Arc::new(AtomicUsize::new(0));
     let mut count_region = 0;
@@ -242,7 +242,7 @@ pub fn check_and_dump_raft_engine(config: &TiKvConfig, engine: &RocksEngine, thr
     }
 
     info!("Start to scan raft log from RaftLogEngine and dump into RocksEngine");
-    let consumed_time = std::time::Instant::now();
+    let consumed_time = tikv_util::time::Instant::now();
     // Seek all region id from RaftLogEngine and send them to workers.
     for id in src_engine.raft_groups() {
         tx.send(id).unwrap();
@@ -259,7 +259,7 @@ pub fn check_and_dump_raft_engine(config: &TiKvConfig, engine: &RocksEngine, thr
         "Finished dump, total regions: {}; Total bytes: {}; Consumed time: {:?}",
         count_region,
         count_size.load(Ordering::Relaxed),
-        consumed_time.elapsed(),
+        consumed_time.saturating_elapsed(),
     );
 
     rename_to_tmp_dir(&raft_engine_path, &dirty_raft_engine_path);
@@ -333,7 +333,7 @@ mod tests {
         }
 
         // Dump logs from RocksEngine to RaftLogEngine.
-        let raft_engine = RaftLogEngine::new(cfg.raft_engine.config());
+        let raft_engine = RaftLogEngine::new(cfg.raft_engine.config()).expect("open raft engine");
         if continue_on_aborted {
             let mut batch = raft_engine.log_batch(0);
             set_write_batch(25, &mut batch);

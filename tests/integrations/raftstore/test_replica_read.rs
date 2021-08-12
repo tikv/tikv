@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use futures::executor::block_on;
 use kvproto::raft_serverpb::RaftMessage;
@@ -15,6 +15,7 @@ use raft::eraftpb::MessageType;
 use raftstore::Result;
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
 
@@ -167,7 +168,7 @@ fn test_replica_read_on_hibernate() {
     // a new election finally because it always ticks.
     let start = Instant::now();
     loop {
-        if start.elapsed() >= Duration::from_secs(6) {
+        if start.saturating_elapsed() >= Duration::from_secs(6) {
             break;
         }
         match rx.recv_timeout(Duration::from_secs(2)) {
@@ -389,7 +390,7 @@ fn test_split_isolation() {
     let mut cluster = new_node_cluster(0, 2);
     // Use long election timeout and short lease.
     configure_for_hibernate(&mut cluster);
-    configure_for_lease_read(&mut cluster, Some(200), Some(10));
+    configure_for_lease_read(&mut cluster, Some(50), Some(20));
     cluster.cfg.raft_store.raft_log_gc_count_limit = 11;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();

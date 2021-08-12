@@ -176,6 +176,15 @@ pub struct Statistics {
     pub lock: CfStatistics,
     pub write: CfStatistics,
     pub data: CfStatistics,
+
+    // Number of bytes of user key-value pairs.
+    //
+    // A user key in mem-comparable format doesn't contain timestamp but some markers and
+    // paddings, so its size is still a little bit greater than the one at client view.
+    //
+    // Note that a value comes from either write cf (due to it's a short value) or default cf, we
+    // can't embed this `processed_size` field into `CfStatistics`.
+    pub processed_size: usize,
 }
 
 impl Statistics {
@@ -199,6 +208,7 @@ impl Statistics {
         self.lock.add(&other.lock);
         self.write.add(&other.write);
         self.data.add(&other.data);
+        self.processed_size += other.processed_size;
     }
 
     /// Deprecated
@@ -225,6 +235,7 @@ impl Statistics {
     pub fn write_scan_detail(&self, detail_v2: &mut ScanDetailV2) {
         detail_v2.set_processed_versions(self.write.processed_keys as u64);
         detail_v2.set_total_versions(self.write.total_op_count() as u64);
+        detail_v2.set_processed_versions_size(self.processed_size as u64);
     }
 }
 
