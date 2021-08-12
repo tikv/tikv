@@ -28,11 +28,12 @@ failpoints = ["fail/failpoints"]
 error_code = { path = "../error_code", default-features = false }
 futures = "0.3"
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
-kvproto = { path = "../../../kvproto", branch = "unsafe-recovery-proto", default-features = false }
+kvproto = { path = "../../../kvproto", default-features = false }
 lazy_static = "1.3"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../log_wrappers" }
 prometheus = { version = "0.12", features = ["nightly"] }
+protobuf = "2"
 security = { path = "../security", default-features = false }
 serde = "1.0"
 serde_derive = "1.0"

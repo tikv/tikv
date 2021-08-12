@@ -2099,7 +2099,7 @@ name = "keys"
 version = "0.1.0"
 dependencies = [
  "byteorder",
- "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
+ "kvproto 0.0.2",
  "log_wrappers",
  "panic_hook",
  "thiserror",
@@ -2110,7 +2110,6 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#317f69fb54b44619271df82ec163764032184a85"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2125,6 +2124,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+source = "git+https://github.com/pingcap/kvproto.git#317f69fb54b44619271df82ec163764032184a85"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2899,6 +2899,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "prometheus",
+ "protobuf",
  "security",
  "semver 0.10.0",
  "serde",
@@ -3450,7 +3451,7 @@ dependencies = [
  "into_other",
  "itertools 0.10.0",
  "keys",
- "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
+ "kvproto 0.0.2",
  "lazy_static",
  "log",
  "log_wrappers",

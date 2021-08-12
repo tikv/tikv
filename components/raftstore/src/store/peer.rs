@@ -3735,7 +3735,7 @@ where
         self.send_extra_message(extra_msg, &mut ctx.trans, &to_peer);
     }
 
-    pub fn require_updating_max_ts(&self, pd_scheduler: &Scheduler<PdTask<EK>>) {
+    pub fn require_updating_max_ts(&self, pd_scheduler: &Scheduler<PdTask<EK, ER>>) {
         let epoch = self.region().get_region_epoch();
         let term_low_bits = self.term() & ((1 << 32) - 1); // 32 bits
         let version_lot_bits = epoch.get_version() & ((1 << 31) - 1); // 31 bits

@@ -352,7 +352,7 @@ where
     pub processed_fsm_count: usize,
     pub cfg: Config,
     pub store: metapb::Store,
-    pub pd_scheduler: Scheduler<PdTask<EK>>,
+    pub pd_scheduler: Scheduler<PdTask<EK, ER>>,
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     // handle Compact, CleanupSST task
@@ -938,7 +938,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
-    pd_scheduler: Scheduler<PdTask<EK>>,
+    pd_scheduler: Scheduler<PdTask<EK, ER>>,
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
@@ -1193,8 +1193,8 @@ where
     }
 }
 
-struct Workers<EK: KvEngine> {
-    pd_worker: LazyWorker<PdTask<EK>>,
+struct Workers<EK: KvEngine, ER: RaftEngine> {
+    pd_worker: LazyWorker<PdTask<EK, ER>>,
     background_worker: Worker,
 
     // Both of cleanup tasks and region tasks get their own workers, instead of reusing
@@ -1211,7 +1211,7 @@ pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
     apply_router: ApplyRouter<EK>,
     apply_system: ApplyBatchSystem<EK>,
     router: RaftRouter<EK, ER>,
-    workers: Option<Workers<EK>>,
+    workers: Option<Workers<EK, ER>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
@@ -1232,7 +1232,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         trans: T,
         pd_client: Arc<C>,
         mgr: SnapManager,
-        pd_worker: LazyWorker<PdTask<EK>>,
+        pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SSTImporter>,
@@ -1341,7 +1341,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
     fn start_system<T: Transport + 'static, C: PdClient + 'static, W: WriteBatch<EK> + 'static>(
         &mut self,
-        mut workers: Workers<EK>,
+        mut workers: Workers<EK, ER>,
         region_peers: Vec<SenderFsmPair<EK, ER>>,
         builder: RaftPollerBuilder<EK, ER, T>,
         auto_split_controller: AutoSplitController,
