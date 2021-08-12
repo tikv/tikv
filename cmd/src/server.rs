@@ -609,34 +609,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cop_read_pools.handle()
         };
 
-<<<<<<< HEAD:cmd/src/server.rs
-        // Register cdc
+        // Register cdc.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-=======
-        // Create resolved ts worker
-        let rts_worker = if self.config.resolved_ts.enable {
-            let worker = Box::new(LazyWorker::new("resolved-ts"));
-            // Register the resolved ts observer
-            let resolved_ts_ob = resolved_ts::Observer::new(worker.scheduler());
-            resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-            // Register config manager for resolved ts worker
-            cfg_controller.register(
-                tikv::config::Module::ResolvedTs,
-                Box::new(resolved_ts::ResolvedTsConfigManager::new(
-                    worker.scheduler(),
-                )),
-            );
-            Some(worker)
-        } else {
-            None
-        };
-
-        let check_leader_runner = CheckLeaderRunner::new(engines.store_meta.clone());
-        let check_leader_scheduler = self
-            .background_worker
-            .start("check-leader", check_leader_runner);
->>>>>>> d3761d610... cdc: Support changing CDC configs dynamically (#10651):components/server/src/server.rs
+        // Register cdc config.
+        cfg_controller.register(
+            tikv::config::Module::CDC,
+            Box::new(CdcConfigManager(cdc_worker.scheduler())),
+        );
 
         let server_config = Arc::new(self.config.server.clone());
 
@@ -764,8 +744,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Start CDC.
-        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
-        cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         let cdc_memory_quota = MemoryQuota::new(self.config.cdc.sink_memory_quota.0 as _);
         let cdc_endpoint = cdc::Endpoint::new(
             &self.config.cdc,
@@ -778,11 +756,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             server.env(),
             self.security_mgr.clone(),
             cdc_memory_quota.clone(),
-        );
-        // Register cdc
-        cfg_controller.register(
-            tikv::config::Module::CDC,
-            Box::new(CdcConfigManager(cdc_worker.scheduler())),
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.to_stop.push(cdc_worker);
