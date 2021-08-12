@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::*;
-use std::time::Duration;
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;

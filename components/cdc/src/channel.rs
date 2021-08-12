@@ -382,6 +382,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn test_set_capacity() {
         let mut e = kvproto::cdcpb::Event::default();
         e.region_id = 1;
