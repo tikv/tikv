@@ -121,7 +121,7 @@ macro_rules! handle_request {
                 .and_then(|res| sink.success(res).map_err(Error::from))
                 .map(|_| timer.observe_duration())
                 .map_err(move |e| {
-                    debug!("kv rpc failed";
+                    warn!("kv rpc failed";
                         "request" => stringify!($fn_name),
                         "err" => ?e
                     );
@@ -263,7 +263,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
-                debug!("kv rpc failed";
+                warn!("kv rpc failed";
                     "request" => "kv_gc",
                     "err" => ?e
                 );
@@ -282,7 +282,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|resp| sink.success(resp).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
-                debug!("kv rpc failed";
+                warn!("kv rpc failed";
                     "request" => "coprocessor",
                     "err" => ?e
                 );
@@ -318,7 +318,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             })
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
-                debug!("kv rpc failed";
+                warn!("kv rpc failed";
                     "request" => "register_lock_observer",
                     "err" => ?e
                 );
@@ -360,7 +360,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             })
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
-                debug!("kv rpc failed";
+                warn!("kv rpc failed";
                     "request" => "check_lock_observer",
                     "err" => ?e
                 );
@@ -396,7 +396,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             })
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
-                debug!("kv rpc failed";
+                warn!("kv rpc failed";
                     "request" => "remove_lock_observer",
                     "err" => ?e
                 );
@@ -439,7 +439,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             })
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
-                debug!("kv rpc failed";
+                warn!("kv rpc failed";
                     "request" => "physical_scan_lock",
                     "err" => ?e
                 );
@@ -486,7 +486,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             })
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
-                debug!("kv rpc failed";
+                warn!("kv rpc failed";
                     "request" => "unsafe_destroy_range",
                     "err" => ?e
                 );
@@ -523,7 +523,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .map(|_| timer.observe_duration())
             .map_err(Error::from)
             .map_err(move |e| {
-                debug!("kv rpc failed";
+                warn!("kv rpc failed";
                     "request" => "coprocessor_stream",
                     "err" => ?e
                 );
@@ -696,7 +696,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
-                debug!("kv rpc failed";
+                warn!("kv rpc failed";
                     "request" => "split_region",
                     "err" => ?e
                 );
@@ -773,7 +773,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
-                debug!("kv rpc failed";
+                warn!("kv rpc failed";
                     "request" => "read_index",
                     "err" => ?e
                 );
@@ -910,7 +910,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             });
 
         ctx.spawn(sink.send_all(response_retriever).map(|_| ()).map_err(|e| {
-            debug!("kv rpc failed";
+            warn!("kv rpc failed";
                 "request" => "batch_commands",
                 "err" => ?e
             );
