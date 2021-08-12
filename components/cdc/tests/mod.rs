@@ -4,6 +4,7 @@ use std::sync::*;
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
+use configuration::Configuration;
 use engine_rocks::RocksEngine;
 use futures::executor::block_on;
 use futures::StreamExt;
@@ -15,7 +16,8 @@ use kvproto::tikvpb::TikvClient;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
 use tikv::config::CdcConfig;
-use tikv_util::worker::LazyWorker;
+use tikv_util::config::ReadableDuration;
+use tikv_util::worker::{LazyWorker, Runnable};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
@@ -147,9 +149,10 @@ impl TestSuite {
             let raft_router = sim.get_server_router(*id);
             let cdc_ob = obs.get(&id).unwrap().clone();
             let cm = sim.get_concurrency_manager(*id);
+            let cfg = CdcConfig::default();
             let env = Arc::new(Environment::new(1));
             let mut cdc_endpoint = cdc::Endpoint::new(
-                &CdcConfig::default(),
+                &cfg,
                 pd_cli.clone(),
                 worker.scheduler(),
                 raft_router,
@@ -160,6 +163,9 @@ impl TestSuite {
                 sim.security_mgr.clone(),
                 MemoryQuota::new(usize::MAX),
             );
+            let mut updated_cfg = cfg.clone();
+            updated_cfg.min_ts_interval = ReadableDuration::millis(100);
+            cdc_endpoint.run(Task::ChangeConfig(cfg.diff(&updated_cfg)));
             cdc_endpoint.set_max_scan_batch_size(2);
             concurrency_managers.insert(*id, cm);
             worker.start(cdc_endpoint);
