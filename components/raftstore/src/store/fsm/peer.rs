@@ -1232,6 +1232,12 @@ where
             return;
         }
 
+        // Keep ticking if there are disk full peers for the Region.
+        if !self.fsm.peer.disk_full_peers.is_empty() {
+            self.register_raft_base_tick();
+            return;
+        }
+
         debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
         self.fsm.reset_hibernate_state(GroupState::Idle);
         // Followers will stop ticking at L789. Keep ticking for followers
@@ -1299,27 +1305,38 @@ where
     }
 
     fn handle_reported_disk_usage(&mut self, msg: &RaftMessage) {
-        let peer_id = msg.get_from_peer().get_id();
         let store_id = msg.get_from_peer().get_store_id();
-        let disk_full_peers = &mut self.fsm.peer.disk_full_peers;
-
-        if matches!(msg.disk_usage, DiskUsage::Normal) {
+        let peer_id = msg.get_from_peer().get_id();
+        let refill_disk_usages = if matches!(msg.disk_usage, DiskUsage::Normal) {
             self.ctx.store_disk_usages.remove(&store_id);
-            if disk_full_peers.any && disk_full_peers.peers.contains_key(&peer_id) {
-                disk_full_peers.peers = HashMap::default();
+            if !self.fsm.peer.is_leader() {
+                return;
             }
-            return;
-        }
-
-        self.ctx.store_disk_usages.insert(store_id, msg.disk_usage);
-        if !disk_full_peers.any {
-            disk_full_peers.any = true;
-        } else if disk_full_peers
-            .peers
-            .get(&peer_id)
-            .map_or(true, |x| x.0 != msg.disk_usage)
-        {
-            disk_full_peers.peers = HashMap::default();
+            self.fsm.peer.disk_full_peers.has(peer_id)
+        } else {
+            self.ctx.store_disk_usages.insert(store_id, msg.disk_usage);
+            if !self.fsm.peer.is_leader() {
+                return;
+            }
+            let disk_full_peers = &self.fsm.peer.disk_full_peers;
+            disk_full_peers.is_empty()
+                || disk_full_peers
+                    .get(peer_id)
+                    .map_or(true, |x| x != msg.disk_usage)
+        };
+        if refill_disk_usages {
+            let prev = self.fsm.peer.disk_full_peers.get(peer_id);
+            info!(
+                "reported disk usage changes {:?} -> {:?}", prev, msg.disk_usage;
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => peer_id,
+            );
+            self.fsm.peer.refill_disk_full_peers(self.ctx);
+            debug!(
+                "raft message refills disk full peers to {:?}",
+                self.fsm.peer.disk_full_peers;
+                "region_id" => self.fsm.region_id(),
+            );
         }
     }
 
@@ -2276,6 +2293,15 @@ where
                 "region" => ?self.fsm.peer.region(),
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
+
+            if !self.fsm.peer.disk_full_peers.is_empty() {
+                self.fsm.peer.refill_disk_full_peers(self.ctx);
+                debug!(
+                    "conf change refills disk full peers to {:?}",
+                    self.fsm.peer.disk_full_peers;
+                    "region_id" => self.fsm.region_id(),
+                );
+            }
 
             // Remove or demote leader will cause this raft group unavailable
             // until new leader elected, but we can't revert this operation
