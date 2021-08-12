@@ -135,7 +135,8 @@ pub fn run_tikv(config: TiKvConfig) {
             tikv.init_yatp();
             tikv.init_encryption();
             let (limiter, fetcher) = tikv.init_io_utility();
-            let (engines, engines_info) = tikv.init_raw_engines(Some(limiter.clone()));
+            let listener = tikv.init_flow_listener();
+            let (engines, engines_info) = tikv.init_raw_engines(limiter.clone(), listener);
             limiter.set_low_priority_io_adjustor_if_needed(Some(engines_info.clone()));
             tikv.init_engines(engines.clone());
             let server_config = tikv.init_servers();
@@ -487,7 +488,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
     }
 
-    fn create_flow_listener(&mut self) -> engine_rocks::FlowListener {
+    fn init_flow_listener(&mut self) -> engine_rocks::FlowListener {
         let (tx, rx) = mpsc::channel();
         self.flow_info_receiver = Some(rx);
         engine_rocks::FlowListener::new(tx)
@@ -1206,9 +1207,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 impl TiKVServer<RocksEngine> {
     fn init_raw_engines(
         &mut self,
-        limiter: Option<Arc<IORateLimiter>>,
+        limiter: Arc<IORateLimiter>,
+        flow_listener: engine_rocks::FlowListener,
     ) -> (Engines<RocksEngine, RocksEngine>, Arc<EnginesResourceInfo>) {
-        let env = get_env(self.encryption_key_manager.clone(), limiter).unwrap();
+        let env = get_env(self.encryption_key_manager.clone(), Some(limiter)).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
@@ -1228,7 +1230,7 @@ impl TiKVServer<RocksEngine> {
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
-        kv_db_opts.add_event_listener(self.create_flow_listener());
+        kv_db_opts.add_event_listener(flow_listener);
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
             &block_cache,
             Some(&self.region_info_accessor),
@@ -1282,12 +1284,13 @@ impl TiKVServer<RocksEngine> {
 impl TiKVServer<RaftLogEngine> {
     fn init_raw_engines(
         &mut self,
-        limiter: Option<Arc<IORateLimiter>>,
+        limiter: Arc<IORateLimiter>,
+        flow_listener: engine_rocks::FlowListener,
     ) -> (
         Engines<RocksEngine, RaftLogEngine>,
         Arc<EnginesResourceInfo>,
     ) {
-        let env = get_env(self.encryption_key_manager.clone(), limiter).unwrap();
+        let env = get_env(self.encryption_key_manager.clone(), Some(limiter)).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
@@ -1302,6 +1305,7 @@ impl TiKVServer<RaftLogEngine> {
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
+        kv_db_opts.add_event_listener(flow_listener);
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
             &block_cache,
             Some(&self.region_info_accessor),
