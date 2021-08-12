@@ -553,6 +553,7 @@ where
 {
     fsm: &'a mut PeerFsm<EK, ER>,
     ctx: &'a mut PollContext<EK, ER, T>,
+    disk_full_opt: DiskFullOpt,
 }
 
 impl<'a, EK, ER, T: Transport> PeerFsmDelegate<'a, EK, ER, T>
@@ -564,7 +565,11 @@ where
         fsm: &'a mut PeerFsm<EK, ER>,
         ctx: &'a mut PollContext<EK, ER, T>,
     ) -> PeerFsmDelegate<'a, EK, ER, T> {
-        PeerFsmDelegate { fsm, ctx }
+        PeerFsmDelegate {
+            fsm,
+            ctx,
+            disk_full_opt: DiskFullOpt::NotAllowedOnFull,
+        }
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
@@ -585,6 +590,7 @@ where
                         .propose
                         .request_wait_time
                         .observe(duration_to_sec(cmd.send_time.saturating_elapsed()) as f64);
+                    self.disk_full_opt = cmd.extra_opts.disk_full_opt;
                     if let Some(Err(e)) = cmd.extra_opts.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));
                         continue;
@@ -593,10 +599,6 @@ where
                     let req_size = cmd.request.compute_size();
                     if self.ctx.cfg.cmd_batch
                         && self.fsm.batch_req_builder.can_batch(&cmd.request, req_size)
-                        // Avoid to merge requests with different `DiskFullOpt`s into one,
-                        // so that normal writes can be rejected when proposing if the
-                        // store's disk is full.
-                        && cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull
                     {
                         self.fsm.batch_req_builder.add(cmd, req_size);
                         if self.fsm.batch_req_builder.should_finish() {
@@ -604,11 +606,7 @@ where
                         }
                     } else {
                         self.propose_batch_raft_command();
-                        self.propose_raft_command(
-                            cmd.request,
-                            cmd.callback,
-                            cmd.extra_opts.disk_full_opt,
-                        )
+                        self.propose_raft_command(cmd.request, cmd.callback)
                     }
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
@@ -648,7 +646,7 @@ where
 
     fn propose_batch_raft_command(&mut self) {
         if let Some(cmd) = self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics) {
-            self.propose_raft_command(cmd.request, cmd.callback, DiskFullOpt::NotAllowedOnFull)
+            self.propose_raft_command(cmd.request, cmd.callback)
         }
     }
 
@@ -913,7 +911,6 @@ where
                     },
                 )
             })),
-            DiskFullOpt::NotAllowedOnFull,
         );
     }
 
@@ -1024,7 +1021,7 @@ where
             self.region().get_region_epoch().clone(),
             self.fsm.peer.peer.clone(),
         );
-        self.propose_raft_command(msg, cb, DiskFullOpt::NotAllowedOnFull);
+        self.propose_raft_command(msg, cb);
     }
 
     fn on_role_changed(&mut self, ready: &Ready) {
@@ -2754,7 +2751,7 @@ where
             request.set_admin_request(admin);
             request
         };
-        self.propose_raft_command(req, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
+        self.propose_raft_command(req, Callback::None);
     }
 
     fn on_check_merge(&mut self) {
@@ -3453,12 +3450,7 @@ where
         }
     }
 
-    fn propose_raft_command(
-        &mut self,
-        mut msg: RaftCmdRequest,
-        cb: Callback<EK::Snapshot>,
-        diskfullopt: DiskFullOpt,
-    ) {
+    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback<EK::Snapshot>) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);
@@ -3504,7 +3496,11 @@ where
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
-        if self.fsm.peer.propose(self.ctx, cb, msg, resp, diskfullopt) {
+        if self
+            .fsm
+            .peer
+            .propose(self.ctx, cb, msg, resp, self.disk_full_opt)
+        {
             self.fsm.has_ready = true;
         }
 
@@ -3679,7 +3675,7 @@ where
         let peer = self.fsm.peer.peer.clone();
         let term = self.fsm.peer.get_index_term(compact_idx);
         let request = new_compact_log_request(region_id, peer, compact_idx, term);
-        self.propose_raft_command(request, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
+        self.propose_raft_command(request, Callback::None);
 
         self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
@@ -4118,7 +4114,7 @@ where
             self.fsm.peer.peer.clone(),
             &self.fsm.peer.consistency_state,
         );
-        self.propose_raft_command(req, Callback::None, DiskFullOpt::NotAllowedOnFull);
+        self.propose_raft_command(req, Callback::None);
     }
 
     fn on_ingest_sst_result(&mut self, ssts: Vec<SSTMetaInfo>) {
