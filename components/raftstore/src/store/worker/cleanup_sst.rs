@@ -11,8 +11,7 @@ use engine_traits::KvEngine;
 use pd_client::PdClient;
 use sst_importer::SSTImporter;
 use std::marker::PhantomData;
-use tikv_util::{error, info};
-use uuid::Builder as UuidBuilder;
+use tikv_util::error;
 use tikv_util::worker::Runnable;
 
 pub enum Task {
@@ -65,10 +64,6 @@ where
     /// Deletes SST files from the importer.
     fn handle_delete_sst(&self, ssts: Vec<SstMeta>) {
         for sst in &ssts {
-            if let Ok(mut builder) = UuidBuilder::from_slice(sst.get_uuid()) {
-                let uuid = builder.build();
-                info!("clean up sst"; "uuid" => format!("{}",uuid));
-            }
             let _ = self.importer.delete(sst);
         }
     }
