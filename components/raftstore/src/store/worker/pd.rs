@@ -11,7 +11,7 @@ use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 use std::{cmp, io};
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{CF_RAFT, KvEngine, RaftEngine};
 #[cfg(feature = "failpoints")]
 use fail::fail_point;
 use kvproto::kvrpcpb::DiskFullOpt;
@@ -19,7 +19,7 @@ use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
     SplitRequest,
 };
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::raft_serverpb::{RaftMessage, PeerState, RegionLocalState};
 use kvproto::replication_modepb::RegionReplicationStatus;
 use kvproto::{metapb, pdpb};
 use ordered_float::OrderedFloat;
@@ -53,7 +53,8 @@ use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::topn::TopN;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
-use tikv_util::{box_err, debug, error, info, thd_name, warn};
+use tikv_util::{box_err, box_try, debug, error, info, thd_name, warn};
+use protobuf::Message;
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
@@ -113,7 +114,7 @@ pub struct HeartbeatTask {
 pub enum Task<EK, ER>
 where
     EK: KvEngine,
-    ER: RafeEngine,
+    ER: RaftEngine,
 {
     AskSplit {
         region: metapb::Region,
@@ -697,7 +698,7 @@ where
         store_id: u64,
         pd_client: Arc<T>,
         router: RaftRouter<EK, ER>,
-        scheduler: Scheduler<Task<EK>>,
+        scheduler: Scheduler<Task<EK, ER>>,
         store_heartbeat_interval: Duration,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
@@ -788,7 +789,7 @@ where
     // be called in an asynchronous context.
     fn handle_ask_batch_split(
         router: RaftRouter<EK, ER>,
-        scheduler: Scheduler<Task<EK>>,
+        scheduler: Scheduler<Task<EK, ER>>,
         pd_client: Arc<T>,
         mut region: metapb::Region,
         mut split_keys: Vec<Vec<u8>>,
@@ -916,7 +917,7 @@ where
         self.remote.spawn(f);
     }
 
-    fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats, store_info: StoreInfo<EK>) {
+    fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats, store_info: StoreInfo<EK, ER>) {
         let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
             Err(e) => {
                 error!(
@@ -1023,7 +1024,7 @@ where
         stats.set_slow_score(slow_score as u64);
 
         let router = self.router.clone();
-        let resp = self.pd_client.store_heartbeat(stats);
+        let resp = self.pd_client.store_heartbeat(stats, None);
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -1031,7 +1032,7 @@ where
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }
                     if resp.send_detailed_report_in_next_heartbeat {
-                        let mut local_states = Vec::new();
+                        let mut reports = Vec::new();
                         store_info.kv_engine.scan_cf(
                             CF_RAFT,
                             keys::REGION_META_MIN_KEY,
@@ -1040,7 +1041,7 @@ where
                             |key, value| {
                                 let (region_id, suffix) =
                                     box_try!(keys::decode_region_meta_key(key));
-                                if suffic != keys::REGION_STATE_SUFFIX {
+                                if suffix != keys::REGION_STATE_SUFFIX {
                                     return Ok(true);
                                 }
 
@@ -1057,20 +1058,21 @@ where
                                     None => return Ok(true),
                                     Some(value) => value,
                                 };
-				let replica_state = pdpb::ReplicaState::new();
-				replica_state.set_region_state(region_local_state);
-				replica_state.set_raft_state(raft_local_state);
-                                local_states.push(replica_state);
+				let peer_report = pdpb::PeerReport::new();
+				peer_report.set_region_state(region_local_state);
+				peer_report.set_raft_state(raft_local_state);
+                                reports.push(peer_report);
+				return Ok(true);
                             },
                         );
 
-                        let resp = self.pd_client.store_heartbeat(stats, states);
+                        let resp = self.pd_client.store_heartbeat(stats, reports);
                         let f = async move {
                             if let Err(e) = resp.await {
                                 error!("store heartbeat failed"; "err" => ?e);
                             }
                         };
-                        spawn_local(f);
+                        self.remote.spawn(f);
                     }
                 }
                 Err(e) => {
@@ -1439,9 +1441,9 @@ where
     ER: RaftEngine,
     T: PdClient,
 {
-    type Task = Task<EK>;
+    type Task = Task<EK, ER>;
 
-    fn run(&mut self, task: Task<EK>) {
+    fn run(&mut self, task: Task<EK, ER>) {
         debug!("executing task"; "task" => %task);
 
         if !self.is_hb_receiver_scheduled {
