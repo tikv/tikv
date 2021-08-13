@@ -413,6 +413,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         requests: Vec<GetRequest>,
         ids: Vec<u64>,
         consumer: P,
+        begin_instant: tikv_util::time::Instant,
     ) -> impl Future<Output = Result<()>> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
@@ -472,7 +473,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             snap_ctx
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e));
+                            consumer.consume(id, Err(e), begin_instant);
                             continue;
                         }
                     };
@@ -520,15 +521,20 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                         id,
                                         v.map_err(|e| Error::from(txn::Error::from(e)))
                                             .map(|v| (v, stat, perf_statistics.delta())),
+                                        begin_instant,
                                     );
                                 }
                                 Err(e) => {
-                                    consumer.consume(id, Err(Error::from(txn::Error::from(e))));
+                                    consumer.consume(
+                                        id,
+                                        Err(Error::from(txn::Error::from(e))),
+                                        begin_instant,
+                                    );
                                 }
                             }
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e));
+                            consumer.consume(id, Err(e), begin_instant);
                         }
                     }
                 }
@@ -1128,16 +1134,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                             &Key::from_encoded(key),
                                             &mut stats,
                                         ),
+                                        begin_instant,
                                     );
                                     tls_collect_read_flow(ctx.get_region_id(), &stats);
                                 }
                                 Err(e) => {
-                                    consumer.consume(id, Err(e));
+                                    consumer.consume(id, Err(e), begin_instant);
                                 }
                             }
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e));
+                            consumer.consume(id, Err(e), begin_instant);
                         }
                     }
                 }
@@ -1967,7 +1974,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
 }
 
 pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
-    fn consume(&self, id: u64, res: Result<ConsumeResponse>);
+    fn consume(&self, id: u64, res: Result<ConsumeResponse>, begin: Instant);
 }
 
 pub mod test_util {
@@ -2139,6 +2146,7 @@ pub mod test_util {
             &self,
             id: u64,
             res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
+            _: tikv_util::time::Instant,
         ) {
             self.data.lock().unwrap().push(GetResult {
                 id,
@@ -2148,7 +2156,7 @@ pub mod test_util {
     }
 
     impl ResponseBatchConsumer<Option<Vec<u8>>> for GetConsumer {
-        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>) {
+        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>, _: tikv_util::time::Instant) {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
     }
@@ -2365,6 +2373,7 @@ mod tests {
             vec![create_get_request(b"c", 1), create_get_request(b"d", 1)],
             vec![1, 2],
             consumer.clone(),
+            Instant::now(),
         ))
         .unwrap();
         let data = consumer.take_data();
@@ -3053,6 +3062,7 @@ mod tests {
             vec![create_get_request(b"c", 2), create_get_request(b"d", 2)],
             vec![1, 2],
             consumer.clone(),
+            Instant::now(),
         ))
         .unwrap();
         let mut x = consumer.take_data();
@@ -3092,6 +3102,7 @@ mod tests {
             ],
             vec![1, 2, 3, 4],
             consumer.clone(),
+            Instant::now(),
         ))
         .unwrap();
 
@@ -6292,8 +6303,13 @@ mod tests {
         req2.set_key(b"key".to_vec());
         req2.set_version(100);
         let consumer = GetConsumer::new();
-        block_on(storage.batch_get_command(vec![req1, req2], vec![1, 2], consumer.clone()))
-            .unwrap();
+        block_on(storage.batch_get_command(
+            vec![req1, req2],
+            vec![1, 2],
+            consumer.clone(),
+            Instant::now(),
+        ))
+        .unwrap();
         let res = consumer.take_data();
         assert!(res[0].is_ok());
         let key_error = extract_key_error(res[1].as_ref().unwrap_err());

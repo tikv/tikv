@@ -17,6 +17,7 @@ use std::{
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
+    str::FromStr,
     sync::{
         atomic::{AtomicU32, AtomicU64, Ordering},
         mpsc, Arc, Mutex,
@@ -25,7 +26,7 @@ use std::{
     u64,
 };
 
-use cdc::MemoryQuota;
+use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{from_rocks_compression_type, get_env, FlowInfo, RocksEngine};
@@ -665,10 +666,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cop_read_pools.handle()
         };
 
-        // Register cdc
+        // Register cdc.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-        // TODO: register a cdc config manager here to support dynamically change cdc config
+        // Register cdc config manager.
+        cfg_controller.register(
+            tikv::config::Module::CDC,
+            Box::new(CdcConfigManager(cdc_worker.scheduler())),
+        );
 
         // Create resolved ts worker
         let rts_worker = if self.config.resolved_ts.enable {
@@ -1071,6 +1076,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn init_storage_stats_task(&self, engines: Engines<RocksEngine, ER>) {
         let config_disk_capacity: u64 = self.config.raft_store.capacity.0;
+        let data_dir = self.config.storage.data_dir.clone();
         let store_path = self.store_path.clone();
         let snap_mgr = self.snap_mgr.clone().unwrap();
         let reserve_space = disk::get_disk_reserved_space();
@@ -1107,7 +1113,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                     .get_engine_size()
                     .expect("get raft engine size");
 
-                let used_size = snap_size + kv_size + raft_size;
+                let placeholer_file_path = PathBuf::from_str(&data_dir)
+                    .unwrap()
+                    .join(Path::new(file_system::SPACE_PLACEHOLDER_FILE));
+
+                let placeholder_size: u64 =
+                    file_system::get_file_size(&placeholer_file_path).unwrap_or_else(|_| 0);
+
+                let used_size = snap_size + kv_size + raft_size + placeholder_size;
                 let capacity = if config_disk_capacity == 0 || disk_cap < config_disk_capacity {
                     disk_cap
                 } else {
@@ -1288,7 +1301,8 @@ impl TiKVServer<RaftLogEngine> {
 
         // Create raft engine.
         let raft_config = self.config.raft_engine.config();
-        let raft_engine = RaftLogEngine::new(raft_config);
+        let raft_engine = RaftLogEngine::new(raft_config)
+            .unwrap_or_else(|e| fatal!("failed to create raft engine: {}", e));
 
         // Try to dump and recover raft data.
         check_and_dump_raft_db(&self.config, &raft_engine, &env, 8);
