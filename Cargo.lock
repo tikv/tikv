@@ -1358,6 +1358,7 @@ dependencies = [
  "crc32fast",
  "libc 0.2.86",
  "libz-sys",
+ "miniz-sys",
  "miniz_oxide",
 ]
 
@@ -2147,24 +2148,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7282d924be3275cec7f6756ff4121987bc6481325397dde6ba3e7802b1a8b1c"
 
 [[package]]
-name = "libflate"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "784f4ec5908a9d7f4e53658906386667e8b02e9389a47cfebf45d324ba9e8d25"
-dependencies = [
- "adler32",
- "crc32fast",
- "libflate_lz77",
- "rle-decode-fast",
-]
-
-[[package]]
-name = "libflate_lz77"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3286f09f7d4926fc486334f28d8d2e6ebe4f7f9994494b6dab27ddfad2c9b11b"
-
-[[package]]
 name = "libfuzzer-sys"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2375,6 +2358,16 @@ name = "mime"
 version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd1d63acd1b78403cc0c325605908475dd9b9a3acbf65ed8bcab97e27014afcf"
+
+[[package]]
+name = "miniz-sys"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e9e3ae51cea1576ceba0dde3d484d30e6e5b86dee0b2d412fe3a16a15c98202"
+dependencies = [
+ "cc",
+ "libc 0.2.86",
+]
 
 [[package]]
 name = "miniz_oxide"
@@ -3160,17 +3153,17 @@ dependencies = [
 
 [[package]]
 name = "procfs"
-version = "0.7.9"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c434e93ef69c216e68e4f417c927b4f31502c3560b72cfdb6827e2321c5c6b3e"
+checksum = "ab8809e0c18450a2db0f236d2a44ec0b4c1412d0eb936233579f0990faa5d5cd"
 dependencies = [
  "bitflags",
  "byteorder",
  "chrono",
+ "flate2",
  "hex 0.4.2",
  "lazy_static",
  "libc 0.2.86",
- "libflate",
 ]
 
 [[package]]
@@ -3839,12 +3832,6 @@ dependencies = [
  "web-sys",
  "winapi 0.3.9",
 ]
-
-[[package]]
-name = "rle-decode-fast"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 
 [[package]]
 name = "rocksdb"
