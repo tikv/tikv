@@ -130,6 +130,7 @@ where
     StoreHeartbeat {
         stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
+	send_detailed_reports: bool,
     },
     ReportBatchSplit {
         regions: Vec<metapb::Region>,
@@ -845,7 +846,7 @@ where
         self.remote.spawn(f);
     }
 
-    fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats, store_info: StoreInfo<EK, ER>) {
+    fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats, store_info: StoreInfo<EK, ER>, send_detailed_reports: bool) {
         let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
             Err(e) => {
                 error!(
@@ -958,8 +959,47 @@ where
         let slow_score = self.slow_score.get();
         stats.set_slow_score(slow_score as u64);
 
+        let mut optional_reports = None;
+	if send_detailed_reports {
+            let mut reports = Vec::new();
+            if let Ok(_) = store_info.kv_engine.scan_cf(
+                CF_RAFT,
+                keys::REGION_META_MIN_KEY,
+                keys::REGION_META_MAX_KEY,
+                false,
+                |key, value| {
+                    let (_, suffix) =
+                        box_try!(keys::decode_region_meta_key(key));
+                    if suffix != keys::REGION_STATE_SUFFIX {
+                        return Ok(true);
+                    }
+
+                    let mut region_local_state = RegionLocalState::default();
+                    region_local_state.merge_from_bytes(value)?;
+                    if region_local_state.get_state() == PeerState::Tombstone {
+                        return Ok(true);
+                    }
+                    let raft_local_state = match store_info
+                        .raft_engine
+                        .get_raft_state(region_local_state.get_region().get_id())
+                        .unwrap()
+                    {
+                        None => return Ok(true),
+                        Some(value) => value,
+                    };
+	    	let mut peer_report = pdpb::PeerReport::new();
+	    	peer_report.set_region_state(region_local_state);
+	    	peer_report.set_raft_state(raft_local_state);
+                    reports.push(peer_report);
+	    	return Ok(true);
+                },
+            ) {
+	        optional_reports = Some(reports);
+	    }
+	}
         let router = self.router.clone();
-        let resp = self.pd_client.store_heartbeat(stats, None);
+	let scheduler = self.scheduler.clone();
+        let resp = self.pd_client.store_heartbeat(stats, optional_reports);
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -967,47 +1007,10 @@ where
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }
                     if resp.send_detailed_report_in_next_heartbeat {
-                        let mut reports = Vec::new();
-                        store_info.kv_engine.scan_cf(
-                            CF_RAFT,
-                            keys::REGION_META_MIN_KEY,
-                            keys::REGION_META_MAX_KEY,
-                            false,
-                            |key, value| {
-                                let (region_id, suffix) =
-                                    box_try!(keys::decode_region_meta_key(key));
-                                if suffix != keys::REGION_STATE_SUFFIX {
-                                    return Ok(true);
-                                }
-
-                                let mut region_local_state = RegionLocalState::default();
-                                region_local_state.merge_from_bytes(value)?;
-                                if region_local_state.get_state() == PeerState::Tombstone {
-                                    return Ok(true);
-                                }
-                                let raft_local_state = match store_info
-                                    .raft_engine
-                                    .get_raft_state(region_local_state.get_region().get_id())
-                                    .unwrap()
-                                {
-                                    None => return Ok(true),
-                                    Some(value) => value,
-                                };
-				let peer_report = pdpb::PeerReport::new();
-				peer_report.set_region_state(region_local_state);
-				peer_report.set_raft_state(raft_local_state);
-                                reports.push(peer_report);
-				return Ok(true);
-                            },
-                        );
-
-                        let resp = self.pd_client.store_heartbeat(stats, reports);
-                        let f = async move {
-                            if let Err(e) = resp.await {
-                                error!("store heartbeat failed"; "err" => ?e);
-                            }
-                        };
-                        self.remote.spawn(f);
+			let task = Task::StoreHeartbeat { stats: pdpb::StoreStats::new(), store_info, send_detailed_reports: true};
+                        if let Err(e) = scheduler.schedule(task) {
+                            error!("notify pd failed"; "err" => ?e);
+                        }
                     }
                 }
                 Err(e) => {
@@ -1480,8 +1483,8 @@ where
                     hb_task.replication_status,
                 )
             }
-            Task::StoreHeartbeat { stats, store_info } => {
-                self.handle_store_heartbeat(stats, store_info)
+            Task::StoreHeartbeat { stats, store_info, send_detailed_reports } => {
+                self.handle_store_heartbeat(stats, store_info, send_detailed_reports)
             }
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),
