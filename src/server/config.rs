@@ -43,7 +43,11 @@ const MIN_ENDPOINT_MAX_CONCURRENCY: usize = 4;
 
 const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
 
-const DEFAULT_MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
+// Lift default value to 64MB.
+// In fact the hard limit of sent message size may not be necessary.
+// Because we have the batch size as soft limit
+// https://github.com/tikv/tikv/issues/9714
+const DEFAULT_MAX_GRPC_SEND_MSG_LEN: i32 = 64 * 1024 * 1024;
 
 /// A clone of `grpc::CompressionAlgorithms` with serde supports.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
