@@ -460,6 +460,9 @@ where
         if overlap_ranges.is_empty() {
             return Ok(());
         }
+        SNAP_COUNTER_VEC
+            .with_label_values(&["overlap", "delete_by_ingest"])
+            .inc();
         let oldest_sequence = self
             .engine
             .get_oldest_snapshot_sequence_number()
@@ -528,6 +531,9 @@ where
         if cleanup_ranges.is_empty() {
             return;
         }
+        SNAP_COUNTER_VEC
+            .with_label_values(&["clean_stale_range", "delete_by_ingest"])
+            .inc();
         cleanup_ranges.sort_by(|a, b| a.1.cmp(&b.1));
         while cleanup_ranges.len() > CLEANUP_MAX_REGION_COUNT {
             cleanup_ranges.pop();
