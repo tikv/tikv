@@ -3,15 +3,25 @@
 use super::test_replica_stale_read::{get_tso, PeerClient};
 use kvproto::disk_usage::DiskUsage;
 use kvproto::kvrpcpb::{DiskFullOpt, Op};
+use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::*;
 use raft::eraftpb::MessageType;
 use raftstore::store::msg::*;
 use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 use test_raftstore::*;
 
 fn assert_disk_full(resp: &RaftCmdResponse) {
     assert!(resp.get_header().get_error().has_disk_full());
+}
+
+fn disk_full_stores(resp: &RaftCmdResponse) -> Vec<u64> {
+    let region_error = resp.get_header().get_error();
+    assert!(region_error.has_disk_full());
+    let mut stores = region_error.get_disk_full().get_store_id().to_vec();
+    stores.sort();
+    stores
 }
 
 fn get_fp(usage: DiskUsage, store_id: u64) -> String {
@@ -22,8 +32,20 @@ fn get_fp(usage: DiskUsage, store_id: u64) -> String {
     }
 }
 
+fn ensure_disk_usage_is_reported<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer_id: u64,
+    store_id: u64,
+    region: &Region,
+) {
+    let peer = new_peer(store_id, peer_id);
+    let key = region.get_start_key();
+    let ch = async_read_on_peer(cluster, peer, region.clone(), key, true, true);
+    assert!(ch.recv_timeout(Duration::from_secs(1)).is_ok());
+}
+
 fn test_disk_full_leader_behaviors(usage: DiskUsage) {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.run();
 
@@ -84,7 +106,7 @@ fn test_disk_full_for_region_leader() {
 }
 
 fn test_disk_full_follower_behaviors(usage: DiskUsage) {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.run();
 
@@ -226,4 +248,118 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
 #[test]
 fn test_disk_full_for_txn_operations() {
     test_disk_full_txn_behaviors(DiskUsage::AlmostFull);
+}
+
+#[test]
+fn test_majority_disk_full() {
+    let mut cluster = new_node_cluster(0, 3);
+    // To ensure the thread has full store disk usage infomation.
+    cluster.cfg.raft_store.store_batch_system.pool_size = 1;
+    cluster.pd_client.disable_default_operator();
+    cluster.run();
+
+    // To ensure all replicas are not pending.
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let region = cluster.get_region(b"k1");
+    let epoch = region.get_region_epoch().clone();
+
+    // To ensure followers have reported disk usages to the leader.
+    for i in 1..3 {
+        fail::cfg(get_fp(DiskUsage::AlmostFull, i + 1), "return").unwrap();
+        ensure_disk_usage_is_reported(&mut cluster, i + 1, i + 1, &region);
+    }
+
+    // Normal proposals will be rejected because of majority peers' disk full.
+    let ch = cluster.async_put(b"k2", b"v2").unwrap();
+    let resp = ch.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(disk_full_stores(&resp), vec![2, 3]);
+
+    // Proposals with special `DiskFullOpt`s can be accepted even if all peers are disk full.
+    fail::cfg(get_fp(DiskUsage::AlmostFull, 1), "return").unwrap();
+    let reqs = vec![new_put_cmd(b"k3", b"v3")];
+    let put = new_request(1, epoch.clone(), reqs, false);
+    let mut opts = RaftCmdExtraOpts::default();
+    opts.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
+    let ch = cluster.async_request_with_opts(put, opts).unwrap();
+    let resp = ch.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(!resp.get_header().has_error());
+
+    // Reset disk full status for peer 2 and 3. 2 follower reads must success because the leader
+    // will continue to append entries to followers after the new disk usages are reported.
+    for i in 1..3 {
+        fail::remove(get_fp(DiskUsage::AlmostFull, i + 1));
+        ensure_disk_usage_is_reported(&mut cluster, i + 1, i + 1, &region);
+        must_get_equal(&cluster.get_engine(i + 1), b"k3", b"v3");
+    }
+
+    // To ensure followers have reported disk usages to the leader.
+    for i in 1..3 {
+        fail::cfg(get_fp(DiskUsage::AlreadyFull, i + 1), "return").unwrap();
+        ensure_disk_usage_is_reported(&mut cluster, i + 1, i + 1, &region);
+    }
+
+    // Proposals with special `DiskFullOpt`s will still be rejected if majority peers are already
+    // disk full.
+    let reqs = vec![new_put_cmd(b"k3", b"v3")];
+    let put = new_request(1, epoch.clone(), reqs, false);
+    let mut opts = RaftCmdExtraOpts::default();
+    opts.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
+    let ch = cluster.async_request_with_opts(put, opts).unwrap();
+    let resp = ch.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(disk_full_stores(&resp), vec![2, 3]);
+
+    // Peer 2 disk usage changes from already full to almost full.
+    fail::remove(get_fp(DiskUsage::AlreadyFull, 2));
+    fail::cfg(get_fp(DiskUsage::AlmostFull, 2), "return").unwrap();
+    ensure_disk_usage_is_reported(&mut cluster, 2, 2, &region);
+
+    // Configuration change should be alloed.
+    cluster.pd_client.must_remove_peer(1, new_peer(2, 2));
+
+    // After the last configuration change is applied, the raft group will be like
+    // `[(1, DiskUsage::AlmostFull), (3, DiskUsage::AlreadyFull)]`. So no more proposals
+    // should be allowed.
+    let reqs = vec![new_put_cmd(b"k4", b"v4")];
+    let put = new_request(1, epoch.clone(), reqs, false);
+    let mut opts = RaftCmdExtraOpts::default();
+    opts.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
+    let ch = cluster.async_request_with_opts(put, opts).unwrap();
+    let resp = ch.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(disk_full_stores(&resp), vec![3]);
+
+    for i in 0..3 {
+        fail::remove(get_fp(DiskUsage::AlreadyFull, i + 1));
+        fail::remove(get_fp(DiskUsage::AlmostFull, i + 1));
+    }
+}
+
+#[test]
+fn test_disk_full_followers_with_hibernate_regions() {
+    let mut cluster = new_node_cluster(0, 2);
+    // To ensure the thread has full store disk usage infomation.
+    cluster.cfg.raft_store.store_batch_system.pool_size = 1;
+    cluster.pd_client.disable_default_operator();
+    let _ = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+
+    // Add a peer which is almost disk full should be allowed.
+    fail::cfg(get_fp(DiskUsage::AlmostFull, 2), "return").unwrap();
+    cluster.pd_client.must_add_peer(1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    let tick_dur = cluster.cfg.raft_store.raft_base_tick_interval.0;
+    let election_timeout = cluster.cfg.raft_store.raft_election_timeout_ticks;
+
+    thread::sleep(tick_dur * 2 * election_timeout as u32);
+    fail::remove(get_fp(DiskUsage::AlmostFull, 2));
+    thread::sleep(tick_dur * 2);
+
+    // The leader should know peer 2's disk usage changes, because it's keeping to tick.
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
 }
