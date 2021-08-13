@@ -55,8 +55,3 @@ pub fn get_disk_status(_store_id: u64) -> DiskUsage {
         _ => panic!("Disk Status Value not meet expectations"),
     }
 }
-
-pub fn is_disk_full() -> bool {
-    let s = DISK_STATUS.load(Ordering::Acquire);
-    !matches!(s, 0)
-}
