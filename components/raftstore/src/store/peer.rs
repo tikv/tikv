@@ -3462,6 +3462,9 @@ impl DiskFullPeers {
     pub fn is_empty(&self) -> bool {
         self.peers.is_empty()
     }
+    pub fn majority(&self) -> bool {
+        self.majority
+    }
     pub fn has(&self, peer_id: u64) -> bool {
         !self.peers.is_empty() && self.peers.contains_key(&peer_id)
     }
