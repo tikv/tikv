@@ -192,7 +192,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tikv_util",
- "tokio",
+ "tokio 0.2.24",
  "url",
 ]
 
@@ -528,7 +528,7 @@ dependencies = [
  "tikv",
  "tikv_util",
  "time 0.1.42",
- "tokio",
+ "tokio 0.2.24",
  "txn_types",
 ]
 
@@ -691,7 +691,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
- "tokio",
+ "tokio 0.2.24",
  "toml",
  "txn_types",
  "vlog",
@@ -733,7 +733,7 @@ dependencies = [
  "parking_lot 0.11.0",
  "rand 0.7.3",
  "tikv_alloc",
- "tokio",
+ "tokio 0.2.24",
  "txn_types",
 ]
 
@@ -912,7 +912,7 @@ dependencies = [
  "crossbeam-deque 0.8.0",
  "crossbeam-epoch 0.9.3",
  "crossbeam-queue 0.3.1",
- "crossbeam-utils 0.8.3",
+ "crossbeam-utils 0.8.5",
 ]
 
 [[package]]
@@ -932,7 +932,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06ed27e177f16d65f0f0c22a213e17c696ace5dd64b14258b52f9417ccb52db4"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.3",
+ "crossbeam-utils 0.8.5",
 ]
 
 [[package]]
@@ -954,7 +954,7 @@ checksum = "94af6efb46fef72616855b036a624cf27ba656ffc9be1b9a3c931cfc7749a9a9"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-epoch 0.9.3",
- "crossbeam-utils 0.8.3",
+ "crossbeam-utils 0.8.5",
 ]
 
 [[package]]
@@ -979,7 +979,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2584f639eb95fea8c798496315b297cf81b9b58b6d30ab066a75455333cf4b12"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.3",
+ "crossbeam-utils 0.8.5",
  "lazy_static",
  "memoffset 0.6.1",
  "scopeguard",
@@ -1002,7 +1002,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0f6cb3c7f5b8e51bc3ebb73a2327ad4abdbd119dc13223f14f961d2f38486756"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.3",
+ "crossbeam-utils 0.8.5",
 ]
 
 [[package]]
@@ -1012,7 +1012,7 @@ source = "git+https://github.com/sticnarf/crossbeam.git?rev=a58551085ce0cfbb07f2
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-epoch 0.9.3",
- "crossbeam-utils 0.8.3",
+ "crossbeam-utils 0.8.5",
  "scopeguard",
 ]
 
@@ -1029,11 +1029,10 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-utils"
-version = "0.8.3"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7e9d99fa91428effe99c5c6d4634cdeba32b8cf784fc428a2a687f61a952c49"
+checksum = "d82cfc11ce7f2c3faef78d8a684447b40d503d9681acebed6cb728d45940c4db"
 dependencies = [
- "autocfg",
  "cfg-if 1.0.0",
  "lazy_static",
 ]
@@ -1244,7 +1243,7 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "tikv_util",
- "tokio",
+ "tokio 0.2.24",
  "toml",
 ]
 
@@ -1412,7 +1411,7 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "tikv_util",
- "tokio",
+ "tokio 0.2.24",
  "url",
 ]
 
@@ -1462,7 +1461,7 @@ dependencies = [
  "bcc",
  "collections",
  "crc32fast",
- "crossbeam-utils 0.8.3",
+ "crossbeam-utils 0.8.5",
  "fs2",
  "lazy_static",
  "libc 0.2.86",
@@ -1839,7 +1838,7 @@ dependencies = [
  "indexmap",
  "log",
  "slab",
- "tokio",
+ "tokio 0.2.24",
  "tokio-util",
 ]
 
@@ -1951,7 +1950,7 @@ dependencies = [
  "itoa",
  "pin-project 1.0.1",
  "socket2",
- "tokio",
+ "tokio 0.2.24",
  "tower-service",
  "tracing",
  "want",
@@ -1971,7 +1970,7 @@ dependencies = [
  "once_cell",
  "openssl",
  "openssl-sys",
- "tokio",
+ "tokio 0.2.24",
  "tokio-openssl",
 ]
 
@@ -1984,7 +1983,7 @@ dependencies = [
  "bytes 0.5.3",
  "hyper",
  "native-tls",
- "tokio",
+ "tokio 0.2.24",
  "tokio-tls",
 ]
 
@@ -2150,7 +2149,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-5.0#7790f94ac2ad2a1141fc63089e335135e79d1961"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-5.0#1a69d0b093f173db790cd58c9dbe9a457a3d311a"
 dependencies = [
  "futures 0.3.8",
  "grpcio",
@@ -2959,6 +2958,7 @@ dependencies = [
  "slog-global",
  "tikv_alloc",
  "tikv_util",
+ "tokio 1.9.0",
  "tokio-timer",
  "txn_types",
  "yatp",
@@ -3375,15 +3375,16 @@ name = "protobuf"
 version = "2.8.0"
 source = "git+https://github.com/pingcap/rust-protobuf?rev=65e9df20fbcbcf2409d5ee86a2332ecd04c534f8#65e9df20fbcbcf2409d5ee86a2332ecd04c534f8"
 dependencies = [
+ "bytes 0.4.12",
  "heck",
  "hex 0.3.2",
 ]
 
 [[package]]
 name = "protobuf-build"
-version = "0.12.0"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "539f2589cd0892cfc07ae25f6e0d2b43440f66b10839e881698f113be28353b2"
+checksum = "6a7266835d38c38c73b091a24412de1f4b4382a5195fab1ec038161582b03b78"
 dependencies = [
  "bitflags",
  "grpcio-compiler",
@@ -3441,7 +3442,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs#91a60ce417d55d4ca4d96b29963e3e3fa7f7d8d7"
+source = "git+https://github.com/tikv/raft-rs?rev=91a60ce417d55d4ca4d96b29963e3e3fa7f7d8d7#91a60ce417d55d4ca4d96b29963e3e3fa7f7d8d7"
 dependencies = [
  "fxhash",
  "getset",
@@ -3473,7 +3474,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#91a60ce417d55d4ca4d96b29963e3e3fa7f7d8d7"
+source = "git+https://github.com/tikv/raft-rs?rev=91a60ce417d55d4ca4d96b29963e3e3fa7f7d8d7#91a60ce417d55d4ca4d96b29963e3e3fa7f7d8d7"
 dependencies = [
  "lazy_static",
  "prost",
@@ -3555,7 +3556,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
- "tokio",
+ "tokio 0.2.24",
  "txn_types",
  "uuid",
  "yatp",
@@ -3687,7 +3688,7 @@ checksum = "9ab346ac5921dc62ffa9f89b7a773907511cdfa5490c572ae9be1be33e8afa4a"
 dependencies = [
  "crossbeam-channel 0.5.1",
  "crossbeam-deque 0.8.0",
- "crossbeam-utils 0.8.3",
+ "crossbeam-utils 0.8.5",
  "lazy_static",
  "num_cpus",
 ]
@@ -3780,7 +3781,7 @@ dependencies = [
  "pin-project-lite 0.1.4",
  "serde",
  "serde_urlencoded",
- "tokio",
+ "tokio 0.2.24",
  "tokio-tls",
  "url",
  "wasm-bindgen",
@@ -3814,7 +3815,7 @@ dependencies = [
  "thiserror",
  "tikv",
  "tikv_util",
- "tokio",
+ "tokio 0.2.24",
  "txn_types",
 ]
 
@@ -3883,7 +3884,7 @@ dependencies = [
  "rustc_version",
  "serde",
  "serde_json",
- "tokio",
+ "tokio 0.2.24",
  "xml-rs",
 ]
 
@@ -3902,7 +3903,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
- "tokio",
+ "tokio 0.2.24",
  "zeroize",
 ]
 
@@ -3966,7 +3967,7 @@ dependencies = [
  "serde",
  "sha2",
  "time 0.2.23",
- "tokio",
+ "tokio 0.2.24",
 ]
 
 [[package]]
@@ -4420,7 +4421,7 @@ dependencies = [
  "test_util",
  "tikv_alloc",
  "tikv_util",
- "tokio",
+ "tokio 0.2.24",
  "txn_types",
  "uuid",
 ]
@@ -4804,7 +4805,7 @@ dependencies = [
  "test_util",
  "tikv",
  "tikv_util",
- "tokio",
+ "tokio 0.2.24",
  "tokio-timer",
  "txn_types",
 ]
@@ -4919,7 +4920,7 @@ dependencies = [
  "time 0.1.42",
  "tipb",
  "tipb_helper",
- "tokio",
+ "tokio 0.2.24",
  "toml",
  "txn_types",
  "uuid",
@@ -5212,7 +5213,7 @@ dependencies = [
  "tikv_util",
  "time 0.1.42",
  "tipb",
- "tokio",
+ "tokio 0.2.24",
  "tokio-openssl",
  "tokio-timer",
  "toml",
@@ -5322,7 +5323,7 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "time 0.1.42",
- "tokio",
+ "tokio 0.2.24",
  "tokio-executor",
  "tokio-timer",
  "toml",
@@ -5435,6 +5436,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio"
+version = "1.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b7b349f11a7047e6d1276853e612d152f5e8a352c61917887cc2169e2366b4c"
+dependencies = [
+ "autocfg",
+ "pin-project-lite 0.2.0",
+]
+
+[[package]]
 name = "tokio-executor"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5462,7 +5473,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c4b08c5f4208e699ede3df2520aca2e82401b2de33f45e96696a074480be594"
 dependencies = [
  "openssl",
- "tokio",
+ "tokio 0.2.24",
 ]
 
 [[package]]
@@ -5484,7 +5495,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7bde02a3a5291395f59b06ec6945a3077602fac2b07eeeaf0dee2122f3619828"
 dependencies = [
  "native-tls",
- "tokio",
+ "tokio 0.2.24",
 ]
 
 [[package]]
@@ -5498,7 +5509,7 @@ dependencies = [
  "futures-sink",
  "log",
  "pin-project-lite 0.1.4",
- "tokio",
+ "tokio 0.2.24",
 ]
 
 [[package]]
