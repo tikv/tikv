@@ -29996,7 +29996,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Max Resolved TS gap",
+          "title": "Max Resolved TS Gap",
           "tooltip": {
             "msResolution": false,
             "shared": true,
