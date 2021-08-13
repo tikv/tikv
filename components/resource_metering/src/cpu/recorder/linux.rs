@@ -19,7 +19,7 @@ use crossbeam::channel::{unbounded, Receiver, Sender};
 use fail::fail_point;
 use lazy_static::lazy_static;
 use libc::pid_t;
-use procinfo::pid::{self};
+use procinfo::pid;
 
 use tikv_util::time::Instant;
 
