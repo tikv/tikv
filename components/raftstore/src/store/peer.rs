@@ -2329,7 +2329,10 @@ where
                 if self.check_disk_usages_before_propose(ctx, disk_full_opt, &mut stores) {
                     self.propose_normal(ctx, req)
                 } else {
-                    let errmsg = String::from("propose failed: disk full");
+                    let errmsg = format!(
+                        "propose failed: tikv disk full, cmd-disk_full_opt={:?}, leader-diskUsage={:?}",
+                        disk_full_opt, ctx.self_disk_usage
+                    );
                     Err(Error::DiskFull(stores, errmsg))
                 }
             }
@@ -2339,7 +2342,10 @@ where
                 if self.check_disk_usages_before_propose(ctx, disk_full_opt, &mut stores) {
                     self.propose_conf_change(ctx, &req)
                 } else {
-                    let errmsg = String::from("propose failed: disk full");
+                    let errmsg = format!(
+                        "propose failed: tikv disk full, cmd-disk_full_opt={:?}, leader-diskUsage={:?}",
+                        disk_full_opt, ctx.self_disk_usage
+                    );
                     Err(Error::DiskFull(stores, errmsg))
                 }
             }
