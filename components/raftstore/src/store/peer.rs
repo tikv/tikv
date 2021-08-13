@@ -2335,7 +2335,6 @@ where
             }
             Ok(RequestPolicy::ProposeConfChange) => {
                 let mut stores = Vec::new();
-                let disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
                 if self.check_disk_usages_before_propose(ctx, disk_full_opt, &mut stores) {
                     self.propose_conf_change(ctx, &req)
                 } else {
