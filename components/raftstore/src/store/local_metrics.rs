@@ -151,6 +151,7 @@ pub struct RaftMessageDropMetrics {
     pub region_tombstone_peer: u64,
     pub region_nonexistent: u64,
     pub applying_snap: u64,
+    pub disk_full: u64,
 }
 
 impl RaftMessageDropMetrics {
@@ -202,6 +203,12 @@ impl RaftMessageDropMetrics {
                 .applying_snap
                 .inc_by(self.applying_snap);
             self.applying_snap = 0;
+        }
+        if self.disk_full > 0 {
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .disk_full
+                .inc_by(self.disk_full);
+            self.disk_full = 0;
         }
     }
 }
@@ -382,6 +389,7 @@ pub struct RaftMetrics {
     pub check_leader: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
+    pub write_block_wait: LocalHistogram,
     pub waterfall_metrics: bool,
     pub batch_wait: LocalHistogram,
 }
@@ -402,6 +410,7 @@ impl RaftMetrics {
             check_leader: CHECK_LEADER_DURATION_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
+            write_block_wait: STORE_WRITE_MSG_BLOCK_WAIT_DURATION_HISTOGRAM.local(),
             waterfall_metrics,
             batch_wait: STORE_BATCH_WAIT_DURATION_HISTOGRAM.local(),
         }
@@ -418,6 +427,7 @@ impl RaftMetrics {
         self.check_leader.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
+        self.write_block_wait.flush();
         if self.waterfall_metrics {
             self.batch_wait.flush();
         }
