@@ -2338,7 +2338,6 @@ where
             }
             Ok(RequestPolicy::ProposeConfChange) => {
                 let mut stores = Vec::new();
-                let disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
                 if self.check_disk_usages_before_propose(ctx, disk_full_opt, &mut stores) {
                     self.propose_conf_change(ctx, &req)
                 } else {
@@ -3467,6 +3466,9 @@ pub struct DiskFullPeers {
 impl DiskFullPeers {
     pub fn is_empty(&self) -> bool {
         self.peers.is_empty()
+    }
+    pub fn majority(&self) -> bool {
+        self.majority
     }
     pub fn has(&self, peer_id: u64) -> bool {
         !self.peers.is_empty() && self.peers.contains_key(&peer_id)
