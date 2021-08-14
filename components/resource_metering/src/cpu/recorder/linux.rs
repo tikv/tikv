@@ -20,7 +20,6 @@ use fail::fail_point;
 use lazy_static::lazy_static;
 use libc::pid_t;
 use procinfo::pid;
-use procinfo::pid::Stat;
 
 use tikv_util::time::Instant;
 
@@ -162,8 +161,7 @@ struct CpuRecorder {
 
 struct ThreadStat {
     shared_ptr: SharedTagPtr,
-    prev_tag: Option<ResourceMeteringTag>,
-    prev_stat: pid::Stat,
+    stat: pid::Stat,
 }
 
 impl CpuRecorder {
@@ -230,9 +228,8 @@ impl CpuRecorder {
             self.thread_stats.insert(
                 thread_id,
                 ThreadStat {
-                    prev_stat: Stat::default(),
+                    stat: pid::stat_task(*PID, thread_id).unwrap_or_default(),
                     shared_ptr,
-                    prev_tag: None,
                 },
             );
         }
@@ -248,41 +245,30 @@ impl CpuRecorder {
                 tag
             });
 
-            let prev_tag = thread_stat.prev_tag.take();
+            fail_point!(
+                "cpu-record-test-filter",
+                cur_tag.as_ref().map_or(false, |t| !t
+                    .infos
+                    .extra_attachment
+                    .starts_with(super::TEST_TAG_PREFIX)),
+                |_| {}
+            );
 
-            if cur_tag.is_some() || prev_tag.is_some() {
-                STAT_TASK_COUNT.inc();
+            if let Some(cur_tag) = cur_tag {
+                if let Ok(cur_stat) = pid::stat_task(*PID, *tid) {
+                    STAT_TASK_COUNT.inc();
 
-                // If existing current tag, need to store the beginning stat.
-                // If existing previous tag, need to get the end stat to calculate delta.
-                if let Ok(stat) = procinfo::pid::stat_task(*PID, *tid) {
-                    // Accumulate the cpu time for the previous tag.
-                    if let Some(prev_tag) = prev_tag {
-                        let prev_cpu_ticks = (thread_stat.prev_stat.utime as u64)
-                            .wrapping_add(thread_stat.prev_stat.stime as u64);
-                        let current_cpu_ticks = (stat.utime as u64).wrapping_add(stat.stime as u64);
-                        let delta_ms = current_cpu_ticks.wrapping_sub(prev_cpu_ticks) * 1_000
-                            / (*CLK_TCK as u64);
+                    let last_stat = &thread_stat.stat;
+                    let last_cpu_tick = last_stat.utime.wrapping_add(last_stat.stime);
+                    let cur_cpu_tick = cur_stat.utime.wrapping_add(cur_stat.stime);
+                    let delta_ticks = cur_cpu_tick.wrapping_sub(last_cpu_tick);
 
-                        if delta_ms != 0 {
-                            *records.entry(prev_tag).or_insert(0) += delta_ms;
-                        }
+                    if delta_ticks > 0 {
+                        let delta_ms = (delta_ticks * 1_000 / *CLK_TCK) as u64;
+                        *records.entry(cur_tag).or_insert(0) += delta_ms;
                     }
 
-                    fail_point!(
-                        "cpu-record-test-filter",
-                        cur_tag.as_ref().map_or(false, |t| !t
-                            .infos
-                            .extra_attachment
-                            .starts_with(super::TEST_TAG_PREFIX)),
-                        |_| {}
-                    );
-
-                    // Store the beginning stat for the current tag.
-                    if cur_tag.is_some() {
-                        thread_stat.prev_tag = cur_tag;
-                        thread_stat.prev_stat = stat;
-                    }
+                    thread_stat.stat = cur_stat;
                 }
             }
         });
@@ -367,8 +353,8 @@ impl CpuRecorder {
     fn reset(&mut self) {
         let now = Instant::now();
         self.current_window_records = CpuRecords::default();
-        for v in self.thread_stats.values_mut() {
-            v.prev_tag = None;
+        for (thread_id, stat) in &mut self.thread_stats {
+            stat.stat = pid::stat_task(*PID, *thread_id).unwrap_or_default();
         }
         self.last_collect_instant = now;
         self.last_gc_instant = now;
@@ -377,7 +363,7 @@ impl CpuRecorder {
 
 lazy_static! {
     static ref STAT_TASK_COUNT: prometheus::IntCounter = prometheus::register_int_counter!(
-        "tikv_req_cpu_stat_task_count",
+        "tikv_resource_metering_stat_task_count",
         "Counter of stat_task call"
     )
     .unwrap();
