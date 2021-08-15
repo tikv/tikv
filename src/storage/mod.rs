@@ -1104,7 +1104,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(CMD)
                     .observe(gets.len() as f64);
                 let command_duration = tikv_util::time::Instant::now_coarse();
-                let read_id = Some(ThreadReadId::new());
+                let read_id = Some(ThreadReadId::default());
                 let mut snaps = vec![];
                 for (req, id) in gets.into_iter().zip(ids) {
                     let snap_ctx = SnapContext {
@@ -2138,6 +2138,12 @@ pub mod test_util {
             let mut results = std::mem::take(&mut *data);
             results.sort_by_key(|k| k.id);
             results.into_iter().map(|v| v.res).collect()
+        }
+    }
+
+    impl Default for GetConsumer {
+        fn default() -> Self {
+            Self::new()
         }
     }
 

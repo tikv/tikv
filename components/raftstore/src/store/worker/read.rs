@@ -196,6 +196,13 @@ impl TrackVer {
     }
 }
 
+impl Default for TrackVer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+
 impl Clone for TrackVer {
     fn clone(&self) -> Self {
         TrackVer {
@@ -390,7 +397,7 @@ where
     E: KvEngine,
 {
     pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: C) -> Self {
-        let cache_read_id = ThreadReadId::new();
+        let cache_read_id = ThreadReadId::default();
         LocalReader {
             store_meta,
             kv_engine,
