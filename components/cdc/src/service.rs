@@ -150,7 +150,7 @@ impl EventBatcher {
                 }
                 self.last_size += size;
                 self.buffer.last_mut().unwrap().mut_events().push(e);
-                self.total_resolved_ts_bytes += size as usize;
+                self.total_event_bytes += size as usize;
             }
             CdcEvent::ResolvedTs(r) => {
                 let mut change_data_event = ChangeDataEvent::default();
@@ -159,7 +159,7 @@ impl EventBatcher {
 
                 // Make sure the next message is not batched with ResolvedTs.
                 self.last_size = CDC_MAX_RESP_SIZE;
-                self.total_event_bytes += size as usize;
+                self.total_resolved_ts_bytes += size as usize;
             }
             CdcEvent::Barrier(_) => {
                 // Barrier requires events must be batched accross the barrier.
@@ -172,6 +172,7 @@ impl EventBatcher {
         self.buffer
     }
 
+    // Return the total bytes of event and resolved ts.
     pub fn statistics(&self) -> (usize, usize) {
         (self.total_event_bytes, self.total_resolved_ts_bytes)
     }
@@ -520,6 +521,52 @@ mod tests {
                 ],
                 vec![CdcEvent::Event(event_big)],
             ],
+        );
+    }
+
+    #[test]
+    fn test_event_batcher_statistics() {
+        let mut event_small = Event::default();
+        let row_small = EventRow::default();
+        let mut event_entries = EventEntries::default();
+        event_entries.entries = vec![row_small].into();
+        event_small.event = Some(Event_oneof_event::Entries(event_entries));
+
+        let mut resolved_ts = ResolvedTs::default();
+        resolved_ts.set_ts(1);
+
+        let mut batcher = EventBatcher::with_capacity(1024);
+        batcher.push(CdcEvent::Event(event_small.clone()));
+        assert_eq!(
+            batcher.statistics(),
+            (CdcEvent::Event(event_small.clone()).size() as usize, 0)
+        );
+
+        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
+        assert_eq!(
+            batcher.statistics(),
+            (
+                CdcEvent::Event(event_small.clone()).size() as usize,
+                CdcEvent::ResolvedTs(resolved_ts.clone()).size() as usize
+            )
+        );
+
+        batcher.push(CdcEvent::Event(event_small.clone()));
+        assert_eq!(
+            batcher.statistics(),
+            (
+                CdcEvent::Event(event_small.clone()).size() as usize * 2,
+                CdcEvent::ResolvedTs(resolved_ts.clone()).size() as usize
+            )
+        );
+
+        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
+        assert_eq!(
+            batcher.statistics(),
+            (
+                CdcEvent::Event(event_small).size() as usize * 2,
+                CdcEvent::ResolvedTs(resolved_ts).size() as usize * 2
+            )
         );
     }
 
