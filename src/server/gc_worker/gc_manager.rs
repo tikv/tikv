@@ -8,7 +8,7 @@ use std::sync::{mpsc, Arc};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
 use tikv_util::time::Instant;
-use tikv_util::worker::Scheduler;
+use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
@@ -270,6 +270,11 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
     pub fn start(mut self) -> Result<GcManagerHandle> {
         set_status_metrics(GcManagerState::Init);
         self.initialize();
+
+        // FIXME: how to schedule this task?
+        let task = UpdateSafePointTask {
+            manager: Arc::new(self),
+        };
 
         let (tx, rx) = mpsc::channel();
         self.gc_manager_ctx.set_stop_signal_receiver(rx);
@@ -611,6 +616,48 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
                 (None, None)
             }
         }
+    }
+}
+
+struct UpdateSafePointTask<S: GcSafePointProvider, R: RegionInfoProvider, E: KvEngine> {
+    manager: Arc<GcManager<S, R, E>>,
+}
+
+impl<S, R, E> Runnable for UpdateSafePointTask<S, R, E>
+where
+    S: GcSafePointProvider,
+    R: RegionInfoProvider,
+    E: KvEngine,
+{
+    type Task = ();
+
+    fn run(&mut self, _: Self::Task) {
+        if !is_compaction_filter_allowed(
+            &*self.manager.cfg_tracker.value(),
+            &self.manager.feature_gate,
+        ) {
+            set_status_metrics(GcManagerState::Working);
+            self.manager.gc_a_round()?;
+            if let Some(on_finished) = self.manager.cfg.post_a_round_of_gc.as_ref() {
+                on_finished();
+            }
+        }
+    }
+}
+
+impl<S, R, E> RunnableWithTimer for UpdateSafePointTask<S, R, E>
+where
+    S: GcSafePointProvider,
+    R: RegionInfoProvider,
+    E: KvEngine,
+{
+    fn on_timeout(&mut self) {
+        set_status_metrics(GcManagerState::Idle);
+        self.manager.try_update_safe_point();
+    }
+
+    fn get_interval(&self) -> Duration {
+        self.manager.cfg.poll_safe_point_interval
     }
 }
 

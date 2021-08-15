@@ -23,8 +23,8 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
 use raftstore::store::util::find_peer;
 use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::time::{duration_to_sec, Instant, Limiter, SlowTimer};
-use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler};
+use tikv_util::time::{duration_to_sec, Instant, Limiter, SlowTimer, Duration};
+use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler, RunnableWithTimer};
 use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
