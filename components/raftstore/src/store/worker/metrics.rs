@@ -101,7 +101,7 @@ lazy_static! {
     .unwrap();
     pub static ref CLEAN_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_raftstore_clean_region_count",
-        "Total number of raftstore snapshot processed.",
+        "Total number of region-worker clean range operations",
         &["type"]
     )
     .unwrap();
