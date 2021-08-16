@@ -15,6 +15,7 @@ use engine_traits::{
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
+use kvproto::import_sstpb::SwitchMode;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
@@ -2056,7 +2057,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
 impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     fn on_validate_sst_result(&mut self, ssts: Vec<SstMeta>) {
-        if ssts.is_empty() {
+        if ssts.is_empty() || self.ctx.importer.get_mode() == SwitchMode::Import {
             return;
         }
         // A stale peer can still ingest a stale SST before it is
@@ -2127,7 +2128,10 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             }
         }
 
-        if !validate_ssts.is_empty() {
+        // When there is an import job running, the region which this sst belongs may has not been
+        //  split from the origin region because the apply thread is so busy that it can not apply
+        //  SplitRequest as soon as possible. So we can not delete this sst file.
+        if !validate_ssts.is_empty() && self.ctx.importer.get_mode() != SwitchMode::Import {
             let task = CleanupSSTTask::ValidateSST {
                 ssts: validate_ssts,
             };
