@@ -728,18 +728,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 response_policy,
             }) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
-                match ctx.get_disk_full_opt() {
-                    DiskFullOpt::AllowedOnAlreadyFull => {
-                        to_be_write.disk_full_opt = DiskFullOpt::AllowedOnAlreadyFull
-                    }
-                    DiskFullOpt::AllowedOnAlmostFull => {
-                        // Like Delete operation, TiDB marks it with AllowedOnAlmostFull
-                        // But TiKV just treats it as Normal prewrite.
-                        if to_be_write.disk_full_opt != DiskFullOpt::AllowedOnAlreadyFull {
-                            to_be_write.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull
-                        }
-                    }
-                    _ => {}
+
+                if ctx.get_disk_full_opt() == DiskFullOpt::AllowedOnAlmostFull {
+                    to_be_write.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull
                 }
 
                 if let Some(lock_info) = lock_info {

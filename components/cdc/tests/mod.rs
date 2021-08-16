@@ -11,10 +11,12 @@ use grpcio::{ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver};
 use kvproto::cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest};
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
+use online_config::OnlineConfig;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
 use tikv::config::CdcConfig;
-use tikv_util::worker::LazyWorker;
+use tikv_util::config::ReadableDuration;
+use tikv_util::worker::{LazyWorker, Runnable};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
@@ -157,8 +159,9 @@ impl TestSuiteBuilder {
             let cdc_ob = obs.get(id).unwrap().clone();
             let cm = sim.get_concurrency_manager(*id);
             let env = Arc::new(Environment::new(1));
+            let cfg = CdcConfig::default();
             let mut cdc_endpoint = cdc::Endpoint::new(
-                &CdcConfig::default(),
+                &cfg,
                 pd_cli.clone(),
                 worker.scheduler(),
                 raft_router,
@@ -169,7 +172,9 @@ impl TestSuiteBuilder {
                 sim.security_mgr.clone(),
                 MemoryQuota::new(usize::MAX),
             );
-            cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
+            let mut updated_cfg = cfg.clone();
+            updated_cfg.min_ts_interval = ReadableDuration::millis(100);
+            cdc_endpoint.run(Task::ChangeConfig(cfg.diff(&updated_cfg)));
             cdc_endpoint.set_max_scan_batch_size(2);
             concurrency_managers.insert(*id, cm);
             worker.start(cdc_endpoint);
