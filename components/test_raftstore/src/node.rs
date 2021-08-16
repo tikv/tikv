@@ -356,11 +356,12 @@ impl Simulator for NodeCluster {
         self.nodes.keys().cloned().collect()
     }
 
-    fn async_command_on_node(
+    fn async_command_on_node_with_opts(
         &self,
         node_id: u64,
         request: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
+        opts: RaftCmdExtraOpts,
     ) -> Result<()> {
         if !self
             .trans
@@ -382,7 +383,7 @@ impl Simulator for NodeCluster {
             .get(&node_id)
             .cloned()
             .unwrap();
-        router.send_command(request, cb, RaftCmdExtraOpts::default())
+        router.send_command(request, cb, opts)
     }
 
     fn async_read(
