@@ -96,7 +96,6 @@ pub trait RaftLogBatch: Send {
     /// The data size of this RaftLogBatch.
     fn persist_size(&self) -> usize;
 
-    /// Whether it is empty or not.
     fn is_empty(&self) -> bool;
 
     /// Merge another RaftLogBatch to itself.
