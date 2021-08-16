@@ -202,7 +202,6 @@ impl Default for TrackVer {
     }
 }
 
-
 impl Clone for TrackVer {
     fn clone(&self) -> Self {
         TrackVer {

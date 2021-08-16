@@ -42,4 +42,3 @@ impl Default for ThreadInfoStatistics {
         Self::new()
     }
 }
-

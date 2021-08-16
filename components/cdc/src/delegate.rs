@@ -59,7 +59,6 @@ impl Default for DownstreamID {
     }
 }
 
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DownstreamState {
     Uninitialized,

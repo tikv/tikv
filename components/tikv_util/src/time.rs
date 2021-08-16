@@ -521,7 +521,6 @@ impl Default for ThreadReadId {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
