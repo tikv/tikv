@@ -396,7 +396,7 @@ where
     E: KvEngine,
 {
     pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: C) -> Self {
-        let cache_read_id = ThreadReadId::default();
+        let cache_read_id = ThreadReadId::new();
         LocalReader {
             store_meta,
             kv_engine,
