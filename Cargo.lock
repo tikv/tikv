@@ -661,7 +661,7 @@ version = "0.0.1"
 dependencies = [
  "crc 1.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "hex 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git?branch=release-3.0)",
+ "kvproto 0.0.1 (git+https://github.com/ekexium/kvproto.git?branch=release-3.0-scan-response-has-lock)",
  "lazy_static 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "prometheus 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.0.6 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1212,20 +1212,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-3.0#7137e8d2924e110f6b0e88b989e85c762156aba8"
-dependencies = [
- "futures 0.1.29 (registry+https://github.com/rust-lang/crates.io-index)",
- "grpcio 0.4.7 (registry+https://github.com/rust-lang/crates.io-index)",
- "hex 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "protobuf 2.0.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "protobuf-build 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "raft 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "kvproto"
-version = "0.0.1"
-source = "git+https://github.com/ekexium/kvproto.git?branch=release-3.0-scan-response-has-lock#11dbc70bd1717fc9d265596751fe446b15751f6f"
+source = "git+https://github.com/ekexium/kvproto.git?branch=release-3.0-scan-response-has-lock#d01c4ebbd8cda04c5de13e05976636e4b410361e"
 dependencies = [
  "futures 0.1.29 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.4.7 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1378,7 +1365,7 @@ name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
  "hex 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git?branch=release-3.0)",
+ "kvproto 0.0.1 (git+https://github.com/ekexium/kvproto.git?branch=release-3.0-scan-response-has-lock)",
  "slog 2.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog-term 2.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tikv_alloc 0.1.0",
@@ -2781,7 +2768,7 @@ name = "test_coprocessor"
 version = "0.0.1"
 dependencies = [
  "futures 0.1.29 (registry+https://github.com/rust-lang/crates.io-index)",
- "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git?branch=release-3.0)",
+ "kvproto 0.0.1 (git+https://github.com/ekexium/kvproto.git?branch=release-3.0-scan-response-has-lock)",
  "protobuf 2.0.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "test_storage 0.0.1",
  "tikv 3.0.20",
@@ -2797,7 +2784,7 @@ dependencies = [
  "futures 0.1.29 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.4.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "hex 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git?branch=release-3.0)",
+ "kvproto 0.0.1 (git+https://github.com/ekexium/kvproto.git?branch=release-3.0-scan-response-has-lock)",
  "protobuf 2.0.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "raft 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.6.5 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2815,7 +2802,7 @@ name = "test_storage"
 version = "0.0.1"
 dependencies = [
  "futures 0.1.29 (registry+https://github.com/rust-lang/crates.io-index)",
- "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git?branch=release-3.0)",
+ "kvproto 0.0.1 (git+https://github.com/ekexium/kvproto.git?branch=release-3.0-scan-response-has-lock)",
  "test_raftstore 0.0.1",
  "tikv 3.0.20",
  "tikv_util 0.1.0",
@@ -3625,7 +3612,6 @@ dependencies = [
 "checksum jobserver 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)" = "f2b1d42ef453b30b7387e113da1c83ab1605d90c5b4e0eb8e96d016ed3b8c160"
 "checksum kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "7507624b29483431c0ba2d82aece8ca6cdba9382bff4ddd0f7490560c056098d"
 "checksum kvproto 0.0.1 (git+https://github.com/ekexium/kvproto.git?branch=release-3.0-scan-response-has-lock)" = "<none>"
-"checksum kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git?branch=release-3.0)" = "<none>"
 "checksum language-tags 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "a91d884b6667cd606bb5a69aa0c99ba811a115fc68915e7056ec08a46e93199a"
 "checksum lazy_static 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)" = "3b37545ab726dd833ec6420aaba8231c5b320814b9029ad585555d2a03e94fbf"
 "checksum lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"

@@ -1392,6 +1392,11 @@ fn future_scan<E: Engine, L: LockMgr>(
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
+                resp.set_has_locks(
+                    v.as_ref()
+                        .map(|v| v.iter().any(|r| r.is_err()))
+                        .unwrap_or(true),
+                );
                 resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
             }
             Ok(resp)
