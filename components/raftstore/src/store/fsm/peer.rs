@@ -32,7 +32,7 @@ use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, Progress, ReadState, Ready, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
-use smallvec::{smallvec, SmallVec};
+use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::sys::disk::DiskUsage;
@@ -143,7 +143,7 @@ where
     raft_entry_max_size: f64,
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
-    callbacks: Vec<(Callback<E::Snapshot>, usize, TiInstant)>,
+    callbacks: Vec<(Callback<E::Snapshot>, usize)>,
 }
 
 impl<EK, ER> Drop for PeerFsm<EK, ER>
@@ -388,7 +388,6 @@ where
     fn add(&mut self, cmd: RaftCommand<E::Snapshot>, req_size: u32) {
         let req_num = cmd.request.get_requests().len();
         let RaftCommand {
-            send_time,
             mut request,
             callback,
             ..
@@ -401,7 +400,7 @@ where
         } else {
             self.request = Some(request);
         };
-        self.callbacks.push((callback, req_num, send_time));
+        self.callbacks.push((callback, req_num));
         self.batch_req_size += req_size;
     }
 
@@ -419,20 +418,15 @@ where
         false
     }
 
-    fn build(&mut self, metric: &mut RaftMetrics) -> Option<RaftCommand<E::Snapshot>> {
+    fn build(
+        &mut self,
+        metric: &mut RaftMetrics,
+    ) -> Option<(RaftCmdRequest, Callback<E::Snapshot>)> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
-                let (mut cb, _, send_time) = self.callbacks.pop().unwrap();
-                if let Callback::Write { request_times, .. } = &mut cb {
-                    if metric.waterfall_metrics {
-                        metric
-                            .batch_wait
-                            .observe(send_time.saturating_elapsed_secs());
-                    }
-                    *request_times = smallvec![send_time];
-                }
-                return Some(RaftCommand::new(req, cb));
+                let (cb, _) = self.callbacks.pop().unwrap();
+                return Some((req, cb));
             }
             metric.propose.batch += self.callbacks.len() - 1;
             let mut cbs = std::mem::take(&mut self.callbacks);
@@ -475,17 +469,11 @@ where
                 }))
             };
 
-            let now = TiInstant::now();
             let times: SmallVec<[TiInstant; 4]> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { .. } = &mut cb.0 {
-                        if metric.waterfall_metrics {
-                            metric
-                                .batch_wait
-                                .observe(duration_to_sec(now.saturating_duration_since(cb.2)));
-                        }
-                        Some(cb.2)
+                    if let Callback::Write { request_times, .. } = &mut cb.0 {
+                        Some(request_times[0])
                     } else {
                         None
                     }
@@ -496,7 +484,7 @@ where
                 Box::new(move |resp| {
                     let mut last_index = 0;
                     let has_error = resp.response.get_header().has_error();
-                    for (cb, req_num, _) in cbs {
+                    for (cb, req_num) in cbs {
                         let next_index = last_index + req_num;
                         let mut cmd_resp = RaftCmdResponse::default();
                         cmd_resp.set_header(resp.response.get_header().clone());
@@ -517,7 +505,7 @@ where
                 *request_times = times;
             }
 
-            return Some(RaftCommand::new(req, cb));
+            return Some((req, cb));
         }
         None
     }
@@ -666,8 +654,10 @@ where
     }
 
     fn propose_batch_raft_command(&mut self) {
-        if let Some(cmd) = self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics) {
-            self.propose_raft_command(cmd.request, cmd.callback, DiskFullOpt::NotAllowedOnFull)
+        if let Some((request, callback)) =
+            self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics)
+        {
+            self.propose_raft_command(request, callback, DiskFullOpt::NotAllowedOnFull)
         }
     }
 
@@ -3544,6 +3534,18 @@ where
             return;
         }
 
+        if self.ctx.raft_metrics.waterfall_metrics {
+            if let Some(request_times) = cb.get_request_times() {
+                let now = TiInstant::now();
+                for t in request_times {
+                    self.ctx
+                        .raft_metrics
+                        .batch_wait
+                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
+                }
+            }
+        }
+
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);
@@ -4615,17 +4617,17 @@ mod tests {
             let cmd = RaftCommand::new(req.clone(), cb);
             builder.add(cmd, 100);
         }
-        let mut cmd = builder.build(&mut metric).unwrap();
-        cmd.callback.invoke_proposed();
+        let (request, mut callback) = builder.build(&mut metric).unwrap();
+        callback.invoke_proposed();
         for flag in proposed_cbs_flags {
             assert!(flag.load(Ordering::Acquire));
         }
-        cmd.callback.invoke_committed();
+        callback.invoke_committed();
         for flag in committed_cbs_flags {
             assert!(flag.load(Ordering::Acquire));
         }
-        assert_eq!(10, cmd.request.get_requests().len());
-        cmd.callback.invoke_with_response(response);
+        assert_eq!(10, request.get_requests().len());
+        callback.invoke_with_response(response);
         for flag in cbs_flags {
             assert!(flag.load(Ordering::Acquire));
         }
