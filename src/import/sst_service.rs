@@ -341,13 +341,12 @@ where
                 // must execute after geting a snapshot from raftstore to make sure that the
                 // current leader has applied to current term.
                 if !importer.exist(&m) {
-                    warn!(
-                        "sst [{:?}] not exist. we may retry an operation that has already succeeded",
-                        sst
-                    );
+                    warn!("sst [{:?}] not exist. we may retry an operation that has already succeeded", m);
                     let mut err = errorpb::Error::default();
                     let stale_err = errorpb::StaleCommand::default();
-                    err.set_message("The file which would be ingested doest not exist.".to_string());
+                    err.set_message(
+                        "The file which would be ingested doest not exist.".to_string(),
+                    );
                     err.set_stale_command(stale_err);
                     resp.set_error(err);
                     return Ok(resp);
