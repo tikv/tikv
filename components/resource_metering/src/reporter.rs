@@ -313,7 +313,7 @@ impl RunnableWithTimer for ResourceMeteringReporter {
                             for summary in record.summary_list {
                                 read_row_count_list.push(summary.get_read_key_count())
                             }
-                            req.set_record_list_scan_rows(read_row_count_list);
+                            // req.set_record_list_scan_rows(read_row_count_list);
                             if tx.send((req, WriteFlags::default())).await.is_err() {
                                 return;
                             }
@@ -333,7 +333,7 @@ impl RunnableWithTimer for ResourceMeteringReporter {
                             let mut req = CpuTimeRecord::default();
                             req.set_record_list_timestamp_sec(timestamp_secs_list);
                             req.set_record_list_cpu_time_ms(cpu_time_ms_list);
-                            req.set_record_list_scan_rows(read_row_count_list);
+                            // req.set_record_list_scan_rows(read_row_count_list);
                             if tx.send((req, WriteFlags::default())).await.is_err() {
                                 return;
                             }

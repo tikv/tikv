@@ -2108,7 +2108,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/crazycs520/kvproto.git?branch=topsql-scan-row#859b500aa0f806577f282ff872206e081caae327"
+source = "git+https://github.com/crazycs520/kvproto.git?branch=topsql-scan-row2#26c02835de88cd51562aa052e8be70771961c789"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

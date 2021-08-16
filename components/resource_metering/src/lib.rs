@@ -64,6 +64,7 @@ pub struct TagInfos {
     pub region_id: u64,
     pub peer_id: u64,
     pub extra_attachment: Vec<u8>,
+    pub key_label: i32,
 }
 
 impl TagInfos {
@@ -74,6 +75,7 @@ impl TagInfos {
             peer_id: peer.get_id(),
             region_id: context.get_region_id(),
             extra_attachment: Vec::from(context.get_resource_group_tag()),
+            key_label: 0,
         }
     }
 }
