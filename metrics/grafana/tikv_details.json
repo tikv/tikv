@@ -13090,7 +13090,7 @@
               "expr": "sum(tikv_scheduler_l0_flow{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance, cf)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "{{cf}}_l0_flow",
+              "legendFormat": "{{cf}}_l0_flow-{{instance}}",
               "metric": "",
               "refId": "D",
               "step": 40
@@ -13099,7 +13099,7 @@
               "expr": "sum(tikv_scheduler_flush_flow{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance, cf)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "{{cf}}_flush_flow",
+              "legendFormat": "{{cf}}_flush_flow-{{instance}}",
               "metric": "",
               "refId": "E",
               "step": 40
@@ -13108,7 +13108,7 @@
               "expr": "sum(tikv_scheduler_l0_target_flow{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "target_flow",
+              "legendFormat": "target_flow-{{instance}}",
               "metric": "",
               "refId": "A",
               "step": 40
@@ -13118,7 +13118,7 @@
               "format": "time_series",
               "hide": true,
               "intervalFactor": 2,
-              "legendFormat": "total_l0_flow",
+              "legendFormat": "total_l0_flow-{{instance}}",
               "metric": "",
               "refId": "B",
               "step": 40
@@ -13128,7 +13128,7 @@
               "format": "time_series",
               "hide": true,
               "intervalFactor": 2,
-              "legendFormat": "total_flush_flow",
+              "legendFormat": "total_flush_flow-{{instance}}",
               "metric": "",
               "refId": "C",
               "step": 40
@@ -13322,7 +13322,7 @@
               "expr": "max(tikv_scheduler_l0{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "l0",
+              "legendFormat": "l0-{{instance}}",
               "metric": "",
               "refId": "A",
               "step": 40
@@ -13331,7 +13331,7 @@
               "expr": "max(tikv_scheduler_memtable{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "memtable",
+              "legendFormat": "memtable-{{instance}}",
               "metric": "",
               "refId": "B",
               "step": 40
@@ -13340,7 +13340,7 @@
               "expr": "max(tikv_scheduler_l0_avg{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "avg_l0",
+              "legendFormat": "avg_l0-{{instance}}",
               "metric": "",
               "refId": "C",
               "step": 40
@@ -13349,7 +13349,7 @@
               "expr": "max(tikv_scheduler_flush_l0{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "flush_l0",
+              "legendFormat": "flush_l0-{{instance}}",
               "metric": "",
               "refId": "D",
               "step": 40
