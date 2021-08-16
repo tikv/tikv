@@ -499,6 +499,7 @@ dependencies = [
  "bitflags",
  "collections",
  "concurrency_manager",
+ "criterion",
  "crossbeam 0.8.0",
  "engine_rocks",
  "engine_traits",
