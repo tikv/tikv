@@ -3,6 +3,7 @@
 mod client;
 mod feature_gate;
 pub mod metrics;
+mod tso;
 mod util;
 
 mod config;
