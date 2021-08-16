@@ -22,7 +22,7 @@ lazy_static! {
     )
     .unwrap();
     pub static ref RTS_MIN_RESOLVED_TS_GAP: IntGauge = register_int_gauge!(
-        "tikv_resolved_ts_min_resolved_ts_gap_seconds",
+        "tikv_resolved_ts_min_resolved_ts_gap_millis",
         "The minimal (non-zero) resolved ts gap for observe regions"
     )
     .unwrap();
