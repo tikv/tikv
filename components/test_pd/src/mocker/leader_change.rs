@@ -44,6 +44,12 @@ impl LeaderChange {
     }
 }
 
+impl Default for LeaderChange {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 const DEAD_ID: u64 = 1000;
 const DEAD_NAME: &str = "walking_dead";
 const DEAD_URL: &str = "127.0.0.1:65534";

@@ -36,6 +36,12 @@ impl Retry {
     }
 }
 
+impl Default for Retry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PdMocker for Retry {
     fn get_region_by_id(&self, _: &GetRegionByIdRequest) -> Option<Result<GetRegionResponse>> {
         if self.is_ok() {
