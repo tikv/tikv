@@ -38,7 +38,7 @@ impl Retry {
 
 impl Default for Retry {
     fn default() -> Self {
-        Self::new(usize::default())
+        Self::new(0)
     }
 }
 
@@ -78,6 +78,12 @@ impl NotRetry {
         NotRetry {
             is_visited: AtomicBool::new(false),
         }
+    }
+}
+
+impl Default for NotRetry {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
