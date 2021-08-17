@@ -20,7 +20,7 @@ fn disk_full_stores(resp: &RaftCmdResponse) -> Vec<u64> {
     let region_error = resp.get_header().get_error();
     assert!(region_error.has_disk_full());
     let mut stores = region_error.get_disk_full().get_store_id().to_vec();
-    stores.sort();
+    stores.sort_unstable();
     stores
 }
 
@@ -325,7 +325,7 @@ fn test_majority_disk_full() {
     // `[(1, DiskUsage::AlmostFull), (3, DiskUsage::AlreadyFull)]`. So no more proposals
     // should be allowed.
     let reqs = vec![new_put_cmd(b"k4", b"v4")];
-    let put = new_request(1, epoch.clone(), reqs, false);
+    let put = new_request(1, epoch, reqs, false);
     let mut opts = RaftCmdExtraOpts::default();
     opts.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
     let ch = cluster.async_request_with_opts(put, opts).unwrap();
