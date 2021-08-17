@@ -1,6 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
+use batch_system::{
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
+    TrackedFsm,
+};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::DB;
@@ -234,8 +237,6 @@ impl Clone for PeerTickBatch {
 }
 
 pub struct PollContext<T, C: 'static> {
-    /// The count of processed normal Fsm.
-    pub processed_fsm_count: usize,
     pub cfg: Config,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask>,
@@ -276,6 +277,7 @@ pub struct PollContext<T, C: 'static> {
     pub has_ready: bool,
     pub ready_res: Vec<CollectedReady>,
     pub need_flush_trans: bool,
+    pub readonly_ready_res: Vec<CollectedReady>,
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
     pub tick_batch: Vec<PeerTickBatch>,
@@ -538,7 +540,11 @@ pub struct RaftPoller<T: 'static, C: 'static> {
 }
 
 impl<T: Transport, C: PdClient> RaftPoller<T, C> {
-    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<RocksEngine>>]) {
+    fn handle_raft_ready(
+        &mut self,
+        peers: &mut [Option<impl TrackedFsm<Target = PeerFsm<RocksEngine>>>],
+        to_skip_end: &mut Vec<usize>,
+    ) {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
@@ -549,22 +555,48 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                     .schedule_task(prop.region_id, ApplyTask::Proposal(prop));
             }
         }
+        let ready_cnt = self.poll_ctx.ready_res.len() + self.poll_ctx.readonly_ready_res.len();
+        let early_apply = self.poll_ctx.cfg.early_apply;
+        if !self.poll_ctx.readonly_ready_res.is_empty() {
+            let mut readonly_ready_res = mem::take(&mut self.poll_ctx.readonly_ready_res);
+            for mut ready in readonly_ready_res.drain(..) {
+                to_skip_end.push(ready.batch_offset);
+                let mut delegate = PeerFsmDelegate::new(
+                    peers[ready.batch_offset].as_mut().unwrap(),
+                    &mut self.poll_ctx,
+                );
+                if early_apply {
+                    delegate.handle_raft_ready_apply(&mut ready);
+                }
+                delegate.post_raft_ready_append(ready);
+            }
+            self.poll_ctx.readonly_ready_res = readonly_ready_res;
+        }
         if self.poll_ctx.need_flush_trans
             && (!self.poll_ctx.kv_wb.is_empty() || !self.poll_ctx.raft_wb.is_empty())
         {
             self.poll_ctx.trans.flush();
             self.poll_ctx.need_flush_trans = false;
         }
-        let ready_cnt = self.poll_ctx.ready_res.len();
-        if ready_cnt != 0 && self.poll_ctx.cfg.early_apply {
+        if !self.poll_ctx.ready_res.is_empty() && early_apply {
             let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
             for ready in &mut ready_res {
-                PeerFsmDelegate::new(&mut peers[ready.batch_offset], &mut self.poll_ctx)
-                    .handle_raft_ready_apply(ready);
+                PeerFsmDelegate::new(
+                    peers[ready.batch_offset].as_mut().unwrap(),
+                    &mut self.poll_ctx,
+                )
+                .handle_raft_ready_apply(ready);
             }
             self.poll_ctx.ready_res = ready_res;
         }
         self.poll_ctx.raft_metrics.ready.has_ready_region += ready_cnt as u64;
+    }
+
+    fn handle_raft_ready_write(
+        &mut self,
+        peers: &mut [Option<impl TrackedFsm<Target = PeerFsm<RocksEngine>>>],
+    ) {
+        let ready_cnt = self.poll_ctx.ready_res.len();
         fail_point!("raft_before_save");
         if !self.poll_ctx.kv_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
@@ -622,8 +654,11 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         if ready_cnt != 0 {
             let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
             for ready in ready_res.drain(..) {
-                PeerFsmDelegate::new(&mut peers[ready.batch_offset], &mut self.poll_ctx)
-                    .post_raft_ready_append(ready);
+                PeerFsmDelegate::new(
+                    &mut peers[ready.batch_offset].as_mut().unwrap(),
+                    &mut self.poll_ctx,
+                )
+                .post_raft_ready_append(ready);
             }
         }
         let dur = self.timer.saturating_elapsed();
@@ -682,7 +717,6 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
 impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for RaftPoller<T, C> {
     fn begin(&mut self, batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
-        self.poll_ctx.processed_fsm_count = 0;
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
@@ -738,8 +772,11 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
         expected_msg_count
     }
 
-    fn handle_normal(&mut self, peer: &mut PeerFsm<RocksEngine>) -> Option<usize> {
-        let mut expected_msg_count = None;
+    fn handle_normal(
+        &mut self,
+        peer: &mut impl TrackedFsm<Target = PeerFsm<RocksEngine>>,
+    ) -> HandleResult {
+        let mut handle_result = HandleResult::KeepProcessing;
 
         fail_point!(
             "pause_on_peer_collect_message",
@@ -771,27 +808,42 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
                     self.peer_msg_buf.push(msg)
                 }
                 Err(TryRecvError::Empty) => {
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
                     peer.stop();
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
             }
         }
+        let offset = peer.offset();
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
-        delegate.collect_ready(&mut self.pending_proposals);
-        self.poll_ctx.processed_fsm_count += 1;
-        expected_msg_count
+        // No readiness is generated, skipping calling ready and release early.
+        if !delegate.collect_ready(&mut self.pending_proposals, offset) {
+            if let HandleResult::StopAt { skip_end, .. } = &mut handle_result {
+                *skip_end = true;
+            }
+        }
+        handle_result
     }
 
-    fn end(&mut self, peers: &mut [Box<PeerFsm<RocksEngine>>]) {
+    fn light_end(
+        &mut self,
+        peers: &mut [Option<impl TrackedFsm<Target = PeerFsm<RocksEngine>>>],
+        to_skip_end: &mut Vec<usize>,
+    ) {
         self.flush_ticks();
         if self.poll_ctx.has_ready {
-            self.handle_raft_ready(peers);
+            self.handle_raft_ready(peers, to_skip_end);
+        }
+    }
+
+    fn end(&mut self, peers: &mut [Option<impl TrackedFsm<Target = PeerFsm<RocksEngine>>>]) {
+        if self.poll_ctx.has_ready {
+            self.handle_raft_ready_write(peers);
         }
         self.poll_ctx.current_time = None;
         self.poll_ctx
@@ -1009,7 +1061,6 @@ where
 
     fn build(&mut self) -> RaftPoller<T, C> {
         let mut ctx = PollContext {
-            processed_fsm_count: 0,
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
@@ -1040,6 +1091,7 @@ where
             has_ready: false,
             ready_res: Vec::new(),
             need_flush_trans: false,
+            readonly_ready_res: Vec::new(),
             current_time: None,
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
             tick_batch: vec![PeerTickBatch::default(); 256],
