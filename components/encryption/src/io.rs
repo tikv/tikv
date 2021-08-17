@@ -237,7 +237,7 @@ pub struct EncrypterWriter<W: Write> {
     writer: Option<W>,
     crypter: OCrypter,
     block_size: usize,
-    encrypt_buffer: Vec<u8>,
+    crypter_buffer: Vec<u8>,
 }
 
 impl<W: Write> EncrypterWriter<W> {
@@ -254,8 +254,14 @@ impl<W: Write> EncrypterWriter<W> {
             writer: Some(writer),
             crypter,
             block_size,
-            encrypt_buffer: Vec::new(),
+            crypter_buffer: Vec::new(),
         })
+    }
+
+    fn reserve_buffer(&mut self, size: usize) {
+        if size + self.block_size > self.crypter_buffer.len() {
+            self.crypter_buffer.resize(size + self.block_size, 0);
+        }
     }
 
     /// Finalize the internal writer and encrypter and return the writer.
@@ -266,10 +272,8 @@ impl<W: Write> EncrypterWriter<W> {
     fn do_finalize(&mut self) -> Option<W> {
         if self.writer.is_some() {
             drop(self.flush());
-            if self.block_size > self.encrypt_buffer.len() {
-                self.encrypt_buffer.resize(self.block_size, 0);
-            }
-            let bytes = self.crypter.finalize(&mut self.encrypt_buffer).unwrap();
+            self.reserve_buffer(0);
+            let bytes = self.crypter.finalize(&mut self.crypter_buffer).unwrap();
             if bytes != 0 {
                 // The EncrypterWriter current only support crypters that always return the same
                 // amount of data. This is true for CTR mode.
@@ -282,10 +286,8 @@ impl<W: Write> EncrypterWriter<W> {
 
 impl<W: Write> Write for EncrypterWriter<W> {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
-        if buf.len() + self.block_size > self.encrypt_buffer.len() {
-            self.encrypt_buffer.resize(buf.len() + self.block_size, 0);
-        }
-        let bytes = self.crypter.update(buf, &mut self.encrypt_buffer)?;
+        self.reserve_buffer(buf.len());
+        let bytes = self.crypter.update(buf, &mut self.crypter_buffer)?;
         // The EncrypterWriter current only support crypters that always return the same amount
         // of data. This is true for CTR mode.
         if bytes != buf.len() {
@@ -299,7 +301,7 @@ impl<W: Write> Write for EncrypterWriter<W> {
             ));
         }
         let writer = self.writer.as_mut().unwrap();
-        writer.write_all(&self.encrypt_buffer[0..bytes])?;
+        writer.write_all(&self.crypter_buffer[0..bytes])?;
         Ok(bytes)
     }
 
@@ -351,11 +353,11 @@ mod tests {
         let mut decrypter = DecrypterReader::new(buf, method, &key, iv).unwrap();
         let step = 7;
         for i in 0..1024 / step {
-            let offset = i * step;
             let mut piece = vec![0; 8];
+            let offset = i * step;
             decrypter.seek(SeekFrom::Start(offset as u64)).unwrap();
             assert_eq!(decrypter.read(&mut piece).unwrap(), piece.len());
-            assert_eq!(piece, plaintext[offset..offset + 8]);
+            assert_eq!(piece, plaintext[offset..offset + piece.len()]);
         }
     }
 
@@ -374,12 +376,9 @@ mod tests {
         for i in 0..1024 / step {
             let mut piece = vec![0; 8];
             let offset = i * step;
-            decrypter.seek(SeekFrom::Start(offset)).unwrap();
+            decrypter.seek(SeekFrom::Start(offset as u64)).unwrap();
             assert_eq!(decrypter.read(&mut piece).unwrap(), piece.len());
-            assert_eq!(
-                piece,
-                plaintext[offset as usize..offset as usize + piece.len()]
-            );
+            assert_eq!(piece, plaintext[offset..offset + piece.len()]);
         }
     }
 }
