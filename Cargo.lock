@@ -949,9 +949,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-deque"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94af6efb46fef72616855b036a624cf27ba656ffc9be1b9a3c931cfc7749a9a9"
+checksum = "6455c0ca19f0d2fbf751b908d5c55c1f5cbc65e03c4225427254b46890bdde1e"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-epoch 0.9.3",
@@ -1935,9 +1935,15 @@ checksum = "494b4d60369511e7dea41cf646832512a94e542f68bb9c49e54518e0f468eb47"
 
 [[package]]
 name = "hyper"
+<<<<<<< HEAD
 version = "0.13.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a6f157065790a3ed2f88679250419b5cdd96e714a0d65f7797fd337186e96bb"
+=======
+version = "0.14.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b61cf2d1aebcf6e6352c97b81dc2244ca29194be1b276f5d8ad5c6330fffb11"
+>>>>>>> eae5915d9... *: update several deps (#10763)
 dependencies = [
  "bytes 0.5.3",
  "futures-channel",
@@ -1949,7 +1955,11 @@ dependencies = [
  "httparse",
  "httpdate",
  "itoa",
+<<<<<<< HEAD
  "pin-project 1.0.1",
+=======
+ "pin-project-lite",
+>>>>>>> eae5915d9... *: update several deps (#10763)
  "socket2",
  "tokio 0.2.24",
  "tower-service",
@@ -5414,9 +5424,15 @@ dependencies = [
 
 [[package]]
 name = "tokio"
+<<<<<<< HEAD
 version = "0.2.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "099837d3464c16a808060bb3f02263b412f6fafcb5d01c533d309985fbeebe48"
+=======
+version = "1.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01cf844b23c6131f624accf65ce0e4e9956a8bb329400ea5bcc26ae3a5c20b0b"
+>>>>>>> eae5915d9... *: update several deps (#10763)
 dependencies = [
  "bytes 0.5.3",
  "fnv",
