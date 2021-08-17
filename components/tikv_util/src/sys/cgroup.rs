@@ -201,7 +201,7 @@ fn cgroup_mountinfos_v2() -> HashMap<String, (String, PathBuf)> {
 fn build_path(path: &str, root: &str, mount_point: &Path) -> PathBuf {
     assert!(path.starts_with('/') && root.starts_with('/'));
     let relative = path.strip_prefix(root).unwrap();
-    let mut absolute = mount_point.to_owned();
+    let mut absolute = mount_point.to_path_buf();
     absolute.push(relative);
     absolute
 }
