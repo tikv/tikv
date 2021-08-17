@@ -55,7 +55,6 @@ use crate::bytes_capacity;
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::store::config::Config;
-use crate::store::fsm::apply::ControlMsg;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
@@ -910,16 +909,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 
         for mut inspector in std::mem::take(&mut self.poll_ctx.pending_latency_inspect) {
             inspector.record_store_process(self.timer.saturating_elapsed());
-            if let Err(e) = self
-                .poll_ctx
-                .apply_router
-                .send_control(ControlMsg::LatencyInspect {
-                    send_time: TiInstant::now(),
-                    inspector,
-                })
-            {
-                warn!("send control msg to apply router failed"; "err" => ?e);
-            }
+            // TODO: Maybe we need to inspect the latency related to apply worker later.
+            inspector.finish();
         }
 
         for peer in peers {
