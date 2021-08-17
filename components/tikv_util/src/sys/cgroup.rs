@@ -4,7 +4,7 @@ use procfs::process::Process;
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::mem::MaybeUninit;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ## Differences between cgroup v1 and v2:
 // ### memory subsystem, memory limitation
@@ -79,12 +79,12 @@ impl CGroupSys {
         let path = if self.is_v2 {
             let group = self.cgroups.get("").unwrap();
             let (root, mount_point) = self.mount_points.get("").unwrap();
-            let path = build_path(group, &root, mount_point);
+            let path = build_path(group, root, mount_point);
             format!("{}/memory.max", path.to_str().unwrap())
         } else {
             let group = self.cgroups.get("memory").unwrap();
             let (root, mount_point) = self.mount_points.get("memory").unwrap();
-            let path = build_path(group, &root, mount_point);
+            let path = build_path(group, root, mount_point);
             format!("{}/memory.limit_in_bytes", path.to_str().unwrap())
         };
         read_to_string(&path).map_or(-1, |x| parse_memory_max(x.trim()))
@@ -94,12 +94,12 @@ impl CGroupSys {
         let path = if self.is_v2 {
             let group = self.cgroups.get("").unwrap();
             let (root, mount_point) = self.mount_points.get("").unwrap();
-            let path = build_path(group, &root, mount_point);
+            let path = build_path(group, root, mount_point);
             format!("{}/cpuset.cpus", path.to_str().unwrap())
         } else {
             let group = self.cgroups.get("cpuset").unwrap();
             let (root, mount_point) = self.mount_points.get("cpuset").unwrap();
-            let path = build_path(group, &root, mount_point);
+            let path = build_path(group, root, mount_point);
             format!("{}/cpuset.cpus", path.to_str().unwrap())
         };
         read_to_string(&path).map_or_else(|_| HashSet::new(), |x| parse_cpu_cores(x.trim()))
@@ -110,7 +110,7 @@ impl CGroupSys {
         if self.is_v2 {
             let group = self.cgroups.get("").unwrap();
             let (root, mount_point) = self.mount_points.get("").unwrap();
-            let path = build_path(group, &root, mount_point);
+            let path = build_path(group, root, mount_point);
             let path = format!("{}/cpu.max", path.to_str().unwrap());
             if let Ok(buffer) = read_to_string(&path) {
                 return parse_cpu_quota_v2(buffer.trim());
@@ -118,7 +118,7 @@ impl CGroupSys {
         } else {
             let group = self.cgroups.get("cpu").unwrap();
             let (root, mount_point) = self.mount_points.get("cpu").unwrap();
-            let path = build_path(group, &root, mount_point);
+            let path = build_path(group, root, mount_point);
             let path1 = format!("{}/cpu.cfs_quota_us", path.to_str().unwrap());
             let path2 = format!("{}/cpu.cfs_period_us", path.to_str().unwrap());
             if let (Ok(buffer1), Ok(buffer2)) = (read_to_string(&path1), read_to_string(&path2)) {
@@ -198,10 +198,10 @@ fn cgroup_mountinfos_v2() -> HashMap<String, (String, PathBuf)> {
 
 // `root` is mounted on `mount_point`. `path` is a sub path of `root`.
 // This is used to build an absolute path starts with `mount_point`.
-fn build_path(path: &str, root: &str, mount_point: &PathBuf) -> PathBuf {
+fn build_path(path: &str, root: &str, mount_point: &Path) -> PathBuf {
     assert!(path.starts_with('/') && root.starts_with('/'));
     let relative = path.strip_prefix(root).unwrap();
-    let mut absolute = mount_point.clone();
+    let mut absolute = mount_point.to_owned();
     absolute.push(relative);
     absolute
 }
