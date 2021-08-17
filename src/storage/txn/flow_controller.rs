@@ -763,7 +763,7 @@ impl<E: KvEngine> FlowChecker<E> {
             };
             self.limiter.speed_limit() + diff * 1024.0 * 1024.0
         } else {
-            INFINITY
+            f64::INFINITY
         };
 
         self.update_speed_limit(throttle);
