@@ -38,7 +38,7 @@ impl Retry {
 
 impl Default for Retry {
     fn default() -> Self {
-        Self::new()
+        Self::new(usize::default())
     }
 }
 
