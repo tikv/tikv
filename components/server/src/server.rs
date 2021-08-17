@@ -1118,7 +1118,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                     .join(Path::new(file_system::SPACE_PLACEHOLDER_FILE));
 
                 let placeholder_size: u64 =
-                    file_system::get_file_size(&placeholer_file_path).unwrap_or_else(|_| 0);
+                    file_system::get_file_size(&placeholer_file_path).unwrap_or(0);
 
                 let used_size = snap_size + kv_size + raft_size + placeholder_size;
                 let capacity = if config_disk_capacity == 0 || disk_cap < config_disk_capacity {
