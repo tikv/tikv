@@ -682,11 +682,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
-        if self.poll_ctx.trans.need_flush()
-            && (!self.poll_ctx.kv_wb.is_empty() || !self.poll_ctx.raft_wb.is_empty())
-        {
-            self.poll_ctx.trans.flush();
-        }
         let ready_cnt = self.poll_ctx.ready_res.len() + self.poll_ctx.readonly_ready_res.len();
         if !self.poll_ctx.readonly_ready_res.is_empty() {
             let mut readonly_ready_res = mem::take(&mut self.poll_ctx.readonly_ready_res);
@@ -699,6 +694,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
                 .post_raft_ready_append(ready);
             }
             self.poll_ctx.readonly_ready_res = readonly_ready_res;
+        }
+        if self.poll_ctx.trans.need_flush()
+            && (!self.poll_ctx.kv_wb.is_empty() || !self.poll_ctx.raft_wb.is_empty())
+        {
+            self.poll_ctx.trans.flush();
         }
         self.poll_ctx.raft_metrics.ready.has_ready_region += ready_cnt as u64;
     }
