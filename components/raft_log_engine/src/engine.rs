@@ -78,8 +78,9 @@ impl RaftLogBatchTrait for RaftLogBatch {
             .map_err(transfer_error)
     }
 
+    #[inline]
     fn persist_size(&self) -> usize {
-        panic!("persist_size is not implemented for raft engine");
+        self.0.approximate_size()
     }
 
     fn is_empty(&self) -> bool {
