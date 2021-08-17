@@ -554,9 +554,9 @@ mod tests {
         // Test ImportDir::delete()
         {
             if let Some(ref manager) = key_manager {
-                manager.create_file(&path.temp).unwrap();
-                manager.create_file(&path.save).unwrap();
-                manager.create_file(&path.clone).unwrap();
+                manager.create_file_for_write(&path.temp).unwrap();
+                manager.create_file_for_write(&path.save).unwrap();
+                manager.create_file_for_write(&path.clone).unwrap();
             } else {
                 File::create(&path.temp).unwrap();
                 File::create(&path.save).unwrap();

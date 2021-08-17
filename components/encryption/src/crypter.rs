@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use byteorder::{BigEndian, ByteOrder};
 use derive_more::Deref;
 use engine_traits::EncryptionMethod as DBEncryptionMethod;
 use kvproto::encryptionpb::EncryptionMethod;
@@ -116,6 +117,22 @@ impl Iv {
         match self {
             Iv::Ctr(iv) => iv,
             Iv::Gcm(iv) => iv,
+        }
+    }
+
+    pub fn seek(&mut self, block_index: u64) -> Result<()> {
+        match self {
+            Iv::Ctr(iv) => {
+                let mut high = BigEndian::read_u64(&iv[0..8]);
+                let low = BigEndian::read_u64(&iv[8..16]) + block_index;
+                if u64::MAX - block_index < low {
+                    high += 1;
+                }
+                BigEndian::write_u64(&mut iv[0..8], high);
+                BigEndian::write_u64(&mut iv[8..16], low);
+                Ok(())
+            }
+            Iv::Gcm(_) => Err(box_err!("Seek is not supported for GCM mode")),
         }
     }
 }
