@@ -138,7 +138,7 @@ prost = "0.5.0"
 tipb_helper = { path = "components/tipb_helper" }
 tipb = { git = "https://github.com/pingcap/tipb.git", branch = "release-3.0" }
 # TODO: use master branch after the next version is released.
-kvproto = { git = "https://github.com/ekexium/kvproto.git", branch = "release-3.0-scan-response-has-lock" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0-20210816" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
