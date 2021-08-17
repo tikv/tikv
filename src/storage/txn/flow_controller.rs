@@ -720,28 +720,32 @@ impl<E: KvEngine> FlowChecker<E> {
         let is_throttled = self.limiter.speed_limit() != f64::INFINITY;
         let should_throttle =
             checker.last_num_memtables.get_avg() > self.memtables_threshold as f64;
-        let throttle = if !is_throttled {
-            if should_throttle {
-                SCHED_THROTTLE_ACTION_COUNTER
-                    .with_label_values(&[cf, "memtable_init"])
-                    .inc();
-                checker.init_speed = true;
-                let x = self.write_flow_recorder.get_percentile_90();
-                if x == 0 { f64::INFINITY } else { x as f64 }
-            } else {
+        let throttle = if !is_throttled && should_throttle {
+            SCHED_THROTTLE_ACTION_COUNTER
+                .with_label_values(&[cf, "memtable_init"])
+                .inc();
+            let x = self.write_flow_recorder.get_percentile_90();
+            if x == 0 {
                 f64::INFINITY
+            } else {
+                checker.init_speed = true;
+                self.throttle_cf = Some(cf.to_string());
+                x as f64
             }
-        } else if !should_throttle
-            || checker.last_num_memtables.get_recent() < self.memtables_threshold
+        } else if is_throttled
+            && (!should_throttle
+                || checker.last_num_memtables.get_recent() < self.memtables_threshold)
         {
             // should not throttle memtable
-            checker.memtable_debt = 0.0;
             if checker.init_speed {
+                checker.init_speed = false;
                 f64::INFINITY
             } else {
-                self.limiter.speed_limit() + checker.memtable_debt * 1024.0 * 1024.0
+                let speed = self.limiter.speed_limit() + checker.memtable_debt * 1024.0 * 1024.0;
+                checker.memtable_debt = 0.0;
+                speed
             }
-        } else {
+        } else if is_throttled && should_throttle {
             // should throttle
             let diff = match checker.last_num_memtables.get_recent().cmp(&prev) {
                 std::cmp::Ordering::Greater => {
@@ -758,6 +762,8 @@ impl<E: KvEngine> FlowChecker<E> {
                 }
             };
             self.limiter.speed_limit() + diff * 1024.0 * 1024.0
+        } else {
+            INFINITY
         };
 
         self.update_speed_limit(throttle);
@@ -772,22 +778,7 @@ impl<E: KvEngine> FlowChecker<E> {
                     .with_label_values(&[cf, "tick_spare"])
                     .inc();
 
-                let throttle = if checker.long_term_num_l0_files.get_avg()
-                    >= self.l0_files_threshold as f64 * 0.5
-                    || checker.long_term_num_l0_files.get_recent() as f64
-                        >= self.l0_files_threshold as f64 * 0.5
-                    || checker.last_num_l0_files_from_flush >= self.l0_files_threshold
-                {
-                    SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[cf, "keep_spare"])
-                        .inc();
-                    self.limiter.speed_limit()
-                } else {
-                    SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[cf, "up_spare"])
-                        .inc();
-                    self.limiter.speed_limit() * (1.0 + 5.0 * LIMIT_UP_PERCENT)
-                };
+                let throttle = self.limiter.speed_limit() * (1.0 + 5.0 * LIMIT_UP_PERCENT);
 
                 self.update_speed_limit(throttle)
             }
