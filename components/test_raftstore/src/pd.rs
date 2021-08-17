@@ -528,6 +528,7 @@ impl Cluster {
                 && overlaps[0].get_region_epoch().get_conf_ver() == conf_ver
         };
         if !same_region {
+            debug!("region changed"; "from" => ?overlaps, "to" => ?region, "leader" => ?leader);
             // remove overlap regions
             for r in overlaps {
                 self.remove_region(&r);
