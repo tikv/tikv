@@ -13,19 +13,20 @@ pub const MAX_HEIGHT: usize = 14;
 const HEIGHT_INCREASE: u32 = u32::MAX / 4;
 const RAND_SEED: u32 = 410958445;
 
+const MAX_NODE_SIZE: usize = std::mem::size_of::<Node>();
 
 
 pub struct WriteBatch {
     entries: Vec<WriteBatchEntry>,
-    buf: Vec<u8>,
-    hint: Box<Hint>,
+    buf: BytesMut,
+    hint: Hint,
 }
 
 impl WriteBatch {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
-            buf: Vec::new(),
+            buf: BytesMut::new(),
             hint: Hint::new(),
         }
     }
@@ -52,6 +53,21 @@ impl WriteBatch {
 
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    pub fn estimated_size(&self) -> usize {
+        return self.buf.len() + self.entries.len() * MAX_NODE_SIZE;
+    }
+
+    pub fn reset(&mut self) {
+        self.entries.clear();
+        self.buf.clear();
+    }
+
+    pub fn iterate<F>(&mut self,f: F) where F: Fn(&mut WriteBatchEntry, &[u8]) {
+        for e in &mut self.entries {
+            f(e, self.buf.chunk())
+        }
     }
 }
 
@@ -131,29 +147,44 @@ pub fn get_node_offset(node: *mut Node) -> ArenaAddr {
     deref(node).addr
 }
 
-#[derive(Clone)]
 pub struct SkipList {
-    inner: Arc<SkipListInner>,
+    height: AtomicU32,
+    head: ArenaAddr,
+    arena: Arc<Arena>,
+    rnd_x: AtomicU32,
 }
 
-impl Deref for SkipList {
-    type Target = SkipListInner;
-    fn deref(&self) -> &Self::Target {
-        &self.inner
+impl Clone for SkipList {
+    fn clone(&self) -> Self {
+        Self { 
+            height: AtomicU32::new(self.height.load(Acquire)), 
+            head: self.head, 
+            arena: self.arena.clone(), 
+            rnd_x: AtomicU32::new(self.rnd_x.load(Acquire)),
+        }
     }
 }
 
+#[allow(dead_code)]
 impl SkipList {
-    pub fn new(arena: Option<Arena>) -> Self {
-        let inner = SkipListInner::new(arena);
+    pub fn new(arena: Option<Arc<Arena>>) -> Self {
+        let a = arena.unwrap_or(Arc::new(Arena::new()));
+        let head_node = a.put_node(MAX_HEIGHT, &[], &WriteBatchEntry::default());
         Self {
-            inner: Arc::new(inner),
+            height: AtomicU32::new(1),
+            head: head_node.addr,
+            arena: a,
+            rnd_x: AtomicU32::new(RAND_SEED),
         }
+    }
+
+    fn get_head(&self) -> *mut Node {
+        self.arena.get_node(self.head)
     }
 
     pub fn new_iterator(&self, reversed: bool) -> SKIterator {
         let it = SKIterator {
-            list: self.clone(),
+            list: &self,
             n: null_mut(),
             uk: BytesMut::new(),
             v: Value::new(),
@@ -162,27 +193,6 @@ impl SkipList {
             reversed,
         };
         it
-    }
-}
-
-pub struct SkipListInner {
-    height: AtomicU32,
-    head: *mut Node,
-    arena: Arena,
-    rnd_x: AtomicU32,
-}
-
-#[allow(dead_code)]
-impl SkipListInner {
-    fn new(arena: Option<Arena>) -> Self {
-        let a = arena.unwrap_or(Arena::new());
-        let head = a.put_node(MAX_HEIGHT, &[], WriteBatchEntry::default());
-        Self {
-            height: AtomicU32::new(1),
-            head,
-            arena: a,
-            rnd_x: AtomicU32::new(RAND_SEED),
-        }
     }
 
     fn random_height(&self) -> usize {
@@ -216,17 +226,17 @@ impl SkipListInner {
 
     pub fn put_batch(&self, batch: &mut WriteBatch) {
         for i in 0..batch.entries.len() {
-            let entry = batch.entries[i];
+            let entry = &batch.entries[i];
             self.put_with_hint(&batch.buf, entry, &mut batch.hint)
         }
     }
 
-    pub fn put(&self, buf: &[u8], entry: WriteBatchEntry) {
-        let mut h = Hint::new();
-        self.put_with_hint(buf, entry, &mut h)
+    pub fn put(&self, buf: &[u8], entry: &WriteBatchEntry) {
+        let mut h = &mut Hint::new();
+        self.put_with_hint(buf, entry, h)
     }
 
-    pub fn put_with_hint(&self, buf: &[u8], entry: WriteBatchEntry, h: &mut Box<Hint>) {
+    pub fn put_with_hint(&self, buf: &[u8], entry: &WriteBatchEntry, h: &mut Hint) {
         // Since we allow overwrite, we may not need to create a new node. We might not even need to
         // increase the height. Let's defer these actions.
         let mut list_height = self.get_height();
@@ -304,10 +314,35 @@ impl SkipListInner {
         }
     }
 
-    pub fn get_with_hint(&self, key: &[u8], version: u64, opt_hint: Option<Box<Hint>>) -> Value {
-        let mut h = opt_hint.unwrap_or(Hint::new());
+    pub fn set_value(&self, node: &mut Node, buf: &[u8], entry: &WriteBatchEntry) {
+        {
+            // check old value version.
+            let old_val_addr = node.get_val_addr();
+            let old_val_off: ArenaAddr;
+            if old_val_addr.is_value_node_addr() {
+                let vn = self.arena.get_value_node(old_val_addr);
+                old_val_off = vn.val_addr;
+            } else {
+                old_val_off = old_val_addr;
+            }
+            let old_v = self.arena.get_val(old_val_off);
+            if entry.version <= old_v.version {
+                // Only happens in Restore backup, do nothing.
+                return
+            }
+        }
+        let new_val_addr = self.arena.put_val(buf, entry);
+        let vn = ValueNode {
+            val_addr: new_val_addr,
+            next_val_addr: node.get_val_addr(),
+        };
+        let vn_addr = self.arena.put_val_node(vn);
+        node.set_val_addr(vn_addr);
+    }
+
+    pub fn get_with_hint(&self, key: &[u8], version: u64, h: &mut Hint) -> Value {
         let list_height = self.get_height();
-        let recompute_height = self.calculate_recompute_height(key, &mut h, list_height as usize);
+        let recompute_height = self.calculate_recompute_height(key, h, list_height as usize);
         let mut n: *mut Node = ptr::null_mut();
         if recompute_height > 0 {
             for i in (0..recompute_height).rev() {
@@ -351,12 +386,13 @@ impl SkipListInner {
     pub fn calculate_recompute_height(
         &self,
         key: &[u8],
-        h: &mut Box<Hint>,
+        h: &mut Hint,
         list_height: usize,
     ) -> usize {
+        let head = self.get_head();
         if h.height < list_height {
             // Either splice is never used or list height has grown, we recompute all.
-            h.prev[list_height] = self.head;
+            h.prev[list_height] = head;
             h.next[list_height] = null_mut();
             h.height = list_height;
             h.hit_height = h.height;
@@ -374,7 +410,7 @@ impl SkipListInner {
                 recompute_height += 1;
                 continue;
             }
-            if prev_node != self.head
+            if prev_node != head
                 && prev_node != null_mut()
                 && key <= self.arena.get(deref(prev_node).key_addr)
             {
@@ -420,7 +456,8 @@ impl SkipListInner {
     }
 
     fn find_near(&self, key: &[u8], less: bool, allow_eq: bool) -> (*mut Node, bool) {
-        let mut x = self.head;
+        let head = self.get_head();
+        let mut x = head;
         let mut level = self.get_height();
         let mut after_node: *mut Node = ptr::null_mut();
         loop {
@@ -438,7 +475,7 @@ impl SkipListInner {
                     return (null_mut(), false);
                 }
                 // Try to return x. Make sure it is not a head node.
-                if x == self.head {
+                if x == head {
                     return (null_mut(), false);
                 }
                 return (x, false);
@@ -471,7 +508,7 @@ impl SkipListInner {
                     continue;
                 }
                 // On base level. Return x.
-                if x == self.head {
+                if x == head {
                     return (null_mut(), false);
                 }
                 return (x, false);
@@ -487,7 +524,7 @@ impl SkipListInner {
                 return (next, false);
             }
             // Try to return x. Make sure it is not a head node.
-            if x == self.head {
+            if x == head {
                 return (null_mut(), false);
             }
             return (x, false);
@@ -497,7 +534,8 @@ impl SkipListInner {
     // find_last returns the last element. If head (empty list), we return nil. All the find functions
     // will NEVER return the head nodes.
     fn find_last(&self) -> *mut Node {
-        let mut n = self.head;
+        let head = self.get_head();
+        let mut n = head;
         let mut level = self.height.load(Acquire) - 1;
         loop {
             let next = self.get_next(n, level as usize);
@@ -506,7 +544,7 @@ impl SkipListInner {
                 continue;
             }
             if level == 0 {
-                if n == self.head {
+                if n == head {
                     return null_mut();
                 }
                 return n;
@@ -540,6 +578,9 @@ impl SkipListInner {
         Value::new()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.get_next(self.get_head(), 0).is_null()
+    }
 
 }
 
@@ -556,18 +597,18 @@ pub struct Hint {
 }
 
 impl Hint {
-    pub fn new() -> Box<Hint> {
-        Box::new(Hint {
+    pub fn new() -> Hint {
+        Hint {
             height: 0,
             hit_height: 0,
             prev: [ptr::null_mut(); MAX_HEIGHT + 1],
             next: [ptr::null_mut(); MAX_HEIGHT + 1],
-        })
+        }
     }
 }
 
-pub struct SKIterator {
-    list: SkipList,
+pub struct SKIterator<'a> {
+    list: &'a SkipList,
     n: *mut Node,
 
     uk: BytesMut,
@@ -578,7 +619,7 @@ pub struct SKIterator {
 }
 
 #[allow(dead_code)]
-impl SKIterator {
+impl SKIterator<'_> {
     fn load_node(&mut self) {
         if self.n.is_null() {
             return;
@@ -613,7 +654,7 @@ impl SKIterator {
     }
 
     fn seek_to_first(&mut self) {
-        self.n = self.list.get_next(self.list.head, 0);
+        self.n = self.list.get_next(self.list.get_head(), 0);
         self.load_node()
     }
 
@@ -646,7 +687,7 @@ impl SKIterator {
     }
 }
 
-impl Iterator for SKIterator {
+impl Iterator for SKIterator<'_> {
     fn next(&mut self) {
         if self.reversed {
             self.next_backward()
@@ -738,7 +779,7 @@ mod tests {
 
     #[test]
     fn test_basic() {
-        let l = SkipListInner::new(None);
+        let l = SkipList::new(None);
         let val1 = new_value(42);
         let val2 = new_value(52);
         let val3 = new_value(62);
@@ -779,7 +820,7 @@ mod tests {
 
     #[test]
     fn test_find_near() {
-        let l = SkipListInner::new(None);
+        let l = SkipList::new(None);
         for i in 0..1000 {
             let key = format!("{:05}", i * 10 + 5);
             let mut wb = WriteBatch::new();

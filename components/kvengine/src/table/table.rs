@@ -6,6 +6,8 @@ use std::{ops::Add, ptr, slice};
 use thiserror::Error;
 use std::{result, io};
 
+use crate::dfs;
+
 pub trait Iterator {
     // next returns the next entry with different key on the latest version.
     // If old version is needed, call next_version.
@@ -26,27 +28,27 @@ pub trait Iterator {
     fn value(&self) -> Value;
 
     fn valid(&self) -> bool;
-}
 
-pub fn seek_to_version(it: &mut dyn Iterator, version: u64) -> bool {
-    if version >= it.value().version {
-        return true;
-    }
-    while it.next_version() {
-        if version >= it.value().version {
+    fn seek_to_version(&mut self, version: u64) -> bool {
+        if version >= self.value().version {
             return true;
         }
+        while self.next_version() {
+            if version >= self.value().version {
+                return true;
+            }
+        }
+        return false;
     }
-    return false;
+
+    fn next_all_version(&mut self) {
+        if !self.next_version() {
+            self.next()
+        }
+    }
 }
 
-pub fn next_all_version(it: &mut dyn Iterator) {
-    if !it.next_version() {
-        it.next()
-    }
-}
-
-const BIT_DELETE: u8 = 1;
+pub const BIT_DELETE: u8 = 1;
 
 pub fn is_deleted(meta: u8) -> bool {
     meta & BIT_DELETE > 0
@@ -68,7 +70,7 @@ pub struct Value {
 }
 
 impl Value {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             ptr: ptr::null(),
             meta: 0,
@@ -78,7 +80,7 @@ impl Value {
         }
     }
 
-    pub fn encode(&self, buf: &mut [u8]) {
+    pub(crate) fn encode(&self, buf: &mut [u8]) {
         buf[0] = self.meta;
         buf[1] = self.user_meta_len;
         LittleEndian::write_u64(&mut buf[2..10], self.version);
@@ -95,7 +97,7 @@ impl Value {
         }
     }
 
-    pub fn encode_buf(meta: u8, user_meta: &[u8], version: u64, val: &[u8]) -> Vec<u8> {
+    pub(crate) fn encode_buf(meta: u8, user_meta: &[u8], version: u64, val: &[u8]) -> Vec<u8> {
         let mut buf = Vec::with_capacity(VALUE_PTR_OFF + user_meta.len() + val.len());
         buf.resize(buf.capacity(), 0);
         let m_buf = buf.as_mut_slice();
@@ -109,7 +111,7 @@ impl Value {
         buf
     }
 
-    pub fn decode(bin: &[u8]) -> Self {
+    pub(crate) fn decode(bin: &[u8]) -> Self {
         let meta = bin[0];
         let user_meta_len = bin[1];
         let version = LittleEndian::read_u64(&bin[2..10]);
@@ -123,7 +125,7 @@ impl Value {
         }
     }
 
-    pub fn new_with_meta_version(meta: u8, version: u64, user_meta_len: u8, bin: &[u8]) -> Self {
+    pub(crate) fn new_with_meta_version(meta: u8, version: u64, user_meta_len: u8, bin: &[u8]) -> Self {
         Self {
             ptr: bin.as_ptr(),
             meta,
@@ -135,6 +137,10 @@ impl Value {
 
     pub fn is_empty(&self) -> bool {
         self.meta == 0 && self.ptr == ptr::null()
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.is_empty()
     }
 
     pub fn user_meta(&self) -> &[u8] {
@@ -152,6 +158,35 @@ impl Value {
 
     pub fn encoded_size(&self) -> usize {
         self.user_meta_len as usize + self.val_len as usize + VALUE_PTR_OFF
+    }
+
+    pub fn is_deleted(&self) -> bool {
+        is_deleted(self.meta)
+    }
+}
+pub struct EmptyIterator;
+
+impl Iterator for EmptyIterator {
+    fn next(&mut self) {}
+
+    fn next_version(&mut self) -> bool {
+        false
+    }
+
+    fn rewind(&mut self) {}
+
+    fn seek(&mut self, _: &[u8]) {}
+
+    fn key(&self) -> &[u8] {
+        &[]
+    }
+
+    fn value(&self) -> Value {
+        Value::new()
+    }
+
+    fn valid(&self) -> bool {
+        false
     }
 }
 
@@ -176,6 +211,13 @@ pub enum Error {
 impl From<io::Error> for Error {
     #[inline]
     fn from(e: io::Error) -> Error {
+        Error::Io(e.to_string())
+    }
+}
+
+impl From<dfs::Error> for Error {
+    #[inline]
+    fn from(e: dfs::Error) -> Error {
         Error::Io(e.to_string())
     }
 }
@@ -220,5 +262,31 @@ impl LocalAddr {
 
     pub fn len(self) -> usize {
         (self.end - self.start) as usize
+    }
+}
+
+pub fn new_merge_iterator<'a>(mut iters: Vec<Box<dyn Iterator + 'a>>, reverse: bool) -> Box<dyn Iterator + 'a> {
+    match iters.len() {
+        0 => Box::new(EmptyIterator {}),
+        1 => iters.pop().unwrap(),
+        2 => {
+            let second_iter: Box<dyn Iterator + 'a> = iters.pop().unwrap();
+            let first_iter: Box<dyn Iterator + 'a> = iters.pop().unwrap();
+            let first: Box<super::MergeIteratorChild<'a>> = Box::new(super::MergeIteratorChild::new(true, first_iter));
+            let second = Box::new(super::MergeIteratorChild::new(false, second_iter));
+            let merge_iter = super::MergeIterator::new(first, second, reverse);
+            Box::new(merge_iter)
+        }
+        _ => {
+            let mid = iters.len() / 2;
+            let mut second = vec![];
+            for _ in 0..mid {
+                second.push(iters.pop().unwrap())
+            }
+            second.reverse();
+            let first_it = new_merge_iterator(iters, reverse);
+            let second_it = new_merge_iterator(second, reverse);
+            new_merge_iterator(vec![first_it, second_it], reverse)
+        }
     }
 }

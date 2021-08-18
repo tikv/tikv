@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use core::slice::{self};
-use std::mem;
+use std::{mem, slice};
 
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 use bytes::{BufMut, BytesMut, Bytes};
@@ -20,10 +19,21 @@ pub const MAGIC_NUMBER: u32 = 2940551257;
 pub const META_HAS_OLD: u8 = 1 << 1;
 pub const BLOCK_ADDR_SIZE: usize = mem::size_of::<BlockAddress>();
 
+#[derive(Clone, Copy)]
 pub struct TableBuilderOptions {
     pub block_size: usize,
     pub bloom_fpr: f64,
     pub max_table_size: usize,
+}
+
+impl Default for TableBuilderOptions {
+    fn default() -> Self {
+        Self {
+            block_size: 64 * 1024,
+            bloom_fpr: 0.01,
+            max_table_size: 16 * 1024 * 1024,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -153,7 +163,7 @@ impl Builder {
             + self.old_builder.block.size
     }
 
-    pub fn finish(&mut self, mut data_buf: BytesMut) -> BuildResult {
+    pub fn finish(&mut self, data_buf: &mut BytesMut) -> BuildResult {
         if self.block_builder.block.size > 0 {
             let last_key = self.block_builder.block.tmp_keys.get_last();
             self.biggest.extend_from_slice(last_key);
@@ -176,7 +186,7 @@ impl Builder {
         data_buf.extend_from_slice(self.old_builder.buf.as_slice());
         let old_index_section_size = self.old_builder.buf.len() as u32;
 
-        self.build_properties(&mut data_buf);
+        self.build_properties(data_buf);
 
         let mut footer = Footer::default();
         footer.old_data_offset = data_section_size;
@@ -190,7 +200,6 @@ impl Builder {
         data_buf.extend_from_slice(footer.marshal());
         BuildResult {
             id: self.fid,
-            file_data: data_buf.freeze(),
             smallest: self.smallest.clone(),
             biggest: self.biggest.clone(),
         }
@@ -209,6 +218,14 @@ impl Builder {
 
     pub fn is_empty(&self) -> bool {
         self.smallest.len() == 0
+    }
+
+    pub fn get_smallest(&self) -> &[u8] {
+        self.smallest.as_slice()
+    }
+
+    pub fn get_biggest(&self) -> &[u8] {
+        self.biggest.as_slice()
     }
 }
 
@@ -459,7 +476,6 @@ impl BlockAddress {
 
 pub struct BuildResult {
     pub id: u64,
-    pub file_data: Bytes,
     pub smallest: Vec<u8>,
     pub biggest: Vec<u8>,
 }

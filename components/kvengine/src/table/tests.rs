@@ -2,7 +2,7 @@
 
 use bytes::{Buf, Bytes};
 
-use crate::table::merge_iterator::new_merge_iterator;
+use crate::table::new_merge_iterator;
 
 use super::table::*;
 use rand::Rng;

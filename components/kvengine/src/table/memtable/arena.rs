@@ -2,6 +2,7 @@
 
 use byteorder::{ByteOrder, LittleEndian};
 use std::fmt::Display;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use std::{mem, ptr, slice};
 
@@ -66,7 +67,7 @@ impl ArenaAddr {
 const MB: u32 = 1024 * 1024;
 
 const BLOCK_SIZE_ARRAY: [u32; 32] = [
-    1 * MB,
+    64 * 1024, // Make the first arenea block small to save memory.
     1 * MB,
     1 * MB,
     1 * MB,
@@ -139,7 +140,7 @@ impl Arena {
         addr
     }
 
-    pub fn put_val(&self, buf: &[u8], entry: WriteBatchEntry) -> ArenaAddr {
+    pub fn put_val(&self, buf: &[u8], entry: &WriteBatchEntry) -> ArenaAddr {
         let size = entry.encoded_val_size();
         let addr = self.alloc(size as u32);
         let m_buf = self.get_mut_bytes(addr);
@@ -152,7 +153,7 @@ impl Arena {
         addr
     }
 
-    pub fn put_node(&self, height: usize, buf: &[u8], entry: WriteBatchEntry) -> &mut Node {
+    pub fn put_node(&self, height: usize, buf: &[u8], entry: &WriteBatchEntry) -> &mut Node {
         let node_size = mem::size_of::<Node>() - (MAX_HEIGHT - height) * 8;
         let node_addr = self.alloc(node_size as u32);
         let key_addr = self.put_key(entry.key(buf));
@@ -216,7 +217,7 @@ impl Arena {
         Value::decode(bin)
     }
 
-    fn put_val_node(&self, vn: ValueNode) -> ArenaAddr {
+    pub fn put_val_node(&self, vn: ValueNode) -> ArenaAddr {
         let mut addr = self.alloc(VALUE_NODE_SIZE as u32);
         vn.encode(self.get_mut_bytes(addr));
         addr.mark_value_node_addr();
@@ -278,12 +279,12 @@ impl ArenaBlock {
 
     pub fn alloc(&self, size: u32) -> u32 {
         // The returned addr should be aligned in 8 bytes.
-        let offset = (self.len.load(Ordering::SeqCst) + BLOCK_ALIGN) & ALIGN_MASK;
+        let offset = (self.len.load(Ordering::Acquire) + BLOCK_ALIGN) & ALIGN_MASK;
         let length = offset + size;
         if length > self.cap {
             return NULL_BLOCK_OFF;
         }
-        self.len.store(length as u32, Ordering::SeqCst);
+        self.len.store(length as u32, Ordering::Release);
         offset as u32
     }
 }

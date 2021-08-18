@@ -1,27 +1,25 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::table::*;
-use bytes::Bytes;
 use std::cmp::Ordering::*;
 use std::mem;
-use std::ptr::null;
 
-pub struct MergeIterator {
-    smaller: Box<MergeIteratorChild>,
-    bigger: Box<MergeIteratorChild>,
+pub struct MergeIterator<'a> {
+    smaller: Box<MergeIteratorChild<'a>>,
+    bigger: Box<MergeIteratorChild<'a>>,
     reverse: bool,
     same_key: bool,
 }
 
-struct MergeIteratorChild {
+pub(crate) struct MergeIteratorChild<'a> {
     is_first: bool,
     valid: bool,
-    iter: Box<dyn Iterator>,
+    iter: Box<dyn Iterator + 'a>,
     ver: u64,
 }
 
-impl MergeIteratorChild {
-    fn new(is_first: bool, iter: Box<dyn Iterator>) -> Self {
+impl<'a> MergeIteratorChild<'a> {
+    pub(crate) fn new(is_first: bool, iter: Box<dyn Iterator + 'a>) -> Self {
         MergeIteratorChild {
             is_first,
             valid: false,
@@ -38,7 +36,7 @@ impl MergeIteratorChild {
     }
 }
 
-impl Iterator for MergeIterator {
+impl Iterator for MergeIterator<'_> {
     fn next(&mut self) {
         self.smaller.iter.next();
         self.smaller.reset();
@@ -105,8 +103,8 @@ impl Iterator for MergeIterator {
     }
 }
 
-impl MergeIterator {
-    fn new(first: Box<MergeIteratorChild>, second: Box<MergeIteratorChild>, reverse: bool) -> Self {
+impl<'a> MergeIterator<'a> {
+    pub(crate) fn new(first: Box<MergeIteratorChild<'a>>, second: Box<MergeIteratorChild<'a>>, reverse: bool) -> Self {
         Self {
             smaller: first,
             bigger: second,
@@ -150,54 +148,3 @@ impl MergeIterator {
     }
 }
 
-pub fn new_merge_iterator(mut iters: Vec<Box<dyn Iterator>>, reverse: bool) -> Box<dyn Iterator> {
-    match iters.len() {
-        0 => Box::new(EmptyIterator {}),
-        1 => iters.pop().unwrap(),
-        2 => {
-            let second_iter = iters.pop().unwrap();
-            let first_iter = iters.pop().unwrap();
-            let first = Box::new(MergeIteratorChild::new(true, first_iter));
-            let second = Box::new(MergeIteratorChild::new(false, second_iter));
-            let merge_iter = MergeIterator::new(first, second, reverse);
-            Box::new(merge_iter)
-        }
-        _ => {
-            let mid = iters.len() / 2;
-            let mut second = vec![];
-            for _ in 0..mid {
-                second.push(iters.pop().unwrap())
-            }
-            second.reverse();
-            let first_it = new_merge_iterator(iters, reverse);
-            let second_it = new_merge_iterator(second, reverse);
-            new_merge_iterator(vec![first_it, second_it], reverse)
-        }
-    }
-}
-
-struct EmptyIterator;
-
-impl Iterator for EmptyIterator {
-    fn next(&mut self) {}
-
-    fn next_version(&mut self) -> bool {
-        false
-    }
-
-    fn rewind(&mut self) {}
-
-    fn seek(&mut self, _: &[u8]) {}
-
-    fn key(&self) -> &[u8] {
-        &[]
-    }
-
-    fn value(&self) -> Value {
-        Value::new()
-    }
-
-    fn valid(&self) -> bool {
-        false
-    }
-}

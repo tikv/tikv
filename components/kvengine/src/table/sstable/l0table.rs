@@ -1,16 +1,18 @@
+use std::sync::Arc;
+
 use byteorder::{ByteOrder, LittleEndian};
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
+use moka::sync::SegmentedCache;
 
-use crate::{NUM_CFS};
+use crate::{NUM_CFS, dfs, table::Value};
 
-use super::table_file::TableFile;
-use super::{SSTable, sstable};
+use super::*;
 use crate::table::table::Result;
 
 
 const L0_FOOTER_SIZE: usize = std::mem::size_of::<L0Footer>();
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct L0Footer {
     commit_ts: u64,
     num_cfs: u32,
@@ -33,18 +35,19 @@ impl L0Footer {
     }
 }
 
+#[derive(Clone)]
 pub struct L0Table {
     footer: L0Footer,
-    file: TableFile,
+    file: Arc<dyn dfs::File>,
     cfs:  [Option<sstable::SSTable>; NUM_CFS],
     cf_offs: [u32; NUM_CFS],
-    smallest_buf: BytesMut,
-    biggest_buf: BytesMut,
+    smallest: Bytes,
+    biggest: Bytes,
 }
 
 impl L0Table {
-    pub fn new(file: TableFile) -> Result<Self> {
-        let footer_off = file.size - L0_FOOTER_SIZE as u64;
+    pub fn new(file: Arc<dyn dfs::File>, cache: SegmentedCache<BlockCacheKey, Bytes>) -> Result<Self> {
+        let footer_off = file.size() - L0_FOOTER_SIZE as u64;
         let mut footer = L0Footer::default();
         let footer_buf = file.read(footer_off, L0_FOOTER_SIZE)?;
         footer.unmarshal(footer_buf.chunk());
@@ -65,66 +68,130 @@ impl L0Table {
             if cf_data.is_empty() {
                 continue;
             }
-            let mem_file = TableFile::new_in_mem(file.id, cf_data);
-            let tbl = sstable::SSTable::new(mem_file)?;
+            let mem_file = dfs::InMemFile::new(file.id(), cf_data);
+            let tbl = sstable::SSTable::new(Arc::new(mem_file), cache.clone())?;
             cfs[i] = Some(tbl)
         }
-
-        let mut l0 = Self {
+        let (smallest, biggest) = Self::compute_smallest_biggest(&cfs);
+        Ok(Self {
             footer,
             file,
             cfs,
             cf_offs,
-            smallest_buf: BytesMut::new(),
-            biggest_buf: BytesMut::new(),
-        };
-        l0.compute_smallest_biggest();
-        Ok(l0)
+            smallest,
+            biggest,
+        })
     }
 
-    fn compute_smallest_biggest(&mut self) {
+    fn compute_smallest_biggest(cfs: &[Option<SSTable>; NUM_CFS]) -> (Bytes, Bytes) {
+        let mut smallest_buf = BytesMut::new();
+        let mut biggest_buf = BytesMut::new();
         for i in 0..NUM_CFS {
-            if let Some(cf_tbl) = &self.cfs[i] {
+            if let Some(cf_tbl) = &cfs[i] {
                 let smallest = cf_tbl.smallest();
                 if smallest.len() > 0 {
-                    if self.smallest_buf.is_empty() || self.smallest_buf.chunk() < smallest {
-                        self.smallest_buf.truncate(0);
-                        self.smallest_buf.extend_from_slice(smallest);
+                    if smallest_buf.is_empty() || smallest_buf.chunk() < smallest {
+                        smallest_buf.truncate(0);
+                        smallest_buf.extend_from_slice(smallest);
                     }
                 }
                 let biggest = cf_tbl.biggest();
-                if biggest > self.biggest_buf.chunk() {
-                    self.biggest_buf.truncate(0);
-                    self.biggest_buf.extend_from_slice(biggest);
+                if biggest > biggest_buf.chunk() {
+                    biggest_buf.truncate(0);
+                    biggest_buf.extend_from_slice(biggest);
                 }
             }
         }
-        assert!(self.smallest_buf.len() > 0);
-        assert!(self.biggest_buf.len() > 0);
+        assert!(smallest_buf.len() > 0);
+        assert!(biggest_buf.len() > 0);
+        (smallest_buf.freeze(), biggest_buf.freeze())
     }
 
     pub fn id(&self) -> u64 {
-        self.file.id
+        self.file.id()
     }
 
-    pub fn get_cf(&self, cf: usize) -> Option<sstable::SSTable> {
-        self.cfs[cf].clone()
+    pub fn get_cf(&self, cf: usize) -> &Option<sstable::SSTable> {
+        &self.cfs[cf]
     }
 
     pub fn size(&self) -> u64 {
-        self.file.size
+        self.file.size()
     }
 
     pub fn smallest(&self) -> &[u8] {
-        self.smallest_buf.chunk()
+        self.smallest.chunk()
     }
 
     pub fn biggest(&self) -> &[u8] {
-        self.biggest_buf.chunk()
+        self.biggest.chunk()
     }
 
     pub fn commit_ts(&self) -> u64 {
         self.footer.commit_ts
     }
+}
 
+pub struct L0Builder {
+    builders: Vec<Builder>,
+    commit_ts: u64,
+}
+
+impl L0Builder {
+    pub fn new(fid: u64, opt: TableBuilderOptions, commit_ts: u64) -> Self {
+        let mut builders = Vec::with_capacity(4);
+        for i in 0..NUM_CFS {
+            let builder = Builder::new(fid, opt);
+            builders.push(builder);
+        }
+        Self {
+            builders,
+            commit_ts,
+        }
+    }
+
+    pub fn add(&mut self, cf: usize, key: &[u8], val: Value) {
+        self.builders[cf].add(key, val);
+    }
+
+    pub fn finish(&mut self) -> Bytes {
+        let mut estimated_size = 0;
+        for builder in &self.builders {
+            estimated_size += builder.estimated_size();
+        }
+        estimated_size += estimated_size / 32; // reserve a little extra buffer.
+        let mut buf = BytesMut::with_capacity(estimated_size);
+        let mut offsets = Vec::with_capacity(NUM_CFS);
+        for builder in &mut self.builders {
+            offsets.push(buf.len() as u32);
+            if !builder.is_empty() {
+                builder.finish(&mut buf);
+            }
+        }
+        for offset in offsets {
+            buf.put_u32_le(offset);
+        }
+        buf.put_u64_le(self.commit_ts);
+        buf.put_u32_le(NUM_CFS as u32);
+        buf.put_u32_le(MAGIC_NUMBER);
+        buf.freeze()
+    }
+
+    pub fn smallest_biggest(&self) -> (Bytes, Bytes) {
+        let mut smallest_buf = BytesMut::new();
+        let mut biggest_buf = BytesMut::new();
+        for builder in &self.builders {
+            if builder.get_smallest().len() > 0 {
+                if smallest_buf.len() == 0 || builder.get_smallest() < smallest_buf {
+                    smallest_buf.truncate(0);
+                    smallest_buf.extend_from_slice(builder.get_smallest());
+                }
+            }
+            if builder.get_biggest() > biggest_buf {
+                biggest_buf.truncate(0);
+                biggest_buf.extend_from_slice(builder.get_biggest());
+            }
+        }
+        (smallest_buf.freeze(), biggest_buf.freeze())
+    }
 }

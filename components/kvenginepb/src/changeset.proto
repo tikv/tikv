@@ -52,8 +52,7 @@ message Compaction {
 
 message Flush {
   L0Create l0Create = 1;
-  uint64 commitTS = 2;
-  Properties properties = 3;
+  Properties properties = 2;
 }
 
 message Snapshot {
@@ -63,7 +62,7 @@ message Snapshot {
   repeated bytes splitKeys = 4;
   repeated L0Create l0Creates = 5;
   repeated TableCreate tableCreates = 6;
-  uint64 commitTS = 7;
+  uint64 baseTS = 7;
 }
 
 message SplitFiles {

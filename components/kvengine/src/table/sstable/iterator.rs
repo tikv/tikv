@@ -2,7 +2,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes, BytesMut};
 use crate::table::{table, Iterator, LocalAddr, search, Value};
 
-use super::{SSTable, builder::META_HAS_OLD, sstable::SSTableInner};
+use super::{SSTable, builder::META_HAS_OLD};
 use std::{slice, sync::Arc};
 
 
@@ -178,8 +178,8 @@ enum IterState {
     OldVersioDone,
 }
 
-pub struct TableIterator {
-    t: Arc<SSTableInner>,
+pub struct TableIterator<'a> {
+    t: &'a SSTable,
     b_pos: i32,
     bi: BlockIterator,
     old_b_pos: i32,
@@ -190,8 +190,8 @@ pub struct TableIterator {
     iter_state: IterState,
 }
 
-impl TableIterator {
-    pub fn new(t: Arc<SSTableInner>, reversed: bool) -> Self {
+impl<'a> TableIterator<'a> {
+    pub fn new(t: &'a SSTable, reversed: bool) -> Self {
         Self {
             t,
             b_pos: 0,
@@ -426,7 +426,7 @@ impl TableIterator {
     }
 }
 
-impl table::Iterator for TableIterator {
+impl table::Iterator for TableIterator<'_> {
     fn next(&mut self) {
         if !self.reversed {
             self.next_inner();
@@ -505,16 +505,16 @@ impl table::Iterator for TableIterator {
 
 // ConcatIterator concatenates the sequences defined by several iterators.  (It only works with
 // TableIterators, probably just because it's faster to not be so generic.)
-pub struct ConcatIterator {
+pub struct ConcatIterator<'a> {
     idx: i32,
-    iter: Option<Box<TableIterator>>,
-    tables: Vec<SSTable>,
+    iter: Option<Box<TableIterator<'a>>>,
+    tables: &'a Vec<SSTable>,
     reversed: bool,
 }
 
 #[allow(dead_code)]
-impl ConcatIterator {
-    pub fn new(tables: Vec<SSTable>, reversed: bool) -> Self {
+impl<'a> ConcatIterator<'a> {
+    pub fn new(tables: &'a Vec<SSTable>, reversed: bool) -> Self {
         ConcatIterator {
             idx: -1,
             iter: None,
@@ -538,7 +538,7 @@ impl ConcatIterator {
     }
 }
 
-impl Iterator for ConcatIterator {
+impl Iterator for ConcatIterator<'_> {
     fn next(&mut self) {
         if self.iter.is_none() {
             return;
