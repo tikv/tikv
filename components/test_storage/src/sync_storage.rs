@@ -14,6 +14,7 @@ use tikv::storage::{
     test_util::GetConsumer, txn::commands, Engine, PerfStatisticsDelta, PrewriteResult, Result,
     Statistics, Storage, TestEngineBuilder, TestStorageBuilder, TxnStatus,
 };
+use tikv_util::time::Instant;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 
 /// A builder to build a `SyncTestStorage`.
@@ -142,7 +143,10 @@ impl<E: Engine> SyncTestStorage<E> {
             })
             .collect();
         let p = GetConsumer::new();
-        block_on(self.store.batch_get_command(requests, ids, p.clone()))?;
+        block_on(
+            self.store
+                .batch_get_command(requests, ids, p.clone(), Instant::now()),
+        )?;
         let mut values = vec![];
         for value in p.take_data().into_iter() {
             values.push(value?);
