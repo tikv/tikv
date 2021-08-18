@@ -2543,9 +2543,17 @@ mod tests {
         cache.append("", &[new_padded_entry(103, 4, 7)]);
         assert_eq!(rx.try_recv().unwrap(), 1);
 
-        // Test compact all entries and traced dangle entries.
+        // Test compact one traced dangle entry and one entry in cache.
+        cache.compact_to(102);
+        assert_eq!(rx.try_recv().unwrap(), -5);
+
+        // Test compact the last traced dangle entry.
+        cache.compact_to(103);
+        assert_eq!(rx.try_recv().unwrap(), -5);
+
+        // Test compact all entries.
         cache.compact_to(104);
-        assert_eq!(rx.try_recv().unwrap(), -17);
+        assert_eq!(rx.try_recv().unwrap(), -7);
 
         drop(cache);
         assert_eq!(rx.try_recv().unwrap(), -896);
