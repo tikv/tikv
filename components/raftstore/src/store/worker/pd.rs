@@ -1504,16 +1504,6 @@ where
                         duration.store_wait_duration.unwrap(),
                     ));
                 STORE_INSPECT_DURTION_HISTOGRAM
-                    .with_label_values(&["apply_process"])
-                    .observe(tikv_util::time::duration_to_sec(
-                        duration.apply_process_duration.unwrap(),
-                    ));
-                STORE_INSPECT_DURTION_HISTOGRAM
-                    .with_label_values(&["apply_wait"])
-                    .observe(tikv_util::time::duration_to_sec(
-                        duration.apply_wait_duration.unwrap(),
-                    ));
-                STORE_INSPECT_DURTION_HISTOGRAM
                     .with_label_values(&["all"])
                     .observe(tikv_util::time::duration_to_sec(dur));
                 if let Err(e) = scheduler.schedule(Task::UpdateSlowScore { id, duration }) {
