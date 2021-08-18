@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(test)]
+#![feature(bench_black_box)]
 
 use concurrency_manager::ConcurrencyManager;
 use criterion::*;
@@ -58,7 +59,7 @@ fn bench_point_check(c: &mut Criterion) {
             thread_rng().fill_bytes(&mut buf[..]);
             let key = Key::from_raw(&buf);
             let _ = cm.read_key_check(&key, |l| {
-                Lock::check_ts_conflict(Cow::Borrowed(&l), &key, 1.into(), &ts_set)
+                Lock::check_ts_conflict(Cow::Borrowed(l), &key, 1.into(), &ts_set)
             });
         })
     });
@@ -84,7 +85,7 @@ fn bench_range_check(c: &mut Criterion) {
             let end_key = Key::from_raw(&[start + 25]);
             // The key range is roughly 1/10 the key space.
             let _ = cm.read_range_check(Some(&start_key), Some(&end_key), |key, l| {
-                Lock::check_ts_conflict(Cow::Borrowed(&l), &key, 1.into(), &ts_set)
+                Lock::check_ts_conflict(Cow::Borrowed(l), key, 1.into(), &ts_set)
             });
         })
     });

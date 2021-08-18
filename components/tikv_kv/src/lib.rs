@@ -36,7 +36,7 @@ use engine_traits::{
 };
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp, KeyRange};
+use kvproto::kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange};
 use thiserror::Error;
 use tikv_util::{deadline::Deadline, escape};
 use txn_types::{Key, TimeStamp, TxnExtra, Value};
@@ -111,6 +111,7 @@ pub struct WriteData {
     pub modifies: Vec<Modify>,
     pub extra: TxnExtra,
     pub deadline: Option<Deadline>,
+    pub disk_full_opt: DiskFullOpt,
 }
 
 impl WriteData {
@@ -119,11 +120,28 @@ impl WriteData {
             modifies,
             extra,
             deadline: None,
+            disk_full_opt: DiskFullOpt::NotAllowedOnFull,
         }
     }
 
     pub fn from_modifies(modifies: Vec<Modify>) -> Self {
         Self::new(modifies, TxnExtra::default())
+    }
+
+    pub fn size(&self) -> usize {
+        let mut total = 0;
+        for m in &self.modifies {
+            total += m.size();
+        }
+        total
+    }
+
+    pub fn set_allowed_on_disk_almost_full(&mut self) {
+        self.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull
+    }
+
+    pub fn set_disk_full_opt(&mut self, level: DiskFullOpt) {
+        self.disk_full_opt = level
     }
 }
 

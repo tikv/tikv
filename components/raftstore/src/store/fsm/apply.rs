@@ -40,6 +40,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
+use prometheus::local::LocalHistogram;
 use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
 };
@@ -61,6 +62,7 @@ use crate::coprocessor::{
     Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
 };
 use crate::store::fsm::RaftPollerBuilder;
+use crate::store::local_metrics::RaftMetrics;
 use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
@@ -70,7 +72,7 @@ use crate::store::peer_storage::{
 };
 use crate::store::util::{
     admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner, ChangePeerI,
-    ConfChangeKind, KeysInfoFormatter,
+    ConfChangeKind, KeysInfoFormatter, LatencyInspector,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
 use crate::{bytes_capacity, store::QueryStats, Error, Result};
@@ -405,6 +407,11 @@ where
 
     /// The ssts waiting to be ingested in `write_to_db`.
     pending_ssts: Vec<SstMeta>,
+
+    /// The pending inspector should be cleaned at the end of a write.
+    pending_latency_inspect: Vec<LatencyInspector>,
+    apply_wait: LocalHistogram,
+    apply_time: LocalHistogram,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -455,6 +462,9 @@ where
             priority,
             yield_high_latency_operation: cfg.apply_batch_system.low_priority_pool_size > 0,
             pending_ssts: vec![],
+            pending_latency_inspect: vec![],
+            apply_wait: APPLY_TASK_WAIT_TIME_HISTOGRAM.local(),
+            apply_time: APPLY_TIME_HISTOGRAM.local(),
         }
     }
 
@@ -547,9 +557,18 @@ where
         self.host
             .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
         // Invoke callbacks
+        let now = Instant::now();
         for (cb, resp) in cb_batch.drain(..) {
-            cb.invoke_with_response(resp)
+            if let Some(times) = cb.get_request_times() {
+                for t in times {
+                    self.apply_time
+                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
+                }
+            }
+            cb.invoke_with_response(resp);
         }
+        self.apply_time.flush();
+        self.apply_wait.flush();
         need_sync
     }
 
@@ -613,6 +632,10 @@ where
 
         let elapsed = t.saturating_elapsed();
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(elapsed) as f64);
+        for mut inspector in std::mem::take(&mut self.pending_latency_inspect) {
+            inspector.record_apply_process(elapsed);
+            inspector.finish();
+        }
 
         slow_log!(
             elapsed,
@@ -1207,7 +1230,7 @@ where
         ctx.exec_ctx = Some(self.new_ctx(index, term));
         ctx.kv_wb_mut().set_save_point();
         let mut origin_epoch = None;
-        let (resp, exec_result) = match self.exec_raft_cmd(ctx, &req) {
+        let (resp, exec_result) = match self.exec_raft_cmd(ctx, req) {
             Ok(a) => {
                 ctx.kv_wb_mut().pop_save_point().unwrap();
                 if req.has_admin_request() {
@@ -1523,7 +1546,7 @@ where
                     "{} failed to write ({}, {}) to cf {}: {:?}",
                     self.tag,
                     log_wrappers::Value::key(&key),
-                    log_wrappers::Value::value(&value),
+                    log_wrappers::Value::value(value),
                     cf,
                     e
                 )
@@ -1534,7 +1557,7 @@ where
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
                     log_wrappers::Value::key(&key),
-                    log_wrappers::Value::value(&value),
+                    log_wrappers::Value::value(value),
                     e
                 );
             });
@@ -2846,6 +2869,23 @@ impl<S: Snapshot> Apply<S> {
             cbs,
         }
     }
+
+    pub fn on_schedule(&mut self, metrics: &RaftMetrics) {
+        let mut now = None;
+        for cb in &mut self.cbs {
+            if let Callback::Write { request_times, .. } = &mut cb.cb {
+                if now.is_none() {
+                    now = Some(Instant::now());
+                }
+                for t in request_times {
+                    metrics
+                        .store_time
+                        .observe(duration_to_sec(now.unwrap().saturating_duration_since(*t)));
+                    *t = now.unwrap();
+                }
+            }
+        }
+    }
 }
 
 pub struct Registration {
@@ -2874,6 +2914,7 @@ impl Registration {
     }
 }
 
+#[derive(Debug)]
 pub struct Proposal<S>
 where
     S: Snapshot,
@@ -3507,7 +3548,9 @@ where
         loop {
             match drainer.next() {
                 Some(Msg::Apply { start, apply }) => {
-                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.saturating_elapsed_secs());
+                    apply_ctx
+                        .apply_wait
+                        .observe(start.saturating_elapsed_secs());
                     // If there is any apply task, we change this fsm to normal-priority.
                     // When it meets a ingest-request or a delete-range request, it will change to
                     // low-priority.
@@ -3588,16 +3631,35 @@ where
     }
 }
 
-pub struct ControlMsg;
+pub enum ControlMsg {
+    LatencyInspect {
+        send_time: Instant,
+        inspector: LatencyInspector,
+    },
+}
 
-pub struct ControlFsm;
+pub struct ControlFsm {
+    receiver: Receiver<ControlMsg>,
+    stopped: bool,
+}
+
+impl ControlFsm {
+    fn new() -> (LooseBoundedSender<ControlMsg>, Box<ControlFsm>) {
+        let (tx, rx) = loose_bounded(std::usize::MAX);
+        let fsm = Box::new(ControlFsm {
+            stopped: false,
+            receiver: rx,
+        });
+        (tx, fsm)
+    }
+}
 
 impl Fsm for ControlFsm {
     type Message = ControlMsg;
 
     #[inline]
     fn is_stopped(&self) -> bool {
-        true
+        self.stopped
     }
 }
 
@@ -3636,9 +3698,28 @@ where
         self.apply_ctx.perf_context.start_observe();
     }
 
-    /// There is no control fsm in apply poller.
-    fn handle_control(&mut self, _: &mut ControlFsm) -> Option<usize> {
-        unimplemented!()
+    fn handle_control(&mut self, control: &mut ControlFsm) -> Option<usize> {
+        loop {
+            match control.receiver.try_recv() {
+                Ok(ControlMsg::LatencyInspect {
+                    send_time,
+                    mut inspector,
+                }) => {
+                    if self.apply_ctx.timer.is_none() {
+                        self.apply_ctx.timer = Some(Instant::now_coarse());
+                    }
+                    inspector.record_apply_wait(send_time.saturating_elapsed());
+                    self.apply_ctx.pending_latency_inspect.push(inspector);
+                }
+                Err(TryRecvError::Empty) => {
+                    return Some(0);
+                }
+                Err(TryRecvError::Disconnected) => {
+                    control.stopped = true;
+                    return Some(0);
+                }
+            }
+        }
     }
 
     fn handle_normal(&mut self, normal: &mut ApplyFsm<EK>) -> Option<usize> {
@@ -3954,9 +4035,9 @@ impl<EK: KvEngine> ApplyBatchSystem<EK> {
 pub fn create_apply_batch_system<EK: KvEngine>(
     cfg: &Config,
 ) -> (ApplyRouter<EK>, ApplyBatchSystem<EK>) {
-    let (tx, _) = loose_bounded(usize::MAX);
+    let (control_tx, control_fsm) = ControlFsm::new();
     let (router, system) =
-        batch_system::create_system(&cfg.apply_batch_system, tx, Box::new(ControlFsm));
+        batch_system::create_system(&cfg.apply_batch_system, control_tx, control_fsm);
     (ApplyRouter { router }, ApplyBatchSystem { system })
 }
 

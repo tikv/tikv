@@ -10,6 +10,7 @@ define_error_codes!(
     READ_INDEX_NOT_READY => ("ReadIndexNotReady", "", ""),
     ENTRY_TOO_LARGE => ("EntryTooLarge", "", ""),
     NOT_LEADER => ("NotLeader", "", ""),
+    DISK_FULL => ("DiskFull", "", ""),
     STORE_NOT_MATCH => ("StoreNotMatch", "", ""),
     REGION_NOT_FOUND => ("RegionNotFound", "", ""),
     REGION_NOT_INITIALIZED => ("RegionNotInitialized", "", ""),
@@ -36,6 +37,8 @@ impl ErrorCodeExt for errorpb::Error {
     fn error_code(&self) -> ErrorCode {
         if self.has_not_leader() {
             NOT_LEADER
+        } else if self.has_disk_full() {
+            DISK_FULL
         } else if self.has_region_not_found() {
             REGION_NOT_FOUND
         } else if self.has_key_not_in_region() {

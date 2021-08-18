@@ -69,6 +69,15 @@ pub trait Simulator {
         node_id: u64,
         request: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
+    ) -> Result<()> {
+        self.async_command_on_node_with_opts(node_id, request, cb, Default::default())
+    }
+    fn async_command_on_node_with_opts(
+        &self,
+        node_id: u64,
+        request: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+        opts: RaftCmdExtraOpts,
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
@@ -336,11 +345,11 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
-        Arc::clone(&self.engines[&node_id].kv.as_inner())
+        Arc::clone(self.engines[&node_id].kv.as_inner())
     }
 
     pub fn get_raft_engine(&self, node_id: u64) -> Arc<DB> {
-        Arc::clone(&self.engines[&node_id].raft.as_inner())
+        Arc::clone(self.engines[&node_id].raft.as_inner())
     }
 
     pub fn get_all_engines(&self, node_id: u64) -> Engines<RocksEngine, RocksEngine> {
@@ -603,11 +612,11 @@ impl<T: Simulator> Cluster<T> {
         for (&id, engines) in &self.engines {
             let peer = new_peer(id, id);
             region.mut_peers().push(peer.clone());
-            bootstrap_store(&engines, self.id(), id).unwrap();
+            bootstrap_store(engines, self.id(), id).unwrap();
         }
 
         for engines in self.engines.values() {
-            prepare_bootstrap_cluster(&engines, &region)?;
+            prepare_bootstrap_cluster(engines, &region)?;
         }
 
         self.bootstrap_cluster(region);
@@ -627,7 +636,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for (&id, engines) in &self.engines {
-            bootstrap_store(&engines, self.id(), id).unwrap();
+            bootstrap_store(engines, self.id(), id).unwrap();
         }
 
         let node_id = 1;
@@ -885,7 +894,15 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn async_request(
         &mut self,
+        req: RaftCmdRequest,
+    ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+        self.async_request_with_opts(req, Default::default())
+    }
+
+    pub fn async_request_with_opts(
+        &mut self,
         mut req: RaftCmdRequest,
+        opts: RaftCmdExtraOpts,
     ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
         let region_id = req.get_header().get_region_id();
         let leader = self.leader_of_region(region_id).unwrap();
@@ -893,7 +910,7 @@ impl<T: Simulator> Cluster<T> {
         let (cb, rx) = make_cb(&req);
         self.sim
             .rl()
-            .async_command_on_node(leader.get_store_id(), req, cb)?;
+            .async_command_on_node_with_opts(leader.get_store_id(), req, cb, opts)?;
         Ok(rx)
     }
 

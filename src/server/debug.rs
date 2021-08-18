@@ -21,8 +21,7 @@ use engine_rocks::RocksMvccProperties;
 use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, RaftEngine,
-    RangePropertiesExt, SeekKey, TableProperties, TablePropertiesCollection, TablePropertiesExt,
-    WriteBatch, WriteOptions,
+    RangePropertiesExt, SeekKey, WriteBatch, WriteOptions,
 };
 use engine_traits::{MvccProperties, Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::get_region_approximate_middle;
@@ -492,7 +491,7 @@ impl<ER: RaftEngine> Debugger<ER> {
 
         let check_value = |value: &[u8]| -> Result<()> {
             let mut local_state = RegionLocalState::default();
-            box_try!(local_state.merge_from_bytes(&value));
+            box_try!(local_state.merge_from_bytes(value));
 
             match local_state.get_state() {
                 PeerState::Tombstone | PeerState::Applying => return Ok(()),
@@ -538,7 +537,7 @@ impl<ER: RaftEngine> Debugger<ER> {
 
         while box_try!(iter.valid()) {
             let (key, value) = (iter.key(), iter.value());
-            if let Ok((region_id, suffix)) = keys::decode_region_meta_key(&key) {
+            if let Ok((region_id, suffix)) = keys::decode_region_meta_key(key) {
                 if suffix != keys::REGION_STATE_SUFFIX {
                     box_try!(iter.next());
                     continue;
@@ -778,13 +777,13 @@ impl<ER: RaftEngine> Debugger<ER> {
 fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
     let mut num_entries = 0; // number of Rocksdb K/V entries.
 
-    let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, &start, &end));
+    let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, start, end));
     let num_files = collection.len();
 
     let mut mvcc_properties = MvccProperties::new();
     for (_, v) in collection.iter() {
         num_entries += v.num_entries();
-        let mvcc = box_try!(RocksMvccProperties::decode(&v.user_collected_properties()));
+        let mvcc = box_try!(RocksMvccProperties::decode(v.user_collected_properties()));
         mvcc_properties.add(&mvcc);
     }
 
@@ -832,7 +831,7 @@ fn recover_mvcc_for_range(
     read_only: bool,
     thread_index: usize,
 ) -> Result<()> {
-    let mut mvcc_checker = box_try!(MvccChecker::new(Arc::clone(&db), start_key, end_key));
+    let mut mvcc_checker = box_try!(MvccChecker::new(Arc::clone(db), start_key, end_key));
     mvcc_checker.thread_index = thread_index;
 
     let wb_limit: usize = 10240;

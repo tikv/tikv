@@ -101,7 +101,7 @@ impl ImportFile {
                     format!("file already exists, {}", path.temp.to_str().unwrap()),
                 )));
             }
-            Box::new(manager.create_file(&path.temp)?)
+            Box::new(manager.create_file_for_write(&path.temp)?)
         } else {
             Box::new(
                 OpenOptions::new()
@@ -275,7 +275,7 @@ impl ImportDir {
         let path = self.join(meta)?;
         let path_str = path.save.to_str().unwrap();
         let env = get_env(key_manager, get_io_rate_limiter())?;
-        let sst_reader = RocksSstReader::open_with_env(&path_str, Some(env))?;
+        let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
         sst_reader.verify_checksum()?;
         // TODO: check the length and crc32 of ingested file.
         let meta_info = sst_reader.sst_meta_info(meta.to_owned());
