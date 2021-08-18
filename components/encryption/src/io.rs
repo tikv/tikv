@@ -255,6 +255,9 @@ impl<W: Write> EncrypterWriter<W> {
         iv: Iv,
     ) -> Result<EncrypterWriter<W>> {
         crate::verify_encryption_config(method, key)?;
+        if method == EncryptionMethod::Plaintext {
+            return Err(box_err!("unexpected Plaintext encryption method"));
+        }
         let (cipher, crypter) = create_aes_ctr_crypter(method, key, Mode::Encrypt, iv)?;
         let block_size = cipher.block_size();
         Ok(EncrypterWriter {
@@ -308,8 +311,7 @@ impl<W: Write> Write for EncrypterWriter<W> {
             ));
         }
         let writer = self.writer.as_mut().unwrap();
-        writer.write_all(&self.crypter_buffer[0..bytes])?;
-        Ok(bytes)
+        writer.write(&self.crypter_buffer[0..bytes])
     }
 
     fn flush(&mut self) -> IoResult<()> {
@@ -355,17 +357,17 @@ mod tests {
         let ivs = [
             Iv::new_ctr(),
             // Iv overflow
-            Iv::from_slice(&(|| {
+            Iv::from_slice(&{
                 let mut v = vec![0; 16];
                 BigEndian::write_u128(&mut v, u128::MAX);
                 v
-            })())
+            })
             .unwrap(),
-            Iv::from_slice(&(|| {
+            Iv::from_slice(&{
                 let mut v = vec![0; 16];
                 BigEndian::write_u64(&mut v[8..16], u64::MAX);
                 v
-            })())
+            })
             .unwrap(),
         ];
         for method in methods {
@@ -408,6 +410,7 @@ mod tests {
     #[test]
     fn test_encrypt_then_decrypt_plaintext() {
         let methods = [
+            EncryptionMethod::Plaintext,
             EncryptionMethod::Aes128Ctr,
             EncryptionMethod::Aes192Ctr,
             EncryptionMethod::Aes256Ctr,
