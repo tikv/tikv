@@ -1546,7 +1546,7 @@ mod tests {
             MemoryQuota::new(std::usize::MAX),
         );
 
-        // Modify min_ts_interval and hibernate_regions_compatible.
+        // Modify min_ts_interval.
         {
             let mut updated_cfg = cfg.clone();
             {
