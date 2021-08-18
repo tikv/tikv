@@ -2705,6 +2705,7 @@ pub enum Module {
     Gc,
     Split,
     Unknown(String),
+    CDC,
 }
 
 impl From<&str> for Module {
