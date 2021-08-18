@@ -596,7 +596,9 @@ where
                         // Avoid to merge requests with different `DiskFullOpt`s into one,
                         // so that normal writes can be rejected when proposing if the
                         // store's disk is full.
-                        && cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull
+                        && ((self.ctx.self_disk_usage == DiskUsage::Normal
+                            && !self.fsm.peer.disk_full_peers.majority())
+                            || cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull)
                     {
                         self.fsm.batch_req_builder.add(cmd, req_size);
                         if self.fsm.batch_req_builder.should_finish() {
@@ -1305,6 +1307,10 @@ where
     }
 
     fn handle_reported_disk_usage(&mut self, msg: &RaftMessage) {
+        // Mocked
+        if matches!(msg.disk_usage, DiskUsage::Normal) {
+            return;
+        }
         let store_id = msg.get_from_peer().get_store_id();
         let peer_id = msg.get_from_peer().get_id();
         let refill_disk_usages = if matches!(msg.disk_usage, DiskUsage::Normal) {

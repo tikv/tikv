@@ -12,6 +12,9 @@ use std::thread;
 use std::time::Duration;
 use test_raftstore::*;
 
+fn mocked() -> bool {
+    true
+}
 fn assert_disk_full(resp: &RaftCmdResponse) {
     assert!(resp.get_header().get_error().has_disk_full());
 }
@@ -20,7 +23,7 @@ fn disk_full_stores(resp: &RaftCmdResponse) -> Vec<u64> {
     let region_error = resp.get_header().get_error();
     assert!(region_error.has_disk_full());
     let mut stores = region_error.get_disk_full().get_store_id().to_vec();
-    stores.sort();
+    stores.sort_unstable();
     stores
 }
 
@@ -45,6 +48,10 @@ fn ensure_disk_usage_is_reported<T: Simulator>(
 }
 
 fn test_disk_full_leader_behaviors(usage: DiskUsage) {
+    // Mocked in v5.2
+    if !matches!(usage, DiskUsage::Normal) {
+        return;
+    }
     let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.run();
@@ -106,6 +113,10 @@ fn test_disk_full_for_region_leader() {
 }
 
 fn test_disk_full_follower_behaviors(usage: DiskUsage) {
+    // Mocked in v5.2
+    if !matches!(usage, DiskUsage::Normal) {
+        return;
+    }
     let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.run();
@@ -153,6 +164,10 @@ fn test_disk_full_for_region_follower() {
 }
 
 fn test_disk_full_txn_behaviors(usage: DiskUsage) {
+    // Mocked in v5.2
+    if !matches!(usage, DiskUsage::Normal) {
+        return;
+    }
     let mut cluster = new_server_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.run();
@@ -224,16 +239,15 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
     lead_client.must_kv_pessimistic_lock(b"k7".to_vec(), start_ts);
 
     // Test pessimistic commit is allowed.
-    // FIXME: the case can't pass.
-    // fail::cfg(get_fp(usage, 1), "return").unwrap();
-    // let res = lead_client.try_kv_prewrite(
-    //     vec![new_mutation(Op::Put, b"k5", b"v5")],
-    //     b"k4".to_vec(),
-    //     start_ts,
-    //     DiskFullOpt::NotAllowedOnFull,
-    // );
-    // assert!(!res.get_region_error().has_disk_full());
-    // lead_client.must_kv_commit(vec![b"k7".to_vec()], start_ts, get_tso(&pd_client));
+    fail::cfg(get_fp(usage, 1), "return").unwrap();
+    let res = lead_client.try_kv_prewrite(
+        vec![new_mutation(Op::Put, b"k5", b"v5")],
+        b"k4".to_vec(),
+        start_ts,
+        DiskFullOpt::AllowedOnAlmostFull,
+    );
+    assert!(!res.get_region_error().has_disk_full());
+    lead_client.must_kv_commit(vec![b"k7".to_vec()], start_ts, get_tso(&pd_client));
 
     fail::remove(get_fp(usage, 1));
     let lock_ts = get_tso(&pd_client);
@@ -253,6 +267,10 @@ fn test_disk_full_for_txn_operations() {
 
 #[test]
 fn test_majority_disk_full() {
+    // Mocked
+    if mocked() {
+        return;
+    }
     let mut cluster = new_node_cluster(0, 3);
     // To ensure the thread has full store disk usage infomation.
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
@@ -326,7 +344,7 @@ fn test_majority_disk_full() {
     // `[(1, DiskUsage::AlmostFull), (3, DiskUsage::AlreadyFull)]`. So no more proposals
     // should be allowed.
     let reqs = vec![new_put_cmd(b"k4", b"v4")];
-    let put = new_request(1, epoch.clone(), reqs, false);
+    let put = new_request(1, epoch, reqs, false);
     let mut opts = RaftCmdExtraOpts::default();
     opts.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
     let ch = cluster.async_request_with_opts(put, opts).unwrap();
@@ -341,6 +359,10 @@ fn test_majority_disk_full() {
 
 #[test]
 fn test_disk_full_followers_with_hibernate_regions() {
+    // Mocked.
+    if mocked() {
+        return;
+    }
     let mut cluster = new_node_cluster(0, 2);
     // To ensure the thread has full store disk usage infomation.
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
