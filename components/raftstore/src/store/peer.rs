@@ -571,6 +571,7 @@ where
     unpersisted_readies: VecDeque<UnpersistedReady>,
     /// The message count in `unpersisted_readies` for memory caculation.
     unpersisted_message_count: usize,
+    /// The last known persisted number.
     persisted_number: u64,
     /// The context of applying snapshot.
     snap_ctx: Option<SnapshotContext>,
@@ -900,7 +901,10 @@ where
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
         kv_wb.write_opt(&write_opts)?;
+
+        ctx.perf_context.start_observe();
         ctx.engines.raft.consume(&mut raft_wb, true)?;
+        ctx.perf_context.report_metrics();
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data

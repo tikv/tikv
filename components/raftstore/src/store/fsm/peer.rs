@@ -2067,7 +2067,7 @@ where
         self.fsm.peer.pending_remove = true;
 
         if self.fsm.peer.has_unpersisted_ready() {
-            // The destroy must be destroyed if there are some unpersisted readies.
+            // The destroy must be delayed if there are some unpersisted readies.
             // Otherwise there is a race of writting kv db and raft db between here
             // and write worker.
             assert_eq!(self.fsm.delayed_destroy, None);
