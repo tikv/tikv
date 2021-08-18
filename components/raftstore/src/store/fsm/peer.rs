@@ -760,7 +760,7 @@ where
                 msg.to = peer_id;
                 msg.from = self.fsm.peer.peer_id();
 
-                let raft_msg = self.fsm.peer.switch_to_raft_msg(&self.ctx, vec![msg]);
+                let raft_msg = self.fsm.peer.switch_to_raft_msg(self.ctx, vec![msg]);
                 self.fsm.peer.send_raft_msg(&mut self.ctx, raft_msg);
             }
         }
@@ -2132,7 +2132,6 @@ where
             );
         }
         let is_initialized = self.fsm.peer.is_initialized();
-        self.ctx.perf_context.start_observe();
         if let Err(e) = self.fsm.peer.destroy(self.ctx, merged_by_target) {
             // If not panic here, the peer will be recreated in the next restart,
             // then it will be gc again. But if some overlap region is created
@@ -2140,7 +2139,6 @@ where
             // data too.
             panic!("{} destroy err {:?}", self.fsm.peer.tag, e);
         }
-        self.ctx.perf_context.report_metrics();
 
         // Some places use `force_send().unwrap()` if the StoreMeta lock is held.
         // So in here, it's necessary to held the StoreMeta lock when closing the router.
