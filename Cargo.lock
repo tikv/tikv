@@ -439,6 +439,7 @@ version = "0.0.1"
 dependencies = [
  "bitflags",
  "criterion",
+ "configuration",
  "crossbeam",
  "engine",
  "engine_rocks",

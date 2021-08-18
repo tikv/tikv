@@ -14,6 +14,7 @@ extern crate tikv_util;
 extern crate matches;
 
 mod channel;
+mod config;
 mod delegate;
 mod endpoint;
 mod errors;
@@ -22,6 +23,7 @@ mod observer;
 mod service;
 
 pub use channel::{recv_timeout, MemoryQuota};
+pub use config::CdcConfigManager;
 pub use endpoint::{Endpoint, OldValueStats, Task, Validate};
 pub use errors::{Error, Result};
 pub use observer::CdcObserver;
