@@ -849,13 +849,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                     .observe(rows as f64);
 
                                 if ok {
-                                    // consume the quota only when write succeeds.
+                                    // consume the quota only when write succeeds, otherwise failed write requests may exhaust
+                                    // the quota and other write requests would be in long delay.
                                     if sched.inner.flow_controller.enabled() {
                                         if sched.inner.flow_controller.is_unlimited() {
                                             // no need to delay if unthrottled, just call consume to record write flow
                                             let _ = sched.inner.flow_controller.consume(write_size);
                                         } else {
-                                            // Control mutex is used to ensure there is only one request consuming the budget.
+                                            // Control mutex is used to ensure there is only one request consuming the quota.
                                             // The delay may exceed 1s, and the speed limit is changed every second.
                                             // If the speed of next second is larger than the one of first second,
                                             // without the mutex, the write flow can't throttled strictly.
@@ -874,10 +875,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         && !self.inner.flow_controller.is_unlimited()
                     {
                         let start = Instant::now_coarse();
-                        // Control mutex is used to ensure there is only one request consuming the budget.
-                        // The delay may exceed 1s, and the speed limit is changed every second.
-                        // If the speed of next second is larger than the one of first second,
-                        // without the mutex, the write flow can't throttled strictly.
+                        // Wait for the delay
                         let _guard = self.control_mutex.lock().await;
                         SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
                     }
