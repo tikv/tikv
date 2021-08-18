@@ -17,6 +17,7 @@ use file_system::File;
 use tikv_util::box_err;
 
 const AES_BLOCK_SIZE: usize = 16;
+const MAX_CRYPTER_READER_BUFFER_SIZE: usize = 1024;
 
 /// Encrypt content as data being read.
 pub struct EncrypterReader<R>(CrypterReader<R>);
@@ -146,19 +147,21 @@ impl<R> CrypterReader<R> {
 
     fn reserve_buffer(&mut self, size: usize) {
         // OCrypter require the output buffer to have block_size extra bytes, or it will panic.
-        if size + self.block_size > self.crypter_buffer.len() {
-            self.crypter_buffer.resize(size + self.block_size, 0);
+        let target = std::cmp::min(size, MAX_CRYPTER_READER_BUFFER_SIZE) + self.block_size;
+        if target > self.crypter_buffer.len() {
+            self.crypter_buffer.resize(target, 0);
         }
     }
 
-    fn init_crypter(&mut self, offset: u64) -> IoResult<()> {
+    fn reset_crypter(&mut self, offset: u64) -> IoResult<()> {
         let mut iv = self.initial_iv;
-        iv.seek(offset / AES_BLOCK_SIZE as u64)?;
+        iv.add_offset(offset / AES_BLOCK_SIZE as u64)?;
         let (cipher, mut crypter) = create_aes_ctr_crypter(self.method, &self.key, self.mode, iv)?;
         // Pretend reading the partial block to properly update Iv.
         let partial_offset = offset as usize % AES_BLOCK_SIZE;
         let partial_block = vec![0; partial_offset];
         self.reserve_buffer(partial_offset);
+        debug_assert!(partial_offset <= MAX_CRYPTER_READER_BUFFER_SIZE);
         let crypter_count = crypter.update(&partial_block, &mut self.crypter_buffer)?;
         if crypter_count != partial_offset {
             return Err(IoError::new(
@@ -179,24 +182,28 @@ impl<R> CrypterReader<R> {
     // want to support other counter modes, this code needs to be updated.
     fn do_crypter(&mut self, buf: &mut [u8], read_count: usize) -> IoResult<usize> {
         if self.crypter.is_none() {
-            self.init_crypter(0)?;
+            self.reset_crypter(0)?;
         }
         self.reserve_buffer(read_count);
-        let crypter_count = self
-            .crypter
-            .as_mut()
-            .unwrap()
-            .update(&buf[..read_count], &mut self.crypter_buffer)?;
-        if read_count != crypter_count {
-            return Err(IoError::new(
-                ErrorKind::Other,
-                format!(
-                    "crypter output size mismatch, expect {} vs actual {}",
-                    read_count, crypter_count,
-                ),
-            ));
+        let crypter = self.crypter.as_mut().unwrap();
+        let mut encrypted = 0;
+        while encrypted < read_count {
+            let target = std::cmp::min(read_count, MAX_CRYPTER_READER_BUFFER_SIZE + encrypted);
+            let crypter_count =
+                crypter.update(&buf[encrypted..target], &mut self.crypter_buffer)?;
+            if crypter_count != target - encrypted {
+                return Err(IoError::new(
+                    ErrorKind::Other,
+                    format!(
+                        "crypter output size mismatch, expect {} vs actual {}",
+                        target - encrypted,
+                        crypter_count,
+                    ),
+                ));
+            }
+            buf[encrypted..target].copy_from_slice(&self.crypter_buffer[..crypter_count]);
+            encrypted += crypter_count;
         }
-        buf[..read_count].copy_from_slice(&self.crypter_buffer[..read_count]);
         Ok(read_count)
     }
 }
@@ -215,7 +222,7 @@ impl<R: Seek> Seek for CrypterReader<R> {
     fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
         let offset = self.reader.seek(pos)?;
         if self.method != EncryptionMethod::Plaintext {
-            self.init_crypter(offset)?;
+            self.reset_crypter(offset)?;
         }
         Ok(offset)
     }
@@ -328,6 +335,7 @@ mod tests {
     use super::*;
 
     use crate::crypter;
+    use byteorder::{BigEndian, ByteOrder};
     use rand::{rngs::OsRng, RngCore};
 
     fn generate_data_key(method: EncryptionMethod) -> Vec<u8> {
@@ -338,47 +346,98 @@ mod tests {
     }
 
     #[test]
-    fn test_random_decrypt_encrypted_text() {
-        let method = EncryptionMethod::Aes256Ctr;
-        let key = generate_data_key(method);
-        let iv = Iv::new_ctr();
+    fn test_decrypt_encrypted_text() {
+        let methods = [
+            EncryptionMethod::Aes128Ctr,
+            EncryptionMethod::Aes192Ctr,
+            EncryptionMethod::Aes256Ctr,
+        ];
+        let ivs = [
+            Iv::new_ctr(),
+            // Iv overflow
+            Iv::from_slice(&(|| {
+                let mut v = vec![0; 16];
+                BigEndian::write_u128(&mut v, u128::MAX);
+                v
+            })())
+            .unwrap(),
+            Iv::from_slice(&(|| {
+                let mut v = vec![0; 16];
+                BigEndian::write_u64(&mut v[8..16], u64::MAX);
+                v
+            })())
+            .unwrap(),
+        ];
+        for method in methods {
+            for iv in ivs {
+                let key = generate_data_key(method);
 
-        let mut plaintext = vec![0; 1024];
-        OsRng.fill_bytes(&mut plaintext);
-        let buf = Vec::with_capacity(1024);
-        let mut encrypter = EncrypterWriter::new(buf, method, &key, iv).unwrap();
-        encrypter.write_all(&plaintext).unwrap();
+                let mut plaintext = vec![0; 1024];
+                OsRng.fill_bytes(&mut plaintext);
+                let buf = Vec::with_capacity(1024);
+                let mut encrypter = EncrypterWriter::new(buf, method, &key, iv).unwrap();
+                encrypter.write_all(&plaintext).unwrap();
 
-        let buf = std::io::Cursor::new(encrypter.finalize());
-        let mut decrypter = DecrypterReader::new(buf, method, &key, iv).unwrap();
-        let step = 7;
-        for i in 0..1024 / step {
-            let mut piece = vec![0; 8];
-            let offset = i * step;
-            decrypter.seek(SeekFrom::Start(offset as u64)).unwrap();
-            assert_eq!(decrypter.read(&mut piece).unwrap(), piece.len());
-            assert_eq!(piece, plaintext[offset..offset + piece.len()]);
+                let buf = std::io::Cursor::new(encrypter.finalize());
+                let mut decrypter = DecrypterReader::new(buf, method, &key, iv).unwrap();
+                let mut piece = vec![0; 5];
+                // Read the first two blocks randomly.
+                for i in 0..31 {
+                    assert_eq!(decrypter.seek(SeekFrom::Start(i as u64)).unwrap(), i as u64);
+                    assert_eq!(decrypter.read(&mut piece).unwrap(), piece.len());
+                    assert_eq!(piece, plaintext[i..i + piece.len()]);
+                }
+                // Read the rest of the data sequentially.
+                let mut cursor = 32;
+                assert_eq!(
+                    decrypter.seek(SeekFrom::Start(cursor as u64)).unwrap(),
+                    cursor as u64
+                );
+                while cursor + piece.len() <= plaintext.len() {
+                    assert_eq!(decrypter.read(&mut piece).unwrap(), piece.len());
+                    assert_eq!(piece, plaintext[cursor..cursor + piece.len()]);
+                    cursor += piece.len();
+                }
+                let tail = plaintext.len() - cursor;
+                assert_eq!(decrypter.read(&mut piece).unwrap(), tail);
+                assert_eq!(piece[..tail], plaintext[cursor..cursor + tail]);
+            }
         }
     }
 
     #[test]
-    fn test_random_encrypt_then_decrypt_plaintext() {
-        let method = EncryptionMethod::Aes256Ctr;
-        let key = generate_data_key(method);
-
-        let mut plaintext = vec![0; 1024];
+    fn test_encrypt_then_decrypt_plaintext() {
+        let methods = [
+            EncryptionMethod::Aes128Ctr,
+            EncryptionMethod::Aes192Ctr,
+            EncryptionMethod::Aes256Ctr,
+        ];
+        let mut plaintext = vec![0; 10240];
         OsRng.fill_bytes(&mut plaintext);
-        let readable_text = std::io::Cursor::new(plaintext.clone());
-
-        let (encrypter, iv) = EncrypterReader::new(readable_text, method, &key).unwrap();
-        let mut decrypter = DecrypterReader::new(encrypter, method, &key, iv).unwrap();
-        let step = 7;
-        for i in 0..1024 / step {
-            let mut piece = vec![0; 8];
-            let offset = i * step;
-            decrypter.seek(SeekFrom::Start(offset as u64)).unwrap();
-            assert_eq!(decrypter.read(&mut piece).unwrap(), piece.len());
-            assert_eq!(piece, plaintext[offset..offset + piece.len()]);
+        let offsets = [1024, 1024 + 1, 10240 - 1, 10240, 10240 + 1];
+        let sizes = [1024, 10240];
+        for method in methods {
+            let key = generate_data_key(method);
+            let readable_text = std::io::Cursor::new(plaintext.clone());
+            let (encrypter, iv) = EncrypterReader::new(readable_text, method, &key).unwrap();
+            let mut decrypter = DecrypterReader::new(encrypter, method, &key, iv).unwrap();
+            let mut piece = vec![0; 10240];
+            for offset in offsets {
+                for size in sizes {
+                    assert_eq!(
+                        decrypter.seek(SeekFrom::Start(offset as u64)).unwrap(),
+                        offset as u64
+                    );
+                    let actual_size = std::cmp::min(plaintext.len().saturating_sub(offset), size);
+                    assert_eq!(decrypter.read(&mut piece[..size]).unwrap(), actual_size);
+                    if actual_size > 0 {
+                        assert_eq!(
+                            piece[..actual_size],
+                            plaintext[offset..offset + actual_size]
+                        );
+                    }
+                }
+            }
         }
     }
 }

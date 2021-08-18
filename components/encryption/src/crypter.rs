@@ -120,24 +120,19 @@ impl Iv {
         }
     }
 
-    pub fn seek(&mut self, block_index: u64) -> Result<()> {
+    pub fn add_offset(&mut self, offset: u64) -> Result<()> {
         match self {
             Iv::Ctr(iv) => {
-                let mut high = BigEndian::read_u64(&iv[0..8]);
-                let low = BigEndian::read_u64(&iv[8..16]) + block_index;
-                if u64::MAX - block_index < low {
-                    high += 1;
-                }
-                BigEndian::write_u64(&mut iv[0..8], high);
-                BigEndian::write_u64(&mut iv[8..16], low);
+                let v = BigEndian::read_u128(iv);
+                BigEndian::write_u128(iv, v.wrapping_add(offset as u128));
                 Ok(())
             }
-            Iv::Gcm(_) => Err(box_err!("Seek is not supported for GCM mode")),
+            Iv::Gcm(_) => Err(box_err!("offset addition is not supported for GCM mode")),
         }
     }
 }
 
-// The length GCM tag must be 16 btyes.
+// The length GCM tag must be 16 bytes.
 const GCM_TAG_LEN: usize = 16;
 
 pub struct AesGcmTag([u8; GCM_TAG_LEN]);
