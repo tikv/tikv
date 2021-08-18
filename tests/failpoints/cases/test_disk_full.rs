@@ -12,6 +12,9 @@ use std::thread;
 use std::time::Duration;
 use test_raftstore::*;
 
+fn mocked() -> bool {
+    true
+}
 fn assert_disk_full(resp: &RaftCmdResponse) {
     assert!(resp.get_header().get_error().has_disk_full());
 }
@@ -45,6 +48,10 @@ fn ensure_disk_usage_is_reported<T: Simulator>(
 }
 
 fn test_disk_full_leader_behaviors(usage: DiskUsage) {
+    // Mocked in v5.2
+    if !matches!(usage, DiskUsage::Normal) {
+        return;
+    }
     let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.run();
@@ -106,6 +113,10 @@ fn test_disk_full_for_region_leader() {
 }
 
 fn test_disk_full_follower_behaviors(usage: DiskUsage) {
+    // Mocked in v5.2
+    if !matches!(usage, DiskUsage::Normal) {
+        return;
+    }
     let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.run();
@@ -153,6 +164,10 @@ fn test_disk_full_for_region_follower() {
 }
 
 fn test_disk_full_txn_behaviors(usage: DiskUsage) {
+    // Mocked in v5.2
+    if !matches!(usage, DiskUsage::Normal) {
+        return;
+    }
     let mut cluster = new_server_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.run();
@@ -252,6 +267,10 @@ fn test_disk_full_for_txn_operations() {
 
 #[test]
 fn test_majority_disk_full() {
+    // Mocked
+    if mocked() {
+        return;
+    }
     let mut cluster = new_node_cluster(0, 3);
     // To ensure the thread has full store disk usage infomation.
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
@@ -340,6 +359,10 @@ fn test_majority_disk_full() {
 
 #[test]
 fn test_disk_full_followers_with_hibernate_regions() {
+    // Mocked.
+    if mocked() {
+        return;
+    }
     let mut cluster = new_node_cluster(0, 2);
     // To ensure the thread has full store disk usage infomation.
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
