@@ -194,6 +194,12 @@ pub mod ctor {
         }
     }
 
+    impl Default for DBOptions {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     pub struct CFOptions<'a> {
         pub cf: &'a str,
         pub options: ColumnFamilyOptions,
@@ -288,6 +294,12 @@ pub mod ctor {
 
         pub fn get_no_table_properties(&self) -> bool {
             self.no_table_properties
+        }
+    }
+
+    impl Default for ColumnFamilyOptions {
+        fn default() -> Self {
+            Self::new()
         }
     }
 
