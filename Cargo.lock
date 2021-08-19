@@ -2227,7 +2227,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#72334ceb658740d2addae0c57b8156a46f7a8f19"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#dcc1f836a2ae7a7ee71b6aed8cd4107e04a4b829"
+>>>>>>> 81226c82d... Fix TiKV panic when enable Titan and upgrade from pre-5.0 version (#10775)
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2246,7 +2250,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#72334ceb658740d2addae0c57b8156a46f7a8f19"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#dcc1f836a2ae7a7ee71b6aed8cd4107e04a4b829"
+>>>>>>> 81226c82d... Fix TiKV panic when enable Titan and upgrade from pre-5.0 version (#10775)
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3856,7 +3864,11 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#72334ceb658740d2addae0c57b8156a46f7a8f19"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#dcc1f836a2ae7a7ee71b6aed8cd4107e04a4b829"
+>>>>>>> 81226c82d... Fix TiKV panic when enable Titan and upgrade from pre-5.0 version (#10775)
 dependencies = [
  "libc 0.2.86",
  "librocksdb_sys",
