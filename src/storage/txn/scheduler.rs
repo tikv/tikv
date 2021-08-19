@@ -827,12 +827,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
                     let sched = scheduler.clone();
                     let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
+                    let write_size = to_be_write.size();
                     // The callback to receive async results of write prepare from the storage engine.
-                    let engine_cb = Box::new(move |(_, result)| {
+                    let engine_cb = Box::new(move |(_, result): (_, EngineResult<()>)| {
                         sched_pool
                             .spawn(async move {
                                 fail_point!("scheduler_async_write_finish");
 
+                                let ok = result.is_ok();
                                 sched.on_write_finished(
                                     cid,
                                     pr,
@@ -845,25 +847,37 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                 KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
                                     .get(tag)
                                     .observe(rows as f64);
+
+                                if ok {
+                                    // consume the quota only when write succeeds, otherwise failed write requests may exhaust
+                                    // the quota and other write requests would be in long delay.
+                                    if sched.inner.flow_controller.enabled() {
+                                        if sched.inner.flow_controller.is_unlimited() {
+                                            // no need to delay if unthrottled, just call consume to record write flow
+                                            let _ = sched.inner.flow_controller.consume(write_size);
+                                        } else {
+                                            // Control mutex is used to ensure there is only one request consuming the quota.
+                                            // The delay may exceed 1s, and the speed limit is changed every second.
+                                            // If the speed of next second is larger than the one of first second,
+                                            // without the mutex, the write flow can't throttled strictly.
+                                            let _guard = sched.control_mutex.lock().await;
+                                            let delay =
+                                                sched.inner.flow_controller.consume(write_size);
+                                            delay.await;
+                                        }
+                                    }
+                                }
                             })
                             .unwrap()
                     });
 
-                    if self.inner.flow_controller.enabled() {
-                        if self.inner.flow_controller.is_unlimited() {
-                            // no need to delay if unthrottled, just call consume to record write flow
-                            let _ = self.inner.flow_controller.consume(to_be_write.size());
-                        } else {
-                            let start = Instant::now_coarse();
-                            // Control mutex is used to ensure there is only one request consuming the budget.
-                            // The delay may exceed 1s, and the speed limit is changed every second.
-                            // If the speed of next second is larger than the one of first second,
-                            // without the mutex, the write flow can't throttled strictly.
-                            let _guard = self.control_mutex.lock().await;
-                            let delay = self.inner.flow_controller.consume(to_be_write.size());
-                            delay.await;
-                            SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
-                        }
+                    if self.inner.flow_controller.enabled()
+                        && !self.inner.flow_controller.is_unlimited()
+                    {
+                        let start = Instant::now_coarse();
+                        // Wait for the delay
+                        let _guard = self.control_mutex.lock().await;
+                        SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
                     }
 
                     to_be_write.deadline = Some(deadline);
