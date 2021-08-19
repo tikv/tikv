@@ -16830,11 +16830,24 @@
             {
               "expr": "sum(rate(tikv_engine_event_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", db=\"$db\"}[1m])) by (type)",
               "format": "time_series",
+<<<<<<< HEAD
               "intervalFactor": 2,
               "legendFormat": "{{type}}",
               "metric": "tikv_engine_event_total",
               "refId": "B",
               "step": 10
+=======
+              "intervalFactor": 1,
+              "legendFormat": "{{type}}-{{status}}",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(delta(tikv_raftstore_clean_region_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "clean-region-by-{{type}}",
+              "refId": "B"
+>>>>>>> a9854fec7... raftstore: Fix delete by ingest cause too many L0 files (#9200)
             }
           ],
           "thresholds": [],
