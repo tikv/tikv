@@ -345,7 +345,15 @@ where
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
-        self.cleanup_overlap_ranges(&start_key, &end_key)?;
+        let overlap_ranges = self
+            .pending_delete_ranges
+            .drain_overlap_ranges(&start_key, &end_key);
+        if !overlap_ranges.is_empty() {
+            CLEAN_COUNTER_VEC
+                .with_label_values(&["overlap-with-apply"])
+                .inc();
+            self.cleanup_overlap_regions(overlap_ranges)?;
+        }
         self.delete_all_in_range(&[Range::new(&start_key, &end_key)])?;
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
@@ -453,14 +461,10 @@ where
     }
 
     /// Gets the overlapping ranges and cleans them up.
-    fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let overlap_ranges = self
-            .pending_delete_ranges
-            .drain_overlap_ranges(start_key, end_key);
-        if overlap_ranges.is_empty() {
-            return Ok(());
-        }
-        CLEAN_COUNTER_VEC.with_label_values(&["overlap"]).inc();
+    fn cleanup_overlap_regions(
+        &mut self,
+        overlap_ranges: Vec<(u64, Vec<u8>, Vec<u8>, u64)>,
+    ) -> Result<()> {
         let oldest_sequence = self
             .engine
             .get_oldest_snapshot_sequence_number()
@@ -493,21 +497,28 @@ where
 
     /// Inserts a new pending range, and it will be cleaned up with some delay.
     fn insert_pending_delete_range(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8]) {
-        if let Err(e) = self.cleanup_overlap_ranges(start_key, end_key) {
-            warn!("cleanup_overlap_ranges failed";
-                "region_id" => region_id,
-                "start_key" => log_wrappers::Value::key(start_key),
-                "end_key" => log_wrappers::Value::key(end_key),
-                "err" => %e,
-            );
-        } else {
-            info!("register deleting data in range";
-                "region_id" => region_id,
-                "start_key" => log_wrappers::Value::key(start_key),
-                "end_key" => log_wrappers::Value::key(end_key),
-            );
+        let overlap_ranges = self
+            .pending_delete_ranges
+            .drain_overlap_ranges(start_key, end_key);
+        if !overlap_ranges.is_empty() {
+            CLEAN_COUNTER_VEC
+                .with_label_values(&["overlap-with-destroy"])
+                .inc();
+            if let Err(e) = self.cleanup_overlap_regions(overlap_ranges) {
+                warn!("cleanup_overlap_ranges failed";
+                    "region_id" => region_id,
+                    "start_key" => log_wrappers::Value::key(start_key),
+                    "end_key" => log_wrappers::Value::key(end_key),
+                    "err" => %e,
+                );
+            } else {
+                info!("register deleting data in range";
+                    "region_id" => region_id,
+                    "start_key" => log_wrappers::Value::key(start_key),
+                    "end_key" => log_wrappers::Value::key(end_key),
+                );
+            }
         }
-
         let seq = self.engine.get_latest_sequence_number();
         self.pending_delete_ranges
             .insert(region_id, start_key, end_key, seq);
@@ -516,7 +527,9 @@ where
     /// Cleans up stale ranges.
     fn clean_stale_ranges(&mut self) {
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
-
+        if self.ingest_maybe_stall() {
+            return;
+        }
         let oldest_sequence = self
             .engine
             .get_oldest_snapshot_sequence_number()
@@ -529,7 +542,7 @@ where
         if cleanup_ranges.is_empty() {
             return;
         }
-        CLEAN_COUNTER_VEC.with_label_values(&["tick"]).inc_by(1);
+        CLEAN_COUNTER_VEC.with_label_values(&["destroy"]).inc_by(1);
         cleanup_ranges.sort_by(|a, b| a.1.cmp(&b.1));
         while cleanup_ranges.len() > CLEANUP_MAX_REGION_COUNT {
             cleanup_ranges.pop();
@@ -706,11 +719,7 @@ where
                 // there might be a coprocessor request related to this range
                 self.ctx
                     .insert_pending_delete_range(region_id, &start_key, &end_key);
-
-                // try to delete stale ranges if there are any
-                if !self.ctx.ingest_maybe_stall() {
-                    self.ctx.clean_stale_ranges();
-                }
+                self.ctx.clean_stale_ranges();
             }
         }
     }
@@ -729,9 +738,7 @@ where
         self.handle_pending_applies();
         self.clean_stale_tick += 1;
         if self.clean_stale_tick >= STALE_PEER_CHECK_TICK {
-            if !self.ctx.ingest_maybe_stall() {
-                self.ctx.clean_stale_ranges();
-            }
+            self.ctx.clean_stale_ranges();
             self.clean_stale_tick = 0;
         }
     }
