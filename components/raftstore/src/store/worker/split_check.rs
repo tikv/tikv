@@ -267,42 +267,20 @@ where
         end_key: &[u8],
     ) -> Result<Vec<Vec<u8>>> {
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
-        MergedIterator::<<E as Iterable>::Iterator>::new(
+        if let Ok(mut iter) = MergedIterator::<<E as Iterable>::Iterator>::new(
             &self.engine,
             LARGE_CFS,
             start_key,
             end_key,
             false,
-        )
-        .map(|mut iter| {
-            let mut size = 0;
-            let mut keys = 0;
+        ) {
             while let Some(e) = iter.next() {
                 if host.on_kv(region, &e) {
-                    return;
+                    break;
                 }
-                size += e.entry_size() as u64;
-                keys += 1;
             }
-
-            // if we scan the whole range, we can update approximate size and keys with accurate value.
-            info!(
-                "update approximate size and keys with accurate value";
-                "region_id" => region.get_id(),
-                "size" => size,
-                "keys" => keys,
-            );
-            let _ = self.router.send(
-                region.get_id(),
-                CasualMessage::RegionApproximateSize { size },
-            );
-            let _ = self.router.send(
-                region.get_id(),
-                CasualMessage::RegionApproximateKeys { keys },
-            );
-        })?;
+        }
         timer.observe_duration();
-
         Ok(host.split_keys())
     }
 
@@ -349,5 +327,38 @@ where
         split_keys,
         callback: Callback::None,
         source: source.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use engine_rocks::{RocksEngine, RocksEngineIterator};
+    use engine_traits::SyncMutable;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_merged_iterator() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().to_str().unwrap();
+        let db = engine_rocks::raw_util::new_engine(path, None, LARGE_CFS, None).unwrap();
+        let engine = RocksEngine::from_db(Arc::new(db));
+        for (i, x) in (b'a'..=b'f').enumerate() {
+            let mut key = [b'z', b'x'];
+            key[1] = x;
+            engine.put_cf(LARGE_CFS[i % 3], &key, b"value").unwrap();
+        }
+
+        let mut iter =
+            MergedIterator::<RocksEngineIterator>::new(&engine, LARGE_CFS, b"z", b"zz", true)
+                .unwrap();
+        for x in b'a'..=b'f' {
+            let entry = iter.next().unwrap();
+            let mut expected = [b'z', b'x'];
+            expected[1] = x;
+            println!("entry.key: {:?}, cf: {}", entry.key, entry.cf);
+            assert_eq!(entry.key, expected);
+        }
     }
 }
