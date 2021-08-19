@@ -31,8 +31,8 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{from_rocks_compression_type, get_env, FlowInfo, RocksEngine};
 use engine_traits::{
-    compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, MiscExt,
-    RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE, KvEngine,
+    compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, KvEngine,
+    MiscExt, RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -1051,8 +1051,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         fetcher: BytesFetcher,
         engines_info: Arc<EnginesResourceInfo>,
     ) {
-        let mut engine_metrics =
-            EngineMetricsManager::<RocksEngine, ER>::new(self.engines.as_ref().unwrap().engines.clone());
+        let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
+            self.engines.as_ref().unwrap().engines.clone(),
+        );
         let mut io_metrics = IOMetricsManager::new(fetcher);
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
