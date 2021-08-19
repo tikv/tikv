@@ -191,3 +191,9 @@ impl TableBuilder {
         }
     }
 }
+
+impl Default for TableBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -1389,10 +1389,20 @@ where
                     // A more recent read may happen on the old leader. So max ts should
                     // be updated after a peer becomes leader.
                     self.require_updating_max_ts(&ctx.pd_scheduler);
+
+                    if !ctx.store_disk_usages.is_empty() {
+                        self.refill_disk_full_peers(ctx);
+                        debug!(
+                            "become leader refills disk full peers to {:?}",
+                            self.disk_full_peers;
+                            "region_id" => self.region_id,
+                        );
+                    }
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
                     self.mut_store().cancel_generating_snap(None);
+                    self.clear_disk_full_peers(ctx);
                 }
                 _ => {}
             }
@@ -2319,17 +2329,22 @@ where
                 if self.check_disk_usages_before_propose(ctx, disk_full_opt, &mut stores) {
                     self.propose_normal(ctx, req)
                 } else {
-                    let errmsg = String::from("propose failed: disk full");
+                    let errmsg = format!(
+                        "propose failed: tikv disk full, cmd-disk_full_opt={:?}, leader-diskUsage={:?}",
+                        disk_full_opt, ctx.self_disk_usage
+                    );
                     Err(Error::DiskFull(stores, errmsg))
                 }
             }
             Ok(RequestPolicy::ProposeConfChange) => {
                 let mut stores = Vec::new();
-                let disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
                 if self.check_disk_usages_before_propose(ctx, disk_full_opt, &mut stores) {
                     self.propose_conf_change(ctx, &req)
                 } else {
-                    let errmsg = String::from("propose failed: disk full");
+                    let errmsg = format!(
+                        "propose failed: tikv disk full, cmd-disk_full_opt={:?}, leader-diskUsage={:?}",
+                        disk_full_opt, ctx.self_disk_usage
+                    );
                     Err(Error::DiskFull(stores, errmsg))
                 }
             }
@@ -3337,35 +3352,39 @@ where
         self.want_rollback_merge_peers.insert(peer_id);
     }
 
-    fn maybe_refill_disk_full_peers<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
-        if !self.disk_full_peers.any || !self.disk_full_peers.peers.is_empty() {
-            return;
+    pub fn clear_disk_full_peers<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+        let disk_full_peers = mem::take(&mut self.disk_full_peers);
+        let raft = &mut self.raft_group.raft;
+        for peer in disk_full_peers.peers.into_keys() {
+            raft.adjust_max_inflight_msgs(peer, ctx.cfg.raft_max_inflight_msgs);
         }
+    }
+
+    pub fn refill_disk_full_peers<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+        self.clear_disk_full_peers(ctx);
 
         // Collect disk full peers and all peers' `next_idx` to find a potential quorum.
         let peers_len = self.get_store().region().get_peers().len();
-        let mut disk_full_peers = HashSet::default();
+        let mut normal_peers = HashSet::default();
         let mut next_idxs = Vec::with_capacity(peers_len);
         for peer in self.get_store().region().get_peers() {
             let (peer_id, store_id) = (peer.get_id(), peer.get_store_id());
             let usage = ctx.store_disk_usages.get(&store_id);
-            if let Some(ref usage) = usage {
-                assert!(!matches!(usage, DiskUsage::Normal));
-                disk_full_peers.insert(peer_id);
+            if usage.is_none() {
+                // Always treat the leader itself as normal.
+                normal_peers.insert(peer_id);
             }
-            let raft = &self.raft_group.raft;
-            if let Some(pr) = raft.prs().get(peer_id) {
+            if let Some(pr) = self.raft_group.raft.prs().get(peer_id) {
                 next_idxs.push((peer_id, pr.next_idx, usage));
             }
         }
 
-        if disk_full_peers.is_empty() {
-            self.disk_full_peers = DiskFullPeers::default();
+        if normal_peers.len() == peers_len {
             return;
         }
 
         let raft = &mut self.raft_group.raft;
-        self.disk_full_peers.majority = raft.prs().has_quorum(&disk_full_peers);
+        self.disk_full_peers.majority = !raft.prs().has_quorum(&normal_peers);
         for &(peer, _, usage) in &next_idxs {
             if let Some(usage) = usage {
                 self.disk_full_peers.peers.insert(peer, (*usage, false));
@@ -3411,8 +3430,6 @@ where
         disk_full_opt: DiskFullOpt,
         disk_full_stores: &mut Vec<u64>,
     ) -> bool {
-        self.maybe_refill_disk_full_peers(ctx);
-
         // Propose can be rejected if the store itself's disk is full.
         let self_allowed = match disk_full_opt {
             DiskFullOpt::NotAllowedOnFull => matches!(ctx.self_disk_usage, DiskUsage::Normal),
@@ -3423,7 +3440,7 @@ where
             return false;
         }
 
-        if !self.disk_full_peers.any || !self.disk_full_peers.majority {
+        if self.disk_full_peers.is_empty() || !self.disk_full_peers.majority {
             return true;
         }
 
@@ -3434,17 +3451,31 @@ where
             return true;
         }
 
-        disk_full_stores.extend(ctx.store_disk_usages.keys());
+        disk_full_stores.extend(self.disk_full_peers.peers.keys());
         false
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct DiskFullPeers {
-    pub any: bool,
-    pub majority: bool,
+    majority: bool,
     // Indicates whether a peer can help to establish a quorum.
-    pub peers: HashMap<u64, (DiskUsage, bool)>,
+    peers: HashMap<u64, (DiskUsage, bool)>,
+}
+
+impl DiskFullPeers {
+    pub fn is_empty(&self) -> bool {
+        self.peers.is_empty()
+    }
+    pub fn majority(&self) -> bool {
+        self.majority
+    }
+    pub fn has(&self, peer_id: u64) -> bool {
+        !self.peers.is_empty() && self.peers.contains_key(&peer_id)
+    }
+    pub fn get(&self, peer_id: u64) -> Option<DiskUsage> {
+        self.peers.get(&peer_id).map(|x| x.0)
+    }
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -3571,10 +3602,11 @@ where
         let mut send_msg = self.prepare_raft_message();
         let ty = msg.get_type();
         debug!("send extra msg";
-        "region_id" => self.region_id,
-        "peer_id" => self.peer.get_id(),
-        "msg_type" => ?ty,
-        "to" => to.get_id());
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+            "msg_type" => ?ty,
+            "to" => to.get_id()
+        );
         send_msg.set_extra_msg(msg);
         send_msg.set_to_peer(to.clone());
         if let Err(e) = trans.send(send_msg) {
@@ -3619,6 +3651,7 @@ where
             "msg_type" => ?msg_type,
             "msg_size" => msg.compute_size(),
             "to" => to_peer_id,
+            "disk_usage" => ?send_msg.disk_usage,
         );
 
         send_msg.set_to_peer(to_peer);
