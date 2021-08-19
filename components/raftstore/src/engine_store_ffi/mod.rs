@@ -1,5 +1,5 @@
 #[allow(dead_code)]
-mod interfaces;
+pub mod interfaces;
 
 mod read_index_helper;
 
@@ -68,7 +68,7 @@ impl RaftStoreProxyPtr {
     unsafe fn as_ref(&self) -> &RaftStoreProxy {
         &*(self.inner as *const RaftStoreProxy)
     }
-    fn is_null(&self) -> bool {
+    pub fn is_null(&self) -> bool {
         self.inner == std::ptr::null()
     }
 }
@@ -384,6 +384,7 @@ impl RaftStoreProxyFFIHelper {
                 fn_next: Some(ffi_next),
                 fn_gc: Some(ffi_gc),
             },
+            fn_server_info: None,
         }
     }
 }
@@ -497,12 +498,12 @@ impl RaftCmdHeader {
     }
 }
 
-struct ProtoMsgBaseBuff {
+pub struct ProtoMsgBaseBuff {
     data: Vec<u8>,
 }
 
 impl ProtoMsgBaseBuff {
-    fn new<T: protobuf::Message>(msg: &T) -> Self {
+    pub fn new<T: protobuf::Message>(msg: &T) -> Self {
         ProtoMsgBaseBuff {
             data: msg.write_to_bytes().unwrap(),
         }
@@ -708,5 +709,9 @@ impl EngineStoreServerHelper {
 
     pub fn check_http_uri_available(&self, path: &str) -> bool {
         unsafe { (self.fn_check_http_uri_available.into_inner())(path.as_bytes().into()) != 0 }
+    }
+
+    pub fn set_server_info_resp(&self, res: BaseBuffView, ptr: RawVoidPtr) {
+        unsafe { (self.fn_set_server_info_resp.into_inner())(res, ptr) }
     }
 }

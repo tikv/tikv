@@ -11,6 +11,7 @@ pub mod memory;
 mod proxy;
 pub mod raft_engine_switch;
 mod server;
+mod util;
 
 fn proxy_version_info() -> String {
     let fallback = "Unknown (env var does not exist when building)";

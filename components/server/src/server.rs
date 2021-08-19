@@ -98,6 +98,7 @@ use tikv_util::{
 use tokio::runtime::Builder;
 
 use crate::raft_engine_switch::{check_and_dump_raft_db, check_and_dump_raft_engine};
+use crate::util::ffi_server_info;
 use crate::{memory::*, setup::*};
 use raftstore::engine_store_ffi::{
     get_engine_store_server_helper, EngineStoreServerStatus, RaftProxyStatus, RaftStoreProxy,
@@ -147,7 +148,11 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
                 )),
             };
 
-            let proxy_helper = RaftStoreProxyFFIHelper::new(&proxy);
+            let proxy_helper = {
+                let mut proxy_helper = RaftStoreProxyFFIHelper::new(&proxy);
+                proxy_helper.fn_server_info = Some(ffi_server_info);
+                proxy_helper
+            };
 
             info!("set raft-store proxy helper");
 

@@ -136,6 +136,8 @@ struct RaftStoreProxyFFIHelper {
   RawVoidPtr (*fn_handle_batch_read_index)(RaftStoreProxyPtr, CppStrVecView,
                                            uint64_t);
   SSTReaderInterfaces sst_reader_interfaces;
+
+  uint32_t (*fn_server_info)(RaftStoreProxyPtr, BaseBuffView, RawVoidPtr);
 };
 
 struct EngineStoreServerHelper {
@@ -170,5 +172,6 @@ struct EngineStoreServerHelper {
   void (*fn_gc_raw_cpp_ptr)(EngineStoreServerWrap *, RawVoidPtr, RawCppPtrType);
   RawVoidPtr (*fn_gen_batch_read_index_res)(uint64_t);
   void (*fn_insert_batch_read_index_resp)(RawVoidPtr, BaseBuffView, uint64_t);
+  void (*fn_set_server_info_resp)(BaseBuffView, RawVoidPtr);
 };
 }  // namespace DB

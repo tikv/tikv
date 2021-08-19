@@ -2,7 +2,7 @@
 
 mod batch;
 mod debug;
-mod diagnostics;
+pub mod diagnostics;
 mod kv;
 
 pub use self::debug::Service as DebugService;
