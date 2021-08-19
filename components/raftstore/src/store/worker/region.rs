@@ -511,14 +511,13 @@ where
                     "end_key" => log_wrappers::Value::key(end_key),
                     "err" => %e,
                 );
-            } else {
-                info!("register deleting data in range";
-                    "region_id" => region_id,
-                    "start_key" => log_wrappers::Value::key(start_key),
-                    "end_key" => log_wrappers::Value::key(end_key),
-                );
             }
         }
+        info!("register deleting data in range";
+            "region_id" => region_id,
+            "start_key" => log_wrappers::Value::key(start_key),
+            "end_key" => log_wrappers::Value::key(end_key),
+        );
         let seq = self.engine.get_latest_sequence_number();
         self.pending_delete_ranges
             .insert(region_id, start_key, end_key, seq);
@@ -974,7 +973,7 @@ mod tests {
         let (router, receiver) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
             engine.kv.clone(),
-            mgr.clone(),
+            mgr,
             0,
             true,
             CoprocessorHost::<KvTestEngine>::default(),
