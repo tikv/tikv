@@ -25,6 +25,12 @@ impl Split {
     }
 }
 
+impl Default for Split {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PdMocker for Split {
     fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         let mut holder = self.inner.lock().unwrap();
