@@ -2,7 +2,6 @@
 
 use std::cmp::PartialOrd;
 use std::collections::VecDeque;
-use std::f64::INFINITY;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
@@ -117,7 +116,7 @@ impl FlowController {
 
         Self {
             discard_ratio: Arc::new(AtomicU32::new(0)),
-            limiter: Arc::new(Limiter::new(INFINITY)),
+            limiter: Arc::new(Limiter::new(f64::INFINITY)),
             enabled: Arc::new(AtomicBool::new(false)),
             tx,
             handle: None,
@@ -129,7 +128,7 @@ impl FlowController {
         engine: E,
         flow_info_receiver: Receiver<FlowInfo>,
     ) -> Self {
-        let limiter = Arc::new(Limiter::new(INFINITY));
+        let limiter = Arc::new(Limiter::new(f64::INFINITY));
         let discard_ratio = Arc::new(AtomicU32::new(0));
         let checker = FlowChecker::new(config, engine, discard_ratio.clone(), limiter.clone());
         let (tx, rx) = mpsc::sync_channel(5);
@@ -174,7 +173,7 @@ impl FlowController {
     }
 
     pub fn is_unlimited(&self) -> bool {
-        self.limiter.speed_limit() == INFINITY
+        self.limiter.speed_limit() == f64::INFINITY
     }
 }
 
@@ -583,7 +582,7 @@ impl<E: KvEngine> FlowChecker<E> {
         }
         SCHED_WRITE_FLOW_GAUGE.set(0);
         SCHED_THROTTLE_FLOW_GAUGE.set(0);
-        self.limiter.set_speed_limit(INFINITY);
+        self.limiter.set_speed_limit(f64::INFINITY);
         SCHED_DISCARD_RATIO_GAUGE.set(0);
         self.discard_ratio.store(0, Ordering::Relaxed);
     }
@@ -718,31 +717,35 @@ impl<E: KvEngine> FlowChecker<E> {
         }
 
         let checker = self.cf_checkers.get_mut(cf).unwrap();
-        let is_throttled = self.limiter.speed_limit() != INFINITY;
+        let is_throttled = self.limiter.speed_limit() != f64::INFINITY;
         let should_throttle =
             checker.last_num_memtables.get_avg() > self.memtables_threshold as f64;
-        let throttle = if !is_throttled {
-            if should_throttle {
-                SCHED_THROTTLE_ACTION_COUNTER
-                    .with_label_values(&[cf, "memtable_init"])
-                    .inc();
-                checker.init_speed = true;
-                let x = self.write_flow_recorder.get_percentile_90();
-                if x == 0 { INFINITY } else { x as f64 }
+        let throttle = if !is_throttled && should_throttle {
+            SCHED_THROTTLE_ACTION_COUNTER
+                .with_label_values(&[cf, "memtable_init"])
+                .inc();
+            let x = self.write_flow_recorder.get_percentile_90();
+            if x == 0 {
+                f64::INFINITY
             } else {
-                INFINITY
+                checker.init_speed = true;
+                self.throttle_cf = Some(cf.to_string());
+                x as f64
             }
-        } else if !should_throttle
-            || checker.last_num_memtables.get_recent() < self.memtables_threshold
+        } else if is_throttled
+            && (!should_throttle
+                || checker.last_num_memtables.get_recent() < self.memtables_threshold)
         {
             // should not throttle memtable
-            checker.memtable_debt = 0.0;
             if checker.init_speed {
-                INFINITY
+                checker.init_speed = false;
+                f64::INFINITY
             } else {
-                self.limiter.speed_limit() + checker.memtable_debt * 1024.0 * 1024.0
+                let speed = self.limiter.speed_limit() + checker.memtable_debt * 1024.0 * 1024.0;
+                checker.memtable_debt = 0.0;
+                speed
             }
-        } else {
+        } else if is_throttled && should_throttle {
             // should throttle
             let diff = match checker.last_num_memtables.get_recent().cmp(&prev) {
                 std::cmp::Ordering::Greater => {
@@ -759,13 +762,15 @@ impl<E: KvEngine> FlowChecker<E> {
                 }
             };
             self.limiter.speed_limit() + diff * 1024.0 * 1024.0
+        } else {
+            f64::INFINITY
         };
 
         self.update_speed_limit(throttle);
     }
 
     fn tick_l0(&mut self) {
-        if self.limiter.speed_limit() != INFINITY {
+        if self.limiter.speed_limit() != f64::INFINITY {
             let cf = self.throttle_cf.as_ref().unwrap();
             let checker = self.cf_checkers.get_mut(cf).unwrap();
             if checker.last_num_l0_files <= self.l0_files_threshold {
@@ -773,22 +778,7 @@ impl<E: KvEngine> FlowChecker<E> {
                     .with_label_values(&[cf, "tick_spare"])
                     .inc();
 
-                let throttle = if checker.long_term_num_l0_files.get_avg()
-                    >= self.l0_files_threshold as f64 * 0.5
-                    || checker.long_term_num_l0_files.get_recent() as f64
-                        >= self.l0_files_threshold as f64 * 0.5
-                    || checker.last_num_l0_files_from_flush >= self.l0_files_threshold
-                {
-                    SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[cf, "keep_spare"])
-                        .inc();
-                    self.limiter.speed_limit()
-                } else {
-                    SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[cf, "up_spare"])
-                        .inc();
-                    self.limiter.speed_limit() * (1.0 + 5.0 * LIMIT_UP_PERCENT)
-                };
+                let throttle = self.limiter.speed_limit() * (1.0 + 5.0 * LIMIT_UP_PERCENT);
 
                 self.update_speed_limit(throttle)
             }
@@ -855,7 +845,7 @@ impl<E: KvEngine> FlowChecker<E> {
 
         let checker = self.cf_checkers.get_mut(&cf).unwrap();
 
-        let is_throttled = self.limiter.speed_limit() != INFINITY;
+        let is_throttled = self.limiter.speed_limit() != f64::INFINITY;
         let should_throttle = checker.last_num_l0_files > self.l0_files_threshold;
 
         let throttle = if !is_throttled && should_throttle {
@@ -866,7 +856,7 @@ impl<E: KvEngine> FlowChecker<E> {
             self.num_l0_for_last_update_target_flow = Some(checker.last_num_l0_files);
             self.l0_target_flow = checker.short_term_l0_production_flow.get_avg();
             let x = self.write_flow_recorder.get_percentile_90();
-            if x == 0 { INFINITY } else { x as f64 }
+            if x == 0 { f64::INFINITY } else { x as f64 }
         } else if is_throttled && should_throttle {
             // refresh down flow if last num l0 files
             if let Some(num_l0_for_last_update_target_flow) =
@@ -913,7 +903,7 @@ impl<E: KvEngine> FlowChecker<E> {
                 self.limiter.speed_limit() * (1.0 + LIMIT_UP_PERCENT)
             }
         } else {
-            INFINITY
+            f64::INFINITY
         };
 
         self.update_speed_limit(throttle)
@@ -926,9 +916,9 @@ impl<E: KvEngine> FlowChecker<E> {
         if throttle > MAX_THROTTLE_SPEED {
             self.throttle_cf = None;
             self.num_l0_for_last_update_target_flow = None;
-            throttle = INFINITY;
+            throttle = f64::INFINITY;
         }
-        SCHED_THROTTLE_FLOW_GAUGE.set(if throttle == INFINITY {
+        SCHED_THROTTLE_FLOW_GAUGE.set(if throttle == f64::INFINITY {
             0
         } else {
             throttle as i64
@@ -1049,10 +1039,10 @@ impl<E: KvEngine> FlowChecker<E> {
     }
 
     fn increase_speed_limit(&mut self, cf: String) {
-        let throttle = if self.limiter.speed_limit() == INFINITY {
+        let throttle = if self.limiter.speed_limit() == f64::INFINITY {
             self.throttle_cf = Some(cf);
             let x = self.write_flow_recorder.get_percentile_90();
-            if x == 0 { INFINITY } else { x as f64 }
+            if x == 0 { f64::INFINITY } else { x as f64 }
         } else {
             // Use PID algorithm to change the flow so up flow can be increased
             // rapidly when the target flow is quite larger than flush flow.
@@ -1075,10 +1065,10 @@ impl<E: KvEngine> FlowChecker<E> {
     }
 
     fn decrease_speed_limit(&mut self, cf: String) {
-        let throttle = if self.limiter.speed_limit() == INFINITY {
+        let throttle = if self.limiter.speed_limit() == f64::INFINITY {
             self.throttle_cf = Some(cf);
             let x = self.write_flow_recorder.get_percentile_90();
-            if x == 0 { INFINITY } else { x as f64 }
+            if x == 0 { f64::INFINITY } else { x as f64 }
         } else {
             self.limiter.speed_limit() * (1.0 - LIMIT_DOWN_PERCENT)
         };
@@ -1102,7 +1092,7 @@ mod tests {
         smoother.observe(5);
         smoother.observe(0);
 
-        assert_eq!(smoother.get_avg(), 2.8);
+        assert!((smoother.get_avg() - 2.8).abs() < f64::EPSILON);
         assert_eq!(smoother.get_recent(), 0);
         assert_eq!(smoother.get_max(), 5);
         assert_eq!(smoother.get_percentile_90(), 4);
@@ -1117,10 +1107,10 @@ mod tests {
         smoother.observe(4.0);
         smoother.observe(5.0);
         smoother.observe(9.0);
-        assert_eq!(smoother.get_avg(), 4.6);
-        assert_eq!(smoother.get_recent(), 9.0);
-        assert_eq!(smoother.get_max(), 9.0);
-        assert_eq!(smoother.get_percentile_90(), 5.0);
+        assert!((smoother.get_avg() - 4.6).abs() < f64::EPSILON);
+        assert!((smoother.get_recent() - 9.0).abs() < f64::EPSILON);
+        assert!((smoother.get_max() - 9.0).abs() < f64::EPSILON);
+        assert!((smoother.get_percentile_90() - 5.0).abs() < f64::EPSILON);
         assert_eq!(smoother.trend(), Trend::Increasing);
     }
 }

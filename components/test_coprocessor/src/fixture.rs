@@ -42,6 +42,12 @@ impl ProductTable {
     }
 }
 
+impl Default for ProductTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl std::ops::Deref for ProductTable {
     type Target = Table;
 

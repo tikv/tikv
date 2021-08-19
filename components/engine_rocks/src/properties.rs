@@ -94,6 +94,12 @@ impl UserProperties {
     }
 }
 
+impl Default for UserProperties {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DecodeProperties for UserProperties {
     fn decode(&self, k: &str) -> Result<&[u8]> {
         match self.0.get(k.as_bytes()) {

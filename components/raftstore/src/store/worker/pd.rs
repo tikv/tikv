@@ -14,6 +14,7 @@ use std::{cmp, io};
 use engine_traits::{KvEngine, RaftEngine, CF_RAFT};
 #[cfg(feature = "failpoints")]
 use fail::fail_point;
+use kvproto::kvrpcpb::DiskFullOpt;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
     SplitRequest,
@@ -35,8 +36,8 @@ use crate::store::worker::query_stats::QueryStats;
 use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
 use crate::store::{
-    Callback, CasualMessage, Config, PeerMsg, RaftCommand, RaftRouter, SnapManager, StoreInfo,
-    StoreMsg,
+    Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
+    SnapManager, StoreInfo, StoreMsg,
 };
 
 use collections::HashMap;
@@ -47,7 +48,6 @@ use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use protobuf::Message;
 use tikv_util::metrics::ThreadInfoStatistics;
-use tikv_util::sys::disk;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::topn::TopN;
@@ -709,7 +709,15 @@ where
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
-                    send_admin_request(&router, region_id, epoch, peer, req, callback)
+                    send_admin_request(
+                        &router,
+                        region_id,
+                        epoch,
+                        peer,
+                        req,
+                        callback,
+                        Default::default(),
+                    );
                 }
                 Err(e) => {
                     warn!("failed to ask split";
@@ -760,7 +768,15 @@ where
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
-                    send_admin_request(&router, region_id, epoch, peer, req, callback)
+                    send_admin_request(
+                        &router,
+                        region_id,
+                        epoch,
+                        peer,
+                        req,
+                        callback,
+                        Default::default(),
+                    );
                 }
                 // When rolling update, there might be some old version tikvs that don't support batch split in cluster.
                 // In this situation, PD version check would refuse `ask_batch_split`.
@@ -907,13 +923,6 @@ where
         let mut available = capacity.checked_sub(used_size).unwrap_or_default();
         // We only care about rocksdb SST file size, so we should check disk available here.
         available = cmp::min(available, disk_stats.available_space());
-        available = available
-            .checked_sub(disk::get_disk_reserved_space())
-            .unwrap_or_default();
-
-        if disk::is_disk_full() {
-            available = 0;
-        }
 
         if available == 0 {
             warn!("no available space");
@@ -1136,7 +1145,9 @@ where
                         change_peer.get_change_type(),
                         change_peer.take_peer(),
                     );
-                    send_admin_request(&router, region_id, epoch, peer, req, Callback::None);
+                    let mut extra_opts = RaftCmdExtraOpts::default();
+                    extra_opts.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
+                    send_admin_request(&router, region_id, epoch, peer, req, Callback::None, extra_opts);
                 } else if resp.has_change_peer_v2() {
                     PD_HEARTBEAT_COUNTER_VEC
                         .with_label_values(&["change peer"])
@@ -1150,7 +1161,7 @@ where
                         "kind" => ?ConfChangeKind::confchange_kind(change_peer_v2.get_changes().len()),
                     );
                     let req = new_change_peer_v2_request(change_peer_v2.take_changes().into());
-                    send_admin_request(&router, region_id, epoch, peer, req, Callback::None);
+                    send_admin_request(&router, region_id, epoch, peer, req, Callback::None, Default::default());
                 } else if resp.has_transfer_leader() {
                     PD_HEARTBEAT_COUNTER_VEC
                         .with_label_values(&["transfer leader"])
@@ -1164,7 +1175,7 @@ where
                         "to_peer" => ?transfer_leader.get_peer()
                     );
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
-                    send_admin_request(&router, region_id, epoch, peer, req, Callback::None);
+                    send_admin_request(&router, region_id, epoch, peer, req, Callback::None, Default::default());
                 } else if resp.has_split_region() {
                     PD_HEARTBEAT_COUNTER_VEC
                         .with_label_values(&["split region"])
@@ -1195,7 +1206,7 @@ where
                     let merge = resp.take_merge();
                     info!("try to merge"; "region_id" => region_id, "merge" => ?merge);
                     let req = new_merge_request(merge);
-                    send_admin_request(&router, region_id, epoch, peer, req, Callback::None)
+                    send_admin_request(&router, region_id, epoch, peer, req, Callback::None, Default::default());
                 } else {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
@@ -1556,16 +1567,6 @@ where
                         duration.store_wait_duration.unwrap(),
                     ));
                 STORE_INSPECT_DURTION_HISTOGRAM
-                    .with_label_values(&["apply_process"])
-                    .observe(tikv_util::time::duration_to_sec(
-                        duration.apply_process_duration.unwrap(),
-                    ));
-                STORE_INSPECT_DURTION_HISTOGRAM
-                    .with_label_values(&["apply_wait"])
-                    .observe(tikv_util::time::duration_to_sec(
-                        duration.apply_wait_duration.unwrap(),
-                    ));
-                STORE_INSPECT_DURTION_HISTOGRAM
                     .with_label_values(&["all"])
                     .observe(tikv_util::time::duration_to_sec(dur));
                 if let Err(e) = scheduler.schedule(Task::UpdateSlowScore { id, duration }) {
@@ -1670,6 +1671,7 @@ fn send_admin_request<EK, ER>(
     peer: metapb::Peer,
     request: AdminRequest,
     callback: Callback<EK::Snapshot>,
+    extra_opts: RaftCmdExtraOpts,
 ) where
     EK: KvEngine,
     ER: RaftEngine,
@@ -1680,10 +1682,10 @@ fn send_admin_request<EK, ER>(
     req.mut_header().set_region_id(region_id);
     req.mut_header().set_region_epoch(epoch);
     req.mut_header().set_peer(peer);
-
     req.set_admin_request(request);
 
-    if let Err(e) = router.send_raft_command(RaftCommand::new(req, callback)) {
+    let cmd = RaftCommand::new_ext(req, callback, extra_opts);
+    if let Err(e) = router.send_raft_command(cmd) {
         error!(
             "send request failed";
             "region_id" => region_id, "cmd_type" => ?cmd_type, "err" => ?e,

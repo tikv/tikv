@@ -332,7 +332,8 @@ impl ExternalStorage for EncryptedExternalStorage {
         speed_limiter: &Limiter,
     ) -> io::Result<()> {
         let mut input = self.read(storage_name);
-        let file_writer: &mut dyn Write = &mut self.key_manager.create_file(&restore_name)?;
+        let file_writer: &mut dyn Write =
+            &mut self.key_manager.create_file_for_write(&restore_name)?;
         let min_read_speed: usize = 8192;
         block_on_external_io(read_external_storage_into_file(
             &mut input,

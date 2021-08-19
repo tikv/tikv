@@ -59,7 +59,7 @@ impl MemoryQuota {
                 return false;
             }
             let new_in_use_bytes = in_use_bytes + bytes;
-            match self.in_use.compare_exchange(
+            match self.in_use.compare_exchange_weak(
                 in_use_bytes,
                 new_in_use_bytes,
                 Ordering::Acquire,
@@ -76,7 +76,7 @@ impl MemoryQuota {
         loop {
             // Saturating at the numeric bounds instead of overflowing.
             let new_in_use_bytes = in_use_bytes - std::cmp::min(bytes, in_use_bytes);
-            match self.in_use.compare_exchange(
+            match self.in_use.compare_exchange_weak(
                 in_use_bytes,
                 new_in_use_bytes,
                 Ordering::Acquire,
