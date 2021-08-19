@@ -9,6 +9,7 @@ use pd_client::REQUEST_RECONNECT_INTERVAL;
 use super::*;
 
 #[derive(Debug)]
+#[allow(clippy::new_without_default)]
 pub struct Retry {
     retry: usize,
     count: AtomicUsize,
@@ -33,12 +34,6 @@ impl Retry {
         // let's sleep awhile, so that client will update its connection.
         thread::sleep(REQUEST_RECONNECT_INTERVAL);
         false
-    }
-}
-
-impl Default for Retry {
-    fn default() -> Self {
-        Self::new(0)
     }
 }
 
