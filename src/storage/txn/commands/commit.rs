@@ -6,8 +6,8 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{MvccTxn, SnapshotReader};
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
-    WriteResult,
+    Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
+    WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::{commit, Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, Snapshot, TxnStatus};
@@ -38,7 +38,7 @@ impl CommandExt for Commit {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, mut context: WriteContext<'_, L>) -> Result<WriteResult> {
         if self.commit_ts <= self.lock_ts {
             return Err(Error::from(ErrorInner::InvalidTxnTso {
                 start_ts: self.lock_ts,
@@ -46,8 +46,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
             }));
         }
         let mut txn = MvccTxn::new(self.lock_ts, context.concurrency_manager);
-        let mut reader =
-            SnapshotReader::new(self.lock_ts, snapshot, !self.ctx.get_not_fill_cache());
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new(self.lock_ts, snapshot, !self.ctx.get_not_fill_cache()),
+            &mut context.statistics,
+        );
 
         let rows = self.keys.len();
         // Pessimistic txn needs key_hashes to wake up waiters
@@ -57,11 +59,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
         }
         released_locks.wake_up(context.lock_mgr);
 
-        context.statistics.add(&reader.take_statistics());
         let pr = ProcessResult::TxnStatus {
             txn_status: TxnStatus::committed(self.commit_ts),
         };
-        let write_data = WriteData::from_modifies(txn.into_modifies());
+        let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write: write_data,

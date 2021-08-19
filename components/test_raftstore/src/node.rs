@@ -34,7 +34,7 @@ use tikv::server::Node;
 use tikv::server::Result as ServerResult;
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
-use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker};
+use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker};
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
@@ -54,6 +54,12 @@ impl ChannelTransport {
                 routers: HashMap::default(),
             })),
         }
+    }
+}
+
+impl Default for ChannelTransport {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -129,6 +135,7 @@ pub struct NodeCluster {
     trans: ChannelTransport,
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient, RocksEngine>>,
+    snap_mgrs: HashMap<u64, SnapManager>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     #[allow(clippy::type_complexity)]
@@ -141,6 +148,7 @@ impl NodeCluster {
             trans: ChannelTransport::new(),
             pd_client,
             nodes: HashMap::default(),
+            snap_mgrs: HashMap::default(),
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
             post_create_coprocessor_host: None,
@@ -196,7 +204,7 @@ impl Simulator for NodeCluster {
         system: RaftBatchSystem<RocksEngine, RocksEngine>,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
-        let pd_worker = FutureWorker::new("test-pd-worker");
+        let pd_worker = LazyWorker::new("test-pd-worker");
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut raft_store = cfg.raft_store.clone();
@@ -222,6 +230,8 @@ impl Simulator for NodeCluster {
         {
             let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
             let snap_mgr = SnapManagerBuilder::default()
+                .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
+                .max_total_size(cfg.server.snap_max_total_size.0)
                 .encryption_key_manager(key_manager)
                 .build(tmp.path().to_str().unwrap());
             (snap_mgr, Some(tmp))
@@ -230,6 +240,8 @@ impl Simulator for NodeCluster {
             let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
             (snap_mgr.clone(), None)
         };
+
+        self.snap_mgrs.insert(node_id, snap_mgr.clone());
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
@@ -244,7 +256,7 @@ impl Simulator for NodeCluster {
 
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(dir, None).unwrap())
+            Arc::new(SSTImporter::new(&cfg.import, dir, None, false).unwrap())
         };
 
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
@@ -327,6 +339,10 @@ impl Simulator for NodeCluster {
             .to_owned()
     }
 
+    fn get_snap_mgr(&self, node_id: u64) -> &SnapManager {
+        self.snap_mgrs.get(&node_id).unwrap()
+    }
+
     fn stop_node(&mut self, node_id: u64) {
         if let Some(mut node) = self.nodes.remove(&node_id) {
             node.stop();
@@ -344,11 +360,12 @@ impl Simulator for NodeCluster {
         self.nodes.keys().cloned().collect()
     }
 
-    fn async_command_on_node(
+    fn async_command_on_node_with_opts(
         &self,
         node_id: u64,
         request: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
+        opts: RaftCmdExtraOpts,
     ) -> Result<()> {
         if !self
             .trans
@@ -370,7 +387,7 @@ impl Simulator for NodeCluster {
             .get(&node_id)
             .cloned()
             .unwrap();
-        router.send_command(request, cb)
+        router.send_command(request, cb, opts)
     }
 
     fn async_read(

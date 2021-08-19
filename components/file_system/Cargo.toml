@@ -22,18 +22,21 @@ fs2 = "0.4"
 lazy_static = "1.3"
 libc = "0.2"
 nix = "0.19"
+online_config = { path = "../online_config" }
 openssl = "0.10"
-prometheus = { version = "0.10", features = ["nightly"] }
-prometheus-static-metric = "0.4"
+parking_lot = "0.11"
+prometheus = { version = "0.12", features = ["nightly"] }
+prometheus-static-metric = "0.5"
+rand = "0.8"
+serde = "1.0"
 strum = { version = "0.20", features = ["derive"] }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
+tokio = { version = "1.5", features = ["time"] }
 
 [dev-dependencies]
-rand = "0.7"
 tempfile = "3.0"
 maligned = "0.2.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 bcc = { version = "0.0.30", optional = true }
-

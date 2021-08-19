@@ -2,21 +2,11 @@
 
 use crate::engine::PanicEngine;
 use crate::write_batch::PanicWriteBatch;
-use engine_traits::{Error, RaftEngine, RaftLogBatch, Result};
+use engine_traits::{Error, RaftEngine, RaftEngineReadOnly, RaftLogBatch, Result};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
 
-impl RaftEngine for PanicEngine {
-    type LogBatch = PanicWriteBatch;
-
-    fn log_batch(&self, capacity: usize) -> Self::LogBatch {
-        panic!()
-    }
-
-    fn sync(&self) -> Result<()> {
-        panic!()
-    }
-
+impl RaftEngineReadOnly for PanicEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
         panic!()
     }
@@ -33,6 +23,18 @@ impl RaftEngine for PanicEngine {
         max_size: Option<usize>,
         buf: &mut Vec<Entry>,
     ) -> Result<usize> {
+        panic!()
+    }
+}
+
+impl RaftEngine for PanicEngine {
+    type LogBatch = PanicWriteBatch;
+
+    fn log_batch(&self, capacity: usize) -> Self::LogBatch {
+        panic!()
+    }
+
+    fn sync(&self) -> Result<()> {
         panic!()
     }
 
@@ -90,6 +92,10 @@ impl RaftEngine for PanicEngine {
     fn dump_stats(&self) -> Result<String> {
         panic!()
     }
+
+    fn get_engine_size(&self) -> Result<u64> {
+        panic!()
+    }
 }
 
 impl RaftLogBatch for PanicWriteBatch {
@@ -105,7 +111,15 @@ impl RaftLogBatch for PanicWriteBatch {
         panic!()
     }
 
+    fn persist_size(&self) -> usize {
+        panic!()
+    }
+
     fn is_empty(&self) -> bool {
+        panic!()
+    }
+
+    fn merge(&mut self, _: Self) {
         panic!()
     }
 }

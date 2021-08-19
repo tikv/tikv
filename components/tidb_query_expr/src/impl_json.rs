@@ -9,6 +9,8 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::json::*;
 
+use serde::de::IgnoredAny;
+
 #[rpn_fn]
 #[inline]
 fn json_depth(arg: JsonRef) -> Result<Option<i64>> {
@@ -202,12 +204,16 @@ fn quote(bytes: BytesRef) -> Result<Option<Bytes>> {
     Ok(Some(result))
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn]
 #[inline]
-fn json_unquote(arg: Option<JsonRef>) -> Result<Option<Bytes>> {
-    arg.as_ref().map_or(Ok(None), |json_arg| {
-        Ok(Some(Bytes::from(json_arg.unquote()?)))
-    })
+fn json_unquote(arg: BytesRef) -> Result<Option<Bytes>> {
+    let tmp_str = std::str::from_utf8(arg)?;
+    let first_char = tmp_str.chars().next();
+    let last_char = tmp_str.chars().last();
+    if tmp_str.len() >= 2 && first_char == Some('"') && last_char == Some('"') {
+        let _: IgnoredAny = serde_json::from_str(tmp_str)?;
+    }
+    Ok(Some(Bytes::from(self::unquote_string(tmp_str)?)))
 }
 
 // Args should be like `(Option<JsonRef> , &[Option<BytesRef>])`.
@@ -221,9 +227,19 @@ fn valid_paths(expr: &tipb::Expr) -> Result<()> {
     let children = expr.get_children();
     super::function::validate_expr_return_type(&children[0], EvalType::Json)?;
     for child in children.iter().skip(1) {
-        super::function::validate_expr_return_type(&child, EvalType::Bytes)?;
+        super::function::validate_expr_return_type(child, EvalType::Bytes)?;
     }
     Ok(())
+}
+
+fn unquote_string(s: &str) -> Result<String> {
+    let first_char = s.chars().next();
+    let last_char = s.chars().last();
+    if s.len() >= 2 && first_char == Some('"') && last_char == Some('"') {
+        Ok(json_unquote::unquote_string(&s[1..s.len() - 1])?)
+    } else {
+        Ok(String::from(s))
+    }
 }
 
 #[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
@@ -303,10 +319,10 @@ fn parse_json_path_list(args: &[ScalarValueRef]) -> Result<Option<Vec<PathExpres
 fn parse_json_path(path: Option<BytesRef>) -> Result<Option<PathExpression>> {
     let json_path = match path {
         None => return Ok(None),
-        Some(p) => std::str::from_utf8(&p).map_err(tidb_query_datatype::codec::Error::from),
+        Some(p) => std::str::from_utf8(p).map_err(tidb_query_datatype::codec::Error::from),
     }?;
 
-    Ok(Some(parse_json_path_expr(&json_path)?))
+    Ok(Some(parse_json_path_expr(json_path)?))
 }
 
 #[cfg(test)]
@@ -533,13 +549,11 @@ mod tests {
         ];
 
         for (vargs, expected) in cases {
-            let vargs = vargs
+            let mut new_vargs: Vec<ScalarValue> = vec![];
+            for (key, value) in vargs
                 .into_iter()
                 .map(|(key, value)| (Bytes::from(key), value.map(|s| Json::from_str(s).unwrap())))
-                .collect::<Vec<_>>();
-
-            let mut new_vargs: Vec<ScalarValue> = vec![];
-            for (key, value) in vargs.into_iter() {
+            {
                 new_vargs.push(ScalarValue::from(key));
                 new_vargs.push(ScalarValue::from(value));
             }
@@ -619,34 +633,39 @@ mod tests {
     #[test]
     fn test_json_unquote() {
         let cases = vec![
-            (None, false, None),
-            (Some(r"a"), false, Some("a")),
-            (Some(r#""3""#), false, Some(r#""3""#)),
-            (Some(r#""3""#), true, Some(r#"3"#)),
-            (Some(r#"{"a":  "b"}"#), false, Some(r#"{"a":  "b"}"#)),
-            (Some(r#"{"a":  "b"}"#), true, Some(r#"{"a": "b"}"#)),
+            (None, None, true),
+            (Some(r#"""#), Some(r#"""#), true),
+            (Some(r"a"), Some("a"), true),
+            (Some(r#""3"#), Some(r#""3"#), true),
+            (Some(r#"{"a":  "b"}"#), Some(r#"{"a":  "b"}"#), true),
             (
-                Some(r#"hello,\"quoted string\",world"#),
-                false,
+                Some(r#""hello,\"quoted string\",world""#),
                 Some(r#"hello,"quoted string",world"#),
+                true,
             ),
+            (Some(r#"A中\\\"文B"#), Some(r#"A中\\\"文B"#), true),
+            (Some(r#""A中\\\"文B""#), Some(r#"A中\"文B"#), true),
+            (Some(r#""\u00E0A中\\\"文B""#), Some(r#"àA中\"文B"#), true),
+            (Some(r#""a""#), Some(r#"a"#), true),
+            (Some(r#"""a"""#), None, false),
+            (Some(r#""""a""""#), None, false),
         ];
 
-        for (arg, parse, expect_output) in cases {
-            let arg = arg.map(|input| {
-                if parse {
-                    input.parse().unwrap()
-                } else {
-                    Json::from_string(input.to_string()).unwrap()
-                }
-            });
-            let expect_output = expect_output.map(Bytes::from);
-
+        for (arg, expect, success) in cases {
+            let arg = arg.map(Bytes::from);
+            let expect = expect.map(Bytes::from);
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg.clone())
-                .evaluate(ScalarFuncSig::JsonUnquoteSig)
-                .unwrap();
-            assert_eq!(output, expect_output, "{:?}", arg);
+                .evaluate(ScalarFuncSig::JsonUnquoteSig);
+            match output {
+                Ok(s) => {
+                    assert_eq!(s, expect, "{:?}", arg);
+                    assert_eq!(success, true);
+                }
+                Err(_) => {
+                    assert_eq!(success, false);
+                }
+            }
         }
     }
 

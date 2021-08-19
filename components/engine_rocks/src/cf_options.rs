@@ -50,6 +50,10 @@ impl ColumnFamilyOptions for RocksColumnFamilyOptions {
         RocksColumnFamilyOptions::from_raw(RawCFOptions::new())
     }
 
+    fn get_max_write_buffer_number(&self) -> u32 {
+        self.0.get_max_write_buffer_number()
+    }
+
     fn get_level_zero_slowdown_writes_trigger(&self) -> u32 {
         self.0.get_level_zero_slowdown_writes_trigger()
     }
@@ -92,6 +96,10 @@ impl ColumnFamilyOptions for RocksColumnFamilyOptions {
 
     fn get_disable_auto_compactions(&self) -> bool {
         self.0.get_disable_auto_compactions()
+    }
+
+    fn get_disable_write_stall(&self) -> bool {
+        self.0.get_disable_write_stall()
     }
 
     fn set_sst_partitioner_factory<F: SstPartitionerFactory>(&mut self, factory: F) {

@@ -4,8 +4,8 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{MvccTxn, Result as MvccResult, SnapshotReader};
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
-    WriteResult,
+    Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
+    WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Result as StorageResult, Snapshot};
@@ -38,10 +38,16 @@ impl CommandExt for PessimisticRollback {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
     /// Delete any pessimistic lock with small for_update_ts belongs to this transaction.
-    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(
+        mut self,
+        snapshot: S,
+        mut context: WriteContext<'_, L>,
+    ) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
-        let mut reader =
-            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache());
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache()),
+            &mut context.statistics,
+        );
 
         let ctx = mem::take(&mut self.ctx);
         let keys = mem::take(&mut self.keys);
@@ -73,8 +79,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
         }
         released_locks.wake_up(context.lock_mgr);
 
-        context.statistics.add(&reader.take_statistics());
-        let write_data = WriteData::from_modifies(txn.into_modifies());
+        let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx,
             to_be_write: write_data,

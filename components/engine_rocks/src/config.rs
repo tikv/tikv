@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use configuration::ConfigValue;
+use online_config::ConfigValue;
 pub use rocksdb::PerfLevel;
 use rocksdb::{DBCompressionType, DBInfoLogLevel, DBTitanDBBlobRunMode};
 use serde::{Deserialize, Serialize};

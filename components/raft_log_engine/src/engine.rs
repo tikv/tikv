@@ -3,28 +3,36 @@
 use std::fs;
 use std::path::Path;
 
-use engine_traits::{CacheStats, RaftEngine, RaftLogBatch as RaftLogBatchTrait, Result};
+use engine_traits::{
+    CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, Result,
+};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
-use raft_engine::{EntryExt, Error as RaftEngineError, LogBatch, RaftLogEngine as RawRaftEngine};
+use raft_engine::{
+    Command, Error as RaftEngineError, LogBatch, MessageExt, RaftLogEngine as RawRaftEngine,
+};
 
 pub use raft_engine::{Config as RaftEngineConfig, RecoveryMode};
 
 #[derive(Clone)]
-pub struct EntryExtTyped;
+pub struct MessageExtTyped;
 
-impl EntryExt<Entry> for EntryExtTyped {
+impl MessageExt for MessageExtTyped {
+    type Entry = Entry;
+
     fn index(e: &Entry) -> u64 {
         e.index
     }
 }
 
 #[derive(Clone)]
-pub struct RaftLogEngine(RawRaftEngine<Entry, EntryExtTyped>);
+pub struct RaftLogEngine(RawRaftEngine<MessageExtTyped>);
 
 impl RaftLogEngine {
-    pub fn new(config: RaftEngineConfig) -> Self {
-        RaftLogEngine(RawRaftEngine::new(config))
+    pub fn new(config: RaftEngineConfig) -> Result<Self> {
+        Ok(RaftLogEngine(
+            RawRaftEngine::open(config).map_err(transfer_error)?,
+        ))
     }
 
     /// If path is not an empty directory, we say db exists.
@@ -35,10 +43,22 @@ impl RaftLogEngine {
         }
         fs::read_dir(&path).unwrap().next().is_some()
     }
+
+    pub fn raft_groups(&self) -> Vec<u64> {
+        self.0.raft_groups()
+    }
+
+    pub fn first_index(&self, raft_id: u64) -> Option<u64> {
+        self.0.first_index(raft_id)
+    }
+
+    pub fn last_index(&self, raft_id: u64) -> Option<u64> {
+        self.0.last_index(raft_id)
+    }
 }
 
 #[derive(Default)]
-pub struct RaftLogBatch(LogBatch<Entry, EntryExtTyped>);
+pub struct RaftLogBatch(LogBatch<MessageExtTyped>);
 
 const RAFT_LOG_STATE_KEY: &[u8] = b"R";
 
@@ -53,33 +73,29 @@ impl RaftLogBatchTrait for RaftLogBatch {
     }
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
-        box_try!(
-            self.0
-                .put_msg(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state)
-        );
-        Ok(())
+        self.0
+            .put_message(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state)
+            .map_err(transfer_error)
+    }
+
+    fn persist_size(&self) -> usize {
+        panic!("persist_size is not implemented for raft engine");
     }
 
     fn is_empty(&self) -> bool {
-        self.0.items.is_empty()
+        self.0.is_empty()
+    }
+
+    fn merge(&mut self, _: Self) {
+        panic!("merge is not implemented for raft engine");
     }
 }
 
-impl RaftEngine for RaftLogEngine {
-    type LogBatch = RaftLogBatch;
-
-    fn log_batch(&self, _capacity: usize) -> Self::LogBatch {
-        RaftLogBatch::default()
-    }
-
-    fn sync(&self) -> Result<()> {
-        box_try!(self.0.sync());
-        Ok(())
-    }
-
+impl RaftEngineReadOnly for RaftLogEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
-        let state = box_try!(self.0.get_msg(raft_group_id, RAFT_LOG_STATE_KEY));
-        Ok(state)
+        self.0
+            .get_message(raft_group_id, RAFT_LOG_STATE_KEY)
+            .map_err(transfer_error)
     }
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>> {
@@ -100,10 +116,21 @@ impl RaftEngine for RaftLogEngine {
             .fetch_entries_to(raft_group_id, begin, end, max_size, to)
             .map_err(transfer_error)
     }
+}
+
+impl RaftEngine for RaftLogEngine {
+    type LogBatch = RaftLogBatch;
+
+    fn log_batch(&self, _capacity: usize) -> Self::LogBatch {
+        RaftLogBatch::default()
+    }
+
+    fn sync(&self) -> Result<()> {
+        self.0.sync().map_err(transfer_error)
+    }
 
     fn consume(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize> {
-        let ret = box_try!(self.0.write(&mut batch.0, sync));
-        Ok(ret)
+        self.0.write(&mut batch.0, sync).map_err(transfer_error)
     }
 
     fn consume_and_shrink(
@@ -113,8 +140,7 @@ impl RaftEngine for RaftLogEngine {
         _: usize,
         _: usize,
     ) -> Result<usize> {
-        let ret = box_try!(self.0.write(&mut batch.0, sync));
-        Ok(ret)
+        self.0.write(&mut batch.0, sync).map_err(transfer_error)
     }
 
     fn clean(
@@ -123,20 +149,20 @@ impl RaftEngine for RaftLogEngine {
         _: &RaftLocalState,
         batch: &mut RaftLogBatch,
     ) -> Result<()> {
-        batch.0.clean_region(raft_group_id);
+        batch.0.add_command(raft_group_id, Command::Clean);
         Ok(())
     }
 
     fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize> {
         let mut batch = Self::LogBatch::default();
         batch.0.add_entries(raft_group_id, entries);
-        let ret = box_try!(self.0.write(&mut batch.0, false));
-        Ok(ret)
+        self.0.write(&mut batch.0, false).map_err(transfer_error)
     }
 
     fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
-        box_try!(self.0.put_msg(raft_group_id, RAFT_LOG_STATE_KEY, state));
-        Ok(())
+        self.0
+            .put_message(raft_group_id, RAFT_LOG_STATE_KEY, state)
+            .map_err(transfer_error)
     }
 
     fn gc(&self, raft_group_id: u64, _from: u64, to: u64) -> Result<usize> {
@@ -144,34 +170,30 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn purge_expired_files(&self) -> Result<Vec<u64>> {
-        let ret = box_try!(self.0.purge_expired_files());
-        Ok(ret)
+        self.0.purge_expired_files().map_err(transfer_error)
     }
 
     fn has_builtin_entry_cache(&self) -> bool {
-        true
+        false
     }
 
-    fn gc_entry_cache(&self, raft_group_id: u64, to: u64) {
-        self.0.compact_cache_to(raft_group_id, to)
-    }
+    fn gc_entry_cache(&self, _raft_group_id: u64, _to: u64) {}
+
     /// Flush current cache stats.
     fn flush_stats(&self) -> Option<CacheStats> {
-        let stat = self.0.flush_cache_stats();
-        Some(engine_traits::CacheStats {
-            hit: stat.hit,
-            miss: stat.miss,
-            cache_size: stat.cache_size,
-        })
+        None
     }
 
-    fn stop(&self) {
-        self.0.stop();
-    }
+    fn stop(&self) {}
 
     fn dump_stats(&self) -> Result<String> {
         // Raft engine won't dump anything.
         Ok("".to_owned())
+    }
+
+    fn get_engine_size(&self) -> Result<u64> {
+        //TODO impl this when RaftLogEngine is ready to go online.
+        Ok(0)
     }
 }
 

@@ -132,18 +132,58 @@ impl<K> Trace<K> {
     }
 }
 
-pub struct LruCache<K, V> {
+pub trait SizePolicy<K, V> {
+    fn current(&self) -> usize;
+    fn on_insert(&mut self, key: &K, value: &V);
+    fn on_remove(&mut self, key: &K, value: &V);
+    fn on_reset(&mut self, val: usize);
+}
+
+pub struct CountTracker(usize);
+
+impl<K, V> SizePolicy<K, V> for CountTracker {
+    fn current(&self) -> usize {
+        self.0
+    }
+
+    fn on_insert(&mut self, _: &K, _: &V) {
+        self.0 += 1;
+    }
+
+    fn on_remove(&mut self, _: &K, _: &V) {
+        self.0 -= 1;
+    }
+
+    fn on_reset(&mut self, val: usize) {
+        self.0 = val;
+    }
+}
+
+impl Default for CountTracker {
+    fn default() -> Self {
+        Self(0)
+    }
+}
+
+pub struct LruCache<K, V, T = CountTracker>
+where
+    T: SizePolicy<K, V>,
+{
     map: HashMap<K, ValueEntry<K, V>>,
     trace: Trace<K>,
     capacity: usize,
+    size_policy: T,
 }
 
-impl<K, V> LruCache<K, V> {
-    pub fn with_capacity(capacity: usize) -> LruCache<K, V> {
-        LruCache::with_capacity_and_sample(capacity, 0)
-    }
-
-    pub fn with_capacity_and_sample(mut capacity: usize, sample_mask: usize) -> LruCache<K, V> {
+impl<K, V, T> LruCache<K, V, T>
+where
+    T: SizePolicy<K, V>,
+{
+    pub fn with_capacity_sample_and_trace(
+        mut capacity: usize,
+        sample_mask: usize,
+        size_policy: T,
+    ) -> LruCache<K, V, T> {
         if capacity == 0 {
             capacity = 1;
         }
@@ -151,15 +191,21 @@ impl<K, V> LruCache<K, V> {
             map: HashMap::default(),
             trace: Trace::new(sample_mask),
             capacity,
+            size_policy,
         }
+    }
+
+    #[inline]
+    pub fn size(&self) -> usize {
+        self.size_policy.current()
     }
 
     #[inline]
     pub fn clear(&mut self) {
         self.map.clear();
         self.trace.clear();
+        self.size_policy.on_reset(0);
     }
-
     #[inline]
     pub fn capacity(&self) -> usize {
         self.capacity
@@ -170,33 +216,36 @@ impl<K, V> LruCache<K, V>
 where
     K: Eq + Hash + Clone + std::fmt::Debug,
 {
-    #[inline]
-    pub fn resize(&mut self, mut new_cap: usize) {
-        if new_cap == 0 {
-            new_cap = 1;
-        }
-        if new_cap < self.capacity && self.map.len() > new_cap {
-            for _ in new_cap..self.map.len() {
-                let key = self.trace.remove_tail();
-                self.map.remove(&key);
-            }
-            self.map.shrink_to_fit();
-        }
-        self.capacity = new_cap;
+    pub fn with_capacity(capacity: usize) -> LruCache<K, V> {
+        LruCache::with_capacity_and_sample(capacity, 0)
     }
 
+    pub fn with_capacity_and_sample(capacity: usize, sample_mask: usize) -> LruCache<K, V> {
+        Self::with_capacity_sample_and_trace(capacity, sample_mask, CountTracker::default())
+    }
+}
+
+impl<K, V, T> LruCache<K, V, T>
+where
+    K: Eq + Hash + Clone + std::fmt::Debug,
+    T: SizePolicy<K, V>,
+{
     #[inline]
     pub fn insert(&mut self, key: K, value: V) {
         let mut old_key = None;
-        let map_len = self.map.len();
+        let current_size = SizePolicy::<K, V>::current(&self.size_policy);
         match self.map.entry(key) {
             HashMapEntry::Occupied(mut e) => {
+                // TODO: evict entries if size exceeds capacity.
+                self.size_policy.on_remove(e.key(), &e.get().value);
+                self.size_policy.on_insert(e.key(), &value);
                 let mut entry = e.get_mut();
                 self.trace.promote(entry.record);
                 entry.value = value;
             }
             HashMapEntry::Vacant(v) => {
-                let record = if self.capacity == map_len {
+                let record = if self.capacity <= current_size {
+                    // TODO: evict not only one entry to fit capacity.
                     let res = self.trace.reuse_tail(v.key().clone());
                     old_key = Some(res.0);
                     res.1
@@ -204,11 +253,13 @@ where
                     self.trace.create(v.key().clone())
                 };
 
+                self.size_policy.on_insert(v.key(), &value);
                 v.insert(ValueEntry { value, record });
             }
         }
         if let Some(o) = old_key {
-            self.map.remove(&o);
+            let entry = self.map.remove(&o).unwrap();
+            self.size_policy.on_remove(&o, &entry.value);
         }
     }
 
@@ -216,6 +267,7 @@ where
     pub fn remove(&mut self, key: &K) -> Option<V> {
         if let Some(v) = self.map.remove(key) {
             self.trace.delete(v.record);
+            self.size_policy.on_remove(key, &v.value);
             return Some(v.value);
         }
         None
@@ -256,11 +308,36 @@ where
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
+
+    #[inline]
+    pub fn resize(&mut self, mut new_cap: usize) {
+        if new_cap == 0 {
+            new_cap = 1;
+        }
+        if new_cap < self.capacity && self.size() > new_cap {
+            while self.size() > new_cap {
+                let key = self.trace.remove_tail();
+                let entry = self.map.remove(&key).unwrap();
+                self.size_policy.on_remove(&key, &entry.value);
+            }
+            self.map.shrink_to_fit();
+        }
+        self.capacity = new_cap;
+    }
 }
 
-unsafe impl<K: Send, V: Send> Send for LruCache<K, V> {}
+unsafe impl<K, V, T> Send for LruCache<K, V, T>
+where
+    K: Send,
+    V: Send,
+    T: Send + SizePolicy<K, V>,
+{
+}
 
-impl<K, V> Drop for LruCache<K, V> {
+impl<K, V, T> Drop for LruCache<K, V, T>
+where
+    T: SizePolicy<K, V>,
+{
     fn drop(&mut self) {
         self.clear();
     }
@@ -449,6 +526,52 @@ mod tests {
         }
         for i in 0..10 {
             assert_eq!(map.get(&i), Some(&i));
+        }
+    }
+
+    struct TestTracker(usize);
+    impl SizePolicy<usize, Vec<u8>> for TestTracker {
+        fn current(&self) -> usize {
+            self.0
+        }
+
+        fn on_insert(&mut self, _: &usize, value: &Vec<u8>) {
+            let size = value.len();
+            self.0 += size;
+        }
+
+        fn on_remove(&mut self, _: &usize, value: &Vec<u8>) {
+            let size = value.len();
+            self.0 -= size;
+        }
+
+        fn on_reset(&mut self, val: usize) {
+            self.0 = val;
+        }
+    }
+
+    #[test]
+    fn test_tracker() {
+        let mut map = LruCache::with_capacity_sample_and_trace(10, 0, TestTracker(0));
+        for i in 0..10 {
+            map.insert(i, vec![b' ']);
+            assert_eq!(
+                SizePolicy::<usize, Vec<u8>>::current(&map.size_policy),
+                i + 1
+            )
+        }
+        for i in 0..10 {
+            assert_eq!(map.get(&i), Some(&vec![b' ']));
+        }
+        for i in 10..20 {
+            map.insert(i, vec![b' ']);
+            assert_eq!(SizePolicy::<usize, Vec<u8>>::current(&map.size_policy), 10)
+        }
+        for i in 0..10 {
+            assert_eq!(map.get(&i), None);
+        }
+        for i in 10..20 {
+            assert_eq!(map.get(&i), Some(&vec![b' ']));
         }
     }
 }

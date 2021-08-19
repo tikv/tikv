@@ -8,6 +8,7 @@ description = "Data type of a query engine to run TiDB pushed down executors"
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = [
+  "protobuf/bytes",
   "codec/protobuf-codec",
   "error_code/protobuf-codec",
   "kvproto/protobuf-codec",

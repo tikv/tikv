@@ -3,6 +3,7 @@
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{LockType, MvccTxn, SnapshotReader, TimeStamp, TxnCommitRecord};
+use crate::storage::txn::commands::ReaderWithStats;
 use crate::storage::txn::{
     actions::check_txn_status::{collapse_prev_rollback, make_rollback},
     commands::{
@@ -50,14 +51,16 @@ enum SecondaryLockStatus {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, mut context: WriteContext<'_, L>) -> Result<WriteResult> {
         // It is not allowed for commit to overwrite a protected rollback. So we update max_ts
         // to prevent this case from happening.
         context.concurrency_manager.update_max_ts(self.start_ts);
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
-        let mut reader =
-            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache());
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache()),
+            &mut context.statistics,
+        );
         let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
         let mut result = SecondaryLocksStatus::Locked(Vec::new());
 
@@ -140,9 +143,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             // One row is mutated only when a secondary lock is rolled back.
             rows = 1;
         }
-        context.statistics.add(&reader.take_statistics());
         let pr = ProcessResult::SecondaryLocksStatus { status: result };
-        let write_data = WriteData::from_modifies(txn.into_modifies());
+        let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write: write_data,

@@ -19,17 +19,16 @@
 //!
 //! ```no_run
 //! use coprocessor_plugin_api::*;
+//! use std::ops::Range;
 //!
 //! #[derive(Default)]
 //! struct MyPlugin;
 //!
 //! impl CoprocessorPlugin for MyPlugin {
-//!     fn name(&self) -> &'static str { "my-plugin" }
-//!
 //!     fn on_raw_coprocessor_request(
 //!         &self,
-//!         region: &Region,
-//!         request: &RawRequest,
+//!         ranges: Vec<Range<Key>>,
+//!         request: RawRequest,
 //!         storage: &dyn RawStorage,
 //!     ) -> Result<RawResponse, PluginError> {
 //!         Ok(vec![])
@@ -41,11 +40,13 @@
 
 #[doc(hidden)]
 pub mod allocator;
+#[doc(hidden)]
+pub mod util;
 
+mod errors;
 mod plugin_api;
 mod storage_api;
-mod util;
 
+pub use errors::*;
 pub use plugin_api::*;
 pub use storage_api::*;
-pub use util::*;

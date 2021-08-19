@@ -11,7 +11,6 @@ mod timestamp;
 mod types;
 mod write;
 
-use std::fmt;
 use std::io;
 
 pub use lock::{Lock, LockType};
@@ -51,29 +50,13 @@ impl ErrorInner {
     }
 }
 
-pub struct Error(pub Box<ErrorInner>);
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct Error(#[from] pub Box<ErrorInner>);
 
 impl Error {
     pub fn maybe_clone(&self) -> Option<Error> {
         self.0.maybe_clone().map(Error::from)
-    }
-}
-
-impl fmt::Debug for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.0, f)
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        std::error::Error::source(&self.0)
     }
 }
 

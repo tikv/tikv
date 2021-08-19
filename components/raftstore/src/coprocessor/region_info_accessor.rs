@@ -98,7 +98,7 @@ impl Display for RegionInfoQuery {
         match self {
             RegionInfoQuery::RaftStoreEvent(e) => write!(f, "RaftStoreEvent({:?})", e),
             RegionInfoQuery::SeekRegion { from, .. } => {
-                write!(f, "SeekRegion(from: {})", log_wrappers::Value::key(&from))
+                write!(f, "SeekRegion(from: {})", log_wrappers::Value::key(from))
             }
             RegionInfoQuery::FindRegionById { region_id, .. } => {
                 write!(f, "FindRegionById(region_id: {})", region_id)
@@ -433,6 +433,12 @@ impl RegionCollector {
     }
 }
 
+impl Default for RegionCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Runnable for RegionCollector {
     type Task = RegionInfoQuery;
 
@@ -693,14 +699,14 @@ mod tests {
         assert!(c.region_ranges.is_empty());
 
         for region in regions {
-            must_create_region(c, &region, StateRole::Follower);
+            must_create_region(c, region, StateRole::Follower);
         }
 
         let expected_regions: Vec<_> = regions
             .iter()
             .map(|r| (r.clone(), StateRole::Follower))
             .collect();
-        check_collection(&c, &expected_regions);
+        check_collection(c, &expected_regions);
     }
 
     fn must_create_region(c: &mut RegionCollector, region: &Region, role: StateRole) {

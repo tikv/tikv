@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::{Error as IoError, ErrorKind, Result as IoResult};
+use std::io::{self, Error as IoError, ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
 use std::sync::{atomic::AtomicU64, atomic::Ordering, Arc, Mutex};
 use std::thread::JoinHandle;
@@ -19,7 +19,7 @@ use crate::config::EncryptionConfig;
 use crate::crypter::{self, compat, Iv};
 use crate::encrypted_file::EncryptedFile;
 use crate::file_dict_file::FileDictionaryFile;
-use crate::io::EncrypterWriter;
+use crate::io::{DecrypterReader, EncrypterWriter};
 use crate::master_key::Backend;
 use crate::metrics::*;
 use crate::{Error, Result};
@@ -565,7 +565,16 @@ impl DataKeyManager {
         })
     }
 
-    pub fn create_file<P: AsRef<Path>>(&self, path: P) -> Result<EncrypterWriter<File>> {
+    pub fn create_file_for_write<P: AsRef<Path>>(&self, path: P) -> Result<EncrypterWriter<File>> {
+        let file_writer = File::create(&path)?;
+        self.create_file_with_writer(path, file_writer)
+    }
+
+    pub fn create_file_with_writer<P: AsRef<Path>, W: std::io::Write>(
+        &self,
+        path: P,
+        writer: W,
+    ) -> Result<EncrypterWriter<W>> {
         let fname = path.as_ref().to_str().ok_or_else(|| {
             Error::Other(box_err!(
                 "failed to convert path to string {:?}",
@@ -573,9 +582,33 @@ impl DataKeyManager {
             ))
         })?;
         let file = self.new_file(fname)?;
-        let file_writer = File::create(path)?;
         EncrypterWriter::new(
-            file_writer,
+            writer,
+            crypter::encryption_method_from_db_encryption_method(file.method),
+            &file.key,
+            Iv::from_slice(&file.iv)?,
+        )
+    }
+
+    pub fn open_file_for_read<P: AsRef<Path>>(&self, path: P) -> Result<DecrypterReader<File>> {
+        let file_reader = File::open(&path)?;
+        self.open_file_with_reader(path, file_reader)
+    }
+
+    pub fn open_file_with_reader<P: AsRef<Path>, R: io::Read + io::Seek>(
+        &self,
+        path: P,
+        reader: R,
+    ) -> Result<DecrypterReader<R>> {
+        let fname = path.as_ref().to_str().ok_or_else(|| {
+            Error::Other(box_err!(
+                "failed to convert path to string {:?}",
+                path.as_ref()
+            ))
+        })?;
+        let file = self.get_file(fname)?;
+        DecrypterReader::new(
+            reader,
             crypter::encryption_method_from_db_encryption_method(file.method),
             &file.key,
             Iv::from_slice(&file.iv)?,
@@ -710,9 +743,7 @@ impl EncryptionKeyManager for DataKeyManager {
     }
 
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
-        let _ = self.dicts.link_file(src_fname, dst_fname)?;
-        // For now we ignore file not found.
-        // TODO: propagate it back up as an Option.
+        self.dicts.link_file(src_fname, dst_fname)?;
         Ok(())
     }
 }
@@ -726,8 +757,8 @@ mod tests {
     use engine_traits::EncryptionMethod as DBEncryptionMethod;
     use file_system::{remove_file, File};
     use matches::assert_matches;
-    use std::io::Write;
     use tempfile::TempDir;
+    use test_util::create_test_key_file;
 
     lazy_static::lazy_static! {
         static ref LOCK_FOR_GAUGE: Mutex<i32> = Mutex::new(1);
@@ -802,13 +833,10 @@ mod tests {
         }
     }
 
-    // TODO(yiwu): use the similar method in test_util crate instead.
     fn create_key_file(name: &str) -> (PathBuf, TempDir) {
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join(name);
-        let mut file = File::create(path.clone()).unwrap();
-        file.write_all(b"603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\n")
-            .unwrap();
+        create_test_key_file(path.to_str().unwrap());
         (path, tmp_dir)
     }
 

@@ -24,6 +24,9 @@ impl ColumnFamilyOptions for PanicColumnFamilyOptions {
     fn new() -> Self {
         panic!()
     }
+    fn get_max_write_buffer_number(&self) -> u32 {
+        panic!()
+    }
     fn get_level_zero_slowdown_writes_trigger(&self) -> u32 {
         panic!()
     }
@@ -55,6 +58,9 @@ impl ColumnFamilyOptions for PanicColumnFamilyOptions {
         panic!()
     }
     fn get_disable_auto_compactions(&self) -> bool {
+        panic!()
+    }
+    fn get_disable_write_stall(&self) -> bool {
         panic!()
     }
     fn set_sst_partitioner_factory<F: SstPartitionerFactory>(&mut self, factory: F) {

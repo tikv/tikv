@@ -9,12 +9,12 @@ use engine_traits::KvEngine;
 use futures::compat::Future01CompatExt;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo};
-use kvproto::metapb::{PeerRole, Region};
+use kvproto::metapb::{Peer, PeerRole};
 use kvproto::tikvpb::TikvClient;
-use pd_client::{Feature, PdClient};
-use raftstore::router::RaftStoreRouter;
+use pd_client::PdClient;
+use protobuf::Message;
 use raftstore::store::fsm::StoreMeta;
-use raftstore::store::msg::{Callback, SignificantMsg};
+use raftstore::store::util::RegionReadProgressRegistry;
 use security::SecurityManager;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::Scheduler;
@@ -23,44 +23,37 @@ use txn_types::TimeStamp;
 
 use crate::endpoint::Task;
 use crate::errors::Result;
-use crate::metrics::RESOLVED_TS_ADVANCE_METHOD;
+use crate::metrics::{CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM, CHECK_LEADER_REQ_SIZE_HISTOGRAM};
 
-const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
-
-pub struct AdvanceTsWorker<T, E: KvEngine> {
+pub struct AdvanceTsWorker<E: KvEngine> {
     store_meta: Arc<Mutex<StoreMeta>>,
+    region_read_progress: RegionReadProgressRegistry,
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
     worker: Runtime,
-    raft_router: T,
-    advance_ts_interval: Duration,
     scheduler: Scheduler<Task<E::Snapshot>>,
     /// The concurrency manager for transactions. It's needed for CDC to check locks when
     /// calculating resolved_ts.
     concurrency_manager: ConcurrencyManager,
-    hibernate_regions_compatible: bool,
     // store_id -> client
     tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
     env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<T, E: KvEngine> AdvanceTsWorker<T, E> {
+impl<E: KvEngine> AdvanceTsWorker<E> {
     pub fn new(
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task<E::Snapshot>>,
-        raft_router: T,
         store_meta: Arc<Mutex<StoreMeta>>,
+        region_read_progress: RegionReadProgressRegistry,
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
-        advance_ts_interval: Duration,
-        hibernate_regions_compatible: bool,
     ) -> Self {
-        let worker = Builder::new()
-            .threaded_scheduler()
+        let worker = Builder::new_multi_thread()
             .thread_name("advance-ts")
-            .core_threads(1)
+            .worker_threads(1)
             .build()
             .unwrap();
         Self {
@@ -70,32 +63,27 @@ impl<T, E: KvEngine> AdvanceTsWorker<T, E> {
             pd_client,
             worker,
             timer: SteadyTimer::default(),
-            raft_router,
             store_meta,
+            region_read_progress,
             concurrency_manager,
-            advance_ts_interval,
-            hibernate_regions_compatible,
             tikv_clients: Arc::new(Mutex::new(HashMap::default())),
         }
     }
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
-    pub fn register_advance_event(&self, regions: Vec<u64>) {
-        let timeout = self.timer.delay(self.advance_ts_interval);
+impl<E: KvEngine> AdvanceTsWorker<E> {
+    pub fn advance_ts_for_regions(&self, regions: Vec<u64>) {
         let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
-        let raft_router = self.raft_router.clone();
         let cm: ConcurrencyManager = self.concurrency_manager.clone();
         let env = self.env.clone();
         let security_mgr = self.security_mgr.clone();
         let store_meta = self.store_meta.clone();
         let tikv_clients = self.tikv_clients.clone();
-        let hibernate_regions_compatible = self.hibernate_regions_compatible;
+        let region_read_progress = self.region_read_progress.clone();
 
         let fut = async move {
-            let _ = timeout.compat().await;
-            // Ignore get tso errors since we will retry every `min_ts_interval`.
+            // Ignore get tso errors since we will retry every `advance_ts_interval`.
             let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
 
             // Sync with concurrency manager so that it can work correctly when optimizations
@@ -109,29 +97,17 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                 }
             }
 
-            if let Err(e) = scheduler.schedule(Task::RegisterAdvanceEvent) {
-                info!("failed to schedule register advance event"; "err" => ?e);
-            }
-
-            let gate = pd_client.feature_gate();
-
-            let regions =
-                if hibernate_regions_compatible && gate.can_enable(FEATURE_RESOLVED_TS_STORE) {
-                    RESOLVED_TS_ADVANCE_METHOD.set(1);
-                    Self::region_resolved_ts_store(
-                        regions,
-                        store_meta,
-                        pd_client,
-                        security_mgr,
-                        env,
-                        tikv_clients,
-                        min_ts,
-                    )
-                    .await
-                } else {
-                    RESOLVED_TS_ADVANCE_METHOD.set(0);
-                    Self::region_resolved_ts_raft(regions, raft_router, min_ts).await
-                };
+            let regions = Self::region_resolved_ts_store(
+                regions,
+                store_meta,
+                region_read_progress,
+                pd_client,
+                security_mgr,
+                env,
+                tikv_clients,
+                min_ts,
+            )
+            .await;
 
             if !regions.is_empty() {
                 if let Err(e) = scheduler.schedule(Task::AdvanceResolvedTs {
@@ -145,43 +121,16 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
         self.worker.spawn(fut);
     }
 
-    // Confirms leadership of region peer before trying to advance resolved ts.
-    // This function sends a raft read command to raftstore to inspect leadership.
-    async fn region_resolved_ts_raft(
-        regions: Vec<u64>,
-        raft_router: T,
-        min_ts: TimeStamp,
-    ) -> Vec<u64> {
-        // TODO: send a message to raftstore would consume too much cpu time,
-        // try to handle it outside raftstore.
-        let regions: Vec<_> = regions
-            .into_iter()
-            .map(|region_id| {
-                let raft_router_clone = raft_router.clone();
-                async move {
-                    let (tx, rx) = tokio::sync::oneshot::channel();
-                    if let Err(e) = raft_router_clone.significant_send(
-                        region_id,
-                        SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
-                            let resp = if resp.response.get_header().has_error() {
-                                None
-                            } else {
-                                Some(region_id)
-                            };
-                            if tx.send(resp).is_err() {
-                                error!("resolved-ts send tso response failed"; "region_id" => region_id);
-                            }
-                        }))),
-                    ) {
-                        warn!("resolved-ts send LeaderCallback failed"; "err" => ?e, "min_ts" => min_ts);
-                        return None;
-                    }
-                    rx.await.unwrap_or(None)
-                }
-            })
-            .collect();
-        let resps = futures::future::join_all(regions).await;
-        resps.into_iter().flatten().collect::<Vec<u64>>()
+    pub fn register_next_event(&self, advance_ts_interval: Duration, cfg_version: usize) {
+        let scheduler = self.scheduler.clone();
+        let timeout = self.timer.delay(advance_ts_interval);
+        let fut = async move {
+            let _ = timeout.compat().await;
+            if let Err(e) = scheduler.schedule(Task::RegisterAdvanceEvent { cfg_version }) {
+                info!("failed to schedule register advance event"; "err" => ?e);
+            }
+        };
+        self.worker.spawn(fut);
     }
 
     // Confirms leadership of region peer before trying to advance resolved ts.
@@ -190,62 +139,61 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
     async fn region_resolved_ts_store(
         regions: Vec<u64>,
         store_meta: Arc<Mutex<StoreMeta>>,
+        region_read_progress: RegionReadProgressRegistry,
         pd_client: Arc<dyn PdClient>,
         security_mgr: Arc<SecurityManager>,
         env: Arc<Environment>,
         cdc_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
         min_ts: TimeStamp,
     ) -> Vec<u64> {
+        #[cfg(feature = "failpoint")]
+        (|| fail_point!("before_sync_replica_read_state", |_| regions))();
+
+        let store_id = match store_meta.lock().unwrap().store_id {
+            Some(id) => id,
+            None => return vec![],
+        };
+
         // store_id -> leaders info, record the request to each stores
         let mut store_map: HashMap<u64, Vec<LeaderInfo>> = HashMap::default();
         // region_id -> region, cache the information of regions
-        let mut region_map: HashMap<u64, Region> = HashMap::default();
+        let mut region_map: HashMap<u64, Vec<Peer>> = HashMap::default();
         // region_id -> peers id, record the responses
         let mut resp_map: HashMap<u64, Vec<u64>> = HashMap::default();
-        {
-            let meta = store_meta.lock().unwrap();
-            let store_id = match meta.store_id {
-                Some(id) => id,
-                None => return vec![],
-            };
-            for region_id in regions {
-                if let Some(region) = meta.regions.get(&region_id) {
-                    if let Some((term, leader_id)) = meta.leaders.get(&region_id) {
-                        let leader_store_id = find_store_id(&region, *leader_id);
-                        if leader_store_id.is_none() {
-                            continue;
-                        }
-                        if leader_store_id.unwrap() != meta.store_id.unwrap() {
-                            continue;
-                        }
-                        for peer in region.get_peers() {
-                            if peer.store_id == store_id && peer.id == *leader_id {
-                                resp_map.entry(region_id).or_default().push(store_id);
-                                continue;
-                            }
-                            if peer.get_role() == PeerRole::Learner {
-                                continue;
-                            }
-                            let mut leader_info = LeaderInfo::default();
-                            leader_info.set_peer_id(*leader_id);
-                            leader_info.set_term(*term);
-                            leader_info.set_region_id(region_id);
-                            leader_info.set_region_epoch(region.get_region_epoch().clone());
-                            store_map
-                                .entry(peer.store_id)
-                                .or_default()
-                                .push(leader_info);
-                        }
-                        region_map.insert(region_id, region.clone());
-                    }
-                }
+        // region_id -> `(Vec<Peer>, LeaderInfo)`
+        let info_map = region_read_progress.dump_leader_infos(&regions);
+
+        for (region_id, (peer_list, leader_info)) in info_map {
+            let leader_id = leader_info.get_peer_id();
+            // Check if the leader in this store
+            if find_store_id(&peer_list, leader_id) != Some(store_id) {
+                continue;
             }
+            for peer in &peer_list {
+                if peer.store_id == store_id && peer.id == leader_id {
+                    resp_map.entry(region_id).or_default().push(store_id);
+                    continue;
+                }
+                store_map
+                    .entry(peer.store_id)
+                    .or_default()
+                    .push(leader_info.clone());
+            }
+            region_map.insert(region_id, peer_list);
         }
+        // Approximate `LeaderInfo` size
+        let leader_info_size = store_map
+            .values()
+            .next()
+            .map_or(0, |regions| regions[0].compute_size());
         let stores = store_map.into_iter().map(|(store_id, regions)| {
             let cdc_clients = cdc_clients.clone();
             let env = env.clone();
             let pd_client = pd_client.clone();
             let security_mgr = security_mgr.clone();
+            let region_num = regions.len() as u32;
+            CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
+            CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
             async move {
                 if cdc_clients.lock().unwrap().get(&store_id).is_none() {
                     let store = box_try!(pd_client.get_store_async(store_id).await);
@@ -290,7 +238,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                 if region_has_quorum(&region_map[&region_id], &stores) {
                     Some(region_id)
                 } else {
-                    debug!("resolved-ts cannot get quorum for resolved ts"; "region_id" => region_id, "stores" => ?stores, "region" => ?&region_map[&region_id]);
+                    debug!(
+                        "resolved-ts cannot get quorum for resolved ts";
+                        "region_id" => region_id,
+                        "stores" => ?stores,
+                        "region" => ?&region_map[&region_id]
+                    );
                     None
                 }
             })
@@ -298,7 +251,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
     }
 }
 
-fn region_has_quorum(region: &Region, stores: &[u64]) -> bool {
+fn region_has_quorum(peers: &[Peer], stores: &[u64]) -> bool {
     let mut voters = 0;
     let mut incoming_voters = 0;
     let mut demoting_voters = 0;
@@ -307,7 +260,7 @@ fn region_has_quorum(region: &Region, stores: &[u64]) -> bool {
     let mut resp_incoming_voters = 0;
     let mut resp_demoting_voters = 0;
 
-    region.get_peers().iter().for_each(|peer| {
+    peers.iter().for_each(|peer| {
         let mut in_resp = false;
         for store_id in stores {
             if *store_id == peer.store_id {
@@ -346,8 +299,8 @@ fn region_has_quorum(region: &Region, stores: &[u64]) -> bool {
     has_incoming_majority && has_demoting_majority
 }
 
-fn find_store_id(region: &Region, peer_id: u64) -> Option<u64> {
-    for peer in region.get_peers() {
+fn find_store_id(peer_list: &[Peer], peer_id: u64) -> Option<u64> {
+    for peer in peer_list {
         if peer.id == peer_id {
             return Some(peer.store_id);
         }

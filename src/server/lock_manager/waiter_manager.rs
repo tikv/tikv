@@ -3,7 +3,7 @@
 use super::config::Config;
 use super::deadlock::Scheduler as DetectorScheduler;
 use super::metrics::*;
-use crate::storage::lock_manager::{Lock, WaitTimeout};
+use crate::storage::lock_manager::{DiagnosticContext, Lock, WaitTimeout};
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp};
 use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use crate::storage::{
@@ -103,6 +103,7 @@ pub enum Task {
         pr: ProcessResult,
         lock: Lock,
         timeout: WaitTimeout,
+        diag_ctx: DiagnosticContext,
     },
     WakeUp {
         // lock info
@@ -118,6 +119,7 @@ pub enum Task {
         start_ts: TimeStamp,
         lock: Lock,
         deadlock_key_hash: u64,
+        wait_chain: Vec<WaitForEntry>,
     },
     ChangeConfig {
         timeout: Option<ReadableDuration>,
@@ -171,6 +173,7 @@ pub(crate) struct Waiter {
     /// it causes deadlock.
     pub(crate) pr: ProcessResult,
     pub(crate) lock: Lock,
+    pub diag_ctx: DiagnosticContext,
     delay: Delay,
     _lifetime_timer: HistogramTimer,
 }
@@ -182,6 +185,7 @@ impl Waiter {
         pr: ProcessResult,
         lock: Lock,
         deadline: Instant,
+        diag_ctx: DiagnosticContext,
     ) -> Self {
         Self {
             start_ts,
@@ -189,6 +193,7 @@ impl Waiter {
             pr,
             lock,
             delay: Delay::new(deadline),
+            diag_ctx,
             _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
         }
     }
@@ -235,13 +240,14 @@ impl Waiter {
     }
 
     /// Changes the `ProcessResult` to `Deadlock`.
-    fn deadlock_with(&mut self, deadlock_key_hash: u64) {
+    fn deadlock_with(&mut self, deadlock_key_hash: u64, wait_chain: Vec<WaitForEntry>) {
         let (key, _) = self.extract_key_info();
         let mvcc_err = MvccError::from(MvccErrorInner::Deadlock {
             start_ts: self.start_ts,
             lock_ts: self.lock.ts,
             lock_key: key,
             deadlock_key_hash,
+            wait_chain,
         });
         self.pr = ProcessResult::Failed {
             err: StorageError::from(TxnError::from(mvcc_err)),
@@ -365,6 +371,9 @@ impl WaitTable {
                     wait_for_entry.set_txn(waiter.start_ts.into_inner());
                     wait_for_entry.set_wait_for_txn(waiter.lock.ts.into_inner());
                     wait_for_entry.set_key_hash(waiter.lock.hash);
+                    wait_for_entry.set_key(waiter.diag_ctx.key.clone());
+                    wait_for_entry
+                        .set_resource_group_tag(waiter.diag_ctx.resource_group_tag.clone());
                     wait_for_entry
                 })
             })
@@ -398,6 +407,7 @@ impl Scheduler {
         pr: ProcessResult,
         lock: Lock,
         timeout: WaitTimeout,
+        diag_ctx: DiagnosticContext,
     ) {
         self.notify_scheduler(Task::WaitFor {
             start_ts,
@@ -405,6 +415,7 @@ impl Scheduler {
             pr,
             lock,
             timeout,
+            diag_ctx,
         });
     }
 
@@ -420,11 +431,18 @@ impl Scheduler {
         self.notify_scheduler(Task::Dump { cb })
     }
 
-    pub fn deadlock(&self, txn_ts: TimeStamp, lock: Lock, deadlock_key_hash: u64) {
+    pub fn deadlock(
+        &self,
+        txn_ts: TimeStamp,
+        lock: Lock,
+        deadlock_key_hash: u64,
+        wait_chain: Vec<WaitForEntry>,
+    ) {
         self.notify_scheduler(Task::Deadlock {
             start_ts: txn_ts,
             lock,
             deadlock_key_hash,
+            wait_chain,
         });
     }
 
@@ -529,9 +547,15 @@ impl WaiterManager {
         cb(self.wait_table.borrow().to_wait_for_entries());
     }
 
-    fn handle_deadlock(&mut self, waiter_ts: TimeStamp, lock: Lock, deadlock_key_hash: u64) {
+    fn handle_deadlock(
+        &mut self,
+        waiter_ts: TimeStamp,
+        lock: Lock,
+        deadlock_key_hash: u64,
+        wait_chain: Vec<WaitForEntry>,
+    ) {
         if let Some(mut waiter) = self.wait_table.borrow_mut().remove_waiter(lock, waiter_ts) {
-            waiter.deadlock_with(deadlock_key_hash);
+            waiter.deadlock_with(deadlock_key_hash, wait_chain);
             waiter.notify();
         }
     }
@@ -564,8 +588,16 @@ impl FutureRunnable<Task> for WaiterManager {
                 pr,
                 lock,
                 timeout,
+                diag_ctx,
             } => {
-                let waiter = Waiter::new(start_ts, cb, pr, lock, self.normalize_deadline(timeout));
+                let waiter = Waiter::new(
+                    start_ts,
+                    cb,
+                    pr,
+                    lock,
+                    self.normalize_deadline(timeout),
+                    diag_ctx,
+                );
                 self.handle_wait_for(waiter);
                 TASK_COUNTER_METRICS.wait_for.inc();
             }
@@ -585,8 +617,9 @@ impl FutureRunnable<Task> for WaiterManager {
                 start_ts,
                 lock,
                 deadlock_key_hash,
+                wait_chain,
             } => {
-                self.handle_deadlock(start_ts, lock, deadlock_key_hash);
+                self.handle_deadlock(start_ts, lock, deadlock_key_hash, wait_chain);
             }
             Task::ChangeConfig { timeout, delay } => self.handle_config_change(timeout, delay),
             #[cfg(any(test, feature = "testexport"))]
@@ -613,6 +646,7 @@ pub mod tests {
     use kvproto::kvrpcpb::LockInfo;
     use rand::prelude::*;
     use tikv_util::config::ReadableDuration;
+    use tikv_util::time::InstantExt;
 
     fn dummy_waiter(start_ts: TimeStamp, lock_ts: TimeStamp, hash: u64) -> Waiter {
         Waiter {
@@ -620,6 +654,7 @@ pub mod tests {
             cb: StorageCallback::Boolean(Box::new(|_| ())),
             pr: ProcessResult::Res,
             lock: Lock { ts: lock_ts, hash },
+            diag_ctx: DiagnosticContext::default(),
             delay: Delay::new(Instant::now()),
             _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
         }
@@ -628,7 +663,7 @@ pub mod tests {
     pub(crate) fn assert_elapsed<F: FnOnce()>(f: F, min: u64, max: u64) {
         let now = Instant::now();
         f();
-        let elapsed = now.elapsed();
+        let elapsed = now.saturating_elapsed();
         assert!(
             Duration::from_millis(min) <= elapsed && elapsed < Duration::from_millis(max),
             "elapsed: {:?}",
@@ -722,6 +757,7 @@ pub mod tests {
             pr,
             lock,
             Instant::now() + Duration::from_millis(3000),
+            DiagnosticContext::default(),
         );
         (waiter, info, f)
     }
@@ -785,6 +821,7 @@ pub mod tests {
         waiter_ts: TimeStamp,
         mut lock_info: LockInfo,
         deadlock_hash: u64,
+        expect_wait_chain: &[(u64, u64, &[u8], &[u8])], // (waiter_ts, wait_for_ts, key, resource_group_tag)
     ) {
         match res {
             Err(StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
@@ -793,12 +830,47 @@ pub mod tests {
                     lock_ts,
                     lock_key,
                     deadlock_key_hash,
+                    wait_chain,
                 }),
             ))))) => {
                 assert_eq!(start_ts, waiter_ts);
                 assert_eq!(lock_ts, lock_info.get_lock_version().into());
                 assert_eq!(lock_key, lock_info.take_key());
                 assert_eq!(deadlock_key_hash, deadlock_hash);
+                assert_eq!(
+                    wait_chain.len(),
+                    expect_wait_chain.len(),
+                    "incorrect wait chain {:?}",
+                    wait_chain
+                );
+                for (i, (entry, expect_entry)) in
+                    wait_chain.iter().zip(expect_wait_chain.iter()).enumerate()
+                {
+                    assert_eq!(
+                        entry.get_txn(),
+                        expect_entry.0,
+                        "item {} in wait chain mismatch",
+                        i
+                    );
+                    assert_eq!(
+                        entry.get_wait_for_txn(),
+                        expect_entry.1,
+                        "item {} in wait chain mismatch",
+                        i
+                    );
+                    assert_eq!(
+                        entry.get_key(),
+                        expect_entry.2,
+                        "item {} in wait chain mismatch",
+                        i
+                    );
+                    assert_eq!(
+                        entry.get_resource_group_tag(),
+                        expect_entry.3,
+                        "item {} in wait chain mismatch",
+                        i
+                    );
+                }
             }
             e => panic!("unexpected error: {:?}", e),
         }
@@ -832,17 +904,17 @@ pub mod tests {
         // Deadlock
         let waiter_ts = TimeStamp::new(10);
         let (mut waiter, lock_info, f) = new_test_waiter(waiter_ts, 20.into(), 20);
-        waiter.deadlock_with(111);
+        waiter.deadlock_with(111, vec![]);
         waiter.notify();
-        expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 111);
+        expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 111, &[]);
 
         // Conflict then deadlock.
         let waiter_ts = TimeStamp::new(10);
         let (mut waiter, lock_info, f) = new_test_waiter(waiter_ts, 20.into(), 20);
         waiter.conflict_with(20.into(), 30.into());
-        waiter.deadlock_with(111);
+        waiter.deadlock_with(111, vec![]);
         waiter.notify();
-        expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 111);
+        expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 111, &[]);
     }
 
     #[test]
@@ -1047,6 +1119,7 @@ pub mod tests {
             waiter.pr,
             waiter.lock,
             WaitTimeout::Millis(1000),
+            DiagnosticContext::default(),
         );
         assert_elapsed(
             || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),
@@ -1062,6 +1135,7 @@ pub mod tests {
             waiter.pr,
             waiter.lock,
             WaitTimeout::Millis(100),
+            DiagnosticContext::default(),
         );
         assert_elapsed(
             || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),
@@ -1077,6 +1151,7 @@ pub mod tests {
             waiter.pr,
             waiter.lock,
             WaitTimeout::Millis(3000),
+            DiagnosticContext::default(),
         );
         assert_elapsed(
             || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),
@@ -1106,6 +1181,7 @@ pub mod tests {
                 waiter.pr,
                 waiter.lock,
                 WaitTimeout::Millis(wait_for_lock_timeout),
+                DiagnosticContext::default(),
             );
             waiters_info.push((waiter_ts, lock_info, f));
         }
@@ -1136,6 +1212,7 @@ pub mod tests {
                 waiter.pr,
                 waiter.lock,
                 WaitTimeout::Millis(wait_for_lock_timeout),
+                DiagnosticContext::default(),
             );
             waiters_info.push((waiter_ts, lock_info, f));
         }
@@ -1184,6 +1261,7 @@ pub mod tests {
             waiter1.pr,
             waiter1.lock,
             WaitTimeout::Millis(wait_for_lock_timeout),
+            DiagnosticContext::default(),
         );
         let (waiter2, lock_info2, f2) = new_test_waiter(30.into(), lock.ts, lock.hash);
         // Waiter2's timeout is 50ms which is less than wake_up_delay_duration.
@@ -1193,6 +1271,7 @@ pub mod tests {
             waiter2.pr,
             waiter2.lock,
             WaitTimeout::Millis(50),
+            DiagnosticContext::default(),
         );
         let commit_ts = 15.into();
         let (tx, rx) = mpsc::sync_channel(1);
@@ -1234,10 +1313,11 @@ pub mod tests {
             waiter.pr,
             waiter.lock,
             WaitTimeout::Millis(1000),
+            DiagnosticContext::default(),
         );
-        scheduler.deadlock(waiter_ts, lock, 30);
+        scheduler.deadlock(waiter_ts, lock, 30, vec![]);
         assert_elapsed(
-            || expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 30),
+            || expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 30, &[]),
             0,
             200,
         );
@@ -1261,6 +1341,7 @@ pub mod tests {
             waiter1.pr,
             waiter1.lock,
             WaitTimeout::Millis(1000),
+            DiagnosticContext::default(),
         );
         let (waiter2, lock_info2, f2) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
         scheduler.wait_for(
@@ -1269,6 +1350,7 @@ pub mod tests {
             waiter2.pr,
             waiter2.lock,
             WaitTimeout::Millis(1000),
+            DiagnosticContext::default(),
         );
         // Should notify duplicated waiter immediately.
         assert_elapsed(

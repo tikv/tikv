@@ -2,12 +2,10 @@
 
 use std::collections::HashMap;
 
+use crate::decode_properties::DecodeProperties;
 use crate::{RocksEngine, UserProperties};
 use engine_traits::util::get_expire_ts;
-use engine_traits::{
-    DecodeProperties, Range, Result, TableProperties, TablePropertiesCollection,
-    TablePropertiesExt, TtlProperties, TtlPropertiesExt,
-};
+use engine_traits::{Range, Result, TtlProperties, TtlPropertiesExt};
 use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory};
 use tikv_util::error;
 
@@ -48,7 +46,7 @@ impl TtlPropertiesExt for RocksEngine {
 
         let mut res = Vec::new();
         for (file_name, v) in collection.iter() {
-            let prop = match RocksTtlProperties::decode(&v.user_collected_properties()) {
+            let prop = match RocksTtlProperties::decode(v.user_collected_properties()) {
                 Ok(v) => v,
                 Err(_) => continue,
             };
@@ -74,7 +72,7 @@ impl TablePropertiesCollector for TtlPropertiesCollector {
             return;
         }
 
-        let expire_ts = match get_expire_ts(&value) {
+        let expire_ts = match get_expire_ts(value) {
             Ok(ts) => ts,
             Err(e) => {
                 error!("failed to get expire ts";

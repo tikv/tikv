@@ -1,6 +1,6 @@
 ## TiKV config template
 ##  Human-readable big numbers:
-##   File size(based on byte): KB, MB, GB, TB, PB
+##   File size(based on byte, binary units): KB, MB, GB, TB, PB
 ##    e.g.: 1_048_576 = "1MB"
 ##   Time(based on ms): ms, s, m, h
 ##    e.g.: 78_000 = "1.3m"
@@ -38,6 +38,30 @@
 ## Enable io snoop which utilize eBPF to get accurate disk io of TiKV
 ## It won't take effect when compiling without BCC_IOSNOOP=1. 
 # enable-io-snoop = true
+
+## Use abort when TiKV panic. By default TiKV will use _exit() on panic, in that case
+## core dump file will not be generated, regardless of system settings.
+## If this config is enabled, core dump files needs to be cleanup to avoid disk space
+## being filled up.
+# abort-on-panic = false
+
+## Memory usage limit for the TiKV instance. Generally it's unnecessary to configure it
+## explicitly, in which case it will be set to 75% of total available system memory.
+## Considering the behavior of `block-cache.capacity`, it means 25% memory is reserved for
+## OS page cache.
+##
+## It's still unnecessary to configure it for deploying multiple TiKV nodes on a single
+## physical machine. It will be calculated as `5/3 * block-cache.capacity`.
+##
+## For different system memory capacity, the default memory quota will be:
+## * system=8G    block-cache=3.6G    memory-usage-limit=6G   page-cache=2G.
+## * system=16G   block-cache=7.2G    memory-usage-limit=12G  page-cache=4G
+## * system=32G   block-cache=14.4G   memory-usage-limit=24G  page-cache=8G
+##
+## So how can `memory-usage-limit` influence TiKV? When a TiKV's memory usage almost reaches
+## this threshold, it can squeeze some internal components (e.g. evicting cached Raft entries)
+## to release memory.
+# memory-usage-limit = "0B"
 
 ## Configurations for the single thread pool serving read requests.
 [readpool.unified]
@@ -146,6 +170,9 @@
 ## Time to wait before closing the connection without receiving KeepAlive ping Ack.
 # grpc-keepalive-timeout = "3s"
 
+## Set maximum message length in bytes that gRPC can send. `-1` means unlimited.
+# max-grpc-send-msg-len = 10485760
+
 ## How many snapshots can be sent concurrently.
 # concurrent-send-snap-limit = 32
 
@@ -228,7 +255,48 @@
 ##
 ## To deploy multiple TiKV nodes on a single physical machine, configure this parameter explicitly.
 ## Otherwise, the OOM problem might occur in TiKV.
+##
+## If it's not set, 45% of available system memory will be used.
 # capacity = "1GB"
+
+[storage.flow-control]
+## Flow controller is used to throttle the write rate at scheduler level, aiming
+## to substitute the write stall mechanism of RocksDB. It features in two points:
+##   * throttle at scheduler, so raftstore and apply won't be blocked anymore
+##   * better control on the throttle rate to avoid QPS drop under heavy write
+##
+## Support change dynamically. 
+## When enabled, it disables kvdb's write stall and raftdb's write stall(except memtable) and vice versa.
+# enable = true
+
+## When the number of immutable memtables of kvdb reaches the threshold, the flow controller begins to work
+# memtables-threshold = 5
+
+## When the number of SST files of level-0 of kvdb reaches the threshold, the flow controller begins to work
+# l0-files-threshold = 9
+
+## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to 
+## reject some write requests with `ServerIsBusy` error. 
+# soft-pending-compaction-bytes-limit = "192GB"
+
+## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to 
+## reject all write requests with `ServerIsBusy` error. 
+# hard-pending-compaction-bytes-limit = "1024GB"
+
+[storage.io-rate-limit]
+## Maximum I/O bytes that this server can write to or read from disk (determined by mode)
+## in one second. Internally it prefers throttling background operations over foreground
+## ones. This value should be set to the disk's optimal IO bandwidth, e.g. maximum IO
+## bandwidth specified by cloud disk vendors.
+##
+## When set to zero, disk IO operations are not limited.
+# max-bytes-per-sec = "0MB"
+
+## Determine which types of IO operations are counted and restrained below threshold.
+## Three different modes are: write-only, read-only, all-io.
+##
+## Only write-only mode is supported for now.
+# mode = "write-only"
 
 [pd]
 ## PD endpoints.
@@ -308,7 +376,7 @@
 
 ## How long the peer will be considered down and reported to PD when it hasn't been active for this
 ## time.
-# max-peer-down-duration = "5m"
+# max-peer-down-duration = "10m"
 
 ## Interval to check whether to start manual compaction for a Region.
 # region-compact-check-interval = "5m"
@@ -343,6 +411,12 @@
 ## Use how many threads to handle raft messages
 # store-pool-size = 2
 
+## Use how many threads to handle raft io tasks
+# store-io-pool-size = 2
+
+## When the size of raft db writebatch exceeds this value, write will be triggered.
+# raft-write-size-limit = "1MB"
+
 [coprocessor]
 ## When it is set to `true`, TiKV will try to split a Region with table prefix if that Region
 ## crosses tables.
@@ -367,6 +441,13 @@
 
 ## Set to "mvcc" to do consistency check for MVCC data, or "raw" for raw data.
 # consistency-check-method = "mvcc"
+
+[coprocessor-v2]
+## Path to the directory where compiled coprocessor plugins are located.
+## Plugins in this directory will be automatically loaded by TiKV.
+## If a coprocessor plugin file is deleted, it will be automatically unloaded.
+## If the config value is not set, hot-reloading will be disabled.
+# coprocessor-plugin-directory = "./coprocessors"
 
 [rocksdb]
 ## Maximum number of threads of RocksDB background jobs.
@@ -410,13 +491,12 @@
 ## 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
 # wal-recovery-mode = 2
 
-## RocksDB WAL directory.
+## KV RocksDB WAL directory.
 ## This config specifies the absolute directory path for WAL.
-## If it is not set, the log files will be in the same directory as data. When you set the path to
-## RocksDB directory in memory like in `/dev/shm`, you may want to set`wal-dir` to a directory on a
-## persistent storage. See https://github.com/facebook/rocksdb/wiki/How-to-persist-in-memory-RocksDB-database .
+## If it is not set, the log files will be in the same directory as data.
 ## If there are two disks on the machine, storing RocksDB data and WAL logs on different disks can
 ## improve performance.
+## Do not set this config the same as `raftdb.wal-dir`.
 # wal-dir = ""
 
 ## The following two fields affect how archived WAL will be deleted.
@@ -784,6 +864,14 @@
 
 # enable-statistics = true
 # stats-dump-period = "10m"
+
+## Raft RocksDB WAL directory.
+## This config specifies the absolute directory path for WAL.
+## If it is not set, the log files will be in the same directory as data.
+## If there are two disks on the machine, storing RocksDB data and WAL logs on different disks can
+## improve performance.
+## Do not set this config the same as `rocksdb.wal-dir`.
+# wal-dir = ""
 
 # compaction-readahead-size = 0
 # writable-file-max-buffer-size = "1MB"

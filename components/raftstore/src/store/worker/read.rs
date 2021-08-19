@@ -18,7 +18,7 @@ use kvproto::raft_cmdpb::{
 use time::Timespec;
 
 use crate::errors::RAFTSTORE_IS_BUSY;
-use crate::store::util::{self, LeaseState, RemoteLease};
+use crate::store::util::{self, LeaseState, RegionReadProgress, RemoteLease};
 use crate::store::{
     cmd_resp, Callback, Peer, ProposalRouter, RaftCommand, ReadResponse, RegionSnapshot,
     RequestInspector, RequestPolicy,
@@ -139,22 +139,21 @@ pub trait ReadExecutor<E: KvEngine> {
 /// A read only delegate of `Peer`.
 #[derive(Clone, Debug)]
 pub struct ReadDelegate {
-    region: Arc<metapb::Region>,
-    peer_id: u64,
-    term: u64,
-    applied_index_term: u64,
-    leader_lease: Option<RemoteLease>,
-    last_valid_ts: Timespec,
+    pub region: Arc<metapb::Region>,
+    pub peer_id: u64,
+    pub term: u64,
+    pub applied_index_term: u64,
+    pub leader_lease: Option<RemoteLease>,
+    pub last_valid_ts: Timespec,
 
-    tag: String,
+    pub tag: String,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-    max_ts_sync_status: Arc<AtomicU64>,
-    // TODO: `safe_ts` serve as a placehodler, should remove it later
-    pub safe_ts: Arc<AtomicU64>,
+    pub max_ts_sync_status: Arc<AtomicU64>,
+    pub read_progress: Arc<RegionReadProgress>,
 
     // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
     // up-to-date with the global `ReadDelegate` stored at `StoreMeta`
-    track_ver: TrackVer,
+    pub track_ver: TrackVer,
 }
 
 impl Drop for ReadDelegate {
@@ -165,7 +164,7 @@ impl Drop for ReadDelegate {
 }
 
 #[derive(Debug)]
-struct TrackVer {
+pub struct TrackVer {
     version: Arc<AtomicU64>,
     local_ver: u64,
     // source set to `true` means the `TrackVer` is created by `TrackVer::new` instead
@@ -176,7 +175,7 @@ struct TrackVer {
 }
 
 impl TrackVer {
-    fn new() -> TrackVer {
+    pub fn new() -> TrackVer {
         TrackVer {
             version: Arc::new(AtomicU64::from(0)),
             local_ver: 0,
@@ -194,6 +193,12 @@ impl TrackVer {
 
     fn any_new(&self) -> bool {
         self.version.load(Ordering::Relaxed) > self.local_ver
+    }
+}
+
+impl Default for TrackVer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -222,7 +227,7 @@ impl ReadDelegate {
             tag: format!("[region {}] {}", region_id, peer_id),
             txn_extra_op: peer.txn_extra_op.clone(),
             max_ts_sync_status: peer.max_ts_sync_status.clone(),
-            safe_ts: Arc::clone(&peer.safe_ts),
+            read_progress: peer.read_progress.clone(),
             track_ver: TrackVer::new(),
         }
     }
@@ -274,7 +279,7 @@ impl ReadDelegate {
         read_ts: u64,
         metrics: &mut ReadMetrics,
     ) -> std::result::Result<(), ReadResponse<S>> {
-        let safe_ts = self.safe_ts.load(Ordering::Acquire);
+        let safe_ts = self.read_progress.safe_ts();
         if safe_ts >= read_ts {
             return Ok(());
         }
@@ -285,11 +290,11 @@ impl ReadDelegate {
             "read ts" => read_ts
         );
         metrics.rejected_by_safe_timestamp += 1;
-        let mut response = cmd_resp::new_error(Error::DataIsNotReady(
-            self.region.get_id(),
-            self.peer_id,
+        let mut response = cmd_resp::new_error(Error::DataIsNotReady {
+            region_id: self.region.get_id(),
+            peer_id: self.peer_id,
             safe_ts,
-        ));
+        });
         cmd_resp::bind_term(&mut response, self.term);
         Err(ReadResponse {
             response,
@@ -579,7 +584,6 @@ where
                             return;
                         }
 
-                        // TODO: the follower should not handle read request while applying snapshot
                         // Getting the snapshot
                         let response = self.execute(&req, &delegate.region, None, read_id);
 
@@ -605,7 +609,7 @@ where
             Ok(None) => self.redirect(RaftCommand::new(req, cb)),
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
-                if let Some(ref delegate) = self.delegates.get(&req.get_header().get_region_id()) {
+                if let Some(delegate) = self.delegates.get(&req.get_header().get_region_id()) {
                     cmd_resp::bind_term(&mut response, delegate.term);
                 }
                 cb.invoke_read(ReadResponse {
@@ -697,20 +701,20 @@ const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 
 #[derive(Clone)]
 struct ReadMetrics {
-    local_executed_requests: i64,
-    local_executed_snapshot_cache_hit: i64,
+    local_executed_requests: u64,
+    local_executed_snapshot_cache_hit: u64,
     // TODO: record rejected_by_read_quorum.
-    rejected_by_store_id_mismatch: i64,
-    rejected_by_peer_id_mismatch: i64,
-    rejected_by_term_mismatch: i64,
-    rejected_by_lease_expire: i64,
-    rejected_by_no_region: i64,
-    rejected_by_no_lease: i64,
-    rejected_by_epoch: i64,
-    rejected_by_appiled_term: i64,
-    rejected_by_channel_full: i64,
-    rejected_by_cache_miss: i64,
-    rejected_by_safe_timestamp: i64,
+    rejected_by_store_id_mismatch: u64,
+    rejected_by_peer_id_mismatch: u64,
+    rejected_by_term_mismatch: u64,
+    rejected_by_lease_expire: u64,
+    rejected_by_no_region: u64,
+    rejected_by_no_lease: u64,
+    rejected_by_epoch: u64,
+    rejected_by_appiled_term: u64,
+    rejected_by_channel_full: u64,
+    rejected_by_cache_miss: u64,
+    rejected_by_safe_timestamp: u64,
 
     last_flush_time: Instant,
 }
@@ -738,7 +742,9 @@ impl Default for ReadMetrics {
 
 impl ReadMetrics {
     pub fn maybe_flush(&mut self) {
-        if self.last_flush_time.elapsed() >= Duration::from_millis(METRICS_FLUSH_INTERVAL) {
+        if self.last_flush_time.saturating_elapsed()
+            >= Duration::from_millis(METRICS_FLUSH_INTERVAL)
+        {
             self.flush();
             self.last_flush_time = Instant::now();
         }
@@ -917,7 +923,7 @@ mod tests {
         region1.set_region_epoch(epoch13.clone());
         let term6 = 6;
         let mut lease = Lease::new(Duration::seconds(1)); // 1s is long enough.
-        let safe_ts = Arc::new(AtomicU64::new(1));
+        let read_progress = Arc::new(RegionReadProgress::new(&region1, 1, 1, "".to_owned()));
 
         let mut cmd = RaftCmdRequest::default();
         let mut header = RaftRequestHeader::default();
@@ -952,7 +958,7 @@ mod tests {
                 last_valid_ts: Timespec::new(0, 0),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
-                safe_ts: Arc::clone(&safe_ts),
+                read_progress: read_progress.clone(),
                 track_ver: TrackVer::new(),
             };
             meta.readers.insert(1, read_delegate);
@@ -1132,7 +1138,8 @@ mod tests {
 
         // Stale read
         assert_eq!(reader.metrics.rejected_by_safe_timestamp, 0);
-        assert_eq!(safe_ts.load(Ordering::Relaxed), 1);
+        read_progress.update_safe_ts(1, 1);
+        assert_eq!(read_progress.safe_ts(), 1);
 
         let data = {
             let mut d = [0u8; 8];
@@ -1153,7 +1160,8 @@ mod tests {
         must_not_redirect(&mut reader, &rx, task);
         assert_eq!(reader.metrics.rejected_by_safe_timestamp, 1);
 
-        safe_ts.store(2, Ordering::SeqCst);
+        read_progress.update_safe_ts(1, 2);
+        assert_eq!(read_progress.safe_ts(), 2);
         let task = RaftCommand::<KvTestSnapshot>::new(cmd, Callback::Read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
         assert_eq!(reader.metrics.rejected_by_safe_timestamp, 1);
@@ -1192,7 +1200,7 @@ mod tests {
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
                 track_ver: TrackVer::new(),
-                safe_ts: Arc::new(AtomicU64::new(0)),
+                read_progress: Arc::new(RegionReadProgress::new(&region, 0, 0, "".to_owned())),
             };
             meta.readers.insert(1, read_delegate);
         }

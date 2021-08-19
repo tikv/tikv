@@ -22,24 +22,20 @@
 #![feature(cell_update)]
 #![feature(proc_macro_hygiene)]
 #![feature(min_specialization)]
-#![feature(const_fn)]
 #![feature(box_patterns)]
 #![feature(shrink_to)]
 #![feature(drain_filter)]
 #![feature(negative_impls)]
+#![feature(deadline_api)]
 
 #[macro_use(fail_point)]
 extern crate fail;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
-extern crate quick_error;
-#[macro_use]
 extern crate serde_derive;
 #[macro_use]
 extern crate more_asserts;
-#[macro_use]
-extern crate vlog;
 #[macro_use]
 extern crate tikv_util;
 

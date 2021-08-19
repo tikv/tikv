@@ -3,11 +3,11 @@
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use test_raftstore::*;
 use tikv_util::config::*;
-use tikv_util::time::UnixSecs as PdInstant;
+use tikv_util::time::{Instant, UnixSecs as PdInstant};
 use tikv_util::HandyRwLock;
 
 fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<u64>) {
@@ -64,14 +64,17 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
     wait_down_peers(cluster, 0, None);
     wait_down_peers(cluster, 1, Some(1));
     assert!(
-        cluster.get_down_peers()[&1].get_down_seconds() < down_secs + timer.elapsed().as_secs()
+        cluster.get_down_peers()[&1].get_down_seconds()
+            < down_secs + timer.saturating_elapsed().as_secs()
     );
 
     // Ensure that node will not reuse the previous peer heartbeats.
     cluster.must_transfer_leader(1, leader);
     wait_down_peers(cluster, 0, None);
     wait_down_peers(cluster, 1, Some(1));
-    assert!(cluster.get_down_peers()[&1].get_down_seconds() < timer.elapsed().as_secs() + 1);
+    assert!(
+        cluster.get_down_peers()[&1].get_down_seconds() < timer.saturating_elapsed().as_secs() + 1
+    );
 }
 
 #[test]
@@ -202,34 +205,4 @@ fn test_region_heartbeat_term() {
         }
     }
     panic!("reported term should be updated");
-}
-
-#[test]
-fn test_region_heartbeat_when_size_or_keys_is_none() {
-    let mut cluster = new_server_cluster(0, 3);
-    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(50);
-    cluster.run();
-
-    fail::cfg("region_size_or_keys_none", "return").unwrap();
-    for i in 0..100 {
-        let (k, v) = (format!("k{}", i), format!("v{}", i));
-        cluster.must_put(k.as_bytes(), v.as_bytes());
-    }
-
-    let region_id = cluster.get_region_id(b"");
-    for _ in 0..10 {
-        sleep_ms(100);
-        let size = cluster
-            .pd_client
-            .get_region_approximate_size(region_id)
-            .unwrap_or_default();
-        let keys = cluster
-            .pd_client
-            .get_region_approximate_keys(region_id)
-            .unwrap_or_default();
-        if size > 0 || keys > 0 {
-            return;
-        }
-    }
-    panic!("reported region keys should be updated");
 }

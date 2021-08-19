@@ -3,13 +3,15 @@
 use std::fs;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use collections::HashMap;
 use lazy_static::lazy_static;
 use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, CounterVec, IntCounterVec, IntGaugeVec, Opts};
+
+use crate::time::Instant;
 
 use procinfo::pid;
 
@@ -171,7 +173,7 @@ impl Collector for ThreadsCollector {
                         .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                         .unwrap();
                     let voluntary_past = voluntary_total.get();
-                    let voluntary_delta = voluntary_ctxt_switches as i64 - voluntary_past;
+                    let voluntary_delta = voluntary_ctxt_switches - voluntary_past;
                     if voluntary_delta > 0 {
                         voluntary_total.inc_by(voluntary_delta);
                     }
@@ -183,7 +185,7 @@ impl Collector for ThreadsCollector {
                         .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                         .unwrap();
                     let nonvoluntary_past = nonvoluntary_total.get();
-                    let nonvoluntary_delta = nonvoluntary_ctxt_switches as i64 - nonvoluntary_past;
+                    let nonvoluntary_delta = nonvoluntary_ctxt_switches - nonvoluntary_past;
                     if nonvoluntary_delta > 0 {
                         nonvoluntary_total.inc_by(nonvoluntary_delta);
                     }
@@ -312,7 +314,7 @@ fn collect_metrics_by_name(
     let mut new_map: HashMap<String, u64> = HashMap::default();
     for (tid, name) in names {
         let new_value = new_map.entry(name.to_string()).or_insert(0);
-        if let Some(value) = values.get(&tid) {
+        if let Some(value) = values.get(tid) {
             *new_value += *value as u64;
         }
     }
@@ -381,7 +383,10 @@ impl ThreadInfoStatistics {
 
     pub fn record(&mut self) {
         let current_instant = Instant::now();
-        let time_delta = (current_instant - self.last_instant).as_millis() as f64 / 1000.0;
+        let time_delta = current_instant
+            .saturating_duration_since(self.last_instant)
+            .as_millis() as f64
+            / 1000.0;
         self.last_instant = current_instant;
         self.metrics_rate.clear();
 
@@ -441,6 +446,12 @@ impl ThreadInfoStatistics {
     }
 }
 
+impl Default for ThreadInfoStatistics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 const TID_MIN_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
 const TID_MAX_UPDATE_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
@@ -465,7 +476,7 @@ impl TidRetriever {
     pub fn get_tids(&mut self) -> &[pid_t] {
         // Update the tid list according to tid_buffer_update_interval.
         // If tid is not changed, update the tid list less frequently.
-        if self.tid_buffer_last_update.elapsed() >= self.tid_buffer_update_interval {
+        if self.tid_buffer_last_update.saturating_elapsed() >= self.tid_buffer_update_interval {
             let new_tid_buffer = get_thread_ids(self.pid).unwrap();
             if new_tid_buffer == self.tid_buffer {
                 self.tid_buffer_update_interval *= 2;
@@ -639,7 +650,7 @@ mod tests {
 
                 let start = Instant::now();
                 loop {
-                    if (Instant::now() - start).as_millis() > duration_ms.into() {
+                    if start.saturating_elapsed().as_millis() > duration_ms.into() {
                         break;
                     }
                 }

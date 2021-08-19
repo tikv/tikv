@@ -1,14 +1,15 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::VecDeque;
-use std::error;
+use std::error::Error as StdError;
 use std::fmt::{self, Display, Formatter};
-use std::time::Instant;
+
+use fail::fail_point;
+use thiserror::Error;
 
 use engine_traits::KvEngine;
 use engine_traits::CF_WRITE;
-use fail::fail_point;
-use quick_error::quick_error;
+use tikv_util::time::Instant;
 use tikv_util::worker::Runnable;
 use tikv_util::{box_try, error, info, warn};
 
@@ -75,15 +76,10 @@ impl Display for Task {
     }
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("compact failed {:?}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("compact failed {0:?}")]
+    Other(#[from] Box<dyn StdError + Sync + Send>),
 }
 
 pub struct Runner<E> {
@@ -119,7 +115,7 @@ where
             "range_start" => start_key.map(::log_wrappers::Value::key),
             "range_end" => end_key.map(::log_wrappers::Value::key),
             "cf" => cf_name,
-            "time_takes" => ?timer.elapsed(),
+            "time_takes" => ?timer.saturating_elapsed(),
         );
         Ok(())
     }

@@ -4,7 +4,6 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
@@ -13,7 +12,9 @@ use rand::rngs::StdRng;
 use rand::Rng;
 use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query_common::storage::Range;
-use tidb_query_datatype::codec::datum::{encode_value, split_datum, Datum, NIL_FLAG};
+use tidb_query_datatype::codec::datum::{
+    encode_value, split_datum, Datum, DatumDecoder, DURATION_FLAG, INT_FLAG, NIL_FLAG, UINT_FLAG,
+};
 use tidb_query_datatype::codec::table;
 use tidb_query_datatype::def::Collation;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
@@ -22,6 +23,7 @@ use tidb_query_executors::{
     interface::BatchExecutor, runner::MAX_TIME_SLICE, BatchTableScanExecutor,
 };
 use tidb_query_expr::BATCH_MAX_SIZE;
+use tikv_util::time::Instant;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use yatp::task::future::reschedule;
 
@@ -96,6 +98,16 @@ impl<S: Snapshot> AnalyzeContext<S> {
         Ok(res_data)
     }
 
+    async fn handle_full_sampling(builder: &mut RowSampleBuilder<S>) -> Result<Vec<u8>> {
+        let sample_res = builder.collect_column_stats().await?;
+
+        let res_data = {
+            let res = sample_res.into_proto();
+            box_try!(res.write_to_bytes())
+        };
+        Ok(res_data)
+    }
+
     // handle_index is used to handle `AnalyzeIndexReq`,
     // it would build a histogram and count-min sketch of index values.
     async fn handle_index(
@@ -125,7 +137,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         while let Some((key, _)) = scanner.next()? {
             row_count += 1;
             if row_count >= BATCH_MAX_SIZE {
-                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
                     reschedule().await;
                     time_slice_start = Instant::now();
                 }
@@ -246,6 +258,16 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 res
             }
 
+            AnalyzeType::TypeFullSampling => {
+                let col_req = self.req.take_col_req();
+                let storage = self.storage.take().unwrap();
+                let ranges = std::mem::take(&mut self.ranges);
+                let mut builder = RowSampleBuilder::new(col_req, storage, ranges)?;
+                let res = AnalyzeContext::handle_full_sampling(&mut builder).await;
+                builder.data.collect_storage_stats(&mut self.storage_stats);
+                res
+            }
+
             AnalyzeType::TypeSampleIndex => Err(Error::Other(
                 "Analyze of this kind not implemented".to_string(),
             )),
@@ -268,6 +290,256 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
         dest.add(&self.storage_stats);
         self.storage_stats = Statistics::default();
+    }
+}
+
+struct RowSampleBuilder<S: Snapshot> {
+    data: BatchTableScanExecutor<TiKVStorage<SnapshotStore<S>>>,
+
+    max_sample_size: usize,
+    max_fm_sketch_size: usize,
+    columns_info: Vec<tipb::ColumnInfo>,
+    column_groups: Vec<tipb::AnalyzeColumnGroup>,
+}
+
+impl<S: Snapshot> RowSampleBuilder<S> {
+    fn new(
+        mut req: AnalyzeColumnsReq,
+        storage: TiKVStorage<SnapshotStore<S>>,
+        ranges: Vec<KeyRange>,
+    ) -> Result<Self> {
+        let columns_info: Vec<_> = req.take_columns_info().into();
+        if columns_info.is_empty() {
+            return Err(box_err!("empty columns_info"));
+        }
+        let common_handle_ids = req.take_primary_column_ids();
+        let table_scanner = BatchTableScanExecutor::new(
+            storage,
+            Arc::new(EvalConfig::default()),
+            columns_info.clone(),
+            ranges,
+            common_handle_ids,
+            false,
+            false, // Streaming mode is not supported in Analyze request, always false here
+            req.take_primary_prefix_column_ids(),
+        )?;
+        Ok(Self {
+            data: table_scanner,
+            max_sample_size: req.get_sample_size() as usize,
+            max_fm_sketch_size: req.get_sketch_size() as usize,
+            columns_info,
+            column_groups: req.take_column_groups().into(),
+        })
+    }
+
+    async fn collect_column_stats(&mut self) -> Result<AnalyzeSamplingResult> {
+        use tidb_query_datatype::{codec::collation::Collator, match_template_collator};
+
+        let mut is_drained = false;
+        let mut time_slice_start = Instant::now();
+        let mut collector = RowSampleCollector::new(
+            self.max_sample_size,
+            self.max_fm_sketch_size,
+            self.columns_info.len() + self.column_groups.len(),
+        );
+        while !is_drained {
+            let time_slice_elapsed = time_slice_start.saturating_elapsed();
+            if time_slice_elapsed > MAX_TIME_SLICE {
+                reschedule().await;
+                time_slice_start = Instant::now();
+            }
+            let result = self.data.next_batch(BATCH_MAX_SIZE);
+            is_drained = result.is_drained?;
+
+            let columns_slice = result.physical_columns.as_slice();
+
+            for logical_row in &result.logical_rows {
+                let mut column_vals: Vec<Vec<u8>> = Vec::new();
+                let mut collation_key_vals: Vec<Vec<u8>> = Vec::new();
+                for i in 0..self.columns_info.len() {
+                    let mut val = vec![];
+                    columns_slice[i].encode(
+                        *logical_row,
+                        &self.columns_info[i],
+                        &mut EvalContext::default(),
+                        &mut val,
+                    )?;
+                    if self.columns_info[i].as_accessor().is_string_like() {
+                        let sorted_val = match_template_collator! {
+                            TT, match self.columns_info[i].as_accessor().collation()? {
+                                Collation::TT => {
+                                    let mut mut_val = &val[..];
+                                    let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &self.columns_info[i])?;
+                                    if decoded_val == Datum::Null {
+                                        val.clone()
+                                    } else {
+                                        // Only if the `decoded_val` is Datum::Null, `decoded_val` is a Ok(None).
+                                        // So it is safe the unwrap the Ok value.
+                                        let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap().into_owned())?;
+                                        decoded_sorted_val
+                                    }
+                                }
+                            }
+                        };
+                        collation_key_vals.push(sorted_val);
+                    } else {
+                        collation_key_vals.push(Vec::new());
+                    }
+                    column_vals.push(val);
+                }
+                collector.count += 1;
+                collector.collect_column_group(
+                    &column_vals,
+                    &collation_key_vals,
+                    &self.columns_info,
+                    &self.column_groups,
+                );
+                collector.collect_column(column_vals, collation_key_vals, &self.columns_info);
+            }
+        }
+        Ok(AnalyzeSamplingResult::new(collector))
+    }
+}
+
+#[derive(Clone)]
+struct RowSampleCollector {
+    samples: BinaryHeap<Reverse<(i64, Vec<Vec<u8>>)>>,
+    null_count: Vec<i64>,
+    count: u64,
+    max_sample_size: usize,
+    fm_sketches: Vec<FmSketch>,
+    rng: StdRng,
+    total_sizes: Vec<i64>,
+    row_buf: Vec<u8>,
+}
+
+impl Default for RowSampleCollector {
+    fn default() -> Self {
+        RowSampleCollector {
+            samples: BinaryHeap::new(),
+            null_count: vec![],
+            count: 0,
+            max_sample_size: 0,
+            fm_sketches: vec![],
+            rng: StdRng::from_entropy(),
+            total_sizes: vec![],
+            row_buf: Vec::new(),
+        }
+    }
+}
+
+impl RowSampleCollector {
+    fn new(
+        max_sample_size: usize,
+        max_fm_sketch_size: usize,
+        col_and_group_len: usize,
+    ) -> RowSampleCollector {
+        RowSampleCollector {
+            samples: BinaryHeap::new(),
+            null_count: vec![0; col_and_group_len],
+            count: 0,
+            max_sample_size,
+            fm_sketches: vec![FmSketch::new(max_fm_sketch_size); col_and_group_len],
+            rng: StdRng::from_entropy(),
+            total_sizes: vec![0; col_and_group_len],
+            row_buf: Vec::new(),
+        }
+    }
+
+    pub fn collect_column_group(
+        &mut self,
+        columns_val: &[Vec<u8>],
+        collation_keys_val: &[Vec<u8>],
+        columns_info: &[tipb::ColumnInfo],
+        column_groups: &[tipb::AnalyzeColumnGroup],
+    ) {
+        let col_len = columns_val.len();
+        for i in 0..column_groups.len() {
+            self.row_buf.clear();
+            let offsets = column_groups[i].get_column_offsets();
+            let mut has_null = true;
+            for j in offsets {
+                if columns_val[*j as usize][0] == NIL_FLAG {
+                    continue;
+                }
+                has_null = false;
+                self.total_sizes[col_len + i] += columns_val[*j as usize].len() as i64
+            }
+            // We only maintain the null count for single column case.
+            if has_null && offsets.len() == 1 {
+                self.null_count[col_len + i] += 1;
+                continue;
+            }
+            // Use a in place murmur3 to replace this memory copy.
+            for j in offsets {
+                if columns_info[*j as usize].as_accessor().is_string_like() {
+                    self.row_buf
+                        .extend_from_slice(&collation_keys_val[*j as usize]);
+                } else {
+                    self.row_buf.extend_from_slice(&columns_val[*j as usize]);
+                }
+            }
+            self.fm_sketches[col_len + i].insert(&self.row_buf);
+        }
+    }
+
+    pub fn collect_column(
+        &mut self,
+        columns_val: Vec<Vec<u8>>,
+        collation_keys_val: Vec<Vec<u8>>,
+        columns_info: &[tipb::ColumnInfo],
+    ) {
+        for i in 0..columns_val.len() {
+            if columns_val[i][0] == NIL_FLAG {
+                self.null_count[i] += 1;
+                continue;
+            }
+            if columns_info[i].as_accessor().is_string_like() {
+                self.fm_sketches[i].insert(&collation_keys_val[i]);
+            } else {
+                self.fm_sketches[i].insert(&columns_val[i]);
+            }
+            self.total_sizes[i] += columns_val[i].len() as i64;
+        }
+        self.sampling(columns_val);
+    }
+
+    pub fn sampling(&mut self, data: Vec<Vec<u8>>) {
+        let cur_rng = self.rng.gen_range(0, i64::MAX);
+        if self.samples.len() < self.max_sample_size {
+            self.samples.push(Reverse((cur_rng, data)));
+            return;
+        }
+        if self.samples.len() == self.max_sample_size && self.samples.peek().unwrap().0.0 < cur_rng
+        {
+            self.samples.pop();
+            self.samples.push(Reverse((cur_rng, data)));
+        }
+    }
+
+    pub fn into_proto(self) -> tipb::RowSampleCollector {
+        let mut s = tipb::RowSampleCollector::default();
+        let samples = self
+            .samples
+            .into_iter()
+            .map(|r_tuple| {
+                let mut pb_sample = tipb::RowSample::default();
+                pb_sample.set_row(r_tuple.0.1.into());
+                pb_sample.set_weight(r_tuple.0.0);
+                pb_sample
+            })
+            .collect();
+        s.set_samples(samples);
+        s.set_null_counts(self.null_count);
+        s.set_count(self.count as i64);
+        let pb_fm_sketches = self
+            .fm_sketches
+            .into_iter()
+            .map(|fm_sketch| fm_sketch.into_proto())
+            .collect();
+        s.set_fm_sketch(pb_fm_sketches);
+        s.set_total_size(self.total_sizes);
+        s
     }
 }
 
@@ -342,7 +614,8 @@ impl<S: Snapshot> SampleBuilder<S> {
     async fn collect_columns_stats(
         &mut self,
     ) -> Result<(AnalyzeColumnsResult, Option<AnalyzeIndexResult>)> {
-        use tidb_query_datatype::codec::collation::{match_template_collator, Collator};
+        use tidb_query_datatype::codec::collation::Collator;
+        use tidb_query_datatype::match_template_collator;
         let columns_without_handle_len =
             self.columns_info.len() - self.columns_info[0].get_pk_handle() as usize;
 
@@ -365,7 +638,7 @@ impl<S: Snapshot> SampleBuilder<S> {
         let mut common_handle_cms = CmSketch::new(self.cm_sketch_depth, self.cm_sketch_width);
         let mut common_handle_fms = FmSketch::new(self.max_fm_sketch_size);
         while !is_drained {
-            let time_slice_elapsed = time_slice_start.elapsed();
+            let time_slice_elapsed = time_slice_start.saturating_elapsed();
             if time_slice_elapsed > MAX_TIME_SLICE {
                 reschedule().await;
                 time_slice_start = Instant::now();
@@ -454,6 +727,28 @@ impl<S: Snapshot> SampleBuilder<S> {
                         &mut EvalContext::default(),
                         &mut val,
                     )?;
+
+                    // This is a workaround for different encoding methods used by TiDB and TiKV for CM Sketch.
+                    // We need this because we must ensure we are using the same encoding method when we are querying values from
+                    //   CM Sketch (in TiDB) and inserting values into CM Sketch (here).
+                    // We are inserting raw bytes from TableScanExecutor into CM Sketch here and query CM Sketch using bytes
+                    //   encoded by tablecodec.EncodeValue() in TiDB. Their results are different after row format becomes ver 2.
+                    //
+                    // Here we (1) convert INT bytes to VAR_INT bytes, (2) convert UINT bytes to VAR_UINT bytes,
+                    //   and (3) "flatten" the duration value from DURATION bytes into i64 value, then convert it to VAR_INT bytes.
+                    // These are the only 3 cases we need to care about according to TiDB's tablecodec.EncodeValue() and
+                    //   TiKV's V1CompatibleEncoder::write_v2_as_datum().
+                    val = match val[0] {
+                        INT_FLAG | UINT_FLAG | DURATION_FLAG => {
+                            let mut mut_val = &val[..];
+                            let decoded_val = mut_val.read_datum()?;
+                            let flattened =
+                                table::flatten(&mut EvalContext::default(), decoded_val)?;
+                            encode_value(&mut EvalContext::default(), &[flattened])?
+                        }
+                        _ => val,
+                    };
+
                     if columns_info[i].as_accessor().is_string_like() {
                         let sorted_val = match_template_collator! {
                             TT, match columns_info[i].as_accessor().collation()? {
@@ -560,6 +855,26 @@ impl SampleCollector {
     }
 }
 
+#[derive(Default)]
+struct AnalyzeSamplingResult {
+    row_sample_collector: RowSampleCollector,
+}
+
+impl AnalyzeSamplingResult {
+    fn new(row_sample_collector: RowSampleCollector) -> AnalyzeSamplingResult {
+        AnalyzeSamplingResult {
+            row_sample_collector,
+        }
+    }
+
+    fn into_proto(self) -> tipb::AnalyzeColumnsResp {
+        let pb_collector = self.row_sample_collector.into_proto();
+        let mut res = tipb::AnalyzeColumnsResp::default();
+        res.set_row_collector(pb_collector);
+        res
+    }
+}
+
 /// `AnalyzeColumnsResult` collect the result of analyze columns request.
 #[derive(Default)]
 struct AnalyzeColumnsResult {
@@ -641,6 +956,7 @@ impl AnalyzeMixedResult {
 mod tests {
     use super::*;
 
+    use ::std::collections::HashMap;
     use tidb_query_datatype::codec::datum;
     use tidb_query_datatype::codec::datum::Datum;
 
@@ -666,5 +982,38 @@ mod tests {
         assert_eq!(sample.count, 3);
         assert_eq!(sample.cm_sketch.unwrap().count(), 3);
         assert_eq!(sample.total_size, 6)
+    }
+
+    #[test]
+    fn test_row_sample_collector() {
+        let sample_num = 20;
+        let row_num = 100;
+        let loop_cnt = 1000;
+        let mut item_cnt: HashMap<Vec<u8>, usize> = HashMap::new();
+        let mut nums: Vec<Vec<u8>> = Vec::with_capacity(row_num);
+        for i in 0..row_num {
+            nums.push(
+                datum::encode_value(&mut EvalContext::default(), &[Datum::I64(i as i64)]).unwrap(),
+            );
+        }
+        for _loop_i in 0..loop_cnt {
+            let mut collector = RowSampleCollector::new(sample_num, 1000, 1);
+            for row in &nums {
+                collector.sampling([row.clone()].to_vec());
+            }
+            assert_eq!(collector.samples.len(), sample_num);
+            for sample in collector.samples.into_vec() {
+                *item_cnt.entry(sample.0.1[0].clone()).or_insert(0) += 1;
+            }
+        }
+        let exp_freq = sample_num as f64 * loop_cnt as f64 / row_num as f64;
+        let delta = 0.5;
+        for (_, v) in item_cnt.into_iter() {
+            assert!(
+                v as f64 >= exp_freq / (1.0 + delta) && v as f64 <= exp_freq * (1.0 + delta),
+                "v: {}",
+                v
+            );
+        }
     }
 }

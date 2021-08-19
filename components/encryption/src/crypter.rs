@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use byteorder::{BigEndian, ByteOrder};
 use derive_more::Deref;
 use engine_traits::EncryptionMethod as DBEncryptionMethod;
 use kvproto::encryptionpb::EncryptionMethod;
@@ -118,9 +119,20 @@ impl Iv {
             Iv::Gcm(iv) => iv,
         }
     }
+
+    pub fn add_offset(&mut self, offset: u64) -> Result<()> {
+        match self {
+            Iv::Ctr(iv) => {
+                let v = BigEndian::read_u128(iv);
+                BigEndian::write_u128(iv, v.wrapping_add(offset as u128));
+                Ok(())
+            }
+            Iv::Gcm(_) => Err(box_err!("offset addition is not supported for GCM mode")),
+        }
+    }
 }
 
-// The length GCM tag must be 16 btyes.
+// The length GCM tag must be 16 bytes.
 const GCM_TAG_LEN: usize = 16;
 
 pub struct AesGcmTag([u8; GCM_TAG_LEN]);
@@ -162,7 +174,7 @@ impl<'k> AesGcmCrypter<'k> {
             &self.key.0,
             Some(self.iv.as_slice()),
             &[], /* AAD */
-            &pt,
+            pt,
             &mut tag.0,
         )?;
         Ok((ciphertext, tag))
@@ -175,7 +187,7 @@ impl<'k> AesGcmCrypter<'k> {
             &self.key.0,
             Some(self.iv.as_slice()),
             &[], /* AAD */
-            &ct,
+            ct,
             &tag.0,
         )?;
         Ok(plaintext)

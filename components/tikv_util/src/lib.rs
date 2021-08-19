@@ -17,6 +17,8 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 use std::{env, thread, u64};
 
+use nix::sys::wait::{wait, WaitStatus};
+use nix::unistd::{fork, ForkResult};
 use rand::rngs::ThreadRng;
 
 #[macro_use]
@@ -32,12 +34,16 @@ pub mod deadline;
 pub mod keybuilder;
 pub mod logger;
 pub mod lru;
+pub mod math;
+pub mod memory;
 pub mod metrics;
 pub mod mpsc;
 pub mod stream;
 pub mod sys;
+pub mod thread_group;
 pub mod time;
 pub mod timer;
+pub mod topn;
 pub mod worker;
 pub mod yatp_pool;
 
@@ -388,6 +394,13 @@ impl<T> MustConsumeVec<T> {
             v: Vec::with_capacity(cap),
         }
     }
+
+    pub fn take(&mut self) -> Self {
+        MustConsumeVec {
+            tag: self.tag,
+            v: std::mem::take(&mut self.v),
+        }
+    }
 }
 
 impl<T> Deref for MustConsumeVec<T> {
@@ -454,12 +467,12 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
             "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
             "backtrace" => format_args!("{:?}", bt),
         );
-        // This may be needed to allow the above log statements to flush
-        thread::sleep(Duration::from_millis(2));
 
         // There might be remaining logs in the async logger.
         // To collect remaining logs and also collect future logs, replace the old one with a
         // terminal logger.
+        // When the old global async logger is replaced, the old async guard will be taken and dropped.
+        // In the drop() the async guard, it waits for the finish of the remaining logs in the async logger.
         if let Some(level) = ::log::max_level().to_level() {
             let drainer = logger::text_format(logger::term_writer());
             let _ = logger::init_log(
@@ -514,6 +527,21 @@ pub fn check_environment_variables() {
     }
 }
 
+/// Create a child process and wait to get its exit code.
+pub fn run_and_wait_child_process(child: impl Fn()) -> Result<i32, String> {
+    match unsafe { fork() } {
+        Ok(ForkResult::Parent { .. }) => match wait().unwrap() {
+            WaitStatus::Exited(_, status) => Ok(status),
+            v => Err(format!("{:?}", v)),
+        },
+        Ok(ForkResult::Child) => {
+            child();
+            std::process::exit(0);
+        }
+        Err(e) => Err(format!("Fork failed: {}", e)),
+    }
+}
+
 #[inline]
 pub fn is_zero_duration(d: &Duration) -> bool {
     d.as_secs() == 0 && d.subsec_nanos() == 0
@@ -532,11 +560,68 @@ pub fn build_on_master_branch() -> bool {
 mod tests {
     use super::*;
 
+    use std::io::Read;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
 
     use tempfile::Builder;
+
+    #[test]
+    #[cfg(unix)]
+    fn test_panic_hook() {
+        use gag::BufferRedirect;
+        use slog::{self, Drain, OwnedKVList, Record};
+
+        struct DelayDrain<D>(D);
+
+        impl<D> Drain for DelayDrain<D>
+        where
+            D: Drain,
+            <D as Drain>::Err: std::fmt::Display,
+        {
+            type Ok = <D as Drain>::Ok;
+            type Err = <D as Drain>::Err;
+
+            fn log(
+                &self,
+                record: &Record<'_>,
+                values: &OwnedKVList,
+            ) -> Result<Self::Ok, Self::Err> {
+                std::thread::sleep(Duration::from_millis(100));
+                self.0.log(record, values)
+            }
+        }
+
+        let mut stderr = BufferRedirect::stderr().unwrap();
+        let status = run_and_wait_child_process(|| {
+            set_panic_hook(false, "./");
+            let drainer = logger::text_format(logger::term_writer());
+            crate::logger::init_log(
+                DelayDrain(drainer),
+                logger::get_level_by_string("debug").unwrap(),
+                true, // use async drainer
+                true, // init std log
+                vec![],
+                0,
+            )
+            .unwrap();
+
+            let _ = std::thread::spawn(|| {
+                // let the global logger is held by the other thread, so the
+                // drop() of the async drain is not called in time.
+                let _guard = slog_global::borrow_global();
+                std::thread::sleep(Duration::from_secs(1));
+            });
+            panic!("test");
+        })
+        .unwrap();
+
+        assert_eq!(status, 1);
+        let mut panic = String::new();
+        stderr.read_to_string(&mut panic).unwrap();
+        assert!(!panic.is_empty());
+    }
 
     #[test]
     fn test_panic_mark_file_path() {

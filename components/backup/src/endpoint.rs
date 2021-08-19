@@ -1,23 +1,23 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::f64::INFINITY;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{borrow::Cow, time::*};
 
 use concurrency_manager::ConcurrencyManager;
-use configuration::Configuration;
 use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, CfName, SstCompressionType};
-use external_storage::*;
+use external_storage_export::{create_storage, ExternalStorage};
 use file_system::{IOType, WithIOType};
 use futures::channel::mpsc::*;
-use kvproto::backup::*;
+use kvproto::brpb::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
+use online_config::OnlineConfig;
 use raft::StateRole;
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
@@ -28,11 +28,10 @@ use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
 use tikv::storage::Statistics;
-use tikv_util::time::Limiter;
-use tikv_util::worker::{Runnable, RunnableWithTimer};
+use tikv_util::time::{Instant, Limiter};
+use tikv_util::worker::Runnable;
 use tikv_util::{
-    box_err, debug, defer, error, error_unknown, impl_display_as_debug, info, slow_log, thd_name,
-    warn,
+    box_err, debug, defer, error, error_unknown, impl_display_as_debug, info, thd_name, warn,
 };
 use txn_types::{Key, Lock, TimeStamp};
 use yatp::task::callback::{Handle, TaskCell};
@@ -44,9 +43,6 @@ use crate::Error;
 use crate::*;
 
 const BACKUP_BATCH_LIMIT: usize = 1024;
-
-// if thread pool has been idle for such long time, we will shutdown it.
-const IDLE_THREADPOOL_DURATION: u64 = 30 * 60 * 1000; // 30 mins
 
 #[derive(Clone)]
 struct Request {
@@ -173,7 +169,7 @@ impl BackupRange {
                 |key, lock| {
                     Lock::check_ts_conflict(
                         Cow::Borrowed(lock),
-                        &key,
+                        key,
                         backup_ts,
                         &Default::default(),
                     )
@@ -200,7 +196,7 @@ impl BackupRange {
         };
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["snapshot"])
-            .observe(start_snapshot.elapsed().as_secs_f64());
+            .observe(start_snapshot.saturating_elapsed().as_secs_f64());
         let snap_store = SnapshotStore::new(
             snapshot,
             backup_ts,
@@ -289,7 +285,7 @@ impl BackupRange {
         }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["scan"])
-            .observe(start_scan.elapsed().as_secs_f64());
+            .observe(start_scan.saturating_elapsed().as_secs_f64());
 
         if writer.need_flush_keys() {
             match writer.save(&storage.storage) {
@@ -372,7 +368,7 @@ impl BackupRange {
         }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["raw_scan"])
-            .observe(start.elapsed().as_secs_f64());
+            .observe(start.saturating_elapsed().as_secs_f64());
         Ok(statistics)
     }
 
@@ -418,8 +414,8 @@ impl BackupRange {
 #[derive(Clone)]
 pub struct ConfigManager(Arc<RwLock<BackupConfig>>);
 
-impl configuration::ConfigManager for ConfigManager {
-    fn dispatch(&mut self, change: configuration::ConfigChange) -> configuration::Result<()> {
+impl online_config::ConfigManager for ConfigManager {
+    fn dispatch(&mut self, change: online_config::ConfigChange) -> online_config::Result<()> {
         self.0.write().unwrap().update(change);
         Ok(())
     }
@@ -438,7 +434,6 @@ impl ConfigManager {
 pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     store_id: u64,
     pool: RefCell<ControlThreadPool>,
-    pool_idle_threshold: u64,
     db: Arc<DB>,
     config_manager: ConfigManager,
     concurrency_manager: ConcurrencyManager,
@@ -512,8 +507,8 @@ impl<R: RegionInfoProvider> Progress<R> {
                         }
                     }
                     if info.role == StateRole::Leader {
-                        let ekey = get_min_end_key(end_key.as_ref(), &region);
-                        let skey = get_max_start_key(start_key.as_ref(), &region);
+                        let ekey = get_min_end_key(end_key.as_ref(), region);
+                        let skey = get_max_start_key(start_key.as_ref(), region);
                         assert!(!(skey == ekey && ekey.is_some()), "{:?} {:?}", skey, ekey);
                         let leader = find_peer(region, store_id).unwrap().to_owned();
                         let backup_range = BackupRange {
@@ -557,7 +552,6 @@ impl<R: RegionInfoProvider> Progress<R> {
 struct ControlThreadPool {
     size: usize,
     workers: Option<Arc<ThreadPool<TaskCell>>>,
-    last_active: Instant,
 }
 
 impl ControlThreadPool {
@@ -565,7 +559,6 @@ impl ControlThreadPool {
         ControlThreadPool {
             size: 0,
             workers: None,
-            last_active: Instant::now(),
         }
     }
 
@@ -601,22 +594,6 @@ impl ControlThreadPool {
         self.size = new_size;
         BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64);
     }
-
-    fn heartbeat(&mut self) {
-        self.last_active = Instant::now();
-    }
-
-    /// Shutdown the thread pool if it has been idle for a long time.
-    fn check_active(&mut self, idle_threshold: Duration) {
-        if self.last_active.elapsed() >= idle_threshold {
-            self.size = 0;
-            if let Some(w) = self.workers.take() {
-                let start = Instant::now();
-                drop(w);
-                slow_log!(start.elapsed(), "backup thread pool shutdown too long");
-            }
-        }
-    }
 }
 
 impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
@@ -633,7 +610,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             engine,
             region_info,
             pool: RefCell::new(ControlThreadPool::new()),
-            pool_idle_threshold: IDLE_THREADPOOL_DURATION,
             db,
             config_manager: ConfigManager(Arc::new(RwLock::new(config))),
             concurrency_manager,
@@ -684,7 +660,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
 
             let storage = LimitedStorage {
                 limiter: request.limiter,
-                storage: backend,
+                storage: Arc::new(backend),
             };
 
             loop {
@@ -847,18 +823,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Runnable for Endpoint<E
         }
         info!("run backup task"; "task" => %task);
         self.handle_backup_task(task);
-        self.pool.borrow_mut().heartbeat();
-    }
-}
-
-impl<E: Engine, R: RegionInfoProvider + Clone + 'static> RunnableWithTimer for Endpoint<E, R> {
-    fn on_timeout(&mut self) {
-        let pool_idle_duration = Duration::from_millis(self.pool_idle_threshold);
-        self.pool.borrow_mut().check_active(pool_idle_duration);
-    }
-
-    fn get_interval(&self) -> Duration {
-        Duration::from_millis(self.pool_idle_threshold)
     }
 }
 
@@ -941,12 +905,13 @@ fn to_sst_compression_type(ct: CompressionType) -> Option<SstCompressionType> {
 
 #[cfg(test)]
 pub mod tests {
+    use std::fs;
     use std::path::{Path, PathBuf};
-    use std::{fs, thread};
+    use std::time::Duration;
 
     use engine_traits::MiscExt;
-    use external_storage::{make_local_backend, make_noop_backend};
-    use file_system::{IOOp, WithIORateLimit};
+    use external_storage_export::{make_local_backend, make_noop_backend};
+    use file_system::{IOOp, IORateLimiter};
     use futures::executor::block_on;
     use futures::stream::StreamExt;
     use kvproto::metapb;
@@ -959,7 +924,6 @@ pub mod tests {
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::config::ReadableSize;
-    use tikv_util::worker::Worker;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use super::*;
@@ -1012,6 +976,12 @@ pub mod tests {
     }
 
     pub fn new_endpoint() -> (TempDir, Endpoint<RocksEngine, MockRegionInfoProvider>) {
+        new_endpoint_with_limiter(None)
+    }
+
+    pub fn new_endpoint_with_limiter(
+        limiter: Option<Arc<IORateLimiter>>,
+    ) -> (TempDir, Endpoint<RocksEngine, MockRegionInfoProvider>) {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
@@ -1020,6 +990,7 @@ pub mod tests {
                 engine_traits::CF_LOCK,
                 engine_traits::CF_WRITE,
             ])
+            .io_rate_limiter(limiter)
             .build()
             .unwrap();
         let concurrency_manager = ConcurrencyManager::new(1.into());
@@ -1161,7 +1132,7 @@ pub mod tests {
         let test_handle_backup_task_range =
             |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
                 let tmp = TempDir::new().unwrap();
-                let backend = external_storage::make_local_backend(tmp.path());
+                let backend = make_local_backend(tmp.path());
                 let (tx, rx) = unbounded();
                 let task = Task {
                     request: Request {
@@ -1233,8 +1204,9 @@ pub mod tests {
 
     #[test]
     fn test_handle_backup_task() {
-        let (_guard, stats) = WithIORateLimit::new(0);
-        let (tmp, endpoint) = new_endpoint();
+        let limiter = Arc::new(IORateLimiter::new_for_test());
+        let stats = limiter.statistics().unwrap();
+        let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter));
         let engine = endpoint.engine.clone();
 
         endpoint
@@ -1499,74 +1471,4 @@ pub mod tests {
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 3);
     }
-
-    pub struct EndpointWrapper<E: Engine, R: RegionInfoProvider + Clone + 'static> {
-        inner: Arc<Mutex<Endpoint<E, R>>>,
-    }
-    impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Runnable for EndpointWrapper<E, R> {
-        type Task = Task;
-
-        fn run(&mut self, task: Task) {
-            self.inner.lock().unwrap().run(task);
-        }
-    }
-
-    impl<E: Engine, R: RegionInfoProvider + Clone + 'static> RunnableWithTimer
-        for EndpointWrapper<E, R>
-    {
-        fn on_timeout(&mut self) {
-            self.inner.lock().unwrap().on_timeout();
-        }
-
-        fn get_interval(&self) -> Duration {
-            self.inner.lock().unwrap().get_interval()
-        }
-    }
-
-    #[test]
-    fn test_thread_pool_shutdown_when_idle() {
-        let (_, mut endpoint) = new_endpoint();
-
-        // set the idle threshold to 100ms
-        endpoint.pool_idle_threshold = 100;
-        let endpoint = Arc::new(Mutex::new(endpoint));
-        let worker = Worker::new("endpoint");
-        let scheduler = {
-            let inner = endpoint.clone();
-            worker.start_with_timer("endpoint", EndpointWrapper { inner })
-        };
-
-        let mut req = BackupRequest::default();
-        req.set_start_key(vec![]);
-        req.set_end_key(vec![]);
-        req.set_start_version(1);
-        req.set_end_version(1);
-        req.set_storage_backend(make_noop_backend());
-
-        endpoint
-            .lock()
-            .unwrap()
-            .get_config_manager()
-            .set_num_threads(10);
-
-        let (tx, resp_rx) = unbounded();
-        let (task, _) = Task::new(req, tx).unwrap();
-
-        // if not task arrive after create the thread pool is empty
-        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
-
-        scheduler.schedule(task).unwrap();
-        // wait until the task finish
-        let _ = block_on(resp_rx.into_future());
-        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
-
-        // thread pool not yet shutdown
-        thread::sleep(Duration::from_millis(50));
-        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
-
-        // thread pool shutdown if not task arrive more than 100ms
-        thread::sleep(Duration::from_millis(160));
-        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
-    }
-    // TODO: region err in txn(engine(request))
 }

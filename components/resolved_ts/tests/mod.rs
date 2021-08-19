@@ -10,9 +10,10 @@ use grpcio::ClientUnaryReceiver;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
+use online_config::ConfigValue;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
-use tikv::config::CdcConfig;
+use tikv::config::ResolvedTsConfig;
 use tikv_util::worker::LazyWorker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
@@ -72,8 +73,8 @@ impl TestSuite {
             let raft_router = sim.get_server_router(*id);
             let cm = sim.get_concurrency_manager(*id);
             let env = Arc::new(Environment::new(1));
-            let cfg = CdcConfig {
-                min_ts_interval: tikv_util::config::ReadableDuration(Duration::from_millis(100)),
+            let cfg = ResolvedTsConfig {
+                advance_ts_interval: tikv_util::config::ReadableDuration(Duration::from_millis(10)),
                 ..Default::default()
             };
             let rts_endpoint = resolved_ts::Endpoint::new(
@@ -106,6 +107,19 @@ impl TestSuite {
             worker.stop();
         }
         self.cluster.shutdown();
+    }
+
+    pub fn must_change_advance_ts_interval(&self, store_id: u64, new_interval: Duration) {
+        let change = {
+            let mut c = std::collections::HashMap::default();
+            c.insert(
+                "advance_ts_interval".to_owned(),
+                ConfigValue::Duration(new_interval.as_millis() as u64),
+            );
+            c
+        };
+        let scheduler = self.endpoints.get(&store_id).unwrap().scheduler();
+        scheduler.schedule(Task::ChangeConfig { change }).unwrap();
     }
 
     pub fn must_kv_prewrite(
@@ -321,8 +335,9 @@ impl TestSuite {
         let leader = self.cluster.leader_of_region(region_id)?;
         let meta = self.cluster.store_metas[&leader.store_id].lock().unwrap();
         Some(
-            meta.peer_properties[&region_id]
-                .load(atomic::Ordering::Acquire)
+            meta.region_read_progress
+                .get_safe_ts(&region_id)
+                .unwrap()
                 .into(),
         )
     }
@@ -336,6 +351,7 @@ impl TestSuite {
             }
             sleep_ms(100)
         }
+        panic!("fail to get same ts after 50 trys");
     }
 
     pub fn must_get_rts_ge(&mut self, region_id: u64, rts: TimeStamp) {
@@ -347,5 +363,6 @@ impl TestSuite {
             }
             sleep_ms(100)
         }
+        panic!("fail to get greater ts after 50 trys");
     }
 }

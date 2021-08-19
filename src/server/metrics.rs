@@ -42,12 +42,7 @@ make_auto_flush_static_metric! {
         raw_batch_delete,
         raw_get_key_ttl,
         raw_compare_and_swap,
-        ver_get,
-        ver_batch_get,
-        ver_mut,
-        ver_batch_mut,
-        ver_scan,
-        ver_delete_range,
+        raw_checksum,
         unsafe_destroy_range,
         physical_scan_lock,
         register_lock_observer,
@@ -55,7 +50,7 @@ make_auto_flush_static_metric! {
         remove_lock_observer,
         coprocessor,
         coprocessor_stream,
-        coprocessor_v2,
+        raw_coprocessor,
         mvcc_get_by_key,
         mvcc_get_by_start_ts,
         split_region,
@@ -140,9 +135,8 @@ make_static_metric! {
     }
 
     pub label_enum BatchableRequestKind {
-        point_get,
-        prewrite,
-        commit,
+        kv_get,
+        raw_get,
     }
 
     pub struct GrpcMsgHistogramGlobal: Histogram {
@@ -376,21 +370,25 @@ lazy_static! {
             "tikv_server_request_batch_size",
             "Size of request batch input",
             &["type"],
-            exponential_buckets(1f64, 5f64, 10).unwrap()
-        )
-        .unwrap();
-    pub static ref REQUEST_BATCH_RATIO_HISTOGRAM_VEC: RequestBatchRatioHistogramVec =
-        register_static_histogram_vec!(
-            RequestBatchRatioHistogramVec,
-            "tikv_server_request_batch_ratio",
-            "Ratio of request batch output to input",
-            &["type"],
-            exponential_buckets(1f64, 5f64, 10).unwrap()
+            vec![1.0, 2.0, 4.0, 8.0, 12.0, 16.0, 20.0, 24.0, 28.0, 32.0, 64.0]
         )
         .unwrap();
     pub static ref CPU_CORES_QUOTA_GAUGE: Gauge = register_gauge!(
         "tikv_server_cpu_cores_quota",
         "Total CPU cores quota for TiKV server"
+    )
+    .unwrap();
+    pub static ref MEM_TRACE_SUM_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_server_mem_trace_sum",
+        "The sum of memory trace for TiKV server",
+        &["name"]
+    )
+    .unwrap();
+    pub static ref MEMORY_USAGE_GAUGE: IntGauge =
+        register_int_gauge!("tikv_server_memory_usage", "Memory usage for the instance").unwrap();
+    pub static ref RAFT_APPEND_REJECTS: IntCounter = register_int_counter!(
+        "tikv_server_raft_append_rejects",
+        "Count for rejected Raft append messages"
     )
     .unwrap();
 }

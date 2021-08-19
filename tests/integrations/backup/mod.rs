@@ -3,7 +3,7 @@
 use std::{fs::File, time::Duration};
 
 use engine_traits::{CF_DEFAULT, CF_WRITE};
-use external_storage::{create_storage, make_local_backend};
+use external_storage_export::{create_storage, make_local_backend};
 use file_system::calc_crc32_bytes;
 use futures::{executor::block_on, AsyncReadExt, StreamExt};
 use kvproto::import_sstpb::*;
@@ -28,7 +28,7 @@ fn assert_same_file_name(s1: String, s2: String) {
     }
 }
 
-fn assert_same_files(files1: Vec<kvproto::backup::File>, files2: Vec<kvproto::backup::File>) {
+fn assert_same_files(files1: Vec<kvproto::brpb::File>, files2: Vec<kvproto::brpb::File>) {
     assert_eq!(files1.len(), files2.len());
 
     // After https://github.com/tikv/tikv/pull/8707 merged.

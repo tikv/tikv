@@ -1,12 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use strum::EnumCount;
 
+use tikv_util::time::Instant;
+
 use crate::iosnoop::{fetch_io_bytes, flush_io_latency_metrics};
-use crate::metrics::IO_BYTES_VEC;
+use crate::metrics::{tls_flush, IO_BYTES_VEC};
 use crate::IOBytes;
 use crate::IORateLimiterStatistics;
 use crate::{IOOp, IOType};
@@ -35,8 +36,8 @@ macro_rules! flush_io_bytes {
         let bytes = $fetcher.fetch($io_type);
         let delta_bytes = bytes - $last_fetch;
         $last_fetch = bytes;
-        IO_BYTES_VEC.$metrics.read.inc_by(delta_bytes.read as i64);
-        IO_BYTES_VEC.$metrics.write.inc_by(delta_bytes.write as i64);
+        IO_BYTES_VEC.$metrics.read.inc_by(delta_bytes.read);
+        IO_BYTES_VEC.$metrics.write.inc_by(delta_bytes.write);
     };
 }
 
@@ -54,6 +55,7 @@ impl MetricsManager {
     }
 
     pub fn flush(&mut self, _now: Instant) {
+        tls_flush();
         flush_io_latency_metrics();
         flush_io_bytes!(
             self.fetcher,
@@ -84,6 +86,12 @@ impl MetricsManager {
             compaction,
             IOType::Compaction,
             self.last_fetch[IOType::Compaction as usize]
+        );
+        flush_io_bytes!(
+            self.fetcher,
+            level_zero_compaction,
+            IOType::LevelZeroCompaction,
+            self.last_fetch[IOType::LevelZeroCompaction as usize]
         );
         flush_io_bytes!(
             self.fetcher,

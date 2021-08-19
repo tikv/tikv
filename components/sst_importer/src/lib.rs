@@ -6,8 +6,6 @@
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
-extern crate quick_error;
-#[macro_use]
 extern crate serde_derive;
 #[macro_use]
 extern crate tikv_util;
@@ -16,14 +14,17 @@ extern crate tikv_alloc;
 
 mod config;
 mod errors;
-pub mod metrics;
+mod import_file;
+mod sst_writer;
 mod util;
 #[macro_use]
-pub mod service;
 pub mod import_mode;
+pub mod metrics;
 pub mod sst_importer;
 
 pub use self::config::Config;
 pub use self::errors::{error_inc, Error, Result};
-pub use self::sst_importer::{sst_meta_to_path, SSTImporter, SSTWriter};
+pub use self::import_file::sst_meta_to_path;
+pub use self::sst_importer::SSTImporter;
+pub use self::sst_writer::{RawSSTWriter, TxnSSTWriter};
 pub use self::util::prepare_sst_for_ingestion;

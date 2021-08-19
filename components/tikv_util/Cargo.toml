@@ -8,6 +8,7 @@ publish = false
 default = ["protobuf-codec"]
 failpoints = ["fail/failpoints"]
 protobuf-codec = [
+  "protobuf/bytes",
   "error_code/protobuf-codec",
   "grpcio/protobuf-codec",
   "kvproto/protobuf-codec",
@@ -17,14 +18,16 @@ prost-codec = [
   "grpcio/prost-codec",
   "kvproto/prost-codec",
 ]
+test-cgroup = []
 
 [dependencies]
+nix = "0.19"
 async-speed-limit = "0.3"
 backtrace = "0.3.9"
 byteorder = "1.2"
-bytes = "0.5.3"
+bytes = "1.0"
 codec = { path = "../codec", default-features = false }
-configuration = { path = "../configuration" }
+online_config = { path = "../online_config" }
 chrono = "0.4"
 crc32fast = "1.2"
 crossbeam = "0.8"
@@ -34,7 +37,7 @@ fail = "0.4"
 fs2 = "0.4"
 futures = { version = "0.3", features = ["compat"] }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
-grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
 http = "0.2.0"
 lazy_static = "1.3"
 libc = "0.2"
@@ -42,9 +45,9 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 log_wrappers = { path = "../log_wrappers" }
 num_cpus = "1"
 openssl = "0.10"
-prometheus = { version = "0.10", features = ["nightly"] }
-rand = "0.7"
-rusoto_core = "0.45.0"
+prometheus = { version = "0.12", features = ["nightly"] }
+rand = "0.8"
+rusoto_core = "0.46.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -57,7 +60,7 @@ thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }
 collections = { path = "../collections" }
 time = "0.1"
-tokio = { version = "0.2", features = ["rt-util", "rt-threaded"] }
+tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-executor = "0.1"
 tokio-timer = "0.2"
 url = "2"
@@ -67,7 +70,8 @@ yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
-procfs = "0.7"
+page_size = "0.4"
+procfs = "0.9"
 
 [dev-dependencies]
 panic_hook = { path = "../panic_hook" }
@@ -76,3 +80,6 @@ regex = "1.0"
 tempfile = "3.0"
 toml = "0.5"
 utime = "0.2"
+
+[target.'cfg(unix)'.dev-dependencies]
+gag = "0.1.10"

@@ -323,7 +323,7 @@ pub fn add_datetime_and_string(
     arg0: &DateTime,
     arg1: BytesRef,
 ) -> Result<Option<DateTime>> {
-    let arg1 = std::str::from_utf8(&arg1).map_err(Error::Encoding)?;
+    let arg1 = std::str::from_utf8(arg1).map_err(Error::Encoding)?;
     let arg1 = match Duration::parse(ctx, arg1, MAX_FSP) {
         Ok(arg) => arg,
         Err(_) => return Ok(None),
@@ -350,7 +350,7 @@ pub fn add_date_and_string(
     arg0: &DateTime,
     arg1: BytesRef,
 ) -> Result<Option<DateTime>> {
-    let arg1 = std::str::from_utf8(&arg1).map_err(Error::Encoding)?;
+    let arg1 = std::str::from_utf8(arg1).map_err(Error::Encoding)?;
     let arg1 = match Duration::parse(ctx, arg1, MAX_FSP) {
         Ok(arg) => arg,
         Err(_) => return Ok(None),
@@ -423,7 +423,7 @@ pub fn sub_datetime_and_string(
     datetime: &DateTime,
     duration_str: BytesRef,
 ) -> Result<Option<DateTime>> {
-    let duration_str = std::str::from_utf8(&duration_str).map_err(Error::Encoding)?;
+    let duration_str = std::str::from_utf8(duration_str).map_err(Error::Encoding)?;
     let duration = match Duration::parse(ctx, duration_str, MAX_FSP) {
         Ok(duration) => duration,
         Err(_) => return Ok(None),
@@ -436,6 +436,33 @@ pub fn sub_datetime_and_string(
                 .handle_invalid_time_error(Error::overflow(
                     "DATETIME",
                     format!("({} - {})", datetime, duration),
+                ))
+                .map(|_| Ok(None))?;
+        }
+    };
+    Ok(Some(res))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn sub_duration_and_string(
+    ctx: &mut EvalContext,
+    arg1: &Duration,
+    arg2: BytesRef,
+) -> Result<Option<Duration>> {
+    let arg2 = std::str::from_utf8(arg2).map_err(Error::Encoding)?;
+    let arg2 = match Duration::parse(ctx, arg2, MAX_FSP) {
+        Ok(arg) => arg,
+        Err(_) => return Ok(None),
+    };
+
+    let res = match arg1.checked_sub(arg2) {
+        Some(res) => res,
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(
+                    "DURATION",
+                    format!("({} - {})", arg1, arg2),
                 ))
                 .map(|_| Ok(None))?;
         }
@@ -714,7 +741,7 @@ pub fn add_duration_and_string(
     arg1: &Duration,
     arg2: BytesRef,
 ) -> Result<Option<Duration>> {
-    let arg2 = std::str::from_utf8(&arg2).map_err(Error::Encoding)?;
+    let arg2 = std::str::from_utf8(arg2).map_err(Error::Encoding)?;
     let arg2 = match Duration::parse(ctx, arg2, MAX_FSP) {
         Ok(arg) => arg,
         Err(_) => return Ok(None),
@@ -831,11 +858,11 @@ mod tests {
         for (duration, string, exp) in cases {
             let expected = exp.map(|exp| Duration::parse(&mut ctx, exp, MAX_FSP).unwrap());
             let duration = duration.map(|arg1| Duration::parse(&mut ctx, arg1, MAX_FSP).unwrap());
-            let string = string.map(|arg2| Duration::parse(&mut ctx, arg2, MAX_FSP).unwrap());
+            let string = string.map(|str| str.as_bytes().to_vec());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(duration)
                 .push_param(string)
-                .evaluate(ScalarFuncSig::AddDurationAndDuration)
+                .evaluate(ScalarFuncSig::AddDurationAndString)
                 .unwrap();
             assert_eq!(output, expected);
         }
@@ -863,6 +890,29 @@ mod tests {
             assert_eq!(output, expected);
         }
     }
+    #[test]
+    fn test_sub_duration_and_string() {
+        let cases = vec![
+            (Some("00:02:02"), Some("00:01:01"), Some("00:01:01")),
+            (Some("12:00:00"), Some("00:00:01"), Some("11:59:59")),
+            (Some("24:00:00"), Some("00:00:01"), Some("23:59:59")),
+            (Some("24:00:01"), Some("00:00:02"), Some("23:59:59")),
+            (None, None, None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (duration, string, exp) in cases {
+            let expected = exp.map(|exp| Duration::parse(&mut ctx, exp, MAX_FSP).unwrap());
+            let duration = duration.map(|arg1| Duration::parse(&mut ctx, arg1, MAX_FSP).unwrap());
+            let string = string.map(|str| str.as_bytes().to_vec());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(duration)
+                .push_param(string)
+                .evaluate(ScalarFuncSig::SubDurationAndString)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
     #[test]
     fn test_date_format() {
         use std::sync::Arc;
