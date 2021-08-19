@@ -460,9 +460,7 @@ where
         if overlap_ranges.is_empty() {
             return Ok(());
         }
-        SNAP_COUNTER_VEC
-            .with_label_values(&["overlap", "delete_by_ingest"])
-            .inc();
+        CLEAN_COUNTER_VEC.with_label_values(&["overlap"]).inc();
         let oldest_sequence = self
             .engine
             .get_oldest_snapshot_sequence_number()
@@ -531,9 +529,7 @@ where
         if cleanup_ranges.is_empty() {
             return;
         }
-        SNAP_COUNTER_VEC
-            .with_label_values(&["clean_stale_range", "delete_by_ingest"])
-            .inc();
+        CLEAN_COUNTER_VEC.with_label_values(&["tick"]).inc_by(1);
         cleanup_ranges.sort_by(|a, b| a.1.cmp(&b.1));
         while cleanup_ranges.len() > CLEANUP_MAX_REGION_COUNT {
             cleanup_ranges.pop();
@@ -578,17 +574,10 @@ where
     fn delete_all_in_range(&self, ranges: &[Range]) -> Result<()> {
         for cf in self.engine.cf_names() {
             let strategy = if cf == CF_LOCK {
-                CLEAN_COUNTER_VEC
-                    .with_label_values(&["key"])
-                    .inc_by(ranges.len() as u64);
                 DeleteStrategy::DeleteByKey
             } else if self.use_delete_range {
-                CLEAN_COUNTER_VEC
-                    .with_label_values(&["range"])
-                    .inc_by(ranges.len() as u64);
                 DeleteStrategy::DeleteByRange
             } else {
-                CLEAN_COUNTER_VEC.with_label_values(&["ingest"]).inc_by(1);
                 DeleteStrategy::DeleteByWriter {
                     sst_path: self.mgr.get_temp_path_for_ingest(),
                 }
