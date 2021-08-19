@@ -113,7 +113,6 @@ where
         engine: &E,
         policy: CheckPolicy,
     ) {
-        return;
         let region = ctx.region();
         let region_id = region.get_id();
         let region_keys = match get_region_approximate_keys(
