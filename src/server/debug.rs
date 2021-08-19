@@ -622,6 +622,14 @@ impl<ER: RaftEngine> Debugger<ER> {
         Ok(())
     }
 
+    pub fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) -> Result<()> {
+        unimplemented!()
+    }
+
+    pub fn remove_regions(&self, region_ids: Vec<u64>) -> Result<()> {
+        unimplemented!()
+    }
+
     pub fn recreate_region(&self, region: Region) -> Result<()> {
         let region_id = region.get_id();
         let kv = &self.engines.kv;
@@ -748,16 +756,17 @@ impl<ER: RaftEngine> Debugger<ER> {
         let mut res = dump_mvcc_properties(self.engines.kv.as_inner(), &start, &end)?;
 
         let middle_key = match box_try!(get_region_approximate_middle(&self.engines.kv, region)) {
-            Some(data_key) => {
-                let mut key = keys::origin_key(&data_key);
-                box_try!(bytes::decode_bytes(&mut key, false))
-            }
+            Some(data_key) => keys::origin_key(&data_key).to_vec(),
             None => Vec::new(),
         };
 
-        // Middle key of the range.
         res.push((
-            "middle_key_by_approximate_size".to_owned(),
+            "region.start_key".to_owned(),
+            hex::encode(&region.start_key),
+        ));
+        res.push(("region.end_key".to_owned(), hex::encode(&region.end_key)));
+        res.push((
+            "region.middle_key_by_approximate_size".to_owned(),
             hex::encode(&middle_key),
         ));
 
