@@ -2073,7 +2073,7 @@ where
             assert_eq!(self.fsm.delayed_destroy, None);
             self.fsm.delayed_destroy = Some(merged_by_target);
             // TODO: The destroy process can also be asynchronous as snapshot process,
-            // if so, all of the write db behavior is removed in store thread.
+            // if so, all write db operations are removed in store thread.
             info!(
                 "delays destroy";
                 "region_id" => self.fsm.region_id(),
