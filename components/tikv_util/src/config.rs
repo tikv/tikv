@@ -1245,6 +1245,12 @@ pub struct TomlWriter {
     current_table: String,
 }
 
+impl Default for TomlWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TomlWriter {
     pub fn new() -> TomlWriter {
         TomlWriter {
