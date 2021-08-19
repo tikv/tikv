@@ -11,7 +11,7 @@ use std::{cmp, mem, u64};
 use batch_system::{BasicMailbox, Fsm};
 use collections::HashMap;
 use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, PerfContext, RaftEngine, SSTMetaInfo, WriteBatchExt};
+use engine_traits::{Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatchExt};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use keys::{self, enc_end_key, enc_start_key};
@@ -2090,7 +2090,7 @@ where
             "merged_by_target" => merged_by_target,
         );
         let region_id = self.region_id();
-        // We can't destroy a peer which is applying snapshot.
+        // We can't destroy a peer which is handling snapshot.
         assert!(!self.fsm.peer.is_handling_snapshot());
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -2132,7 +2132,11 @@ where
             );
         }
         let is_initialized = self.fsm.peer.is_initialized();
-        if let Err(e) = self.fsm.peer.destroy(self.ctx, merged_by_target) {
+        if let Err(e) = self.fsm.peer.destroy(
+            &self.ctx.engines,
+            &mut self.ctx.perf_context,
+            merged_by_target,
+        ) {
             // If not panic here, the peer will be recreated in the next restart,
             // then it will be gc again. But if some overlap region is created
             // before restarting, the gc action will delete the overlap region's

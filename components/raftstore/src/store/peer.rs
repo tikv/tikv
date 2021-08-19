@@ -10,7 +10,9 @@ use std::{cmp, mem, u64, usize};
 use bitflags::bitflags;
 use crossbeam::atomic::AtomicCell;
 use crossbeam::channel::TrySendError;
-use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteBatch, WriteOptions};
+use engine_traits::{
+    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions,
+};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
@@ -876,7 +878,12 @@ where
     /// 1. Set the region to tombstone;
     /// 2. Clear data;
     /// 3. Notify all pending requests.
-    pub fn destroy<T>(&mut self, ctx: &PollContext<EK, ER, T>, keep_data: bool) -> Result<()> {
+    pub fn destroy(
+        &mut self,
+        engines: &Engines<EK, ER>,
+        perf_context: &mut EK::PerfContext,
+        keep_data: bool,
+    ) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = TiInstant::now();
 
@@ -888,8 +895,8 @@ where
         );
 
         // Set Tombstone state explicitly
-        let mut kv_wb = ctx.engines.kv.write_batch();
-        let mut raft_wb = ctx.engines.raft.log_batch(1024);
+        let mut kv_wb = engines.kv.write_batch();
+        let mut raft_wb = engines.raft.log_batch(1024);
         self.mut_store().clear_meta(&mut kv_wb, &mut raft_wb)?;
         write_peer_state(
             &mut kv_wb,
@@ -902,9 +909,9 @@ where
         write_opts.set_sync(true);
         kv_wb.write_opt(&write_opts)?;
 
-        ctx.perf_context.start_observe();
-        ctx.engines.raft.consume(&mut raft_wb, true)?;
-        ctx.perf_context.report_metrics();
+        perf_context.start_observe();
+        engines.raft.consume(&mut raft_wb, true)?;
+        perf_context.report_metrics();
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
