@@ -375,16 +375,18 @@ fn test_query_stats() {
     test_query_num(raw_batch_get_command);
     test_query_num(batch_get_command);
     test_delete_query();
+    test_pessimistic_lock();
+    test_rollback();
     fail::remove("mock_tick_interval");
     fail::remove("mock_hotspot_threshold");
     fail::remove("mock_collect_interval");
 }
 
 fn raw_put(
-    cluster: &Cluster<ServerCluster>,
+    _cluster: &Cluster<ServerCluster>,
     client: &TikvClient,
     ctx: &Context,
-    store_id: u64,
+    _store_id: u64,
     key: Vec<u8>,
 ) {
     let mut put_req = RawPutRequest::default();
@@ -394,7 +396,8 @@ fn raw_put(
     let put_resp = client.raw_put(&put_req).unwrap();
     assert!(!put_resp.has_region_error());
     assert!(put_resp.error.is_empty());
-    assert!(check_query_num_write(&cluster, store_id, QueryKind::Put, 1));
+    // todo support raw kv write query statistic
+    // skip raw kv write query check
 }
 
 fn put(
@@ -429,7 +432,12 @@ fn put(
             prewrite_resp.get_errors()
         );
     }
-    assert!(check_query_num_write(&cluster, store_id, QueryKind::Put, 1));
+    assert!(check_query_num_write(
+        &cluster,
+        store_id,
+        QueryKind::Prewrite,
+        1
+    ));
     // Commit
     {
         let commit_ts = block_on(cluster.pd_client.get_tso()).unwrap();
@@ -446,7 +454,86 @@ fn put(
         );
         assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
     }
-    assert!(check_query_num_write(&cluster, store_id, QueryKind::Put, 1));
+    assert!(check_query_num_write(
+        &cluster,
+        store_id,
+        QueryKind::Commit,
+        1
+    ));
+}
+
+fn test_pessimistic_lock() {
+    let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+        cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
+        cluster.cfg.storage.enable_ttl = true;
+    });
+
+    let key = b"key2".to_vec();
+    let store_id = 1;
+    put(&cluster, &client, &ctx, store_id, key.clone());
+
+    let start_ts = block_on(cluster.pd_client.get_tso()).unwrap();
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::PessimisticLock);
+    mutation.key = key.clone();
+    mutation.value = b"v2".to_vec();
+
+    let mut lock_req = PessimisticLockRequest::default();
+    lock_req.set_context(ctx.clone());
+    lock_req.set_mutations(vec![mutation].into_iter().collect());
+    lock_req.start_version = start_ts.into_inner();
+    lock_req.for_update_ts = start_ts.into_inner();
+    lock_req.primary_lock = key.clone();
+    let lock_resp = client.kv_pessimistic_lock(&lock_req).unwrap();
+    assert!(
+        !lock_resp.has_region_error(),
+        "{:?}",
+        lock_resp.get_region_error()
+    );
+    assert!(
+        lock_resp.get_errors().is_empty(),
+        "{:?}",
+        lock_resp.get_errors()
+    );
+    assert!(check_query_num_write(
+        &cluster,
+        store_id,
+        QueryKind::AcquirePessimisticLock,
+        1
+    ));
+}
+
+pub fn test_rollback() {
+    let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+        cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
+        cluster.cfg.storage.enable_ttl = true;
+    });
+    let key = b"key2".to_vec();
+    let store_id = 1;
+    put(&cluster, &client, &ctx, store_id, key.clone());
+    let start_ts = block_on(cluster.pd_client.get_tso()).unwrap();
+
+    let mut rollback_req = BatchRollbackRequest::default();
+    rollback_req.set_context(ctx.clone());
+    rollback_req.start_version = start_ts.into_inner();
+    rollback_req.set_keys(vec![key].into_iter().collect());
+    let rollback_resp = client.kv_batch_rollback(&rollback_req).unwrap();
+    assert!(
+        !rollback_resp.has_region_error(),
+        "{:?}",
+        rollback_resp.get_region_error()
+    );
+    assert!(
+        !rollback_resp.has_error(),
+        "{:?}",
+        rollback_resp.get_error()
+    );
+    assert!(check_query_num_write(
+        &cluster,
+        store_id,
+        QueryKind::Rollback,
+        1
+    ));
 }
 
 fn test_query_num(query: Box<Query>) {
@@ -491,12 +578,7 @@ fn test_delete_query() {
     delete_req.set_context(ctx.clone());
     delete_req.key = k.clone();
     client.raw_delete(&delete_req).unwrap();
-    assert!(check_query_num_write(
-        &cluster,
-        store_id,
-        QueryKind::Delete,
-        1
-    ));
+    // skip raw kv write query check
 
     // DeleteRange
     let mut delete_req = DeleteRangeRequest::default();
@@ -504,12 +586,7 @@ fn test_delete_query() {
     delete_req.set_start_key(k.clone());
     delete_req.set_end_key(vec![]);
     client.kv_delete_range(&delete_req).unwrap();
-    assert!(check_query_num_write(
-        &cluster,
-        store_id,
-        QueryKind::DeleteRange,
-        1
-    ));
+    // skip raw kv write query check
 
     raw_put(&cluster, &client, &ctx, store_id, k.clone());
     put(&cluster, &client, &ctx, store_id, k.clone());
@@ -519,12 +596,7 @@ fn test_delete_query() {
     delete_req.set_start_key(k.clone());
     delete_req.set_end_key(vec![]);
     client.raw_delete_range(&delete_req).unwrap();
-    assert!(check_query_num_write(
-        &cluster,
-        store_id,
-        QueryKind::DeleteRange,
-        1
-    ));
+    // skip raw kv write query check
 }
 
 fn check_query_num_read(
