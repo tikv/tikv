@@ -11,14 +11,14 @@ use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 use std::{cmp, io};
 
-use engine_traits::{CF_RAFT, KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, CF_RAFT};
 #[cfg(feature = "failpoints")]
 use fail::fail_point;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
     SplitRequest,
 };
-use kvproto::raft_serverpb::{RaftMessage, PeerState, RegionLocalState};
+use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use kvproto::replication_modepb::RegionReplicationStatus;
 use kvproto::{metapb, pdpb};
 use ordered_float::OrderedFloat;
@@ -45,6 +45,7 @@ use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
+use protobuf::Message;
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::sys::disk;
 use tikv_util::time::UnixSecs;
@@ -52,7 +53,6 @@ use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::topn::TopN;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tikv_util::{box_err, box_try, debug, error, info, thd_name, warn};
-use protobuf::Message;
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
@@ -130,7 +130,7 @@ where
     StoreHeartbeat {
         stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
-	send_detailed_reports: bool,
+        send_detailed_reports: bool,
     },
     ReportBatchSplit {
         regions: Vec<metapb::Region>,
@@ -846,7 +846,12 @@ where
         self.remote.spawn(f);
     }
 
-    fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats, store_info: StoreInfo<EK, ER>, send_detailed_reports: bool) {
+    fn handle_store_heartbeat(
+        &mut self,
+        mut stats: pdpb::StoreStats,
+        store_info: StoreInfo<EK, ER>,
+        send_detailed_reports: bool,
+    ) {
         let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
             Err(e) => {
                 error!(
@@ -959,17 +964,17 @@ where
         let slow_score = self.slow_score.get();
         stats.set_slow_score(slow_score as u64);
 
-        let mut optional_reports = None;
-	if send_detailed_reports {
-            let mut reports = Vec::new();
+        let mut optional_report = None;
+        if send_detailed_reports {
+            let mut store_report = pdpb::StoreReport::new();
+            store_report.set_store_id(self.store_id);
             if let Ok(_) = store_info.kv_engine.scan_cf(
                 CF_RAFT,
                 keys::REGION_META_MIN_KEY,
                 keys::REGION_META_MAX_KEY,
                 false,
                 |key, value| {
-                    let (_, suffix) =
-                        box_try!(keys::decode_region_meta_key(key));
+                    let (_, suffix) = box_try!(keys::decode_region_meta_key(key));
                     if suffix != keys::REGION_STATE_SUFFIX {
                         return Ok(true);
                     }
@@ -987,19 +992,19 @@ where
                         None => return Ok(true),
                         Some(value) => value,
                     };
-	    	let mut peer_report = pdpb::PeerReport::new();
-	    	peer_report.set_region_state(region_local_state);
-	    	peer_report.set_raft_state(raft_local_state);
-                    reports.push(peer_report);
-	    	return Ok(true);
+                    let mut peer_report = pdpb::PeerReport::new();
+                    peer_report.set_region_state(region_local_state);
+                    peer_report.set_raft_state(raft_local_state);
+                    store_report.reports.push(peer_report);
+                    return Ok(true);
                 },
             ) {
-	        optional_reports = Some(reports);
-	    }
-	}
+                optional_report = Some(store_report);
+            }
+        }
         let router = self.router.clone();
-	let scheduler = self.scheduler.clone();
-        let resp = self.pd_client.store_heartbeat(stats, optional_reports);
+        let scheduler = self.scheduler.clone();
+        let resp = self.pd_client.store_heartbeat(stats, optional_report);
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -1007,7 +1012,11 @@ where
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }
                     if resp.send_detailed_report_in_next_heartbeat {
-			let task = Task::StoreHeartbeat { stats: pdpb::StoreStats::new(), store_info, send_detailed_reports: true};
+                        let task = Task::StoreHeartbeat {
+                            stats: pdpb::StoreStats::new(),
+                            store_info,
+                            send_detailed_reports: true,
+                        };
                         if let Err(e) = scheduler.schedule(task) {
                             error!("notify pd failed"; "err" => ?e);
                         }
@@ -1483,9 +1492,11 @@ where
                     hb_task.replication_status,
                 )
             }
-            Task::StoreHeartbeat { stats, store_info, send_detailed_reports } => {
-                self.handle_store_heartbeat(stats, store_info, send_detailed_reports)
-            }
+            Task::StoreHeartbeat {
+                stats,
+                store_info,
+                send_detailed_reports,
+            } => self.handle_store_heartbeat(stats, store_info, send_detailed_reports),
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
