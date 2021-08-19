@@ -16311,6 +16311,13 @@
               "intervalFactor": 2,
               "legendFormat": "99%-{{req}}",
               "refId": "A"
+            },
+            {
+              "expr": "sum(delta(tikv_raftstore_clean_region_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "clean-region-by-{{type}}",
+              "refId": "B"
             }
           ],
           "thresholds": [],
