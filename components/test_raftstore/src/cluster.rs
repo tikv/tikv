@@ -69,6 +69,15 @@ pub trait Simulator {
         node_id: u64,
         request: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
+    ) -> Result<()> {
+        self.async_command_on_node_with_opts(node_id, request, cb, Default::default())
+    }
+    fn async_command_on_node_with_opts(
+        &self,
+        node_id: u64,
+        request: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+        opts: RaftCmdExtraOpts,
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
@@ -885,7 +894,15 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn async_request(
         &mut self,
+        req: RaftCmdRequest,
+    ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+        self.async_request_with_opts(req, Default::default())
+    }
+
+    pub fn async_request_with_opts(
+        &mut self,
         mut req: RaftCmdRequest,
+        opts: RaftCmdExtraOpts,
     ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
         let region_id = req.get_header().get_region_id();
         let leader = self.leader_of_region(region_id).unwrap();
@@ -893,7 +910,7 @@ impl<T: Simulator> Cluster<T> {
         let (cb, rx) = make_cb(&req);
         self.sim
             .rl()
-            .async_command_on_node(leader.get_store_id(), req, cb)?;
+            .async_command_on_node_with_opts(leader.get_store_id(), req, cb, opts)?;
         Ok(rx)
     }
 
