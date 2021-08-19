@@ -673,7 +673,7 @@ impl PdClient for RpcClient {
         &self,
         mut stats: pdpb::StoreStats,
         states: Option<vec<pdpb::GroupState>>,
-        reports_opt: Option<Vec<pdpb::PeerReport>>,
+        report_opt: Option<pdpb::StoreReport>,
     ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         let timer = Instant::now();
 
@@ -683,8 +683,8 @@ impl PdClient for RpcClient {
             .mut_interval()
             .set_end_timestamp(UnixSecs::now().into_inner());
         req.set_stats(stats);
-        if let Some(reports) = reports_opt {
-            req.mut_store_report().set_reports(protobuf::RepeatedField::from(reports));
+        if let Some(report) = report_opt {
+            req.set_store_report(report);
 	}
         if let Some(states) = states {
             rep.set_group_states(RepeatedFiled::from(states));
