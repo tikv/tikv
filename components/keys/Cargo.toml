@@ -17,7 +17,7 @@ prost-codec = [
 
 [dependencies]
 byteorder = "1.2"
-kvproto = { path = "../../../kvproto", default-features = false }
+kvproto = { git = "https://github.co/pingcap/kvproto.git", default-features = false }
 log_wrappers = { path = "../log_wrappers" }
 thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }
