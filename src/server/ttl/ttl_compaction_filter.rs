@@ -75,6 +75,7 @@ impl CompactionFilter for TTLCompactionFilter {
             return CompactionFilterDecision::Keep;
         }
         if expire_ts <= self.ts {
+            info!("delete hint: {}", log_wrappers::Value::key(key));
             CompactionFilterDecision::Remove
         } else {
             CompactionFilterDecision::Keep
