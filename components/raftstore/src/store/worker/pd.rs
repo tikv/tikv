@@ -46,6 +46,8 @@ use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
+use resource_metering::cpu::collector::{register_collector, Collector, CollectorHandle};
+use resource_metering::cpu::recorder::CpuRecords;
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -158,6 +160,7 @@ where
         id: u64,
         duration: RaftstoreDuration,
     },
+    RegionCPURecords(Arc<CpuRecords>),
 }
 
 pub struct StoreStat {
@@ -305,7 +308,7 @@ where
                 ref write_io_rates,
             } => write!(
                 f,
-                "get store's informations: cpu_usages {:?}, read_io_rates {:?}, write_io_rates {:?}",
+                "get store's information: cpu_usages {:?}, read_io_rates {:?}, write_io_rates {:?}",
                 cpu_usages, read_io_rates, write_io_rates,
             ),
             Task::UpdateMaxTimestamp { region_id, .. } => write!(
@@ -319,12 +322,16 @@ where
             Task::UpdateSlowScore { id, ref duration } => {
                 write!(f, "compute slow score: id {}, duration {:?}", id, duration)
             }
+            Task::RegionCPURecords(ref cpu_records) => {
+                write!(f, "get region cpu records: {:?}", cpu_records)
+            }
         }
     }
 }
 
 const DEFAULT_QPS_INFO_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_COLLECT_INTERVAL: Duration = Duration::from_secs(1);
+
 fn default_collect_interval() -> Duration {
     #[cfg(feature = "failpoints")]
     fail_point!("mock_collect_interval", |_| { Duration::from_millis(1) });
@@ -485,7 +492,7 @@ const HOTSPOT_QUERY_RATE_THRESHOLD: u64 = 128;
 const HOTSPOT_BYTE_RATE_THRESHOLD: u64 = 8 * 1024;
 const HOTSPOT_REPORT_CAPACITY: usize = 1000;
 
-// TODO: support dyamic configure threshold in future
+// TODO: support dynamic configure threshold in future.
 fn hotspot_key_report_threshold() -> u64 {
     #[cfg(feature = "failpoints")]
     fail_point!("mock_hotspot_threshold", |_| { 0 });
@@ -509,7 +516,7 @@ fn hotspot_query_num_report_threshold() -> u64 {
 
 // Slow score is a value that represents the speed of a store and ranges in [1, 100].
 // It is maintained in the AIMD way.
-// If there are some inpspecting requests timeout during a round, by default the score
+// If there are some inspecting requests timeout during a round, by default the score
 // will be increased at most 1x when above 10% inspecting requests timeout.
 // If there is not any timeout inspecting requests, the score will go back to 1 in at least 5min.
 struct SlowScore {
@@ -527,7 +534,7 @@ struct SlowScore {
 
     // After how many ticks the value need to be updated.
     round_ticks: u64,
-    // Indentify every ticks.
+    // Identify every ticks.
     last_tick_id: u64,
     // If the last tick does not finished, it would be recorded as a timeout.
     last_tick_finished: bool,
@@ -601,6 +608,34 @@ impl SlowScore {
     }
 }
 
+// RegionCPUMeteringCollector is used to collect the region-related CPU info.
+struct RegionCPUMeteringCollector<E>
+where
+    E: KvEngine,
+{
+    scheduler: Scheduler<Task<E>>,
+}
+
+impl<E> RegionCPUMeteringCollector<E>
+where
+    E: KvEngine,
+{
+    fn new(scheduler: Scheduler<Task<E>>) -> RegionCPUMeteringCollector<E> {
+        RegionCPUMeteringCollector { scheduler }
+    }
+}
+
+impl<E> Collector for RegionCPUMeteringCollector<E>
+where
+    E: KvEngine,
+{
+    fn collect(&self, records: Arc<CpuRecords>) {
+        self.scheduler
+            .schedule(Task::RegionCPURecords(records))
+            .ok();
+    }
+}
+
 pub struct Runner<EK, ER, T>
 where
     EK: KvEngine,
@@ -621,6 +656,10 @@ where
     // calls Runner's run() on Task received.
     scheduler: Scheduler<Task<EK>>,
     stats_monitor: StatsMonitor<EK>,
+
+    _region_cpu_records_collector: CollectorHandle,
+    // region_id -> ([timestamp_secs], [cpu_time_ms], total_cpu_time_ms)
+    region_cpu_records: HashMap<u64, (Vec<u64>, Vec<u32>, u32)>,
 
     concurrency_manager: ConcurrencyManager,
     snap_mgr: SnapManager,
@@ -654,6 +693,9 @@ where
             error!("failed to start stats collector, error = {:?}", e);
         }
 
+        let _region_cpu_records_collector =
+            register_collector(Box::new(RegionCPUMeteringCollector::new(scheduler.clone())));
+
         Runner {
             store_id,
             pd_client,
@@ -664,6 +706,8 @@ where
             start_ts: UnixSecs::now(),
             scheduler,
             stats_monitor,
+            _region_cpu_records_collector,
+            region_cpu_records: HashMap::default(),
             concurrency_manager,
             snap_mgr,
             remote,
@@ -1290,6 +1334,43 @@ where
         };
         self.remote.spawn(f);
     }
+
+    fn handle_region_cpu_records(&mut self, records: Arc<CpuRecords>) {
+        calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records)
+    }
+}
+
+fn calculate_region_cpu_records(
+    store_id: u64,
+    records: Arc<CpuRecords>,
+    region_cpu_records: &mut HashMap<u64, (Vec<u64>, Vec<u32>, u32)>,
+) {
+    let timestamp_secs = records.begin_unix_time_secs;
+
+    for (tag, ms) in &records.records {
+        let record_store_id = tag.infos.store_id;
+        let region_id = &tag.infos.region_id;
+        let extra_attachment = &tag.infos.extra_attachment;
+        if extra_attachment.is_empty() || record_store_id != store_id {
+            continue;
+        }
+
+        let ms = *ms as u32;
+        match region_cpu_records.get_mut(region_id) {
+            Some((ts, cpu_time, total)) => {
+                if *ts.last().unwrap() == timestamp_secs {
+                    *cpu_time.last_mut().unwrap() += ms;
+                } else {
+                    ts.push(timestamp_secs);
+                    cpu_time.push(ms);
+                }
+                *total += ms;
+            }
+            None => {
+                region_cpu_records.insert(*region_id, (vec![timestamp_secs], vec![ms], ms));
+            }
+        }
+    }
 }
 
 impl<EK, ER, T> Runnable for Runner<EK, ER, T>
@@ -1461,6 +1542,7 @@ where
             } => self.handle_update_max_timestamp(region_id, initial_status, max_ts_sync_status),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => self.slow_score.record(id, duration.sum()),
+            Task::RegionCPURecords(records) => self.handle_region_cpu_records(records),
         };
     }
 
@@ -1707,82 +1789,88 @@ fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
     stat.get_get() + stat.get_coprocessor() + stat.get_scan()
 }
 
-#[cfg(not(target_os = "macos"))]
 #[cfg(test)]
 mod tests {
-    use engine_test::kv::KvTestEngine;
-    use kvproto::pdpb::QueryKind;
-    use std::sync::Mutex;
-    use std::time::Instant;
-    use tikv_util::worker::LazyWorker;
+    use kvproto::{kvrpcpb, pdpb::QueryKind};
+    use std::thread::sleep;
 
     use super::*;
 
-    struct RunnerTest {
-        store_stat: Arc<Mutex<StoreStat>>,
-        stats_monitor: StatsMonitor<KvTestEngine>,
-    }
+    const DEFAULT_TEST_STORE_ID: u64 = 1;
 
-    impl RunnerTest {
-        fn new(
-            interval: u64,
-            scheduler: Scheduler<Task<KvTestEngine>>,
-            store_stat: Arc<Mutex<StoreStat>>,
-        ) -> RunnerTest {
-            let mut stats_monitor = StatsMonitor::new(Duration::from_secs(interval), scheduler);
-
-            if let Err(e) = stats_monitor.start(AutoSplitController::default()) {
-                error!("failed to start stats collector, error = {:?}", e);
-            }
-
-            RunnerTest {
-                store_stat,
-                stats_monitor,
-            }
-        }
-
-        fn handle_store_infos(
-            &mut self,
-            cpu_usages: RecordPairVec,
-            read_io_rates: RecordPairVec,
-            write_io_rates: RecordPairVec,
-        ) {
-            let mut store_stat = self.store_stat.lock().unwrap();
-            store_stat.store_cpu_usages = cpu_usages;
-            store_stat.store_read_io_rates = read_io_rates;
-            store_stat.store_write_io_rates = write_io_rates;
-        }
-    }
-
-    impl Runnable for RunnerTest {
-        type Task = Task<KvTestEngine>;
-
-        fn run(&mut self, task: Task<KvTestEngine>) {
-            if let Task::StoreInfos {
-                cpu_usages,
-                read_io_rates,
-                write_io_rates,
-            } = task
-            {
-                self.handle_store_infos(cpu_usages, read_io_rates, write_io_rates)
-            };
-        }
-
-        fn shutdown(&mut self) {
-            self.stats_monitor.stop();
-        }
-    }
-
-    fn sum_record_pairs(pairs: &[pdpb::RecordPair]) -> u64 {
-        let mut sum = 0;
-        for record in pairs.iter() {
-            sum += record.get_value();
-        }
-        sum
-    }
-
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn test_collect_stats() {
+        use std::sync::Mutex;
+        use std::time::Instant;
+
+        use engine_test::kv::KvTestEngine;
+        use tikv_util::worker::LazyWorker;
+
+        struct RunnerTest {
+            store_stat: Arc<Mutex<StoreStat>>,
+            stats_monitor: StatsMonitor<KvTestEngine>,
+        }
+
+        impl RunnerTest {
+            fn new(
+                interval: u64,
+                scheduler: Scheduler<Task<KvTestEngine>>,
+                store_stat: Arc<Mutex<StoreStat>>,
+            ) -> RunnerTest {
+                let mut stats_monitor = StatsMonitor::new(Duration::from_secs(interval), scheduler);
+
+                if let Err(e) = stats_monitor.start(AutoSplitController::default()) {
+                    error!("failed to start stats collector, error = {:?}", e);
+                }
+
+                RunnerTest {
+                    store_id: DEFAULT_TEST_STORE_ID,
+                    store_stat,
+                    stats_monitor,
+                }
+            }
+
+            fn handle_store_infos(
+                &mut self,
+                cpu_usages: RecordPairVec,
+                read_io_rates: RecordPairVec,
+                write_io_rates: RecordPairVec,
+            ) {
+                let mut store_stat = self.store_stat.lock().unwrap();
+                store_stat.store_cpu_usages = cpu_usages;
+                store_stat.store_read_io_rates = read_io_rates;
+                store_stat.store_write_io_rates = write_io_rates;
+            }
+        }
+
+        impl Runnable for RunnerTest {
+            type Task = Task<KvTestEngine>;
+
+            fn run(&mut self, task: Task<KvTestEngine>) {
+                if let Task::StoreInfos {
+                    cpu_usages,
+                    read_io_rates,
+                    write_io_rates,
+                } = task
+                {
+                    self.handle_store_infos(cpu_usages, read_io_rates, write_io_rates)
+                };
+            }
+
+            fn shutdown(&mut self) {
+                self.stats_monitor.stop();
+            }
+        }
+
+        fn sum_record_pairs(pairs: &[pdpb::RecordPair]) -> u64 {
+            let mut sum = 0;
+            for record in pairs.iter() {
+                sum += record.get_value();
+            }
+            sum
+        }
+
         let mut pd_worker = LazyWorker::new("test-pd-worker");
         let store_stat = Arc::new(Mutex::new(StoreStat::default()));
         let runner = RunnerTest::new(1, pd_worker.scheduler(), Arc::clone(&store_stat));
@@ -1869,5 +1957,61 @@ mod tests {
             OrderedFloat(19.0),
             slow_score.update_impl(Duration::from_secs(15))
         );
+    }
+
+    use metapb::Peer;
+    use resource_metering::ResourceMeteringTag;
+
+    #[test]
+    fn test_calculate_region_cpu_records() {
+        // region_id -> ([timestamp_secs], [cpu_time_ms], total_cpu_time_ms)
+        let mut region_cpu_records: HashMap<u64, (Vec<u64>, Vec<u32>, u32)> = HashMap::default();
+
+        let region_num = 3;
+        for i in 0..region_num * 10 {
+            let cpu_records = Arc::new(CpuRecords {
+                begin_unix_time_secs: UnixSecs::now().into_inner(),
+                duration: Duration::default(),
+                records: {
+                    let region_id = i % region_num + 1_u64;
+                    let peer_id = region_id * 2;
+                    let resource_group_tag = "test-resource-group".as_bytes().to_vec();
+                    let mut peer = Peer::default();
+                    peer.set_id(peer_id);
+                    peer.set_store_id(DEFAULT_TEST_STORE_ID);
+                    let mut context = kvrpcpb::Context::default();
+                    context.set_peer(peer);
+                    context.set_region_id(region_id);
+                    context.set_resource_group_tag(resource_group_tag);
+                    let resource_tag = ResourceMeteringTag::from_rpc_context(&context);
+
+                    let mut records = HashMap::default();
+                    records.insert(resource_tag, 10);
+                    records
+                },
+            });
+
+            calculate_region_cpu_records(
+                DEFAULT_TEST_STORE_ID,
+                cpu_records,
+                &mut region_cpu_records,
+            );
+
+            sleep(Duration::from_millis(50));
+        }
+
+        fn get_region_total_cpu(
+            region_id: &u64,
+            region_cpu_records: &HashMap<u64, (Vec<u64>, Vec<u32>, u32)>,
+        ) -> u32 {
+            match region_cpu_records.get(region_id) {
+                Some(record) => record.2,
+                None => 0,
+            }
+        }
+
+        for region_id in 1..region_num + 1 {
+            assert!(get_region_total_cpu(&region_id, &region_cpu_records) > 0)
+        }
     }
 }
