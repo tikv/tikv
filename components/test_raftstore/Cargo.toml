@@ -61,7 +61,7 @@ grpcio = { version = "0.9",  default-features = false, features = ["openssl-vend
 lazy_static = "1.3"
 log_wrappers = { path = "../log_wrappers" }
 keys = { path = "../keys", default-features = false }
-kvproto = { path = "../../../kvproto", default-features = false }
+kvproto = { git = "https://github.co/pingcap/kvproto.git", default-features = false }
 pd_client = { path = "../pd_client", default-features = false }
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }

@@ -90,7 +90,7 @@ tokio = { version = "1.5", features = ["rt-multi-thread"] }
 grpcio = { version = "0.9", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 keys = { path = "../keys", default-features = false }
-kvproto = { path = "../../../kvproto", default-features = false }
+kvproto = { git = "https://github.co/pingcap/kvproto.git", default-features = false }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../log_wrappers" }
