@@ -64,6 +64,11 @@ impl RocksEngine {
                 }
                 if let Some(writer) = writer_wrapper.as_mut() {
                     writer.delete(it.key())?;
+                    use tikv_util::info;
+                    info!(
+                        "delete hint: {} source: delete_all_in_range_cf_by_ingest",
+                        log_wrappers::Value::key(it.key()),
+                    );
                 } else {
                     data.push(it.key().to_vec());
                 }

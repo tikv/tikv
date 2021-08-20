@@ -1504,6 +1504,9 @@ where
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
             }
             // TODO: check whether cf exists or not.
+            if cf == CF_WRITE {
+                info!("put hint: {} cf: {}", log_wrappers::Value::key(&key), cf);
+            }
             wb.put_cf(cf, &key, value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}) to cf {}: {:?}",
@@ -1515,6 +1518,7 @@ where
                 )
             });
         } else {
+            info!("put hint: {} cf: default", log_wrappers::Value::key(&key));
             wb.put(&key, value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
@@ -1540,6 +1544,7 @@ where
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
+            info!("delete hint: {} cf: {}", log_wrappers::Value::key(&key), cf);
             wb.delete_cf(cf, &key).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete {}: {}",
@@ -1556,6 +1561,7 @@ where
                 self.metrics.delete_keys_hint += 1;
             }
         } else {
+            info!("delete hint: {} cf: default", log_wrappers::Value::key(&key));
             wb.delete(&key).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete {}: {}",

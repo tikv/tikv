@@ -351,6 +351,7 @@ impl<'a> PrewriteMutation<'a> {
                 lock.short_value = Some(value);
             } else {
                 // value is long
+                info!("put hint: {} cf: default source: prewrite", self.key);
                 txn.put_value(self.key.clone(), self.txn_props.start_ts, value);
             }
         }

@@ -157,7 +157,7 @@ pub fn rollback_lock(
 
     // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
     if lock.short_value.is_none() && lock.lock_type == LockType::Put {
-        txn.delete_value(key.clone(), lock.ts);
+        txn.delete_value(key.clone(), lock.ts, "rollback_lock");
     }
 
     // Only the primary key of a pessimistic transaction needs to be protected.

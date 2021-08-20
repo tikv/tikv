@@ -47,7 +47,8 @@ impl<'a, S: Snapshot> Gc<'a, S> {
     fn delete_write(&mut self, write: Write, ts: TimeStamp) {
         self.txn.delete_write(self.key.clone(), ts);
         if write.write_type == WriteType::Put && write.short_value.is_none() {
-            self.txn.delete_value(self.key.clone(), write.start_ts);
+            self.txn
+                .delete_value(self.key.clone(), write.start_ts, "gc");
         }
         self.info.deleted_versions += 1;
     }

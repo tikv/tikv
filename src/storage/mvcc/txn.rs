@@ -106,7 +106,8 @@ impl MvccTxn {
         self.modifies.push(write);
     }
 
-    pub(crate) fn delete_value(&mut self, key: Key, ts: TimeStamp) {
+    pub(crate) fn delete_value(&mut self, key: Key, ts: TimeStamp, source: &str) {
+        info!("delete hint: {} ts: {} cf: default source: {}", key, ts, source);
         let write = Modify::Delete(CF_DEFAULT, key.append_ts(ts));
         self.write_size += write.size();
         self.modifies.push(write);

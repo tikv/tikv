@@ -404,6 +404,10 @@ impl WriteCompactionFilter {
         if write.short_value.is_none() && write.write_type == WriteType::Put {
             let prefix = Key::from_encoded_slice(&self.mvcc_key_prefix);
             let def_key = prefix.append_ts(write.start_ts).into_encoded();
+            info!(
+                "delete hint: {} cf: default source: compaction_filter",
+                log_wrappers::Value::key(&def_key)
+            );
             self.write_batch.delete(&def_key)?;
         }
         Ok(())
