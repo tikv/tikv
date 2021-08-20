@@ -93,7 +93,7 @@ error_code = { path = "../../components/error_code", default-features = false }
 file_system = { path = "../../components/file_system", default-features = false }
 fs2 = "0.4"
 futures = "0.3"
-kvproto = { path = "../../../kvproto", default-features = false }
+kvproto = { git = "https://github.co/pingcap/kvproto.git", default-features = false }
 tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
 gag = "0.1"
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
