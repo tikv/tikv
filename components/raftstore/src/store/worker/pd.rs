@@ -1825,7 +1825,6 @@ mod tests {
                 }
 
                 RunnerTest {
-                    store_id: DEFAULT_TEST_STORE_ID,
                     store_stat,
                     stats_monitor,
                 }
