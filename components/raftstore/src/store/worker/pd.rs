@@ -1973,7 +1973,7 @@ mod tests {
                 duration: Duration::default(),
                 records: {
                     let region_id = i % region_num + 1_u64;
-                    let peer_id = region_id * 2;
+                    let peer_id = region_id + region_num;
                     let resource_group_tag = "test-resource-group".as_bytes().to_vec();
                     let mut peer = Peer::default();
                     peer.set_id(peer_id);
