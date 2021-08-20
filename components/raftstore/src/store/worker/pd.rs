@@ -884,7 +884,7 @@ where
         for (region_id, region_peer) in &mut self.region_peers {
             let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
             let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
-            let read_query_stats = region_peer
+            let query_stats = region_peer
                 .query_stats
                 .sub_query_stats(&region_peer.last_store_report_query_stats);
             region_peer.last_store_report_read_bytes = region_peer.read_bytes;
@@ -894,7 +894,7 @@ where
                 .fill_query_stats(&region_peer.query_stats);
             if read_bytes < hotspot_byte_report_threshold()
                 && read_keys < hotspot_key_report_threshold()
-                && read_query_stats.get_read_query_num() < hotspot_query_num_report_threshold()
+                && query_stats.get_read_query_num() < hotspot_query_num_report_threshold()
             {
                 continue;
             }
@@ -902,7 +902,7 @@ where
             read_stat.set_region_id(*region_id);
             read_stat.set_read_keys(read_keys);
             read_stat.set_read_bytes(read_bytes);
-            read_stat.set_query_stats(read_query_stats.0);
+            read_stat.set_query_stats(query_stats.0);
             report_peers.insert(*region_id, read_stat);
         }
 
