@@ -141,7 +141,7 @@ impl<ER: RaftEngine> Debugger<ER> {
     }
 
     /// Get all regions holding region meta data from raft CF in KV storage.
-    pub fn get_all_meta_regions(&self) -> Result<Vec<u64>> {
+    pub fn get_all_regions_in_store(&self) -> Result<Vec<u64>> {
         let db = &self.engines.kv;
         let cf = CF_RAFT;
         let start_key = keys::REGION_META_MIN_KEY;
