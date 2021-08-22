@@ -16,7 +16,6 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
 pub use read_index_helper::ReadIndexClient;
-use std::borrow::Borrow;
 
 pub use crate::engine_store_ffi::interfaces::root::DB::{
     BaseBuffView, ColumnFamilyType, CppStrVecView, EngineStoreApplyRes, EngineStoreServerHelper,
@@ -30,6 +29,7 @@ use crate::engine_store_ffi::interfaces::root::DB::{
     RAFT_STORE_PROXY_VERSION,
 };
 use crate::store::LockCFFileReader;
+use std::pin::Pin;
 use std::time::Duration;
 
 impl From<&[u8]> for BaseBuffView {
@@ -122,7 +122,7 @@ pub extern "C" fn ffi_batch_read_index(
         let mut req_vec = Vec::with_capacity(view.len as usize);
         for i in 0..view.len as usize {
             let mut req = kvrpcpb::ReadIndexRequest::default();
-            let p = &(*view.view.offset(i as isize));
+            let p = &(*view.view.add(i));
             assert_ne!(p.data, std::ptr::null());
             assert_ne!(p.len, 0);
             req.merge_from_bytes(p.to_slice()).unwrap();
@@ -135,12 +135,7 @@ pub extern "C" fn ffi_batch_read_index(
         let res = get_engine_store_server_helper().gen_batch_read_index_res(resp.len() as u64);
         assert_ne!(res, std::ptr::null_mut());
         for (r, region_id) in &resp {
-            let r = ProtoMsgBaseBuff::new(r);
-            get_engine_store_server_helper().insert_batch_read_index_resp(
-                res,
-                r.borrow().into(),
-                *region_id,
-            );
+            get_engine_store_server_helper().insert_batch_read_index_resp(res, r, *region_id);
         }
         res
     }
@@ -202,7 +197,7 @@ pub extern "C" fn ffi_handle_get_file(
                             ),
                         )
                     },
-                    |f| FileEncryptionInfoRaw::from(f),
+                    FileEncryptionInfoRaw::from,
                 )
             },
         )
@@ -227,7 +222,7 @@ pub extern "C" fn ffi_handle_new_file(
                             ),
                         )
                     },
-                    |f| FileEncryptionInfoRaw::from(f),
+                    FileEncryptionInfoRaw::from,
                 )
             },
         )
@@ -463,12 +458,15 @@ impl WriteCmds {
     pub fn push(&mut self, key: &[u8], val: &[u8], cmd_type: WriteCmdType, cf: ColumnFamilyType) {
         self.keys.push(key.into());
         self.vals.push(val.into());
-        self.cmd_type.push(cmd_type.into());
-        self.cf.push(cf.into());
+        self.cmd_type.push(cmd_type);
+        self.cf.push(cf);
     }
 
     pub fn len(&self) -> usize {
-        return self.cmd_type.len();
+        self.cmd_type.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     fn gen_view(&self) -> WriteCmdsView {
@@ -510,8 +508,8 @@ impl ProtoMsgBaseBuff {
     }
 }
 
-impl From<&ProtoMsgBaseBuff> for BaseBuffView {
-    fn from(p: &ProtoMsgBaseBuff) -> Self {
+impl From<Pin<&ProtoMsgBaseBuff>> for BaseBuffView {
+    fn from(p: Pin<&ProtoMsgBaseBuff>) -> Self {
         Self {
             data: p.data.as_ptr() as *const _,
             len: p.data.len() as u64,
@@ -543,9 +541,11 @@ impl Drop for RawCppPtr {
 static mut ENGINE_STORE_SERVER_HELPER_PTR: u64 = 0;
 
 pub fn get_engine_store_server_helper() -> &'static EngineStoreServerHelper {
-    return unsafe { &(*(ENGINE_STORE_SERVER_HELPER_PTR as *const EngineStoreServerHelper)) };
+    unsafe { &(*(ENGINE_STORE_SERVER_HELPER_PTR as *const EngineStoreServerHelper)) }
 }
 
+/// # Safety
+/// The lifetime of `engine_store_server_helper` is definitely longer than `ENGINE_STORE_SERVER_HELPER_PTR`.
 pub unsafe fn init_engine_store_server_helper(engine_store_server_helper: *const u8) {
     let ptr = &ENGINE_STORE_SERVER_HELPER_PTR as *const _ as *mut _;
     *ptr = engine_store_server_helper;
@@ -562,8 +562,8 @@ fn into_sst_views(snaps: Vec<(&[u8], ColumnFamilyType)>) -> Vec<SSTView> {
     snaps_view
 }
 
-impl From<&Vec<SSTView>> for SSTViewVec {
-    fn from(snaps_view: &Vec<SSTView>) -> Self {
+impl From<Pin<&Vec<SSTView>>> for SSTViewVec {
+    fn from(snaps_view: Pin<&Vec<SSTView>>) -> Self {
         Self {
             views: snaps_view.as_ptr(),
             len: snaps_view.len() as u64,
@@ -587,15 +587,11 @@ impl EngineStoreServerHelper {
         cmds: &WriteCmds,
         header: RaftCmdHeader,
     ) -> EngineStoreApplyRes {
-        unsafe {
-            let res =
-                (self.fn_handle_write_raft_cmd.into_inner())(self.inner, cmds.gen_view(), header);
-            res.into()
-        }
+        unsafe { (self.fn_handle_write_raft_cmd.into_inner())(self.inner, cmds.gen_view(), header) }
     }
 
     pub fn handle_get_engine_store_server_status(&self) -> EngineStoreServerStatus {
-        unsafe { (self.fn_handle_get_engine_store_server_status.into_inner())(self.inner).into() }
+        unsafe { (self.fn_handle_get_engine_store_server_status.into_inner())(self.inner) }
     }
 
     pub fn handle_set_proxy(&self, proxy: *const RaftStoreProxyFFIHelper) {
@@ -632,11 +628,11 @@ impl EngineStoreServerHelper {
 
             let res = (self.fn_handle_admin_raft_cmd.into_inner())(
                 self.inner,
-                req.borrow().into(),
-                resp.borrow().into(),
+                Pin::new(&req).into(),
+                Pin::new(&resp).into(),
                 header,
             );
-            res.into()
+            res
         }
     }
 
@@ -653,9 +649,9 @@ impl EngineStoreServerHelper {
             let region = ProtoMsgBaseBuff::new(region);
             (self.fn_pre_handle_snapshot.into_inner())(
                 self.inner,
-                region.borrow().into(),
+                Pin::new(&region).into(),
                 peer_id,
-                (&snaps_view).into(),
+                Pin::new(&snaps_view).into(),
                 index,
                 term,
             )
@@ -675,9 +671,11 @@ impl EngineStoreServerHelper {
     ) -> EngineStoreApplyRes {
         let snaps_view = into_sst_views(snaps);
         unsafe {
-            let res =
-                (self.fn_handle_ingest_sst.into_inner())(self.inner, (&snaps_view).into(), header);
-            res.into()
+            (self.fn_handle_ingest_sst.into_inner())(
+                self.inner,
+                Pin::new(&snaps_view).into(),
+                header,
+            )
         }
     }
 
@@ -699,8 +697,20 @@ impl EngineStoreServerHelper {
         unsafe { (self.fn_gen_batch_read_index_res.into_inner())(cap) }
     }
 
-    fn insert_batch_read_index_resp(&self, data: RawVoidPtr, buf: BaseBuffView, region_id: u64) {
-        unsafe { (self.fn_insert_batch_read_index_resp.into_inner())(data, buf, region_id) }
+    fn insert_batch_read_index_resp(
+        &self,
+        data: RawVoidPtr,
+        r: &kvrpcpb::ReadIndexResponse,
+        region_id: u64,
+    ) {
+        let r = ProtoMsgBaseBuff::new(r);
+        unsafe {
+            (self.fn_insert_batch_read_index_resp.into_inner())(
+                data,
+                Pin::new(&r).into(),
+                region_id,
+            )
+        }
     }
 
     pub fn handle_http_request(&self, path: &str) -> HttpRequestRes {

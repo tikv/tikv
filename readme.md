@@ -117,36 +117,6 @@ scenes equivalent to TiKV. The main battlefields of it are about `HTAP` or OLAP.
 consider about distributed fault tolerance/recovery or automatic re-balancing, because the library itself has inherited
 these important features from TiKV.
 
-<!--
-A discussion of alternate approaches and the trade-offs, advantages, and disadvantages of the specified approach:
-- How other systems solve the same issue?
-- What other designs have been considered and what are their disadvantages?
-- What is the advantage of this design compared with other designs?
-- What is the disadvantage of this design?
-- What is the impact of not doing this?
--->
-
-
-<!--
-## Compatibility and Migration Plan
-
-A discussion of the change with regard to the compatibility issues:
-- Does this proposal make TiDB not compatible with the old versions?
-- Does this proposal make TiDB not compatible with TiDB tools?
-    + [BR](https://github.com/pingcap/br)
-    + [DM](https://github.com/pingcap/dm)
-    + [Dumpling](https://github.com/pingcap/dumpling)
-    + [TiCDC](https://github.com/pingcap/ticdc)
-    + [TiDB Binlog](https://github.com/pingcap/tidb-binlog)
-    + [TiDB Lightning](https://github.com/pingcap/tidb-lightning)
-- If the existing behavior will be changed, how will we phase out the older behavior?
-- Does this proposal make TiDB more compatible with MySQL?
-- What is the impact(if any) on the data migration:
-    + from MySQL to TiDB
-    + from TiDB to MySQL
-    + from old TiDB cluster to new TiDB cluster
--->
-
 ## Implementation
 
 There are total two exposed functions:

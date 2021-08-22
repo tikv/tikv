@@ -9,7 +9,7 @@ use raftstore::engine_store_ffi::{get_engine_store_server_helper, ProtoMsgBaseBu
 
 use futures::compat::Future01CompatExt;
 use futures::executor::block_on;
-use std::borrow::Borrow;
+use std::pin::Pin;
 use std::time::{Duration, Instant};
 use tikv::server::service::diagnostics::sys;
 use tikv::server::service::diagnostics::{ioload, SYS_INFO};
@@ -76,6 +76,6 @@ pub extern "C" fn ffi_server_info(
 
     let resp = server_info_for_ffi(req);
     let r = ProtoMsgBaseBuff::new(&resp);
-    get_engine_store_server_helper().set_server_info_resp(r.borrow().into(), res);
+    get_engine_store_server_helper().set_server_info_resp(Pin::new(&r).into(), res);
     0
 }

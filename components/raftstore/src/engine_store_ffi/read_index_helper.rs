@@ -39,10 +39,7 @@ fn into_read_index_response<S: engine_traits::Snapshot>(
     res: Option<ReadResponse<S>>,
 ) -> kvproto::kvrpcpb::ReadIndexResponse {
     let mut resp = ReadIndexResponse::default();
-    if res.is_none() {
-        resp.set_region_error(Default::default());
-    } else {
-        let mut res = res.unwrap();
+    if let Some(mut res) = res {
         if res.response.get_header().has_error() {
             resp.set_region_error(res.response.mut_header().take_error());
         } else {
@@ -65,6 +62,8 @@ fn into_read_index_response<S: engine_traits::Snapshot>(
                 }
             }
         }
+    } else {
+        resp.set_region_error(Default::default());
     }
     resp
 }
@@ -115,20 +114,16 @@ impl<ER: RaftEngine> ReadIndex for ReadIndexClient<ER> {
         let finished = {
             let read_index_res = &mut read_index_res;
             let read_index_fut = async {
-                loop {
-                    if let Some((fut, region_id)) = router_cbs.front_mut() {
-                        let res = match fut {
-                            None => None,
-                            Some(fut) => match fut.await {
-                                Err(_) => None,
-                                Ok(e) => Some(e),
-                            },
-                        };
-                        read_index_res.push((into_read_index_response(res), *region_id));
-                        router_cbs.pop_front();
-                    } else {
-                        break;
-                    }
+                while let Some((fut, region_id)) = router_cbs.front_mut() {
+                    let res = match fut {
+                        None => None,
+                        Some(fut) => match fut.await {
+                            Err(_) => None,
+                            Ok(e) => Some(e),
+                        },
+                    };
+                    read_index_res.push((into_read_index_response(res), *region_id));
+                    router_cbs.pop_front();
                 }
             };
 
@@ -145,28 +140,24 @@ impl<ER: RaftEngine> ReadIndex for ReadIndexClient<ER> {
         };
         if !finished {
             let read_index_res = &mut read_index_res;
-            loop {
-                if let Some((cb, region_id)) = router_cbs.front_mut() {
-                    let res = match cb {
-                        None => None,
-                        Some(fut) => {
-                            let waker = futures::task::noop_waker();
-                            let cx = &mut std::task::Context::from_waker(&waker);
-                            futures::pin_mut!(fut);
-                            match fut.poll(cx) {
-                                std::task::Poll::Pending => None,
-                                std::task::Poll::Ready(e) => match e {
-                                    Err(_) => None,
-                                    Ok(e) => Some(e),
-                                },
-                            }
+            while let Some((cb, region_id)) = router_cbs.front_mut() {
+                let res = match cb {
+                    None => None,
+                    Some(fut) => {
+                        let waker = futures::task::noop_waker();
+                        let cx = &mut std::task::Context::from_waker(&waker);
+                        futures::pin_mut!(fut);
+                        match fut.poll(cx) {
+                            std::task::Poll::Pending => None,
+                            std::task::Poll::Ready(e) => match e {
+                                Err(_) => None,
+                                Ok(e) => Some(e),
+                            },
                         }
-                    };
-                    read_index_res.push((into_read_index_response(res), *region_id));
-                    router_cbs.pop_front();
-                } else {
-                    break;
-                }
+                    }
+                };
+                read_index_res.push((into_read_index_response(res), *region_id));
+                router_cbs.pop_front();
             }
         }
         assert_eq!(req_vec.len(), read_index_res.len());

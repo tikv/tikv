@@ -484,7 +484,7 @@ pub fn dump_thread_stats() -> String {
             res.push(stat);
         }
     }
-    format!("total count {}\n{:#?}", res.len(), res).into()
+    format!("total count {}\n{:#?}", res.len(), res)
 }
 
 #[cfg(test)]
