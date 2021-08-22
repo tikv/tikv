@@ -180,7 +180,7 @@ trait DebugExecutor {
     }
 
     fn dump_all_region_size(&self, cfs: Vec<&str>) {
-        let regions = self.get_all_meta_regions();
+        let regions = self.get_all_regions_in_store();
         let regions_number = regions.len();
         let mut total_size = 0;
         for region in regions {
@@ -211,7 +211,7 @@ trait DebugExecutor {
     }
 
     fn dump_all_region_info(&self, skip_tombstone: bool) {
-        for region in self.get_all_meta_regions() {
+        for region in self.get_all_regions_in_store() {
             self.dump_region_info(region, skip_tombstone);
         }
     }
@@ -572,7 +572,7 @@ trait DebugExecutor {
         self.recover_all(threads, read_only);
     }
 
-    fn get_all_meta_regions(&self) -> Vec<u64>;
+    fn get_all_regions_in_store(&self) -> Vec<u64>;
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8>;
 
@@ -623,8 +623,10 @@ impl DebugExecutor for DebugClient {
         process::exit(-1);
     }
 
-    fn get_all_meta_regions(&self) -> Vec<u64> {
-        unimplemented!();
+    fn get_all_regions_in_store(&self) -> Vec<u64> {
+        DebugClient::get_all_regions_in_store(&self, &GetAllRegionsInStoreRequest::default())
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_all_regions_in_store", e))
+            .take_regions()
     }
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
@@ -820,9 +822,9 @@ impl DebugExecutor for DebugClient {
 impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     fn check_local_mode(&self) {}
 
-    fn get_all_meta_regions(&self) -> Vec<u64> {
-        self.get_all_meta_regions()
-            .unwrap_or_else(|e| perror_and_exit("Debugger::get_all_meta_regions", e))
+    fn get_all_regions_in_store(&self) -> Vec<u64> {
+        self.get_all_regions_in_store()
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_all_regions_in_store", e))
     }
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
