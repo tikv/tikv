@@ -658,8 +658,8 @@ where
     stats_monitor: StatsMonitor<EK>,
 
     _region_cpu_records_collector: CollectorHandle,
-    // region_id -> ([timestamp_secs], [cpu_time_ms], total_cpu_time_ms)
-    region_cpu_records: HashMap<u64, (Vec<u64>, Vec<u32>, u32)>,
+    // region_id -> total_cpu_time_ms (since last region heartbeat)
+    region_cpu_records: HashMap<u64, u32>,
 
     concurrency_manager: ConcurrencyManager,
     snap_mgr: SnapManager,
@@ -1343,31 +1343,23 @@ where
 fn calculate_region_cpu_records(
     store_id: u64,
     records: Arc<CpuRecords>,
-    region_cpu_records: &mut HashMap<u64, (Vec<u64>, Vec<u32>, u32)>,
+    region_cpu_records: &mut HashMap<u64, u32>,
 ) {
-    let timestamp_secs = records.begin_unix_time_secs;
-
     for (tag, ms) in &records.records {
         let record_store_id = tag.infos.store_id;
-        let region_id = &tag.infos.region_id;
         let extra_attachment = &tag.infos.extra_attachment;
-        if extra_attachment.is_empty() || record_store_id != store_id {
+        if record_store_id != store_id || extra_attachment.is_empty() {
             continue;
         }
 
+        let region_id = &tag.infos.region_id;
         let ms = *ms as u32;
         match region_cpu_records.get_mut(region_id) {
-            Some((ts, cpu_time, total)) => {
-                if *ts.last().unwrap() == timestamp_secs {
-                    *cpu_time.last_mut().unwrap() += ms;
-                } else {
-                    ts.push(timestamp_secs);
-                    cpu_time.push(ms);
-                }
+            Some(total) => {
                 *total += ms;
             }
             None => {
-                region_cpu_records.insert(*region_id, (vec![timestamp_secs], vec![ms], ms));
+                region_cpu_records.insert(*region_id, ms);
             }
         }
     }
@@ -1459,10 +1451,13 @@ where
                     written_keys_delta,
                     last_report_ts,
                     query_stats,
+                    // TODO: report the region CPU time usage since the last region heartbeat to PD.
+                    _cpu_time_ms,
                 ) = {
+                    let region_id = hb_task.region.get_id();
                     let peer_stat = self
                         .region_peers
-                        .entry(hb_task.region.get_id())
+                        .entry(region_id)
                         .or_insert_with(PeerStat::default);
                     peer_stat.approximate_size = hb_task.approximate_size;
                     peer_stat.approximate_keys = hb_task.approximate_keys;
@@ -1482,7 +1477,6 @@ where
                         .read_query_stats
                         .sub_query_stats(&peer_stat.last_region_report_read_query_stats);
                     query_stats.add_query_stats(&written_query_stats_delta.0); // add write info
-                    let mut last_report_ts = peer_stat.last_region_report_ts;
                     peer_stat.last_region_report_written_bytes = hb_task.written_bytes;
                     peer_stat.last_region_report_written_keys = hb_task.written_keys;
                     peer_stat.last_region_report_written_query_stats = hb_task.written_query_stats;
@@ -1490,8 +1484,14 @@ where
                     peer_stat.last_region_report_read_keys = peer_stat.read_keys;
                     peer_stat.last_region_report_read_query_stats =
                         peer_stat.read_query_stats.clone();
-                    peer_stat.last_region_report_ts = UnixSecs::now();
+                    // Take out the region CPU record.
+                    let cpu_time_ms = match self.region_cpu_records.remove(&region_id) {
+                        Some(total_cpu_time_ms) => total_cpu_time_ms,
+                        None => 0,
+                    };
 
+                    let mut last_report_ts = peer_stat.last_region_report_ts;
+                    peer_stat.last_region_report_ts = UnixSecs::now();
                     if last_report_ts.is_zero() {
                         last_report_ts = self.start_ts;
                     }
@@ -1502,6 +1502,7 @@ where
                         written_keys_delta,
                         last_report_ts,
                         query_stats.0,
+                        cpu_time_ms,
                     )
                 };
                 self.handle_heartbeat(
@@ -1963,8 +1964,8 @@ mod tests {
 
     #[test]
     fn test_calculate_region_cpu_records() {
-        // region_id -> ([timestamp_secs], [cpu_time_ms], total_cpu_time_ms)
-        let mut region_cpu_records: HashMap<u64, (Vec<u64>, Vec<u32>, u32)> = HashMap::default();
+        // region_id -> total_cpu_time_ms
+        let mut region_cpu_records: HashMap<u64, u32> = HashMap::default();
 
         let region_num = 3;
         for i in 0..region_num * 10 {
@@ -1999,18 +2000,18 @@ mod tests {
             sleep(Duration::from_millis(50));
         }
 
-        fn get_region_total_cpu(
+        fn get_region_total_cpu_time_ms(
             region_id: &u64,
-            region_cpu_records: &HashMap<u64, (Vec<u64>, Vec<u32>, u32)>,
+            region_cpu_records: &HashMap<u64, u32>,
         ) -> u32 {
             match region_cpu_records.get(region_id) {
-                Some(record) => record.2,
+                Some(total_cpu_time_ms) => *total_cpu_time_ms,
                 None => 0,
             }
         }
 
         for region_id in 1..region_num + 1 {
-            assert!(get_region_total_cpu(&region_id, &region_cpu_records) > 0)
+            assert!(get_region_total_cpu_time_ms(&region_id, &region_cpu_records) > 0)
         }
     }
 }
