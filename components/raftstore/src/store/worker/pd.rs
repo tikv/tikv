@@ -1350,17 +1350,7 @@ fn calculate_region_cpu_records(
         if record_store_id != store_id {
             continue;
         }
-
-        let region_id = &tag.infos.region_id;
-        let ms = *ms as u32;
-        match region_cpu_records.get_mut(region_id) {
-            Some(total) => {
-                *total += ms;
-            }
-            None => {
-                region_cpu_records.insert(*region_id, ms);
-            }
-        }
+        *region_cpu_records.entry(tag.infos.region_id).or_insert(0) += *ms as u32;
     }
 }
 
