@@ -1347,8 +1347,7 @@ fn calculate_region_cpu_records(
 ) {
     for (tag, ms) in &records.records {
         let record_store_id = tag.infos.store_id;
-        let extra_attachment = &tag.infos.extra_attachment;
-        if record_store_id != store_id || extra_attachment.is_empty() {
+        if record_store_id != store_id {
             continue;
         }
 
@@ -1485,10 +1484,7 @@ where
                     peer_stat.last_region_report_read_query_stats =
                         peer_stat.read_query_stats.clone();
                     // Take out the region CPU record.
-                    let cpu_time_ms = match self.region_cpu_records.remove(&region_id) {
-                        Some(total_cpu_time_ms) => total_cpu_time_ms,
-                        None => 0,
-                    };
+                    let cpu_time_ms = self.region_cpu_records.remove(&region_id).unwrap_or(0);
 
                     let mut last_report_ts = peer_stat.last_region_report_ts;
                     peer_stat.last_region_report_ts = UnixSecs::now();
@@ -2000,18 +1996,8 @@ mod tests {
             sleep(Duration::from_millis(50));
         }
 
-        fn get_region_total_cpu_time_ms(
-            region_id: &u64,
-            region_cpu_records: &HashMap<u64, u32>,
-        ) -> u32 {
-            match region_cpu_records.get(region_id) {
-                Some(total_cpu_time_ms) => *total_cpu_time_ms,
-                None => 0,
-            }
-        }
-
         for region_id in 1..region_num + 1 {
-            assert!(get_region_total_cpu_time_ms(&region_id, &region_cpu_records) > 0)
+            assert!(*region_cpu_records.get(&region_id).unwrap_or(&0) > 0)
         }
     }
 }
