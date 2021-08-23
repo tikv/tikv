@@ -32,6 +32,7 @@ impl CommandExt for RawCompareAndSwap {
     ctx!();
     tag!(raw_compare_and_swap);
     gen_lock!(key);
+    property!(support_ttl);
 
     fn write_bytes(&self) -> usize {
         self.key.as_encoded().len() + self.value.len()

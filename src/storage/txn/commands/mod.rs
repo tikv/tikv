@@ -486,6 +486,10 @@ pub trait CommandExt: Display {
     fn write_bytes(&self) -> usize;
 
     fn gen_lock(&self) -> latch::Lock;
+
+    fn support_ttl(&self) -> bool {
+        false
+    }
 }
 
 pub struct WriteContext<'a, L: LockManager> {
@@ -659,6 +663,10 @@ impl Command {
 
     pub fn ctx_mut(&mut self) -> &mut Context {
         self.command_ext_mut().get_ctx_mut()
+    }
+
+    pub fn support_ttl(&self) -> bool {
+        self.command_ext().support_ttl()
     }
 }
 

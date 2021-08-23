@@ -28,6 +28,7 @@ impl CommandExt for RawAtomicStore {
     ctx!();
     tag!(raw_atomic_store);
     gen_lock!(mutations: multiple(|x| x.key()));
+    property!(support_ttl);
 
     fn write_bytes(&self) -> usize {
         let mut bytes = 0;
