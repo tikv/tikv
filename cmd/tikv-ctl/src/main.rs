@@ -534,6 +534,10 @@ trait DebugExecutor {
     /// Recover the cluster when given `store_ids` are failed.
     fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>);
 
+    fn remove_regions(&self, region_ids: Vec<u64>);
+
+    fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>);
+
     /// Recreate the region with metadata from pd, but alloc new id for it.
     fn recreate_region(&self, sec_mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64);
 
@@ -761,13 +765,20 @@ impl DebugExecutor for DebugClient {
     fn print_bad_regions(&self) {
         unimplemented!("only available for local mode");
     }
-
     fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>) {
-        self.check_local_mode();
+        unimplemented!("only available for local mode");
+    }
+
+    fn remove_regions(&self, _: Vec<u64>) {
+        unimplemented!("only available for local mode");
+    }
+
+    fn drop_unapplied_raftlog(&self, _: Option<Vec<u64>>) {
+        unimplemented!("only available for local mode");
     }
 
     fn recreate_region(&self, _: Arc<SecurityManager>, _: &PdConfig, _: u64) {
-        self.check_local_mode();
+        unimplemented!("only available for local mode");
     }
 
     fn check_region_consistency(&self, region_id: u64) {
@@ -945,6 +956,20 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         self.remove_failed_stores(store_ids, region_ids)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         println!("success");
+    }
+
+    fn remove_regions(&self, region_ids: Vec<u64>) {
+        v1!("removing regions {:?} from configurations...", region_ids);
+        self.remove_regions(region_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
+        v1!("success");
+    }
+
+    fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) {
+        v1!("removing unapplied raftlog on region {:?} ...", region_ids);
+        self.drop_unapplied_raftlog(region_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
+        v1!("success");
     }
 
     fn recreate_region(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
@@ -1566,7 +1591,7 @@ fn main() {
                 .about("Unsafely recover when the store can not start normally, this recover may lose data")
                 .subcommand(
                     SubCommand::with_name("remove-fail-stores")
-                        .about("Unsafely recover the cluster when the majority replicas are failed")
+                        .about("Remove the failed machines from the peer list for the regions")
                         .arg(
                             Arg::with_name("stores")
                                 .required(true)
@@ -1578,6 +1603,45 @@ fn main() {
                                 .value_delimiter(",")
                                 .help("Stores to be removed"),
                         )
+                        .arg(
+                            Arg::with_name("regions")
+                                .required_unless("all-regions")
+                                .conflicts_with("all-regions")
+                                .takes_value(true)
+                                .short("r")
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .help("Only for these regions"),
+                        )
+                        .arg(
+                            Arg::with_name("all-regions")
+                                .required_unless("regions")
+                                .conflicts_with("regions")
+                                .long("all-regions")
+                                .takes_value(false)
+                                .help("Do the command for all regions"),
+                        )
+                )
+                .subcommand(
+                    SubCommand::with_name("remove-regions")
+                        .about("Remove the peers in this store for the regions")
+                        .arg(
+                            Arg::with_name("regions")
+                                .required(true)
+                                .takes_value(true)
+                                .short("r")
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .help("Only for these regions"),
+                        )
+                )
+                .subcommand(
+                    SubCommand::with_name("drop-unapplied-raftlog")
+                        .about("Remove unapplied raftlogs on the regions")
                         .arg(
                             Arg::with_name("regions")
                                 .required_unless("all-regions")
@@ -2249,6 +2313,23 @@ fn main() {
                     .expect("parse regions fail")
             });
             debug_executor.remove_fail_stores(store_ids, region_ids);
+        } else if let Some(matches) = matches.subcommand_matches("remove-regions") {
+            let region_ids = matches
+                .values_of("regions")
+                .map(|ids| {
+                    ids.map(str::parse)
+                        .collect::<Result<Vec<_>, _>>()
+                        .expect("parse regions fail")
+                })
+                .unwrap();
+            debug_executor.remove_regions(region_ids);
+        } else if let Some(matches) = matches.subcommand_matches("drop-unapplied-raftlog") {
+            let region_ids = matches.values_of("regions").map(|ids| {
+                ids.map(str::parse)
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("parse regions fail")
+            });
+            debug_executor.drop_unapplied_raftlog(region_ids);
         } else {
             println!("{}", matches.usage());
         }

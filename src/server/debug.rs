@@ -6,6 +6,15 @@ use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::{error::Error as StdError, result};
 
+use engine_rocks::raw::{CompactOptions, DBBottommostLevelCompaction, DB};
+use engine_rocks::util::get_cf_handle;
+use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
+use engine_traits::{
+    DeleteStrategy, Engines, IterOptions, Iterable, Iterator as EngineIterator, MiscExt, Mutable,
+    Peekable, RaftEngine, RangePropertiesExt, SeekKey, SyncMutable, TableProperties,
+    TablePropertiesCollection, TablePropertiesExt, WriteBatch, WriteOptions,
+};
+use engine_traits::{MvccProperties, Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
@@ -28,7 +37,6 @@ use raftstore::coprocessor::get_region_approximate_middle;
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
 use raftstore::store::{write_initial_apply_state, write_initial_raft_state, write_peer_state};
-use tikv_util::codec::bytes;
 use tikv_util::config::ReadableSize;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
@@ -622,6 +630,128 @@ impl<ER: RaftEngine> Debugger<ER> {
         Ok(())
     }
 
+    pub fn remove_regions(&self, region_ids: Vec<u64>) -> Result<()> {
+        let kv = &self.engines.kv;
+        let raft = &self.engines.raft;
+
+        for region_id in region_ids {
+            let region_state = self.region_info(region_id)?;
+            let raft_local_state = region_state.raft_local_state.ok_or_else(|| {
+                Error::Other(format!("No RaftLocalState found for region {}", region_id).into())
+            })?;
+            let raft_apply_state = region_state.raft_apply_state.ok_or_else(|| {
+                Error::Other(format!("No RaftApplyState found for region {}", region_id).into())
+            })?;
+            let region_local_state = region_state.region_local_state.ok_or_else(|| {
+                Error::Other(format!("No RegionLocalState found for region {}", region_id).into())
+            })?;
+
+            let region = region_local_state.region.unwrap();
+            let key_range = Range {
+                start_key: &keys::enc_start_key(&region),
+                end_key: &keys::enc_end_key(&region),
+            };
+
+            let mut kv_wb = kv.write_batch();
+            let mut raft_wb = raft.log_batch(1024);
+
+            box_try!(raftstore::store::clear_meta(
+                &self.engines,
+                &mut kv_wb,
+                &mut raft_wb,
+                region_id,
+                &raft_local_state,
+            ));
+
+            // write kv rocksdb first in case of restart happen between two write
+            let mut write_opts = WriteOptions::new();
+            write_opts.set_sync(true);
+            box_try!(kv_wb.write_opt(&write_opts));
+            box_try!(raft.consume(&mut raft_wb, true));
+
+            // FIXME: Add tombstone?
+
+            kv.delete_all_in_range(DeleteStrategy::DeleteFiles, &[key_range])
+                .unwrap_or_else(|e| {
+                    error!("failed to delete files in range"; "err" => %e);
+                });
+            kv.delete_all_in_range(DeleteStrategy::DeleteBlobs, &[key_range])
+                .unwrap_or_else(|e| {
+                    error!("failed to delete files in range"; "err" => %e);
+                });
+
+            info!(
+                "removed peer";
+                "region_id" => region_id,
+                "raft_local_state" => ?raft_local_state,
+                "raft_apply_state" => ?raft_apply_state,
+                "region_local_state" => ?raft_apply_state,
+            );
+        }
+
+        Ok(())
+    }
+
+    pub fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) -> Result<()> {
+        let kv = &self.engines.kv;
+        let raft = &self.engines.raft;
+
+        let region_ids = region_ids.unwrap_or(self.get_all_regions_in_store()?);
+        for region_id in region_ids {
+            let region_state = self.region_info(region_id)?;
+            let old_raft_local_state = region_state.raft_local_state.ok_or_else(|| {
+                Error::Other(format!("No RaftLocalState found for region {}", region_id).into())
+            })?;
+            let old_raft_apply_state = region_state.raft_apply_state.ok_or_else(|| {
+                Error::Other(format!("No RaftApplyState found for region {}", region_id).into())
+            })?;
+
+            let applied_index = old_raft_apply_state.applied_index;
+            let last_index = old_raft_local_state.last_index;
+
+            let new_raft_local_state = RaftLocalState {
+                last_index: applied_index,
+                ..old_raft_local_state.clone()
+            };
+            let new_raft_apply_state = RaftApplyState {
+                commit_index: applied_index,
+                ..old_raft_apply_state.clone()
+            };
+
+            info!(
+                "dropping unapplied raft log";
+                "region_id" => region_id,
+                "old_raft_local_state" => ?old_raft_local_state,
+                "new_raft_local_state" => ?new_raft_local_state,
+                "old_raft_apply_state" => ?old_raft_apply_state,
+                "new_raft_apply_state" => ?new_raft_apply_state,
+            );
+
+            // flush the changes
+            box_try!(kv.put_msg_cf(
+                CF_RAFT,
+                &keys::apply_state_key(region_id),
+                &new_raft_apply_state
+            ));
+            box_try!(raft.put_raft_state(region_id, &new_raft_local_state));
+            let deleted_logs = box_try!(raft.gc(region_id, applied_index + 1, last_index + 1));
+            raft.sync().unwrap();
+            kv.sync().unwrap();
+
+            info!(
+                "dropped unapplied raft log";
+                "region_id" => region_id,
+                "old_raft_local_state" => ?old_raft_local_state,
+                "new_raft_local_state" => ?new_raft_local_state,
+                "old_raft_apply_state" => ?old_raft_apply_state,
+                "new_raft_apply_state" => ?new_raft_apply_state,
+                "deleted logs" => deleted_logs,
+            );
+        }
+
+        Ok(())
+    }
+
     pub fn recreate_region(&self, region: Region) -> Result<()> {
         let region_id = region.get_id();
         let kv = &self.engines.kv;
@@ -749,16 +879,17 @@ impl<ER: RaftEngine> Debugger<ER> {
         let mut res = dump_mvcc_properties(self.engines.kv.as_inner(), &start, &end)?;
 
         let middle_key = match box_try!(get_region_approximate_middle(&self.engines.kv, region)) {
-            Some(data_key) => {
-                let mut key = keys::origin_key(&data_key);
-                box_try!(bytes::decode_bytes(&mut key, false))
-            }
+            Some(data_key) => keys::origin_key(&data_key).to_vec(),
             None => Vec::new(),
         };
 
-        // Middle key of the range.
         res.push((
-            "middle_key_by_approximate_size".to_owned(),
+            "region.start_key".to_owned(),
+            hex::encode(&region.start_key),
+        ));
+        res.push(("region.end_key".to_owned(), hex::encode(&region.end_key)));
+        res.push((
+            "region.middle_key_by_approximate_size".to_owned(),
             hex::encode(&middle_key),
         ));
 
@@ -1248,6 +1379,28 @@ mod tests {
         region
     }
 
+    fn init_raft_state(
+        kv_engine: &RocksEngine,
+        raft_engine: &RocksEngine,
+        region_id: u64,
+        last_index: u64,
+        commit_index: u64,
+        applied_index: u64,
+    ) {
+        let apply_state_key = keys::apply_state_key(region_id);
+        let mut apply_state = RaftApplyState::default();
+        apply_state.set_applied_index(applied_index);
+        apply_state.set_commit_index(commit_index);
+        kv_engine
+            .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
+            .unwrap();
+
+        let raft_state_key = keys::raft_state_key(region_id);
+        let mut raft_state = RaftLocalState::default();
+        raft_state.set_last_index(last_index);
+        raft_engine.put_msg(&raft_state_key, &raft_state).unwrap();
+    }
+
     fn get_region_state(engine: &Arc<DB>, region_id: u64) -> RegionLocalState {
         let key = keys::region_state_key(region_id);
         engine
@@ -1629,6 +1782,73 @@ mod tests {
         // Should fail when the store itself is in the failed list.
         init_region_state(engine.as_inner(), 3, &[100, 31, 32, 33]);
         debugger.remove_failed_stores(vec![100], None).unwrap_err();
+    }
+
+    #[test]
+    fn test_remove_region() {
+        let debugger = new_debugger();
+        debugger.set_store_id(100);
+        let kv_engine = &debugger.engines.kv;
+        let raft_engine = &debugger.engines.raft;
+
+        init_region_state(kv_engine.as_inner(), 1, &[100, 101]);
+        init_region_state(kv_engine.as_inner(), 2, &[100, 102]);
+        init_region_state(kv_engine.as_inner(), 3, &[100, 103]);
+        init_raft_state(kv_engine, raft_engine, 1, 100, 90, 80);
+        init_raft_state(kv_engine, raft_engine, 2, 100, 90, 80);
+        init_raft_state(kv_engine, raft_engine, 3, 100, 90, 80);
+
+        debugger.remove_regions(vec![1, 2]).unwrap();
+
+        debugger.region_info(1).unwrap_err();
+        debugger.region_info(2).unwrap_err();
+        debugger.region_info(3).unwrap();
+
+        // Should fail if the region does not exist.
+        debugger.remove_regions(vec![1]).unwrap_err();
+    }
+
+    #[test]
+    fn test_drop_unapplied_raftlog() {
+        let debugger = new_debugger();
+        debugger.set_store_id(100);
+        let kv_engine = &debugger.engines.kv;
+        let raft_engine = &debugger.engines.raft;
+
+        init_region_state(kv_engine.as_inner(), 1, &[100, 101]);
+        init_region_state(kv_engine.as_inner(), 2, &[100, 103]);
+        init_raft_state(kv_engine, raft_engine, 1, 100, 90, 80);
+        init_raft_state(kv_engine, raft_engine, 2, 80, 80, 80);
+
+        let region_info_2_before = debugger.region_info(2).unwrap();
+
+        // Drop raftlog on all regions
+        debugger.drop_unapplied_raftlog(None).unwrap();
+
+        let region_info_1 = debugger.region_info(1).unwrap();
+        let region_info_2 = debugger.region_info(2).unwrap();
+
+        assert_eq!(
+            region_info_1.raft_local_state.as_ref().unwrap().last_index,
+            80
+        );
+        assert_eq!(
+            region_info_1
+                .raft_apply_state
+                .as_ref()
+                .unwrap()
+                .applied_index,
+            80
+        );
+        assert_eq!(
+            region_info_1
+                .raft_apply_state
+                .as_ref()
+                .unwrap()
+                .commit_index,
+            80
+        );
+        assert_eq!(region_info_2, region_info_2_before);
     }
 
     #[test]
