@@ -2408,14 +2408,14 @@ mod tests {
         exp_res.push(new_entry(7, 8));
         validate_cache(&store, &exp_res);
 
-        // compact to min(6, 7)
-        store.cache.persisted = 6;
+        // compact to min(5 + 1, 7)
+        store.cache.persisted = 5;
         store.compact_to(7);
         exp_res = vec![new_entry(6, 7), new_entry(7, 8)];
         validate_cache(&store, &exp_res);
 
-        // compact to min(8, 7)
-        store.cache.persisted = 8;
+        // compact to min(7 + 1, 7)
+        store.cache.persisted = 7;
         store.compact_to(7);
         exp_res = vec![new_entry(7, 8)];
         validate_cache(&store, &exp_res);
