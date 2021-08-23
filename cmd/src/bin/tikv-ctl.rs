@@ -190,29 +190,26 @@ trait DebugExecutor {
         v1!("total region size: {}", convert_gbmb(total_size as u64));
     }
 
-    fn dump_region_info(&self, region: u64, skip_tombstone: bool) {
-        let r = self.get_region_info(region);
-        if skip_tombstone {
-            let region_state = r.region_local_state.as_ref();
-            if region_state.map_or(false, |s| s.get_state() == PeerState::Tombstone) {
-                return;
+    fn dump_region_info(&self, region_ids: Option<Vec<u64>>, skip_tombstone: bool) {
+        let region_ids = region_ids.unwrap_or_else(|| self.get_all_regions_in_store());
+        for region_id in region_ids {
+            let r = self.get_region_info(region_id);
+            if skip_tombstone {
+                let region_state = r.region_local_state.as_ref();
+                if region_state.map_or(false, |s| s.get_state() == PeerState::Tombstone) {
+                    return;
+                }
             }
-        }
-        let region_state_key = keys::region_state_key(region);
-        let raft_state_key = keys::raft_state_key(region);
-        let apply_state_key = keys::apply_state_key(region);
-        v1!("region id: {}", region);
-        v1!("region state key: {}", escape(&region_state_key));
-        v1!("region state: {:?}", r.region_local_state);
-        v1!("raft state key: {}", escape(&raft_state_key));
-        v1!("raft state: {:?}", r.raft_local_state);
-        v1!("apply state key: {}", escape(&apply_state_key));
-        v1!("apply state: {:?}", r.raft_apply_state);
-    }
-
-    fn dump_all_region_info(&self, skip_tombstone: bool) {
-        for region in self.get_all_regions_in_store() {
-            self.dump_region_info(region, skip_tombstone);
+            let region_state_key = keys::region_state_key(region_id);
+            let raft_state_key = keys::raft_state_key(region_id);
+            let apply_state_key = keys::apply_state_key(region_id);
+            v1!("region id: {}", region_id);
+            v1!("region state key: {}", escape(&region_state_key));
+            v1!("region state: {:?}", r.region_local_state);
+            v1!("raft state key: {}", escape(&raft_state_key));
+            v1!("raft state: {:?}", r.raft_local_state);
+            v1!("apply state key: {}", escape(&apply_state_key));
+            v1!("apply state: {:?}", r.raft_apply_state);
         }
     }
 
@@ -1214,10 +1211,24 @@ fn main() {
                     SubCommand::with_name("region")
                         .about("print region info")
                         .arg(
-                            Arg::with_name("region")
-                                .short("r")
+                            Arg::with_name("regions")
+                                .required_unless("all-regions")
+                                .conflicts_with("all-regions")
                                 .takes_value(true)
-                                .help("Set the region id, if not specified, print all regions"),
+                                .short("r")
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .help("Print info for these regions"),
+                        )
+                        .arg(
+                            Arg::with_name("all-regions")
+                                .required_unless("regions")
+                                .conflicts_with("regions")
+                                .long("all-regions")
+                                .takes_value(false)
+                                .help("Print info for all regions"),
                         )
                         .arg(
                             Arg::with_name("skip-tombstone")
@@ -2100,11 +2111,13 @@ fn main() {
             debug_executor.dump_raft_log(id, index);
         } else if let Some(matches) = matches.subcommand_matches("region") {
             let skip_tombstone = matches.is_present("skip-tombstone");
-            if let Some(id) = matches.value_of("region") {
-                debug_executor.dump_region_info(id.parse().unwrap(), skip_tombstone);
-            } else {
-                debug_executor.dump_all_region_info(skip_tombstone);
-            }
+            let regions = matches.values_of("regions").map(|values| {
+                values
+                    .map(str::parse)
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("parse regions fail")
+            });
+            debug_executor.dump_region_info(regions, skip_tombstone);
         } else {
             let _ = app.print_help();
         }
