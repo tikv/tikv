@@ -927,7 +927,23 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         }
     }
 
+    // The entry point of all transaction commands. It checks transaction-specific constraints.
     pub fn sched_txn_command<T: StorageCallbackType>(
+        &self,
+        cmd: TypedCommand<T>,
+        callback: Callback<T>,
+    ) -> Result<()> {
+        if self.enable_ttl {
+            return Err(box_err!(
+                "can't sched txn cmd({}) with TTL enabled",
+                cmd.cmd.tag()
+            ));
+        }
+        self.sched_command(cmd, callback)
+    }
+
+    // The entry point of the storage scheduler. Not only transaction commands need to access keys serially.
+    fn sched_command<T: StorageCallbackType>(
         &self,
         cmd: TypedCommand<T>,
         callback: Callback<T>,
@@ -937,10 +953,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         };
 
         let cmd: Command = cmd.into();
-
-        if self.enable_ttl && !cmd.support_ttl() {
-            return Err(box_err!("can't sched cmd({}) with TTL enabled", cmd.tag()));
-        }
 
         match &cmd {
             Command::Prewrite(Prewrite { mutations, .. }) => {
@@ -1728,7 +1740,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         };
         let cmd =
             RawCompareAndSwap::new(cf, Key::from_encoded(key), previous_value, value, ttl, ctx);
-        self.sched_txn_command(cmd, cb)
+        self.sched_command(cmd, cb)
     }
 
     pub fn raw_batch_put_atomic(
@@ -1753,7 +1765,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             None
         };
         let cmd = RawAtomicStore::new(cf, muations, ttl, ctx);
-        self.sched_txn_command(cmd, callback)
+        self.sched_command(cmd, callback)
     }
 
     pub fn raw_batch_delete_atomic(
@@ -1769,7 +1781,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .map(|k| Mutation::Delete(Key::from_encoded(k)))
             .collect();
         let cmd = RawAtomicStore::new(cf, muations, None, ctx);
-        self.sched_txn_command(cmd, callback)
+        self.sched_command(cmd, callback)
     }
 
     pub fn raw_checksum(
@@ -6912,59 +6924,5 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-    }
-
-    #[test]
-    fn test_txn_cmd_with_ttl_enabled() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, true)
-            .build()
-            .unwrap();
-        let (tx, rx) = channel();
-
-        // TTL commands can pass the check.
-        storage
-            .raw_batch_put_atomic(
-                Context::default(),
-                "".to_string(),
-                vec![(b"k".to_vec(), b"v".to_vec())],
-                10,
-                expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .raw_batch_delete_atomic(
-                Context::default(),
-                "".to_string(),
-                vec![b"k".to_vec()],
-                expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .raw_compare_and_swap_atomic(
-                Context::default(),
-                "".to_string(),
-                b"k".to_vec(),
-                None,
-                b"v".to_vec(),
-                10,
-                expect_value_callback(tx.clone(), 2, (None, true)),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-
-        // Can't sched txn cmds with TTL enabled.
-        assert!(matches!(
-            storage.sched_txn_command(
-                commands::Prewrite::with_defaults(
-                    vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
-                    b"k".to_vec(),
-                    100.into(),
-                ),
-                expect_ok_callback(tx, 3),
-            ),
-            Err(Error(box ErrorInner::Other(_)))
-        ));
     }
 }
