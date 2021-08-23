@@ -31,6 +31,12 @@ impl MockRaftStoreRouter {
     }
 }
 
+impl Default for MockRaftStoreRouter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StoreRouter<RocksEngine> for MockRaftStoreRouter {
     fn send(&self, _: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
         unimplemented!();

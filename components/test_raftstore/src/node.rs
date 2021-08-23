@@ -57,6 +57,12 @@ impl ChannelTransport {
     }
 }
 
+impl Default for ChannelTransport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Transport for ChannelTransport {
     fn send(&mut self, msg: RaftMessage) -> Result<()> {
         let from_store = msg.get_from_peer().get_store_id();

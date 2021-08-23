@@ -416,16 +416,16 @@ pub fn replace(
     if from_str.is_empty() {
         return Ok(writer.write_ref(Some(s)));
     }
-    let mut dest = Vec::with_capacity(s.len());
     let mut last = 0;
+    let mut writer = writer.begin();
     while let Some(mut start) = twoway::find_bytes(&s[last..], from_str) {
         start += last;
-        dest.extend_from_slice(&s[last..start]);
-        dest.extend_from_slice(to_str);
+        writer.partial_write(&s[last..start]);
+        writer.partial_write(to_str);
         last = start + from_str.len();
     }
-    dest.extend_from_slice(&s[last..]);
-    Ok(writer.write(Some(dest)))
+    writer.partial_write(&s[last..]);
+    Ok(writer.finish())
 }
 
 #[rpn_fn(writer)]
