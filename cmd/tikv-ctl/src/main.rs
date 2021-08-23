@@ -190,12 +190,15 @@ trait DebugExecutor {
         println!("total region size: {}", convert_gbmb(total_size as u64));
     }
 
-    fn dump_region_info(&self, region: u64, skip_tombstone: bool) {
-        let r = self.get_region_info(region);
-        if skip_tombstone {
-            let region_state = r.region_local_state.as_ref();
-            if region_state.map_or(false, |s| s.get_state() == PeerState::Tombstone) {
-                return;
+    fn dump_region_info(&self, region_ids: Option<Vec<u64>>, skip_tombstone: bool) {
+        let region_ids = region_ids.unwrap_or_else(|| self.get_all_regions_in_store());
+        for region_id in region_ids {
+            let r = self.get_region_info(region_id);
+            if skip_tombstone {
+                let region_state = r.region_local_state.as_ref();
+                if region_state.map_or(false, |s| s.get_state() == PeerState::Tombstone) {
+                    return;
+                }
             }
         }
         let region_state_key = keys::region_state_key(region);
@@ -1229,10 +1232,24 @@ fn main() {
                     SubCommand::with_name("region")
                         .about("print region info")
                         .arg(
-                            Arg::with_name("region")
-                                .short("r")
+                            Arg::with_name("regions")
+                                .required_unless("all-regions")
+                                .conflicts_with("all-regions")
                                 .takes_value(true)
-                                .help("Set the region id, if not specified, print all regions"),
+                                .short("r")
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .help("Print info for these regions"),
+                        )
+                        .arg(
+                            Arg::with_name("all-regions")
+                                .required_unless("regions")
+                                .conflicts_with("regions")
+                                .long("all-regions")
+                                .takes_value(false)
+                                .help("Print info for all regions"),
                         )
                         .arg(
                             Arg::with_name("skip-tombstone")
@@ -2170,11 +2187,13 @@ fn main() {
             debug_executor.dump_raft_log(id, index);
         } else if let Some(matches) = matches.subcommand_matches("region") {
             let skip_tombstone = matches.is_present("skip-tombstone");
-            if let Some(id) = matches.value_of("region") {
-                debug_executor.dump_region_info(id.parse().unwrap(), skip_tombstone);
-            } else {
-                debug_executor.dump_all_region_info(skip_tombstone);
-            }
+            let regions = matches.values_of("regions").map(|values| {
+                values
+                    .map(str::parse)
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("parse regions fail")
+            });
+            debug_executor.dump_region_info(regions, skip_tombstone);
         } else {
             let _ = app.print_help();
         }
