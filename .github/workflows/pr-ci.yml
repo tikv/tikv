@@ -1,0 +1,25 @@
+name: Pull Request CI
+
+on:
+  # push:
+  #   branches:
+  #     - 'raftstore-proxy*'
+  pull_request:
+    branches:
+      - 'raftstore-proxy*'
+
+jobs:
+  format-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: format-check
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain none -y
+          export PATH=/root/.cargo/bin/:$PATH
+          rustup self update && rustup set profile minimal && rustup default $(cat "rust-toolchain")
+          cd ${{github.workspace}}
+          make pre-format
+          cargo fmt -- --check >/dev/null
