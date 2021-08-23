@@ -27,6 +27,7 @@ impl QueryStats {
             QueryKind::DeleteRange => self.0.set_delete_range(query_num),
             QueryKind::Put => self.0.set_put(query_num),
             QueryKind::Others => (),
+            _ => (),
         }
     }
 
@@ -40,6 +41,7 @@ impl QueryStats {
             QueryKind::DeleteRange => query_stats.get_delete_range(),
             QueryKind::Put => query_stats.get_put(),
             QueryKind::Others => 0,
+            _ => 0,
         }
     }
 

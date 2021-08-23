@@ -42,6 +42,7 @@ pub struct RegionStat {
     pub approximate_size: u64,
     pub approximate_keys: u64,
     pub last_report_ts: UnixSecs,
+    pub cpu_time_ms: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]

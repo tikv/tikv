@@ -1450,8 +1450,7 @@ where
                     written_keys_delta,
                     last_report_ts,
                     query_stats,
-                    // TODO: report the region CPU time usage since the last region heartbeat to PD.
-                    _cpu_time_ms,
+                    cpu_time_ms,
                 ) = {
                     let region_id = hb_task.region.get_id();
                     let peer_stat = self
@@ -1516,6 +1515,7 @@ where
                         approximate_size: hb_task.approximate_size,
                         approximate_keys: hb_task.approximate_keys,
                         last_report_ts,
+                        cpu_time_ms,
                     },
                     hb_task.replication_status,
                 )
