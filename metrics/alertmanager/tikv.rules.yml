@@ -242,24 +242,24 @@ groups:
       summary: TiKV scheduler command duration seconds more than 1s
 
   - alert: TiKV_coprocessor_request_error
-    expr: increase(tikv_coprocessor_request_error{reason!="lock"}[10m]) > 100
+    expr: increase(tikv_coprocessor_request_error{reason!="meet_lock"}[10m]) > 100
     for: 1m
     labels:
       env: ENV_LABELS_ENV
       level: warning
-      expr:  increase(tikv_coprocessor_request_error{reason!="lock"}[10m]) > 100
+      expr:  increase(tikv_coprocessor_request_error{reason!="meet_lock"}[10m]) > 100
     annotations:
       description: 'cluster: ENV_LABELS_ENV, reason: {{ $labels.reason }}, instance: {{ $labels.instance }}, values: {{ $value }}'
       value: '{{ $value }}'
       summary: TiKV coprocessor request error
 
   - alert: TiKV_coprocessor_request_lock_error
-    expr: increase(tikv_coprocessor_request_error{reason="lock"}[10m]) > 10000
+    expr: increase(tikv_coprocessor_request_error{reason="meet_lock"}[10m]) > 10000
     for: 1m
     labels:
       env: ENV_LABELS_ENV
       level: warning
-      expr:  increase(tikv_coprocessor_request_error{reason="lock"}[10m]) > 10000
+      expr:  increase(tikv_coprocessor_request_error{reason="meet_lock"}[10m]) > 10000
     annotations:
       description: 'cluster: ENV_LABELS_ENV, reason: {{ $labels.reason }}, instance: {{ $labels.instance }}, values: {{ $value }}'
       value: '{{ $value }}'
