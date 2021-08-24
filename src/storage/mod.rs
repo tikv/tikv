@@ -927,7 +927,23 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         }
     }
 
+    // The entry point of all transaction commands. It checks transaction-specific constraints.
     pub fn sched_txn_command<T: StorageCallbackType>(
+        &self,
+        cmd: TypedCommand<T>,
+        callback: Callback<T>,
+    ) -> Result<()> {
+        if self.enable_ttl {
+            return Err(box_err!(
+                "can't sched txn cmd({}) with TTL enabled",
+                cmd.cmd.tag()
+            ));
+        }
+        self.sched_command(cmd, callback)
+    }
+
+    // The entry point of the storage scheduler. Not only transaction commands need to access keys serially.
+    fn sched_command<T: StorageCallbackType>(
         &self,
         cmd: TypedCommand<T>,
         callback: Callback<T>,
@@ -1724,7 +1740,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         };
         let cmd =
             RawCompareAndSwap::new(cf, Key::from_encoded(key), previous_value, value, ttl, ctx);
-        self.sched_txn_command(cmd, cb)
+        self.sched_command(cmd, cb)
     }
 
     pub fn raw_batch_put_atomic(
@@ -1749,7 +1765,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             None
         };
         let cmd = RawAtomicStore::new(cf, muations, ttl, ctx);
-        self.sched_txn_command(cmd, callback)
+        self.sched_command(cmd, callback)
     }
 
     pub fn raw_batch_delete_atomic(
@@ -1765,7 +1781,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .map(|k| Mutation::Delete(Key::from_encoded(k)))
             .collect();
         let cmd = RawAtomicStore::new(cf, muations, None, ctx);
-        self.sched_txn_command(cmd, callback)
+        self.sched_command(cmd, callback)
     }
 
     pub fn raw_checksum(
