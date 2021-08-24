@@ -86,6 +86,7 @@ use kvproto::kvrpcpb::{
 };
 use kvproto::pdpb::QueryKind;
 use raftstore::store::util::build_key_range;
+use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
 use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
 use std::{
@@ -197,7 +198,7 @@ macro_rules! check_key_size {
 
 impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Create a `Storage` from given engine.
-    pub fn from_engine(
+    pub fn from_engine<R: FlowStatsReporter>(
         engine: E,
         config: &Config,
         read_pool: ReadPoolHandle,
@@ -205,6 +206,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         concurrency_manager: ConcurrencyManager,
         pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
         flow_controller: Arc<FlowController>,
+        reporter: R,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -213,6 +215,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             config,
             pipelined_pessimistic_lock,
             flow_controller,
+            reporter,
         );
 
         info!("Storage started.");
@@ -1895,6 +1898,14 @@ impl TestStorageBuilder<RocksEngine, DummyLockManager> {
     }
 }
 
+#[derive(Clone)]
+struct DummyReporter;
+
+impl FlowStatsReporter for DummyReporter {
+    fn report_read_stats(&self, _read_stats: ReadStats) {}
+    fn report_write_stats(&self, _write_stats: WriteStats) {}
+}
+
 impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L) -> Self {
         let config = Config::default();
@@ -1940,6 +1951,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             ConcurrencyManager::new(1.into()),
             self.pipelined_pessimistic_lock,
             Arc::new(FlowController::empty()),
+            DummyReporter,
         )
     }
 }
