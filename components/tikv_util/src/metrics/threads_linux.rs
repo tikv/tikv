@@ -399,6 +399,8 @@ impl ThreadInfoStatistics {
                 let name = get_name(&stat.command);
                 self.tid_names.entry(tid).or_insert(name);
 
+                // To get a percentage result,
+                // we pre-multiply `cpu_time` by 100 here rather than inside the `update_metric`.
                 let cpu_time = cpu_total(&stat) * 100.0;
                 update_metric(
                     &mut self.metrics_total.cpu_times,
