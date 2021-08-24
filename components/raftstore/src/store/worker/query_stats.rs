@@ -81,6 +81,12 @@ impl QueryStats {
         mem::swap(&mut self.0, &mut query_stats);
         query_stats
     }
+
+    pub fn clean(&mut self) {
+        for kind in QUERY_KINDS {
+            self.set_query_num(*kind, 0);
+        }
+    }
 }
 
 pub fn is_read_query(kind: QueryKind) -> bool {
