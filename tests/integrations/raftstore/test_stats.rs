@@ -270,19 +270,6 @@ fn test_query_stats() {
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
     fail::cfg("mock_collect_interval", "return(0)").unwrap();
-<<<<<<< HEAD
-    test_query_num(raw_get);
-    test_query_num(raw_batch_get);
-    test_query_num(raw_scan);
-    test_query_num(raw_batch_scan);
-    test_query_num(get);
-    test_query_num(batch_get);
-    test_query_num(scan);
-    test_query_num(scan_lock);
-    test_query_num(get_key_ttl);
-    test_query_num(raw_batch_get_command);
-    test_query_num(batch_get_command);
-=======
     test_query_num(raw_get, true);
     test_query_num(raw_batch_get, true);
     test_query_num(raw_scan, true);
@@ -294,8 +281,6 @@ fn test_query_stats() {
     test_query_num(get_key_ttl, true);
     test_query_num(raw_batch_get_command, true);
     test_query_num(batch_get_command, false);
-    test_delete_query();
->>>>>>> c6bee7428... storage: ban txn cmds when TTL is enabled. (#10800)
     fail::remove("mock_tick_interval");
     fail::remove("mock_hotspot_threshold");
     fail::remove("mock_collect_interval");
@@ -396,114 +381,6 @@ fn test_query_num(query: Box<Query>, enable_ttl: bool) {
     );
 }
 
-<<<<<<< HEAD
-=======
-fn test_delete_query() {
-    let k = b"key".to_vec();
-    let store_id = 1;
-
-    {
-        let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
-            cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
-            cluster.cfg.storage.enable_ttl = true;
-        });
-
-        raw_put(&cluster, &client, &ctx, store_id, k.clone());
-        // Raw Delete
-        let mut delete_req = RawDeleteRequest::default();
-        delete_req.set_context(ctx.clone());
-        delete_req.key = k.clone();
-        client.raw_delete(&delete_req).unwrap();
-        assert!(check_query_num_write(
-            &cluster,
-            store_id,
-            QueryKind::Delete,
-            1
-        ));
-
-        raw_put(&cluster, &client, &ctx, store_id, k.clone());
-        // Raw DeleteRange
-        let mut delete_req = RawDeleteRangeRequest::default();
-        delete_req.set_context(ctx.clone());
-        delete_req.set_start_key(k.clone());
-        delete_req.set_end_key(vec![]);
-        client.raw_delete_range(&delete_req).unwrap();
-        assert!(check_query_num_write(
-            &cluster,
-            store_id,
-            QueryKind::DeleteRange,
-            1
-        ));
-    }
-
-    {
-        let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
-            cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
-        });
-
-        put(&cluster, &client, &ctx, store_id, k.clone());
-        // DeleteRange
-        let mut delete_req = DeleteRangeRequest::default();
-        delete_req.set_context(ctx);
-        delete_req.set_start_key(k);
-        delete_req.set_end_key(vec![]);
-        client.kv_delete_range(&delete_req).unwrap();
-        assert!(check_query_num_write(
-            &cluster,
-            store_id,
-            QueryKind::DeleteRange,
-            1
-        ));
-    }
-}
-
-fn check_query_num_read(
-    cluster: &Cluster<ServerCluster>,
-    store_id: u64,
-    region_id: u64,
-    kind: QueryKind,
-    expect: u64,
-) -> bool {
-    let start = std::time::SystemTime::now();
-    let mut num = 0;
-    loop {
-        sleep_ms(10);
-        if let Some(hot_peers) = cluster.pd_client.get_store_hotspots(store_id) {
-            let peer_stat = hot_peers.get(&region_id).unwrap();
-            let query_stat = peer_stat.get_query_stats();
-            num = QueryStats::get_query_num(query_stat, kind);
-            if num == expect {
-                return true;
-            }
-        }
-        if start.elapsed().unwrap().as_secs() > 10 {
-            println!("real query {}", num);
-            return false;
-        }
-    }
-}
-
-fn check_query_num_write(
-    cluster: &Cluster<ServerCluster>,
-    store_id: u64,
-    kind: QueryKind,
-    expect: u64,
-) -> bool {
-    let start = std::time::SystemTime::now();
-    loop {
-        sleep_ms(10);
-        if let Some(hb) = cluster.pd_client.get_store_stats(store_id) {
-            if QueryStats::get_query_num(hb.get_query_stats(), kind) >= expect {
-                return true;
-            }
-        }
-        if start.elapsed().unwrap().as_secs() > 5 {
-            return false;
-        }
-    }
-}
-
->>>>>>> c6bee7428... storage: ban txn cmds when TTL is enabled. (#10800)
 fn check_split_key(cluster: &Cluster<ServerCluster>, k: Vec<u8>) -> bool {
     let start = std::time::SystemTime::now();
     loop {
