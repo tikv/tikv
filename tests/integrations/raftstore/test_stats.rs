@@ -568,51 +568,6 @@ fn test_delete_query() {
 
     let k = b"key".to_vec();
     let store_id = 1;
-<<<<<<< HEAD
-    raw_put(&cluster, &client, &ctx, store_id, k.clone());
-    put(&cluster, &client, &ctx, store_id, k.clone());
-
-    // Raw Delete
-    let mut delete_req = RawDeleteRequest::default();
-    delete_req.set_context(ctx.clone());
-    delete_req.key = k.clone();
-    client.raw_delete(&delete_req).unwrap();
-    assert!(check_query_num_write(
-        &cluster,
-        store_id,
-        QueryKind::Delete,
-        1
-    ));
-
-    // DeleteRange
-    let mut delete_req = DeleteRangeRequest::default();
-    delete_req.set_context(ctx.clone());
-    delete_req.set_start_key(k.clone());
-    delete_req.set_end_key(vec![]);
-    client.kv_delete_range(&delete_req).unwrap();
-    assert!(check_query_num_write(
-        &cluster,
-        store_id,
-        QueryKind::DeleteRange,
-        1
-    ));
-
-    raw_put(&cluster, &client, &ctx, store_id, k.clone());
-    put(&cluster, &client, &ctx, store_id, k.clone());
-    // Raw DeleteRange
-    let mut delete_req = RawDeleteRangeRequest::default();
-    delete_req.set_context(ctx.clone());
-    delete_req.set_start_key(k.clone());
-    delete_req.set_end_key(vec![]);
-    client.raw_delete_range(&delete_req).unwrap();
-    assert!(check_query_num_write(
-        &cluster,
-        store_id,
-        QueryKind::DeleteRange,
-        1
-    ));
-=======
-
     {
         let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
             cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
@@ -651,7 +606,6 @@ fn test_delete_query() {
         client.kv_delete_range(&delete_req).unwrap();
         // skip kv write query check
     }
->>>>>>> 762531710... statistics: add more write query kind (#10786)
 }
 
 fn check_query_num_read(
@@ -752,5 +706,5 @@ fn batch_commands(
             }
         }
     });
-    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    rx.recv_timeout(Duration::from_secs(10)).unwrap();
 }
