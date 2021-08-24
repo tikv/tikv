@@ -446,6 +446,12 @@ impl ThreadInfoStatistics {
     }
 }
 
+impl Default for ThreadInfoStatistics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 const TID_MIN_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
 const TID_MAX_UPDATE_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
