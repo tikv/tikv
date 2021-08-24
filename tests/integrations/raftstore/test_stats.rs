@@ -561,11 +561,6 @@ fn test_query_num(query: Box<Query>) {
 }
 
 fn test_delete_query() {
-    let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
-        cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
-        cluster.cfg.storage.enable_ttl = true;
-    });
-
     let k = b"key".to_vec();
     let store_id = 1;
     {
