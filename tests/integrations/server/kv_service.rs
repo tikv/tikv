@@ -243,11 +243,7 @@ fn test_rawkv_ttl() {
 
     let mut get_req = RawGetRequest::default();
     get_req.set_context(ctx.clone());
-<<<<<<< HEAD
-    get_req.key = k.clone();
-=======
     get_req.key = k;
->>>>>>> c6bee7428... storage: ban txn cmds when TTL is enabled. (#10800)
     let get_resp = client.raw_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(get_resp.error.is_empty());
