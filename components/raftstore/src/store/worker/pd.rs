@@ -1335,8 +1335,14 @@ where
         self.remote.spawn(f);
     }
 
+    // Notice: CPU records here we collect are all from the outside RPC workloads,
+    // CPU consumption from internal TiKV are not included. Also, since the write
+    // path CPU consumption is not large but the logging is complex, the current
+    // CPU time for the write path only takes into account the lock checking,
+    // which is the read load portion of the write path.
+    // TODO: more accurate CPU consumption of a specified region.
     fn handle_region_cpu_records(&mut self, records: Arc<CpuRecords>) {
-        calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records)
+        calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records);
     }
 }
 
@@ -1350,6 +1356,7 @@ fn calculate_region_cpu_records(
         if record_store_id != store_id {
             continue;
         }
+        // Reporting a region heartbeat later will clear the corresponding record.
         *region_cpu_records.entry(tag.infos.region_id).or_insert(0) += *ms as u32;
     }
 }
@@ -1440,7 +1447,7 @@ where
                     written_keys_delta,
                     last_report_ts,
                     query_stats,
-                    cpu_time_ms,
+                    cpu_usage,
                 ) = {
                     let region_id = hb_task.region.get_id();
                     let peer_stat = self
@@ -1472,14 +1479,24 @@ where
                     peer_stat.last_region_report_read_keys = peer_stat.read_keys;
                     peer_stat.last_region_report_read_query_stats =
                         peer_stat.read_query_stats.clone();
-                    // Take out the region CPU record.
-                    let cpu_time_ms = self.region_cpu_records.remove(&region_id).unwrap_or(0);
 
                     let mut last_report_ts = peer_stat.last_region_report_ts;
                     peer_stat.last_region_report_ts = UnixSecs::now();
                     if last_report_ts.is_zero() {
                         last_report_ts = self.start_ts;
                     }
+                    // Calculate the CPU usage since the last region heartbeat.
+                    let cpu_usage = {
+                        // Take out the region CPU record.
+                        let cpu_time_duration = Duration::from_millis(
+                            self.region_cpu_records.remove(&region_id).unwrap_or(0) as u64,
+                        );
+                        let interval_second =
+                            UnixSecs::now().into_inner() - last_report_ts.into_inner();
+                        // Keep consistent with the calculation of cpu_usages in a store heartbeat.
+                        // See components/tikv_util/src/metrics/threads_linux.rs for more details.
+                        (cpu_time_duration.as_secs_f64() * 100.0) / interval_second as f64
+                    } as u64;
                     (
                         read_bytes_delta,
                         read_keys_delta,
@@ -1487,7 +1504,7 @@ where
                         written_keys_delta,
                         last_report_ts,
                         query_stats.0,
-                        cpu_time_ms,
+                        cpu_usage,
                     )
                 };
                 self.handle_heartbeat(
@@ -1505,7 +1522,7 @@ where
                         approximate_size: hb_task.approximate_size,
                         approximate_keys: hb_task.approximate_keys,
                         last_report_ts,
-                        cpu_time_ms,
+                        cpu_usage,
                     },
                     hb_task.replication_status,
                 )
