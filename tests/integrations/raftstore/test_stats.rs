@@ -363,17 +363,17 @@ fn test_query_stats() {
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
     fail::cfg("mock_collect_interval", "return(0)").unwrap();
-    test_query_num(raw_get);
-    test_query_num(raw_batch_get);
-    test_query_num(raw_scan);
-    test_query_num(raw_batch_scan);
-    test_query_num(get);
-    test_query_num(batch_get);
-    test_query_num(scan);
-    test_query_num(scan_lock);
-    test_query_num(get_key_ttl);
-    test_query_num(raw_batch_get_command);
-    test_query_num(batch_get_command);
+    test_query_num(raw_get, true);
+    test_query_num(raw_batch_get, true);
+    test_query_num(raw_scan, true);
+    test_query_num(raw_batch_scan, true);
+    test_query_num(get, false);
+    test_query_num(batch_get, false);
+    test_query_num(scan, false);
+    test_query_num(scan_lock, false);
+    test_query_num(get_key_ttl, true);
+    test_query_num(raw_batch_get_command, true);
+    test_query_num(batch_get_command, false);
     test_delete_query();
     fail::remove("mock_tick_interval");
     fail::remove("mock_hotspot_threshold");
@@ -449,7 +449,7 @@ fn put(
     assert!(check_query_num_write(&cluster, store_id, QueryKind::Put, 1));
 }
 
-fn test_query_num(query: Box<Query>) {
+fn test_query_num(query: Box<Query>, enable_ttl: bool) {
     let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
         cluster.cfg.split.qps_threshold = 0;
@@ -457,13 +457,16 @@ fn test_query_num(query: Box<Query>) {
         cluster.cfg.split.split_contained_score = 2.0;
         cluster.cfg.split.detect_times = 1;
         cluster.cfg.split.sample_threshold = 0;
-        cluster.cfg.storage.enable_ttl = true;
+        cluster.cfg.storage.enable_ttl = enable_ttl;
     });
 
     let k = b"key".to_vec();
     let store_id = 1;
-    raw_put(&cluster, &client, &ctx, store_id, k.clone());
-    put(&cluster, &client, &ctx, store_id, k.clone());
+    if enable_ttl {
+        raw_put(&cluster, &client, &ctx, store_id, k.clone());
+    } else {
+        put(&cluster, &client, &ctx, store_id, k.clone());
+    }
     let region_id = cluster.get_region_id(&k);
     query(
         ctx.clone(),
@@ -476,55 +479,62 @@ fn test_query_num(query: Box<Query>) {
 }
 
 fn test_delete_query() {
-    let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
-        cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
-        cluster.cfg.storage.enable_ttl = true;
-    });
-
     let k = b"key".to_vec();
     let store_id = 1;
-    raw_put(&cluster, &client, &ctx, store_id, k.clone());
-    put(&cluster, &client, &ctx, store_id, k.clone());
 
-    // Raw Delete
-    let mut delete_req = RawDeleteRequest::default();
-    delete_req.set_context(ctx.clone());
-    delete_req.key = k.clone();
-    client.raw_delete(&delete_req).unwrap();
-    assert!(check_query_num_write(
-        &cluster,
-        store_id,
-        QueryKind::Delete,
-        1
-    ));
+    {
+        let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+            cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
+            cluster.cfg.storage.enable_ttl = true;
+        });
 
-    // DeleteRange
-    let mut delete_req = DeleteRangeRequest::default();
-    delete_req.set_context(ctx.clone());
-    delete_req.set_start_key(k.clone());
-    delete_req.set_end_key(vec![]);
-    client.kv_delete_range(&delete_req).unwrap();
-    assert!(check_query_num_write(
-        &cluster,
-        store_id,
-        QueryKind::DeleteRange,
-        1
-    ));
+        raw_put(&cluster, &client, &ctx, store_id, k.clone());
+        // Raw Delete
+        let mut delete_req = RawDeleteRequest::default();
+        delete_req.set_context(ctx.clone());
+        delete_req.key = k.clone();
+        client.raw_delete(&delete_req).unwrap();
+        assert!(check_query_num_write(
+            &cluster,
+            store_id,
+            QueryKind::Delete,
+            1
+        ));
 
-    raw_put(&cluster, &client, &ctx, store_id, k.clone());
-    put(&cluster, &client, &ctx, store_id, k.clone());
-    // Raw DeleteRange
-    let mut delete_req = RawDeleteRangeRequest::default();
-    delete_req.set_context(ctx.clone());
-    delete_req.set_start_key(k.clone());
-    delete_req.set_end_key(vec![]);
-    client.raw_delete_range(&delete_req).unwrap();
-    assert!(check_query_num_write(
-        &cluster,
-        store_id,
-        QueryKind::DeleteRange,
-        1
-    ));
+        raw_put(&cluster, &client, &ctx, store_id, k.clone());
+        // Raw DeleteRange
+        let mut delete_req = RawDeleteRangeRequest::default();
+        delete_req.set_context(ctx.clone());
+        delete_req.set_start_key(k.clone());
+        delete_req.set_end_key(vec![]);
+        client.raw_delete_range(&delete_req).unwrap();
+        assert!(check_query_num_write(
+            &cluster,
+            store_id,
+            QueryKind::DeleteRange,
+            1
+        ));
+    }
+
+    {
+        let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+            cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
+        });
+
+        put(&cluster, &client, &ctx, store_id, k.clone());
+        // DeleteRange
+        let mut delete_req = DeleteRangeRequest::default();
+        delete_req.set_context(ctx);
+        delete_req.set_start_key(k);
+        delete_req.set_end_key(vec![]);
+        client.kv_delete_range(&delete_req).unwrap();
+        assert!(check_query_num_write(
+            &cluster,
+            store_id,
+            QueryKind::DeleteRange,
+            1
+        ));
+    }
 }
 
 fn check_query_num_read(
