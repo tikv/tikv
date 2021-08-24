@@ -301,17 +301,17 @@ groups:
       value: '{{ $value }}'
       summary: TiKV pending task too much
 
-  - alert: TiKV_low_space_and_add_region
-    expr: count( (sum(tikv_store_size_bytes{type="available"}) by (instance) / sum(tikv_store_size_bytes{type="capacity"}) by (instance) < 0.2) and (sum(tikv_raftstore_snapshot_traffic_total{type="applying"}) by (instance) > 0 ) ) > 0
+  - alert: TiKV_low_space
+    expr: sum(tikv_store_size_bytes{type="available"}) by (instance) / sum(tikv_store_size_bytes{type="capacity"}) by (instance) < 0.2
     for: 1m
     labels:
       env: ENV_LABELS_ENV
       level: warning
-      expr:  count( (sum(tikv_store_size_bytes{type="available"}) by (instance) / sum(tikv_store_size_bytes{type="capacity"}) by (instance) < 0.2) and (sum(tikv_raftstore_snapshot_traffic_total{type="applying"}) by (instance) > 0 ) ) > 0
+      expr:  sum(tikv_store_size_bytes{type="available"}) by (instance) / sum(tikv_store_size_bytes{type="capacity"}) by (instance) < 0.2
     annotations:
       description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
       value: '{{ $value }}'
-      summary: TiKV low_space and add_region
+      summary: TiKV available space too small
 
   - alert: TiKV_approximate_region_size
     expr: histogram_quantile(0.99, sum(rate(tikv_raftstore_region_size_bucket[1m])) by (le)) > 1073741824
