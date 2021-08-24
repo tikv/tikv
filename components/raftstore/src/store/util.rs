@@ -923,6 +923,12 @@ impl RegionReadProgressRegistry {
     }
 }
 
+impl Default for RegionReadProgressRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// `RegionReadProgress` is used to keep track of the replica's `safe_ts`, the replica can handle a read
 /// request directly without requiring leader lease or read index iff `safe_ts` >= `read_ts` (the `read_ts`
 /// is usually stale i.e seconds ago).

@@ -17,7 +17,6 @@ fi
 
 CLIPPY_LINTS=(-A clippy::module_inception  \
 	-A clippy::should_implement_trait \
-	-A clippy::new_without_default \
 	-A clippy::too_many_arguments \
 	-A clippy::blacklisted_name \
 	-A clippy::redundant_closure \

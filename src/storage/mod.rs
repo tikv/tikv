@@ -2141,6 +2141,12 @@ pub mod test_util {
         }
     }
 
+    impl Default for GetConsumer {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)> for GetConsumer {
         fn consume(
             &self,

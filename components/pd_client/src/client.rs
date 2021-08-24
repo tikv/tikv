@@ -862,6 +862,12 @@ impl DummyPdClient {
     }
 }
 
+impl Default for DummyPdClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PdClient for DummyPdClient {
     fn get_tso(&self) -> PdFuture<TimeStamp> {
         Box::pin(future::ok(self.next_ts))

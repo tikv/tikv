@@ -75,6 +75,12 @@ impl CbContext {
     }
 }
 
+impl Default for CbContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Modify {
     Delete(CfName, Key),

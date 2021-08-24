@@ -95,3 +95,9 @@ impl ColumnBuilder {
         }
     }
 }
+
+impl Default for ColumnBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}

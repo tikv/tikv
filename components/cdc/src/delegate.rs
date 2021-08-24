@@ -53,6 +53,12 @@ impl DownstreamID {
     }
 }
 
+impl Default for DownstreamID {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DownstreamState {
     Uninitialized,
