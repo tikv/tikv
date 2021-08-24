@@ -15,6 +15,7 @@ use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, kvrpcpb};
 use txn_types::{KvPair, TimeStamp};
 
+<<<<<<< HEAD
 quick_error! {
     #[derive(Debug)]
     /// Detailed errors for storage operations. This enum also unifies code for basic error
@@ -65,6 +66,38 @@ quick_error! {
         }
     }
 }
+=======
+#[derive(Debug, Error)]
+/// Detailed errors for storage operations. This enum also unifies code for basic error
+/// handling functionality in a single place instead of being spread out.
+pub enum ErrorInner {
+    #[error("{0}")]
+    Engine(#[from] kv::Error),
+
+    #[error("{0}")]
+    Txn(#[from] txn::Error),
+
+    #[error("storage is closed.")]
+    Closed,
+
+    #[error("{0}")]
+    Other(#[from] Box<dyn StdError + Send + Sync>),
+
+    #[error("{0}")]
+    Io(#[from] IoError),
+
+    #[error("scheduler is too busy")]
+    SchedTooBusy,
+
+    #[error("gc worker is too busy")]
+    GcWorkerTooBusy,
+
+    #[error("max key size exceeded, size: {}, limit: {}", .size, .limit)]
+    KeyTooLarge { size: usize, limit: usize },
+
+    #[error("invalid cf name: {0}")]
+    InvalidCf(String),
+>>>>>>> c6bee7428... storage: ban txn cmds when TTL is enabled. (#10800)
 
 /// Errors for storage module. Wrapper type of `ErrorInner`.
 pub struct Error(pub Box<ErrorInner>);
