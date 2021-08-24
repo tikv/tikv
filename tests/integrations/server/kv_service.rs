@@ -242,12 +242,18 @@ fn test_rawkv_ttl() {
     std::thread::sleep(Duration::from_secs(1));
 
     let mut get_req = RawGetRequest::default();
-    get_req.set_context(ctx);
+    get_req.set_context(ctx.clone());
     get_req.key = k;
     let get_resp = client.raw_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(get_resp.error.is_empty());
     assert!(get_resp.value.is_empty());
+
+    // Can't run transaction commands with TTL enabled.
+    let mut prewrite_req = PrewriteRequest::default();
+    prewrite_req.set_context(ctx);
+    let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
+    assert!(!prewrite_resp.get_errors().is_empty());
 }
 
 #[test]
