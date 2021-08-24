@@ -31,6 +31,7 @@ pub enum ErrorInner {
 
     #[error("storage is closed.")]
     Closed,
+
     #[error("{0}")]
     Other(#[from] Box<dyn StdError + Send + Sync>),
 
