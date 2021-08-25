@@ -12,6 +12,10 @@ static QUERY_KINDS: &[kvproto::pdpb::QueryKind] = &[
     QueryKind::Delete,
     QueryKind::DeleteRange,
     QueryKind::Put,
+    QueryKind::Prewrite,
+    QueryKind::Commit,
+    QueryKind::Rollback,
+    QueryKind::AcquirePessimisticLock,
 ];
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct QueryStats(pub pdpb::QueryStats);
@@ -26,6 +30,10 @@ impl QueryStats {
             QueryKind::Delete => self.0.set_delete(query_num),
             QueryKind::DeleteRange => self.0.set_delete_range(query_num),
             QueryKind::Put => self.0.set_put(query_num),
+            QueryKind::Prewrite => self.0.set_prewrite(query_num),
+            QueryKind::Commit => self.0.set_commit(query_num),
+            QueryKind::Rollback => self.0.set_rollback(query_num),
+            QueryKind::AcquirePessimisticLock => self.0.set_acquire_pessimistic_lock(query_num),
             QueryKind::Others => (),
         }
     }
@@ -39,6 +47,10 @@ impl QueryStats {
             QueryKind::Delete => query_stats.get_delete(),
             QueryKind::DeleteRange => query_stats.get_delete_range(),
             QueryKind::Put => query_stats.get_put(),
+            QueryKind::Prewrite => query_stats.get_prewrite(),
+            QueryKind::Commit => query_stats.get_commit(),
+            QueryKind::Rollback => query_stats.get_rollback(),
+            QueryKind::AcquirePessimisticLock => query_stats.get_acquire_pessimistic_lock(),
             QueryKind::Others => 0,
         }
     }
