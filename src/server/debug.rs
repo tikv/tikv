@@ -154,6 +154,7 @@ impl<ER: RaftEngine> Debugger<ER> {
             regions.push(id);
             Ok(true)
         }));
+        regions.sort();
         Ok(regions)
     }
 
