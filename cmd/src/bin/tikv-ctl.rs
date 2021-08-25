@@ -21,6 +21,8 @@ use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
 use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
+use serde_json::json;
+use base16::encode_upper;
 
 use encryption_export::{
     create_backend, data_key_manager_from_config, encryption_method_from_db_encryption_method,
@@ -56,7 +58,7 @@ const METRICS_JEMALLOC: &str = "jemalloc";
 
 const LOCK_FILE_ERROR: &str = "IO error: While lock file";
 
-type MvccInfoStream = Pin<Box<dyn Stream<Item = Result<(Vec<u8>, MvccInfo), String>>>>;
+type MvccInfoStream = Pin<Box<dyn Stream<Item=Result<(Vec<u8>, MvccInfo), String>>>>;
 
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     ve1!("{}: {}", prefix, e);
@@ -190,8 +192,9 @@ trait DebugExecutor {
         v1!("total region size: {}", convert_gbmb(total_size as u64));
     }
 
-    fn dump_region_info(&self, region_ids: Option<Vec<u64>>, skip_tombstone: bool) {
+    fn dump_region_info(&self, region_ids: Option<Vec<u64>>, skip_tombstone: bool, use_json: bool) {
         let region_ids = region_ids.unwrap_or_else(|| self.get_all_regions_in_store());
+        let mut region_objects = vec![];
         for region_id in region_ids {
             let r = self.get_region_info(region_id);
             if skip_tombstone {
@@ -203,13 +206,69 @@ trait DebugExecutor {
             let region_state_key = keys::region_state_key(region_id);
             let raft_state_key = keys::raft_state_key(region_id);
             let apply_state_key = keys::apply_state_key(region_id);
-            v1!("region id: {}", region_id);
-            v1!("region state key: {}", escape(&region_state_key));
-            v1!("region state: {:?}", r.region_local_state);
-            v1!("raft state key: {}", escape(&raft_state_key));
-            v1!("raft state: {:?}", r.raft_local_state);
-            v1!("apply state key: {}", escape(&apply_state_key));
-            v1!("apply state: {:?}", r.raft_apply_state);
+            if use_json {
+                region_objects.push(
+                    json!({
+                        "region_id": region_id,
+                        "region_state_key": encode_upper(&region_state_key),
+                        "region_state": r.region_local_state.map(|s| {
+                            let r = s.get_region();
+                            let region_epoch = r.get_region_epoch();
+                            let peers = r.get_peers();
+                            json!({
+                        "region": json!({
+                            "id": r.get_id(),
+                            "start_key": encode_upper(r.get_start_key()),
+                            "end_key": encode_upper(r.get_end_key()),
+                            "region_epoch": json!({
+                                "conf_ver": region_epoch.get_conf_ver(),
+                                "version": region_epoch.get_version()
+                            }),
+                            "peers": peers.into_iter().map(|p| json!({
+                                    "id": p.get_id(),
+                                    "store_id": p.get_store_id(),
+                                    "role": format!("{:?}", p.get_role()),
+                                })).collect::<Vec<_>>(),
+                        }),
+                    })}),
+                        "raft_state_key": encode_upper(&raft_state_key),
+                        "raft_state_key": r.raft_local_state.map(|s| {
+                            let hard_state = s.get_hard_state();
+                            json!({
+                            "hard_state": json!({
+                                "term": hard_state.get_term(),
+                                "vote": hard_state.get_vote(),
+                                "commit": hard_state.get_commit(),
+                            }),
+                            "last_index": s.get_last_index(),
+                        })
+                        }),
+                        "apply_state_key": encode_upper(&apply_state_key),
+                        "apply_state": r.raft_apply_state.map(|s|{
+                            let truncated_state = s.get_truncated_state();
+                            json!({
+                            "applied_index": s.get_applied_index(),
+                            "commit_index": s.get_commit_index(),
+                            "commit_term": s.get_commit_term(),
+                            "truncated_state": json!({
+                                "index": truncated_state.get_index(),
+                                "term": truncated_state.get_term(),
+                            })
+                        })
+                        })
+                    }));
+            } else {
+                v1!("region id: {}", region_id);
+                v1!("region state key: {}", escape(&region_state_key));
+                v1!("region state: {:?}", r.region_local_state);
+                v1!("raft state key: {}", escape(&raft_state_key));
+                v1!("raft state: {:?}", r.raft_local_state);
+                v1!("apply state key: {}", escape(&apply_state_key));
+                v1!("apply state: {:?}", r.raft_apply_state);
+            }
+            if use_json {
+                v1!("{}", json!({"region_infos": region_objects}));
+            }
         }
     }
 
@@ -1078,7 +1137,7 @@ fn warning_prompt(message: &str) -> bool {
         "Type \"{}\" to continue, anything else to exit",
         EXPECTED
     ))
-    .unwrap();
+        .unwrap();
     if input == EXPECTED {
         true
     } else {
@@ -1239,6 +1298,11 @@ fn main() {
                                 .long("all-regions")
                                 .takes_value(false)
                                 .help("Print info for all regions"),
+                        )
+                        .arg(Arg::with_name("json")
+                            .long("json")
+                            .takes_value(false)
+                            .help("Print info in JSON format")
                         )
                         .arg(
                             Arg::with_name("skip-tombstone")
@@ -2059,7 +2123,7 @@ fn main() {
                         .values_of("ids")
                         .map(|ids| ids.map(|id| id.parse::<u64>().unwrap()).collect()),
                 )
-                .unwrap();
+                    .unwrap();
             }
             ("dump-file", Some(matches)) => {
                 let path = matches
@@ -2128,13 +2192,14 @@ fn main() {
             debug_executor.dump_raft_log(id, index);
         } else if let Some(matches) = matches.subcommand_matches("region") {
             let skip_tombstone = matches.is_present("skip-tombstone");
+            let json = matches.is_present("json");
             let regions = matches.values_of("regions").map(|values| {
                 values
                     .map(str::parse)
                     .collect::<Result<Vec<_>, _>>()
                     .expect("parse regions fail")
             });
-            debug_executor.dump_region_info(regions, skip_tombstone);
+            debug_executor.dump_region_info(regions, skip_tombstone, json);
         } else {
             let _ = app.print_help();
         }
