@@ -690,9 +690,23 @@ impl<ER: RaftEngine> Debugger<ER> {
                 end_key: &keys::enc_end_key(&region),
             };
 
+            // clear data
+            kv.delete_all_in_range(DeleteStrategy::DeleteFiles, &[key_range])
+                .unwrap_or_else(|e| {
+                    error!("failed to delete files in range"; "err" => %e);
+                });
+            kv.delete_all_in_range(DeleteStrategy::DeleteByKey, &[key_range])
+                .unwrap_or_else(|e| {
+                    error!("failed to delete by range"; "err" => %e);
+                });
+            kv.delete_all_in_range(DeleteStrategy::DeleteBlobs, &[key_range])
+                .unwrap_or_else(|e| {
+                    error!("failed to delete blobs in range"; "err" => %e);
+                });
+
+            // clear meta
             let mut kv_wb = kv.write_batch();
             let mut raft_wb = raft.log_batch(1024);
-
             box_try!(raftstore::store::clear_meta(
                 &self.engines,
                 &mut kv_wb,
@@ -700,7 +714,6 @@ impl<ER: RaftEngine> Debugger<ER> {
                 region_id,
                 &raft_local_state,
             ));
-
             // write kv rocksdb first in case of restart happen between two write
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
@@ -708,15 +721,6 @@ impl<ER: RaftEngine> Debugger<ER> {
             box_try!(raft.consume(&mut raft_wb, true));
 
             // FIXME: Add tombstone?
-
-            kv.delete_all_in_range(DeleteStrategy::DeleteFiles, &[key_range])
-                .unwrap_or_else(|e| {
-                    error!("failed to delete files in range"; "err" => %e);
-                });
-            kv.delete_all_in_range(DeleteStrategy::DeleteBlobs, &[key_range])
-                .unwrap_or_else(|e| {
-                    error!("failed to delete files in range"; "err" => %e);
-                });
 
             info!(
                 "removed peer";
