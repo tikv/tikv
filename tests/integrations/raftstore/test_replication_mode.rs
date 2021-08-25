@@ -20,10 +20,21 @@ fn prepare_cluster() -> Cluster<ServerCluster> {
     cluster.add_label(1, "zone", "ES");
     cluster.add_label(2, "zone", "ES");
     cluster.add_label(3, "zone", "WS");
+    cluster
+}
+
+fn configure_for_snapshot(cluster: &mut Cluster<ServerCluster>) {
+    // Truncate the log quickly so that we can force sending snapshot.
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
+    cluster.cfg.raft_store.merge_max_log_gap = 1;
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+}
+
+fn run_cluster(cluster: &mut Cluster<ServerCluster>) {
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v0");
-    cluster
 }
 
 /// When using DrAutoSync replication mode, data should be replicated to different labels
@@ -31,6 +42,7 @@ fn prepare_cluster() -> Cluster<ServerCluster> {
 #[test]
 fn test_dr_auto_sync() {
     let mut cluster = prepare_cluster();
+    run_cluster(&mut cluster);
     cluster.add_send_filter(IsolationFilterFactory::new(2));
     let region = cluster.get_region(b"k1");
     let mut request = new_request(
@@ -78,10 +90,72 @@ fn test_dr_auto_sync() {
     assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
 }
 
+#[test]
+fn test_sync_recover_after_apply_snapshot() {
+    let mut cluster = prepare_cluster();
+    configure_for_snapshot(&mut cluster);
+    run_cluster(&mut cluster);
+    let region = cluster.get_region(b"k1");
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_put_cf_cmd("default", b"k2", b"v2")],
+        false,
+    );
+    request.mut_header().set_peer(new_peer(1, 1));
+    let (cb, rx) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, request, cb)
+        .unwrap();
+    assert_eq!(
+        rx.recv_timeout(Duration::from_millis(100)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    );
+    must_get_none(&cluster.get_engine(1), b"k2");
+    let state = cluster.pd_client.region_replication_status(region.get_id());
+    assert_eq!(state.state_id, 1);
+    assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
+
+    // swith to async
+    cluster
+        .pd_client
+        .switch_replication_mode(DrAutoSyncState::Async);
+    rx.recv_timeout(Duration::from_millis(100)).unwrap();
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+    thread::sleep(Duration::from_millis(100));
+    let state = cluster.pd_client.region_replication_status(region.get_id());
+    assert_eq!(state.state_id, 2);
+    assert_eq!(state.state, RegionReplicationState::SimpleMajority);
+
+    // Write some data to trigger snapshot.
+    for i in 10..110 {
+        let key = format!("k{}", i);
+        let value = format!("v{}", i);
+        cluster.must_put_cf("default", key.as_bytes(), value.as_bytes());
+    }
+
+    cluster
+        .pd_client
+        .switch_replication_mode(DrAutoSyncState::SyncRecover);
+    thread::sleep(Duration::from_millis(100));
+    // Add node 3 back, snapshot will apply
+    cluster.clear_send_filters();
+    cluster.must_transfer_leader(region.get_id(), new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k100", b"v100");
+    thread::sleep(Duration::from_millis(100));
+    let state = cluster.pd_client.region_replication_status(region.get_id());
+    assert_eq!(state.state_id, 3);
+    assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
+}
+
 /// Conf change should consider labels when DrAutoSync is chosen.
 #[test]
 fn test_check_conf_change() {
     let mut cluster = prepare_cluster();
+    run_cluster(&mut cluster);
     let pd_client = cluster.pd_client.clone();
     pd_client.must_remove_peer(1, new_peer(2, 2));
     must_get_none(&cluster.get_engine(2), b"k1");
@@ -167,6 +241,7 @@ fn test_update_group_id() {
 #[test]
 fn test_switching_replication_mode() {
     let mut cluster = prepare_cluster();
+    run_cluster(&mut cluster);
     let region = cluster.get_region(b"k1");
     cluster.add_send_filter(IsolationFilterFactory::new(3));
     let mut request = new_request(
