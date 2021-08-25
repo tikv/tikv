@@ -767,7 +767,6 @@ pub struct RaftClient<S, R, E> {
     engine: PhantomData<E>,
     last_hash: (u64, u64),
     last_flush_time: TiInstant,
-    delay_flush: Duration,
 }
 
 impl<S, R, E> RaftClient<S, R, E>
@@ -782,7 +781,6 @@ where
                 .max_thread_count(1)
                 .build_future_pool(),
         );
-        let delay_flush = builder.cfg.raft_client_delay_flush_time.0;
         RaftClient {
             pool: Arc::default(),
             cache: LruCache::with_capacity_and_sample(0, 7),
@@ -793,7 +791,6 @@ where
             engine: PhantomData::<E>,
             last_hash: (0, 0),
             last_flush_time: TiInstant::now_coarse(),
-            delay_flush,
         }
     }
 
@@ -936,16 +933,6 @@ where
         }
     }
 
-    pub fn delay_flush(&mut self) {
-        if !self.need_flush() {
-            return;
-        }
-        let now = TiInstant::now_coarse();
-        if now > self.last_flush_time + self.delay_flush {
-            self.flush();
-        }
-    }
-
     /// Flushes all buffered messages.
     pub fn flush(&mut self) {
         self.last_flush_time = TiInstant::now_coarse();
@@ -993,7 +980,6 @@ where
             engine: PhantomData::<E>,
             last_hash: (0, 0),
             last_flush_time: TiInstant::now_coarse(),
-            delay_flush: self.delay_flush,
         }
     }
 }
