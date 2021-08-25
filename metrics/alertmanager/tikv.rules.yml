@@ -311,7 +311,7 @@ groups:
     annotations:
       description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
       value: '{{ $value }}'
-      summary: TiKV available space too small
+      summary: TiKV available disk space too low
 
   - alert: TiKV_approximate_region_size
     expr: histogram_quantile(0.99, sum(rate(tikv_raftstore_region_size_bucket[1m])) by (le)) > 1073741824
