@@ -100,7 +100,6 @@ impl<S: Snapshot> AnalyzeContext<S> {
 
     async fn handle_full_sampling(builder: &mut RowSampleBuilder<S>) -> Result<Vec<u8>> {
         let sample_res = builder.collect_column_stats().await?;
-
         let res_data = {
             let res = sample_res.into_proto();
             box_try!(res.write_to_bytes())
