@@ -646,18 +646,25 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
             if !write_worker.batch.is_empty() {
                 self.poll_ctx.trans.flush();
             }
-            write_worker.write_to_db();
+            write_worker.write_to_db(false);
             let mut readies = mem::take(&mut write_worker.batch.readies);
             write_worker.batch.clear();
             self.poll_ctx.write_worker = Some(write_worker);
 
             for fsm in peers {
-                if let Some((peer_id, ready_number)) = readies.remove(&fsm.region_id()) {
-                    PeerFsmDelegate::new(fsm, &mut self.poll_ctx).on_persisted_msg(
-                        peer_id,
-                        ready_number,
-                        None,
-                    );
+                if let Some((peer_id, ready_number)) = readies.get(&fsm.region_id()) {
+                    // It's possible that there are two peers which have the same region id and peer id in
+                    // this batch. In this case, one peer should be uninitialized and the other one should be
+                    // the new split peer. The uninitialized one should not generate write task so here we
+                    // can simply distinguish them by checking whether it has unpersisted ready.
+                    if fsm.peer.has_unpersisted_ready() {
+                        PeerFsmDelegate::new(fsm, &mut self.poll_ctx).on_persisted_msg(
+                            *peer_id,
+                            *ready_number,
+                            None,
+                        );
+                        readies.remove(&fsm.region_id());
+                    }
                 }
             }
             if !readies.is_empty() {

@@ -416,15 +416,7 @@ where
 
             STORE_WRITE_TRIGGER_SIZE_HISTOGRAM.observe(self.batch.get_raft_size() as f64);
 
-            self.write_to_db();
-
-            let now = Instant::now();
-            for (region_id, (peer_id, ready_number)) in &self.batch.readies {
-                self.notifier
-                    .notify_persisted(*region_id, *peer_id, *ready_number, now);
-            }
-            STORE_WRITE_CALLBACK_DURATION_HISTOGRAM
-                .observe(duration_to_sec(now.saturating_elapsed()));
+            self.write_to_db(true);
 
             self.batch.clear();
 
@@ -447,7 +439,7 @@ where
         false
     }
 
-    pub fn write_to_db(&mut self) {
+    pub fn write_to_db(&mut self, notify: bool) {
         self.batch.before_write_to_db(&self.metrics);
 
         fail_point!("raft_before_save");
@@ -498,6 +490,8 @@ where
                 .observe(duration_to_sec(now.saturating_elapsed()) as f64);
         }
 
+        fail_point!("raft_after_save");
+
         self.batch.after_write_to_raft_db(&self.metrics);
 
         fail_point!("raft_before_follower_send");
@@ -538,7 +532,14 @@ where
         STORE_WRITE_SEND_DURATION_HISTOGRAM
             .observe(duration_to_sec(now2.saturating_duration_since(now)));
 
-        fail_point!("raft_after_save");
+        if notify {
+            for (region_id, (peer_id, ready_number)) in &self.batch.readies {
+                self.notifier
+                    .notify_persisted(*region_id, *peer_id, *ready_number, now2);
+            }
+            STORE_WRITE_CALLBACK_DURATION_HISTOGRAM
+                .observe(duration_to_sec(now2.saturating_elapsed()));
+        }
 
         self.metrics.flush();
 
