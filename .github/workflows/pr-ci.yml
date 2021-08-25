@@ -9,17 +9,41 @@ on:
       - 'raftstore-proxy*'
 
 jobs:
-  format-check:
+  build-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
         with:
           submodules: true
-      - name: format-check
+      - name: cache cargo env
+        id: cache-cargo
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            # ~/.cache/sccache
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/rust-toolchain') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ hashFiles('**/rust-toolchain') }}-
+      - name: install rust
+        if: steps.cache-cargo.outputs.cache-hit != 'true'
         run: |
           curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain none -y
-          export PATH=/root/.cargo/bin/:$PATH
+          export PATH=~/.cargo/bin/:$PATH
           rustup self update && rustup set profile minimal && rustup default $(cat "rust-toolchain")
+          # cargo install sccache
+          # export RUSTC_WRAPPER=~/.cache/sccache
+          # export SCCACHE_CACHE_SIZE="4G"
+      - name: format check
+        run: |
           cd ${{github.workspace}}
           make pre-format
           cargo fmt -- --check >/dev/null
+      - name: test
+        run: |
+          # make test
+          # make debug
+          cargo check
