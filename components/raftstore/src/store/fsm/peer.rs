@@ -1307,10 +1307,6 @@ where
     }
 
     fn handle_reported_disk_usage(&mut self, msg: &RaftMessage) {
-        // Mocked
-        if matches!(msg.disk_usage, DiskUsage::Normal) {
-            return;
-        }
         let store_id = msg.get_from_peer().get_store_id();
         let peer_id = msg.get_from_peer().get_id();
         let refill_disk_usages = if matches!(msg.disk_usage, DiskUsage::Normal) {
@@ -1374,12 +1370,7 @@ where
 
         let msg_type = msg.get_message().get_msg_type();
         if matches!(self.ctx.self_disk_usage, DiskUsage::AlreadyFull)
-            && [
-                MessageType::MsgSnapshot,
-                MessageType::MsgAppend,
-                MessageType::MsgTimeoutNow,
-            ]
-            .contains(&msg_type)
+            && [MessageType::MsgTimeoutNow].contains(&msg_type)
         {
             debug!(
                 "skip {:?} because of disk full", msg_type;

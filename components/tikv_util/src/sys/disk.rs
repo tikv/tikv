@@ -20,13 +20,12 @@ pub fn get_disk_reserved_space() -> u64 {
 }
 
 pub fn set_disk_status(status: DiskUsage) {
-    let _ = match status {
+    let v = match status {
         DiskUsage::Normal => 0,
         DiskUsage::AlmostFull => 1,
         DiskUsage::AlreadyFull => 2,
     };
-    // Mocked
-    DISK_STATUS.store(0, Ordering::Release);
+    DISK_STATUS.store(v, Ordering::Release);
 }
 
 pub fn get_disk_status(_store_id: u64) -> DiskUsage {

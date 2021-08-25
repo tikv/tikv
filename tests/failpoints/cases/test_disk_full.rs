@@ -7,14 +7,10 @@ use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::*;
 use raft::eraftpb::MessageType;
 use raftstore::store::msg::*;
-use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use test_raftstore::*;
 
-fn mocked() -> bool {
-    true
-}
 fn assert_disk_full(resp: &RaftCmdResponse) {
     assert!(resp.get_header().get_error().has_disk_full());
 }
@@ -48,10 +44,6 @@ fn ensure_disk_usage_is_reported<T: Simulator>(
 }
 
 fn test_disk_full_leader_behaviors(usage: DiskUsage) {
-    // Mocked in v5.2
-    if !matches!(usage, DiskUsage::Normal) {
-        return;
-    }
     let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.run();
@@ -72,18 +64,9 @@ fn test_disk_full_leader_behaviors(usage: DiskUsage) {
     let new_last_index = cluster.raft_local_state(1, 1).last_index;
     assert_eq!(old_last_index, new_last_index);
 
-    // Test split won't be allowed when disk is full.
-    let old_last_index = cluster.raft_local_state(1, 1).last_index;
+    // Test split must be allowed when disk is full.
     let region = cluster.get_region(b"k1");
-    let (tx, rx) = mpsc::sync_channel(1);
-    cluster.split_region(
-        &region,
-        b"k1",
-        Callback::write(Box::new(move |resp| tx.send(resp.response).unwrap())),
-    );
-    assert_disk_full(&rx.recv_timeout(Duration::from_secs(2)).unwrap());
-    let new_last_index = cluster.raft_local_state(1, 1).last_index;
-    assert_eq!(old_last_index, new_last_index);
+    cluster.must_split(&region, b"k1");
 
     // Test transfer leader should be allowed.
     cluster.must_transfer_leader(1, new_peer(2, 2));
@@ -93,15 +76,13 @@ fn test_disk_full_leader_behaviors(usage: DiskUsage) {
     cluster.must_transfer_leader(1, new_peer(1, 1));
     fail::cfg(get_fp(usage, 1), "return").unwrap();
 
-    if matches!(usage, DiskUsage::AlmostFull) {
-        // Test remove peer should be allowed.
-        cluster.pd_client.must_remove_peer(1, new_peer(3, 3));
-        must_get_none(&cluster.get_engine(3), b"k1");
+    // Test remove peer should be allowed.
+    cluster.pd_client.must_remove_peer(1, new_peer(3, 3));
+    must_get_none(&cluster.get_engine(3), b"k1");
 
-        // Test add peer should be allowed.
-        cluster.pd_client.must_add_peer(1, new_peer(3, 3));
-        must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-    }
+    // Test add peer should be allowed.
+    cluster.pd_client.must_add_peer(1, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 
     fail::remove(get_fp(usage, 1));
 }
@@ -113,10 +94,6 @@ fn test_disk_full_for_region_leader() {
 }
 
 fn test_disk_full_follower_behaviors(usage: DiskUsage) {
-    // Mocked in v5.2
-    if !matches!(usage, DiskUsage::Normal) {
-        return;
-    }
     let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.run();
@@ -164,10 +141,6 @@ fn test_disk_full_for_region_follower() {
 }
 
 fn test_disk_full_txn_behaviors(usage: DiskUsage) {
-    // Mocked in v5.2
-    if !matches!(usage, DiskUsage::Normal) {
-        return;
-    }
     let mut cluster = new_server_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.run();
@@ -267,10 +240,6 @@ fn test_disk_full_for_txn_operations() {
 
 #[test]
 fn test_majority_disk_full() {
-    // Mocked
-    if mocked() {
-        return;
-    }
     let mut cluster = new_node_cluster(0, 3);
     // To ensure the thread has full store disk usage infomation.
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
@@ -359,10 +328,6 @@ fn test_majority_disk_full() {
 
 #[test]
 fn test_disk_full_followers_with_hibernate_regions() {
-    // Mocked.
-    if mocked() {
-        return;
-    }
     let mut cluster = new_node_cluster(0, 2);
     // To ensure the thread has full store disk usage infomation.
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
