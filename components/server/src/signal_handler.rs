@@ -11,7 +11,7 @@ mod imp {
     use tikv_util::metrics;
 
     #[allow(dead_code)]
-    pub fn wait_for_signal<ER: RaftEngine>(engines: Option<Engines<impl KvEngine, ER>>) {
+    pub fn wait_for_signal(engines: Option<Engines<impl KvEngine, impl RaftEngine>>) {
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);
         for sig in trap {
             match sig {
@@ -38,5 +38,5 @@ mod imp {
 mod imp {
     use engine_traits::{Engines, KvEngine, RaftEngine};
 
-    pub fn wait_for_signal<ER: RaftEngine>(_: Option<Engines<impl KvEngine, ER>>) {}
+    pub fn wait_for_signal(_: Option<Engines<impl KvEngine, impl RaftEngine>>) {}
 }
