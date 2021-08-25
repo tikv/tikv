@@ -1793,7 +1793,7 @@ fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
 #[cfg(not(target_os = "macos"))]
 #[cfg(test)]
 mod tests {
-    use engine_test::kv::KvTestEngine;
+    use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use kvproto::pdpb::QueryKind;
     use std::sync::Mutex;
     use std::time::Instant;
@@ -1803,13 +1803,13 @@ mod tests {
 
     struct RunnerTest {
         store_stat: Arc<Mutex<StoreStat>>,
-        stats_monitor: StatsMonitor<KvTestEngine>,
+        stats_monitor: StatsMonitor<KvTestEngine, RaftTestEngine>,
     }
 
     impl RunnerTest {
         fn new(
             interval: u64,
-            scheduler: Scheduler<Task<KvTestEngine>>,
+            scheduler: Scheduler<Task<KvTestEngine, RaftTestEngine>>,
             store_stat: Arc<Mutex<StoreStat>>,
         ) -> RunnerTest {
             let mut stats_monitor = StatsMonitor::new(Duration::from_secs(interval), scheduler);
@@ -1838,9 +1838,9 @@ mod tests {
     }
 
     impl Runnable for RunnerTest {
-        type Task = Task<KvTestEngine>;
+        type Task = Task<KvTestEngine, RaftTestEngine>;
 
-        fn run(&mut self, task: Task<KvTestEngine>) {
+        fn run(&mut self, task: Task<KvTestEngine, RaftTestEngine>) {
             if let Task::StoreInfos {
                 cpu_usages,
                 read_io_rates,
