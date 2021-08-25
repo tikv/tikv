@@ -267,7 +267,7 @@ impl<ER: RaftEngine> Debugger<ER> {
             if end.is_empty() { None } else { Some(end) },
             limit as usize,
         )
-            .map_err(|e| box_err!(e))
+        .map_err(|e| box_err!(e))
     }
 
     /// Scan raw keys for given range `[start, end)` in given cf.
@@ -973,9 +973,9 @@ fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(S
         ("mvcc.num_versions", mvcc_properties.num_versions),
         ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
     ]
-        .iter()
-        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-        .collect();
+    .iter()
+    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+    .collect();
 
     // Entries and delete marks of RocksDB.
     let num_deletes = num_entries - mvcc_properties.num_versions;
@@ -1535,7 +1535,7 @@ mod tests {
                     CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
                 ],
             )
-                .unwrap(),
+            .unwrap(),
         );
 
         let engines = Engines::new(
