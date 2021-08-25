@@ -33,7 +33,7 @@ pub fn init_recorder() -> RecorderHandle {
         static ref HANDLE: RecorderHandle = {
             let config = crate::Config::default();
 
-            let pause = Arc::new(AtomicBool::new(config.enabled));
+            let pause = Arc::new(AtomicBool::new(!config.enabled));
             let pause0 = pause.clone();
             let precision_ms = Arc::new(AtomicU64::new(config.precision.0.as_millis() as _));
             let precision_ms0 = precision_ms.clone();
