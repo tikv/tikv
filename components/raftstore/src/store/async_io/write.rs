@@ -177,7 +177,7 @@ where
 }
 
 /// WriteTaskBatch is used for combining several WriteTask into one.
-struct WriteTaskBatch<EK, ER>
+pub struct WriteTaskBatch<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -209,7 +209,7 @@ where
     }
 
     /// Add write task to this batch
-    fn add_write_task(&mut self, mut task: WriteTask<EK, ER>) {
+    pub fn add_write_task(&mut self, mut task: WriteTask<EK, ER>) {
         if let Err(e) = task.valid() {
             panic!("task is not valid: {:?}", e);
         }
@@ -258,7 +258,7 @@ where
         self.tasks.push(task);
     }
 
-    fn clear(&mut self) {
+    pub fn clear(&mut self) {
         // raft_wb doesn't have clear interface and it should be consumed by raft db before
         self.kv_wb.clear();
         self.raft_states.clear();
@@ -268,7 +268,7 @@ where
     }
 
     #[inline]
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.tasks.is_empty()
     }
 
@@ -322,11 +322,10 @@ where
     }
 }
 
-struct Worker<EK, ER, T, N>
+pub struct Worker<EK, ER, T, N>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: Transport,
     N: Notifier,
 {
     store_id: u64,
@@ -335,7 +334,7 @@ where
     receiver: Receiver<WriteMsg<EK, ER>>,
     notifier: N,
     trans: T,
-    batch: WriteTaskBatch<EK, ER>,
+    pub batch: WriteTaskBatch<EK, ER>,
     cfg_tracker: Tracker<Config>,
     raft_write_size_limit: usize,
     metrics: StoreWriteMetrics,
@@ -347,10 +346,10 @@ impl<EK, ER, T, N> Worker<EK, ER, T, N>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: Transport,
     N: Notifier,
+    T: Transport,
 {
-    fn new(
+    pub fn new(
         store_id: u64,
         tag: String,
         engines: Engines<EK, ER>,
@@ -419,13 +418,15 @@ where
 
             self.write_to_db();
 
-            self.metrics.flush();
-
-            // update config
-            if let Some(incoming) = self.cfg_tracker.any_new() {
-                self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
-                self.metrics.waterfall_metrics = incoming.waterfall_metrics;
+            let now = Instant::now();
+            for (region_id, (peer_id, ready_number)) in &self.batch.readies {
+                self.notifier
+                    .notify_persisted(*region_id, *peer_id, *ready_number, now);
             }
+            STORE_WRITE_CALLBACK_DURATION_HISTOGRAM
+                .observe(duration_to_sec(now.saturating_elapsed()));
+
+            self.batch.clear();
 
             STORE_WRITE_LOOP_DURATION_HISTOGRAM
                 .observe(duration_to_sec(handle_begin.saturating_elapsed()));
@@ -446,7 +447,7 @@ where
         false
     }
 
-    fn write_to_db(&mut self) {
+    pub fn write_to_db(&mut self) {
         self.batch.before_write_to_db(&self.metrics);
 
         fail_point!("raft_before_save");
@@ -537,15 +538,15 @@ where
         STORE_WRITE_SEND_DURATION_HISTOGRAM
             .observe(duration_to_sec(now2.saturating_duration_since(now)));
 
-        for (region_id, (peer_id, ready_number)) in &self.batch.readies {
-            self.notifier
-                .notify_persisted(*region_id, *peer_id, *ready_number, now2);
-        }
-        STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(duration_to_sec(now2.saturating_elapsed()));
-
-        self.batch.clear();
-
         fail_point!("raft_after_save");
+
+        self.metrics.flush();
+
+        // update config
+        if let Some(incoming) = self.cfg_tracker.any_new() {
+            self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
+            self.metrics.waterfall_metrics = incoming.waterfall_metrics;
+        }
     }
 }
 

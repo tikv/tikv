@@ -13,7 +13,7 @@ use std::{mem, u64};
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
 };
-use crossbeam::channel::{Sender, TryRecvError, TrySendError};
+use crossbeam::channel::{unbounded, Sender, TryRecvError, TrySendError};
 use engine_traits::{Engines, KvEngine, Mutable, PerfContextKind, WriteBatch, WriteBatchExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use fail::fail_point;
@@ -52,6 +52,7 @@ use tikv_util::{
 use crate::bytes_capacity;
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
+use crate::store::async_io::write::{StoreWriters, Worker as WriteWorker, WriteMsg};
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
@@ -86,8 +87,6 @@ type Key = Vec<u8>;
 pub const PENDING_MSG_CAP: usize = 100;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
-
-use crate::store::async_io::write::{StoreWriters, WriteMsg};
 
 pub struct StoreInfo<E> {
     pub engine: E,
@@ -395,6 +394,7 @@ where
     pub store_disk_usages: HashMap<u64, DiskUsage>,
     pub write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
     pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
+    pub write_worker: Option<WriteWorker<EK, ER, T, RaftRouter<EK, ER>>>,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -638,11 +638,35 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
-    fn handle_raft_ready(&mut self, _peers: &mut [Box<PeerFsm<EK, ER>>]) {
+    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
-        self.poll_ctx.trans.flush();
+        if let Some(mut write_worker) = self.poll_ctx.write_worker.take() {
+            if !write_worker.batch.is_empty() {
+                self.poll_ctx.trans.flush();
+            }
+            write_worker.write_to_db();
+            let mut readies = mem::take(&mut write_worker.batch.readies);
+            write_worker.batch.clear();
+            self.poll_ctx.write_worker = Some(write_worker);
+
+            for fsm in peers {
+                if let Some((peer_id, ready_number)) = readies.remove(&fsm.region_id()) {
+                    PeerFsmDelegate::new(fsm, &mut self.poll_ctx).on_persisted_msg(
+                        peer_id,
+                        ready_number,
+                        None,
+                    );
+                }
+            }
+            if !readies.is_empty() {
+                panic!("readies are not exhausted, remaining {:?}", readies);
+            }
+        } else {
+            self.poll_ctx.trans.flush();
+        }
+
         let dur = self.timer.saturating_elapsed();
         if !self.poll_ctx.store_stat.is_busy {
             let election_timeout = Duration::from_millis(
@@ -1035,6 +1059,20 @@ where
     type Handler = RaftPoller<EK, ER, T>;
 
     fn build(&mut self, _: Priority) -> RaftPoller<EK, ER, T> {
+        let write_worker = if self.write_senders.is_empty() {
+            let (_, rx) = unbounded();
+            Some(WriteWorker::new(
+                self.store.get_id(),
+                "store-writer".to_string(),
+                self.engines.clone(),
+                rx,
+                self.router.clone(),
+                self.trans.clone(),
+                &self.cfg,
+            ))
+        } else {
+            None
+        };
         let mut ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
@@ -1075,6 +1113,7 @@ where
             store_disk_usages: Default::default(),
             write_senders: self.write_senders.clone(),
             io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
+            write_worker,
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());

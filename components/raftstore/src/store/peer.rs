@@ -2011,11 +2011,15 @@ where
 
         match &ready_res {
             HandleReadyResult::SendIOTask | HandleReadyResult::Snapshot { .. } => {
-                self.write_router.send_write_msg(
-                    ctx,
-                    self.unpersisted_readies.back().map(|r| r.number),
-                    WriteMsg::WriteTask(task),
-                );
+                if let Some(write_worker) = ctx.write_worker.as_mut() {
+                    write_worker.batch.add_write_task(task);
+                } else {
+                    self.write_router.send_write_msg(
+                        ctx,
+                        self.unpersisted_readies.back().map(|r| r.number),
+                        WriteMsg::WriteTask(task),
+                    );
+                }
             }
             _ => (),
         }
@@ -2070,7 +2074,7 @@ where
                     // persisted with the last ready at the same time.
                     assert!(ready.number() > last.max_number);
                     last.max_number = ready.number();
-                    if !msg.is_empty() {
+                    if !msgs.is_empty() {
                         self.unpersisted_message_count += msgs.len();
                         last.raft_msgs.push(msgs);
                     }
@@ -2279,8 +2283,10 @@ where
         }
         self.persisted_number = persisted_number;
 
-        self.write_router
-            .check_new_persisted(ctx, self.persisted_number);
+        if ctx.write_worker.is_none() {
+            self.write_router
+                .check_new_persisted(ctx, self.persisted_number);
+        }
 
         if !self.pending_remove {
             // If `pending_remove` is true, no need to call `on_persist_ready` to

@@ -27,7 +27,7 @@ use std::marker::Unpin;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use std::{cmp, mem, result};
 use tikv_util::lru::LruCache;
 use tikv_util::time::Instant as TiInstant;

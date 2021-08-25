@@ -411,8 +411,9 @@
 ## Use how many threads to handle raft messages
 # store-pool-size = 2
 
-## Use how many threads to handle raft io tasks
-# store-io-pool-size = 2
+## Use how many threads to handle raft io tasks, if it's zero, the io tasks will be handled
+## in store threads.
+# store-io-pool-size = 0
 
 ## When the size of ready entries exceeds this value, ready will be fetched and handled.
 # raft-ready-size-limit = "1MB"
