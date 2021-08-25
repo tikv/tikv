@@ -226,15 +226,22 @@ impl<E: Engine> Endpoint<E> {
             REQ_TYPE_ANALYZE => {
                 let mut analyze = AnalyzeReq::default();
                 parser.merge_to(&mut analyze)?;
-                let table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
                 if start_ts == 0 {
                     start_ts = analyze.get_start_ts_fallback();
                 }
 
+<<<<<<< HEAD
                 let tag = if table_scan {
                     "analyze_table"
                 } else {
                     "analyze_index"
+=======
+                let tag = match analyze.get_tp() {
+                    AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => ReqTag::analyze_index,
+                    AnalyzeType::TypeColumn | AnalyzeType::TypeMixed => ReqTag::analyze_table,
+                    AnalyzeType::TypeFullSampling => ReqTag::analyze_full_sampling,
+                    AnalyzeType::TypeSampleIndex => unimplemented!(),
+>>>>>>> acb9747d6... coprocessor: tag analyze requests correctly (#10817)
                 };
                 req_ctx = ReqContext::new(
                     tag,
