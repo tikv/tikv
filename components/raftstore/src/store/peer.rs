@@ -115,7 +115,7 @@ impl<S: Snapshot> ProposalQueue<S> {
 
     fn find_request_times(&self, index: u64) -> Option<(u64, &SmallVec<[TiInstant; 4]>)> {
         self.queue
-            .binary_search_by_key(&index, |p: &Proposal<_>| (p.index))
+            .binary_search_by_key(&index, |p: &Proposal<_>| p.index)
             .ok()
             .map(|i| {
                 self.queue[i]
@@ -2070,8 +2070,10 @@ where
                     // persisted with the last ready at the same time.
                     assert!(ready.number() > last.max_number);
                     last.max_number = ready.number();
-                    self.unpersisted_message_count += msgs.len();
-                    last.raft_msgs.push(msgs);
+                    if !msg.is_empty() {
+                        self.unpersisted_message_count += msgs.len();
+                        last.raft_msgs.push(msgs);
+                    }
                 } else {
                     // If this ready don't need to be persisted and there is no previous unpersisted ready,
                     // we can safely consider it is persisted so the persisted msgs can be sent immediately.
