@@ -2269,7 +2269,11 @@ fn main() {
                     .collect::<Result<Vec<_>, _>>()
                     .expect("parse regions fail")
             });
-            debug_executor.remove_fail_stores(store_ids, region_ids, matches.is_present("promote-learner"));
+            debug_executor.remove_fail_stores(
+                store_ids,
+                region_ids,
+                matches.is_present("promote-learner"),
+            );
         } else if let Some(matches) = matches.subcommand_matches("remove-regions") {
             let region_ids = matches
                 .values_of("regions")
