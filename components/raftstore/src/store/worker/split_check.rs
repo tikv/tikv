@@ -240,6 +240,7 @@ where
         };
 
         if !split_keys.is_empty() {
+	   return;
             let region_epoch = region.get_region_epoch().clone();
             let msg = new_split_region(region_epoch, split_keys, "split checker");
             let res = self.router.send(region_id, msg);
