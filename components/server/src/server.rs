@@ -628,6 +628,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.concurrency_manager.clone(),
             lock_mgr.get_pipelined(),
             flow_controller,
+            pd_sender.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
