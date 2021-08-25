@@ -29,4 +29,4 @@ pub use self::read::{LocalReader, Progress as ReadProgress, ReadDelegate, ReadEx
 pub use self::region::{Runner as RegionRunner, Task as RegionTask};
 pub use self::split_check::{KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask};
 pub use self::split_config::{SplitConfig, SplitConfigManager};
-pub use self::split_controller::{AutoSplitController, ReadStats};
+pub use self::split_controller::{AutoSplitController, ReadStats, WriteStats};

@@ -30,6 +30,7 @@ use std::u64;
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
+use kvproto::pdpb::QueryKind;
 use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
 use tikv_util::{callback::must_call, deadline::Deadline, time::Instant};
 use txn_types::TimeStamp;
@@ -45,6 +46,7 @@ use crate::storage::metrics::{self, *};
 use crate::storage::txn::commands::{
     ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo,
 };
+use crate::storage::txn::sched_pool::tls_collect_query;
 use crate::storage::txn::{
     commands::Command,
     flow_controller::FlowController,
@@ -53,7 +55,7 @@ use crate::storage::txn::{
     Error, ProcessResult,
 };
 use crate::storage::{
-    get_priority_tag, types::StorageCallback, Error as StorageError,
+    get_priority_tag, kv::FlowStatsReporter, types::StorageCallback, Error as StorageError,
     ErrorInner as StorageErrorInner,
 };
 
@@ -287,13 +289,14 @@ unsafe impl<E: Engine, L: LockManager> Send for Scheduler<E, L> {}
 
 impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Creates a scheduler.
-    pub(in crate::storage) fn new(
+    pub(in crate::storage) fn new<R: FlowStatsReporter>(
         engine: E,
         lock_mgr: L,
         concurrency_manager: ConcurrencyManager,
         config: &Config,
         pipelined_pessimistic_lock: Arc<AtomicBool>,
         flow_controller: Arc<FlowController>,
+        reporter: R,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -310,11 +313,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             worker_pool: SchedPool::new(
                 engine.clone(),
                 config.scheduler_worker_pool_size,
+                reporter.clone(),
                 "sched-worker-pool",
             ),
             high_priority_pool: SchedPool::new(
                 engine.clone(),
                 std::cmp::max(1, config.scheduler_worker_pool_size / 2),
+                reporter,
                 "sched-high-pri-pool",
             ),
             lock_mgr,
@@ -644,6 +649,21 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     let region_id = task.cmd.ctx().get_region_id();
                     let ts = task.cmd.ts();
                     let mut statistics = Statistics::default();
+                    match &task.cmd {
+                        Command::Prewrite(_) | Command::PrewritePessimistic(_) => {
+                            tls_collect_query(region_id, QueryKind::Prewrite);
+                        }
+                        Command::AcquirePessimisticLock(_) => {
+                            tls_collect_query(region_id, QueryKind::AcquirePessimisticLock);
+                        }
+                        Command::Commit(_) => {
+                            tls_collect_query(region_id, QueryKind::Commit);
+                        }
+                        Command::Rollback(_) | Command::PessimisticRollback(_) => {
+                            tls_collect_query(region_id, QueryKind::Rollback);
+                        }
+                        _ => {}
+                    }
 
                     if task.cmd.readonly() {
                         self.process_read(snapshot, task, &mut statistics);
@@ -939,9 +959,18 @@ mod tests {
     };
     use futures_executor::block_on;
     use kvproto::kvrpcpb::{BatchRollbackRequest, Context};
+    use raftstore::store::{ReadStats, WriteStats};
     use tikv_util::config::ReadableSize;
     use tikv_util::future::paired_future_callback;
     use txn_types::{Key, OldValues};
+
+    #[derive(Clone)]
+    struct DummyReporter;
+
+    impl FlowStatsReporter for DummyReporter {
+        fn report_read_stats(&self, _read_stats: ReadStats) {}
+        fn report_write_stats(&self, _write_stats: WriteStats) {}
+    }
 
     #[test]
     fn test_command_latches() {
@@ -1075,6 +1104,7 @@ mod tests {
             &config,
             Arc::new(AtomicBool::new(true)),
             Arc::new(FlowController::empty()),
+            DummyReporter,
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1124,6 +1154,7 @@ mod tests {
             &config,
             Arc::new(AtomicBool::new(true)),
             Arc::new(FlowController::empty()),
+            DummyReporter,
         );
 
         // Spawn a task that sleeps for 500ms to occupy the pool. The next request
@@ -1174,6 +1205,7 @@ mod tests {
             &config,
             Arc::new(AtomicBool::new(true)),
             Arc::new(FlowController::empty()),
+            DummyReporter,
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
