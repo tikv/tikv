@@ -1499,7 +1499,8 @@ where
                     peer_stat.last_region_report_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_region_report_read_keys = peer_stat.read_keys;
                     peer_stat.last_region_report_query_stats = peer_stat.query_stats.clone();
-                    peer_stat.last_region_report_ts = UnixSecs::now();
+                    let unix_secs_now = UnixSecs::now();
+                    peer_stat.last_region_report_ts = unix_secs_now;
 
                     if last_report_ts.is_zero() {
                         last_report_ts = self.start_ts;
@@ -1511,7 +1512,7 @@ where
                             self.region_cpu_records.remove(&region_id).unwrap_or(0) as u64,
                         );
                         let interval_second =
-                            UnixSecs::now().into_inner() - last_report_ts.into_inner();
+                            unix_secs_now.into_inner() - last_report_ts.into_inner();
                         // Keep consistent with the calculation of cpu_usages in a store heartbeat.
                         // See components/tikv_util/src/metrics/threads_linux.rs for more details.
                         (interval_second > 0)
