@@ -1895,8 +1895,6 @@ mod tests {
     fn test_collect_stats() {
         use std::sync::Mutex;
         use std::time::Instant;
-
-        use engine_test::kv::KvTestEngine;
         use tikv_util::worker::LazyWorker;
 
         struct RunnerTest {
@@ -1936,9 +1934,9 @@ mod tests {
         }
 
         impl Runnable for RunnerTest {
-            type Task = Task<KvTestEngine>;
+            type Task = Task<KvTestEngine, RaftTestEngine>;
 
-            fn run(&mut self, task: Task<KvTestEngine>) {
+            fn run(&mut self, task: Task<KvTestEngine, RaftTestEngine>) {
                 if let Task::StoreInfos {
                     cpu_usages,
                     read_io_rates,
