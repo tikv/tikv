@@ -625,5 +625,5 @@ fn batch_commands(
             }
         }
     });
-    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    rx.recv_timeout(Duration::from_secs(10)).unwrap();
 }
