@@ -30,6 +30,7 @@ use std::u64;
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
+use kvproto::pdpb::QueryKind;
 use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
 use tikv_util::{callback::must_call, deadline::Deadline, time::Instant};
 use txn_types::TimeStamp;
@@ -45,6 +46,7 @@ use crate::storage::metrics::{self, *};
 use crate::storage::txn::commands::{
     ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo,
 };
+use crate::storage::txn::sched_pool::tls_collect_query;
 use crate::storage::txn::{
     commands::Command,
     flow_controller::FlowController,
@@ -53,7 +55,7 @@ use crate::storage::txn::{
     Error, ProcessResult,
 };
 use crate::storage::{
-    get_priority_tag, types::StorageCallback, Error as StorageError,
+    get_priority_tag, kv::FlowStatsReporter, types::StorageCallback, Error as StorageError,
     ErrorInner as StorageErrorInner,
 };
 
@@ -287,13 +289,14 @@ unsafe impl<E: Engine, L: LockManager> Send for Scheduler<E, L> {}
 
 impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Creates a scheduler.
-    pub(in crate::storage) fn new(
+    pub(in crate::storage) fn new<R: FlowStatsReporter>(
         engine: E,
         lock_mgr: L,
         concurrency_manager: ConcurrencyManager,
         config: &Config,
         pipelined_pessimistic_lock: Arc<AtomicBool>,
         flow_controller: Arc<FlowController>,
+        reporter: R,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -310,11 +313,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             worker_pool: SchedPool::new(
                 engine.clone(),
                 config.scheduler_worker_pool_size,
+                reporter.clone(),
                 "sched-worker-pool",
             ),
             high_priority_pool: SchedPool::new(
                 engine.clone(),
                 std::cmp::max(1, config.scheduler_worker_pool_size / 2),
+                reporter,
                 "sched-high-pri-pool",
             ),
             lock_mgr,
@@ -644,6 +649,21 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     let region_id = task.cmd.ctx().get_region_id();
                     let ts = task.cmd.ts();
                     let mut statistics = Statistics::default();
+                    match &task.cmd {
+                        Command::Prewrite(_) | Command::PrewritePessimistic(_) => {
+                            tls_collect_query(region_id, QueryKind::Prewrite);
+                        }
+                        Command::AcquirePessimisticLock(_) => {
+                            tls_collect_query(region_id, QueryKind::AcquirePessimisticLock);
+                        }
+                        Command::Commit(_) => {
+                            tls_collect_query(region_id, QueryKind::Commit);
+                        }
+                        Command::Rollback(_) | Command::PessimisticRollback(_) => {
+                            tls_collect_query(region_id, QueryKind::Rollback);
+                        }
+                        _ => {}
+                    }
 
                     if task.cmd.readonly() {
                         self.process_read(snapshot, task, &mut statistics);
@@ -728,18 +748,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 response_policy,
             }) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
-                match ctx.get_disk_full_opt() {
-                    DiskFullOpt::AllowedOnAlreadyFull => {
-                        to_be_write.disk_full_opt = DiskFullOpt::AllowedOnAlreadyFull
-                    }
-                    DiskFullOpt::AllowedOnAlmostFull => {
-                        // Like Delete operation, TiDB marks it with AllowedOnAlmostFull
-                        // But TiKV just treats it as Normal prewrite.
-                        if to_be_write.disk_full_opt != DiskFullOpt::AllowedOnAlreadyFull {
-                            to_be_write.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull
-                        }
-                    }
-                    _ => {}
+
+                if ctx.get_disk_full_opt() == DiskFullOpt::AllowedOnAlmostFull {
+                    to_be_write.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull
                 }
 
                 if let Some(lock_info) = lock_info {
@@ -836,12 +847,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
                     let sched = scheduler.clone();
                     let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
+                    let write_size = to_be_write.size();
                     // The callback to receive async results of write prepare from the storage engine.
-                    let engine_cb = Box::new(move |(_, result)| {
+                    let engine_cb = Box::new(move |(_, result): (_, EngineResult<()>)| {
                         sched_pool
                             .spawn(async move {
                                 fail_point!("scheduler_async_write_finish");
 
+                                let ok = result.is_ok();
                                 sched.on_write_finished(
                                     cid,
                                     pr,
@@ -854,25 +867,37 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                 KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
                                     .get(tag)
                                     .observe(rows as f64);
+
+                                if ok {
+                                    // consume the quota only when write succeeds, otherwise failed write requests may exhaust
+                                    // the quota and other write requests would be in long delay.
+                                    if sched.inner.flow_controller.enabled() {
+                                        if sched.inner.flow_controller.is_unlimited() {
+                                            // no need to delay if unthrottled, just call consume to record write flow
+                                            let _ = sched.inner.flow_controller.consume(write_size);
+                                        } else {
+                                            // Control mutex is used to ensure there is only one request consuming the quota.
+                                            // The delay may exceed 1s, and the speed limit is changed every second.
+                                            // If the speed of next second is larger than the one of first second,
+                                            // without the mutex, the write flow can't throttled strictly.
+                                            let _guard = sched.control_mutex.lock().await;
+                                            let delay =
+                                                sched.inner.flow_controller.consume(write_size);
+                                            delay.await;
+                                        }
+                                    }
+                                }
                             })
                             .unwrap()
                     });
 
-                    if self.inner.flow_controller.enabled() {
-                        if self.inner.flow_controller.is_unlimited() {
-                            // no need to delay if unthrottled, just call consume to record write flow
-                            let _ = self.inner.flow_controller.consume(to_be_write.size());
-                        } else {
-                            let start = Instant::now_coarse();
-                            // Control mutex is used to ensure there is only one request consuming the budget.
-                            // The delay may exceed 1s, and the speed limit is changed every second.
-                            // If the speed of next second is larger than the one of first second,
-                            // without the mutex, the write flow can't throttled strictly.
-                            let _guard = self.control_mutex.lock().await;
-                            let delay = self.inner.flow_controller.consume(to_be_write.size());
-                            delay.await;
-                            SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
-                        }
+                    if self.inner.flow_controller.enabled()
+                        && !self.inner.flow_controller.is_unlimited()
+                    {
+                        let start = Instant::now_coarse();
+                        // Wait for the delay
+                        let _guard = self.control_mutex.lock().await;
+                        SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
                     }
 
                     to_be_write.deadline = Some(deadline);
@@ -934,9 +959,18 @@ mod tests {
     };
     use futures_executor::block_on;
     use kvproto::kvrpcpb::{BatchRollbackRequest, Context};
+    use raftstore::store::{ReadStats, WriteStats};
     use tikv_util::config::ReadableSize;
     use tikv_util::future::paired_future_callback;
     use txn_types::{Key, OldValues};
+
+    #[derive(Clone)]
+    struct DummyReporter;
+
+    impl FlowStatsReporter for DummyReporter {
+        fn report_read_stats(&self, _read_stats: ReadStats) {}
+        fn report_write_stats(&self, _write_stats: WriteStats) {}
+    }
 
     #[test]
     fn test_command_latches() {
@@ -1070,6 +1104,7 @@ mod tests {
             &config,
             Arc::new(AtomicBool::new(true)),
             Arc::new(FlowController::empty()),
+            DummyReporter,
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1119,6 +1154,7 @@ mod tests {
             &config,
             Arc::new(AtomicBool::new(true)),
             Arc::new(FlowController::empty()),
+            DummyReporter,
         );
 
         // Spawn a task that sleeps for 500ms to occupy the pool. The next request
@@ -1169,6 +1205,7 @@ mod tests {
             &config,
             Arc::new(AtomicBool::new(true)),
             Arc::new(FlowController::empty()),
+            DummyReporter,
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);

@@ -101,7 +101,7 @@ impl ImportFile {
                     format!("file already exists, {}", path.temp.to_str().unwrap()),
                 )));
             }
-            Box::new(manager.create_file(&path.temp)?)
+            Box::new(manager.create_file_for_write(&path.temp)?)
         } else {
             Box::new(
                 OpenOptions::new()

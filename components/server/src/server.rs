@@ -17,6 +17,7 @@ use std::{
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
+    str::FromStr,
     sync::{
         atomic::{AtomicU32, AtomicU64, Ordering},
         mpsc, Arc, Mutex,
@@ -426,12 +427,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
         disk::set_disk_reserved_space(reserve_space);
         let available = disk_stats.available_space();
-        if available > reserve_space / 2 {
-            file_system::reserve_space_for_recover(
-                &self.config.storage.data_dir,
-                reserve_space / 5,
-            )
-            .unwrap();
+        if available > reserve_space {
+            file_system::reserve_space_for_recover(&self.config.storage.data_dir, reserve_space)
+                .unwrap();
         } else {
             warn!("no enough disk space left to create the place holder file");
         }
@@ -630,6 +628,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.concurrency_manager.clone(),
             lock_mgr.get_pipelined(),
             flow_controller,
+            pd_sender.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -1079,6 +1078,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn init_storage_stats_task(&self, engines: Engines<RocksEngine, ER>) {
         let config_disk_capacity: u64 = self.config.raft_store.capacity.0;
+        let data_dir = self.config.storage.data_dir.clone();
         let store_path = self.store_path.clone();
         let snap_mgr = self.snap_mgr.clone().unwrap();
         let reserve_space = disk::get_disk_reserved_space();
@@ -1115,7 +1115,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                     .get_engine_size()
                     .expect("get raft engine size");
 
-                let used_size = snap_size + kv_size + raft_size;
+                let placeholer_file_path = PathBuf::from_str(&data_dir)
+                    .unwrap()
+                    .join(Path::new(file_system::SPACE_PLACEHOLDER_FILE));
+
+                let placeholder_size: u64 =
+                    file_system::get_file_size(&placeholer_file_path).unwrap_or(0);
+
+                let used_size = snap_size + kv_size + raft_size + placeholder_size;
                 let capacity = if config_disk_capacity == 0 || disk_cap < config_disk_capacity {
                     disk_cap
                 } else {
