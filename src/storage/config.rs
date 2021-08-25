@@ -117,7 +117,7 @@ impl<EK: KvEngine> StorageConfigManger<EK> {
         shared_block_cache: bool,
         ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
         flow_controller: Arc<FlowController>,
-    ) -> StorageConfigManger<EK> {
+    ) -> Self {
         StorageConfigManger {
             kvdb,
             shared_block_cache,
