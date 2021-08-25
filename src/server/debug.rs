@@ -708,7 +708,6 @@ impl<ER: RaftEngine> Debugger<ER> {
                 region_id,
                 &raft_local_state,
             ));
-            // write kv rocksdb first in case of restart happen between two write
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             box_try!(kv_wb.write_opt(&write_opts));
@@ -1869,9 +1868,9 @@ mod tests {
         let kv_engine = &debugger.engines.kv;
         let raft_engine = &debugger.engines.raft;
 
-        init_region_state(kv_engine.as_inner(), 1, &[100, 101]);
-        init_region_state(kv_engine.as_inner(), 2, &[100, 102]);
-        init_region_state(kv_engine.as_inner(), 3, &[100, 103]);
+        init_region_state(kv_engine.as_inner(), 1, &[100, 101], 1);
+        init_region_state(kv_engine.as_inner(), 2, &[100, 102], 1);
+        init_region_state(kv_engine.as_inner(), 3, &[100, 103], 1);
         init_raft_state(kv_engine, raft_engine, 1, 100, 90, 80);
         init_raft_state(kv_engine, raft_engine, 2, 100, 90, 80);
         init_raft_state(kv_engine, raft_engine, 3, 100, 90, 80);
@@ -1893,8 +1892,8 @@ mod tests {
         let kv_engine = &debugger.engines.kv;
         let raft_engine = &debugger.engines.raft;
 
-        init_region_state(kv_engine.as_inner(), 1, &[100, 101]);
-        init_region_state(kv_engine.as_inner(), 2, &[100, 103]);
+        init_region_state(kv_engine.as_inner(), 1, &[100, 101], 1);
+        init_region_state(kv_engine.as_inner(), 2, &[100, 103], 1);
         init_raft_state(kv_engine, raft_engine, 1, 100, 90, 80);
         init_raft_state(kv_engine, raft_engine, 2, 80, 80, 80);
 
