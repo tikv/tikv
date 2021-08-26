@@ -666,6 +666,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
                         readies.remove(&fsm.region_id());
                     }
                 }
+                if fsm.peer.has_unpersisted_ready() {
+                    panic!("{} has unpersisted ready after persistence", fsm.peer.tag);
+                }
             }
             if !readies.is_empty() {
                 panic!("readies are not exhausted, remaining {:?}", readies);
