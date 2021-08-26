@@ -3175,13 +3175,11 @@ where
             "region" => ?region,
         );
 
-        if prev_region.get_peers() != region.get_peers() {
-            let mut state = self.ctx.global_replication_state.lock().unwrap();
-            let gb = state
-                .calculate_commit_group(self.fsm.peer.replication_mode_version, region.get_peers());
-            self.fsm.peer.raft_group.raft.clear_commit_group();
-            self.fsm.peer.raft_group.raft.assign_commit_groups(gb);
-        }
+        let mut state = self.ctx.global_replication_state.lock().unwrap();
+        let gb = state
+            .calculate_commit_group(self.fsm.peer.replication_mode_version, region.get_peers());
+        self.fsm.peer.raft_group.raft.clear_commit_group();
+        self.fsm.peer.raft_group.raft.assign_commit_groups(gb);
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
         debug!(
