@@ -800,7 +800,7 @@ pub fn duration_string_time_diff(
     arg1: &Duration,
     arg2: BytesRef,
 ) -> Result<Option<Duration>> {
-    let arg2 = std::str::from_utf8(&arg2).map_err(Error::Encoding)?;
+    let arg2 = std::str::from_utf8(arg2).map_err(Error::Encoding)?;
     let arg2 = match Duration::parse(ctx, arg2, MAX_FSP) {
         Ok(arg) => arg,
         Err(_) => return Ok(None),
