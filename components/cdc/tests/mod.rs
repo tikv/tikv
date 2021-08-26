@@ -203,6 +203,12 @@ pub struct TestSuite {
     env: Arc<Environment>,
 }
 
+impl Default for TestSuiteBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TestSuite {
     pub fn new(count: usize) -> TestSuite {
         let mut cluster = new_server_cluster(1, count);

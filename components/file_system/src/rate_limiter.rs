@@ -149,6 +149,12 @@ impl IORateLimiterStatistics {
     }
 }
 
+impl Default for IORateLimiterStatistics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Used to dynamically adjust the proportion of total budgets allocated for rate limited
 /// IO. This is needed when global IOs are only partially rate limited, e.g. when mode is
 /// IORateLimitMode::WriteOnly.

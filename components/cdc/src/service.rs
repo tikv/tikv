@@ -35,6 +35,12 @@ impl ConnID {
     }
 }
 
+impl Default for ConnID {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub enum CdcEvent {
     ResolvedTs(ResolvedTs),
     Event(Event),

@@ -36,6 +36,12 @@ impl SyncTestStorageBuilder<RocksEngine> {
     }
 }
 
+impl Default for SyncTestStorageBuilder<RocksEngine> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<E: Engine> SyncTestStorageBuilder<E> {
     pub fn from_engine(engine: E) -> Self {
         Self {

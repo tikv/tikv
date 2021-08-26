@@ -60,14 +60,14 @@ pub mod raft {
 
     #[cfg(feature = "test-engine-raft-panic")]
     pub use engine_panic::{
-        PanicEngine as RaftTestEngine, PanicSnapshot as RaftTestSnapshot,
-        PanicWriteBatch as RaftTestWriteBatch,
+        PanicEngine as RaftTestEngine, PanicEngineIterator as RaftTestEngineIterator,
+        PanicSnapshot as RaftTestSnapshot, PanicWriteBatch as RaftTestWriteBatch,
     };
 
     #[cfg(feature = "test-engine-raft-rocksdb")]
     pub use engine_rocks::{
-        RocksEngine as RaftTestEngine, RocksSnapshot as RaftTestSnapshot,
-        RocksWriteBatch as RaftTestWriteBatch,
+        RocksEngine as RaftTestEngine, RocksEngineIterator as RaftTestEngineIterator,
+        RocksSnapshot as RaftTestSnapshot, RocksWriteBatch as RaftTestWriteBatch,
     };
 
     pub fn new_engine(
@@ -98,14 +98,14 @@ pub mod kv {
 
     #[cfg(feature = "test-engine-kv-panic")]
     pub use engine_panic::{
-        PanicEngine as KvTestEngine, PanicSnapshot as KvTestSnapshot,
-        PanicWriteBatch as KvTestWriteBatch,
+        PanicEngine as KvTestEngine, PanicEngineIterator as KvTestEngineIterator,
+        PanicSnapshot as KvTestSnapshot, PanicWriteBatch as KvTestWriteBatch,
     };
 
     #[cfg(feature = "test-engine-kv-rocksdb")]
     pub use engine_rocks::{
-        RocksEngine as KvTestEngine, RocksSnapshot as KvTestSnapshot,
-        RocksWriteBatch as KvTestWriteBatch,
+        RocksEngine as KvTestEngine, RocksEngineIterator as KvTestEngineIterator,
+        RocksSnapshot as KvTestSnapshot, RocksWriteBatch as KvTestWriteBatch,
     };
 
     pub fn new_engine(
@@ -191,6 +191,12 @@ pub mod ctor {
 
         pub fn with_default_ctr_encrypted_env(&mut self, ciphertext: Vec<u8>) {
             self.encryption = CryptoOptions::DefaultCtrEncryptedEnv(ciphertext);
+        }
+    }
+
+    impl Default for DBOptions {
+        fn default() -> Self {
+            Self::new()
         }
     }
 
@@ -288,6 +294,12 @@ pub mod ctor {
 
         pub fn get_no_table_properties(&self) -> bool {
             self.no_table_properties
+        }
+    }
+
+    impl Default for ColumnFamilyOptions {
+        fn default() -> Self {
+            Self::new()
         }
     }
 
