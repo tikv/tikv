@@ -2,7 +2,7 @@
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-
+use std::mem;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -19,10 +19,9 @@ use tidb_query_datatype::codec::table;
 use tidb_query_datatype::def::Collation;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 use tidb_query_datatype::FieldTypeAccessor;
-use tidb_query_executors::{
-    interface::BatchExecutor, runner::MAX_TIME_SLICE, BatchTableScanExecutor,
-};
+use tidb_query_executors::{interface::BatchExecutor, BatchTableScanExecutor};
 use tidb_query_expr::BATCH_MAX_SIZE;
+use tikv_alloc::trace::{MemTraced, TraceEvent};
 use tikv_util::time::Instant;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use yatp::task::future::reschedule;
@@ -31,11 +30,13 @@ use super::cmsketch::CmSketch;
 use super::fmsketch::FmSketch;
 use super::histogram::Histogram;
 use crate::coprocessor::dag::TiKVStorage;
+use crate::coprocessor::MEMTRACE_ANALYZE;
 use crate::coprocessor::*;
 use crate::storage::{Snapshot, SnapshotStore, Statistics};
 
 const ANALYZE_VERSION_V1: i32 = 1;
 const ANALYZE_VERSION_V2: i32 = 2;
+const ANALYZE_MAX_TIME_SLICE: Duration = Duration::from_secs(1);
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
@@ -136,7 +137,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         while let Some((key, _)) = scanner.next()? {
             row_count += 1;
             if row_count >= BATCH_MAX_SIZE {
-                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
+                if time_slice_start.saturating_elapsed() > ANALYZE_MAX_TIME_SLICE {
                     reschedule().await;
                     time_slice_start = Instant::now();
                 }
@@ -209,7 +210,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
 
 #[async_trait]
 impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
-    async fn handle_request(&mut self) -> Result<Response> {
+    async fn handle_request(&mut self) -> Result<MemTraced<Response>> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
                 let req = self.req.take_idx_req();
@@ -271,16 +272,19 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 "Analyze of this kind not implemented".to_string(),
             )),
         };
+        // FIXME: do real trace.
         match ret {
             Ok(data) => {
+                let memory_size = data.capacity();
+                MEMTRACE_ANALYZE.trace(TraceEvent::Add(memory_size));
                 let mut resp = Response::default();
                 resp.set_data(data);
-                Ok(resp)
+                Ok(MemTraced::new(resp, memory_size, MEMTRACE_ANALYZE.clone()))
             }
             Err(Error::Other(e)) => {
                 let mut resp = Response::default();
                 resp.set_other_error(e);
-                Ok(resp)
+                Ok(resp.into())
             }
             Err(e) => Err(e),
         }
@@ -343,7 +347,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
         );
         while !is_drained {
             let time_slice_elapsed = time_slice_start.saturating_elapsed();
-            if time_slice_elapsed > MAX_TIME_SLICE {
+            if time_slice_elapsed > ANALYZE_MAX_TIME_SLICE {
                 reschedule().await;
                 time_slice_start = Instant::now();
             }
@@ -410,6 +414,8 @@ struct RowSampleCollector {
     rng: StdRng,
     total_sizes: Vec<i64>,
     row_buf: Vec<u8>,
+    memory_usage: usize,
+    reported_memory_usage: usize,
 }
 
 impl Default for RowSampleCollector {
@@ -423,6 +429,8 @@ impl Default for RowSampleCollector {
             rng: StdRng::from_entropy(),
             total_sizes: vec![],
             row_buf: Vec::new(),
+            memory_usage: 0,
+            reported_memory_usage: 0,
         }
     }
 }
@@ -442,6 +450,8 @@ impl RowSampleCollector {
             rng: StdRng::from_entropy(),
             total_sizes: vec![0; col_and_group_len],
             row_buf: Vec::new(),
+            memory_usage: 0,
+            reported_memory_usage: 0,
         }
     }
 
@@ -504,22 +514,28 @@ impl RowSampleCollector {
     }
 
     pub fn sampling(&mut self, data: Vec<Vec<u8>>) {
+        let mut need_push = false;
         let cur_rng = self.rng.gen_range(0, i64::MAX);
         if self.samples.len() < self.max_sample_size {
-            self.samples.push(Reverse((cur_rng, data)));
-            return;
+            need_push = true;
+        } else if self.samples.peek().unwrap().0.0 < cur_rng {
+            need_push = true;
+            let (_, evicted) = self.samples.pop().unwrap().0;
+            self.memory_usage -= evicted.iter().map(|x| x.capacity()).sum::<usize>();
         }
-        if self.samples.len() == self.max_sample_size && self.samples.peek().unwrap().0.0 < cur_rng
-        {
-            self.samples.pop();
+
+        if need_push {
+            self.memory_usage += data.iter().map(|x| x.capacity()).sum::<usize>();
             self.samples.push(Reverse((cur_rng, data)));
+            self.maybe_report_memory_usage(false);
         }
     }
 
-    pub fn into_proto(self) -> tipb::RowSampleCollector {
+    pub fn to_proto(&mut self) -> tipb::RowSampleCollector {
+        self.memory_usage = 0;
+
         let mut s = tipb::RowSampleCollector::default();
-        let samples = self
-            .samples
+        let samples = mem::take(&mut self.samples)
             .into_iter()
             .map(|r_tuple| {
                 let mut pb_sample = tipb::RowSample::default();
@@ -529,16 +545,34 @@ impl RowSampleCollector {
             })
             .collect();
         s.set_samples(samples);
-        s.set_null_counts(self.null_count);
+        s.set_null_counts(mem::take(&mut self.null_count));
         s.set_count(self.count as i64);
-        let pb_fm_sketches = self
-            .fm_sketches
+        let pb_fm_sketches = mem::take(&mut self.fm_sketches)
             .into_iter()
             .map(|fm_sketch| fm_sketch.into_proto())
             .collect();
         s.set_fm_sketch(pb_fm_sketches);
-        s.set_total_size(self.total_sizes);
+        s.set_total_size(mem::take(&mut self.total_sizes));
         s
+    }
+
+    fn maybe_report_memory_usage(&mut self, on_finish: bool) {
+        let diff = self.memory_usage as isize - self.reported_memory_usage as isize;
+        if on_finish || diff.abs() > 1024 * 1024 {
+            let event = if diff >= 0 {
+                TraceEvent::Add(diff as usize)
+            } else {
+                TraceEvent::Sub(-diff as usize)
+            };
+            MEMTRACE_ANALYZE.trace(event);
+            self.reported_memory_usage = self.memory_usage;
+        }
+    }
+}
+
+impl Drop for RowSampleCollector {
+    fn drop(&mut self) {
+        self.maybe_report_memory_usage(true);
     }
 }
 
@@ -638,7 +672,7 @@ impl<S: Snapshot> SampleBuilder<S> {
         let mut common_handle_fms = FmSketch::new(self.max_fm_sketch_size);
         while !is_drained {
             let time_slice_elapsed = time_slice_start.saturating_elapsed();
-            if time_slice_elapsed > MAX_TIME_SLICE {
+            if time_slice_elapsed > ANALYZE_MAX_TIME_SLICE {
                 reschedule().await;
                 time_slice_start = Instant::now();
             }
@@ -866,8 +900,8 @@ impl AnalyzeSamplingResult {
         }
     }
 
-    fn into_proto(self) -> tipb::AnalyzeColumnsResp {
-        let pb_collector = self.row_sample_collector.into_proto();
+    fn into_proto(mut self) -> tipb::AnalyzeColumnsResp {
+        let pb_collector = self.row_sample_collector.to_proto();
         let mut res = tipb::AnalyzeColumnsResp::default();
         res.set_row_collector(pb_collector);
         res
@@ -1001,7 +1035,7 @@ mod tests {
                 collector.sampling([row.clone()].to_vec());
             }
             assert_eq!(collector.samples.len(), sample_num);
-            for sample in collector.samples.into_vec() {
+            for sample in &collector.samples {
                 *item_cnt.entry(sample.0.1[0].clone()).or_insert(0) += 1;
             }
         }

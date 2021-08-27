@@ -34,6 +34,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
 use resource_metering::cpu::{FutureExt, StreamExt};
 use resource_metering::ResourceMeteringTag;
+use tikv_alloc::trace::MemTraced;
 use tikv_util::time::Instant;
 use txn_types::Lock;
 
@@ -394,7 +395,7 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> Result<coppb::Response> {
+    ) -> Result<MemTraced<coppb::Response>> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         tracker.on_scheduled();
@@ -446,7 +447,7 @@ impl<E: Engine> Endpoint<E> {
                 COPR_RESP_SIZE.inc_by(resp.data.len() as u64);
                 resp
             }
-            Err(e) => make_error_response(e),
+            Err(e) => make_error_response(e).into(),
         };
         resp.set_exec_details(exec_details);
         resp.set_exec_details_v2(exec_details_v2);
@@ -461,7 +462,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl Future<Output = Result<coppb::Response>> {
+    ) -> impl Future<Output = Result<MemTraced<coppb::Response>>> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
         let resource_tag = ResourceMeteringTag::from_rpc_context(&req_ctx.context);
@@ -488,15 +489,17 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Future<Output = coppb::Response> {
+    ) -> impl Future<Output = MemTraced<coppb::Response>> {
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
 
         async move {
             match result_of_future {
-                Err(e) => make_error_response(e),
-                Ok(handle_fut) => handle_fut.await.unwrap_or_else(make_error_response),
+                Err(e) => make_error_response(e).into(),
+                Ok(handle_fut) => handle_fut
+                    .await
+                    .unwrap_or_else(|e| make_error_response(e).into()),
             }
         }
     }
@@ -732,7 +735,7 @@ mod tests {
 
     #[async_trait]
     impl RequestHandler for UnaryFixture {
-        async fn handle_request(&mut self) -> Result<coppb::Response> {
+        async fn handle_request(&mut self) -> Result<MemTraced<coppb::Response>> {
             if self.yieldable {
                 // We split the task into small executions of 1 second.
                 for _ in 0..self.handle_duration_millis / 1_000 {
@@ -744,7 +747,7 @@ mod tests {
                 thread::sleep(Duration::from_millis(self.handle_duration_millis));
             }
 
-            self.result.take().unwrap()
+            self.result.take().unwrap().map(|x| x.into())
         }
     }
 
@@ -909,7 +912,7 @@ mod tests {
             req
         };
 
-        let resp: coppb::Response = block_on(copr.parse_and_handle_unary_request(req, None));
+        let resp = block_on(copr.parse_and_handle_unary_request(req, None));
         assert!(!resp.get_other_error().is_empty());
     }
 
@@ -931,7 +934,7 @@ mod tests {
         let mut req = coppb::Request::default();
         req.set_tp(9999);
 
-        let resp: coppb::Response = block_on(copr.parse_and_handle_unary_request(req, None));
+        let resp = block_on(copr.parse_and_handle_unary_request(req, None));
         assert!(!resp.get_other_error().is_empty());
     }
 
@@ -1513,7 +1516,8 @@ mod tests {
             });
             let resp_future_3 = copr
                 .handle_stream_request(req_with_exec_detail, handler_builder)
-                .unwrap();
+                .unwrap()
+                .map(|x| x.map(|x| x.into()));
             thread::spawn(move || {
                 tx.send(
                     block_on_stream(resp_future_3)

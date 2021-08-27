@@ -16,9 +16,9 @@
 //! macro constructs every node as a `MemoryTraceNode` which implements `MemoryTrace` trait.
 //! We can also define a specified tree node by implementing `MemoryTrace` trait.
 
-use std::fmt::{self, Display};
+use std::fmt::{self, Debug, Display, Formatter};
 use std::num::NonZeroU64;
-use std::ops::Add;
+use std::ops::{Add, Deref, DerefMut};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -234,6 +234,77 @@ macro_rules! mem_trace {
     };
     (($name: ident, [$($child:tt),+])) => {
         mem_trace!($name, [$($child),*])
+    }
+}
+
+pub struct MemTraced<T: Default> {
+    item: T,
+    size: usize,
+    node: Option<Arc<dyn MemoryTrace + Send + Sync>>,
+}
+
+impl<T: Default> MemTraced<T> {
+    pub fn new(item: T, size: usize, node: Arc<dyn MemoryTrace + Send + Sync>) -> Self {
+        let node = Some(node);
+        MemTraced { item, size, node }
+    }
+
+    pub fn map<F, U: Default>(mut self, f: F) -> MemTraced<U>
+    where
+        F: FnOnce(T) -> U,
+    {
+        let item = std::mem::take(&mut self.item);
+        MemTraced {
+            item: f(item),
+            size: self.size,
+            node: self.node.take(),
+        }
+    }
+
+    pub fn consume(&mut self) -> T {
+        if let Some(node) = self.node.take() {
+            node.trace(TraceEvent::Sub(self.size));
+        }
+        std::mem::take(&mut self.item)
+    }
+}
+
+impl<T: Default> Drop for MemTraced<T> {
+    fn drop(&mut self) {
+        if let Some(node) = self.node.take() {
+            node.trace(TraceEvent::Sub(self.size));
+        }
+    }
+}
+
+impl<T: Default> From<T> for MemTraced<T> {
+    fn from(item: T) -> Self {
+        MemTraced {
+            item,
+            size: 0,
+            node: None,
+        }
+    }
+}
+
+impl<T: Default> Deref for MemTraced<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.item
+    }
+}
+
+impl<T: Default> DerefMut for MemTraced<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.item
+    }
+}
+
+impl<T: Default> Debug for MemTraced<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemTraced")
+            .field("size", &self.size)
+            .finish()
     }
 }
 
