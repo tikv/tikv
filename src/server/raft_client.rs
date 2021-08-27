@@ -30,7 +30,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::{cmp, mem, result};
 use tikv_util::lru::LruCache;
-use tikv_util::time::Instant as TiInstant;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use yatp::task::future::TaskCell;
@@ -933,7 +932,6 @@ where
 
     /// Flushes all buffered messages.
     pub fn flush(&mut self) {
-        self.last_flush_time = TiInstant::now_coarse();
         self.flush_full_metrics();
         if self.need_flush.is_empty() {
             return;

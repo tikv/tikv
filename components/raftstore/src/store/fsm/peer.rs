@@ -347,9 +347,9 @@ where
 {
     fn new(cfg: &Config) -> BatchRaftCmdRequestBuilder<E> {
         BatchRaftCmdRequestBuilder {
-            can_batch_limit: cfg.raft_entry_max_size.0 * 0.2 as u64,
+            can_batch_limit: (cfg.raft_entry_max_size.0 as f64 * 0.2) as u64,
             should_propose_size: cmp::min(
-                cfg.raft_entry_max_size.0 * 0.4 as u64,
+                (cfg.raft_entry_max_size.0 as f64 * 0.4) as u64,
                 cfg.raft_ready_size_limit.0,
             ),
             batch_req_size: 0,
@@ -4518,7 +4518,9 @@ mod memtrace {
 
 #[cfg(test)]
 mod tests {
-    use super::BatchRaftCmdRequestBuilder;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
     use crate::store::local_metrics::RaftMetrics;
     use crate::store::msg::{Callback, ExtCallback, RaftCommand};
 
@@ -4528,13 +4530,15 @@ mod tests {
         StatusRequest,
     };
     use protobuf::Message;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+    use tikv_util::config::ReadableSize;
+
+    use super::*;
 
     #[test]
     fn test_batch_raft_cmd_request_builder() {
-        let max_batch_size = 1000.0;
-        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new(max_batch_size);
+        let mut cfg = Config::default();
+        cfg.raft_entry_max_size = ReadableSize(1000);
+        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new(&cfg);
         let mut q = Request::default();
         let mut metric = RaftMetrics::new(true);
 
