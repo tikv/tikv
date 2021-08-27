@@ -1210,7 +1210,7 @@ struct Opt {
     encode: Option<String>,
 
     #[structopt(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(StructOpt)]
@@ -1825,8 +1825,30 @@ fn main() {
     );
     let mgr = new_security_mgr(&opt);
 
+    let cmd = match opt.cmd {
+        Some(cmd) => cmd,
+        None => {
+            // Deal with arguments about key utils.
+            if let Some(hex) = opt.hex_to_escaped.as_deref() {
+                println!("{}", escape(&from_hex(hex).unwrap()));
+            } else if let Some(escaped) = opt.escaped_to_hex.as_deref() {
+                println!("{}", log_wrappers::hex_encode_upper(unescape(escaped)));
+            } else if let Some(encoded) = opt.decode.as_deref() {
+                match Key::from_encoded(unescape(encoded)).into_raw() {
+                    Ok(k) => println!("{}", escape(&k)),
+                    Err(e) => println!("decode meets error: {}", e),
+                };
+            } else if let Some(decoded) = opt.encode.as_deref() {
+                println!("{}", Key::from_raw(&unescape(decoded)));
+            } else {
+                Opt::clap().print_help().ok();
+            }
+            return;
+        }
+    };
+
     // Bypass the ldb and sst dump command to RocksDB.
-    if let Cmd::External(args) = opt.cmd {
+    if let Cmd::External(args) = cmd {
         match args[0].as_str() {
             "ldb" => run_ldb_command(args, &cfg),
             "sst_dump" => run_sst_dump_command(args, &cfg),
@@ -1835,7 +1857,7 @@ fn main() {
         return;
     }
 
-    if let Cmd::BadSsts { db, manifest, pd } = opt.cmd {
+    if let Cmd::BadSsts { db, manifest, pd } = cmd {
         let pd_client = get_pd_rpc_client(&pd, Arc::clone(&mgr));
         print_bad_ssts(&db, manifest.as_deref(), pd_client, &cfg);
         return;
@@ -1843,7 +1865,7 @@ fn main() {
 
     // Deal with subcommand dump-snap-meta. This subcommand doesn't require other args, so process
     // it before checking args.
-    if let Cmd::DumpSnapMeta { file } = opt.cmd {
+    if let Cmd::DumpSnapMeta { file } = cmd {
         let path = file.as_ref();
         return dump_snap_meta_file(path);
     }
@@ -1866,7 +1888,7 @@ fn main() {
         return;
     }
 
-    if let Cmd::DecryptFile { file, out_file } = opt.cmd {
+    if let Cmd::DecryptFile { file, out_file } = cmd {
         let message = "This action will expose sensitive data as plaintext on persistent storage";
         if !warning_prompt(message) {
             return;
@@ -1916,7 +1938,7 @@ fn main() {
         return;
     }
 
-    if let Cmd::EncryptionMeta { cmd: subcmd } = opt.cmd {
+    if let Cmd::EncryptionMeta { cmd: subcmd } = cmd {
         match subcmd {
             EncryptionMetaCmd::DumpKey { ids } => {
                 let message = "This action will expose encryption key(s) as plaintext. Do not output the \
@@ -1951,7 +1973,7 @@ fn main() {
             to,
             threads,
             bottommost,
-        } = opt.cmd
+        } = cmd
         {
             let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
             let cfs = cf.iter().map(|s| s.as_ref()).collect();
@@ -1965,7 +1987,7 @@ fn main() {
         if let Cmd::SplitRegion {
             region: region_id,
             key,
-        } = opt.cmd
+        } = cmd
         {
             let key = unescape(&key);
             return split_region(&pd_client, mgr, region_id, key);
@@ -1983,10 +2005,10 @@ fn main() {
     let debug_executor =
         new_debug_executor(&cfg, data_dir, skip_paranoid_checks, host, Arc::clone(&mgr));
 
-    if let Cmd::Print { cf, key } = opt.cmd {
+    if let Cmd::Print { cf, key } = cmd {
         let key = unescape(&key);
         debug_executor.dump_value(&cf, key);
-    } else if let Cmd::Raft { cmd: subcmd } = opt.cmd {
+    } else if let Cmd::Raft { cmd: subcmd } = cmd {
         match subcmd {
             RaftCmd::Log { region, index, key } => {
                 let (id, index) = if let Some(key) = key.as_deref() {
@@ -2006,7 +2028,7 @@ fn main() {
                 debug_executor.dump_region_info(regions, skip_tombstone);
             }
         }
-    } else if let Cmd::Size { region, cf } = opt.cmd {
+    } else if let Cmd::Size { region, cf } = cmd {
         let cfs = cf.iter().map(AsRef::as_ref).collect();
         if let Some(id) = region {
             debug_executor.dump_region_size(id, cfs);
@@ -2020,7 +2042,7 @@ fn main() {
         show_cf,
         start_ts,
         commit_ts,
-    } = opt.cmd
+    } = cmd
     {
         let from = unescape(&from);
         let to = to.map_or_else(Vec::new, |to| unescape(&to));
@@ -2036,7 +2058,7 @@ fn main() {
         to,
         limit,
         cf,
-    } = opt.cmd
+    } = cmd
     {
         let from = unescape(&from);
         let to = unescape(&to);
@@ -2046,7 +2068,7 @@ fn main() {
         show_cf,
         start_ts,
         commit_ts,
-    } = opt.cmd
+    } = cmd
     {
         let from = unescape(&key);
         let cfs = show_cf.iter().map(AsRef::as_ref).collect();
@@ -2057,7 +2079,7 @@ fn main() {
         to_host,
         to_config,
         ..
-    } = opt.cmd
+    } = cmd
     {
         let to_data_dir = to_data_dir.as_deref();
         let to_host = to_host.as_deref();
@@ -2074,7 +2096,7 @@ fn main() {
         to,
         threads,
         bottommost,
-    } = opt.cmd
+    } = cmd
     {
         let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
         let from_key = from.map(|k| unescape(&k));
@@ -2085,7 +2107,7 @@ fn main() {
         } else {
             debug_executor.compact(host, db_type, &cf, from_key, to_key, threads, bottommost);
         }
-    } else if let Cmd::Tombstone { regions, pd, force } = opt.cmd {
+    } else if let Cmd::Tombstone { regions, pd, force } = cmd {
         if let Some(pd_urls) = pd {
             let cfg = PdConfig {
                 endpoints: pd_urls,
@@ -2105,7 +2127,7 @@ fn main() {
         threads,
         regions,
         pd: pd_urls,
-    } = opt.cmd
+    } = cmd
     {
         if all {
             let threads = threads.unwrap();
@@ -2129,7 +2151,7 @@ fn main() {
             }
             debug_executor.recover_regions_mvcc(mgr, &cfg, regions, read_only);
         }
-    } else if let Cmd::UnsafeRecover { cmd: subcmd } = opt.cmd {
+    } else if let Cmd::UnsafeRecover { cmd: subcmd } = cmd {
         match subcmd {
             UnsafeRecoverCmd::RemoveFailStores {
                 stores,
@@ -2146,33 +2168,33 @@ fn main() {
     } else if let Cmd::RecreateRegion {
         pd,
         region: region_id,
-    } = opt.cmd
+    } = cmd
     {
         let pd_cfg = PdConfig {
             endpoints: pd,
             ..Default::default()
         };
         debug_executor.recreate_region(mgr, &pd_cfg, region_id);
-    } else if let Cmd::ConsistencyCheck { region } = opt.cmd {
+    } else if let Cmd::ConsistencyCheck { region } = cmd {
         debug_executor.check_region_consistency(region);
-    } else if let Cmd::BadRegions {} = opt.cmd {
+    } else if let Cmd::BadRegions {} = cmd {
         debug_executor.print_bad_regions();
     } else if let Cmd::ModifyTikvConfig {
         config_name,
         config_value,
-    } = opt.cmd
+    } = cmd
     {
         debug_executor.modify_tikv_config(&config_name, &config_value);
-    } else if let Cmd::Metrics { tag } = opt.cmd {
+    } else if let Cmd::Metrics { tag } = cmd {
         let tags = tag.iter().map(AsRef::as_ref).collect();
         debug_executor.dump_metrics(tags)
-    } else if let Cmd::RegionProperties { region } = opt.cmd {
+    } else if let Cmd::RegionProperties { region } = cmd {
         debug_executor.dump_region_properties(region)
-    } else if let Cmd::RangeProperties { start, end } = opt.cmd {
+    } else if let Cmd::RangeProperties { start, end } = cmd {
         let start_key = from_hex(&start).unwrap();
         let end_key = from_hex(&end).unwrap();
         debug_executor.dump_range_properties(start_key, end_key);
-    } else if let Cmd::Fail { cmd: subcmd } = opt.cmd {
+    } else if let Cmd::Fail { cmd: subcmd } = cmd {
         if host.is_none() {
             println!("command fail requires host");
             process::exit(-1);
@@ -2220,9 +2242,9 @@ fn main() {
                 println!("{:?}", resp.get_entries());
             }
         }
-    } else if let Cmd::Store {} = opt.cmd {
+    } else if let Cmd::Store {} = cmd {
         debug_executor.dump_store_info();
-    } else if let Cmd::Cluster {} = opt.cmd {
+    } else if let Cmd::Cluster {} = cmd {
         debug_executor.dump_cluster_info();
     } else {
         Opt::clap().print_help().ok();
