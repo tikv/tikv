@@ -1123,7 +1123,7 @@ static VERSION_INFO: SyncLazy<String> = SyncLazy::new(|| {
     tikv::tikv_version_info(build_timestamp)
 });
 
-const RAW_KEY_HINT: &'static str = "Raw key (generally starts with \"z\") in escaped form";
+const RAW_KEY_HINT: &str = "Raw key (generally starts with \"z\") in escaped form";
 
 #[derive(StructOpt)]
 #[structopt(
