@@ -766,7 +766,6 @@ pub struct RaftClient<S, R, E> {
     builder: ConnectionBuilder<S, R>,
     engine: PhantomData<E>,
     last_hash: (u64, u64),
-    last_flush_time: TiInstant,
 }
 
 impl<S, R, E> RaftClient<S, R, E>
@@ -790,7 +789,6 @@ where
             builder,
             engine: PhantomData::<E>,
             last_hash: (0, 0),
-            last_flush_time: TiInstant::now_coarse(),
         }
     }
 
@@ -979,7 +977,6 @@ where
             builder: self.builder.clone(),
             engine: PhantomData::<E>,
             last_hash: (0, 0),
-            last_flush_time: TiInstant::now_coarse(),
         }
     }
 }

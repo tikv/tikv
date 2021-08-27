@@ -140,8 +140,9 @@ pub struct BatchRaftCmdRequestBuilder<E>
 where
     E: KvEngine,
 {
-    raft_entry_max_size: f64,
-    batch_req_size: u32,
+    can_batch_limit: u64,
+    should_propose_size: u64,
+    batch_req_size: u64,
     request: Option<RaftCmdRequest>,
     callbacks: Vec<(Callback<E::Snapshot>, usize)>,
 }
@@ -237,9 +238,7 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
-                batch_req_builder: BatchRaftCmdRequestBuilder::new(
-                    cfg.raft_entry_max_size.0 as f64,
-                ),
+                batch_req_builder: BatchRaftCmdRequestBuilder::new(cfg),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
             }),
@@ -282,9 +281,7 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
-                batch_req_builder: BatchRaftCmdRequestBuilder::new(
-                    cfg.raft_entry_max_size.0 as f64,
-                ),
+                batch_req_builder: BatchRaftCmdRequestBuilder::new(cfg),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
             }),
@@ -348,24 +345,24 @@ impl<E> BatchRaftCmdRequestBuilder<E>
 where
     E: KvEngine,
 {
-    fn new(raft_entry_max_size: f64) -> BatchRaftCmdRequestBuilder<E> {
+    fn new(cfg: &Config) -> BatchRaftCmdRequestBuilder<E> {
         BatchRaftCmdRequestBuilder {
-            raft_entry_max_size,
-            request: None,
+            can_batch_limit: cfg.raft_entry_max_size.0 * 0.2 as u64,
+            should_propose_size: cmp::min(
+                cfg.raft_entry_max_size.0 * 0.4 as u64,
+                cfg.raft_ready_size_limit.0,
+            ),
             batch_req_size: 0,
+            request: None,
             callbacks: vec![],
         }
-    }
-
-    fn get_batch_size(&self) -> u32 {
-        self.batch_req_size
     }
 
     fn can_batch(&self, req: &RaftCmdRequest, req_size: u32) -> bool {
         // No batch request whose size exceed 20% of raft_entry_max_size,
         // so total size of request in batch_raft_request would not exceed
         // (40% + 20%) of raft_entry_max_size
-        if req.get_requests().is_empty() || f64::from(req_size) > self.raft_entry_max_size * 0.2 {
+        if req.get_requests().is_empty() || req_size as u64 > self.can_batch_limit {
             return false;
         }
         for r in req.get_requests() {
@@ -401,14 +398,14 @@ where
             self.request = Some(request);
         };
         self.callbacks.push((callback, req_num));
-        self.batch_req_size += req_size;
+        self.batch_req_size += req_size as u64;
     }
 
     fn should_finish(&self) -> bool {
         if let Some(batch_req) = self.request.as_ref() {
             // Limit the size of batch request so that it will not exceed raft_entry_max_size after
             // adding header.
-            if f64::from(self.batch_req_size) > self.raft_entry_max_size * 0.4 {
+            if self.batch_req_size > self.should_propose_size {
                 return true;
             }
             if batch_req.get_requests().len() > <E as WriteBatchExt>::WRITE_BATCH_MAX_KEYS {
@@ -575,6 +572,11 @@ where
                             "peer_id" => self.fsm.peer_id(),
                         );
                     }
+                    if self.fsm.peer.raft_group.raft.raft_log.unstable.entries_size
+                        >= self.ctx.cfg.raft_ready_size_limit.0 as usize
+                    {
+                        self.collect_ready();
+                    }
                 }
                 PeerMsg::RaftCommand(cmd) => {
                     self.ctx
@@ -609,6 +611,11 @@ where
                             cmd.extra_opts.disk_full_opt,
                         )
                     }
+                    if self.fsm.peer.raft_group.raft.raft_log.unstable.entries_size
+                        >= self.ctx.cfg.raft_ready_size_limit.0 as usize
+                    {
+                        self.collect_ready();
+                    }
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
                 PeerMsg::ApplyRes { res } => {
@@ -639,13 +646,6 @@ where
                         }
                     }
                 }
-            }
-            if self.fsm.batch_req_builder.get_batch_size() as usize
-                + self.fsm.peer.raft_group.raft.raft_log.unstable.entries_size
-                >= self.ctx.cfg.raft_ready_size_limit.0 as usize
-            {
-                self.propose_batch_raft_command();
-                self.collect_ready();
             }
         }
         // Propose batch request which may be still waiting for more raft-command

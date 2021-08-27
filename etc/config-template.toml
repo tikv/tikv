@@ -419,6 +419,7 @@
 # raft-ready-size-limit = "1MB"
 
 ## When the size of raft db writebatch exceeds this value, write will be triggered.
+## If `store-io-pool-size` is 0, this config will have no effect.
 # raft-write-size-limit = "1MB"
 
 [coprocessor]

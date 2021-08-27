@@ -201,6 +201,7 @@ pub struct Config {
     pub raft_ready_size_limit: ReadableSize,
 
     /// When the size of raft db writebatch exceeds this value, write will be triggered.
+    /// If `store-io-pool-size` is 0, this config will have no effect.
     pub raft_write_size_limit: ReadableSize,
 
     pub waterfall_metrics: bool,
