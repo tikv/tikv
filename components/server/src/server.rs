@@ -429,6 +429,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let available = disk_stats.available_space();
         if available > reserve_space {
             file_system::reserve_space_for_recover(&self.config.storage.data_dir, reserve_space)
+                .map_err(|e| panic!("Failed to reserve space for recovery: {}.", e))
                 .unwrap();
         } else {
             warn!("no enough disk space left to create the place holder file");
