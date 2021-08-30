@@ -232,9 +232,17 @@ impl Tracker {
 
         let total_storage_stats = std::mem::take(&mut self.total_storage_stats);
 
+<<<<<<< HEAD
         if self.req_lifetime > self.slow_log_threshold {
             let some_table_id = self.req_ctx.first_range.as_ref().map(|range| {
                 tidb_query::codec::table::decode_table_id(range.get_start()).unwrap_or_default()
+=======
+        if self.total_process_time > self.slow_log_threshold {
+            let first_range = self.req_ctx.ranges.first();
+            let some_table_id = first_range.as_ref().map(|range| {
+                tidb_query_datatype::codec::table::decode_table_id(range.get_start())
+                    .unwrap_or_default()
+>>>>>>> e0c68a703... coprocessor: reduce the slow log count by changing the req_lifetime to total_process_time (#10858)
             });
 
             info!(#"slow_log", "slow-query";
