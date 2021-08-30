@@ -433,6 +433,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 &self.config.storage.data_dir,
                 reserve_space / 5,
             )
+            .map_err(|e| panic!("Failed to reserve space for recovery: {}.", e))
             .unwrap();
         } else {
             warn!("no enough disk space left to create the place holder file");
