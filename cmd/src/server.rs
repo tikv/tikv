@@ -381,7 +381,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         if self.config.raft_store.capacity.0 > 0 {
             capacity = cmp::min(capacity, self.config.raft_store.capacity.0);
         }
-<<<<<<< HEAD:cmd/src/server.rs
         file_system::reserve_space_for_recover(
             &self.config.storage.data_dir,
             if self.config.storage.reserve_space.0 == 0 {
@@ -394,25 +393,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 )
             },
         )
+        .map_err(|e| panic!("Failed to reserve space for recovery: {}.", e))
         .unwrap();
-=======
-        let mut reserve_space = self.config.storage.reserve_space.0;
-        if self.config.storage.reserve_space.0 != 0 {
-            reserve_space = cmp::max(
-                (capacity as f64 * 0.05) as u64,
-                self.config.storage.reserve_space.0,
-            );
-        }
-        disk::set_disk_reserved_space(reserve_space);
-        let available = disk_stats.available_space();
-        if available > reserve_space {
-            file_system::reserve_space_for_recover(&self.config.storage.data_dir, reserve_space)
-                .map_err(|e| panic!("Failed to reserve space for recovery: {}.", e))
-                .unwrap();
-        } else {
-            warn!("no enough disk space left to create the place holder file");
-        }
->>>>>>> 293419676... print log for space reserve failure (#10844):components/server/src/server.rs
     }
 
     fn init_yatp(&self) {
