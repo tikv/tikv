@@ -77,7 +77,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            enabled: false,
+            enabled: true,
             agent_address: "".to_string(),
             report_agent_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
