@@ -420,8 +420,9 @@ impl<E: Engine> Endpoint<E> {
         tracker.on_begin_all_items();
 
         let deadline = tracker.req_ctx.deadline;
-        let handle_request_future =
-            check_deadline(track(handler.handle_request(), &mut tracker), deadline);
+        let handle_request_future = check_deadline(handler.handle_request(), deadline);
+        let handle_request_future = track(handle_request_future, &mut tracker);
+
         let deadline_res = if let Some(semaphore) = &semaphore {
             limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
@@ -1611,6 +1612,52 @@ mod tests {
                     .get_wait_wall_time_ms(),
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
+        }
+    }
+
+    #[test]
+    fn test_exceed_deadline() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            PerfLevel::EnableCount,
+        );
+
+        {
+            let handler_builder = Box::new(|_, _: &_| {
+                thread::sleep(Duration::from_millis(600));
+                Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
+            });
+
+            let mut config = ReqContext::default_for_test();
+            config.deadline = Deadline::from_now(Duration::from_millis(500));
+
+            let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
+            assert_eq!(resp.get_data().len(), 0);
+            assert!(!resp.get_other_error().is_empty());
+        }
+
+        {
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(
+                    UnaryFixture::new_with_duration_yieldable(Ok(coppb::Response::default()), 1500)
+                        .into_boxed(),
+                )
+            });
+
+            let mut config = ReqContext::default_for_test();
+            config.deadline = Deadline::from_now(Duration::from_millis(1000));
+
+            let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
+            assert_eq!(resp.get_data().len(), 0);
+            assert!(!resp.get_other_error().is_empty());
         }
     }
 
