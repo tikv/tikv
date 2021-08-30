@@ -24,7 +24,7 @@ pub use slog::Level;
 const SLOG_CHANNEL_SIZE: usize = 10240;
 // Default is DropAndReport.
 // It is not desirable to have dropped logs in our use case.
-const SLOG_CHANNEL_OVERFLOW_STRATEGY: OverflowStrategy = OverflowStrategy::Block;
+const SLOG_CHANNEL_OVERFLOW_STRATEGY: OverflowStrategy = OverflowStrategy::Drop;
 const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%S%.3f %:z";
 
 pub fn init_log<D>(
