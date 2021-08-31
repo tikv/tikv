@@ -22,6 +22,7 @@ use raftstore::store::util::{self, RegionReadProgress, RegionReadProgressRegistr
 use raftstore::store::RegionSnapshot;
 use security::SecurityManager;
 use tikv::config::ResolvedTsConfig;
+use tikv::server::debug;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 use txn_types::{Key, TimeStamp};
 
@@ -379,7 +380,10 @@ where
                 resolver_status,
                 ..
             } = observe_region;
-            info!(
+
+            // register/deregister will fail due to merging/spliting blocked when disk full.
+            // and will generate so much log. so change log level from info to debug.
+            debug!(
                 "deregister observe region";
                 "store_id" => ?self.store_meta.lock().unwrap().store_id,
                 "region_id" => region_id,
@@ -446,7 +450,10 @@ where
                 warn!("resolved ts deregister region failed due to observe_id not match");
                 return;
             }
-            info!(
+
+            // register/deregister will fail due to merging/spliting blocked when disk full.
+            // and will generate so much log. so change log level from info to debug.
+            debug!(
                 "register region again";
                 "region_id" => region_id,
                 "observe_id" => ?observe_id,
