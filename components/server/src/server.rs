@@ -883,28 +883,32 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Start resource metering.
-        let rm_recorder = resource_metering::cpu::recorder::init_recorder();
+        use resource_metering::cpu::recorder::init_recorder;
+        use resource_metering::cpu::reporter::ResourceMeteringReporter;
+        use resource_metering::ConfigManager;
 
-        let mut rm_reporter_worker = WorkerBuilder::new("resource-metering-reporter")
+        let recorder = init_recorder();
+
+        let mut reporter_worker = WorkerBuilder::new("resource-metering-reporter")
             .pending_capacity(30)
             .create()
             .lazy_build("resource-metering-reporter");
-        let rm_reporter_scheduler = rm_reporter_worker.scheduler();
-        let rm_reporter = resource_metering::cpu::reporter::ResourceMeteringReporter::new(
+        let reporter_scheduler = reporter_worker.scheduler();
+        let reporter = ResourceMeteringReporter::new(
             self.config.resource_metering.clone(),
-            rm_reporter_scheduler.clone(),
+            reporter_scheduler.clone(),
         );
-        rm_reporter_worker.start_with_timer(rm_reporter);
-        self.to_stop.push(Box::new(rm_reporter_worker));
+        reporter_worker.start_with_timer(reporter);
+        self.to_stop.push(Box::new(reporter_worker));
 
-        let rm_cfg_manager = resource_metering::ConfigManager::new(
+        let cfg_manager = ConfigManager::new(
             self.config.resource_metering.clone(),
-            rm_reporter_scheduler,
-            rm_recorder,
+            reporter_scheduler,
+            recorder,
         );
         cfg_controller.register(
             tikv::config::Module::ResourceMetering,
-            Box::new(rm_cfg_manager),
+            Box::new(cfg_manager),
         );
 
         self.servers = Some(Servers {
