@@ -148,3 +148,9 @@ impl Display for Task {
         Ok(())
     }
 }
+
+impl Config {
+    fn should_report(&self) -> bool {
+        self.enabled && !self.agent_address.is_empty() && self.max_resource_groups != 0
+    }
+}

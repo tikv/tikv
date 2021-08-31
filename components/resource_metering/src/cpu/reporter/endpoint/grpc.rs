@@ -10,6 +10,7 @@ use std::time::Duration;
 use futures::SinkExt;
 use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
 use kvproto::resource_usage_agent::{CpuTimeRecord, ResourceUsageAgentClient};
+use tikv_util::warn;
 
 pub struct GRPCEndpoint {
     env: Arc<Environment>,

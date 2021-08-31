@@ -3,8 +3,7 @@
 #![feature(shrink_to)]
 #![feature(hash_drain_filter)]
 
-#[macro_use]
-extern crate tikv_util;
+pub mod cpu;
 
 use crate::cpu::recorder::RecorderHandle;
 use crate::cpu::reporter::Task;
@@ -15,8 +14,6 @@ use online_config::{ConfigChange, OnlineConfig};
 use serde_derive::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::Scheduler;
-
-pub mod cpu;
 
 #[derive(Debug, Default, Eq, PartialEq, Clone, Hash)]
 pub struct ResourceMeteringTag {
@@ -119,10 +116,6 @@ impl Config {
         }
 
         Ok(())
-    }
-
-    fn should_report(&self) -> bool {
-        self.enabled && !self.agent_address.is_empty() && self.max_resource_groups != 0
     }
 }
 
