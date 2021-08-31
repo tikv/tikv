@@ -83,7 +83,7 @@ impl TestSuite {
             cfg_controller,
             tx,
             rx,
-            env,
+            env: Arc::new(Environment::new(2)),
             rt,
             cancel_workload: None,
             wait_for_cancel: None,
