@@ -35,7 +35,7 @@ impl Reporter {
 
         let collector = config
             .should_report()
-            .then(|| CpuRecordsCollector::register(scheduler.clone()));
+            .then(|| CollectorImpl::register(scheduler.clone()));
 
         Self {
             config,
@@ -71,7 +71,7 @@ impl Reporter {
         }
 
         if self.collector.is_none() {
-            self.collector = Some(CpuRecordsCollector::register(self.scheduler.clone()));
+            self.collector = Some(CollectorImpl::register(self.scheduler.clone()));
         }
 
         match &mut self.endpoint {
@@ -119,17 +119,17 @@ impl RunnableWithTimer for Reporter {
     }
 }
 
-pub struct CpuRecordsCollector {
+pub struct CollectorImpl {
     scheduler: Scheduler<Task>,
 }
 
-impl CpuRecordsCollector {
+impl CollectorImpl {
     pub fn register(scheduler: Scheduler<Task>) -> CollectorHandle {
         register_collector(Box::new(Self { scheduler }))
     }
 }
 
-impl Collector for CpuRecordsCollector {
+impl Collector for CollectorImpl {
     fn collect(&self, records: Arc<CpuRecords>) {
         self.scheduler.schedule(Task::CpuRecords(records)).ok();
     }
