@@ -1941,6 +1941,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 "store_id" => self.fsm.store.id,
                 "region_id" => region_id,
             );
+
             let gc_snap = PeerMsg::CasualMessage(CasualMessage::GcSnap { snaps });
             match self.ctx.router.send(region_id, gc_snap) {
                 Ok(()) => Ok(()),
@@ -1957,7 +1958,16 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                         "snaps" => ?snaps,
                     );
                     for (key, is_sending) in snaps {
-                        let snap = self.ctx.snap_mgr.get_snapshot_for_gc(&key, is_sending)?;
+                        let snap = match self.ctx.snap_mgr.get_snapshot_for_gc(&key, is_sending) {
+                            Ok(snap) => snap,
+                            Err(e) => {
+                                error!(%e;
+                                    "failed to load snapshot";
+                                    "snapshot" => ?key,
+                                );
+                                continue;
+                            }
+                        };
                         self.ctx
                             .snap_mgr
                             .delete_snapshot(&key, snap.as_ref(), false);
