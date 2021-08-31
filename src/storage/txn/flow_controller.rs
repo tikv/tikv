@@ -8,7 +8,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
-use std::u64;
+use std::{mem, u64};
 
 use collections::HashMap;
 use engine_rocks::FlowInfo;
@@ -112,7 +112,8 @@ impl Drop for FlowController {
 impl FlowController {
     // only for test
     pub fn empty() -> Self {
-        let (tx, _rx) = mpsc::sync_channel(0);
+        let (tx, rx) = mpsc::sync_channel(2);
+        mem::forget(rx);
 
         Self {
             discard_ratio: Arc::new(AtomicU32::new(0)),
@@ -170,6 +171,11 @@ impl FlowController {
 
     pub fn enabled(&self) -> bool {
         self.enabled.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub fn set_speed_limit(&self, speed_limit: f64) {
+        self.limiter.set_speed_limit(speed_limit);
     }
 
     pub fn is_unlimited(&self) -> bool {
