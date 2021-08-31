@@ -3,7 +3,6 @@
 use super::record::Records;
 
 pub mod grpc;
-pub mod vm;
 
 mod util;
 

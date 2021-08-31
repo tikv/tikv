@@ -59,7 +59,6 @@ impl Endpoint for GRPCEndpoint {
 
         let call_opt = CallOption::default().timeout(Duration::from_secs(2));
         let call = self.client.report_cpu_time_opt(call_opt);
-
         if let Err(err) = &call {
             warn!("failed to connect to agent"; "error" => ?err);
             return;
