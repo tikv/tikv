@@ -10,9 +10,9 @@ use engine_rocks::raw::{CompactOptions, DBBottommostLevelCompaction, DB};
 use engine_rocks::util::get_cf_handle;
 use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
-    DeleteStrategy, Engines, IterOptions, Iterable, Iterator as EngineIterator, MiscExt, Mutable,
-    Peekable, RaftEngine, RangePropertiesExt, SeekKey, SyncMutable, TableProperties,
-    TablePropertiesCollection, TablePropertiesExt, WriteBatch, WriteOptions,
+    Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, RaftEngine,
+    RangePropertiesExt, SeekKey, SyncMutable, TableProperties, TablePropertiesCollection,
+    TablePropertiesExt, WriteBatch, WriteOptions,
 };
 use engine_traits::{MvccProperties, Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType};
@@ -154,7 +154,7 @@ impl<ER: RaftEngine> Debugger<ER> {
             regions.push(id);
             Ok(true)
         }));
-        regions.sort();
+        regions.sort_unstable();
         Ok(regions)
     }
 
@@ -664,65 +664,29 @@ impl<ER: RaftEngine> Debugger<ER> {
 
     pub fn remove_regions(&self, region_ids: Vec<u64>) -> Result<()> {
         let kv = &self.engines.kv;
-        let raft = &self.engines.raft;
+        let mut wb = kv.write_batch();
 
         for region_id in region_ids {
-            let region_state = self.region_info(region_id)?;
-            let raft_local_state = region_state.raft_local_state.ok_or_else(|| {
-                Error::Other(format!("No RaftLocalState found for region {}", region_id).into())
-            })?;
-            let raft_apply_state = region_state.raft_apply_state.ok_or_else(|| {
-                Error::Other(format!("No RaftApplyState found for region {}", region_id).into())
-            })?;
-            let region_local_state = region_state.region_local_state.ok_or_else(|| {
-                Error::Other(format!("No RegionLocalState found for region {}", region_id).into())
-            })?;
-
-            let region = region_local_state.region.unwrap();
-            let key_range = Range {
-                start_key: &keys::enc_start_key(&region),
-                end_key: &keys::enc_end_key(&region),
-            };
-
-            // clear data
-            kv.delete_all_in_range(DeleteStrategy::DeleteFiles, &[key_range])
-                .unwrap_or_else(|e| {
-                    error!("failed to delete files in range"; "err" => %e);
-                });
-            kv.delete_all_in_range(DeleteStrategy::DeleteByKey, &[key_range])
-                .unwrap_or_else(|e| {
-                    error!("failed to delete by range"; "err" => %e);
-                });
-            kv.delete_all_in_range(DeleteStrategy::DeleteBlobs, &[key_range])
-                .unwrap_or_else(|e| {
-                    error!("failed to delete blobs in range"; "err" => %e);
-                });
-
-            // clear meta
-            let mut kv_wb = kv.write_batch();
-            let mut raft_wb = raft.log_batch(1024);
-            box_try!(raftstore::store::clear_meta(
-                &self.engines,
-                &mut kv_wb,
-                &mut raft_wb,
-                region_id,
-                &raft_local_state,
-            ));
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
-            box_try!(kv_wb.write_opt(&write_opts));
-            box_try!(raft.consume(&mut raft_wb, true));
-
-            // FIXME: Add tombstone?
+            let key = keys::region_state_key(region_id);
+            let mut region_local_state = kv
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
+                .map_err(|e| box_err!(e))
+                .and_then(|s| {
+                    s.ok_or_else(|| Error::Other("Can't find RegionLocalState".into()))
+                })?;
+            region_local_state.state = PeerState::Tombstone;
+            box_try!(wb.put_msg_cf(CF_RAFT, &key, &region_local_state));
 
             info!(
-                "removed peer";
+                "tombstoned peer";
                 "region_id" => region_id,
-                "raft_local_state" => ?raft_local_state,
-                "raft_apply_state" => ?raft_apply_state,
-                "region_local_state" => ?raft_apply_state,
+                "region_local_state" => ?region_local_state,
             );
         }
+
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        box_try!(wb.write_opt(&write_opts));
 
         Ok(())
     }
@@ -1866,23 +1830,18 @@ mod tests {
         let debugger = new_debugger();
         debugger.set_store_id(100);
         let kv_engine = &debugger.engines.kv;
-        let raft_engine = &debugger.engines.raft;
 
         init_region_state(kv_engine.as_inner(), 1, &[100, 101], 1);
-        init_region_state(kv_engine.as_inner(), 2, &[100, 102], 1);
-        init_region_state(kv_engine.as_inner(), 3, &[100, 103], 1);
-        init_raft_state(kv_engine, raft_engine, 1, 100, 90, 80);
-        init_raft_state(kv_engine, raft_engine, 2, 100, 90, 80);
-        init_raft_state(kv_engine, raft_engine, 3, 100, 90, 80);
-
-        debugger.remove_regions(vec![1, 2]).unwrap();
-
-        debugger.region_info(1).unwrap_err();
-        debugger.region_info(2).unwrap_err();
-        debugger.region_info(3).unwrap();
-
-        // Should fail if the region does not exist.
-        debugger.remove_regions(vec![1]).unwrap_err();
+        debugger.remove_regions(vec![1]).unwrap();
+        assert_eq!(
+            debugger
+                .region_info(1)
+                .unwrap()
+                .region_local_state
+                .unwrap()
+                .state,
+            PeerState::Tombstone
+        );
     }
 
     #[test]

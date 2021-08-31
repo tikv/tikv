@@ -218,7 +218,7 @@ trait DebugExecutor {
                         "conf_ver": region_epoch.get_conf_ver(),
                         "version": region_epoch.get_version()
                     }),
-                    "peers": peers.into_iter().map(|p| json!({
+                    "peers": peers.iter().map(|p| json!({
                             "id": p.get_id(),
                             "store_id": p.get_store_id(),
                             "role": format!("{:?}", p.get_role()),
@@ -816,6 +816,7 @@ impl DebugExecutor for DebugClient {
     fn print_bad_regions(&self) {
         unimplemented!("only available for local mode");
     }
+
     fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>, _: bool) {
         unimplemented!("only available for local mode");
     }
@@ -1008,7 +1009,7 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         region_ids: Option<Vec<u64>>,
         promote_learner: bool,
     ) {
-        println!("removing stores {:?} from configurations...", store_ids);
+        v1!("removing stores {:?} from configurations...", store_ids);
         self.remove_failed_stores(store_ids, region_ids, promote_learner)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         v1!("success");
@@ -1269,6 +1270,7 @@ fn main() {
                         .about("print region info")
                         .arg(
                             Arg::with_name("regions")
+                                .aliases(&["region"])
                                 .required_unless("all-regions")
                                 .conflicts_with("all-regions")
                                 .takes_value(true)
