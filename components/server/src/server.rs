@@ -899,11 +899,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 resource_metering_cpu_recorder,
             )),
         );
-        let resource_metering_reporter = resource_metering::reporter::ResourceMeteringReporter::new(
-            self.config.resource_metering.clone(),
-            resource_metering_reporter_scheduler,
-            self.env.clone(),
-        );
+        let resource_metering_reporter =
+            resource_metering::cpu::reporter::ResourceMeteringReporter::new(
+                self.config.resource_metering.clone(),
+                resource_metering_reporter_scheduler,
+            );
         resource_metering_reporter_worker.start_with_timer(resource_metering_reporter);
         self.to_stop.push(resource_metering_reporter_worker);
 

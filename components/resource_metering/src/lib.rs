@@ -7,17 +7,16 @@
 extern crate tikv_util;
 
 use crate::cpu::recorder::RecorderHandle;
-use crate::reporter::Task;
 
 use std::sync::Arc;
 
+use cpu::reporter::Task;
 use online_config::{ConfigChange, OnlineConfig};
 use serde_derive::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::Scheduler;
 
 pub mod cpu;
-pub mod reporter;
 
 #[derive(Debug, Default, Eq, PartialEq, Clone, Hash)]
 pub struct ResourceMeteringTag {
