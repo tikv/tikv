@@ -7,10 +7,10 @@
 extern crate tikv_util;
 
 use crate::cpu::recorder::RecorderHandle;
+use crate::cpu::reporter::Task;
 
 use std::sync::Arc;
 
-use cpu::reporter::Task;
 use online_config::{ConfigChange, OnlineConfig};
 use serde_derive::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
