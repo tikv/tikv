@@ -5,7 +5,6 @@ extern crate clap;
 #[macro_use]
 extern crate log;
 
-use base16::encode_upper;
 use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
 use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
 use grpcio::{CallOption, ChannelBuilder, Environment};
@@ -209,7 +208,7 @@ trait DebugExecutor {
             }
             let region_object = json!({
                 "region_id": region_id,
-                "region_local_state_key": encode_upper(&keys::region_state_key(region_id)),
+                "region_local_state_key": base16::encode_upper(&keys::region_state_key(region_id)),
                 "region_local_state": r.region_local_state.map(|s| {
                     let r = s.get_region();
                     let region_epoch = r.get_region_epoch();
@@ -217,8 +216,8 @@ trait DebugExecutor {
                     json!({
                 "region": json!({
                     "id": r.get_id(),
-                    "start_key": encode_upper(r.get_start_key()),
-                    "end_key": encode_upper(r.get_end_key()),
+                    "start_key": base16::encode_upper(r.get_start_key()),
+                    "end_key": base16::encode_upper(r.get_end_key()),
                     "region_epoch": json!({
                         "conf_ver": region_epoch.get_conf_ver(),
                         "version": region_epoch.get_version()
@@ -230,7 +229,7 @@ trait DebugExecutor {
                         })).collect::<Vec<_>>(),
                 }),
             })}),
-                "raft_local_state_key": encode_upper(&keys::raft_state_key(region_id)),
+                "raft_local_state_key": base16::encode_upper(&keys::raft_state_key(region_id)),
                 "raft_local_state": r.raft_local_state.map(|s| {
                     let hard_state = s.get_hard_state();
                     json!({
@@ -242,7 +241,7 @@ trait DebugExecutor {
                     "last_index": s.get_last_index(),
                 })
                 }),
-                "raft_apply_state_key": encode_upper(&keys::apply_state_key(region_id)),
+                "raft_apply_state_key": base16::encode_upper(&keys::apply_state_key(region_id)),
                 "raft_apply_state": r.raft_apply_state.map(|s|{
                     let truncated_state = s.get_truncated_state();
                     json!({
@@ -2109,7 +2108,7 @@ fn main() {
         println!("{}", escape(&from_hex(hex).unwrap()));
         return;
     } else if let Some(escaped) = matches.value_of("escaped-to-hex") {
-        println!("{}", log_wrappers::hex_encode_upper(unescape(escaped)));
+        v1!("{}", hex::encode_upper(unescape(escaped)));
         return;
     } else if let Some(encoded) = matches.value_of("decode") {
         match Key::from_encoded(unescape(encoded)).into_raw() {
