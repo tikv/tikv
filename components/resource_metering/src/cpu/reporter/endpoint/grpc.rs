@@ -18,8 +18,8 @@ pub struct GRPCEndpoint {
     limiter: Limiter,
 }
 
-impl GRPCEndpoint {
-    pub fn init(address: &str) -> Self {
+impl Endpoint for GRPCEndpoint {
+    fn init(address: &str) -> Box<dyn Endpoint> {
         let env = Arc::new(Environment::new(2));
         let channel = {
             let cb = ChannelBuilder::new(env.clone())
@@ -29,16 +29,14 @@ impl GRPCEndpoint {
         };
         let client = ResourceUsageAgentClient::new(channel);
 
-        Self {
+        Box::new(Self {
             env,
             client,
             address: address.to_owned(),
             limiter: Limiter::default(),
-        }
+        })
     }
-}
 
-impl Endpoint for GRPCEndpoint {
     fn update(&mut self, address: &str) {
         if self.address == address {
             return;
@@ -59,47 +57,52 @@ impl Endpoint for GRPCEndpoint {
             return;
         }
 
-        match self
-            .client
-            .report_cpu_time_opt(CallOption::default().timeout(Duration::from_secs(2)))
-        {
-            Ok((mut tx, rx)) => {
-                self.client.spawn(async move {
-                    let _hd = handle;
+        let call_opt = CallOption::default().timeout(Duration::from_secs(2));
+        let call = self.client.report_cpu_time_opt(call_opt);
 
-                    let others = records.others;
-                    let records = records.records;
-                    for (tag, (timestamp_list, cpu_time_ms_list, _)) in records {
-                        let mut req = CpuTimeRecord::default();
-                        req.set_resource_group_tag(tag);
-                        req.set_record_list_timestamp_sec(timestamp_list);
-                        req.set_record_list_cpu_time_ms(cpu_time_ms_list);
-                        if tx.send((req, WriteFlags::default())).await.is_err() {
-                            return;
-                        }
-                    }
-
-                    // others
-                    if !others.is_empty() {
-                        let timestamp_list = others.keys().cloned().collect::<Vec<_>>();
-                        let cpu_time_ms_list = others.values().cloned().collect::<Vec<_>>();
-                        let mut req = CpuTimeRecord::default();
-                        req.set_record_list_timestamp_sec(timestamp_list);
-                        req.set_record_list_cpu_time_ms(cpu_time_ms_list);
-                        if tx.send((req, WriteFlags::default())).await.is_err() {
-                            return;
-                        }
-                    }
-
-                    if tx.close().await.is_err() {
-                        return;
-                    }
-                    rx.await.ok();
-                });
-            }
-            Err(err) => {
-                warn!("failed to connect resource usage agent"; "error" => ?err);
-            }
+        if let Err(err) = &call {
+            warn!("failed to connect to agent"; "error" => ?err);
+            return;
         }
+
+        let (mut tx, rx) = call.unwrap();
+        self.client.spawn(async move {
+            let _hd = handle;
+
+            let others = records.others;
+            let records = records.records;
+            for (tag, (timestamp_list, cpu_time_ms_list, _)) in records {
+                let mut req = CpuTimeRecord::default();
+                req.set_resource_group_tag(tag);
+                req.set_record_list_timestamp_sec(timestamp_list);
+                req.set_record_list_cpu_time_ms(cpu_time_ms_list);
+                if let Err(err) = tx.send((req, WriteFlags::default())).await {
+                    warn!("failed to send cpu records"; "error" => ?err);
+                    return;
+                }
+            }
+
+            // others
+            if !others.is_empty() {
+                let timestamp_list = others.keys().cloned().collect::<Vec<_>>();
+                let cpu_time_ms_list = others.values().cloned().collect::<Vec<_>>();
+                let mut req = CpuTimeRecord::default();
+                req.set_record_list_timestamp_sec(timestamp_list);
+                req.set_record_list_cpu_time_ms(cpu_time_ms_list);
+                if let Err(err) = tx.send((req, WriteFlags::default())).await {
+                    warn!("failed to send cpu records"; "error" => ?err);
+                    return;
+                }
+            }
+
+            if let Err(err) = tx.close().await {
+                warn!("failed to close a grpc call"; "error" => ?err);
+                return;
+            }
+
+            if let Err(err) = rx.await {
+                warn!("failed to receive from a grpc call"; "error" => ?err);
+            }
+        });
     }
 }

@@ -7,7 +7,10 @@ pub mod vm;
 
 mod util;
 
-pub trait Endpoint {
+pub trait Endpoint: Send + 'static {
+    fn init(address: &str) -> Box<dyn Endpoint>
+    where
+        Self: Sized;
     fn update(&mut self, address: &str);
     fn report(&mut self, records: Records);
 }

@@ -103,6 +103,11 @@ impl Records {
             false
         }
     }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+        self.others.clear();
+    }
 }
 
 thread_local! {

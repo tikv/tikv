@@ -9,18 +9,18 @@ pub struct Limiter {
 }
 
 impl Limiter {
-    pub fn try_acquire(&self) -> Option<Handle> {
-        (!self.is_acquired.swap(true, Ordering::Relaxed)).then(|| Handle {
+    pub fn try_acquire(&self) -> Option<Guard> {
+        (!self.is_acquired.swap(true, Ordering::Relaxed)).then(|| Guard {
             acquired: self.is_acquired.clone(),
         })
     }
 }
 
-pub struct Handle {
+pub struct Guard {
     acquired: Arc<AtomicBool>,
 }
 
-impl Drop for Handle {
+impl Drop for Guard {
     fn drop(&mut self) {
         assert!(self.acquired.swap(false, Ordering::Relaxed));
     }

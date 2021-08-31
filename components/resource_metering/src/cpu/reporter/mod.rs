@@ -21,7 +21,7 @@ pub struct ResourceMeteringReporter {
 
     scheduler: Scheduler<Task>,
 
-    endpoint: Option<Box<dyn Endpoint + 'static + Send>>,
+    endpoint: Option<Box<dyn Endpoint>>,
     collector: Option<CollectorHandle>,
 
     records: Records,
@@ -31,7 +31,7 @@ impl ResourceMeteringReporter {
     pub fn new(config: Config, scheduler: Scheduler<Task>) -> Self {
         let endpoint = config
             .should_report()
-            .then(|| Box::new(GRPCEndpoint::init(&config.agent_address)) as _);
+            .then(|| GRPCEndpoint::init(&config.agent_address));
 
         let collector = config
             .should_report()
@@ -45,6 +45,48 @@ impl ResourceMeteringReporter {
             records: Records::default(),
         }
     }
+
+    fn handle_report(&mut self) {
+        if self.records.is_empty() {
+            return;
+        }
+
+        // Whether endpoint exists or not, records should be taken in order to reset.
+        let records = std::mem::take(&mut self.records);
+        if let Some(endpoint) = self.endpoint.as_mut() {
+            endpoint.report(records);
+        }
+    }
+
+    fn handle_cpu_records(&mut self, raw_records: Arc<CpuRecords>) {
+        self.records.append(raw_records);
+        self.records.keep_top_k(self.config.max_resource_groups);
+    }
+
+    fn handle_config_change(&mut self, config: Config) {
+        self.config = config;
+        if !self.config.should_report() {
+            self.reset();
+            return;
+        }
+
+        if self.collector.is_none() {
+            self.collector = Some(CpuRecordsCollector::register(self.scheduler.clone()));
+        }
+
+        match &mut self.endpoint {
+            Some(ep) => ep.update(&self.config.agent_address),
+            None => {
+                self.endpoint = Some(GRPCEndpoint::init(&self.config.agent_address));
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        self.endpoint.take();
+        self.collector.take();
+        self.records.clear();
+    }
 }
 
 pub enum Task {
@@ -57,50 +99,19 @@ impl Runnable for ResourceMeteringReporter {
 
     fn run(&mut self, task: Self::Task) {
         match task {
-            Task::ConfigChange(config) => {
-                self.config = config;
-                if !self.config.should_report() {
-                    self.endpoint.take();
-                    self.collector.take();
-                    return;
-                }
-
-                if self.collector.is_none() {
-                    self.collector = Some(CpuRecordsCollector::register(self.scheduler.clone()));
-                }
-                if self.endpoint.is_none() {
-                    self.endpoint =
-                        Some(Box::new(GRPCEndpoint::init(&self.config.agent_address)) as _);
-                }
-
-                self.endpoint
-                    .as_mut()
-                    .unwrap()
-                    .update(&self.config.agent_address);
-            }
-            Task::CpuRecords(raw_records) => {
-                self.records.append(raw_records);
-                self.records.keep_top_k(self.config.max_resource_groups);
-            }
+            Task::CpuRecords(raw_records) => self.handle_cpu_records(raw_records),
+            Task::ConfigChange(config) => self.handle_config_change(config),
         }
     }
 
     fn shutdown(&mut self) {
-        self.collector.take();
-        self.endpoint.take();
+        self.reset();
     }
 }
 
 impl RunnableWithTimer for ResourceMeteringReporter {
     fn on_timeout(&mut self) {
-        if self.records.is_empty() {
-            return;
-        }
-
-        let records = std::mem::take(&mut self.records);
-        if let Some(endpoint) = self.endpoint.as_mut() {
-            endpoint.report(records);
-        }
+        self.handle_report();
     }
 
     fn get_interval(&self) -> Duration {
