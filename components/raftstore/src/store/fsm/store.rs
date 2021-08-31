@@ -667,7 +667,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
                     }
                 }
                 if fsm.peer.has_unpersisted_ready() {
-                    panic!("{} has unpersisted ready after persistence", fsm.peer.tag);
+                    panic!("{} has unpersisted ready after persisting", fsm.peer.tag);
                 }
             }
             if !readies.is_empty() {

@@ -26,3 +26,4 @@ mod test_storage;
 mod test_transaction;
 mod test_transfer_leader;
 mod test_ttl;
+mod test_async_io;

@@ -95,6 +95,14 @@ fn test_server_huge_snapshot() {
 }
 
 #[test]
+fn test_server_huge_snapshot_async_io() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.cfg.raft_store.store_io_pool_size = 2;
+    test_huge_snapshot(&mut cluster);
+}
+
+#[test]
 fn test_server_snap_gc() {
     let mut cluster = new_server_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
@@ -236,6 +244,13 @@ fn test_server_concurrent_snap() {
     test_concurrent_snap(&mut cluster);
 }
 
+#[test]
+fn test_server_concurrent_snap_async_io() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.store_io_pool_size = 2;
+    test_concurrent_snap(&mut cluster);
+}
+
 fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     configure_for_snapshot(cluster);
 
@@ -283,6 +298,13 @@ fn test_node_cf_snapshot() {
 #[test]
 fn test_server_snapshot() {
     let mut cluster = new_server_cluster(0, 3);
+    test_cf_snapshot(&mut cluster);
+}
+
+#[test]
+fn test_server_snapshot_async_io() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.store_io_pool_size = 2;
     test_cf_snapshot(&mut cluster);
 }
 
@@ -445,6 +467,13 @@ fn test_node_snapshot_with_append() {
 #[test]
 fn test_server_snapshot_with_append() {
     let mut cluster = new_server_cluster(0, 4);
+    test_snapshot_with_append(&mut cluster);
+}
+
+#[test]
+fn test_server_snapshot_with_append_async_io() {
+    let mut cluster = new_server_cluster(0, 4);
+    cluster.cfg.raft_store.store_io_pool_size = 2;
     test_snapshot_with_append(&mut cluster);
 }
 

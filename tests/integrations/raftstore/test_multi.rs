@@ -182,30 +182,18 @@ fn test_multi_node_base() {
     test_multi_base(&mut cluster)
 }
 
-fn test_multi_drop_packet<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.run();
-    cluster.add_send_filter(CloneFilterFactory(DropPacketFilter::new(30)));
-    test_multi_base_after_bootstrap(cluster);
-}
-
-#[test]
-fn test_multi_node_latency() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_multi_latency(&mut cluster);
-}
-
-#[test]
-fn test_multi_node_drop_packet() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_multi_drop_packet(&mut cluster);
-}
-
 #[test]
 fn test_multi_server_base() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
+    test_multi_base(&mut cluster)
+}
+
+#[test]
+fn test_multi_server_base_async_io() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.cfg.raft_store.store_io_pool_size = 2;
     test_multi_base(&mut cluster)
 }
 
@@ -218,9 +206,24 @@ fn test_multi_latency<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 #[test]
+fn test_multi_node_latency() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_multi_latency(&mut cluster);
+}
+
+#[test]
 fn test_multi_server_latency() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
+    test_multi_latency(&mut cluster);
+}
+
+#[test]
+fn test_multi_server_latency_async_io() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.cfg.raft_store.store_io_pool_size = 2;
     test_multi_latency(&mut cluster);
 }
 
@@ -245,9 +248,38 @@ fn test_multi_server_random_latency() {
 }
 
 #[test]
+fn test_multi_server_random_latency_async() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.cfg.raft_store.store_io_pool_size = 2;
+    test_multi_random_latency(&mut cluster);
+}
+
+fn test_multi_drop_packet<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.run();
+    cluster.add_send_filter(CloneFilterFactory(DropPacketFilter::new(30)));
+    test_multi_base_after_bootstrap(cluster);
+}
+
+#[test]
+fn test_multi_node_drop_packet() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_multi_drop_packet(&mut cluster);
+}
+
+#[test]
 fn test_multi_server_drop_packet() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
+    test_multi_drop_packet(&mut cluster);
+}
+
+#[test]
+fn test_multi_server_drop_packet_async_io() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.cfg.raft_store.store_io_pool_size = 2;
     test_multi_drop_packet(&mut cluster);
 }
 
@@ -266,6 +298,14 @@ fn test_multi_server_leader_crash() {
 }
 
 #[test]
+fn test_multi_server_leader_crash_async_io() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.cfg.raft_store.store_io_pool_size = 2;
+    test_multi_leader_crash(&mut cluster)
+}
+
+#[test]
 fn test_multi_node_cluster_restart() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
@@ -276,6 +316,14 @@ fn test_multi_node_cluster_restart() {
 fn test_multi_server_cluster_restart() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
+    test_multi_cluster_restart(&mut cluster)
+}
+
+#[test]
+fn test_multi_server_cluster_restart_async_io() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.cfg.raft_store.store_io_pool_size = 2;
     test_multi_cluster_restart(&mut cluster)
 }
 
@@ -298,6 +346,16 @@ fn test_multi_server_lost_majority() {
 }
 
 #[test]
+fn test_multi_server_lost_majority_async_io() {
+    let mut tests = vec![4, 5];
+    for count in tests.drain(..) {
+        let mut cluster = new_server_cluster(0, count);
+        cluster.cfg.raft_store.store_io_pool_size = 2;
+        test_multi_lost_majority(&mut cluster, count)
+    }
+}
+
+#[test]
 fn test_multi_node_random_restart() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
@@ -308,6 +366,14 @@ fn test_multi_node_random_restart() {
 fn test_multi_server_random_restart() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
+    test_multi_random_restart(&mut cluster, count, 10);
+}
+
+#[test]
+fn test_multi_server_random_restart_async_io() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.cfg.raft_store.store_io_pool_size = 2;
     test_multi_random_restart(&mut cluster, count, 10);
 }
 
@@ -408,6 +474,13 @@ fn test_node_leader_change_with_uncommitted_log() {
 #[test]
 fn test_server_leader_change_with_uncommitted_log() {
     let mut cluster = new_server_cluster(0, 3);
+    test_leader_change_with_uncommitted_log(&mut cluster);
+}
+
+#[test]
+fn test_server_leader_change_with_uncommitted_log_async_io() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.store_io_pool_size = 2;
     test_leader_change_with_uncommitted_log(&mut cluster);
 }
 
@@ -587,6 +660,13 @@ fn test_server_read_leader_with_unapplied_log() {
     test_read_leader_with_unapplied_log(&mut cluster);
 }
 
+#[test]
+fn test_server_read_leader_with_unapplied_log_async_io() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.store_io_pool_size = 2;
+    test_read_leader_with_unapplied_log(&mut cluster);
+}
+
 fn get_with_timeout<T: Simulator>(
     cluster: &mut Cluster<T>,
     key: &[u8],
@@ -664,6 +744,13 @@ fn test_node_remove_leader_with_uncommitted_log() {
 #[test]
 fn test_server_remove_leader_with_uncommitted_log() {
     let mut cluster = new_server_cluster(0, 2);
+    test_remove_leader_with_uncommitted_log(&mut cluster);
+}
+
+#[test]
+fn test_server_remove_leader_with_uncommitted_log_async_io() {
+    let mut cluster = new_server_cluster(0, 2);
+    cluster.cfg.raft_store.store_io_pool_size = 2;
     test_remove_leader_with_uncommitted_log(&mut cluster);
 }
 
