@@ -42,6 +42,7 @@ impl Endpoint for GRPCEndpoint {
         if self.address == address {
             return;
         }
+        self.address = address.to_owned();
 
         let channel = {
             let cb = ChannelBuilder::new(self.env.clone())
