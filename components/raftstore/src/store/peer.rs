@@ -2332,7 +2332,20 @@ where
                     Err(Error::DiskFull(stores, errmsg))
                 }
             }
-            Ok(RequestPolicy::ProposeConfChange) => self.propose_conf_change(ctx, &req),
+            Ok(RequestPolicy::ProposeConfChange) => {
+                if !matches!(ctx.self_disk_usage, DiskUsage::Normal) {
+                    let peer_ids: Vec<u64> = self
+                        .region()
+                        .get_peers()
+                        .iter()
+                        .map(|x| x.get_id())
+                        .collect();
+                    for id in peer_ids {
+                        self.raft_group.raft.adjust_max_inflight_msgs(id, 1);
+                    }
+                }
+                self.propose_conf_change(ctx, &req)
+            }
             Err(e) => Err(e),
         };
 

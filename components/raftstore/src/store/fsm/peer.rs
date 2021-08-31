@@ -1370,7 +1370,7 @@ where
 
         let msg_type = msg.get_message().get_msg_type();
         if matches!(self.ctx.self_disk_usage, DiskUsage::AlreadyFull)
-            && [MessageType::MsgTimeoutNow].contains(&msg_type)
+            && [MessageType::MsgTimeoutNow, MessageType::MsgSnapshot].contains(&msg_type)
         {
             debug!(
                 "skip {:?} because of disk full", msg_type;
