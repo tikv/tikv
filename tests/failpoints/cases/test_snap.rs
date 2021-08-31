@@ -7,14 +7,10 @@ use std::{fs, io, mem, thread};
 
 use fail;
 use raft::eraftpb::MessageType;
-<<<<<<< HEAD
-
 use raftstore::store::*;
-=======
 use std::fs::File;
 use std::io::prelude::*;
-use std::path::PathBuf;
->>>>>>> 56b3ae673... raftstore: continue GC  snapshot files when it encounters a corrupted snapshot (#10831)
+use std::path::{Path, PathBuf};
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::time::Instant;
@@ -476,100 +472,6 @@ fn test_receive_old_snapshot() {
 
     fail::remove(peer_2_handle_snap_mgr_gc_fp);
 }
-<<<<<<< HEAD
-=======
-
-/// Test if snapshot can be genereated when there is a ready with no newly
-/// committed entries.
-/// The failpoint `before_no_ready_gen_snap_task` is used for skipping
-/// the code path that snapshot is generated when there is no ready.
-#[test]
-fn test_gen_snapshot_with_no_committed_entries_ready() {
-    let mut cluster = new_node_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
-
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-    let on_raft_gc_log_tick_fp = "on_raft_gc_log_tick";
-    fail::cfg(on_raft_gc_log_tick_fp, "return()").unwrap();
-
-    let before_no_ready_gen_snap_task_fp = "before_no_ready_gen_snap_task";
-    fail::cfg(before_no_ready_gen_snap_task_fp, "return()").unwrap();
-
-    cluster.run();
-
-    cluster.add_send_filter(IsolationFilterFactory::new(3));
-
-    for i in 1..10 {
-        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
-    }
-
-    fail::remove(on_raft_gc_log_tick_fp);
-    sleep_ms(100);
-
-    cluster.clear_send_filters();
-    // Snapshot should be generated and sent after leader 1 receives the heartbeat
-    // response from peer 3.
-    must_get_equal(&cluster.get_engine(3), b"k9", b"v1");
-}
-
-// Test snapshot generating can be canceled by Raft log GC correctly. It does
-// 1. pause snapshot generating with a failpoint, and then add a new peer;
-// 2. append more Raft logs to the region to trigger raft log compactions;
-// 3. disable the failpoint to continue snapshot generating;
-// 4. the generated snapshot should have a larger index than the latest `truncated_idx`.
-#[test]
-fn test_cancel_snapshot_generating() {
-    let mut cluster = new_node_cluster(0, 5);
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration(Duration::from_secs(100));
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 10;
-    cluster.cfg.raft_store.merge_max_log_gap = 5;
-
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-    let rid = cluster.run_conf_change();
-    let snap_dir = cluster.get_snap_dir(1);
-
-    pd_client.must_add_peer(rid, new_peer(2, 2));
-    cluster.must_put(b"k0", b"v0");
-    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
-    pd_client.must_add_peer(rid, new_peer(3, 3));
-    cluster.must_put(b"k1", b"v1");
-    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-
-    // Remove snapshot files generated for initial configuration changes.
-    for entry in fs::read_dir(&snap_dir).unwrap() {
-        let entry = entry.unwrap();
-        fs::remove_file(entry.path()).unwrap();
-    }
-
-    fail::cfg("before_region_gen_snap", "pause").unwrap();
-    pd_client.must_add_peer(rid, new_learner_peer(4, 4));
-
-    // Snapshot generatings will be canceled by raft log GC.
-    let mut truncated_idx = cluster.truncated_state(rid, 1).get_index();
-    truncated_idx += 20;
-    (0..20).for_each(|_| cluster.must_put(b"kk", b"vv"));
-    cluster.wait_log_truncated(rid, 1, truncated_idx);
-
-    fail::cfg("before_region_gen_snap", "off").unwrap();
-    // Wait for all snapshot generating tasks are consumed.
-    thread::sleep(Duration::from_millis(100));
-
-    // New generated snapshot files should have a larger index than truncated index.
-    for entry in fs::read_dir(&snap_dir).unwrap() {
-        let entry = entry.unwrap();
-        let path = entry.path();
-        let file_name = path.file_name().unwrap().to_str().unwrap();
-        if !file_name.ends_with(".meta") {
-            continue;
-        }
-        let parts: Vec<_> = file_name[0..file_name.len() - 5].split('_').collect();
-        let snap_index = parts[3].parse::<u64>().unwrap();
-        assert!(snap_index > truncated_idx);
-    }
-}
 
 #[test]
 fn test_snapshot_gc_after_failed() {
@@ -607,7 +509,50 @@ fn test_snapshot_gc_after_failed() {
     }
     let now = Instant::now();
     loop {
-        let snap_keys = cluster.get_snap_mgr(3).list_idle_snap().unwrap();
+        let snap_dir = cluster.get_snap_dir(3);
+        let read_dir = fs::read_dir(Path::new(&snap_dir)).unwrap();
+        // Remove the duplicate snap keys.
+        let mut snap_keys: Vec<_> = read_dir
+            .filter_map(|p| {
+                let p = match p {
+                    Err(_) => panic!("failed to list content of directory"),
+                    Ok(p) => p,
+                };
+                match p.file_type() {
+                    Ok(t) if t.is_file() => {}
+                    _ => return None,
+                }
+                let file_name = p.file_name();
+                let name = match file_name.to_str() {
+                    None => return None,
+                    Some(n) => n,
+                };
+                let is_sending = name.starts_with("gen");
+                if !is_sending {
+                    return None;
+                }
+                let numbers: Vec<u64> = name.split('.').next().map_or_else(
+                    || vec![],
+                    |s| {
+                        s.split('_')
+                            .skip(1)
+                            .filter_map(|s| s.parse().ok())
+                            .collect()
+                    },
+                );
+                if numbers.len() != 3 {
+                    error!(
+                        "failed to parse snapkey";
+                        "snap_key" => %name,
+                    );
+                    return None;
+                }
+                let snap_key = SnapKey::new(numbers[0], numbers[1], numbers[2]);
+                Some((snap_key, is_sending))
+            })
+            .collect();
+        snap_keys.sort();
+        snap_keys.dedup();
         if snap_keys.is_empty() {
             panic!("no snapshot file is found");
         }
@@ -640,4 +585,3 @@ fn test_snapshot_gc_after_failed() {
     fail::cfg("get_snapshot_for_gc", "off").unwrap();
     cluster.sim.wl().clear_recv_filters(3);
 }
->>>>>>> 56b3ae673... raftstore: continue GC  snapshot files when it encounters a corrupted snapshot (#10831)
