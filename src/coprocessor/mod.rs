@@ -208,8 +208,7 @@ impl ReqContext {
 }
 
 lazy_static! {
-    pub static ref MEMTRACE_ROOT: Arc<MemoryTraceNode> =
-        mem_trace!(coprocessor, [analyze, table_scan, index_scan]);
+    pub static ref MEMTRACE_ROOT: Arc<MemoryTraceNode> = mem_trace!(coprocessor, [analyze]);
     pub static ref MEMTRACE_ANALYZE: Arc<dyn MemoryTrace + Send + Sync> =
         MEMTRACE_ROOT.sub_trace(Id::Name("analyze"));
 }
