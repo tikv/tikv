@@ -3547,7 +3547,7 @@ where
                 for t in request_times {
                     self.ctx
                         .raft_metrics
-                        .batch_wait
+                        .wf_batch_wait
                         .observe(duration_to_sec(now.saturating_duration_since(*t)));
                 }
             }

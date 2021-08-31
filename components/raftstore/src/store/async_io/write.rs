@@ -288,7 +288,7 @@ where
             for task in &self.tasks {
                 for t in &task.request_times {
                     metrics
-                        .before_write
+                        .wf_before_write
                         .observe(duration_to_sec(now.saturating_duration_since(*t)));
                 }
             }
@@ -301,7 +301,7 @@ where
             for task in &self.tasks {
                 for t in &task.request_times {
                     metrics
-                        .kvdb_end
+                        .wf_kvdb_end
                         .observe(duration_to_sec(now.saturating_duration_since(*t)));
                 }
             }
@@ -314,7 +314,7 @@ where
             for task in &self.tasks {
                 for t in &task.request_times {
                     metrics
-                        .write_end
+                        .wf_write_end
                         .observe(duration_to_sec(now.saturating_duration_since(*t)))
                 }
             }

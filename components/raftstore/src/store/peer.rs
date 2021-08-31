@@ -1301,7 +1301,7 @@ where
                     }
                     for t in times {
                         metrics
-                            .know_persist
+                            .wf_persist_log
                             .observe(duration_to_sec(now.unwrap().saturating_duration_since(*t)));
                     }
                 }
@@ -1326,9 +1326,9 @@ where
                         now = Some(TiInstant::now());
                     }
                     let hist = if index <= self.raft_group.raft.raft_log.persisted {
-                        &metrics.know_commit
+                        &metrics.wf_commit_log
                     } else {
-                        &metrics.know_commit_not_persist
+                        &metrics.wf_commit_not_persist_log
                     };
                     for t in times {
                         hist.observe(duration_to_sec(now.unwrap().saturating_duration_since(*t)));
@@ -1816,6 +1816,7 @@ where
                 // the peer, it's still dangerous if continue to handle ready for the
                 // peer. So it's better to revoke `JOB_STATUS_CANCELLING` to ensure all
                 // started tasks can get finished correctly.
+                self.snap_ctx = None;
             }
         }
         assert_eq!(self.snap_ctx, None);
@@ -1933,7 +1934,7 @@ where
                             now = Some(TiInstant::now());
                         }
                         for t in times {
-                            ctx.raft_metrics.to_write_queue.observe(duration_to_sec(
+                            ctx.raft_metrics.wf_send_to_queue.observe(duration_to_sec(
                                 now.unwrap().saturating_duration_since(*t),
                             ));
                         }
