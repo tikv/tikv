@@ -1306,7 +1306,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: Context,
         cf: String,
         pairs: Vec<KvPair>,
-        ttl: u64,
+        ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
         let cf = Self::rawkv_cf(&cf)?;
@@ -1317,17 +1317,23 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             callback
         );
 
-        if !self.enable_ttl && ttl != 0 {
-            return Err(Error::from(ErrorInner::TTLNotEnabled));
+        if !self.enable_ttl {
+            for ttl in &ttls {
+                if *ttl != 0 {
+                    return Err(Error::from(ErrorInner::TTLNotEnabled));
+                }
+            }
         }
-        let expire_ts = convert_to_expire_ts(ttl);
+        let mut idx = 0;
 
         let modifies = pairs
             .into_iter()
             .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v))
             .map(|mut m| {
                 if self.enable_ttl {
-                    m.with_ttl(expire_ts)
+                    let expire_ts = convert_to_expire_ts(ttls[idx]);
+                    idx += 1;
+                    m.with_ttl(expire_ts);
                 }
                 m
             })
@@ -1751,7 +1757,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: Context,
         cf: String,
         pairs: Vec<KvPair>,
-        ttl: u64,
+        ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
         let cf = Self::rawkv_cf(&cf)?;
@@ -1760,10 +1766,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .map(|(k, v)| Mutation::Put((Key::from_encoded(k), v)))
             .collect();
         let ttl = if self.enable_ttl {
-            Some(ttl)
+            Some(ttls)
         } else {
-            if ttl != 0 {
-                return Err(Error::from(ErrorInner::TTLNotEnabled));
+            for ttl in &ttls {
+                if *ttl != 0 {
+                    return Err(Error::from(ErrorInner::TTLNotEnabled));
+                }
             }
             None
         };
@@ -3737,7 +3745,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
-                0,
+                vec![0; test_data.len()],
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
@@ -3891,7 +3899,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
-                0,
+                vec![0; test_data.len()],
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -4001,7 +4009,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
-                0,
+                vec![0; test_data.len()],
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
@@ -4385,7 +4393,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
-                0,
+                vec![0; test_data.len()],
                 expect_ok_callback(tx, 0),
             )
             .unwrap();

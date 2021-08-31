@@ -20,7 +20,7 @@ command! {
             /// The set of mutations to apply.
             cf: CfName,
             mutations: Vec<Mutation>,
-            ttl: Option<u64>,
+            ttls: Option<Vec<u64>>,
         }
 }
 
@@ -52,14 +52,21 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
         let mut data = vec![];
         let rows = self.mutations.len();
         let (cf, mutations, ctx) = (self.cf, self.mutations, self.ctx);
-        let expire_ts = self.ttl.map(convert_to_expire_ts);
+        let expire_ts: Vec<Option<u64>> = self
+            .ttls
+            .unwrap()
+            .iter()
+            .map(|ttl| Some(convert_to_expire_ts(*ttl)))
+            .collect();
+        let mut idx = 0;
         for m in mutations {
             match m {
                 Mutation::Put((key, value)) => {
                     let mut m = Modify::Put(cf, key, value);
-                    if let Some(ts) = expire_ts {
+                    if let Some(ts) = expire_ts[idx] {
                         m.with_ttl(ts);
                     }
+                    idx += 1;
                     data.push(m);
                 }
                 Mutation::Delete(key) => {

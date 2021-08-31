@@ -45,6 +45,7 @@ use raftstore::store::memory::{MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
 use raftstore::store::CheckLeaderTask;
 use raftstore::store::{Callback, CasualMessage, RaftCmdExtraOpts};
 use raftstore::{DiscardReason, Error as RaftStoreError};
+use std::str;
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::sys::memory_usage_reaches_high_water;
@@ -1514,7 +1515,7 @@ fn future_raw_put<E: Engine, L: LockManager>(
             req.take_context(),
             req.take_cf(),
             vec![(req.take_key(), req.take_value())],
-            req.get_ttl(),
+            vec![req.get_ttl(); 1],
             cb,
         )
     } else {
@@ -1557,9 +1558,9 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
     let (cb, f) = paired_future_callback();
     let for_atomic = req.get_for_cas();
     let res = if for_atomic {
-        storage.raw_batch_put_atomic(req.take_context(), cf, pairs, req.get_ttl(), cb)
+        storage.raw_batch_put_atomic(req.take_context(), cf, pairs, req.take_ttls(), cb)
     } else {
-        storage.raw_batch_put(req.take_context(), cf, pairs, req.get_ttl(), cb)
+        storage.raw_batch_put(req.take_context(), cf, pairs, req.take_ttls(), cb)
     };
 
     async move {

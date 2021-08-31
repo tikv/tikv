@@ -373,7 +373,8 @@ impl<E: Engine> SyncTestStorage<E> {
         pairs: Vec<KvPair>,
         ttl: u64,
     ) -> Result<()> {
-        wait_op!(|cb| self.store.raw_batch_put_atomic(ctx, cf, pairs, ttl, cb)).unwrap()
+        let ttls = vec![ttl; pairs.len()];
+        wait_op!(|cb| self.store.raw_batch_put_atomic(ctx, cf, pairs, ttls, cb)).unwrap()
     }
 
     pub fn raw_batch_delete_atomic(
