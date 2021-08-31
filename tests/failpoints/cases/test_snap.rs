@@ -6,7 +6,13 @@ use std::time::Duration;
 use std::{fs, io, thread};
 
 use raft::eraftpb::MessageType;
+<<<<<<< HEAD
 use raftstore::store::*;
+=======
+use std::fs::File;
+use std::io::prelude::*;
+use std::path::PathBuf;
+>>>>>>> 56b3ae673... raftstore: continue GC  snapshot files when it encounters a corrupted snapshot (#10831)
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::time::Instant;
@@ -527,4 +533,74 @@ fn test_cancel_snapshot_generating() {
         let snap_index = parts[3].parse::<u64>().unwrap();
         assert!(snap_index > truncated_idx);
     }
+}
+
+#[test]
+fn test_snapshot_gc_after_failed() {
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_snapshot(&mut cluster);
+    cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    let snap_dir = cluster.get_snap_dir(3);
+    fail::cfg("get_snapshot_for_gc", "return(0)").unwrap();
+    for idx in 1..3 {
+        // idx 1 will fail in fail_point("get_snapshot_for_gc"), but idx 2 will succeed
+        for suffix in &[".meta", "_default.sst"] {
+            let f = format!("gen_{}_{}_{}{}", 2, 6, idx, suffix);
+            let mut snap_file_path = PathBuf::from(&snap_dir);
+            snap_file_path.push(&f);
+            let snap_file_path = snap_file_path.as_path();
+            let mut file = match File::create(&snap_file_path) {
+                Err(why) => panic!("couldn't create {:?}: {}", snap_file_path, why),
+                Ok(file) => file,
+            };
+
+            // write any data, in fact we don't check snapshot file corrupted or not in GC;
+            if let Err(why) = file.write_all(b"some bytes") {
+                panic!("couldn't write to {:?}: {}", snap_file_path, why)
+            }
+        }
+    }
+    let now = Instant::now();
+    loop {
+        let snap_keys = cluster.get_snap_mgr(3).list_idle_snap().unwrap();
+        if snap_keys.is_empty() {
+            panic!("no snapshot file is found");
+        }
+
+        let mut found_unexpected_file = false;
+        let mut found_expected_file = false;
+        for (snap_key, _is_sending) in snap_keys {
+            if snap_key.region_id == 2 && snap_key.idx == 1 {
+                found_expected_file = true;
+            }
+            if snap_key.idx == 2 && snap_key.region_id == 2 {
+                if now.saturating_elapsed() > Duration::from_secs(10) {
+                    panic!("unexpected snapshot file found. {:?}", snap_key);
+                }
+                found_unexpected_file = true;
+                break;
+            }
+        }
+
+        if !found_expected_file {
+            panic!("The expected snapshot file is not found");
+        }
+
+        if !found_unexpected_file {
+            break;
+        }
+
+        sleep_ms(400);
+    }
+    fail::cfg("get_snapshot_for_gc", "off").unwrap();
+    cluster.sim.wl().clear_recv_filters(3);
 }
