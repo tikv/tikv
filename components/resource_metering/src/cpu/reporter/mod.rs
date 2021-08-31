@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 
-pub struct ResourceMeteringReporter {
+pub struct Reporter {
     config: Config,
 
     scheduler: Scheduler<Task>,
@@ -27,7 +27,7 @@ pub struct ResourceMeteringReporter {
     records: Records,
 }
 
-impl ResourceMeteringReporter {
+impl Reporter {
     pub fn new(config: Config, scheduler: Scheduler<Task>) -> Self {
         let endpoint = config
             .should_report()
@@ -94,7 +94,7 @@ pub enum Task {
     CpuRecords(Arc<CpuRecords>),
 }
 
-impl Runnable for ResourceMeteringReporter {
+impl Runnable for Reporter {
     type Task = Task;
 
     fn run(&mut self, task: Self::Task) {
@@ -109,7 +109,7 @@ impl Runnable for ResourceMeteringReporter {
     }
 }
 
-impl RunnableWithTimer for ResourceMeteringReporter {
+impl RunnableWithTimer for Reporter {
     fn on_timeout(&mut self) {
         self.handle_report();
     }

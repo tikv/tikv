@@ -13,7 +13,7 @@ use kvproto::kvrpcpb::Context;
 use kvproto::resource_usage_agent::CpuTimeRecord;
 use mock_agent_server::MockAgentServer;
 use resource_metering::cpu::recorder::{init_recorder, TEST_TAG_PREFIX};
-use resource_metering::cpu::reporter::{ResourceMeteringReporter, Task};
+use resource_metering::cpu::reporter::{Reporter, Task};
 use resource_metering::{Config, ConfigManager};
 use tempfile::TempDir;
 use tikv::config::{ConfigController, Module, TiKvConfig};
@@ -67,10 +67,7 @@ impl TestSuite {
             )),
         );
 
-        reporter.start_with_timer(ResourceMeteringReporter::new(
-            resource_metering_cfg,
-            scheduler.clone(),
-        ));
+        reporter.start_with_timer(Reporter::new(resource_metering_cfg, scheduler.clone()));
 
         let (tx, rx) = unbounded();
 

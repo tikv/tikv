@@ -884,7 +884,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         // Start resource metering.
         use resource_metering::cpu::recorder::init_recorder;
-        use resource_metering::cpu::reporter::ResourceMeteringReporter;
+        use resource_metering::cpu::reporter::Reporter;
         use resource_metering::ConfigManager;
 
         let recorder = init_recorder();
@@ -894,7 +894,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .create()
             .lazy_build("resource-metering-reporter");
         let reporter_scheduler = reporter_worker.scheduler();
-        let reporter = ResourceMeteringReporter::new(
+        let reporter = Reporter::new(
             self.config.resource_metering.clone(),
             reporter_scheduler.clone(),
         );
