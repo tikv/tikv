@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::util::Limiter;
 use super::Endpoint;
 use crate::cpu::reporter::record::Records;
 
@@ -14,6 +15,7 @@ pub struct GRPCEndpoint {
     env: Arc<Environment>,
     address: String,
     client: ResourceUsageAgentClient,
+    limiter: Limiter,
 }
 
 impl GRPCEndpoint {
@@ -31,6 +33,7 @@ impl GRPCEndpoint {
             env,
             client,
             address: address.to_owned(),
+            limiter: Limiter::default(),
         }
     }
 }
@@ -51,12 +54,19 @@ impl Endpoint for GRPCEndpoint {
     }
 
     fn report(&mut self, records: Records) {
+        let handle = self.limiter.try_acquire();
+        if handle.is_none() {
+            return;
+        }
+
         match self
             .client
             .report_cpu_time_opt(CallOption::default().timeout(Duration::from_secs(2)))
         {
             Ok((mut tx, rx)) => {
                 self.client.spawn(async move {
+                    let _hd = handle;
+
                     let others = records.others;
                     let records = records.records;
                     for (tag, (timestamp_list, cpu_time_ms_list, _)) in records {
