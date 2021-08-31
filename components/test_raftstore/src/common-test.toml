@@ -66,6 +66,7 @@ allow-remove-leader = true
 merge-check-tick-interval = "100ms"
 pd-heartbeat-tick-interval = "20ms"
 raft-reject-transfer-leader-duration = "0s"
+store-io-pool-size = 0
 dev-assert = true
 hibernate-regions = true
 
