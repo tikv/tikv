@@ -2,11 +2,8 @@
 
 use std::sync::Arc;
 
-use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use test_raftstore::*;
-use tikv::config::TiKvConfig;
-use tikv_util::config::ReadableDuration;
 
 // Test if the entries can be committed and applied on followers even when
 // leader's io is paused.
