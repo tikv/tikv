@@ -272,7 +272,6 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 "Analyze of this kind not implemented".to_string(),
             )),
         };
-        // FIXME: do real trace.
         match ret {
             Ok(data) => {
                 let memory_size = data.capacity();
@@ -533,6 +532,7 @@ impl RowSampleCollector {
 
     pub fn to_proto(&mut self) -> tipb::RowSampleCollector {
         self.memory_usage = 0;
+        self.maybe_report_memory_usage(true);
 
         let mut s = tipb::RowSampleCollector::default();
         let samples = mem::take(&mut self.samples)
@@ -572,6 +572,7 @@ impl RowSampleCollector {
 
 impl Drop for RowSampleCollector {
     fn drop(&mut self) {
+        self.memory_usage = 0;
         self.maybe_report_memory_usage(true);
     }
 }
@@ -1029,7 +1030,7 @@ mod tests {
                 datum::encode_value(&mut EvalContext::default(), &[Datum::I64(i as i64)]).unwrap(),
             );
         }
-        for _loop_i in 0..loop_cnt {
+        for loop_i in 0..loop_cnt {
             let mut collector = RowSampleCollector::new(sample_num, 1000, 1);
             for row in &nums {
                 collector.sampling([row.clone()].to_vec());
@@ -1038,7 +1039,19 @@ mod tests {
             for sample in &collector.samples {
                 *item_cnt.entry(sample.0.1[0].clone()).or_insert(0) += 1;
             }
+
+            // Test memory usage tracing is correct.
+            collector.maybe_report_memory_usage(true);
+            assert_eq!(collector.reported_memory_usage, collector.memory_usage);
+            if loop_i % 2 == 0 {
+                collector.to_proto();
+                assert_eq!(collector.memory_usage, 0);
+                assert_eq!(MEMTRACE_ANALYZE.sum(), 0);
+            }
+            drop(collector);
+            assert_eq!(MEMTRACE_ANALYZE.sum(), 0);
         }
+
         let exp_freq = sample_num as f64 * loop_cnt as f64 / row_num as f64;
         let delta = 0.5;
         for (_, v) in item_cnt.into_iter() {

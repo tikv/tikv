@@ -1150,7 +1150,6 @@ fn response_batch_commands_request<F, T>(
     begin: Instant,
     label: GrpcTypeKind,
 ) where
-    // F: Future<Output = Result<batch_commands_response::Response, ()>> + Send + 'static,
     MemTraced<batch_commands_response::Response>: From<T>,
     F: Future<Output = Result<T, ()>> + Send + 'static,
 {
