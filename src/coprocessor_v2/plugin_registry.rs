@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::time::Duration;
-use std::{collections::HashMap, ops::Range};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -43,6 +46,9 @@ pub enum PluginLoadingError {
         plugin_api: String,
         tikv_api: String,
     },
+
+    #[error("unloaded plugin `{path:?}` cannot be reloaded")]
+    ReloadError { path: OsString },
 }
 
 /// Helper function for error handling.
@@ -153,9 +159,8 @@ impl PluginRegistry {
                             rename(&old_file, &new_file);
                         }
                         Ok(DebouncedEvent::Write(file)) => {
-                            warn!("another process is overwriting a coprocessor plugin while the plugin is loaded. This can lead to severe issues!"; "plugin_path" => ?file);
+                            warn!("another process is overwriting a coprocessor plugin while the plugin is loaded. Unloading the plugin..."; "plugin_path" => ?file);
                             unload(&file);
-                            maybe_load(&file);
                         }
                         Ok(_) => (),
                         Err(_) => break, // Stop when watcher is dropped.
@@ -278,6 +283,10 @@ struct PluginRegistryInner {
     /// Plugins that are currently loaded.
     /// Provides a mapping from the plugin's name to the actual instance.
     loaded_plugins: HashMap<String, (OsString, Arc<LoadedPlugin>)>,
+
+    /// Paths of loaded *and* unloaded plugins.
+    /// Files in this list should not be loaded again.
+    library_paths: HashSet<OsString>,
 }
 
 impl PluginRegistryInner {
@@ -306,12 +315,22 @@ impl PluginRegistryInner {
         &mut self,
         filename: P,
     ) -> Result<String, PluginLoadingError> {
+        if self.library_paths.contains(filename.as_ref()) {
+            let err = Err(PluginLoadingError::ReloadError {
+                path: filename.as_ref().to_owned(),
+            });
+            let filename = filename.as_ref().to_string_lossy();
+            error!("Unloaded plugin should not load again!"; "plugin_path" => ?filename, "error" => ?err);
+            return err;
+        }
         let plugin = unsafe { LoadedPlugin::new(&filename) };
         if let Err(err) = &plugin {
             let filename = filename.as_ref().to_string_lossy();
             warn!("failed to load coprocessor plugin. Maybe not compiled correctly as a TiKV plugin?"; "plugin_path" => ?filename, "error" => ?err);
         }
         let plugin = plugin?;
+        // plugin successfully loaded, add path to library_paths.
+        self.library_paths.insert(filename.as_ref().to_owned());
 
         let plugin_name = plugin.name().to_string();
 
