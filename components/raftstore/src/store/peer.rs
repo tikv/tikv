@@ -2299,7 +2299,7 @@ where
             self.report_know_commit_duration(pre_commit_index, &ctx.raft_metrics);
 
             let persist_index = self.raft_group.raft.raft_log.persisted;
-            self.mut_store().update_persist_index(persist_index);
+            self.mut_store().update_cache_persisted(persist_index);
         }
 
         if self.snap_ctx.is_some() && self.unpersisted_readies.is_empty() {

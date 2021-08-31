@@ -229,8 +229,10 @@ impl EntryCache {
 
     /// Compact all entries whose indexes are less than `idx`.
     pub fn compact_to(&mut self, mut idx: u64) -> u64 {
-        // Only the persisted entries can be compacted
-        idx = cmp::min(idx, self.persisted + 1);
+        if idx > self.persisted + 1 {
+            // Only the persisted entries can be compacted
+            idx = self.persisted + 1;
+        }
 
         let mut mem_size_change = 0;
 
@@ -366,6 +368,10 @@ impl EntryCache {
             return Self::get_cache_vec_mem_size_change(new_capacity, old_capacity);
         }
         0
+    }
+
+    fn update_persisted(&mut self, persisted: u64) {
+        self.persisted = persisted;
     }
 }
 
@@ -1455,6 +1461,7 @@ where
             fail_point!("raft_before_apply_snap");
             let snap_region =
                 self.apply_snapshot(ready.snapshot(), &mut write_task, &destroy_regions)?;
+
             res = HandleReadyResult::Snapshot {
                 msgs: std::mem::take(&mut msgs),
                 snap_region,
@@ -1505,8 +1512,8 @@ where
         Ok((res, write_task))
     }
 
-    pub fn update_persist_index(&mut self, persisted: u64) {
-        self.cache.persisted = persisted;
+    pub fn update_cache_persisted(&mut self, persisted: u64) {
+        self.cache.update_persisted(persisted);
     }
 
     pub fn persist_snapshot(&mut self, res: &PersistSnapshotResult) {
