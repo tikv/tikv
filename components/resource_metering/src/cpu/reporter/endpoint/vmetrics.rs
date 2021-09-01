@@ -5,12 +5,13 @@ use crate::cpu::reporter::endpoint::Endpoint;
 use crate::cpu::reporter::record::{CpuTime, Records, Timestamp};
 
 use hex::ToHex;
-use hyper::Client;
 use hyper::client::HttpConnector;
+use hyper::{Body, Client, Method, Request};
 use tikv_util::warn;
 use tokio::runtime::{Builder, Runtime};
 
 pub struct VictoriaMetricsEndpoint {
+    instance_name: String,
     address: String,
     limiter: Limiter,
     runtime: Runtime,
@@ -18,11 +19,12 @@ pub struct VictoriaMetricsEndpoint {
 }
 
 impl Endpoint for VictoriaMetricsEndpoint {
-    fn init(address: &str) -> Box<dyn Endpoint>
+    fn init(instance_name: &str, address: &str) -> Box<dyn Endpoint>
     where
         Self: Sized,
     {
         Box::new(Self {
+            instance_name: instance_name.to_owned(),
             address: address.to_owned(),
             limiter: Limiter::default(),
             runtime: Builder::new_multi_thread()
@@ -47,22 +49,40 @@ impl Endpoint for VictoriaMetricsEndpoint {
             return;
         }
 
-
+        let client = self.client.clone();
+        let instance_name = self.instance_name.to_owned();
+        let address = self.address.clone();
         self.runtime.spawn(async move {
             let _hd = handle;
 
             let mut body_buf = vec![];
-            if !encode_to_metrics_jsonl(records, &mut body_buf) {
+            if !encode_to_metrics_jsonl(&instance_name, records, &mut body_buf) {
                 return;
             }
 
+            let req = Request::builder()
+                .method(Method::POST)
+                .uri(&format!("http://{}/api/v1/import", address))
+                .body(Body::from(body_buf));
+            if let Err(err) = req {
+                warn!("failed to build request"; "error" => ?err);
+                return;
+            }
 
+            let resp = client.request(req.unwrap()).await;
+            if let Err(err) = resp {
+                warn!("failed to send request"; "error" => ?err);
+            }
         });
+    }
+
+    fn name(&self) -> &'static str {
+        "victoria-metrics"
     }
 }
 
 #[derive(serde::Serialize)]
-struct Metrics<'a> {
+struct Metric<'a> {
     metric: MetricsLabels<'a>,
     timestamps: &'a [Timestamp],
     values: &'a [CpuTime],
@@ -80,7 +100,7 @@ struct MetricsLabels<'a> {
     plan_digest: &'a str,
 }
 
-fn encode_to_metrics_jsonl(records: Records, buf: &mut Vec<u8>) -> bool {
+fn encode_to_metrics_jsonl(instance: &str, records: Records, mut buf: &mut Vec<u8>) -> bool {
     let mut sql_digest_hex = String::new();
     let mut plan_digest_hex = String::new();
     for (tag, (ts_list, cpu_list, _)) in records.records {
@@ -91,11 +111,10 @@ fn encode_to_metrics_jsonl(records: Records, buf: &mut Vec<u8>) -> bool {
             continue;
         }
 
-        let metrics = Metrics {
+        let metric = Metric {
             metric: MetricsLabels {
                 name: "cpu_time",
-                // FIXME: wrong instance
-                instance: "127.0.0.1:10101",
+                instance,
                 job: "tikv",
                 sql_digest: &sql_digest_hex,
                 plan_digest: &plan_digest_hex,
@@ -104,7 +123,7 @@ fn encode_to_metrics_jsonl(records: Records, buf: &mut Vec<u8>) -> bool {
             values: &cpu_list,
         };
 
-        if let Err(err) = serde_json::to_writer(buf, &metrics) {
+        if let Err(err) = serde_json::to_writer(&mut buf, &metric) {
             warn!("failed to encode cpu records to json"; "error" => ?err);
             return false;
         }
@@ -112,11 +131,10 @@ fn encode_to_metrics_jsonl(records: Records, buf: &mut Vec<u8>) -> bool {
     }
 
     if !records.others.is_empty() {
-        let metrics = Metrics {
+        let metric = Metric {
             metric: MetricsLabels {
                 name: "cpu_time",
-                // FIXME: wrong instance
-                instance: "127.0.0.1:10101",
+                instance,
                 job: "tikv",
                 sql_digest: "",
                 plan_digest: "",
@@ -124,7 +142,7 @@ fn encode_to_metrics_jsonl(records: Records, buf: &mut Vec<u8>) -> bool {
             timestamps: &records.others.keys().cloned().collect::<Vec<_>>(),
             values: &records.others.values().cloned().collect::<Vec<_>>(),
         };
-        if let Err(err) = serde_json::to_writer(buf, &metrics) {
+        if let Err(err) = serde_json::to_writer(&mut buf, &metric) {
             warn!("failed to encode cpu records to json"; "error" => ?err);
             return false;
         }

@@ -67,7 +67,11 @@ impl TestSuite {
             )),
         );
 
-        reporter.start_with_timer(Reporter::new(resource_metering_cfg, scheduler.clone()));
+        reporter.start_with_timer(Reporter::new(
+            &tikv_cfg.server.status_addr,
+            resource_metering_cfg,
+            scheduler.clone(),
+        ));
 
         let (tx, rx) = unbounded();
 

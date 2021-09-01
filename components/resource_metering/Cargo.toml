@@ -43,6 +43,7 @@ tokio = { version = "1.5", features = ["full"] }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 protobuf = "2.8"
 hex = "0.3.2"
+hostname = "^0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }

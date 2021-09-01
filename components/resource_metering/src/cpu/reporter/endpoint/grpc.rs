@@ -20,7 +20,7 @@ pub struct GRPCEndpoint {
 }
 
 impl Endpoint for GRPCEndpoint {
-    fn init(address: &str) -> Box<dyn Endpoint> {
+    fn init(_instance: &str, address: &str) -> Box<dyn Endpoint> {
         let env = Arc::new(Environment::new(2));
         let channel = {
             let cb = ChannelBuilder::new(env.clone())
@@ -105,5 +105,9 @@ impl Endpoint for GRPCEndpoint {
                 warn!("failed to receive from a grpc call"; "error" => ?err);
             }
         });
+    }
+
+    fn name(&self) -> &'static str {
+        "grpc"
     }
 }

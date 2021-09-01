@@ -895,6 +895,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .lazy_build("resource-metering-reporter");
         let reporter_scheduler = reporter_worker.scheduler();
         let reporter = Reporter::new(
+            &self.config.server.status_addr,
             self.config.resource_metering.clone(),
             reporter_scheduler.clone(),
         );
