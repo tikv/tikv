@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod recorder;
+mod background_recorder;
 
 use crate::cpu::recorder::get_thread_id;
 use collections::HashMap;
@@ -14,15 +14,17 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::SharedTagPtr;
-pub use recorder::init_recorder;
+pub use background_recorder::init_recorder;
 
 pub fn add_thread_read_key(count: u64) {
+    // TODO: implement row
     CURRENT_REQ_SUMMARY.with(|r| {
         r.read_key_count.fetch_add(count, Relaxed);
     })
 }
 
 pub fn add_thread_write_key(count: u64) {
+    // TODO: implement row
     CURRENT_REQ_SUMMARY.with(|r| {
         r.write_key_count.fetch_add(count, Relaxed);
     })
@@ -58,15 +60,14 @@ thread_local! {
     pub static REQ_SUMMARY_MAP: Arc<Mutex<HashMap<TagInfo, ReqSummary>>> = {
         let map = Arc::new(Mutex::new(HashMap::default()));
         CURRENT_REQ_SUMMARY.with(|r|{
-            let cur_req_summary = r.clone();
             crate::cpu::recorder::CURRENT_REQ.with(|s| {
                 let thread_id = get_thread_id();
                 let shared_ptr = s.shared_ptr.clone();
                 THREAD_REGISTRATION_CHANNEL.0.send(ThreadRegistrationMsg {
                     thread_id,
                     thread_stat: ThreadStat{
-                        shared_ptr: shared_ptr,
-                        req_summary: cur_req_summary,
+                        shared_ptr,
+                        req_summary: r.clone(),
                         records_by_tag: map.clone(),
                     }
                 }).ok();
@@ -85,6 +86,7 @@ pub(crate) struct ThreadStat {
     pub(crate) shared_ptr: SharedTagPtr,
     pub(crate) req_summary: Arc<ReqSummary>,
     // tag -> Req
+    // TODO: DashMap is better than Mutex<HashMap<...>>
     pub(crate) records_by_tag: Arc<Mutex<HashMap<TagInfo, ReqSummary>>>,
 }
 
@@ -97,8 +99,21 @@ lazy_static! {
 
 #[derive(Debug, Default)]
 pub struct ReqSummary {
+    // TODO: if we have list of read and write do we still need count?
+    // TODO: consider to refractor as a count function
     pub read_key_count: AtomicU64,
     pub write_key_count: AtomicU64,
+    //TODO: pub read_keys: Vec/HashSet u64
+    //TODO: pub write_keys: Vec/HashSet u64
+}
+
+impl Clone for ReqSummary {
+    fn clone(&self) -> Self {
+        Self {
+            read_key_count: AtomicU64::new(self.read_key_count.load(Relaxed)),
+            write_key_count: AtomicU64::new(self.write_key_count.load(Relaxed)),
+        }
+    }
 }
 
 impl ReqSummary {
@@ -120,13 +135,6 @@ impl ReqSummary {
             .fetch_add(other.read_key_count.load(Relaxed), Relaxed);
         self.write_key_count
             .fetch_add(other.write_key_count.load(Relaxed), Relaxed);
-    }
-
-    pub fn clone(&self) -> Self {
-        Self {
-            read_key_count: AtomicU64::new(self.read_key_count.load(Relaxed)),
-            write_key_count: AtomicU64::new(self.write_key_count.load(Relaxed)),
-        }
     }
 
     pub fn take_and_reset(&self) -> Self {
@@ -164,8 +172,7 @@ impl Default for ReqSummaryRecords {
             .expect("Clock may have gone backwards");
         Self {
             begin_unix_time_secs: now_unix_time.as_secs(),
-            duration: Duration::default(),
-            records: HashMap::default(),
+            ..Default::default()
         }
     }
 }

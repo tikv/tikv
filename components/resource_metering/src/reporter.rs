@@ -250,7 +250,7 @@ impl Runnable for ResourceMeteringReporter {
                                         .zip(record.summary_list.into_iter()),
                                 )
                                 .for_each(|(secs, (cpu_time, summary))| {
-                                    (*others.entry(secs).or_insert(OtherRecord::default()))
+                                    (*others.entry(secs).or_insert_with(OtherRecord::default))
                                         .merge(cpu_time, &summary);
                                 })
                         });

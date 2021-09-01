@@ -12,7 +12,7 @@ use grpcio::{Environment, Server};
 use kvproto::kvrpcpb::Context;
 use kvproto::resource_usage_agent::CpuTimeRecord;
 use mock_agent_server::MockAgentServer;
-use resource_metering::cpu::recorder::{init_recorder, TEST_TAG_PREFIX};
+use resource_metering::cpu::recorder::TEST_TAG_PREFIX;
 use resource_metering::reporter::{ResourceMeteringReporter, Task};
 use resource_metering::{Config, ConfigManager};
 use tempfile::TempDir;
@@ -63,7 +63,8 @@ impl TestSuite {
             Box::new(ConfigManager::new(
                 resource_metering_cfg.clone(),
                 scheduler.clone(),
-                init_recorder(),
+                resource_metering::cpu::recorder::init_recorder(),
+                resource_metering::summary::recorder::init_recorder(),
             )),
         );
         let env = Arc::new(Environment::new(2));

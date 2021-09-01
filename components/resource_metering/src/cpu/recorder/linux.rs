@@ -29,38 +29,39 @@ use super::RecorderHandle;
 const RECORD_FREQUENCY: f64 = 99.0;
 const GC_INTERVAL_SECS: u64 = 15 * 60;
 
+lazy_static! {
+    static ref HANDLE: RecorderHandle = {
+        let config = crate::Config::default();
+
+        let pause = Arc::new(AtomicBool::new(config.enabled));
+        let pause0 = pause.clone();
+        let precision_ms = Arc::new(AtomicU64::new(config.precision.0.as_millis() as _));
+        let precision_ms0 = precision_ms.clone();
+
+        let join_handle = std::thread::Builder::new()
+            .name("cpu-recorder".to_owned())
+            .spawn(move || {
+                let mut recorder = CpuRecorder::new(pause, precision_ms);
+
+                loop {
+                    recorder.handle_pause();
+                    recorder.handle_collector_registration();
+                    recorder.handle_thread_registration();
+                    recorder.record();
+                    recorder.may_advance_window();
+                    recorder.may_gc();
+
+                    std::thread::sleep(Duration::from_micros(
+                        (1_000.0 / RECORD_FREQUENCY * 1_000.0) as _,
+                    ));
+                }
+            })
+            .expect("Failed to create recorder thread");
+        RecorderHandle::new(join_handle, pause0, precision_ms0)
+    };
+}
+
 pub fn init_recorder() -> RecorderHandle {
-    lazy_static! {
-        static ref HANDLE: RecorderHandle = {
-            let config = crate::Config::default();
-
-            let pause = Arc::new(AtomicBool::new(config.enabled));
-            let pause0 = pause.clone();
-            let precision_ms = Arc::new(AtomicU64::new(config.precision.0.as_millis() as _));
-            let precision_ms0 = precision_ms.clone();
-
-            let join_handle = std::thread::Builder::new()
-                .name("cpu-recorder".to_owned())
-                .spawn(move || {
-                    let mut recorder = CpuRecorder::new(pause, precision_ms);
-
-                    loop {
-                        recorder.handle_pause();
-                        recorder.handle_collector_registration();
-                        recorder.handle_thread_registration();
-                        recorder.record();
-                        recorder.may_advance_window();
-                        recorder.may_gc();
-
-                        std::thread::sleep(Duration::from_micros(
-                            (1_000.0 / RECORD_FREQUENCY * 1_000.0) as _,
-                        ));
-                    }
-                })
-                .expect("Failed to create recorder thread");
-            RecorderHandle::new(join_handle, pause0, precision_ms0)
-        };
-    }
     HANDLE.clone()
 }
 
