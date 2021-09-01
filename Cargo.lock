@@ -249,6 +249,15 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
+=======
+name = "base-x"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b20b618342cf9891c292c4f5ac2cde7287cc5c87e87e9c769d617793607dec1"
+
+[[package]]
+>>>>>>> 9ddef9863... address comment
 name = "base64"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -601,6 +610,60 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
+=======
+name = "cmd"
+version = "0.0.1"
+dependencies = [
+ "backup",
+ "cdc",
+ "chrono",
+ "clap",
+ "collections",
+ "concurrency_manager",
+ "crossbeam 0.8.0",
+ "encryption_export",
+ "engine_rocks",
+ "engine_traits",
+ "error_code",
+ "file_system",
+ "fs2",
+ "futures 0.3.8",
+ "grpcio",
+ "hex 0.4.2",
+ "keys",
+ "kvproto",
+ "libc 0.2.86",
+ "log",
+ "log_wrappers",
+ "nix 0.11.1",
+ "pd_client",
+ "prometheus",
+ "promptly",
+ "protobuf",
+ "raft",
+ "raft_log_engine",
+ "raftstore",
+ "rand 0.7.3",
+ "security",
+ "serde_json",
+ "signal",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "tikv",
+ "tikv_alloc",
+ "tikv_util",
+ "time 0.1.42",
+ "tokio 0.2.24",
+ "toml",
+ "txn_types",
+ "vlog",
+ "yatp",
+]
+
+[[package]]
+>>>>>>> 9ddef9863... address comment
 name = "codec"
 version = "0.0.1"
 dependencies = [

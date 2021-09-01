@@ -208,7 +208,7 @@ trait DebugExecutor {
             }
             let region_object = json!({
                 "region_id": region_id,
-                "region_local_state_key": base16::encode_upper(&keys::region_state_key(region_id)),
+                "region_local_state_key": hex::encode_upper(&keys::region_state_key(region_id)),
                 "region_local_state": r.region_local_state.map(|s| {
                     let r = s.get_region();
                     let region_epoch = r.get_region_epoch();
@@ -216,8 +216,8 @@ trait DebugExecutor {
                     json!({
                 "region": json!({
                     "id": r.get_id(),
-                    "start_key": base16::encode_upper(r.get_start_key()),
-                    "end_key": base16::encode_upper(r.get_end_key()),
+                    "start_key": hex::encode_upper(r.get_start_key()),
+                    "end_key": hex::encode_upper(r.get_end_key()),
                     "region_epoch": json!({
                         "conf_ver": region_epoch.get_conf_ver(),
                         "version": region_epoch.get_version()
@@ -229,7 +229,7 @@ trait DebugExecutor {
                         })).collect::<Vec<_>>(),
                 }),
             })}),
-                "raft_local_state_key": base16::encode_upper(&keys::raft_state_key(region_id)),
+                "raft_local_state_key": hex::encode_upper(&keys::raft_state_key(region_id)),
                 "raft_local_state": r.raft_local_state.map(|s| {
                     let hard_state = s.get_hard_state();
                     json!({
@@ -241,7 +241,7 @@ trait DebugExecutor {
                     "last_index": s.get_last_index(),
                 })
                 }),
-                "raft_apply_state_key": base16::encode_upper(&keys::apply_state_key(region_id)),
+                "raft_apply_state_key": hex::encode_upper(&keys::apply_state_key(region_id)),
                 "raft_apply_state": r.raft_apply_state.map(|s|{
                     let truncated_state = s.get_truncated_state();
                     json!({
@@ -587,8 +587,6 @@ trait DebugExecutor {
         promote_learner: bool,
     );
 
-    fn remove_regions(&self, region_ids: Vec<u64>);
-
     fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>);
 
     /// Recreate the region with metadata from pd, but alloc new id for it.
@@ -823,10 +821,6 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only available for local mode");
     }
 
-    fn remove_regions(&self, _: Vec<u64>) {
-        unimplemented!("only available for local mode");
-    }
-
     fn drop_unapplied_raftlog(&self, _: Option<Vec<u64>>) {
         unimplemented!("only available for local mode");
     }
@@ -1015,13 +1009,6 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         self.remove_failed_stores(store_ids, region_ids, promote_learner)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         println!("success");
-    }
-
-    fn remove_regions(&self, region_ids: Vec<u64>) {
-        v1!("removing regions {:?} from configurations...", region_ids);
-        self.remove_regions(region_ids)
-            .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
-        v1!("success");
     }
 
     fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) {
@@ -1706,21 +1693,6 @@ fn main() {
                         )
                 )
                 .subcommand(
-                    SubCommand::with_name("remove-regions")
-                        .about("Remove the peers in this store for the regions")
-                        .arg(
-                            Arg::with_name("regions")
-                                .required(true)
-                                .takes_value(true)
-                                .short("r")
-                                .multiple(true)
-                                .use_delimiter(true)
-                                .require_delimiter(true)
-                                .value_delimiter(",")
-                                .help("Only for these regions"),
-                        )
-                )
-                .subcommand(
                     SubCommand::with_name("drop-unapplied-raftlog")
                         .about("Remove unapplied raftlogs on the regions")
                         .arg(
@@ -2400,16 +2372,6 @@ fn main() {
                 region_ids,
                 matches.is_present("promote-learner"),
             );
-        } else if let Some(matches) = matches.subcommand_matches("remove-regions") {
-            let region_ids = matches
-                .values_of("regions")
-                .map(|ids| {
-                    ids.map(str::parse)
-                        .collect::<Result<Vec<_>, _>>()
-                        .expect("parse regions fail")
-                })
-                .unwrap();
-            debug_executor.remove_regions(region_ids);
         } else if let Some(matches) = matches.subcommand_matches("drop-unapplied-raftlog") {
             let region_ids = matches.values_of("regions").map(|ids| {
                 ids.map(str::parse)
