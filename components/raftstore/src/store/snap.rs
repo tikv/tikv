@@ -34,7 +34,7 @@ use file_system::{
 use keys::{enc_end_key, enc_start_key};
 use tikv_util::time::{duration_to_sec, Instant, Limiter};
 use tikv_util::HandyRwLock;
-use tikv_util::{box_err, box_try, debug, error, info, map, warn};
+use tikv_util::{box_err, box_try, debug, error, info, warn};
 
 use crate::coprocessor::CoprocessorHost;
 use crate::store::metrics::{
@@ -1515,7 +1515,7 @@ impl SnapManagerBuilder {
         SnapManager {
             core: SnapManagerCore {
                 base: path.into(),
-                registry: Arc::new(RwLock::new(map![])),
+                registry: Default::default(),
                 limiter,
                 temp_sst_id: Arc::new(AtomicU64::new(0)),
                 encryption_key_manager: self.key_manager,
@@ -1699,7 +1699,7 @@ pub mod tests {
     fn create_manager_core(path: &str) -> SnapManagerCore {
         SnapManagerCore {
             base: path.to_owned(),
-            registry: Arc::new(RwLock::new(map![])),
+            registry: Default::default(),
             limiter: Limiter::new(f64::INFINITY),
             temp_sst_id: Arc::new(AtomicU64::new(0)),
             encryption_key_manager: None,
