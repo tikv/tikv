@@ -2,7 +2,7 @@
 
 use super::util::Limiter;
 use crate::cpu::reporter::endpoint::Endpoint;
-use crate::cpu::reporter::record::{CpuTime, Records, Timestamp};
+use crate::cpu::reporter::record::{CpuTime, Records};
 
 use hex::ToHex;
 use hyper::client::HttpConnector;
@@ -84,7 +84,8 @@ impl Endpoint for VictoriaMetricsEndpoint {
 #[derive(serde::Serialize)]
 struct Metric<'a> {
     metric: MetricsLabels<'a>,
-    timestamps: &'a [Timestamp],
+    // Timestamps here is in millisecond. Timestamps in records is in second. Conversion is needed.
+    timestamps: Vec<u64>,
     values: &'a [CpuTime],
 }
 
@@ -119,7 +120,7 @@ fn encode_to_metrics_jsonl(instance: &str, records: Records, mut buf: &mut Vec<u
                 sql_digest: &sql_digest_hex,
                 plan_digest: &plan_digest_hex,
             },
-            timestamps: &ts_list,
+            timestamps: ts_list.iter().map(|ts| ts * 1_000).collect(),
             values: &cpu_list,
         };
 
@@ -139,7 +140,7 @@ fn encode_to_metrics_jsonl(instance: &str, records: Records, mut buf: &mut Vec<u
                 sql_digest: "",
                 plan_digest: "",
             },
-            timestamps: &records.others.keys().cloned().collect::<Vec<_>>(),
+            timestamps: records.others.keys().map(|ts| ts * 1_000).collect(),
             values: &records.others.values().cloned().collect::<Vec<_>>(),
         };
         if let Err(err) = serde_json::to_writer(&mut buf, &metric) {
