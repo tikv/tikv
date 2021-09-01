@@ -662,35 +662,6 @@ impl<ER: RaftEngine> Debugger<ER> {
         Ok(())
     }
 
-    pub fn remove_regions(&self, region_ids: Vec<u64>) -> Result<()> {
-        let kv = &self.engines.kv;
-        let mut wb = kv.write_batch();
-
-        for region_id in region_ids {
-            let key = keys::region_state_key(region_id);
-            let mut region_local_state = kv
-                .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
-                .map_err(|e| box_err!(e))
-                .and_then(|s| {
-                    s.ok_or_else(|| Error::Other("Can't find RegionLocalState".into()))
-                })?;
-            region_local_state.state = PeerState::Tombstone;
-            box_try!(wb.put_msg_cf(CF_RAFT, &key, &region_local_state));
-
-            info!(
-                "tombstoned peer";
-                "region_id" => region_id,
-                "region_local_state" => ?region_local_state,
-            );
-        }
-
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
-        box_try!(wb.write_opt(&write_opts));
-
-        Ok(())
-    }
-
     pub fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) -> Result<()> {
         let kv = &self.engines.kv;
         let raft = &self.engines.raft;
@@ -1823,25 +1794,6 @@ mod tests {
         debugger.remove_failed_stores(vec![64], None, true).unwrap();
         assert_eq!(get_region_stores(engine.as_inner(), 6), &[61, 62, 63]);
         assert_eq!(get_region_learner(engine.as_inner(), 6), 1);
-    }
-
-    #[test]
-    fn test_remove_region() {
-        let debugger = new_debugger();
-        debugger.set_store_id(100);
-        let kv_engine = &debugger.engines.kv;
-
-        init_region_state(kv_engine.as_inner(), 1, &[100, 101], 1);
-        debugger.remove_regions(vec![1]).unwrap();
-        assert_eq!(
-            debugger
-                .region_info(1)
-                .unwrap()
-                .region_local_state
-                .unwrap()
-                .state,
-            PeerState::Tombstone
-        );
     }
 
     #[test]

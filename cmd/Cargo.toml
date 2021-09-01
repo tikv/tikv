@@ -120,7 +120,6 @@ toml = "0.5"
 txn_types = { path = "../components/txn_types", default-features = false }
 vlog = "0.1.4"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
-base16 = "0.2.1"
 
 [build-dependencies]
 time = "0.1"
