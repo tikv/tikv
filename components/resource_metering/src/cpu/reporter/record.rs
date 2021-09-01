@@ -36,10 +36,34 @@ pub struct Records {
 
 impl Records {
     pub fn append(&mut self, raw_records: Arc<CpuRecords>) {
-        let timestamp_secs = raw_records.begin_unix_time_secs;
+        // # Before
+        //
+        // ts: 1630464417
+        // records: | tag | cpu time |
+        //          | --- | -------- |
+        //          | t1  |  500     |
+        //          | t2  |  600     |
+        //          | t3  |  200     |
+        //          | t2  |  100     |
+
+        // # After
+        //
+        // t1: | ts       | ... | 1630464417 |
+        //     | cpu time | ... |    500     |
+        //     | total    | $total + 500     |
+        //
+        // t2: | ts       | ... | 1630464417 |
+        //     | cpu time | ... |    700     |
+        //     | total    | $total + 700     |
+        //
+        // t3: | ts       | ... | 1630464417 |
+        //     | cpu time | ... |    200     |
+        //     | total    | $total + 200     |
+
+        let ts = raw_records.begin_unix_time_secs;
 
         for (tag, ms) in &raw_records.records {
-            let ms = *ms as u32;
+            let cpu_time = *ms as u32;
             let tag = &tag.infos.extra_attachment;
             if tag.is_empty() {
                 continue;
@@ -48,22 +72,55 @@ impl Records {
             let record_value = self.records.get_mut(tag);
             if record_value.is_none() {
                 self.records
-                    .insert(tag.clone(), (vec![timestamp_secs], vec![ms], ms));
+                    .insert(tag.clone(), (vec![ts], vec![cpu_time], cpu_time));
                 continue;
             }
 
-            let (ts, cpu_time, total) = record_value.unwrap();
-            *total += ms;
-            if *ts.last().unwrap() == timestamp_secs {
-                *cpu_time.last_mut().unwrap() += ms;
+            let (ts_list, cpu_list, total_cpu) = record_value.unwrap();
+            *total_cpu += cpu_time;
+            if *ts_list.last().unwrap() == ts {
+                *cpu_list.last_mut().unwrap() += cpu_time;
             } else {
-                ts.push(timestamp_secs);
-                cpu_time.push(ms);
+                ts_list.push(ts);
+                cpu_list.push(cpu_time);
             }
         }
     }
 
     pub fn keep_top_k(&mut self, k: usize) {
+        // # Before
+        //
+        // K: 2
+        //
+        // t1: | ts       | 1630464416 | 1630464417 |
+        //     | cpu time | 300        |    500     |
+        //     | total    | 800                     |
+        //
+        // t2: | ts       | 1630464416 | 1630464417 |
+        //     | cpu time | 200        |    700     |
+        //     | total    | 900                     |
+        //
+        // t3: | ts       | 1630464416 | 1630464417 |
+        //     | cpu time | 100        |    200     |
+        //     | total    | 300                     |
+        //
+        // t4: | ts       | 1630464416 | 1630464417 |
+        //     | cpu time | 500        |    200     |
+        //     | total    | 700                     |
+
+        // # After
+        //
+        // t1: | ts       | 1630464416 | 1630464417 |
+        //     | cpu time | 300        |    500     |
+        //     | total    | 800                     |
+        //
+        // t2: | ts       | 1630464416 | 1630464417 |
+        //     | cpu time | 200        |    700     |
+        //     | total    | 900                     |
+        //
+        // others: |  ts      | 1630464416 | 1630464417 |
+        //         | cpu time | 600        | 400        |
+
         if self.records.len() <= k {
             return;
         }
@@ -77,20 +134,23 @@ impl Records {
         let mut buf = STATIC_BUF.with(|b| b.take());
         buf.clear();
 
+        // Find kth top total cpu time
         for (_, _, total) in self.records.values() {
             buf.push(*total);
         }
         pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
         let kth = buf[k];
+
+        // Evict records with total cpu time less or equal than `kth`
         let others = &mut self.others;
-        self.records
-            .drain_filter(|_, (_, _, total)| *total <= kth)
-            .for_each(|(_, (secs_list, cpu_time_list, _))| {
-                secs_list
-                    .into_iter()
-                    .zip(cpu_time_list.into_iter())
-                    .for_each(|(secs, cpu_time)| *others.entry(secs).or_insert(0) += cpu_time)
-            });
+        let evicted_records = self.records.drain_filter(|_, (_, _, total)| *total <= kth);
+
+        // Record evicted cpu time into others
+        for (_, (secs_list, cpu_time_list, _)) in evicted_records {
+            for (ts, cpu_time) in secs_list.into_iter().zip(cpu_time_list.into_iter()) {
+                *others.entry(ts).or_insert(0) += cpu_time;
+            }
+        }
 
         STATIC_BUF.with(move |b| b.set(buf));
     }
