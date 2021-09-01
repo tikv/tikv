@@ -6,15 +6,6 @@ use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::{error::Error as StdError, result};
 
-use engine_rocks::raw::{CompactOptions, DBBottommostLevelCompaction, DB};
-use engine_rocks::util::get_cf_handle;
-use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
-use engine_traits::{
-    Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, RaftEngine,
-    RangePropertiesExt, SeekKey, SyncMutable, TableProperties, TablePropertiesCollection,
-    TablePropertiesExt, WriteBatch, WriteOptions,
-};
-use engine_traits::{MvccProperties, Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType};
 use kvproto::metapb::{PeerRole, Region};
 use kvproto::raft_serverpb::*;
@@ -30,7 +21,7 @@ use engine_rocks::RocksMvccProperties;
 use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, RaftEngine,
-    RangePropertiesExt, SeekKey, WriteBatch, WriteOptions,
+    RangePropertiesExt, SeekKey, SyncMutable, WriteBatch, WriteOptions,
 };
 use engine_traits::{MvccProperties, Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::get_region_approximate_middle;

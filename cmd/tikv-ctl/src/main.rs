@@ -6,11 +6,6 @@ extern crate clap;
 extern crate log;
 
 use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
-use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
-use grpcio::{CallOption, ChannelBuilder, Environment};
-use protobuf::Message;
-use serde_json::json;
-
 use encryption_export::{
     create_backend, data_key_manager_from_config, encryption_method_from_db_encryption_method,
     DataKeyManager, DecrypterReader, Iv,
@@ -40,6 +35,7 @@ use raft_log_engine::RaftLogEngine;
 use raftstore::store::INIT_EPOCH_CONF_VER;
 use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
+use serde_json::json;
 use server::setup::initial_logger;
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
@@ -256,7 +252,7 @@ trait DebugExecutor {
             region_objects.insert(region_id.to_string(), region_object);
         }
 
-        v1!(
+        println!(
             "{}",
             serde_json::to_string_pretty(&json!({ "region_infos": region_objects })).unwrap()
         );
@@ -677,7 +673,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn get_all_regions_in_store(&self) -> Vec<u64> {
-        DebugClient::get_all_regions_in_store(&self, &GetAllRegionsInStoreRequest::default())
+        DebugClient::get_all_regions_in_store(self, &GetAllRegionsInStoreRequest::default())
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_all_regions_in_store", e))
             .take_regions()
     }
@@ -1003,17 +999,17 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         region_ids: Option<Vec<u64>>,
         promote_learner: bool,
     ) {
-        v1!("removing stores {:?} from configurations...", store_ids);
+        println!("removing stores {:?} from configurations...", store_ids);
         self.remove_failed_stores(store_ids, region_ids, promote_learner)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         println!("success");
     }
 
     fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) {
-        v1!("removing unapplied raftlog on region {:?} ...", region_ids);
+        println!("removing unapplied raftlog on region {:?} ...", region_ids);
         self.drop_unapplied_raftlog(region_ids)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
-        v1!("success");
+        println!("success");
     }
 
     fn recreate_region(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
@@ -2080,7 +2076,7 @@ fn main() {
         println!("{}", escape(&from_hex(hex).unwrap()));
         return;
     } else if let Some(escaped) = matches.value_of("escaped-to-hex") {
-        v1!("{}", hex::encode_upper(unescape(escaped)));
+        println!("{}", hex::encode_upper(unescape(escaped)));
         return;
     } else if let Some(encoded) = matches.value_of("decode") {
         match Key::from_encoded(unescape(encoded)).into_raw() {

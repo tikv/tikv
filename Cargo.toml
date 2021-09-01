@@ -242,7 +242,7 @@ zipf = "6.1.0"
 # kvproto at the same time.
 # After the PR on kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
 [patch.'https://github.com/pingcap/kvproto']
-kvproto = {git = "https://github.com/andylokandy/kvproto", rev="d54e107" }
+kvproto = {git = "https://github.com/andylokandy/kvproto", branch="ctl" }
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
