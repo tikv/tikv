@@ -9,10 +9,12 @@ failpoints = ["fail/failpoints"]
 protobuf-codec = [
   "kvproto/protobuf-codec",
   "grpcio/protobuf-codec",
+  "tipb/protobuf-codec",
 ]
 prost-codec = [
   "kvproto/prost-codec",
   "grpcio/prost-codec",
+  "tipb/prost-codec",
 ]
 
 [dependencies]
@@ -29,12 +31,18 @@ grpcio = { version = "0.9",  default-features = false, features = ["openssl-vend
 online_config = { path = "../online_config" }
 serde = "1.0"
 serde_derive = "1.0"
+serde_json = "1.0"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 futures = "0.3"
 pdqselect = "0.1"
 fail = "0.4"
+hyper = { version = "0.14", features = ["full"] }
+tokio = { version = "1.5", features = ["full"] }
+tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
+protobuf = "2.8"
+hex = "0.3.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }

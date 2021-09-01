@@ -222,7 +222,7 @@ dependencies = [
  "futures 0.3.15",
  "futures-util",
  "grpcio",
- "hex 0.4.2",
+ "hex 0.4.3",
  "keys",
  "kvproto",
  "lazy_static",
@@ -1041,7 +1041,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "futures-util",
- "hex 0.4.2",
+ "hex 0.4.3",
  "kvproto",
  "lazy_static",
  "matches",
@@ -1820,9 +1820,9 @@ checksum = "805026a5d0141ffc30abb3be3173848ad46a1b1664fe632428479619a3644d77"
 
 [[package]]
 name = "hex"
-version = "0.4.2"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "644f9158b2f133fd50f5fb3242878846d9eb792e445c893805ff0e3824006e35"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hmac"
@@ -2259,7 +2259,7 @@ dependencies = [
 name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
- "hex 0.4.2",
+ "hex 0.4.3",
  "protobuf",
  "slog",
  "slog-term",
@@ -2355,9 +2355,9 @@ dependencies = [
 
 [[package]]
 name = "mime"
-version = "0.3.14"
+version = "0.3.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd1d63acd1b78403cc0c325605908475dd9b9a3acbf65ed8bcab97e27014afcf"
+checksum = "2a60c7ce501c71e03a9c9c0d35b861413ae925bd979cc7a4e30d060069aaac8d"
 
 [[package]]
 name = "miniz-sys"
@@ -3161,7 +3161,7 @@ dependencies = [
  "byteorder",
  "chrono",
  "flate2",
- "hex 0.4.2",
+ "hex 0.4.3",
  "lazy_static",
  "libc 0.2.86",
 ]
@@ -3356,7 +3356,7 @@ dependencies = [
  "crossbeam",
  "fail",
  "fxhash",
- "hex 0.4.2",
+ "hex 0.4.3",
  "lazy_static",
  "log",
  "lz4-sys",
@@ -3710,9 +3710,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.11.1"
+version = "0.11.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0460542b551950620a3648c6aa23318ac6b3cd779114bd873209e6e8b5eb1c34"
+checksum = "246e9f61b9bb77df069a947682be06e31ac43ea37862e244a69f177694ea6d22"
 dependencies = [
  "base64",
  "bytes 1.0.1",
@@ -3754,7 +3754,7 @@ dependencies = [
  "fail",
  "futures 0.3.15",
  "grpcio",
- "hex 0.4.2",
+ "hex 0.4.3",
  "kvproto",
  "lazy_static",
  "log_wrappers",
@@ -3789,6 +3789,8 @@ dependencies = [
  "fail",
  "futures 0.3.15",
  "grpcio",
+ "hex 0.3.2",
+ "hyper",
  "kvproto",
  "lazy_static",
  "libc 0.2.86",
@@ -3799,12 +3801,16 @@ dependencies = [
  "procinfo",
  "prometheus",
  "prometheus-static-metric",
+ "protobuf",
  "rand 0.8.3",
  "serde",
  "serde_derive",
+ "serde_json",
  "slog",
  "slog-global",
  "tikv_util",
+ "tipb",
+ "tokio",
 ]
 
 [[package]]
@@ -3933,7 +3939,7 @@ dependencies = [
  "chrono",
  "digest",
  "futures 0.3.15",
- "hex 0.4.2",
+ "hex 0.4.3",
  "hmac",
  "http",
  "hyper",
@@ -4255,7 +4261,7 @@ dependencies = [
  "fs2",
  "futures 0.3.15",
  "grpcio",
- "hex 0.4.2",
+ "hex 0.4.3",
  "keys",
  "kvproto",
  "libc 0.2.86",
@@ -5021,7 +5027,7 @@ dependencies = [
  "codec",
  "collections",
  "error_code",
- "hex 0.4.2",
+ "hex 0.4.3",
  "kvproto",
  "lazy_static",
  "log_wrappers",
@@ -5083,7 +5089,7 @@ dependencies = [
  "codec",
  "file_system",
  "flate2",
- "hex 0.4.2",
+ "hex 0.4.3",
  "log_wrappers",
  "match_template",
  "num",
@@ -5143,7 +5149,7 @@ dependencies = [
  "futures-util",
  "grpcio",
  "grpcio-health",
- "hex 0.4.2",
+ "hex 0.4.3",
  "http",
  "hyper",
  "hyper-openssl",
@@ -5245,7 +5251,7 @@ dependencies = [
  "futures 0.3.15",
  "gag",
  "grpcio",
- "hex 0.4.2",
+ "hex 0.4.3",
  "keys",
  "kvproto",
  "libc 0.2.86",
@@ -5453,7 +5459,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#dc47a87b52aaa5ff150d179f47ba6c25dc441227"
+source = "git+https://github.com/pingcap/tipb.git#b80be13ddf6cfd9186ec5239fc631c241eb7f281"
 dependencies = [
  "lazy_static",
  "prost",

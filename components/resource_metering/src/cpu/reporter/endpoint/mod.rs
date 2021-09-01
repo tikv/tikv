@@ -3,6 +3,7 @@
 use super::record::Records;
 
 pub mod grpc;
+pub mod vmetrics;
 
 mod util;
 
