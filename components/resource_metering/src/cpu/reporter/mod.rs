@@ -18,12 +18,9 @@ use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 
 pub struct Reporter {
     config: Config,
-
     scheduler: Scheduler<Task>,
-
     endpoint: Option<Box<dyn Endpoint>>,
     collector: Option<CollectorHandle>,
-
     records: Records,
 }
 

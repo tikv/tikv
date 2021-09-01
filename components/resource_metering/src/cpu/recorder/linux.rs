@@ -3,7 +3,7 @@
 use crate::cpu::collector::{Collector, CollectorId};
 use crate::cpu::collector::{CollectorRegistrationMsg, COLLECTOR_REGISTRATION_CHANNEL};
 use crate::cpu::recorder::CpuRecords;
-use crate::{ResourceMeteringTag, TagInfos};
+use crate::{Config, ResourceMeteringTag, TagInfos};
 
 use std::cell::Cell;
 use std::fs::read_dir;
@@ -28,14 +28,12 @@ use super::RecorderHandle;
 const RECORD_FREQUENCY: f64 = 99.0;
 const GC_INTERVAL_SECS: u64 = 15 * 60;
 
-pub fn init_recorder() -> RecorderHandle {
+pub fn init_recorder(config: &Config) -> RecorderHandle {
     lazy_static! {
         static ref HANDLE: RecorderHandle = {
-            let config = crate::Config::default();
-
-            let pause = Arc::new(AtomicBool::new(!config.enabled));
+            let pause = Arc::new(AtomicBool::new(false));
             let pause0 = pause.clone();
-            let precision_ms = Arc::new(AtomicU64::new(config.precision.0.as_millis() as _));
+            let precision_ms = Arc::new(AtomicU64::new(1000));
             let precision_ms0 = precision_ms.clone();
 
             let join_handle = std::thread::Builder::new()
@@ -60,7 +58,15 @@ pub fn init_recorder() -> RecorderHandle {
             RecorderHandle::new(join_handle, pause0, precision_ms0)
         };
     }
-    HANDLE.clone()
+
+    let handle = HANDLE.clone();
+    if config.enabled {
+        handle.resume();
+    } else {
+        handle.pause();
+    }
+    handle.set_precision(config.precision.0);
+    handle
 }
 
 impl ResourceMeteringTag {

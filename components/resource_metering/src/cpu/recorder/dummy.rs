@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::cpu::recorder::RecorderHandle;
-use crate::ResourceMeteringTag;
+use crate::{Config, ResourceMeteringTag};
 
 use std::marker::PhantomData;
 
@@ -17,6 +17,6 @@ pub struct Guard {
     _p: PhantomData<*const ()>,
 }
 
-pub fn init_recorder() -> RecorderHandle {
+pub fn init_recorder(_config: &Config) -> RecorderHandle {
     RecorderHandle::default()
 }

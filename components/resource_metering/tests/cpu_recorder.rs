@@ -10,7 +10,7 @@ mod linux {
     use lazy_static::lazy_static;
     use resource_metering::cpu::collector::{register_collector, Collector};
     use resource_metering::cpu::recorder::{init_recorder, CpuRecords, TEST_TAG_PREFIX};
-    use resource_metering::{ResourceMeteringTag, TagInfos};
+    use resource_metering::{Config, ResourceMeteringTag, TagInfos};
     use tikv_util::defer;
 
     enum Operation {
@@ -161,7 +161,7 @@ mod linux {
 
     #[test]
     fn test_cpu_record() {
-        let handle = init_recorder();
+        let handle = init_recorder(&Config::default());
         handle.resume();
         fail::cfg("cpu-record-test-filter", "return").unwrap();
 
