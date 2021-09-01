@@ -213,43 +213,44 @@ trait DebugExecutor {
                     let region_epoch = r.get_region_epoch();
                     let peers = r.get_peers();
                     json!({
-                "region": json!({
-                    "id": r.get_id(),
-                    "start_key": hex::encode_upper(r.get_start_key()),
-                    "end_key": hex::encode_upper(r.get_end_key()),
-                    "region_epoch": json!({
-                        "conf_ver": region_epoch.get_conf_ver(),
-                        "version": region_epoch.get_version()
-                    }),
-                    "peers": peers.iter().map(|p| json!({
-                            "id": p.get_id(),
-                            "store_id": p.get_store_id(),
-                            "role": format!("{:?}", p.get_role()),
-                        })).collect::<Vec<_>>(),
+                        "region": json!({
+                            "id": r.get_id(),
+                            "start_key": hex::encode_upper(r.get_start_key()),
+                            "end_key": hex::encode_upper(r.get_end_key()),
+                            "region_epoch": json!({
+                                "conf_ver": region_epoch.get_conf_ver(),
+                                "version": region_epoch.get_version()
+                            }),
+                            "peers": peers.iter().map(|p| json!({
+                                "id": p.get_id(),
+                                "store_id": p.get_store_id(),
+                                "role": format!("{:?}", p.get_role()),
+                            })).collect::<Vec<_>>(),
+                        }),
+                    })
                 }),
-            })}),
                 "raft_local_state": r.raft_local_state.map(|s| {
                     let hard_state = s.get_hard_state();
                     json!({
-                    "hard_state": json!({
-                        "term": hard_state.get_term(),
-                        "vote": hard_state.get_vote(),
-                        "commit": hard_state.get_commit(),
-                    }),
-                    "last_index": s.get_last_index(),
-                })
+                        "hard_state": json!({
+                            "term": hard_state.get_term(),
+                            "vote": hard_state.get_vote(),
+                            "commit": hard_state.get_commit(),
+                        }),
+                        "last_index": s.get_last_index(),
+                    })
                 }),
-                "raft_apply_state": r.raft_apply_state.map(|s|{
+                "raft_apply_state": r.raft_apply_state.map(|s| {
                     let truncated_state = s.get_truncated_state();
                     json!({
-                    "applied_index": s.get_applied_index(),
-                    "commit_index": s.get_commit_index(),
-                    "commit_term": s.get_commit_term(),
-                    "truncated_state": json!({
-                        "index": truncated_state.get_index(),
-                        "term": truncated_state.get_term(),
+                        "applied_index": s.get_applied_index(),
+                        "commit_index": s.get_commit_index(),
+                        "commit_term": s.get_commit_term(),
+                        "truncated_state": json!({
+                            "index": truncated_state.get_index(),
+                            "term": truncated_state.get_term(),
+                        })
                     })
-                })
                 })
             });
             region_objects.insert(region_id.to_string(), region_object);
