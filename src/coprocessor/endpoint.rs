@@ -732,12 +732,12 @@ mod tests {
     impl RequestHandler for UnaryFixture {
         async fn handle_request(&mut self) -> Result<coppb::Response> {
             if self.yieldable {
-                // We split the task into small executions of 1 second.
-                for _ in 0..self.handle_duration_millis / 1_000 {
-                    thread::sleep(Duration::from_millis(1_000));
+                // We split the task into small executions of 1 millisecond.
+                for _ in 0..self.handle_duration_millis / 100 {
+                    thread::sleep(Duration::from_millis(100));
                     yatp::task::future::reschedule().await;
                 }
-                thread::sleep(Duration::from_millis(self.handle_duration_millis % 1_000));
+                thread::sleep(Duration::from_millis(self.handle_duration_millis % 100));
             } else {
                 thread::sleep(Duration::from_millis(self.handle_duration_millis));
             }
@@ -1653,7 +1653,7 @@ mod tests {
             });
 
             let mut config = ReqContext::default_for_test();
-            config.deadline = Deadline::from_now(Duration::from_millis(1000));
+            config.deadline = Deadline::from_now(Duration::from_millis(500));
 
             let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
             assert_eq!(resp.get_data().len(), 0);
