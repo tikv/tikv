@@ -1656,7 +1656,7 @@ mod tests {
             });
 
             let mut config = ReqContext::default_for_test();
-            config.deadline = Deadline::from_now(Duration::from_millis(1000));
+            config.deadline = Deadline::from_now(Duration::from_millis(500));
 
             let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
             assert_eq!(resp.get_data().len(), 0);
