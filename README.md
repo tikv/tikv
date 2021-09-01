@@ -75,53 +75,15 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 The most quickest to try out TiKV with TiDB is using TiUP, a component manager for TiDB.
 
-You can see [this page](https://docs.pingcap.com/tidb/stable/quick-start-with-tidb#deploy-a-local-test-environment-using-tiup-playground) for a step by step tutorial.
+```shell
+# install tiup
+curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh
 
-### Deploy a playground with binary
-
-TiKV is able to run separatedly with PD, which is the minimal deployment required.
-
-1. Download and extract binaries.
-
-```bash
-$ export TIKV_VERSION=v4.0.12
-$ export GOOS=darwin  # only {darwin, linux} are supported
-$ export GOARCH=amd64 # only {amd64, arm64} are supported
-$ curl -O  https://tiup-mirrors.pingcap.com/tikv-$TIKV_VERSION-$GOOS-$GOARCH.tar.gz
-$ curl -O  https://tiup-mirrors.pingcap.com/pd-$TIKV_VERSION-$GOOS-$GOARCH.tar.gz
-$ tar -xzf tikv-$TIKV_VERSION-$GOOS-$GOARCH.tar.gz
-$ tar -xzf pd-$TIKV_VERSION-$GOOS-$GOARCH.tar.gz
+# deploy a TiKV playground
+tiup playground --mode tikv-slim
 ```
 
-2. Start PD instance.
-
-```bash
-$ ./pd-server --name=pd --data-dir=/tmp/pd/data --client-urls="http://127.0.0.1:2379" --peer-urls="http://127.0.0.1:2380" --initial-cluster="pd=http://127.0.0.1:2380" --log-file=/tmp/pd/log/pd.log
-```
-
-3. Start TiKV instance.
-
-```bash
-$ ./tikv-server --pd-endpoints="127.0.0.1:2379" --addr="127.0.0.1:20160" --data-dir=/tmp/tikv/data --log-file=/tmp/tikv/log/tikv.log
-```
-
-4. Install TiKV Client(Python) and verify the deployment, required Python 3.5+.
-
-```bash
-$ pip3 install -i https://test.pypi.org/simple/ tikv-client
-```
-
-```python
-from tikv_client import RawClient
-
-client = RawClient.connect("127.0.0.1:2379")
-
-client.put(b'foo', b'bar')
-print(client.get(b'foo')) # b'bar'
-
-client.put(b'foo', b'baz')
-print(client.get(b'foo')) # b'baz'
-```
+You can see [TiKV in 5 Minutes](https://tikv.org/docs/5.1/concepts/tikv-in-5-minutes/) for a step by step tutorial.
 
 ### Deploy a cluster with TiUP
 
