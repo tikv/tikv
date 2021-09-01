@@ -208,7 +208,6 @@ trait DebugExecutor {
             }
             let region_object = json!({
                 "region_id": region_id,
-                "region_local_state_key": hex::encode_upper(&keys::region_state_key(region_id)),
                 "region_local_state": r.region_local_state.map(|s| {
                     let r = s.get_region();
                     let region_epoch = r.get_region_epoch();
@@ -229,7 +228,6 @@ trait DebugExecutor {
                         })).collect::<Vec<_>>(),
                 }),
             })}),
-                "raft_local_state_key": hex::encode_upper(&keys::raft_state_key(region_id)),
                 "raft_local_state": r.raft_local_state.map(|s| {
                     let hard_state = s.get_hard_state();
                     json!({
@@ -241,7 +239,6 @@ trait DebugExecutor {
                     "last_index": s.get_last_index(),
                 })
                 }),
-                "raft_apply_state_key": hex::encode_upper(&keys::apply_state_key(region_id)),
                 "raft_apply_state": r.raft_apply_state.map(|s|{
                     let truncated_state = s.get_truncated_state();
                     json!({
