@@ -198,9 +198,9 @@ impl<T: Display + Send + 'static> Worker<T> {
 
 #[cfg(test)]
 mod tests {
+    use crate::time::Instant;
     use std::sync::mpsc::{self, Sender};
     use std::time::Duration;
-    use std::time::Instant;
 
     use crate::timer::GLOBAL_TIMER_HANDLE;
     use futures::compat::Future01CompatExt;
@@ -219,7 +219,7 @@ mod tests {
             self.ch.send(step).unwrap();
             let f = self
                 .timer
-                .delay(Instant::now() + Duration::from_millis(step))
+                .delay(std::time::Instant::now() + Duration::from_millis(step))
                 .compat();
             spawn_local(f);
         }
@@ -249,7 +249,7 @@ mod tests {
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 1000);
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 1500);
         // above three tasks are executed concurrently, should be less then 2s.
-        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(start.saturating_elapsed() < Duration::from_secs(2));
         worker.stop().unwrap().join().unwrap();
         // now worker can't handle any task
         assert!(worker.is_busy());

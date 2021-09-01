@@ -90,6 +90,7 @@ test_util = { path = "../test_util", default-features = false }
 panic_hook = { path = "../panic_hook" }
 raft = { version = "0.6.0-alpha", default-features = false }
 time = "0.1"
+criterion = "0.3"
 
 [[test]]
 name = "integrations"
@@ -100,3 +101,8 @@ path = "tests/integrations/mod.rs"
 name = "failpoints"
 path = "tests/failpoints/mod.rs"
 required-features = ["failpoints"]
+
+[[bench]]
+name = "cdc_event"
+harness = false
+required-features = ["protobuf-codec"]
