@@ -15,14 +15,10 @@ use std::time::Duration;
 use std::vec::Drain;
 use std::{cmp, usize};
 
-<<<<<<< HEAD
-use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
-=======
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
-    Priority, TrackedFsm,
+    TrackedFsm,
 };
->>>>>>> f3f55b190... raftstore: separate read write ready (#10592)
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::PerfContext;
@@ -3513,20 +3509,12 @@ where
         handle_result
     }
 
-<<<<<<< HEAD
-    fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
+    fn end(&mut self, fsms: &mut [Option<impl TrackedFsm<Target = ApplyFsm<EK>>>]) {
         let is_synced = self.apply_ctx.flush();
         if is_synced {
-            for fsm in fsms {
+            for fsm in fsms.iter_mut().flatten() {
                 fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
             }
-=======
-    fn end(&mut self, fsms: &mut [Option<impl TrackedFsm<Target = ApplyFsm<EK>>>]) {
-        self.apply_ctx.flush();
-        for fsm in fsms.iter_mut().flatten() {
-            fsm.delegate.last_flush_applied_index = fsm.delegate.apply_state.get_applied_index();
-            fsm.delegate.update_memory_trace(&mut self.trace_event);
->>>>>>> f3f55b190... raftstore: separate read write ready (#10592)
         }
     }
 }

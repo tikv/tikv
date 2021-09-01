@@ -12,12 +12,7 @@ use crate::router::Router;
 use crossbeam::channel::{self, SendError};
 use file_system::{set_io_type, IOType};
 use std::borrow::Cow;
-<<<<<<< HEAD
-=======
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
->>>>>>> f3f55b190... raftstore: separate read write ready (#10592)
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tikv_util::mpsc;
@@ -404,19 +399,10 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 p.offset = i;
                 let res = self.handler.handle_normal(p);
                 if p.is_stopped() {
-<<<<<<< HEAD
-                    reschedule_fsms.push((i, ReschedulePolicy::Remove));
-                } else {
-                    if batch.timers[i].elapsed() >= self.reschedule_duration {
-=======
                     p.policy = Some(ReschedulePolicy::Remove);
                     reschedule_fsms.push(i);
-                } else if p.get_priority() != self.handler.get_priority() {
-                    p.policy = Some(ReschedulePolicy::Schedule);
-                    reschedule_fsms.push(i);
                 } else {
-                    if p.timer.saturating_elapsed() >= self.reschedule_duration {
->>>>>>> f3f55b190... raftstore: separate read write ready (#10592)
+                    if p.timer.elapsed() >= self.reschedule_duration {
                         hot_fsm_count += 1;
                         // We should only reschedule a half of the hot regions, otherwise,
                         // it's possible all the hot regions are fetched in a batch the

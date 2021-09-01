@@ -11,7 +11,7 @@ use batch_system::{BasicMailbox, Fsm};
 use collections::HashMap;
 use engine_traits::CF_RAFT;
 use engine_traits::{
-    Engines, KvEngine, RaftEngine, RaftLogBatch, SSTMetaInfo, WriteBatch, WriteBatchExt,
+    Engines, KvEngine, Mutable, RaftEngine, RaftLogBatch, SSTMetaInfo, WriteBatchExt,
 };
 use error_code::ErrorCodeExt;
 use kvproto::errorpb;

@@ -9,14 +9,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, u64};
 
-<<<<<<< HEAD
-use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
-=======
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
-    Priority, TrackedFsm,
+    TrackedFsm,
 };
->>>>>>> f3f55b190... raftstore: separate read write ready (#10592)
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::PerfContext;
 use engine_traits::PerfContextKind;
@@ -617,11 +613,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
-        if self.poll_ctx.trans.need_flush()
-            && (!self.poll_ctx.kv_wb.is_empty() || !self.poll_ctx.raft_wb.is_empty())
-        {
-            self.poll_ctx.trans.flush();
-        }
         let ready_cnt = self.poll_ctx.ready_res.len() + self.poll_ctx.readonly_ready_res.len();
         if !self.poll_ctx.readonly_ready_res.is_empty() {
             let mut readonly_ready_res = mem::take(&mut self.poll_ctx.readonly_ready_res);
@@ -634,6 +625,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
                 .post_raft_ready_append(ready);
             }
             self.poll_ctx.readonly_ready_res = readonly_ready_res;
+        }
+        if self.poll_ctx.trans.need_flush()
+            && (!self.poll_ctx.kv_wb.is_empty() || !self.poll_ctx.raft_wb.is_empty())
+        {
+            self.poll_ctx.trans.flush();
         }
         self.poll_ctx.raft_metrics.ready.has_ready_region += ready_cnt as u64;
     }
@@ -866,10 +862,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         to_skip_end: &mut Vec<usize>,
     ) {
         self.flush_ticks();
-        for peer in peers.iter_mut().flatten() {
-            peer.update_memory_trace(&mut self.trace_event);
-        }
-        MEMTRACE_PEERS.trace(mem::take(&mut self.trace_event));
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers, to_skip_end);
         }
