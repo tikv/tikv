@@ -364,6 +364,10 @@ impl Lock {
     pub fn is_pessimistic_txn(&self) -> bool {
         !self.for_update_ts.is_zero()
     }
+
+    pub fn is_pessimistic_lock(&self) -> bool {
+        self.lock_type == LockType::Pessimistic
+    }
 }
 
 #[cfg(test)]
