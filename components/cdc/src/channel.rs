@@ -253,7 +253,7 @@ impl Drop for Drain {
             memory_quota.free(total_bytes);
         });
         block_on(&mut drain);
-        let takes = start.elapsed();
+        let takes = start.saturating_elapsed();
         if takes >= Duration::from_millis(200) {
             warn!("drop Drain too slow"; "takes" => ?takes);
         }
