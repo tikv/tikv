@@ -402,7 +402,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     p.policy = Some(ReschedulePolicy::Remove);
                     reschedule_fsms.push(i);
                 } else {
-                    if p.timer.elapsed() >= self.reschedule_duration {
+                    if p.timer.saturating_elapsed() >= self.reschedule_duration {
                         hot_fsm_count += 1;
                         // We should only reschedule a half of the hot regions, otherwise,
                         // it's possible all the hot regions are fetched in a batch the

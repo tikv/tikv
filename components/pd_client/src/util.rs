@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::thread;
 use std::time::Duration;
-use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedSender;
 use futures::compat::Future01CompatExt;
@@ -18,7 +17,9 @@ use futures::task::Context;
 use futures::task::Poll;
 use futures::task::Waker;
 
-use super::{metrics::*, Config, Error, FeatureGate, PdFuture, Result, REQUEST_TIMEOUT};
+use super::{
+    metrics::*, tso::TimestampOracle, Config, Error, FeatureGate, PdFuture, Result, REQUEST_TIMEOUT,
+};
 use collections::HashSet;
 use fail::fail_point;
 use grpcio::{
@@ -30,6 +31,7 @@ use kvproto::pdpb::{
     RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader,
 };
 use security::SecurityManager;
+use tikv_util::time::Instant;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{box_err, debug, error, info, slow_log, warn};
 use tikv_util::{Either, HandyRwLock};
@@ -89,6 +91,7 @@ pub struct Inner {
     security_mgr: Arc<SecurityManager>,
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
     pub pending_heartbeat: Arc<AtomicU64>,
+    pub tso: TimestampOracle,
 
     last_try_reconnect: Instant,
 }
@@ -152,6 +155,7 @@ impl Client {
         client_stub: PdClientStub,
         members: GetMembersResponse,
         target: TargetInfo,
+        tso: TimestampOracle,
         enable_forwarding: bool,
     ) -> Client {
         if !target.direct_connected() {
@@ -175,17 +179,19 @@ impl Client {
                 on_reconnect: None,
                 pending_heartbeat: Arc::default(),
                 last_try_reconnect: Instant::now(),
+                tso,
             }),
             feature_gate: FeatureGate::default(),
             enable_forwarding,
         }
     }
 
-    pub fn update_client(
+    fn update_client(
         &self,
         client_stub: PdClientStub,
         target: TargetInfo,
         members: GetMembersResponse,
+        tso: TimestampOracle,
     ) {
         let start_refresh = Instant::now();
         let mut inner = self.inner.wl();
@@ -204,6 +210,7 @@ impl Client {
         let _ = prev_receiver.right().map(|t| t.wake());
         inner.client_stub = client_stub;
         inner.members = members;
+        inner.tso = tso;
         if let Some(ref on_reconnect) = inner.on_reconnect {
             on_reconnect();
         }
@@ -229,7 +236,7 @@ impl Client {
         );
         inner.target = target;
         slow_log!(
-            start_refresh.elapsed(),
+            start_refresh.saturating_elapsed(),
             "PD client refresh region heartbeat",
         );
     }
@@ -289,9 +296,7 @@ impl Client {
 
         let future = {
             let inner = self.inner.rl();
-            if start
-                .checked_duration_since(inner.last_try_reconnect)
-                .map_or(true, |d| d < GLOBAL_RECONNECT_INTERVAL)
+            if start.saturating_duration_since(inner.last_try_reconnect) < GLOBAL_RECONNECT_INTERVAL
             {
                 // Avoid unnecessary updating.
                 // Prevent a large number of reconnections in a short time.
@@ -312,9 +317,7 @@ impl Client {
 
         {
             let mut inner = self.inner.wl();
-            if start
-                .checked_duration_since(inner.last_try_reconnect)
-                .map_or(true, |d| d < GLOBAL_RECONNECT_INTERVAL)
+            if start.saturating_duration_since(inner.last_try_reconnect) < GLOBAL_RECONNECT_INTERVAL
             {
                 // There may be multiple reconnections that pass the read lock at the same time.
                 // Check again in the write lock to avoid unnecessary updating.
@@ -326,8 +329,8 @@ impl Client {
             inner.last_try_reconnect = start;
         }
 
-        slow_log!(start.elapsed(), "try reconnect pd");
-        let (client, target_info, members) = match future.await {
+        slow_log!(start.saturating_elapsed(), "try reconnect pd");
+        let (client, target_info, members, tso) = match future.await {
             Err(e) => {
                 PD_RECONNECT_COUNTER_VEC
                     .with_label_values(&["failure"])
@@ -350,8 +353,8 @@ impl Client {
 
         fail_point!("pd_client_reconnect", |_| Ok(()));
 
-        self.update_client(client, target_info, members);
-        info!("trying to update PD client done"; "spend" => ?start.elapsed());
+        self.update_client(client, target_info, members, tso);
+        info!("trying to update PD client done"; "spend" => ?start.saturating_elapsed());
         Ok(())
     }
 }
@@ -392,7 +395,7 @@ where
                 let _ = self
                     .client
                     .timer
-                    .delay(Instant::now() + REQUEST_RECONNECT_INTERVAL)
+                    .delay(std::time::Instant::now() + REQUEST_RECONNECT_INTERVAL)
                     .compat()
                     .await;
             }
@@ -469,7 +472,12 @@ where
     }
 }
 
-pub type StubTuple = (PdClientStub, TargetInfo, GetMembersResponse);
+pub type StubTuple = (
+    PdClientStub,
+    TargetInfo,
+    GetMembersResponse,
+    TimestampOracle,
+);
 
 pub struct PdConnector {
     env: Arc<Environment>,
@@ -616,7 +624,12 @@ impl PdConnector {
         match res {
             Some((client, target_url)) => {
                 let info = TargetInfo::new(target_url, "");
-                return Ok(Some((client, info, resp)));
+                let tso = TimestampOracle::new(
+                    resp.get_header().get_cluster_id(),
+                    &client,
+                    info.call_option(),
+                )?;
+                return Ok(Some((client, info, resp, tso)));
             }
             None => {
                 // If the force is false, we could have already forwarded the requests.
@@ -626,7 +639,12 @@ impl PdConnector {
                 }
                 if enable_forwarding && has_network_error {
                     if let Ok(Some((client, info))) = self.try_forward(members, leader).await {
-                        return Ok(Some((client, info, resp)));
+                        let tso = TimestampOracle::new(
+                            resp.get_header().get_cluster_id(),
+                            &client,
+                            info.call_option(),
+                        )?;
+                        return Ok(Some((client, info, resp, tso)));
                     }
                 }
             }
@@ -677,16 +695,18 @@ impl PdConnector {
         fail_point!("connect_leader", |_| Ok((None, true)));
         let mut retry_times = MAX_RETRY_TIMES;
         let timer = Instant::now();
-
         // Try to connect the PD cluster leader.
         loop {
             let (res, has_network_err) = self.connect_member(leader).await?;
             match res {
                 Some((client, ep, _)) => return Ok((Some((client, ep)), has_network_err)),
                 None => {
-                    if has_network_err && retry_times > 0 && timer.elapsed() <= MAX_RETRY_DURATION {
+                    if has_network_err
+                        && retry_times > 0
+                        && timer.saturating_elapsed() <= MAX_RETRY_DURATION
+                    {
                         let _ = GLOBAL_TIMER_HANDLE
-                            .delay(Instant::now() + RETRY_INTERVAL)
+                            .delay(std::time::Instant::now() + RETRY_INTERVAL)
                             .compat()
                             .await;
                         retry_times -= 1;
