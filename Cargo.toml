@@ -242,7 +242,7 @@ zipf = "6.1.0"
 # kvproto at the same time.
 # After the PR on kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
 [patch.'https://github.com/pingcap/kvproto']
-kvproto = {git = "https://github.com/andylokandy/kvproto", rev="b16d6dec4a1a7a40ea8bf336f26a1ff34cb51810"}
+kvproto = {git = "https://github.com/andylokandy/kvproto", rev="d54e107" }
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
@@ -261,12 +261,6 @@ rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
-
-# When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
-# kvproto at the same time.
-# After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
-# [patch.'https://github.com/pingcap/kvproto']
-# kvproto = {git = "https://github.com/your_github_id/kvproto", branch="your_branch"}
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
