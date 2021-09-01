@@ -278,12 +278,12 @@ groups:
       summary: TiKV pending {{ $labels.type }} request is high
 
   - alert: TiKV_coprocessor_cpu_util
-    expr: sum(rate(tikv_thread_cpu_seconds_total{name=~"cop_.*"}[1m])) by (instance) / (count(tikv_thread_cpu_seconds_total{name=~"cop_.", instance=~"$instance"}) by (instance) * 0.9) >= 1
+    expr: sum(rate(tikv_thread_cpu_seconds_total{name=~"cop_.*"}[1m])) by (instance) / (count(tikv_thread_cpu_seconds_total{name=~"cop_."}) by (instance) * 0.9) >= 1
     for: 1m
     labels:
       env: ENV_LABELS_ENV
       level: warning
-      expr:  sum(rate(tikv_thread_cpu_seconds_total{name=~"cop_.*"}[1m])) by (instance) / (count(tikv_thread_cpu_seconds_total{name=~"cop_.", instance=~"$instance"}) by (instance) * 0.9) >= 1
+      expr:  sum(rate(tikv_thread_cpu_seconds_total{name=~"cop_.*"}[1m])) by (instance) / (count(tikv_thread_cpu_seconds_total{name=~"cop_."}) by (instance) * 0.9) >= 1
     annotations:
       description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
       value: '{{ $value }}'
