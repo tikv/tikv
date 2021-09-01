@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
-use std::time::Instant;
 
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::import_sstpb::SstMeta;
@@ -20,7 +19,7 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
-use tikv_util::escape;
+use tikv_util::{escape, time::Instant};
 
 use super::{AbstractPeer, RegionSnapshot};
 
