@@ -19,7 +19,9 @@ use tidb_query_datatype::codec::table;
 use tidb_query_datatype::def::Collation;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 use tidb_query_datatype::FieldTypeAccessor;
-use tidb_query_executors::{interface::BatchExecutor, BatchTableScanExecutor};
+use tidb_query_executors::{
+    interface::BatchExecutor, runner::MAX_TIME_SLICE, BatchTableScanExecutor,
+};
 use tidb_query_expr::BATCH_MAX_SIZE;
 use tikv_alloc::trace::{MemTraced, TraceEvent};
 use tikv_util::time::Instant;
@@ -36,7 +38,6 @@ use crate::storage::{Snapshot, SnapshotStore, Statistics};
 
 const ANALYZE_VERSION_V1: i32 = 1;
 const ANALYZE_VERSION_V2: i32 = 2;
-const ANALYZE_MAX_TIME_SLICE: Duration = Duration::from_secs(1);
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
@@ -137,7 +138,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         while let Some((key, _)) = scanner.next()? {
             row_count += 1;
             if row_count >= BATCH_MAX_SIZE {
-                if time_slice_start.saturating_elapsed() > ANALYZE_MAX_TIME_SLICE {
+                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
                     reschedule().await;
                     time_slice_start = Instant::now();
                 }
@@ -346,7 +347,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
         );
         while !is_drained {
             let time_slice_elapsed = time_slice_start.saturating_elapsed();
-            if time_slice_elapsed > ANALYZE_MAX_TIME_SLICE {
+            if time_slice_elapsed > MAX_TIME_SLICE {
                 reschedule().await;
                 time_slice_start = Instant::now();
             }
@@ -673,7 +674,7 @@ impl<S: Snapshot> SampleBuilder<S> {
         let mut common_handle_fms = FmSketch::new(self.max_fm_sketch_size);
         while !is_drained {
             let time_slice_elapsed = time_slice_start.saturating_elapsed();
-            if time_slice_elapsed > ANALYZE_MAX_TIME_SLICE {
+            if time_slice_elapsed > MAX_TIME_SLICE {
                 reschedule().await;
                 time_slice_start = Instant::now();
             }
