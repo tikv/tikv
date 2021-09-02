@@ -21,6 +21,7 @@ use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
+use crate::store::async_io::write::WriteTask;
 use crate::store::fsm::GenSnapTask;
 use crate::store::memory::*;
 use crate::store::peer::PersistSnapshotResult;
@@ -36,8 +37,6 @@ use tikv_util::{box_err, box_try, debug, defer, error, info, warn};
 use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
-
-use crate::store::async_io::write::WriteTask;
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
