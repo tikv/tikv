@@ -669,6 +669,13 @@ impl<ER: RaftEngine> Debugger<ER> {
         let region_ids = region_ids.unwrap_or(self.get_all_regions_in_store()?);
         for region_id in region_ids {
             let region_state = self.region_info(region_id)?;
+
+            // It's safe to unwrap region_local_state here, because get_all_regions_in_store()
+            // guarantees that the region state exists in kvdb.
+            if region_state.region_local_state.unwrap().state == PeerState::Tombstone {
+                continue;
+            }
+
             let old_raft_local_state = region_state.raft_local_state.ok_or_else(|| {
                 Error::Other(format!("No RaftLocalState found for region {}", region_id).into())
             })?;
