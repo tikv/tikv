@@ -6,61 +6,27 @@
 [![Coverage Status](https://codecov.io/gh/tikv/tikv/branch/master/graph/badge.svg)](https://codecov.io/gh/tikv/tikv)
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/2574/badge)](https://bestpractices.coreinfrastructure.org/projects/2574)
 
-TiKV is an open-source, distributed, and transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical key-value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
+## What is TiKV?
 
-The design of TiKV ('Ti' stands for titanium) is inspired by some great distributed systems from Google, such as BigTable, Spanner, and Percolator, and some of the latest achievements in academia in recent years, such as the Raft consensus algorithm.
-
-If you're interested in contributing to TiKV, or want to build it from source, see [CONTRIBUTING.md](./CONTRIBUTING.md).
-
-![cncf_logo](images/cncf.png)
-
-TiKV is a graduated project of the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/announcements/2020/09/02/cloud-native-computing-foundation-announces-tikv-graduation/).
-
----
+TiKV ('Ti' stands for titanium) is an open-source, distributed, and transactional key-value database with ACID compliance.
 
 With the implementation of the Raft consensus algorithm in Rust and consensus state stored in RocksDB, TiKV guarantees data consistency. [Placement Driver (PD)](https://github.com/pingcap/pd/), which is introduced to implement auto-sharding, enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), snapshot isolation with lock (SQL: `SELECT ... FOR UPDATE`), and externally consistent reads and writes in distributed transactions.
 
 TiKV has the following key features:
 
-- **Geo-Replication**
+- **Geo-Replication**: TiKV uses [Raft](http://raft.github.io/) and the Placement Driver to support Geo-Replication.
+- **Horizontal scalability**: With PD and carefully designed Raft groups, TiKV excels in horizontal scalability and can easily scale to 100+ TBs of data.
+- **Consistent distributed transactions**: Similar to Google's Spanner, TiKV supports externally-consistent distributed transactions.
+- **Coprocessor support**: Similar to HBase, TiKV implements a coprocessor framework to support distributed computing.
+- **Cooperates with [TiDB](https://github.com/pingcap/tidb)**: Thanks to the internal optimization, TiKV and TiDB can work together to be a compelling database solution with high horizontal scalability, externally-consistent transactions, support for RDBMS, and NoSQL design patterns.
 
-    TiKV uses [Raft](http://raft.github.io/) and the Placement Driver to support Geo-Replication.
+![cncf_logo](images/cncf.png)
 
-- **Horizontal scalability**
-
-    With PD and carefully designed Raft groups, TiKV excels in horizontal scalability and can easily scale to 100+ TBs of data.
-
-- **Consistent distributed transactions**
-
-    Similar to Google's Spanner, TiKV supports externally-consistent distributed transactions.
-
-- **Coprocessor support**
-
-    Similar to HBase, TiKV implements a coprocessor framework to support distributed computing.
-
-- **Cooperates with [TiDB](https://github.com/pingcap/tidb)**
-
-    Thanks to the internal optimization, TiKV and TiDB can work together to be a compelling database solution with high horizontal scalability, externally-consistent transactions, support for RDBMS, and NoSQL design patterns.
-
-## Governance
-
-See [Governance](https://github.com/tikv/community/blob/master/GOVERNANCE.md).
-
-## Documentation
-
-For instructions on deployment, configuration, and maintenance of TiKV,see TiKV documentation on our [website](https://tikv.org/docs/4.0/tasks/introduction/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/deep-dive/introduction/).
-
-> **Note:**
->
-> We have migrated our documentation from the [TiKV's wiki page](https://github.com/tikv/tikv/wiki/) to the [official website](https://tikv.org/docs). The original Wiki page is discontinued. If you have any suggestions or issues regarding documentation, offer your feedback [here](https://github.com/tikv/website).
-
-## TiKV adopters
-
-You can view the list of [TiKV Adopters](https://tikv.org/adopters/).
-
-## TiKV software stack
+TiKV is a graduated project of the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/announcements/2020/09/02/cloud-native-computing-foundation-announces-tikv-graduation/).
 
 ![The TiKV software stack](images/tikv_stack.png)
+
+TiKV is composed of:
 
 - **Placement Driver:** PD is the cluster manager of TiKV, which periodically checks replication constraints to balance load and data automatically.
 - **Store:** There is a RocksDB within each Store and it stores data into the local disk.
@@ -71,9 +37,7 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 ## Quick start
 
-### Deploy a playground with TiUP
-
-The most quickest to try out TiKV with TiDB is using TiUP, a component manager for TiDB.
+The most quickest to try out TiKV is using TiUP:
 
 ```shell
 # install tiup
@@ -85,13 +49,7 @@ tiup playground --mode tikv-slim
 
 You can see [TiKV in 5 Minutes](https://tikv.org/docs/5.1/concepts/tikv-in-5-minutes/) for a step by step tutorial.
 
-### Deploy a cluster with TiUP
-
-You can see [this manual](./doc/deploy.md) of production-like cluster deployment presented by @c4pt0r.
-
-### Build from source
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md).
+For productization deployment, please refer to [deploy](https://tikv.org/docs/5.1/deploy/deploy/) for details. You can also see [this manual](./doc/deploy.md) of production-like cluster deployment presented by @c4pt0r.
 
 ## Client drivers
 
@@ -106,19 +64,35 @@ These are the clients for TiKV:
 
 If you want to try the Go client, see [Go Client](https://tikv.org/docs/4.0/reference/clients/go/).
 
-## Security
+## Documentation
 
-### Security audit
+For instructions on deployment, configuration, and maintenance of TiKV, see [TiKV documentation](https://tikv.org/docs/5.1/concepts/overview/) on our [website](https://tikv.org/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/deep-dive/introduction/).
 
-A third-party security auditing was performed by Cure53. See the full report [here](./security/Security-Audit.pdf).
+> **Note:**
+>
+> We have migrated our documentation from the [TiKV's wiki page](https://github.com/tikv/tikv/wiki/) to the [official website](https://tikv.org/docs). The original Wiki page is discontinued. If you have any suggestions or issues regarding documentation, offer your feedback [here](https://github.com/tikv/website).
 
-### Reporting Security Vulnerabilities
+## TiKV adopters
 
-To report a security vulnerability, please send an email to [TiKV-security](mailto:tikv-security@lists.cncf.io) group.
+You can view the list of [TiKV Adopters](https://tikv.org/adopters/).
 
-See [Security](./security/SECURITY.md) for the process and policy followed by the TiKV project.
+## The TiKV Community
 
-## Communication
+### Build from source
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+### Contributing to TiKV
+
+The design of TiKV is inspired by some great distributed systems from Google, such as BigTable, Spanner, and Percolator, and some of the latest achievements in academia in recent years, such as the Raft consensus algorithm. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
+
+If you're interested in contributing to TiKV, or want to build it from source, see [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+### Community Governance
+
+See [Governance](https://github.com/tikv/community/blob/master/GOVERNANCE.md).
+
+### Communication
 
 Communication within the TiKV community abides by [TiKV Code of Conduct](./CODE_OF_CONDUCT.md). Here is an excerpt:
 
@@ -149,6 +123,18 @@ The TiKV community is also available on WeChat. If you want to join our WeChat g
 - Other basic information
 
 We will invite you in right away.
+
+## Security
+
+### Security audit
+
+A third-party security auditing was performed by Cure53. See the full report [here](./security/Security-Audit.pdf).
+
+### Reporting Security Vulnerabilities
+
+To report a security vulnerability, please send an email to [TiKV-security](mailto:tikv-security@lists.cncf.io) group.
+
+See [Security](./security/SECURITY.md) for the process and policy followed by the TiKV project.
 
 ## License
 
