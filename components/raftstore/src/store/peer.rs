@@ -1196,8 +1196,7 @@ where
     ) -> Vec<RaftMessage> {
         let mut raft_msgs = Vec::with_capacity(msgs.len());
         for msg in msgs {
-            if let Some(mut m) = self.fill_raft_message(msg) {
-                m.disk_usage = ctx.self_disk_usage;
+            if let Some(m) = self.fill_raft_message(msg, ctx.self_disk_usage) {
                 raft_msgs.push(m);
             }
         }
@@ -1787,6 +1786,7 @@ where
                     assert!(snap_ctx.scheduled);
 
                     let raft_msgs = mem::take(&mut snap_ctx.msgs);
+                    fail_point!("raft_before_follower_send");
                     self.send_raft_msg(ctx, raft_msgs);
 
                     // Snapshot has been persisted.
@@ -1816,7 +1816,9 @@ where
                 // the peer, it's still dangerous if continue to handle ready for the
                 // peer. So it's better to revoke `JOB_STATUS_CANCELLING` to ensure all
                 // started tasks can get finished correctly.
-                self.snap_ctx = None;
+                if self.snap_ctx.is_some() {
+                    return false;
+                }
             }
         }
         assert_eq!(self.snap_ctx, None);
@@ -2076,13 +2078,14 @@ where
                     assert!(ready.number() > last.max_empty_number);
                     last.max_empty_number = ready.number();
                     if !msgs.is_empty() {
-                        self.unpersisted_message_count += msgs.len();
+                        self.unpersisted_message_count += msgs.capacity();
                         last.raft_msgs.push(msgs);
                     }
                 } else {
                     // If this ready don't need to be persisted and there is no previous unpersisted ready,
                     // we can safely consider it is persisted so the persisted msgs can be sent immediately.
                     self.persisted_number = ready.number();
+                    fail_point!("raft_before_follower_send");
                     self.send_raft_msg(ctx, msgs);
                     // The commit index and messages of light ready should be empty because no data needs
                     // to be persisted. Only the committed entries may not be empty when the size is too
@@ -2266,8 +2269,9 @@ where
                 break;
             }
             let v = self.unpersisted_readies.pop_front().unwrap();
-            self.unpersisted_message_count -= v.raft_msgs.len();
+            self.unpersisted_message_count -= v.raft_msgs.capacity();
             for msgs in v.raft_msgs {
+                fail_point!("raft_before_follower_send");
                 self.send_raft_msg(ctx, msgs);
             }
             if number == v.number {
@@ -3962,8 +3966,14 @@ where
         }
     }
 
-    fn fill_raft_message(&mut self, msg: eraftpb::Message) -> Option<RaftMessage> {
+    fn fill_raft_message(
+        &mut self,
+        msg: eraftpb::Message,
+        disk_usage: DiskUsage,
+    ) -> Option<RaftMessage> {
         let mut send_msg = self.prepare_raft_message();
+
+        send_msg.set_disk_usage(disk_usage);
 
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
             Some(p) => p,
@@ -3987,7 +3997,7 @@ where
             "msg_type" => ?msg_type,
             "msg_size" => msg.compute_size(),
             "to" => to_peer_id,
-            "disk_usage" => ?send_msg.disk_usage,
+            "disk_usage" => ?send_msg.get_disk_usage(),
         );
 
         send_msg.set_to_peer(to_peer);
