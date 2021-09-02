@@ -10,10 +10,9 @@
 #![allow(incomplete_features)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
-#![feature(const_fn)]
 #![feature(test)]
-#![feature(int_error_matching)]
 #![feature(const_fn_fn_ptr_basics)]
+#![feature(const_fn_trait_bound)]
 #![feature(const_mut_refs)]
 
 #[macro_use(box_err, box_try, try_opt)]
@@ -700,6 +699,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::AddDurationAndDuration => add_duration_and_duration_fn_meta(),
         ScalarFuncSig::AddDurationAndString => add_duration_and_string_fn_meta(),
         ScalarFuncSig::SubDurationAndDuration => sub_duration_and_duration_fn_meta(),
+        ScalarFuncSig::SubDurationAndString => sub_duration_and_string_fn_meta(),
         ScalarFuncSig::MakeTime => make_time_fn_meta(),
         ScalarFuncSig::DurationDurationTimeDiff => duration_duration_time_diff_fn_meta(),
         _ => return Err(other_err!(

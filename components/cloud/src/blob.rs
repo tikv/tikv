@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures_io::AsyncRead;
-pub use kvproto::backup::CloudDynamic;
+pub use kvproto::brpb::CloudDynamic;
 use std::io;
 use std::marker::Unpin;
 
@@ -136,7 +136,7 @@ impl BucketConf {
         let path = none_to_empty(self.prefix.clone());
         if let Some(ep) = &self.endpoint {
             let mut u =
-                url::Url::parse(&ep).map_err(|e| format!("invalid endpoint {}: {}", &ep, e))?;
+                url::Url::parse(ep).map_err(|e| format!("invalid endpoint {}: {}", &ep, e))?;
             u.set_path(&format!(
                 "{}/{}",
                 &self.bucket.trim_end_matches('/'),

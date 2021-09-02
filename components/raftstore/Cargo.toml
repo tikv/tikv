@@ -26,6 +26,7 @@ protobuf-codec = [
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
   "file_system/protobuf-codec",
+  "protobuf/bytes"
 ]
 prost-codec = [
   "prost",
@@ -83,6 +84,7 @@ lazy_static = "1.3"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../log_wrappers" }
 memory_trace_macros = { path = "../memory_trace_macros" }
+ordered-float = "2.6"
 pd_client = { path = "../pd_client", default-features = false }
 prometheus = { version = "0.12", features = ["nightly"] }
 prometheus-static-metric = "0.5"
@@ -91,6 +93,7 @@ protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
 raft-proto = { version = "0.6.0-alpha", default-features = false }
 rand = "0.8.3"
+resource_metering = { path = "../resource_metering" }
 serde = "1.0"
 serde_derive = "1.0"
 serde_with = "1.4"

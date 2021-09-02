@@ -29,10 +29,8 @@ use encryption_export::{
     data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
 };
 use engine_rocks::config::BlobRunMode;
+use engine_rocks::get_env;
 use engine_rocks::raw::DB;
-use engine_rocks::{
-    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
-};
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, Iterable, Peekable};
@@ -621,8 +619,7 @@ pub fn create_test_engine(
             .unwrap()
             .map(Arc::new);
 
-    let env = get_encrypted_env(key_manager.clone(), None).unwrap();
-    let env = get_inspected_env(Some(env), limiter).unwrap();
+    let env = get_env(key_manager.clone(), limiter).unwrap();
     let cache = cfg.storage.block_cache.build_shared_cache();
 
     let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
@@ -911,6 +908,38 @@ pub fn must_kv_prewrite_with(
     );
 }
 
+// Disk full test interface.
+pub fn try_kv_prewrite_with(
+    client: &TikvClient,
+    ctx: Context,
+    muts: Vec<Mutation>,
+    pk: Vec<u8>,
+    ts: u64,
+    use_async_commit: bool,
+    try_one_pc: bool,
+) -> PrewriteResponse {
+    let mut prewrite_req = PrewriteRequest::default();
+    prewrite_req.set_context(ctx);
+    prewrite_req.set_mutations(muts.into_iter().collect());
+    prewrite_req.primary_lock = pk;
+    prewrite_req.start_version = ts;
+    prewrite_req.lock_ttl = 3000;
+    prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
+    prewrite_req.use_async_commit = use_async_commit;
+    prewrite_req.try_one_pc = try_one_pc;
+    client.kv_prewrite(&prewrite_req).unwrap()
+}
+
+pub fn try_kv_prewrite(
+    client: &TikvClient,
+    ctx: Context,
+    muts: Vec<Mutation>,
+    pk: Vec<u8>,
+    ts: u64,
+) -> PrewriteResponse {
+    try_kv_prewrite_with(client, ctx, muts, pk, ts, false, false)
+}
+
 pub fn must_kv_prewrite(
     client: &TikvClient,
     ctx: Context,
@@ -942,6 +971,19 @@ pub fn must_kv_commit(
     );
     assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
     assert_eq!(commit_resp.get_commit_version(), expect_commit_ts);
+}
+
+pub fn must_kv_rollback(client: &TikvClient, ctx: Context, keys: Vec<Vec<u8>>, start_ts: u64) {
+    let mut rollback_req = BatchRollbackRequest::default();
+    rollback_req.set_context(ctx);
+    rollback_req.start_version = start_ts;
+    rollback_req.set_keys(keys.into_iter().collect());
+    let rollback_req = client.kv_batch_rollback(&rollback_req).unwrap();
+    assert!(
+        !rollback_req.has_region_error(),
+        "{:?}",
+        rollback_req.get_region_error()
+    );
 }
 
 pub fn kv_pessimistic_lock(

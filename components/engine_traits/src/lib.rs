@@ -259,6 +259,8 @@ extern crate tikv_alloc;
 #[macro_use]
 extern crate serde_derive;
 extern crate slog_global;
+#[macro_use(fail_point)]
+extern crate fail;
 
 // These modules contain traits that need to be implemented by engines, either
 // they are required by KvEngine or are an associated type of KvEngine. It is
@@ -288,14 +290,10 @@ mod snapshot;
 pub use crate::snapshot::*;
 mod sst;
 pub use crate::sst::*;
-mod table_properties;
-pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
 mod encryption;
 pub use crate::encryption::*;
-mod properties;
-pub use crate::properties::*;
 mod mvcc_properties;
 mod sst_partitioner;
 pub use crate::sst_partitioner::*;

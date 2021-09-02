@@ -10,6 +10,8 @@ use crate::import::SSTImporter;
 use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
+use crate::storage::kv::FlowStatsReporter;
+use crate::storage::txn::flow_controller::FlowController;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
@@ -26,20 +28,22 @@ use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
 use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::{FutureWorker, Scheduler, Worker};
+use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<S, EK>(
+pub fn create_raft_storage<S, EK, R: FlowStatsReporter>(
     engine: RaftKv<EK, S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
     lock_mgr: LockManager,
     concurrency_manager: ConcurrencyManager,
     pipelined_pessimistic_lock: Arc<AtomicBool>,
+    flow_controller: Arc<FlowController>,
+    reporter: R,
 ) -> Result<Storage<RaftKv<EK, S>, LockManager>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
@@ -52,6 +56,8 @@ where
         lock_mgr,
         concurrency_manager,
         pipelined_pessimistic_lock,
+        flow_controller,
+        reporter,
     )?;
     Ok(store)
 }
@@ -155,7 +161,7 @@ where
         engines: Engines<RocksEngine, ER>,
         trans: T,
         snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask<RocksEngine>>,
+        pd_worker: LazyWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
@@ -286,7 +292,7 @@ where
         );
 
         let region = initial_region(store_id, region_id, peer_id);
-        store::prepare_bootstrap_cluster(&engines, &region)?;
+        store::prepare_bootstrap_cluster(engines, &region)?;
         Ok(region)
     }
 
@@ -321,16 +327,16 @@ where
                     fail_point!("node_after_bootstrap_cluster", |_| Err(box_err!(
                         "injected error: node_after_bootstrap_cluster"
                     )));
-                    store::clear_prepare_bootstrap_key(&engines)?;
+                    store::clear_prepare_bootstrap_key(engines)?;
                     return Ok(());
                 }
                 Err(PdError::ClusterBootstrapped(_)) => match self.pd_client.get_region(b"") {
                     Ok(region) => {
                         if region == first_region {
-                            store::clear_prepare_bootstrap_key(&engines)?;
+                            store::clear_prepare_bootstrap_key(engines)?;
                         } else {
                             info!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
-                            store::clear_prepare_bootstrap_cluster(&engines, region_id)?;
+                            store::clear_prepare_bootstrap_cluster(engines, region_id)?;
                         }
                         return Ok(());
                     }
@@ -371,7 +377,7 @@ where
         engines: Engines<RocksEngine, ER>,
         trans: T,
         snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask<RocksEngine>>,
+        pd_worker: LazyWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,

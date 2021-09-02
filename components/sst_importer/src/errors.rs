@@ -88,7 +88,8 @@ pub enum Error {
 
     #[error(
         "{what} has wrong prefix: key {} does not start with {}",
-        log_wrappers::Value::key(&key), log_wrappers::Value::key(&prefix)
+        log_wrappers::Value::key(key),
+        log_wrappers::Value::key(prefix)
     )]
     WrongKeyPrefix {
         what: &'static str,
@@ -107,6 +108,9 @@ pub enum Error {
 
     #[error("ingest file conflict")]
     FileConflict,
+
+    #[error("ttl is not enabled")]
+    TTLNotEnabled,
 }
 
 impl From<String> for Error {
@@ -148,6 +152,7 @@ impl ErrorCodeExt for Error {
             Error::Encryption(e) => e.error_code(),
             Error::CodecError(e) => e.error_code(),
             Error::FileConflict => error_code::sst_importer::FILE_CONFLICT,
+            Error::TTLNotEnabled => error_code::sst_importer::TTL_NOT_ENABLED,
         }
     }
 }

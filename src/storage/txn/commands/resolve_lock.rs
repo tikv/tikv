@@ -2,7 +2,9 @@
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE};
+use crate::storage::mvcc::{
+    Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE,
+};
 use crate::storage::txn::commands::{
     Command, CommandExt, ReaderWithStats, ReleasedLocks, ResolveLockReadPhase, ResponsePolicy,
     TypedCommand, WriteCommand, WriteContext, WriteResult,
@@ -93,7 +95,18 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                     false,
                 )?
             } else if commit_ts > current_lock.ts {
-                commit(&mut txn, &mut reader, current_key.clone(), commit_ts)?
+                // Continue to resolve locks if the not found committed locks are pessimistic type.
+                // They could be left if the transaction is finally committed and pessimistic conflict
+                // retry happens during execution.
+                match commit(&mut txn, &mut reader, current_key.clone(), commit_ts) {
+                    Ok(res) => res,
+                    Err(MvccError(box MvccErrorInner::TxnLockNotFound { .. }))
+                        if current_lock.is_pessimistic_lock() =>
+                    {
+                        None
+                    }
+                    Err(err) => return Err(err.into()),
+                }
             } else {
                 return Err(Error::from(ErrorInner::InvalidTxnTso {
                     start_ts: current_lock.ts,
@@ -122,7 +135,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                 cmd: ResolveLockReadPhase::new(txn_status, scan_key.take(), ctx.clone()).into(),
             }
         };
-        let write_data = WriteData::from_modifies(txn.into_modifies());
+        let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx,
             to_be_write: write_data,

@@ -28,7 +28,7 @@ fn assert_same_file_name(s1: String, s2: String) {
     }
 }
 
-fn assert_same_files(files1: Vec<kvproto::backup::File>, files2: Vec<kvproto::backup::File>) {
+fn assert_same_files(files1: Vec<kvproto::brpb::File>, files2: Vec<kvproto::brpb::File>) {
     assert_eq!(files1.len(), files2.len());
 
     // After https://github.com/tikv/tikv/pull/8707 merged.

@@ -34,7 +34,7 @@ use tikv::import::SSTImporter;
 use tikv::server;
 use tikv::server::gc_worker::sync_gc;
 use tikv::server::service::{batch_commands_request, batch_commands_response};
-use tikv_util::worker::{dummy_scheduler, FutureWorker};
+use tikv_util::worker::{dummy_scheduler, LazyWorker};
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
@@ -242,12 +242,18 @@ fn test_rawkv_ttl() {
     std::thread::sleep(Duration::from_secs(1));
 
     let mut get_req = RawGetRequest::default();
-    get_req.set_context(ctx);
+    get_req.set_context(ctx.clone());
     get_req.key = k;
     let get_resp = client.raw_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(get_resp.error.is_empty());
     assert!(get_resp.value.is_empty());
+
+    // Can't run transaction commands with TTL enabled.
+    let mut prewrite_req = PrewriteRequest::default();
+    prewrite_req.set_context(ctx);
+    let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
+    assert!(!prewrite_resp.get_errors().is_empty());
 }
 
 #[test]
@@ -941,14 +947,14 @@ fn test_double_run_node() {
     let router = cluster.sim.rl().get_router(id).unwrap();
     let mut sim = cluster.sim.wl();
     let node = sim.get_node(id).unwrap();
-    let pd_worker = FutureWorker::new("test-pd-worker");
+    let pd_worker = LazyWorker::new("test-pd-worker");
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
-        Arc::new(SSTImporter::new(&ImportConfig::default(), dir, None).unwrap())
+        Arc::new(SSTImporter::new(&ImportConfig::default(), dir, None, false).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 

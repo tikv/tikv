@@ -134,7 +134,7 @@ impl Operator {
         match *self {
             Operator::AddPeer { ref peer, .. } => {
                 if let Either::Left(ref peer) = *peer {
-                    let conf_change_type = if is_learner(&peer) {
+                    let conf_change_type = if is_learner(peer) {
                         ConfChangeType::AddLearnerNode
                     } else {
                         ConfChangeType::AddNode
@@ -184,7 +184,7 @@ impl Operator {
             } => {
                 let mut cps = Vec::with_capacity(to_add_peers.len() + remove_peers.len());
                 for peer in to_add_peers.iter() {
-                    let conf_change_type = if is_learner(&peer) {
+                    let conf_change_type = if is_learner(peer) {
                         ConfChangeType::AddLearnerNode
                     } else {
                         ConfChangeType::AddNode
@@ -1295,9 +1295,13 @@ impl PdClient for TestPdClient {
 
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
         self.check_bootstrap()?;
-        if let Some(region) = self.cluster.rl().get_region(data_key(key)) {
-            if check_key_in_region(key, &region).is_ok() {
-                return Ok(region);
+
+        for _ in 1..500 {
+            sleep_ms(10);
+            if let Some(region) = self.cluster.rl().get_region(data_key(key)) {
+                if check_key_in_region(key, &region).is_ok() {
+                    return Ok(region);
+                }
             }
         }
 

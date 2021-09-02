@@ -314,7 +314,7 @@ fn collect_metrics_by_name(
     let mut new_map: HashMap<String, u64> = HashMap::default();
     for (tid, name) in names {
         let new_value = new_map.entry(name.to_string()).or_insert(0);
-        if let Some(value) = values.get(&tid) {
+        if let Some(value) = values.get(tid) {
             *new_value += *value as u64;
         }
     }
@@ -399,6 +399,8 @@ impl ThreadInfoStatistics {
                 let name = get_name(&stat.command);
                 self.tid_names.entry(tid).or_insert(name);
 
+                // To get a percentage result,
+                // we pre-multiply `cpu_time` by 100 here rather than inside the `update_metric`.
                 let cpu_time = cpu_total(&stat) * 100.0;
                 update_metric(
                     &mut self.metrics_total.cpu_times,
@@ -443,6 +445,12 @@ impl ThreadInfoStatistics {
 
     pub fn get_write_io_rates(&self) -> HashMap<String, u64> {
         collect_metrics_by_name(&self.tid_names, &self.metrics_rate.write_ios)
+    }
+}
+
+impl Default for ThreadInfoStatistics {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

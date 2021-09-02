@@ -22,7 +22,7 @@ static MEMORY_USAGE_HIGH_WATER: AtomicU64 = AtomicU64::new(u64::MAX);
 
 #[cfg(target_os = "linux")]
 lazy_static! {
-    static ref SELF_CGROUP: cgroup::CGroupSys = cgroup::CGroupSys::default();
+    static ref SELF_CGROUP: cgroup::CGroupSys = cgroup::CGroupSys::new();
 }
 
 pub struct SysQuota;
@@ -31,7 +31,7 @@ impl SysQuota {
     pub fn cpu_cores_quota() -> f64 {
         let mut cpu_num = num_cpus::get() as f64;
         let cpuset_cores = SELF_CGROUP.cpuset_cores().len() as f64;
-        let cpu_quota = SELF_CGROUP.cpu_cores_quota().unwrap_or(0.);
+        let cpu_quota = SELF_CGROUP.cpu_quota().unwrap_or(0.);
 
         if cpuset_cores != 0. {
             cpu_num = cpu_num.min(cpuset_cores);
@@ -67,6 +67,14 @@ impl SysQuota {
     }
 
     pub fn log_quota() {
+        #[cfg(target_os = "linux")]
+        info!(
+            "cgroup quota: memory={:?}, cpu={:?}, cores={:?}",
+            ReadableSize(SELF_CGROUP.memory_limit_in_bytes() as u64),
+            SELF_CGROUP.cpu_quota(),
+            SELF_CGROUP.cpuset_cores(),
+        );
+
         info!(
             "memory limit in bytes: {}, cpu cores quota: {}",
             Self::memory_limit_in_bytes(),
@@ -104,9 +112,10 @@ pub fn register_memory_usage_high_water(mark: u64) {
     MEMORY_USAGE_HIGH_WATER.store(mark, Ordering::Release);
 }
 
-pub fn memory_usage_reaches_high_water() -> bool {
+pub fn memory_usage_reaches_high_water(usage: &mut u64) -> bool {
     fail_point!("memory_usage_reaches_high_water", |_| true);
-    get_global_memory_usage() >= MEMORY_USAGE_HIGH_WATER.load(Ordering::Acquire)
+    *usage = get_global_memory_usage();
+    *usage >= MEMORY_USAGE_HIGH_WATER.load(Ordering::Acquire)
 }
 
 fn limit_cpu_cores_quota_by_env_var(quota: f64) -> f64 {

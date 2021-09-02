@@ -94,7 +94,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
 
         let schema: Vec<_> = columns_info
             .iter()
-            .map(|ci| field_type_from_column_info(&ci))
+            .map(|ci| field_type_from_column_info(ci))
             .collect();
 
         let columns_id_without_handle: Vec<_> = columns_info

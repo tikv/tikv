@@ -232,7 +232,7 @@ fn calc_checksum_and_size(
     let (checksum, size) = if let Some(mgr) = encryption_key_manager {
         // Crc32 and file size need to be calculated based on decrypted contents.
         let file_name = path.to_str().unwrap();
-        let mut r = snap_io::get_decrypter_reader(file_name, &mgr)?;
+        let mut r = snap_io::get_decrypter_reader(file_name, mgr)?;
         calc_crc32_and_size(&mut r)?
     } else {
         (calc_crc32(path)?, get_file_size(path)?)
@@ -1247,6 +1247,11 @@ impl SnapManager {
         let _lock = self.core.registry.rl();
         let base = &self.core.base;
         let s = Snapshot::new(base, key, is_sending, CheckPolicy::None, &self.core)?;
+        fail_point!(
+            "get_snapshot_for_gc",
+            key.region_id == 2 && key.idx == 1,
+            |_| { Err(box_err!("invalid cf number of snapshot meta")) }
+        );
         Ok(Box::new(s))
     }
 
@@ -1800,7 +1805,7 @@ pub mod tests {
             .prefix("test-snap-file-db-src")
             .tempdir()
             .unwrap();
-        let db = get_db(&src_db_dir.path(), db_opt.clone(), None).unwrap();
+        let db = get_db(src_db_dir.path(), db_opt.clone(), None).unwrap();
         let snapshot = db.snapshot();
 
         let src_dir = Builder::new()
@@ -1917,7 +1922,7 @@ pub mod tests {
             .prefix("test-snap-validation-db")
             .tempdir()
             .unwrap();
-        let db = get_db(&db_dir.path(), None, None).unwrap();
+        let db = get_db(db_dir.path(), None, None).unwrap();
         let snapshot = db.snapshot();
 
         let dir = Builder::new()
@@ -2084,7 +2089,7 @@ pub mod tests {
             .prefix("test-snap-corruption-db")
             .tempdir()
             .unwrap();
-        let db: KvTestEngine = open_test_db(&db_dir.path(), None, None).unwrap();
+        let db: KvTestEngine = open_test_db(db_dir.path(), None, None).unwrap();
         let snapshot = db.snapshot();
 
         let dir = Builder::new()
@@ -2150,7 +2155,7 @@ pub mod tests {
             .prefix("test-snap-corruption-dst-db")
             .tempdir()
             .unwrap();
-        let dst_db: KvTestEngine = open_test_empty_db(&dst_db_dir.path(), None, None).unwrap();
+        let dst_db: KvTestEngine = open_test_empty_db(dst_db_dir.path(), None, None).unwrap();
         let options = ApplyOptions {
             db: dst_db,
             region,
@@ -2173,7 +2178,7 @@ pub mod tests {
             .prefix("test-snapshot-corruption-meta-db")
             .tempdir()
             .unwrap();
-        let db: KvTestEngine = open_test_db(&db_dir.path(), None, None).unwrap();
+        let db: KvTestEngine = open_test_db(db_dir.path(), None, None).unwrap();
         let snapshot = db.snapshot();
 
         let dir = Builder::new()
@@ -2271,7 +2276,7 @@ pub mod tests {
             .prefix("test-snap-mgr-delete-temp-files-v2-db")
             .tempdir()
             .unwrap();
-        let db: KvTestEngine = open_test_db(&db_dir.path(), None, None).unwrap();
+        let db: KvTestEngine = open_test_db(db_dir.path(), None, None).unwrap();
         let snapshot = db.snapshot();
         let key1 = SnapKey::new(1, 1, 1);
         let mgr_core = create_manager_core(&path);
@@ -2351,7 +2356,7 @@ pub mod tests {
             .prefix("test-snap-deletion-on-registry-src-db")
             .tempdir()
             .unwrap();
-        let db: KvTestEngine = open_test_db(&src_db_dir.path(), None, None).unwrap();
+        let db: KvTestEngine = open_test_db(src_db_dir.path(), None, None).unwrap();
         let snapshot = db.snapshot();
 
         let key = SnapKey::new(1, 1, 1);
@@ -2500,7 +2505,7 @@ pub mod tests {
             .prefix("test_snap_temp_file_delete_kv")
             .tempdir()
             .unwrap();
-        let engine = open_test_db(&kv_temp_dir.path(), None, None).unwrap();
+        let engine = open_test_db(kv_temp_dir.path(), None, None).unwrap();
         let sst_path = src_mgr.get_temp_path_for_ingest();
         let mut writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
             .set_db(&engine)
@@ -2519,7 +2524,7 @@ pub mod tests {
 
     #[test]
     fn test_build_with_encryption() {
-        let (_enc_dir, key_path, dict_path) = create_enc_dir(&"test_build_with_encryption_enc");
+        let (_enc_dir, key_path, dict_path) = create_enc_dir("test_build_with_encryption_enc");
         let enc_cfg = EncryptionConfig {
             data_encryption_method: EncryptionMethod::Aes128Ctr,
             master_key: MasterKeyConfig::File {

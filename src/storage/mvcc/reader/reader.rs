@@ -45,7 +45,7 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     pub fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
         Ok(self
             .reader
-            .get_write(&key, ts, Some(self.start_ts))?
+            .get_write(key, ts, Some(self.start_ts))?
             .is_some())
     }
 
@@ -377,7 +377,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         self.create_lock_cursor()?;
         let cursor = self.lock_cursor.as_mut().unwrap();
         let ok = match start {
-            Some(ref x) => cursor.seek(x, &mut self.statistics.lock)?,
+            Some(x) => cursor.seek(x, &mut self.statistics.lock)?,
             None => cursor.seek_to_first(&mut self.statistics.lock),
         };
         if !ok {
@@ -545,7 +545,7 @@ pub mod tests {
     impl RegionEngine {
         pub fn new(db: &Arc<DB>, region: &Region) -> RegionEngine {
             RegionEngine {
-                db: Arc::clone(&db),
+                db: Arc::clone(db),
                 region: region.clone(),
             }
         }
@@ -611,6 +611,7 @@ pub mod tests {
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
                 need_old_value: false,
+                is_retry_request: false,
             }
         }
 
@@ -877,7 +878,7 @@ pub mod tests {
         let path = dir.path().to_str().unwrap();
         let region = make_region(1, vec![0], vec![]);
 
-        let db = open_db(&path, true);
+        let db = open_db(path, true);
         let mut engine = RegionEngine::new(&db, &region);
 
         let key1 = &[1];
