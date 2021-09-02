@@ -24,20 +24,11 @@ TiKV has the following key features:
 
 TiKV is a graduated project of the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/announcements/2020/09/02/cloud-native-computing-foundation-announces-tikv-graduation/).
 
-## The TiKV Architecture
+## TiKV Adopters
 
-![The TiKV software stack](images/tikv_stack.png)
+You can view the list of [TiKV Adopters](https://tikv.org/adopters/).
 
-TiKV is composed of:
-
-- **Placement Driver:** PD is the cluster manager of TiKV, which periodically checks replication constraints to balance load and data automatically.
-- **Store:** There is a RocksDB within each Store and it stores data into the local disk.
-- **Region:** Region is the basic unit of Key-Value data movement. Each Region is replicated to multiple Nodes. These multiple replicas form a Raft group.
-- **Node:** A physical node in the cluster. Within each node, there are one or more Stores. Within each Store, there are many Regions.
-
-When a node starts, the metadata of the Node, Store and Region are recorded into PD. The status of each Region and Store is reported to PD regularly.
-
-## Quick start
+## Quick Start
 
 The most quickest to try out TiKV is using TiUP:
 
@@ -53,18 +44,17 @@ You can see [TiKV in 5 Minutes](https://tikv.org/docs/5.1/concepts/tikv-in-5-min
 
 For productization deployment, please refer to [deploy](https://tikv.org/docs/5.1/deploy/deploy/) for details. You can also see [this manual](./doc/deploy.md) of production-like cluster deployment presented by @c4pt0r.
 
-## Client drivers
+## Client Drivers
 
-Currently, the interfaces to TiKV are the [TiDB Go client](https://github.com/pingcap/tidb/tree/master/store/tikv) and the [TiSpark Java client](https://github.com/pingcap/tispark/tree/master/tikv-client/src/main/java/com/pingcap/tikv).
+Currently, the most mature TiKV clients are the [Go](https://github.com/tikv/client-go) and [Java](https://github.com/tikv/client-java) clients, clients for other languages are under development. All the supported clients are:
 
-These are the clients for TiKV:
-
-- [Go](https://github.com/tikv/client-go) (The most stable and widely used)
+- [Go](https://github.com/tikv/client-go): The most stable and widely used client, see [examples](https://github.com/tikv/client-go/tree/master/examples) for how to use.
 - [Java](https://github.com/tikv/client-java)
-- [Rust](https://github.com/tikv/client-rust)
+- [Python](https://github.com/tikv/client-py)
+- [Node.js](https://github.com/tikv/client-node)
 - [C](https://github.com/tikv/client-c)
-
-If you want to try the Go client, see [Go Client](https://tikv.org/docs/4.0/reference/clients/go/).
+- [C++](https://github.com/tikv/client-cpp)
+- [Rust](https://github.com/tikv/client-rust)
 
 ## Documentation
 
@@ -74,17 +64,22 @@ For instructions on deployment, configuration, and maintenance of TiKV, see [TiK
 >
 > We have migrated our documentation from the [TiKV's wiki page](https://github.com/tikv/tikv/wiki/) to the [official website](https://tikv.org/docs). The original Wiki page is discontinued. If you have any suggestions or issues regarding documentation, offer your feedback [here](https://github.com/tikv/website).
 
-## TiKV adopters
+## TiKV Architecture
 
-You can view the list of [TiKV Adopters](https://tikv.org/adopters/).
+![The TiKV software stack](images/tikv_stack.png)
 
-## The TiKV Community
+TiKV is composed of:
 
-### Build from source
+- **Placement Driver:** PD is the cluster manager of TiKV, which periodically checks replication constraints to balance load and data automatically.
+- **Store:** There is a RocksDB within each Store and it stores data into the local disk.
+- **Region:** Region is the basic unit of Key-Value data movement. Each Region is replicated to multiple Nodes. These multiple replicas form a Raft group.
+- **Node:** A physical node in the cluster. Within each node, there are one or more Stores. Within each Store, there are many Regions.
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md).
+When a node starts, the metadata of the Node, Store and Region are recorded into PD. The status of each Region and Store is reported to PD regularly.
 
-### Contributing to TiKV
+## TiKV Community
+
+### Contribute to TiKV
 
 The design of TiKV is inspired by some great distributed systems from Google, such as BigTable, Spanner, and Percolator, and some of the latest achievements in academia in recent years, such as the Raft consensus algorithm. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
 
@@ -128,7 +123,7 @@ We will invite you in right away.
 
 ## Security
 
-### Security audit
+### Security Audit
 
 A third-party security auditing was performed by Cure53. See the full report [here](./security/Security-Audit.pdf).
 
