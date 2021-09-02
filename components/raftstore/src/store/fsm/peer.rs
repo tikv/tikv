@@ -633,8 +633,7 @@ where
                 PeerMsg::Persisted {
                     peer_id,
                     ready_number,
-                    send_time,
-                } => self.on_persisted_msg(peer_id, ready_number, Some(send_time)),
+                } => self.on_persisted_msg(peer_id, ready_number),
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
                 PeerMsg::Destroy(peer_id) => {
                     if self.fsm.peer.peer_id() == peer_id {
@@ -990,12 +989,7 @@ where
         }
     }
 
-    pub fn on_persisted_msg(
-        &mut self,
-        peer_id: u64,
-        ready_number: u64,
-        send_time: Option<TiInstant>,
-    ) {
+    pub fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64) {
         if peer_id != self.fsm.peer_id() {
             error!(
                 "peer id not match";
@@ -1006,12 +1000,6 @@ where
             );
             return;
         }
-        if let Some(t) = send_time {
-            self.ctx
-                .raft_metrics
-                .persisted_msg_wait
-                .observe(duration_to_sec(t.saturating_elapsed()));
-        }
         if let Some(persist_snap_res) = self.fsm.peer.on_persist_ready(self.ctx, ready_number) {
             self.on_ready_apply_snapshot(persist_snap_res);
             if self.fsm.peer.pending_merge_state.is_some() {
@@ -1020,7 +1008,10 @@ where
             }
             self.register_raft_base_tick();
         }
-        self.fsm.has_ready = true;
+        // TODO: It's a little bit tricky
+        if !self.fsm.peer.raft_group.raft.msgs.is_empty() {
+            self.fsm.has_ready = true;
+        }
         if let Some(mbt) = self.fsm.delayed_destroy {
             if !self.fsm.peer.has_unpersisted_ready() {
                 self.destroy_peer(mbt);

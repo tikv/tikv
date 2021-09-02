@@ -658,11 +658,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
                     // the new split peer. The uninitialized one should not generate write task so here we
                     // can simply distinguish them by checking whether it has unpersisted ready.
                     if fsm.peer.has_unpersisted_ready() {
-                        PeerFsmDelegate::new(fsm, &mut self.poll_ctx).on_persisted_msg(
-                            *peer_id,
-                            *ready_number,
-                            None,
-                        );
+                        PeerFsmDelegate::new(fsm, &mut self.poll_ctx)
+                            .on_persisted_msg(*peer_id, *ready_number);
                         readies.remove(&fsm.region_id());
                     }
                 }

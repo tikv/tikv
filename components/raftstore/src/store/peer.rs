@@ -2239,7 +2239,6 @@ where
         fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
     }
 
-    /// Returns if there are new persisted readies.
     pub fn on_persist_ready<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,

@@ -270,12 +270,6 @@ lazy_static! {
             "Bucketed histogram of store write loop duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
-    pub static ref STORE_PERSISTED_MSG_WAIT_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_store_persist_msg_wait_duration_seconds",
-            "Bucketed histogram of persisted msg wait duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
     pub static ref STORE_WRITE_MSG_BLOCK_WAIT_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_write_msg_block_wait_duration_seconds",

@@ -40,7 +40,7 @@ const RAFT_WB_DEFAULT_SIZE: usize = 256 * 1024;
 
 /// Notify the event to the specified region.
 pub trait Notifier: Clone + Send + 'static {
-    fn notify_persisted(&self, region_id: u64, peer_id: u64, ready_number: u64, now: Instant);
+    fn notify_persisted(&self, region_id: u64, peer_id: u64, ready_number: u64);
 }
 
 impl<EK, ER> Notifier for RaftRouter<EK, ER>
@@ -48,19 +48,12 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn notify_persisted(
-        &self,
-        region_id: u64,
-        peer_id: u64,
-        ready_number: u64,
-        send_time: Instant,
-    ) {
+    fn notify_persisted(&self, region_id: u64, peer_id: u64, ready_number: u64) {
         if let Err(e) = self.force_send(
             region_id,
             PeerMsg::Persisted {
                 peer_id,
                 ready_number,
-                send_time,
             },
         ) {
             warn!(
@@ -535,7 +528,7 @@ where
         if notify {
             for (region_id, (peer_id, ready_number)) in &self.batch.readies {
                 self.notifier
-                    .notify_persisted(*region_id, *peer_id, *ready_number, now2);
+                    .notify_persisted(*region_id, *peer_id, *ready_number);
             }
             STORE_WRITE_CALLBACK_DURATION_HISTOGRAM
                 .observe(duration_to_sec(now2.saturating_elapsed()));
