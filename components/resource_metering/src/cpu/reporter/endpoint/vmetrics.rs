@@ -74,7 +74,7 @@ impl Default for VictoriaMetricsEndpoint {
 struct Metric<'a> {
     metric: MetricsLabels<'a>,
     // Timestamps here is in millisecond. Timestamps in records is in second. Conversion is needed.
-    timestamps: Vec<u64>,
+    timestamps: &'a [u64],
     values: &'a [CpuTime],
 }
 
@@ -93,12 +93,17 @@ struct MetricsLabels<'a> {
 fn encode_metrics_jsonl(instance: &str, records: Records, mut buf: &mut Vec<u8>) -> bool {
     let mut sql_digest_hex = String::new();
     let mut plan_digest_hex = String::new();
-    for (tag, (ts_list, cpu_list, _)) in records.records {
+    for (tag, (mut ts_list, cpu_list, _)) in records.records {
         sql_digest_hex.clear();
         plan_digest_hex.clear();
         decode_tag(&tag, &mut sql_digest_hex, &mut plan_digest_hex);
         if sql_digest_hex.is_empty() && plan_digest_hex.is_empty() {
             continue;
+        }
+
+        // second -> millisecond
+        for ts in &mut ts_list {
+            *ts *= 1000;
         }
 
         let metric = Metric {
@@ -109,7 +114,7 @@ fn encode_metrics_jsonl(instance: &str, records: Records, mut buf: &mut Vec<u8>)
                 sql_digest: &sql_digest_hex,
                 plan_digest: &plan_digest_hex,
             },
-            timestamps: ts_list.iter().map(|ts| ts * 1_000).collect(),
+            timestamps: &ts_list,
             values: &cpu_list,
         };
 
@@ -121,6 +126,8 @@ fn encode_metrics_jsonl(instance: &str, records: Records, mut buf: &mut Vec<u8>)
     }
 
     if !records.others.is_empty() {
+        let timestamps: Vec<_> = records.others.keys().map(|ts| ts * 1_000).collect();
+        let values: Vec<_> = records.others.values().cloned().collect();
         let metric = Metric {
             metric: MetricsLabels {
                 name: "cpu_time",
@@ -129,8 +136,8 @@ fn encode_metrics_jsonl(instance: &str, records: Records, mut buf: &mut Vec<u8>)
                 sql_digest: "",
                 plan_digest: "",
             },
-            timestamps: records.others.keys().map(|ts| ts * 1_000).collect(),
-            values: &records.others.values().cloned().collect::<Vec<_>>(),
+            timestamps: &timestamps,
+            values: &values,
         };
         if let Err(err) = serde_json::to_writer(&mut buf, &metric) {
             warn!("failed to encode cpu records to json"; "error" => ?err);
