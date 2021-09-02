@@ -4,12 +4,12 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use slog_global::info;
 
+use crate::shard::{L0Tables, MemTables};
 use crate::table::{memtable, sstable, table};
 use crate::*;
-use crate::shard::{L0Tables, MemTables};
 use crossbeam_epoch as epoch;
-
 
 pub struct Item<'a> {
     val: table::Value,
@@ -26,7 +26,7 @@ impl std::ops::Deref for Item<'_> {
 
 impl Item<'_> {
     fn new(val: table::Value) -> Self {
-        Self{
+        Self {
             val,
             phantom: Default::default(),
         }
@@ -34,7 +34,7 @@ impl Item<'_> {
 }
 
 pub struct SnapAccess<'a> {
-    cfs:   [CFConfig; NUM_CFS],
+    cfs: [CFConfig; NUM_CFS],
     managed_ts: u64,
     hints: [RefCell<memtable::Hint>; NUM_CFS],
     splitting: Option<&'a SplitContext>,
@@ -58,7 +58,7 @@ impl<'a> SnapAccess<'a> {
             RefCell::new(memtable::Hint::new()),
         ];
         Self {
-            cfs: cfs,
+            cfs,
             managed_ts: 0,
             hints,
             mem_tbls,
@@ -94,7 +94,7 @@ impl<'a> SnapAccess<'a> {
             }
         }
         for i in 0..self.mem_tbls.tbls.len() {
-            let tbl = &self.mem_tbls.tbls[i].get_cf(cf);
+            let tbl = self.mem_tbls.tbls[i].get_cf(cf);
             let v: table::Value;
             if i == 0 {
                 v = tbl.get_with_hint(key, version, &mut self.hints[cf].try_borrow_mut().unwrap());
@@ -109,7 +109,7 @@ impl<'a> SnapAccess<'a> {
             if let Some(tbl) = &l0.get_cf(cf) {
                 let v = tbl.get(key, version, key_hash);
                 if v.is_valid() {
-                    return v
+                    return v;
                 }
             }
         }
@@ -117,7 +117,7 @@ impl<'a> SnapAccess<'a> {
         for lh in &scf.levels {
             let v = lh.get(key, version, key_hash);
             if v.is_valid() {
-                return v
+                return v;
             }
         }
         return table::Value::new();
@@ -189,7 +189,6 @@ pub struct Iterator<'a> {
 }
 
 impl<'a> Iterator<'a> {
-
     pub fn valid(&self) -> bool {
         self.val.is_valid()
     }
@@ -197,11 +196,11 @@ impl<'a> Iterator<'a> {
     pub fn key(&self) -> &[u8] {
         self.key.chunk()
     }
-    
+
     pub fn item(&self) -> Item {
         Item {
             val: self.val,
-            phantom: Default::default()
+            phantom: Default::default(),
         }
     }
 
@@ -212,9 +211,10 @@ impl<'a> Iterator<'a> {
     pub fn next(&mut self) {
         if self.all_versions && self.valid() && self.inner.next_version() {
             self.update_item();
-            return
+            return;
         }
         self.inner.next();
+        self.parse_item();
     }
 
     fn update_item(&mut self) {
@@ -222,7 +222,6 @@ impl<'a> Iterator<'a> {
         self.key.extend_from_slice(self.inner.key());
         self.val = self.inner.value();
     }
-
 
     fn parse_item(&mut self) {
         while self.inner.valid() {

@@ -4,11 +4,10 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use moka::sync::SegmentedCache;
 
-use crate::{NUM_CFS, dfs, table::Value};
+use crate::{dfs, table::Value, NUM_CFS};
 
 use super::*;
 use crate::table::table::Result;
-
 
 const L0_FOOTER_SIZE: usize = std::mem::size_of::<L0Footer>();
 
@@ -39,14 +38,17 @@ impl L0Footer {
 pub struct L0Table {
     footer: L0Footer,
     file: Arc<dyn dfs::File>,
-    cfs:  [Option<sstable::SSTable>; NUM_CFS],
+    cfs: [Option<sstable::SSTable>; NUM_CFS],
     cf_offs: [u32; NUM_CFS],
     smallest: Bytes,
     biggest: Bytes,
 }
 
 impl L0Table {
-    pub fn new(file: Arc<dyn dfs::File>, cache: SegmentedCache<BlockCacheKey, Bytes>) -> Result<Self> {
+    pub fn new(
+        file: Arc<dyn dfs::File>,
+        cache: SegmentedCache<BlockCacheKey, Bytes>,
+    ) -> Result<Self> {
         let footer_off = file.size() - L0_FOOTER_SIZE as u64;
         let mut footer = L0Footer::default();
         let footer_buf = file.read(footer_off, L0_FOOTER_SIZE)?;
@@ -55,14 +57,14 @@ impl L0Table {
         let cf_offs_buf = file.read(cf_offs_off, 4 * NUM_CFS)?;
         let mut cf_offs = [0u32; NUM_CFS];
         for i in 0..NUM_CFS {
-            cf_offs[i] = LittleEndian::read_u32(&cf_offs_buf[i*4..]);
+            cf_offs[i] = LittleEndian::read_u32(&cf_offs_buf[i * 4..]);
         }
         let mut cfs: [Option<SSTable>; NUM_CFS] = [None, None, None];
         for i in 0..NUM_CFS {
             let start_off = cf_offs[i] as u64;
             let mut end_off = cf_offs_off as usize;
             if i + 1 < NUM_CFS {
-                end_off = cf_offs[i+1] as usize;
+                end_off = cf_offs[i + 1] as usize;
             }
             let cf_data = file.read(start_off, end_off - start_off as usize)?;
             if cf_data.is_empty() {
@@ -159,7 +161,6 @@ impl L0Builder {
         for builder in &self.builders {
             estimated_size += builder.estimated_size();
         }
-        estimated_size += estimated_size / 32; // reserve a little extra buffer.
         let mut buf = BytesMut::with_capacity(estimated_size);
         let mut offsets = Vec::with_capacity(NUM_CFS);
         for builder in &mut self.builders {

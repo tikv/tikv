@@ -1,0 +1,31 @@
+[package]
+name = "rfengine"
+version = "0.0.1"
+authors = ["The TiKV Authors"]
+license = "Apache-2.0"
+edition = "2018"
+publish = false
+
+
+[features]
+default = ["protobuf-codec"]
+protobuf-codec = [
+  "protobuf/bytes",
+  "kvproto/protobuf-codec",
+  "raft/protobuf-codec",
+]
+
+[dependencies]
+bytes = "1.0"
+byteorder = "1.2"
+protobuf = "2.8"
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+raft = { version = "0.6.0-alpha", default-features = false }
+raft-proto = { version = "0.6.0-alpha", default-features = false }
+crc32c = "0.6"
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog-term = "2.4"
+tempfile = "3.0"
+libc = "0.2"
+thiserror = "1.0"

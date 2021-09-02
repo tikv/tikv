@@ -4,8 +4,8 @@ use bytes::{Buf, Bytes};
 use kvenginepb as pb;
 
 use super::*;
-use slog_global::*;
 use protobuf::{Message, RepeatedField};
+use slog_global::*;
 
 #[derive(Default, Clone)]
 pub struct ShardMeta {
@@ -47,12 +47,25 @@ impl ShardMeta {
             meta.add_file(l0.id, -1, 0, l0.get_smallest(), l0.get_biggest());
         }
         for tbl in snap.get_table_creates() {
-            meta.add_file(tbl.id, tbl.cf, tbl.level, tbl.get_smallest(), tbl.get_biggest());
+            meta.add_file(
+                tbl.id,
+                tbl.cf,
+                tbl.level,
+                tbl.get_smallest(),
+                tbl.get_biggest(),
+            );
         }
         meta
     }
 
-    pub fn new_split(id: u64, ver: u64, start: &[u8], end: &[u8], props: &pb::Properties, parent: Box<ShardMeta>) ->  Self {
+    pub fn new_split(
+        id: u64,
+        ver: u64,
+        start: &[u8],
+        end: &[u8],
+        props: &pb::Properties,
+        parent: Box<ShardMeta>,
+    ) -> Self {
         Self {
             id,
             ver,
@@ -74,7 +87,8 @@ impl ShardMeta {
 
     fn add_file(&mut self, id: u64, cf: i32, level: u32, smallest: &[u8], biggest: &[u8]) {
         info!("{}:{} add file {}", self.id, self.ver, id);
-        self.files.insert(id, FileMeta::new(cf, level, smallest, biggest));
+        self.files
+            .insert(id, FileMeta::new(cf, level, smallest, biggest));
     }
 
     fn delete_file(&mut self, id: u64) {
@@ -92,33 +106,36 @@ impl ShardMeta {
 
     pub fn apply_change_set(&mut self, mut cs: pb::ChangeSet) {
         if self.is_duplicated_change_set(&mut cs) {
-            return
+            return;
         }
         if cs.sequence > 0 {
             self.seq = cs.sequence;
         }
         if cs.has_flush() {
             self.apply_flush(cs);
-            return
+            return;
         }
         if cs.has_pre_split() {
             self.apply_pre_split(cs.take_pre_split());
-            return;   
+            return;
         }
         if cs.has_compaction() {
             self.apply_compaction(cs.take_compaction());
-            return
+            return;
         }
         if cs.has_split_files() {
             self.apply_split_files(cs.take_split_files());
-            return
+            return;
         }
         panic!("unexpected change set {:?}", cs)
     }
 
     pub fn is_duplicated_change_set(&self, cs: &mut pb::ChangeSet) -> bool {
         if cs.sequence > 0 && self.seq >= cs.sequence {
-            info!("{}:{} skip duplicated change, meta seq:{}", self.id, self.ver, cs.sequence);
+            info!(
+                "{}:{} skip duplicated change, meta seq:{}",
+                self.id, self.ver, cs.sequence
+            );
             return true;
         }
         if cs.has_pre_split() {
@@ -131,14 +148,17 @@ impl ShardMeta {
             return self.split_stage == cs.stage;
         }
         if cs.has_compaction() {
-            let mut comp = cs.mut_compaction();
+            let comp = cs.mut_compaction();
             if is_move_down(&comp) {
                 if let Some(level) = self.file_level(comp.get_top_deletes()[0]) {
                     if level == comp.level {
                         return false;
                     }
                 }
-                info!("{}:{} skip duplicated move_down compaction level:{}", self.id, self.ver, comp.level);
+                info!(
+                    "{}:{} skip duplicated move_down compaction level:{}",
+                    self.id, self.ver, comp.level
+                );
                 return true;
             }
             for i in 0..comp.get_top_deletes().len() {
@@ -150,7 +170,7 @@ impl ShardMeta {
             for i in 0..comp.get_bottom_deletes().len() {
                 let id = comp.get_bottom_deletes()[i];
                 if self.is_compaction_file_deleted(id, comp) {
-                    return true
+                    return true;
                 }
             }
         }
@@ -159,11 +179,14 @@ impl ShardMeta {
 
     fn is_compaction_file_deleted(&self, id: u64, comp: &mut pb::Compaction) -> bool {
         if !self.files.contains_key(&id) {
-            info!("{}:{} skip duplicated compaction file {} already deleted.", self.id, self.ver, id);
+            info!(
+                "{}:{} skip duplicated compaction file {} already deleted.",
+                self.id, self.ver, id
+            );
             comp.conflicted = true;
             return true;
         }
-        return false
+        return false;
     }
 
     fn apply_flush(&mut self, cs: pb::ChangeSet) {
@@ -203,7 +226,13 @@ impl ShardMeta {
             self.delete_file(*id);
         }
         for tbl in comp.get_table_creates() {
-            self.add_file(tbl.id, tbl.cf, tbl.level, tbl.get_smallest(), tbl.get_biggest())
+            self.add_file(
+                tbl.id,
+                tbl.cf,
+                tbl.level,
+                tbl.get_smallest(),
+                tbl.get_biggest(),
+            )
         }
     }
 
@@ -215,7 +244,13 @@ impl ShardMeta {
             self.add_file(l0.id, -1, 0, l0.get_smallest(), l0.get_biggest());
         }
         for tbl in split_files.get_table_creates() {
-            self.add_file(tbl.id, tbl.cf, tbl.level, tbl.get_smallest(), tbl.get_biggest());
+            self.add_file(
+                tbl.id,
+                tbl.cf,
+                tbl.level,
+                tbl.get_smallest(),
+                tbl.get_biggest(),
+            );
         }
         self.split_stage = pb::SplitStage::SplitFileDone;
     }
@@ -227,10 +262,18 @@ impl ShardMeta {
         let mut new_shards = Vec::with_capacity(new_shards_len);
         let new_ver = old.ver + new_shards_len as u64 - 1;
         for i in 0..new_shards_len {
-            let (start_key, end_key) = get_splitting_start_end(&old.start, &old.end, split.get_keys(), i);
+            let (start_key, end_key) =
+                get_splitting_start_end(&old.start, &old.end, split.get_keys(), i);
             let new_shard = &split.get_new_shards()[i];
             let id = new_shard.get_shard_id();
-            let mut meta = ShardMeta::new_split(id, new_ver, start_key, end_key, new_shard, Box::new(old.clone()));
+            let mut meta = ShardMeta::new_split(
+                id,
+                new_ver,
+                start_key,
+                end_key,
+                new_shard,
+                Box::new(old.clone()),
+            );
             if id == old.id {
                 old.split = Some(split.clone());
                 meta.base_ts = old.base_ts;
@@ -248,7 +291,7 @@ impl ShardMeta {
         new_shards
     }
 
-    fn to_change_set(&self) -> pb::ChangeSet {
+    pub fn to_change_set(&self) -> pb::ChangeSet {
         let mut cs = new_change_set(self.id, self.ver, self.split_stage);
         cs.set_sequence(self.seq);
         let mut snap = pb::Snapshot::new();
@@ -308,7 +351,8 @@ impl FileMeta {
 }
 
 pub fn is_move_down(comp: &pb::Compaction) -> bool {
-    comp.top_deletes.len() == comp.table_creates.len() && comp.top_deletes[0] == comp.table_creates[0].id
+    comp.top_deletes.len() == comp.table_creates.len()
+        && comp.top_deletes[0] == comp.table_creates[0].id
 }
 
 pub fn new_change_set(shard_id: u64, shard_ver: u64, stage: pb::SplitStage) -> pb::ChangeSet {
@@ -319,10 +363,13 @@ pub fn new_change_set(shard_id: u64, shard_ver: u64, stage: pb::SplitStage) -> p
     cs
 }
 
-pub const GLOBAL_SHARD_END_KEY: Bytes = Bytes::from_static(&[255, 255, 255, 255, 255, 255, 255, 255]);
+pub const GLOBAL_SHARD_END_KEY: Bytes =
+    Bytes::from_static(&[255, 255, 255, 255, 255, 255, 255, 255]);
 
 trait MetaReader {
-    fn iterate_meta<F>(&self, f: F) -> Result<()> where F: Fn(&pb::ChangeSet) -> Result<()>;
+    fn iterate_meta<F>(&self, f: F) -> Result<()>
+    where
+        F: Fn(&pb::ChangeSet) -> Result<()>;
 }
 
 #[cfg(test)]

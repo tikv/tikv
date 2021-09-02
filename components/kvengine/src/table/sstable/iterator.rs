@@ -1,13 +1,12 @@
+use crate::table::{search, table, Iterator, LocalAddr, Value};
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes, BytesMut};
-use crate::table::{table, Iterator, LocalAddr, search, Value};
 
-use super::{SSTable, builder::META_HAS_OLD};
+use super::{builder::META_HAS_OLD, SSTable};
 use std::{slice, sync::Arc};
 
-
 pub struct BlockIterator {
-    b:   Bytes,
+    b: Bytes,
     idx: i32,
     err: Option<table::Error>,
 
@@ -97,11 +96,11 @@ impl BlockIterator {
         match &key[..common_prefix.len()].cmp(common_prefix.chunk()) {
             Less => {
                 self.set_idx(0);
-                return
-            },
+                return;
+            }
             Greater => {
                 self.set_idx(self.entry_offs.len() as i32);
-                return
+                return;
             }
             Equal => {}
         };
@@ -125,8 +124,8 @@ impl BlockIterator {
         let addr = self.entries_data_addr;
         let start = addr.start + self.entry_offs[i] as usize;
         if i + 1 < self.entry_offs.len() {
-            let end = addr.start + self.entry_offs[i+1] as usize;
-            return LocalAddr::new(start, end)
+            let end = addr.start + self.entry_offs[i + 1] as usize;
+            return LocalAddr::new(start, end);
         }
         return LocalAddr::new(start, addr.end);
     }
@@ -140,7 +139,7 @@ impl BlockIterator {
         self.err = None;
         let cur_entry_addr = self.get_entry_addr(i as usize);
         let entry_data = cur_entry_addr.get(self.b.chunk());
-        
+
         let diff_key_len = LittleEndian::read_u16(entry_data) as usize;
         let diff_key_start = cur_entry_addr.start + 2;
         self.diff_key_addr = LocalAddr::new(diff_key_start, diff_key_start + diff_key_len);
@@ -219,32 +218,32 @@ impl<'a> TableIterator<'a> {
         self.b_pos = b_pos;
         let block: Bytes;
         match self.t.load_block(self.b_pos as usize) {
-            Ok(b) => { 
+            Ok(b) => {
                 block = b;
-            },
+            }
             Err(e) => {
                 self.err = Some(e);
-                return false
-            },
+                return false;
+            }
         }
         self.bi.set_block(block);
-        return true
+        return true;
     }
 
     fn set_old_block(&mut self, b_pos: i32) -> bool {
         self.old_b_pos = b_pos;
         let block: Bytes;
         match self.t.load_old_block(self.old_b_pos as usize) {
-            Ok(b) => { 
+            Ok(b) => {
                 block = b;
-            },
+            }
             Err(e) => {
                 self.err = Some(e);
-                return false
-            },
+                return false;
+            }
         }
         self.old_bi.set_block(block);
-        return true
+        return true;
     }
 
     fn seek_to_first(&mut self) {
@@ -252,10 +251,10 @@ impl<'a> TableIterator<'a> {
         let num_blocks = self.t.idx.num_blocks();
         if num_blocks == 0 {
             self.err = Some(table::Error::EOF);
-            return
+            return;
         }
         if !self.set_block(0) {
-            return
+            return;
         }
         self.bi.seek_to_first();
         self.sync_block_iterator();
@@ -266,10 +265,10 @@ impl<'a> TableIterator<'a> {
         let num_blocks = self.t.idx.num_blocks();
         if num_blocks == 0 {
             self.err = Some(table::Error::EOF);
-            return
+            return;
         }
         if !self.set_block(num_blocks as i32 - 1) {
-            return
+            return;
         }
         self.bi.seek_to_last();
         self.sync_block_iterator();
@@ -277,7 +276,7 @@ impl<'a> TableIterator<'a> {
 
     fn seek_in_block(&mut self, b_pos: usize, key: &[u8]) {
         if !self.set_block(b_pos as i32) {
-            return
+            return;
         }
         self.bi.seek(key);
         self.sync_block_iterator();
@@ -285,12 +284,12 @@ impl<'a> TableIterator<'a> {
 
     fn seek_from_offset(&mut self, b_pos: usize, offset: usize, key: &[u8]) {
         if !self.set_block(b_pos as i32) {
-            return
+            return;
         }
         self.bi.set_idx(offset as i32);
         self.sync_block_iterator();
         if self.key_buf.chunk() >= key {
-            return
+            return;
         }
         self.bi.seek(key);
         self.sync_block_iterator();
@@ -301,9 +300,9 @@ impl<'a> TableIterator<'a> {
         let idx = self.t.idx.seek_block(key);
         if idx == 0 {
             // The smallest key in our table is already strictly > key. We can return that.
-		    // This is like a SeekToFirst.
+            // This is like a SeekToFirst.
             self.seek_from_offset(0, 0, key);
-            return
+            return;
         }
 
         // block[idx].smallest is > key.
@@ -312,13 +311,13 @@ impl<'a> TableIterator<'a> {
         // 1) Everything in block[idx-1] is strictly < key. In this case, we should go to the first
         //    element of block[idx].
         // 2) Some element in block[idx-1] is >= key. We should go to that element.
-        self.seek_in_block(idx-1, key);
+        self.seek_in_block(idx - 1, key);
         if self.err.is_some() {
             // Case 1. Need to visit block[idx].
             if idx == self.t.idx.num_blocks() {
                 // If idx == len(itr.t.blockEndOffsets), then input key is greater than ANY element of table.
-			    // There's nothing we can do. Valid() should return false as we seek to end of table.
-                return
+                // There's nothing we can do. Valid() should return false as we seek to end of table.
+                return;
             }
             self.err = None;
             // Since block[idx].smallest is > key. This is essentially a block[idx].SeekToFirst.
@@ -340,15 +339,15 @@ impl<'a> TableIterator<'a> {
         self.iter_state = IterState::NewVersion;
         if self.b_pos >= self.t.idx.num_blocks() as i32 {
             self.err = Some(table::Error::EOF);
-            return
+            return;
         }
         if self.bi.b.is_empty() {
             if !self.set_block(self.b_pos) {
-                return
+                return;
             }
             self.bi.seek_to_first();
             self.sync_block_iterator();
-            return
+            return;
         }
         self.bi.next();
         self.sync_block_iterator();
@@ -364,15 +363,15 @@ impl<'a> TableIterator<'a> {
         self.iter_state = IterState::NewVersion;
         if self.b_pos < 0 {
             self.err = Some(table::Error::EOF);
-            return
+            return;
         }
         if self.bi.b.is_empty() {
             if !self.set_block(self.b_pos) {
-                return
+                return;
             }
             self.bi.seek_to_last();
             self.sync_block_iterator();
-            return
+            return;
         }
 
         self.bi.prev();
@@ -398,9 +397,10 @@ impl<'a> TableIterator<'a> {
         let prefix_len = self.old_bi.common_prefix_addr.len();
         let key = self.key_buf.chunk();
         if prefix_len + self.old_bi.diff_key_addr.len() != key.len() {
-            return false
+            return false;
         }
-        &key[..prefix_len] == self.old_bi.get_common_prefix() && &key[prefix_len..] == self.old_bi.get_diff_key()
+        &key[..prefix_len] == self.old_bi.get_common_prefix()
+            && &key[prefix_len..] == self.old_bi.get_diff_key()
     }
 
     fn seek_old_block(&mut self) -> Option<table::Error> {
@@ -411,14 +411,14 @@ impl<'a> TableIterator<'a> {
         }
         if self.old_bi.b.is_empty() || old_b_pos != self.old_b_pos {
             if !self.set_old_block(old_b_pos) {
-                return self.old_bi.err.clone()
+                return self.old_bi.err.clone();
             }
         }
         self.old_bi.seek(self.key_buf.chunk());
         assert!(self.old_bi.err.is_none());
         assert!(self.bi.old_ver == self.old_bi.ver);
         self.iter_state = IterState::OldVersion;
-        return None
+        return None;
     }
 
     pub fn set_reversed(&mut self, reversed: bool) {
@@ -453,18 +453,18 @@ impl table::Iterator for TableIterator<'_> {
             }
             if self.old_bi.err.is_some() {
                 self.iter_state = IterState::OldVersioDone;
-                return false
+                return false;
             }
             if !self.same_old_key() {
                 self.iter_state = IterState::OldVersioDone;
-                return false
+                return false;
             }
             self.iter_state = IterState::OldVersion;
             return true;
         }
         self.err = self.seek_old_block();
         assert!(self.err.is_none());
-        return true
+        return true;
     }
 
     fn rewind(&mut self) {
@@ -495,7 +495,7 @@ impl table::Iterator for TableIterator<'_> {
             bi = &self.old_bi;
         }
         let bin = bi.val_addr.get(bi.b.chunk());
-        return table::Value::new_with_meta_version(bi.meta, bi.ver, bi.user_meta_len, bin)
+        return table::Value::new_with_meta_version(bi.meta, bi.ver, bi.user_meta_len, bin);
     }
 
     fn valid(&self) -> bool {

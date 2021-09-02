@@ -2,8 +2,9 @@
 
 use std::sync::Arc;
 
-use crate::{NUM_CFS, table::Value};
 use super::{Arena, Hint, SkipList};
+use crate::table::Value;
+use crate::NUM_CFS;
 
 #[derive(Clone)]
 pub struct CFTable {
@@ -58,6 +59,6 @@ impl CFTable {
     }
 
     pub fn get_version(&self) -> u64 {
-        return self.ver
+        return self.ver;
     }
 }

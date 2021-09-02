@@ -3,7 +3,7 @@
 use std::{mem, slice};
 
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
-use bytes::{BufMut, BytesMut, Bytes};
+use bytes::{BufMut, Bytes, BytesMut};
 
 use crate::table::table::Error;
 
@@ -157,10 +157,12 @@ impl Builder {
     }
 
     pub fn estimated_size(&self) -> usize {
-        self.block_builder.buf.len()
+        let mut size = self.block_builder.buf.len()
             + self.old_builder.buf.len()
             + self.block_builder.block.size
-            + self.old_builder.block.size
+            + self.old_builder.block.size;
+        size += size / 32; // reserve extra capacity to avoid reallocate.
+        size
     }
 
     pub fn finish(&mut self, data_buf: &mut BytesMut) -> BuildResult {
@@ -274,18 +276,14 @@ impl Footer {
                 + FOOTER_SIZE
     }
 
-    pub fn unmarshal(&mut self, mut data: &[u8]) {
+    pub fn unmarshal(&mut self, data: &[u8]) {
         let footer_ptr = data.as_ptr() as *const Footer;
-        *self = unsafe {
-            *footer_ptr
-        };
+        *self = unsafe { *footer_ptr };
     }
 
     pub fn marshal(&self) -> &[u8] {
         let footer_ptr = self as *const Footer as *const u8;
-        unsafe {
-            slice::from_raw_parts(footer_ptr, FOOTER_SIZE)
-        }
+        unsafe { slice::from_raw_parts(footer_ptr, FOOTER_SIZE) }
     }
 }
 

@@ -1,20 +1,19 @@
-
 use crate::dfs;
 use crate::table::*;
 
 use super::builder::*;
 use super::iterator::TableIterator;
+use crate::table::table::Result;
 use byteorder::ByteOrder;
 use byteorder::LittleEndian;
 use bytes::BytesMut;
-use bytes::{Buf,Bytes};
+use bytes::{Buf, Bytes};
 use moka::sync::SegmentedCache;
 use slog_global::info;
 use std::cmp::Ordering;
 use std::path::PathBuf;
-use std::sync::Arc;
-use crate::table::table::Result;
 use std::slice;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct SSTable {
@@ -28,7 +27,10 @@ pub struct SSTable {
 }
 
 impl SSTable {
-    pub fn new(file: Arc<dyn dfs::File>, cache: SegmentedCache<BlockCacheKey, Bytes>) -> Result<Self> {
+    pub fn new(
+        file: Arc<dyn dfs::File>,
+        cache: SegmentedCache<BlockCacheKey, Bytes>,
+    ) -> Result<Self> {
         let mut footer = Footer::default();
         if file.size() < FOOTER_SIZE as u64 {
             return Err(table::Error::InvalidFileSize);
@@ -42,7 +44,10 @@ impl SSTable {
         let idx = Index::new(idx_data.clone(), footer.checksum_type)?;
         let old_idx_data = file.read(footer.old_index_offset as u64, footer.old_index_len())?;
         let old_idx = Index::new(old_idx_data.clone(), footer.checksum_type)?;
-        let props_data = file.read(footer.properties_offset as u64, footer.properties_len(file.size() as usize))?;
+        let props_data = file.read(
+            footer.properties_offset as u64,
+            footer.properties_len(file.size() as usize),
+        )?;
         let mut prop_slice = props_data.chunk();
         validate_checksum(prop_slice, footer.checksum_type)?;
         prop_slice = &prop_slice[4..];
@@ -58,9 +63,9 @@ impl SSTable {
             }
         }
         Ok(Self {
-            file: file,
-            cache: cache,
-            footer: footer,
+            file,
+            cache,
+            footer,
             smallest_buf,
             biggest_buf,
             idx,
@@ -72,7 +77,7 @@ impl SSTable {
         let addr = self.idx.block_addrs[pos];
         let length: usize;
         if pos + 1 < self.idx.num_blocks() {
-            length = (self.idx.block_addrs[pos+1].curr_off - addr.curr_off) as usize;
+            length = (self.idx.block_addrs[pos + 1].curr_off - addr.curr_off) as usize;
         } else {
             length = self.footer.data_len() - addr.curr_off as usize;
         }
@@ -82,7 +87,7 @@ impl SSTable {
     fn load_block_by_addr_len(&self, addr: BlockAddress, length: usize) -> Result<Bytes> {
         let cache_key = BlockCacheKey::new(addr.origin_fid, addr.origin_off);
         if let Some(block) = self.cache.get(&cache_key) {
-            return Ok(block)
+            return Ok(block);
         }
         let raw_block = self.file.read(addr.curr_off as u64, length)?;
         validate_checksum(raw_block.chunk(), self.footer.checksum_type)?;
@@ -95,7 +100,7 @@ impl SSTable {
         let addr = self.old_idx.block_addrs[pos];
         let length: usize;
         if pos + 1 < self.old_idx.num_blocks() {
-            length = (self.old_idx.block_addrs[pos+1].curr_off - addr.curr_off) as usize;
+            length = (self.old_idx.block_addrs[pos + 1].curr_off - addr.curr_off) as usize;
         } else {
             length = self.footer.index_offset as usize - addr.curr_off as usize;
         }
@@ -113,11 +118,11 @@ impl SSTable {
     }
 
     pub fn smallest(&self) -> &[u8] {
-        return self.smallest_buf.chunk()
+        return self.smallest_buf.chunk();
     }
 
     pub fn biggest(&self) -> &[u8] {
-        return self.biggest_buf.chunk()
+        return self.biggest_buf.chunk();
     }
 
     pub fn new_iterator(&self, reversed: bool) -> Box<TableIterator> {
@@ -125,7 +130,7 @@ impl SSTable {
         Box::new(it)
     }
 
-    pub fn get(&self, key: &[u8], version: u64, key_hash: u64) -> table::Value {
+    pub fn get(&self, key: &[u8], version: u64, _key_hash: u64) -> table::Value {
         let mut it = self.new_iterator(false);
         it.seek(key);
         if !it.valid() || key != it.key() {
@@ -146,10 +151,10 @@ impl SSTable {
         match end.cmp(self.smallest()) {
             Ordering::Less => {
                 return false;
-            },
+            }
             Ordering::Equal => {
                 return include_end;
-            },
+            }
             _ => {}
         }
         let mut it = self.new_iterator(false);
@@ -158,26 +163,20 @@ impl SSTable {
             return it.error().is_some();
         }
         match it.key().cmp(end) {
-            Ordering::Greater => {
-                false
-            },
-            Ordering::Equal => {
-                include_end
-            },
-            _ => {
-                true
-            }
+            Ordering::Greater => false,
+            Ordering::Equal => include_end,
+            _ => true,
         }
     }
 
     pub fn get_suggest_split_key(&self) -> Option<Bytes> {
         let num_blocks = self.idx.num_blocks();
         if num_blocks > 0 {
-            let diff_key = self.idx.block_diff_key(num_blocks/2);
+            let diff_key = self.idx.block_diff_key(num_blocks / 2);
             let mut split_key = BytesMut::new();
             split_key.extend_from_slice(self.idx.common_prefix.chunk());
             split_key.extend_from_slice(diff_key);
-            return Some(split_key.freeze())
+            return Some(split_key.freeze());
         }
         None
     }
@@ -204,7 +203,7 @@ impl Index {
             slice::from_raw_parts(ptr, num_blocks)
         };
         offset += 4 * num_blocks;
-        
+
         let block_addrs = unsafe {
             let ptr = data[offset..].as_ptr() as *mut BlockAddress;
             slice::from_raw_parts(ptr, num_blocks)
@@ -212,11 +211,11 @@ impl Index {
         offset += BLOCK_ADDR_SIZE * num_blocks;
         let common_prefix_len = LittleEndian::read_u16(&data[offset..]) as usize;
         offset += 2;
-        let common_prefix = bin.slice(offset..offset+common_prefix_len);
+        let common_prefix = bin.slice(offset..offset + common_prefix_len);
         offset += common_prefix_len;
         let block_key_len = LittleEndian::read_u32(&data[offset..]) as usize;
         offset += 4;
-        let block_keys = bin.slice(offset..offset+block_key_len);
+        let block_keys = bin.slice(offset..offset + block_key_len);
         Ok(Self {
             bin,
             common_prefix,
@@ -233,9 +232,9 @@ impl Index {
     pub fn seek_block(&self, key: &[u8]) -> usize {
         if key.len() <= self.common_prefix.len() {
             if key <= self.common_prefix.chunk() {
-                return 0
+                return 0;
             }
-            return self.num_blocks()
+            return self.num_blocks();
         }
         let cmp = key[..self.common_prefix.len()].cmp(self.common_prefix.chunk());
         match cmp {
@@ -243,7 +242,7 @@ impl Index {
             Ordering::Equal => {
                 let diff_key = &key[self.common_prefix.len()..];
                 search(self.num_blocks(), |i| self.block_diff_key(i) > diff_key)
-            },
+            }
             Ordering::Greater => self.num_blocks(),
         }
     }
@@ -252,7 +251,7 @@ impl Index {
         let off = self.block_key_offs[i] as usize;
         let end_off: usize;
         if i + 1 < self.num_blocks() {
-            end_off = self.block_key_offs[i+1] as usize;
+            end_off = self.block_key_offs[i + 1] as usize;
         } else {
             end_off = self.block_keys.len();
         }
@@ -277,14 +276,19 @@ impl BlockCacheKey {
 
 fn validate_checksum(data: &[u8], checksum_type: u8) -> Result<()> {
     if data.len() < 4 {
-        return Err(table::Error::InvalidChecksum(String::from("data is too short")))
+        return Err(table::Error::InvalidChecksum(String::from(
+            "data is too short",
+        )));
     }
     let checksum = LittleEndian::read_u32(data);
     let content = &data[4..];
     if checksum_type == CRC32_CASTAGNOLI {
         let got_checksum = crc32c::crc32c(content);
         if checksum != got_checksum {
-            return Err(table::Error::InvalidChecksum(format!("checksum mismatch expect {} got {}", checksum, got_checksum)));
+            return Err(table::Error::InvalidChecksum(format!(
+                "checksum mismatch expect {} got {}",
+                checksum, got_checksum
+            )));
         }
     }
     Ok(())
@@ -295,11 +299,11 @@ const FILE_SUFFIX: &str = ".sst";
 fn parse_file_id(path: &PathBuf) -> Result<u64> {
     let name = path.file_name().unwrap().to_str().unwrap();
     if name.as_bytes().ends_with(FILE_SUFFIX.as_bytes()) {
-        return Err(table::Error::InvalidFileName)
+        return Err(table::Error::InvalidFileName);
     }
     let digit_part = &name[..name.len() - FILE_SUFFIX.len()];
     if let Ok(id) = u64::from_str_radix(digit_part, 16) {
-        return Ok(id)
+        return Ok(id);
     }
     Err(table::Error::InvalidFileName)
 }
@@ -326,16 +330,16 @@ pub fn new_filename(id: u64, dir: &PathBuf) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::atomic::AtomicU64};
     use bytes::BytesMut;
     use rand::Rng;
+    use std::sync::atomic::AtomicU64;
 
-    use crate::{Iterator, table::sstable::ConcatIterator};
+    use crate::{table::sstable::ConcatIterator, Iterator};
 
     use super::*;
     use std::sync::atomic::Ordering;
 
-    static id_alloc: AtomicU64 = AtomicU64::new(1);
+    static ID_ALLOC: AtomicU64 = AtomicU64::new(1);
 
     fn default_builder_opts() -> TableBuilderOptions {
         TableBuilderOptions {
@@ -370,7 +374,7 @@ mod tests {
     }
 
     fn build_table(key_vals: Vec<(String, String)>) -> Arc<dyn dfs::File> {
-        let id = id_alloc.fetch_add(1, Ordering::Relaxed);
+        let id = ID_ALLOC.fetch_add(1, Ordering::Relaxed) + 1;
         let mut builder = new_table_builder_for_test(id);
         for (k, v) in key_vals {
             let val_buf = Value::encode_buf('A' as u8, &[0], 0, v.as_bytes());
@@ -381,14 +385,15 @@ mod tests {
         Arc::new(dfs::InMemFile::new(id, buf.freeze()))
     }
 
-
     fn build_test_table(prefix: &str, n: usize) -> Arc<dyn dfs::File> {
         let kvs = generate_key_values(prefix, n);
         build_table(kvs)
     }
 
-    fn build_multi_vesion_table(mut key_vals: Vec<(String, String)>) -> (Arc<dyn dfs::File>, usize) {
-        let id = id_alloc.fetch_add(1, Ordering::Relaxed);
+    fn build_multi_vesion_table(
+        mut key_vals: Vec<(String, String)>,
+    ) -> (Arc<dyn dfs::File>, usize) {
+        let id = ID_ALLOC.fetch_add(1, Ordering::Relaxed) + 1;
         let mut builder = new_table_builder_for_test(id);
         key_vals.sort_by(|a, b| a.0.cmp(&b.0));
         let mut all_cnt = key_vals.len();
@@ -441,7 +446,6 @@ mod tests {
             let v = t.get(k.as_bytes(), u64::MAX, k_h);
             assert!(!v.is_empty())
         }
-
 
         for i in 0..8000 {
             let k = key("key", i);
@@ -515,9 +519,9 @@ mod tests {
         let test_datas: Vec<TestData> = vec![
             TestData::new("abc", true, "k0000"),
             TestData::new("k0100", true, "k0100"),
-            TestData::new("k0100b", true, "k0101"), 
-            TestData::new("k1234", true, "k1234"), 
-            TestData::new("k1234b", true, "k1235"), 
+            TestData::new("k0100b", true, "k0101"),
+            TestData::new("k1234", true, "k1234"),
+            TestData::new("k1234b", true, "k1235"),
             TestData::new("k9999", true, "k9999"),
             TestData::new("z", false, ""),
         ];
@@ -540,9 +544,9 @@ mod tests {
         let test_datas: Vec<TestData> = vec![
             TestData::new("abc", false, ""),
             TestData::new("k0100", true, "k0100"),
-            TestData::new("k0100b", true, "k0100"), 
-            TestData::new("k1234", true, "k1234"), 
-            TestData::new("k1234b", true, "k1234"), 
+            TestData::new("k0100b", true, "k0100"),
+            TestData::new("k1234", true, "k1234"),
+            TestData::new("k1234b", true, "k1234"),
             TestData::new("k9999", true, "k9999"),
             TestData::new("z", true, "k9999"),
         ];
@@ -650,7 +654,6 @@ mod tests {
         assert_eq!(it.valid(), true);
         assert_eq!(it.key(), key("key", 1010).as_bytes());
 
-        
         it.seek(key("key", 2000).as_bytes());
         assert_eq!(it.valid(), true);
         assert_eq!(it.key(), key("key", 2000).as_bytes());
@@ -664,7 +667,6 @@ mod tests {
         it.rewind();
         assert_eq!(it.key(), key("key", 0).as_bytes());
     }
-
 
     #[test]
     fn test_iterate_multi_version() {
@@ -813,7 +815,10 @@ mod tests {
             let mut cnt = 0;
             while it.valid() {
                 let v = it.value();
-                assert_eq!(v.get_value(), format!("{}", 10000 - (cnt % 10000) - 1).as_bytes());
+                assert_eq!(
+                    v.get_value(),
+                    format!("{}", 10000 - (cnt % 10000) - 1).as_bytes()
+                );
                 assert_eq!(v.meta, 'A' as u8);
                 cnt += 1;
                 it.next();

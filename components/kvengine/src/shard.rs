@@ -1,16 +1,31 @@
-use std::{borrow::Borrow, cell::RefCell, collections::HashMap, sync::{Arc, Mutex, atomic::{self, AtomicBool, AtomicI32, AtomicI64, AtomicU64, Ordering::*}, mpsc}, time::Instant};
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes};
 use dashmap::DashMap;
 use pb::changeset;
 use protobuf::ProtobufEnum;
+use std::{
+    sync::{
+        atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering::*, *},
+        Arc,
+    },
+    time::Instant,
+};
 
-use crate::{meta::ShardMeta, table::{self, memtable::{self, CFTable, Hint}, search, sstable::L0Table, sstable::SSTable}};
 use crate::*;
+use crate::{
+    meta::ShardMeta,
+    table::{
+        self,
+        memtable::{self, CFTable, Hint},
+        search,
+        sstable::L0Table,
+        sstable::SSTable,
+    },
+};
 use crossbeam_epoch as epoch;
-use epoch::{Atomic, Owned, Guard};
-use slog_global::*;
+use epoch::{Atomic, Guard, Owned};
 use kvenginepb as pb;
+use slog_global::*;
 
 pub(crate) struct MemTables {
     pub tbls: Vec<memtable::CFTable>,
@@ -18,13 +33,7 @@ pub(crate) struct MemTables {
 
 impl MemTables {
     pub(crate) fn new(tbls: Vec<memtable::CFTable>) -> Self {
-        MemTables {
-            tbls,
-        }
-    }
-
-    pub(crate) fn get(&self, i: usize) -> &memtable::CFTable {
-        &self.tbls[i]
+        MemTables { tbls }
     }
 }
 
@@ -81,9 +90,7 @@ pub(crate) struct L0Tables {
 
 impl L0Tables {
     pub(crate) fn new(tbls: Vec<L0Table>) -> Self {
-        Self {
-            tbls,
-        }
+        Self { tbls }
     }
 
     pub(crate) fn total_size(&self) -> u64 {
@@ -126,17 +133,22 @@ pub struct Shard {
     pub(crate) ingest_pre_split_seq: u64,
 
     size_stats: Atomic<ShardSizeStats>,
-    
+
     pub(crate) remove_file: AtomicBool,
 
     pub(crate) compact_lock: tokio::sync::Mutex<()>,
 }
 
-
 pub const MEM_TABLE_SIZE_KEY: &str = "_mem_table_size";
 
 impl Shard {
-    pub fn new(props: &pb::Properties, ver: u64, start: &[u8], end: &[u8], opt: Arc<Options>) -> Self {
+    pub fn new(
+        props: &pb::Properties,
+        ver: u64,
+        start: &[u8],
+        end: &[u8],
+        opt: Arc<Options>,
+    ) -> Self {
         let base_size = opt.base_size;
         let shard = Self {
             id: props.shard_id,
@@ -163,21 +175,29 @@ impl Shard {
             remove_file: AtomicBool::new(false),
             compact_lock: tokio::sync::Mutex::new(()),
         };
-        if let Some(val) = get_shard_property(MEM_TABLE_SIZE_KEY, props){
+        if let Some(val) = get_shard_property(MEM_TABLE_SIZE_KEY, props) {
             shard.set_max_mem_table_size(LittleEndian::read_u64(val.as_slice()))
         }
         for cf in 0..NUM_CFS {
-            let mut scf = ShardCF::new(opt.cfs[cf].max_levels);
+            let scf = ShardCF::new(opt.cfs[cf].max_levels);
             shard.cfs[cf].store(Owned::new(scf), Relaxed);
         }
         shard
     }
 
     pub fn new_for_loading(meta: &ShardMeta, opt: Arc<Options>) -> Self {
-        let mut shard = Self::new(&meta.properties.to_pb(meta.id), meta.ver, meta.start.as_slice(), meta.end.as_slice(), opt);
-        if meta.pre_split.is_some() && meta.split_stage.value() >= pb::SplitStage::PreSplitFlushDone.value() {
+        let mut shard = Self::new(
+            &meta.properties.to_pb(meta.id),
+            meta.ver,
+            meta.start.as_slice(),
+            meta.end.as_slice(),
+            opt,
+        );
+        if meta.pre_split.is_some()
+            && meta.split_stage.value() >= pb::SplitStage::PreSplitFlushDone.value()
+        {
             // We don't set split keys if the split stage has not reached enginepb.SplitStage_PRE_SPLIT_FLUSH_DONE
-		    // because some the recover data should be executed before split key is set.
+            // because some the recover data should be executed before split key is set.
             shard.set_split_keys(meta.pre_split.as_ref().unwrap().get_keys());
         }
         shard.set_split_stage(meta.split_stage);
@@ -189,20 +209,39 @@ impl Shard {
 
     pub fn new_for_ingest(cs: pb::ChangeSet, opt: Arc<Options>) -> Self {
         let snap = cs.get_snapshot();
-        let mut shard = Self::new(snap.get_properties(), cs.shard_ver, snap.start.as_slice(), snap.end.as_slice(), opt);
+        let mut shard = Self::new(
+            snap.get_properties(),
+            cs.shard_ver,
+            snap.start.as_slice(),
+            snap.end.as_slice(),
+            opt,
+        );
         if snap.get_split_keys().len() > 0 {
-            info!("shard {}:{} set pre-split keys by ingest", cs.get_shard_id(), cs.get_shard_ver());
+            info!(
+                "shard {}:{} set pre-split keys by ingest",
+                cs.get_shard_id(),
+                cs.get_shard_ver()
+            );
             shard.set_split_keys(snap.get_split_keys());
             if cs.stage == pb::SplitStage::PreSplit {
                 shard.ingest_pre_split_seq = cs.sequence;
-                info!("shard {}:{} set pre-split seuqence {} by ingest", shard.id, shard.ver, shard.ingest_pre_split_seq);
+                info!(
+                    "shard {}:{} set pre-split seuqence {} by ingest",
+                    shard.id, shard.ver, shard.ingest_pre_split_seq
+                );
             }
         }
         shard.set_split_stage(cs.get_stage());
         store_bool(&shard.initial_flushed, true);
         shard.base_ts = snap.base_ts;
         shard.meta_seq.store(cs.sequence, Relaxed);
-        info!("ingest shard {}:{} max_table_size {}, mem_table_ts {}", cs.shard_id, cs.shard_ver, shard.get_max_mem_table_size(), shard.load_mem_table_ts());
+        info!(
+            "ingest shard {}:{} max_table_size {}, mem_table_ts {}",
+            cs.shard_id,
+            cs.shard_ver,
+            shard.get_max_mem_table_size(),
+            shard.load_mem_table_ts()
+        );
         shard
     }
 
@@ -210,7 +249,7 @@ impl Shard {
         let g = &epoch::pin();
         let mut ids = Vec::new();
         let shared = self.l0_tbls.load(Relaxed, &g);
-        let l0s = unsafe{shared.as_ref().unwrap()};
+        let l0s = unsafe { shared.as_ref().unwrap() };
         for tbl in &l0s.tbls {
             ids.push(tbl.id());
         }
@@ -240,7 +279,7 @@ impl Shard {
             stats.l0 += l0.size();
         }
         self.for_each_level(|cf, l| {
-            stats.cfs[cf] += l.total_size();
+            stats.cfs[cf] += l.total_size;
             false
         });
         store_u64(&self.estimated_size, stats.cf_size() + stats.l0);
@@ -258,44 +297,51 @@ impl Shard {
 
     pub(crate) fn set_split_keys(&self, keys: &[Vec<u8>]) -> bool {
         if self.get_split_stage() == pb::SplitStage::Initial {
-            self.split_ctx.store(Owned::new(SplitContext::new(keys)), Release);
+            self.split_ctx
+                .store(Owned::new(SplitContext::new(keys)), Release);
             return true;
         }
-        warn!("shard {}:{} failed to set split key got stage {}", self.id, self.ver, self.get_split_stage().value());
+        warn!(
+            "shard {}:{} failed to set split key got stage {}",
+            self.id,
+            self.ver,
+            self.get_split_stage().value()
+        );
         false
     }
 
-    pub(crate) fn for_each_level<F>(&self, mut f: F) where F: FnMut(usize/*cf*/, &LevelHandler) -> bool/*stopped*/ {
+    pub(crate) fn for_each_level<F>(&self, mut f: F)
+    where
+        F: FnMut(usize /*cf*/, &LevelHandler) -> bool, /*stopped*/
+    {
         let g = &epoch::pin();
         for cf in 0..NUM_CFS {
             let scf = self.get_cf(cf, g);
             for lh in &scf.levels {
                 if f(cf, lh) {
-                    return
+                    return;
                 }
             }
         }
-    }
-
-    fn load_writable_mem_table<'a>(&self, g: &'a Guard) -> &'a memtable::CFTable {
-        let tbls = self.get_mem_tbls(g);
-        tbls.get(0)
     }
 
     pub(crate) fn get_suggest_split_keys(&self, target_size: u64) -> Vec<Bytes> {
         let mut keys = Vec::new();
         let estimated_size = load_u64(&self.estimated_size);
         if estimated_size < target_size {
-            return keys
+            return keys;
         }
         let g = &epoch::pin();
         let l0s = self.get_l0_tbls(g);
         if l0s.tbls.len() > 0 && l0s.total_size() > (estimated_size * 3 / 10) {
             if let Some(tbl) = l0s.tbls[0].get_cf(0) {
                 if let Some(split_key) = tbl.get_suggest_split_key() {
-                    info!("shard {}:{} get table suggest split key {:x}, start {:x}, end {:x}", self.id, self.ver, split_key, self.start, self.end);
+                    info!(
+                        "shard {}:{} get table suggest split key {:x}, start {:x}, end {:x}",
+                        self.id, self.ver, split_key, self.start, self.end
+                    );
                     keys.push(split_key);
-                    return keys
+                    return keys;
                 }
             }
         }
@@ -303,11 +349,12 @@ impl Shard {
         let mut max_level = &max_cf.levels[0];
         for i in 1..max_cf.levels.len() {
             let level = &max_cf.levels[i];
-            if level.total_size() > max_level.total_size() {
+            if level.total_size > max_level.total_size {
                 max_level = level;
             }
         }
-        let level_target_size = ((target_size as f64) * (max_level.total_size() as f64) / (estimated_size as f64)) as u64;
+        let level_target_size =
+            ((target_size as f64) * (max_level.total_size as f64) / (estimated_size as f64)) as u64;
         let mut current_size = 0;
         for i in 0..max_level.tables.len() {
             let tbl = &max_level.tables[i];
@@ -357,6 +404,10 @@ impl Shard {
         load_resource(&self.cfs[cf], g)
     }
 
+    pub(crate) fn set_cf(&self, cf: usize, scf: ShardCF) {
+        self.cfs[cf].store(epoch::Owned::new(scf), Release);
+    }
+
     pub fn get_property(&self, key: &str) -> Option<Bytes> {
         self.properties.get(key)
     }
@@ -365,8 +416,12 @@ impl Shard {
         self.properties.set(key, val);
     }
 
-    pub(crate) fn next_mem_table_size(&self, current_size: i64, last_switch_time: Instant) -> i64 {
-        todo!()
+    pub(crate) fn next_mem_table_size(&self, current_size: u64, last_switch_time: Instant) -> u64 {
+        let dur = last_switch_time.elapsed();
+        let time_in_ms = dur.as_millis() as u64 + 1;
+        let bytes_per_sec = current_size * 1000 / time_in_ms;
+        let next_mem_size = bytes_per_sec * self.opt.max_mem_table_size_factor as u64;
+        Self::bounded_mem_size(next_mem_size)
     }
 
     pub(crate) fn bounded_mem_size(size: u64) -> u64 {
@@ -380,7 +435,7 @@ impl Shard {
             bounded = MAX_MEM_SIZE_LOWER_LIMIT;
         }
         bounded
-    } 
+    }
 
     pub(crate) fn load_mem_table_ts(&self) -> u64 {
         self.base_ts + self.meta_seq.load(Acquire)
@@ -393,7 +448,7 @@ impl Shard {
         for l0 in &l0s.tbls {
             files.push(l0.id());
         }
-        self.for_each_level(|cf, lh|{
+        self.for_each_level(|cf, lh| {
             for tbl in &lh.tables {
                 files.push(tbl.id())
             }
@@ -424,18 +479,17 @@ impl Shard {
     }
 
     pub fn atomic_add_mem_table<'a>(&self, g: &'a Guard, mem_tbl: memtable::CFTable) {
+        info!("shard {}:{} atomic add new mem table", self.id, self.ver);
         loop {
             let mem_tbl = mem_tbl.clone();
             let shared = self.mem_tbls.load(Acquire, g);
-            let old_mem_tbls = unsafe {&shared.deref().tbls};
+            let old_mem_tbls = unsafe { &shared.deref().tbls };
             let mut tbl_vec = Vec::with_capacity(old_mem_tbls.len() + 1);
             tbl_vec.push(mem_tbl);
             for tbl in old_mem_tbls {
                 tbl_vec.push(tbl.clone());
             }
-            let new_mem_tbls = MemTables {
-                tbls: tbl_vec,
-            };
+            let new_mem_tbls = MemTables { tbls: tbl_vec };
             if cas_resource(&self.mem_tbls, g, shared, new_mem_tbls) {
                 break;
             }
@@ -443,9 +497,10 @@ impl Shard {
     }
 
     pub fn atomic_remove_mem_table<'a>(&self, g: &'a Guard) {
+        info!("shard {}:{} atomic remove mem table", self.id, self.ver);
         loop {
             let shared = self.mem_tbls.load(Acquire, g);
-            let old_mem_tbls = unsafe {&shared.deref().tbls};
+            let old_mem_tbls = unsafe { &shared.deref().tbls };
             let old_len = old_mem_tbls.len();
             if old_len <= 1 {
                 warn!("atomic remove mem table with old table len {}", old_len);
@@ -456,30 +511,50 @@ impl Shard {
             for i in 0..new_len {
                 tbl_vec.push(old_mem_tbls[i].clone());
             }
-            let new_mem_tbls = MemTables {
-                tbls: tbl_vec,
-            };
+            let new_mem_tbls = MemTables { tbls: tbl_vec };
             if cas_resource(&self.mem_tbls, g, shared, new_mem_tbls) {
                 break;
             }
         }
     }
 
-
     pub fn atomic_add_l0_table<'a>(&self, g: &'a Guard, l0_tbl: L0Table) {
+        info!(
+            "shard {}:{} atomic add l0 table, commit_ts {}",
+            self.id,
+            self.ver,
+            l0_tbl.commit_ts()
+        );
         loop {
             let l0_tbl = l0_tbl.clone();
             let shared = self.l0_tbls.load(Acquire, g);
-            let old_l0_tbls = unsafe {&shared.deref().tbls};
+            let old_l0_tbls = unsafe { &shared.deref().tbls };
             let mut tbl_vec = Vec::with_capacity(old_l0_tbls.len());
             tbl_vec.push(l0_tbl);
             for tbl in old_l0_tbls {
                 tbl_vec.push(tbl.clone());
             }
-            let new_l0_tabls = L0Tables {
-                tbls: tbl_vec,
-            };
+            let new_l0_tabls = L0Tables { tbls: tbl_vec };
             if cas_resource(&self.l0_tbls, g, shared, new_l0_tabls) {
+                break;
+            }
+        }
+    }
+
+    pub fn atomic_remove_l0_tables<'a>(&self, g: &'a Guard, n: usize) {
+        info!(
+            "shard {}:{} atomic remove {} l0 tables",
+            self.id, self.ver, n,
+        );
+        loop {
+            let mut size = 0;
+            let shared = self.l0_tbls.load(Acquire, g);
+            let old_l0_tbls = unsafe { &shared.deref().tbls };
+            let new_len = old_l0_tbls.len() - n;
+            let new_l0_tbls = L0Tables {
+                tbls: old_l0_tbls[..new_len].to_vec(),
+            };
+            if cas_resource(&self.l0_tbls, g, shared, new_l0_tbls) {
                 break;
             }
         }
@@ -488,11 +563,12 @@ impl Shard {
 
 pub fn load_resource<'a, T>(ptr: &Atomic<T>, g: &'a Guard) -> &'a T {
     let shared = ptr.load(Acquire, g);
-    unsafe {shared.deref()}
+    unsafe { shared.deref() }
 }
 
 pub fn cas_resource<'a, T>(ptr: &Atomic<T>, g: &'a Guard, old: epoch::Shared<T>, new: T) -> bool {
-    ptr.compare_exchange(old, Owned::new(new), AcqRel, AcqRel, g).is_ok()
+    ptr.compare_exchange(old, Owned::new(new), Release, Relaxed, g)
+        .is_ok()
 }
 
 pub fn store_u64(ptr: &AtomicU64, val: u64) {
@@ -500,7 +576,7 @@ pub fn store_u64(ptr: &AtomicU64, val: u64) {
 }
 
 pub fn load_u64(ptr: &AtomicU64) -> u64 {
-    ptr.load( Acquire)
+    ptr.load(Acquire)
 }
 
 pub fn store_bool(ptr: &AtomicBool, val: bool) {
@@ -527,7 +603,7 @@ impl ShardSizeStats {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct ShardCF {
     pub(crate) levels: Vec<LevelHandler>,
 }
@@ -546,11 +622,11 @@ impl ShardCF {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct LevelHandler {
     pub(crate) tables: Vec<SSTable>,
     pub(crate) level: usize,
-    pub(crate) total_size: AtomicU64,
+    pub(crate) total_size: u64,
 }
 
 impl LevelHandler {
@@ -558,19 +634,29 @@ impl LevelHandler {
         Self {
             tables: Vec::new(),
             level,
-            total_size: AtomicU64::new(0),
+            total_size: 0,
         }
     }
 
     fn overlapping_tables(&self, key_range: KeyRange) -> (usize, usize) {
-        get_tables_in_range(&self.tables, key_range.start, key_range.end)
+        get_tables_in_range(
+            &self.tables,
+            key_range.left.chunk(),
+            key_range.right.chunk(),
+        )
     }
 
     pub fn get(&self, key: &[u8], version: u64, key_hash: u64) -> table::Value {
         self.get_in_table(key, version, key_hash, self.get_table(key))
     }
 
-    fn get_in_table(&self, key: &[u8], version: u64, key_hash: u64, tbl: Option<&SSTable>) -> table::Value {
+    fn get_in_table(
+        &self,
+        key: &[u8],
+        version: u64,
+        key_hash: u64,
+        tbl: Option<&SSTable>,
+    ) -> table::Value {
         if tbl.is_none() {
             return table::Value::new();
         }
@@ -580,17 +666,17 @@ impl LevelHandler {
     fn get_table(&self, key: &[u8]) -> Option<&SSTable> {
         let idx = search(self.tables.len(), |i| self.tables[i].biggest() >= key);
         if idx >= self.tables.len() {
-            return None
+            return None;
         }
-        return Some(&self.tables[idx])
+        return Some(&self.tables[idx]);
     }
 
-    fn total_size(&self) -> u64 {
-        let mut total = 0;
-        for tbl in &self.tables {
-            total += tbl.size();
-        }
-        total
+    pub(crate) fn add_total_size(&mut self, size: u64) {
+        self.total_size += size;
+    }
+
+    pub(crate) fn sub_total_size(&mut self, size: u64) {
+        self.total_size -= size;
     }
 }
 
@@ -641,17 +727,22 @@ pub fn get_shard_property(key: &str, props: &kvenginepb::Properties) -> Option<V
     let keys = props.get_keys();
     for i in 0..keys.len() {
         if key == keys[i] {
-            return Some(props.get_values()[i].clone())
+            return Some(props.get_values()[i].clone());
         }
     }
     None
 }
 
-pub fn get_splitting_start_end<'a: 'b, 'b>(start: &'a [u8], end: &'a [u8], split_keys: &'b [Vec<u8>], i: usize) -> (&'b [u8], &'b [u8]) {
+pub fn get_splitting_start_end<'a: 'b, 'b>(
+    start: &'a [u8],
+    end: &'a [u8],
+    split_keys: &'b [Vec<u8>],
+    i: usize,
+) -> (&'b [u8], &'b [u8]) {
     let start_key: &'b [u8];
     let end_key: &'b [u8];
     if i != 0 {
-        start_key = split_keys[i-1].as_slice();
+        start_key = split_keys[i - 1].as_slice();
     } else {
         start_key = start as &'b [u8];
     }

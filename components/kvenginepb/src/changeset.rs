@@ -40,7 +40,7 @@ pub struct ChangeSet {
     pub split: ::protobuf::SingularPtrField<Split>,
     pub shard_delete: bool,
     pub sequence: u64,
-    pub next_mem_table_size: i64,
+    pub next_mem_table_size: u64,
     pub parent: ::protobuf::SingularPtrField<ChangeSet>,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
@@ -331,10 +331,10 @@ impl ChangeSet {
         self.sequence = v;
     }
 
-    // int64 nextMemTableSize = 13;
+    // uint64 nextMemTableSize = 13;
 
 
-    pub fn get_next_mem_table_size(&self) -> i64 {
+    pub fn get_next_mem_table_size(&self) -> u64 {
         self.next_mem_table_size
     }
     pub fn clear_next_mem_table_size(&mut self) {
@@ -342,7 +342,7 @@ impl ChangeSet {
     }
 
     // Param is passed by value, moved
-    pub fn set_next_mem_table_size(&mut self, v: i64) {
+    pub fn set_next_mem_table_size(&mut self, v: u64) {
         self.next_mem_table_size = v;
     }
 
@@ -477,7 +477,7 @@ impl ::protobuf::Message for ChangeSet {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     }
-                    let tmp = is.read_int64()?;
+                    let tmp = is.read_uint64()?;
                     self.next_mem_table_size = tmp;
                 },
                 14 => {
@@ -593,7 +593,7 @@ impl ::protobuf::Message for ChangeSet {
             os.write_uint64(12, self.sequence)?;
         }
         if self.next_mem_table_size != 0 {
-            os.write_int64(13, self.next_mem_table_size)?;
+            os.write_uint64(13, self.next_mem_table_size)?;
         }
         if let Some(ref v) = self.parent.as_ref() {
             os.write_tag(14, ::protobuf::wire_format::WireTypeLengthDelimited)?;
@@ -697,7 +697,7 @@ impl ::protobuf::Message for ChangeSet {
                     |m: &ChangeSet| { &m.sequence },
                     |m: &mut ChangeSet| { &mut m.sequence },
                 ));
-                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
                     "nextMemTableSize",
                     |m: &ChangeSet| { &m.next_mem_table_size },
                     |m: &mut ChangeSet| { &mut m.next_mem_table_size },
@@ -3564,7 +3564,7 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     s\x18\t\x20\x01(\x0b2\x14.enginepb.SplitFilesB\0\x12\x20\n\x05split\x18\
     \n\x20\x01(\x0b2\x0f.enginepb.SplitB\0\x12\x15\n\x0bshardDelete\x18\x0b\
     \x20\x01(\x08B\0\x12\x12\n\x08sequence\x18\x0c\x20\x01(\x04B\0\x12\x1a\n\
-    \x10nextMemTableSize\x18\r\x20\x01(\x03B\0\x12%\n\x06parent\x18\x0e\x20\
+    \x10nextMemTableSize\x18\r\x20\x01(\x04B\0\x12%\n\x06parent\x18\x0e\x20\
     \x01(\x0b2\x13.enginepb.ChangeSetB\0:\0\"\xa1\x01\n\nCompaction\x12\x0c\
     \n\x02cf\x18\x01\x20\x01(\x05B\0\x12\x0f\n\x05level\x18\x02\x20\x01(\rB\
     \0\x12-\n\x0ctableCreates\x18\x03\x20\x03(\x0b2\x15.enginepb.TableCreate\

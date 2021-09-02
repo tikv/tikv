@@ -104,7 +104,11 @@ impl Iterator for MergeIterator<'_> {
 }
 
 impl<'a> MergeIterator<'a> {
-    pub(crate) fn new(first: Box<MergeIteratorChild<'a>>, second: Box<MergeIteratorChild<'a>>, reverse: bool) -> Self {
+    pub(crate) fn new(
+        first: Box<MergeIteratorChild<'a>>,
+        second: Box<MergeIteratorChild<'a>>,
+        reverse: bool,
+    ) -> Self {
         Self {
             smaller: first,
             bigger: second,
@@ -147,4 +151,3 @@ impl<'a> MergeIterator<'a> {
         mem::swap(&mut self.smaller, &mut self.bigger)
     }
 }
-

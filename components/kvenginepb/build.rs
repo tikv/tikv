@@ -1,5 +1,3 @@
-
-
 fn main() {
     extern crate protobuf_codegen_pure;
 
@@ -8,7 +6,8 @@ fn main() {
         input: &["src/changeset.proto"],
         includes: &["src"],
         customize: protobuf_codegen_pure::Customize {
-        ..Default::default()
+            ..Default::default()
         },
-    }).expect("protoc");
+    })
+    .expect("protoc");
 }

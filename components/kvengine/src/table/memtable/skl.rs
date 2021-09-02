@@ -1,11 +1,19 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{ops::{Deref, DerefMut}, ptr::{self, null_mut}, sync::{Arc, atomic::{AtomicU32, AtomicU64, Ordering::*}}};
+use std::{
+    fmt::Display,
+    ops::{Deref, DerefMut},
+    ptr::{self, null_mut},
+    sync::{
+        atomic::{AtomicU32, AtomicU64, Ordering::*},
+        Arc,
+    },
+};
 
 use crate::table::table::{Iterator, Value};
 use bytes::{Buf, Bytes, BytesMut};
 
-use super::{arena::*};
+use super::arena::*;
 use std::cmp::Ordering::*;
 use std::str;
 
@@ -14,7 +22,6 @@ const HEIGHT_INCREASE: u32 = u32::MAX / 4;
 const RAND_SEED: u32 = 410958445;
 
 const MAX_NODE_SIZE: usize = std::mem::size_of::<Node>();
-
 
 pub struct WriteBatch {
     entries: Vec<WriteBatchEntry>,
@@ -64,7 +71,14 @@ impl WriteBatch {
         self.buf.clear();
     }
 
-    pub fn iterate<F>(&mut self,f: F) where F: Fn(&mut WriteBatchEntry, &[u8]) {
+    pub fn reset_hint(&mut self) {
+        self.hint = Hint::new();
+    }
+
+    pub fn iterate<F>(&mut self, f: F)
+    where
+        F: Fn(&mut WriteBatchEntry, &[u8]),
+    {
         for e in &mut self.entries {
             f(e, self.buf.chunk())
         }
@@ -119,19 +133,19 @@ pub struct Node {
 
 impl Node {
     fn get_val_addr(&self) -> ArenaAddr {
-        ArenaAddr(self.value_addr.load(Acquire))
+        ArenaAddr(self.value_addr.load(SeqCst))
     }
 
     fn set_val_addr(&self, addr: ArenaAddr) {
-        self.value_addr.store(addr.0, Release)
+        self.value_addr.store(addr.0, SeqCst)
     }
 
     fn get_next_off(&self, h: usize) -> ArenaAddr {
-        ArenaAddr(self.tower[h].load(Acquire))
+        ArenaAddr(self.tower[h].load(SeqCst))
     }
 
     fn cas_next_off(&self, h: usize, current: ArenaAddr, new: ArenaAddr) -> bool {
-        let result = self.tower[h].compare_exchange(current.0, new.0, AcqRel, Acquire);
+        let result = self.tower[h].compare_exchange(current.0, new.0, SeqCst, SeqCst);
         !result.is_err()
     }
 }
@@ -156,10 +170,10 @@ pub struct SkipList {
 
 impl Clone for SkipList {
     fn clone(&self) -> Self {
-        Self { 
-            height: AtomicU32::new(self.height.load(Acquire)), 
-            head: self.head, 
-            arena: self.arena.clone(), 
+        Self {
+            height: AtomicU32::new(self.height.load(Acquire)),
+            head: self.head,
+            arena: self.arena.clone(),
             rnd_x: AtomicU32::new(self.rnd_x.load(Acquire)),
         }
     }
@@ -205,11 +219,11 @@ impl SkipList {
 
     // See https://en.wikipedia.org/wiki/Xorshift
     fn next_rand(&self) -> u32 {
-        let mut x = self.rnd_x.load(Relaxed);
+        let mut x = self.rnd_x.load(SeqCst);
         x ^= x << 13;
         x ^= x >> 17;
         x ^= x << 5;
-        self.rnd_x.store(x, Relaxed);
+        self.rnd_x.store(x, SeqCst);
         x
     }
 
@@ -227,12 +241,12 @@ impl SkipList {
     pub fn put_batch(&self, batch: &mut WriteBatch) {
         for i in 0..batch.entries.len() {
             let entry = &batch.entries[i];
-            self.put_with_hint(&batch.buf, entry, &mut batch.hint)
+            self.put_with_hint(&batch.buf, entry, &mut batch.hint);
         }
     }
 
     pub fn put(&self, buf: &[u8], entry: &WriteBatchEntry) {
-        let mut h = &mut Hint::new();
+        let h = &mut Hint::new();
         self.put_with_hint(buf, entry, h)
     }
 
@@ -248,10 +262,9 @@ impl SkipList {
             list_height = height;
         }
         let mut splice_valid = true;
-        let key =  entry.key(buf);
+        let key = entry.key(buf);
         let recomput_height = self.calculate_recompute_height(key, h, list_height);
         if recomput_height > 0 {
-            
             for i in (0..recomput_height).rev() {
                 let (prev, next, matched) = self.find_splice_for_level(key, h.prev[i + 1], i);
                 h.prev[i] = prev;
@@ -288,7 +301,10 @@ impl SkipList {
         for i in 0..height {
             loop {
                 let next_off = get_node_offset(h.next[i]);
-                x.tower[i].store(next_off.0, Relaxed);
+                if next_off.0 != NULL_ARENA_ADDR {
+                    assert!(next_off.block_idx() < 32);
+                }
+                x.tower[i].store(next_off.0, SeqCst);
                 if deref(h.prev[i]).cas_next_off(i, next_off, x.addr) {
                     // Managed to insert x between prev[i] and next[i]. Go to the next level.
                     break;
@@ -328,7 +344,7 @@ impl SkipList {
             let old_v = self.arena.get_val(old_val_off);
             if entry.version <= old_v.version {
                 // Only happens in Restore backup, do nothing.
-                return
+                return;
             }
         }
         let new_val_addr = self.arena.put_val(buf, entry);
@@ -380,7 +396,7 @@ impl SkipList {
             }
             val_off = vn.next_val_addr;
         }
-        Value::new()
+        self.arena.get_val(val_off)
     }
 
     pub fn calculate_recompute_height(
@@ -536,7 +552,7 @@ impl SkipList {
     fn find_last(&self) -> *mut Node {
         let head = self.get_head();
         let mut n = head;
-        let mut level = self.height.load(Acquire) - 1;
+        let mut level = self.height.load(SeqCst) - 1;
         loop {
             let next = self.get_next(n, level as usize);
             if next != null_mut() {
@@ -581,10 +597,10 @@ impl SkipList {
     pub fn is_empty(&self) -> bool {
         self.get_next(self.get_head(), 0).is_null()
     }
-
 }
 
 // Hint is used to speed up sequential write.
+#[derive(Debug)]
 pub struct Hint {
     height: usize,
 
@@ -935,10 +951,7 @@ mod tests {
         assert_eq!(it.valid(), false);
         for i in 0..n {
             let mut wb = WriteBatch::new();
-            wb.put(
-                new_key(i).as_bytes(),
-                0, &[0], 0, new_value(i).as_bytes(),
-            );
+            wb.put(new_key(i).as_bytes(), 0, &[0], 0, new_value(i).as_bytes());
             l.put_batch(&mut wb)
         }
         let mut it = l.new_iterator(false);
@@ -961,10 +974,7 @@ mod tests {
         assert_eq!(it.valid(), false);
         for i in (0..n).rev() {
             let mut wb = WriteBatch::new();
-            wb.put(
-                new_key(i).as_bytes(),
-                0, &[0], 0, new_value(i).as_bytes(),
-            );
+            wb.put(new_key(i).as_bytes(), 0, &[0], 0, new_value(i).as_bytes());
             l.put_batch(&mut wb)
         }
         it.seek_to_last();
@@ -989,10 +999,7 @@ mod tests {
             let v = i * 10 + 1000;
             let key = format!("{:05}", v);
             let mut wb = WriteBatch::new();
-            wb.put(
-                key.as_bytes(),
-                0, &[0], 0, new_value(v).as_bytes(),
-            );
+            wb.put(key.as_bytes(), 0, &[0], 0, new_value(v).as_bytes());
             l.put_batch(&mut wb)
         }
         it.seek_to_first();
@@ -1056,10 +1063,7 @@ mod tests {
                 break;
             }
             let key = random_key();
-            wb.put(
-                key.as_slice(),
-                0, &[], 0, key.as_slice(),
-            );
+            wb.put(key.as_slice(), 0, &[], 0, key.as_slice());
             cnt += 1;
         }
         l.put_batch(&mut wb);

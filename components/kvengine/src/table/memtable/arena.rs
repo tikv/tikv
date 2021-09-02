@@ -2,13 +2,13 @@
 
 use byteorder::{ByteOrder, LittleEndian};
 use std::fmt::Display;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+use std::sync::Arc;
 use std::{mem, ptr, slice};
 
 use super::super::table::Value;
-use super::WriteBatchEntry;
 use super::skl::{deref, Node, MAX_HEIGHT};
+use super::WriteBatchEntry;
 
 pub const NULL_ARENA_ADDR: u64 = 0;
 
@@ -25,7 +25,7 @@ const BLOCK_OFF_SHIFT: u64 = 24;
 const BLOCK_OFF_MASK: u64 = 0x0000_ffff_ff00_0000;
 const SIZE_MASK: u64 = 0x0000_0000_00ff_ffff;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ArenaAddr(pub u64);
 
 impl Display for ArenaAddr {
@@ -36,6 +36,7 @@ impl Display for ArenaAddr {
 
 impl ArenaAddr {
     fn new(block_idx: usize, block_off: u32, size: u32) -> ArenaAddr {
+        assert!(block_idx < 32);
         ArenaAddr(
             (block_idx as u64 + 1) << BLOCK_IDX_SHIFT
                 | (block_off as u64) << BLOCK_OFF_SHIFT
@@ -43,7 +44,7 @@ impl ArenaAddr {
         )
     }
 
-    fn block_idx(self) -> usize {
+    pub fn block_idx(self) -> usize {
         (((self.0 & BLOCK_IDX_MASK) >> BLOCK_IDX_SHIFT) - 1) as usize
     }
 
@@ -113,7 +114,8 @@ impl Arena {
             blocks: Default::default(),
             block_idx: Default::default(),
         };
-        s.grow(0);
+        let new_block = Box::into_raw(Box::new(ArenaBlock::new(BLOCK_SIZE_ARRAY[0])));
+        s.blocks[0].store(new_block, Ordering::Release);
         s
     }
 
@@ -147,7 +149,7 @@ impl Arena {
         m_buf[0] = entry.meta;
         m_buf[1] = entry.user_meta_len;
         LittleEndian::write_u64(&mut m_buf[2..], entry.version);
-        m_buf[10..10+entry.user_meta_len as usize].copy_from_slice(entry.user_meta(buf));
+        m_buf[10..10 + entry.user_meta_len as usize].copy_from_slice(entry.user_meta(buf));
         let offset = 10 + entry.user_meta_len as usize;
         m_buf[offset..offset + entry.val_len as usize].copy_from_slice(entry.value(buf));
         addr
@@ -203,6 +205,16 @@ impl Arena {
         if addr.0 == NULL_ARENA_ADDR {
             return ptr::null_mut();
         }
+        if addr.block_idx() > 32 {
+            error!(
+                "{}, {}, {}, {}",
+                addr.block_idx(),
+                addr.block_off(),
+                addr.size(),
+                addr.0
+            );
+        }
+        assert!(addr.block_idx() < 32, "{}, {}", addr.block_idx(), addr.0);
         let bin = self.get_mut_bytes(addr);
         let ptr = bin.as_mut_ptr() as *mut Node;
         unsafe { &mut *ptr }
@@ -259,7 +271,7 @@ impl Clone for ArenaBlock {
 
 impl ArenaBlock {
     fn new(cap: u32) -> Self {
-        let mut buf: Vec<u64> = Vec::with_capacity(cap as usize / 8);
+        let mut buf: Vec<u64> = vec![0; cap as usize / 8];
         let ptr = buf.as_mut_ptr() as *mut u8;
         mem::forget(buf);
         Self {

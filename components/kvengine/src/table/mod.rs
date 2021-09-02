@@ -6,5 +6,5 @@ pub mod sstable;
 pub mod table;
 mod tests;
 
-pub use table::*;
 pub use merge_iterator::*;
+pub use table::*;

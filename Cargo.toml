@@ -255,6 +255,7 @@ members = [
   "components/resource_metering",
   "components/kvengine",
   "components/kvenginepb",
+  "components/rfengine",
 ]
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 

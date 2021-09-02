@@ -30,7 +30,7 @@ message ChangeSet {
   // The sequence value is not set by the DB when generating the change set, user have to assign the value.
   // If specified, we check sequence is monotonically increasing.
   uint64 sequence = 12;
-  int64 nextMemTableSize = 13;
+  uint64 nextMemTableSize = 13;
   ChangeSet parent = 14;
 }
 

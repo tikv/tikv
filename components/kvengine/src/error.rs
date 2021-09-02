@@ -2,6 +2,7 @@ use crate::{dfs, table};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+#[derive(Debug)]
 pub enum Error {
     KeyNotFound,
     ShardNotFound,
@@ -19,7 +20,6 @@ impl From<table::Error> for Error {
         Error::TableError(e)
     }
 }
-
 
 impl From<dfs::Error> for Error {
     fn from(e: dfs::Error) -> Self {

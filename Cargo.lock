@@ -2158,6 +2158,7 @@ dependencies = [
  "rand 0.8.3",
  "slog",
  "slog-global",
+ "slog-term",
  "tempfile",
  "thiserror",
  "tokio",
@@ -3949,6 +3950,25 @@ name = "rev_lines"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "18eb52b6664d331053136fcac7e4883bdc6f5fc04a6aab3b0f75eafb80ab88b3"
+
+[[package]]
+name = "rfengine"
+version = "0.0.1"
+dependencies = [
+ "byteorder",
+ "bytes 1.0.1",
+ "crc32c",
+ "kvproto",
+ "libc 0.2.86",
+ "protobuf",
+ "raft",
+ "raft-proto",
+ "slog",
+ "slog-global",
+ "slog-term",
+ "tempfile",
+ "thiserror",
+]
 
 [[package]]
 name = "rgb"

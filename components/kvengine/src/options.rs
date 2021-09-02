@@ -10,13 +10,13 @@ use crate::*;
 // work for most applications. Consider using that as a starting point before
 // customizing it for your own needs.
 pub struct Options {
-    	// 1. Mandatory flags
-	// -------------------
-	// Directory to store the data in. Should exist and be writable.
-	pub dir: PathBuf,
+    // 1. Mandatory flags
+    // -------------------
+    // Directory to store the data in. Should exist and be writable.
+    pub dir: PathBuf,
 
     // base_size is th maximum L1 size before trigger a compaction.
-	// The L2 size is 10x of the base size, L3 size is 100x of the base size.
+    // The L2 size is 10x of the base size, L3 size is 100x of the base size.
     pub base_size: u64,
 
     // Maximum number of tables to keep in memory, before stalling.
@@ -41,26 +41,33 @@ pub struct Options {
     pub preparation_concurrency: usize,
 
     // Max mem size is dynamically adjusted for each time the mem-table get flushed.
-	// The formula is (factor * write_bytes_per_second)
-	// And limited in range [2MB, 256MB].
-	pub max_mem_table_size_factor: usize,
+    // The formula is (factor * write_bytes_per_second)
+    // And limited in range [2MB, 256MB].
+    pub max_mem_table_size_factor: usize,
+
+    pub dynamic_mem_table_size: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { 
-            dir: Default::default(), 
-            base_size: 64 << 20, 
-            num_mem_tables: 16, 
+        Self {
+            dir: Default::default(),
+            base_size: 64 << 20,
+            num_mem_tables: 16,
             max_block_cache_size: 0,
             num_compactors: 3,
-            table_builder_options: Default::default(), 
-            remote_compaction_addr: Default::default(), 
-            instance_id: Default::default(), 
-            cfs: [CFConfig::new(true, 3), CFConfig::new(false, 2), CFConfig::new(true, 1)],
-            recovery_concurrency: Default::default(), 
+            table_builder_options: Default::default(),
+            remote_compaction_addr: Default::default(),
+            instance_id: Default::default(),
+            cfs: [
+                CFConfig::new(true, 3),
+                CFConfig::new(false, 2),
+                CFConfig::new(true, 1),
+            ],
+            recovery_concurrency: Default::default(),
             preparation_concurrency: Default::default(),
             max_mem_table_size_factor: 256,
+            dynamic_mem_table_size: true,
         }
     }
 }
@@ -85,18 +92,15 @@ pub trait IDAllocator: Sync + Send {
     fn alloc_id(&self, count: usize) -> std::result::Result<Vec<u64>, String>;
 }
 
-// MetaChangeListener is used to notify the engine user that engine meta has changed.
-pub trait MetaChangeListener: Sync + Send {
-    fn on_change(&self, e: kvenginepb::ChangeSet);
-}
-
 pub trait RecoverHandler {
     // Recovers from the shard's state to the state that is stored in the toState property.
-	// So the Engine has a chance to execute pre-split command.
-	// If toState is nil, the implementation should recovers to the latest state.
+    // So the Engine has a chance to execute pre-split command.
+    // If toState is nil, the implementation should recovers to the latest state.
     fn recover(&self, engine: &Engine, shard: &Shard, info: &ShardMeta) -> Result<()>;
 }
 
 pub trait MetaIterator {
-    fn iterate<F>(&self, f: F) -> Result<()> where F: FnMut(kvenginepb::ChangeSet);
+    fn iterate<F>(&self, f: F) -> Result<()>
+    where
+        F: FnMut(kvenginepb::ChangeSet);
 }

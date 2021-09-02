@@ -2,9 +2,9 @@
 
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{BufMut, Bytes};
-use std::{ops::Add, ptr, slice};
+use std::{io, result};
+use std::{ptr, slice};
 use thiserror::Error;
-use std::{result, io};
 
 use crate::dfs;
 
@@ -56,7 +56,6 @@ pub fn is_deleted(meta: u8) -> bool {
 
 const VALUE_PTR_OFF: usize = 10;
 
-
 // Value is a short life struct used to pass value across iterators.
 // It is valid until iterator call next or next_version.
 // As long as the value is never escaped, there will be no dangling pointer.
@@ -93,7 +92,11 @@ impl Value {
                 )
             }
             let off = VALUE_PTR_OFF + self.user_meta_len as usize;
-            ptr::copy(self.ptr.add(self.user_meta_len as usize), buf[off..].as_mut_ptr(), self.val_len as usize)
+            ptr::copy(
+                self.ptr.add(self.user_meta_len as usize),
+                buf[off..].as_mut_ptr(),
+                self.val_len as usize,
+            )
         }
     }
 
@@ -105,9 +108,9 @@ impl Value {
         m_buf[1] = user_meta.len() as u8;
         LittleEndian::write_u64(&mut m_buf[2..], version);
         let off = 10usize;
-        m_buf[off..off+user_meta.len()].copy_from_slice(user_meta);
+        m_buf[off..off + user_meta.len()].copy_from_slice(user_meta);
         let off = 10 + user_meta.len();
-        m_buf[off..off+val.len()].copy_from_slice(val);
+        m_buf[off..off + val.len()].copy_from_slice(val);
         buf
     }
 
@@ -125,12 +128,27 @@ impl Value {
         }
     }
 
-    pub(crate) fn new_with_meta_version(meta: u8, version: u64, user_meta_len: u8, bin: &[u8]) -> Self {
+    pub(crate) fn new_with_meta_version(
+        meta: u8,
+        version: u64,
+        user_meta_len: u8,
+        bin: &[u8],
+    ) -> Self {
         Self {
             ptr: bin.as_ptr(),
             meta,
             user_meta_len,
             val_len: bin.len() as u32 - user_meta_len as u32,
+            version,
+        }
+    }
+
+    pub(crate) fn new_tombstone(version: u64) -> Self {
+        Self {
+            ptr: ptr::null(),
+            meta: BIT_DELETE,
+            user_meta_len: 0,
+            val_len: 0,
             version,
         }
     }
@@ -250,10 +268,7 @@ pub struct LocalAddr {
 
 impl LocalAddr {
     pub fn new(start: usize, end: usize) -> Self {
-        Self {
-            start,
-            end,
-        }
+        Self { start, end }
     }
 
     pub fn get(self, buf: &[u8]) -> &[u8] {
@@ -265,14 +280,18 @@ impl LocalAddr {
     }
 }
 
-pub fn new_merge_iterator<'a>(mut iters: Vec<Box<dyn Iterator + 'a>>, reverse: bool) -> Box<dyn Iterator + 'a> {
+pub fn new_merge_iterator<'a>(
+    mut iters: Vec<Box<dyn Iterator + 'a>>,
+    reverse: bool,
+) -> Box<dyn Iterator + 'a> {
     match iters.len() {
         0 => Box::new(EmptyIterator {}),
         1 => iters.pop().unwrap(),
         2 => {
             let second_iter: Box<dyn Iterator + 'a> = iters.pop().unwrap();
             let first_iter: Box<dyn Iterator + 'a> = iters.pop().unwrap();
-            let first: Box<super::MergeIteratorChild<'a>> = Box::new(super::MergeIteratorChild::new(true, first_iter));
+            let first: Box<super::MergeIteratorChild<'a>> =
+                Box::new(super::MergeIteratorChild::new(true, first_iter));
             let second = Box::new(super::MergeIteratorChild::new(false, second_iter));
             let merge_iter = super::MergeIterator::new(first, second, reverse);
             Box::new(merge_iter)
