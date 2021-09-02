@@ -61,6 +61,16 @@ impl OldValueCache {
             miss_none_count: 0,
         }
     }
+
+    pub(crate) fn resize(&mut self, new_capacity: ReadableSize) {
+        CDC_OLD_VALUE_CACHE_MEMORY_QUOTA.set(new_capacity.0 as i64);
+        self.cache.resize(new_capacity.0 as usize);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn capacity(&self) -> usize {
+        self.cache.capacity()
+    }
 }
 
 pub struct OldValueReader<S: EngineSnapshot> {
@@ -205,6 +215,68 @@ mod tests {
     use std::sync::Arc;
     use tikv::storage::kv::TestEngineBuilder;
     use tikv::storage::txn::tests::*;
+
+    #[test]
+    fn test_old_value_resize() {
+        let capacity = 1024;
+
+        let mut old_value_cache = OldValueCache::new(ReadableSize(capacity));
+        let value = (
+            OldValue::Value {
+                value: b"value".to_vec(),
+            },
+            None,
+        );
+
+        // The size of each insert.
+        let mut size_calc = OldValueCacheSizePolicy::default();
+        size_calc.on_insert(&Key::from_raw(&0_usize.to_be_bytes()), &value);
+        let size = size_calc.current();
+
+        // Insert ten values.
+        let cases = 10_usize;
+        for i in 0..cases {
+            let key = Key::from_raw(&i.to_be_bytes());
+            old_value_cache.cache.insert(key, value.clone());
+        }
+
+        assert_eq!(old_value_cache.cache.size(), size * cases as usize);
+        assert_eq!(old_value_cache.cache.len(), cases as usize);
+        assert_eq!(old_value_cache.capacity(), capacity as usize);
+
+        // Reduces capacity.
+        let new_capacity = 256;
+        // The memory usage that needs to be removed because of the capacity reduction.
+        let dropped = old_value_cache.cache.size() - new_capacity;
+        let dropped_count = if dropped % size != 0 {
+            (dropped / size) + 1
+        } else {
+            dropped / size
+        };
+        // The remaining values count.
+        let remaining_count = old_value_cache.cache.len() - dropped_count;
+        old_value_cache.resize(ReadableSize(new_capacity as u64));
+
+        assert_eq!(old_value_cache.cache.size(), size * remaining_count);
+        assert_eq!(old_value_cache.cache.len(), remaining_count);
+        assert_eq!(old_value_cache.capacity(), new_capacity as usize);
+        for i in dropped_count..cases {
+            let key = Key::from_raw(&i.to_be_bytes());
+            assert_eq!(old_value_cache.cache.get(&key).is_some(), true);
+        }
+
+        // Increases the capacity again.
+        let new_capacity = 1024;
+        old_value_cache.resize(ReadableSize(new_capacity));
+
+        assert_eq!(old_value_cache.cache.size(), size * remaining_count);
+        assert_eq!(old_value_cache.cache.len(), remaining_count);
+        assert_eq!(old_value_cache.capacity(), new_capacity as usize);
+        for i in dropped_count..cases {
+            let key = Key::from_raw(&i.to_be_bytes());
+            assert_eq!(old_value_cache.cache.get(&key).is_some(), true);
+        }
+    }
 
     #[test]
     fn test_old_value_reader() {
