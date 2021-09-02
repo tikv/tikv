@@ -22,7 +22,6 @@ use raftstore::store::util::{self, RegionReadProgress, RegionReadProgressRegistr
 use raftstore::store::RegionSnapshot;
 use security::SecurityManager;
 use tikv::config::ResolvedTsConfig;
-use tikv::server::debug;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 use txn_types::{Key, TimeStamp};
 

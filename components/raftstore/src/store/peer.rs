@@ -2332,20 +2332,7 @@ where
                     Err(Error::DiskFull(stores, errmsg))
                 }
             }
-            Ok(RequestPolicy::ProposeConfChange) => {
-                if !matches!(ctx.self_disk_usage, DiskUsage::Normal) {
-                    let peer_ids: Vec<u64> = self
-                        .region()
-                        .get_peers()
-                        .iter()
-                        .map(|x| x.get_id())
-                        .collect();
-                    for id in peer_ids {
-                        self.raft_group.raft.adjust_max_inflight_msgs(id, 1);
-                    }
-                }
-                self.propose_conf_change(ctx, &req)
-            }
+            Ok(RequestPolicy::ProposeConfChange) => self.propose_conf_change(ctx, &req),
             Err(e) => Err(e),
         };
 
@@ -3395,13 +3382,41 @@ where
             return;
         }
 
-        // Reverse sort peers based on `next_idx`, then try to get a potential quorum.
-        next_idxs.sort_by(|x, y| y.1.cmp(&x.1));
-        let (mut potential_quorum, mut quorum_ok) = (HashSet::default(), false);
-        for &(peer_id, _, usage) in &next_idxs {
-            if matches!(usage, Some(DiskUsage::AlreadyFull)) {
-                continue;
+        // Reverse sort peers based on `next_idx` and `usage`, then try to get a potential quorum.
+        next_idxs.sort_by(|x, y| {
+            if y.2.is_some() {
+                if matches!(y.2.unwrap(), DiskUsage::AlreadyFull) {
+                    if x.2.is_some() {
+                        if matches!(x.2.unwrap(), DiskUsage::AlreadyFull) {
+                            return y.1.cmp(&x.1);
+                        } else {
+                            return std::cmp::Ordering::Less;
+                        }
+                    } else {
+                        return std::cmp::Ordering::Less;
+                    }
+                } else {
+                    if x.2.is_some() {
+                        if matches!(x.2.unwrap(), DiskUsage::AlreadyFull) {
+                            return std::cmp::Ordering::Greater;
+                        } else {
+                            return y.1.cmp(&x.1);
+                        }
+                    } else {
+                        return std::cmp::Ordering::Less;
+                    }
+                }
+            } else {
+                if x.2.is_some() {
+                    return std::cmp::Ordering::Greater;
+                } else {
+                    return y.1.cmp(&x.1);
+                }
             }
+        });
+
+        let (mut potential_quorum, mut quorum_ok) = (HashSet::default(), false);
+        for &(peer_id, _, _) in &next_idxs {
             potential_quorum.insert(peer_id);
             if raft.prs().has_quorum(&potential_quorum) {
                 quorum_ok = true;
