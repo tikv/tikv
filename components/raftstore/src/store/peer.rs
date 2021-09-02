@@ -432,7 +432,7 @@ pub struct UnpersistedReady {
     /// Number of ready.
     pub number: u64,
     /// Max number of following ready whose data to be persisted is empty.
-    pub max_number: u64,
+    pub max_empty_number: u64,
     pub raft_msgs: Vec<Vec<RaftMessage>>,
 }
 
@@ -1261,7 +1261,7 @@ where
         let has_snap_task = self.get_store().has_gen_snap_task();
         let pre_commit_index = self.raft_group.raft.raft_log.committed;
         self.raft_group.step(m)?;
-        self.report_know_commit_duration(pre_commit_index, &ctx.raft_metrics);
+        self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
 
         let mut for_balance = false;
         if !has_snap_task && self.get_store().has_gen_snap_task() {
@@ -1283,7 +1283,7 @@ where
         Ok(())
     }
 
-    fn report_know_persist_duration(&self, pre_persist_index: u64, metrics: &RaftMetrics) {
+    fn report_persist_log_duration(&self, pre_persist_index: u64, metrics: &RaftMetrics) {
         if !metrics.waterfall_metrics {
             return;
         }
@@ -1309,7 +1309,7 @@ where
         }
     }
 
-    fn report_know_commit_duration(&self, pre_commit_index: u64, metrics: &RaftMetrics) {
+    fn report_commit_log_duration(&self, pre_commit_index: u64, metrics: &RaftMetrics) {
         if !metrics.waterfall_metrics {
             return;
         }
@@ -2038,7 +2038,7 @@ where
             HandleReadyResult::SendIOTask => {
                 self.unpersisted_readies.push_back(UnpersistedReady {
                     number: ready.number(),
-                    max_number: ready.number(),
+                    max_empty_number: ready.number(),
                     raft_msgs: vec![],
                 });
                 self.raft_group.advance_append_async(ready);
@@ -2050,7 +2050,7 @@ where
             } => {
                 self.unpersisted_readies.push_back(UnpersistedReady {
                     number: ready.number(),
-                    max_number: ready.number(),
+                    max_empty_number: ready.number(),
                     raft_msgs: vec![],
                 });
                 self.snap_ctx = Some(SnapshotContext {
@@ -2073,8 +2073,8 @@ where
                 if let Some(last) = self.unpersisted_readies.back_mut() {
                     // Attach to the last unpersisted ready so that it can be considered to be
                     // persisted with the last ready at the same time.
-                    assert!(ready.number() > last.max_number);
-                    last.max_number = ready.number();
+                    assert!(ready.number() > last.max_empty_number);
+                    last.max_empty_number = ready.number();
                     if !msgs.is_empty() {
                         self.unpersisted_message_count += msgs.len();
                         last.raft_msgs.push(msgs);
@@ -2272,7 +2272,7 @@ where
                 self.send_raft_msg(ctx, msgs);
             }
             if number == v.number {
-                persisted_number = v.max_number;
+                persisted_number = v.max_empty_number;
                 break;
             }
         }
@@ -2295,8 +2295,8 @@ where
             let pre_persist_index = self.raft_group.raft.raft_log.persisted;
             let pre_commit_index = self.raft_group.raft.raft_log.committed;
             self.raft_group.on_persist_ready(persisted_number);
-            self.report_know_persist_duration(pre_persist_index, &ctx.raft_metrics);
-            self.report_know_commit_duration(pre_commit_index, &ctx.raft_metrics);
+            self.report_persist_log_duration(pre_persist_index, &ctx.raft_metrics);
+            self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
 
             let persist_index = self.raft_group.raft.raft_log.persisted;
             self.mut_store().update_cache_persisted(persist_index);
