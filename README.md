@@ -24,6 +24,8 @@ TiKV has the following key features:
 
 TiKV is a graduated project of the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/announcements/2020/09/02/cloud-native-computing-foundation-announces-tikv-graduation/).
 
+## The TiKV Architecture
+
 ![The TiKV software stack](images/tikv_stack.png)
 
 TiKV is composed of:
