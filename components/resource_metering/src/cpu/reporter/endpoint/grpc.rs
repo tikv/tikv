@@ -15,59 +15,36 @@ use tikv_util::warn;
 pub struct GRPCEndpoint {
     env: Arc<Environment>,
     address: String,
-    client: ResourceUsageAgentClient,
+    client: Option<ResourceUsageAgentClient>,
     limiter: Limiter,
 }
 
 impl Endpoint for GRPCEndpoint {
-    fn init(_instance: &str, address: &str) -> Box<dyn Endpoint> {
-        let env = Arc::new(Environment::new(2));
-        let channel = {
-            let cb = ChannelBuilder::new(env.clone())
-                .keepalive_time(Duration::from_secs(10))
-                .keepalive_timeout(Duration::from_secs(3));
-            cb.connect(address)
-        };
-        let client = ResourceUsageAgentClient::new(channel);
-
-        Box::new(Self {
-            env,
-            client,
-            address: address.to_owned(),
-            limiter: Limiter::default(),
-        })
-    }
-
-    fn update(&mut self, address: &str) {
-        if self.address == address {
+    fn report(&mut self, _instance_name: &str, address: &str, records: Records) {
+        if address.is_empty() {
             return;
         }
-        self.address = address.to_owned();
 
-        let channel = {
-            let cb = ChannelBuilder::new(self.env.clone())
-                .keepalive_time(Duration::from_secs(10))
-                .keepalive_timeout(Duration::from_secs(3));
-            cb.connect(address)
-        };
-        self.client = ResourceUsageAgentClient::new(channel);
-    }
-
-    fn report(&mut self, records: Records) {
         let handle = self.limiter.try_acquire();
         if handle.is_none() {
             return;
         }
 
+        if self.address != address || self.client.is_none() {
+            self.address = address.to_owned();
+            self.init_client();
+        }
+
+        let client = self.client.as_ref().unwrap();
         let call_opt = CallOption::default().timeout(Duration::from_secs(2));
-        let call = self.client.report_cpu_time_opt(call_opt);
+        let call = client.report_cpu_time_opt(call_opt);
         if let Err(err) = &call {
             warn!("failed to connect to agent"; "error" => ?err);
             return;
         }
 
         let (mut tx, rx) = call.unwrap();
-        self.client.spawn(async move {
+        client.spawn(async move {
             let _hd = handle;
 
             let others = records.others;
@@ -109,5 +86,28 @@ impl Endpoint for GRPCEndpoint {
 
     fn name(&self) -> &'static str {
         "grpc"
+    }
+}
+
+impl GRPCEndpoint {
+    fn init_client(&mut self) {
+        let channel = {
+            let cb = ChannelBuilder::new(self.env.clone())
+                .keepalive_time(Duration::from_secs(10))
+                .keepalive_timeout(Duration::from_secs(3));
+            cb.connect(&self.address)
+        };
+        self.client = Some(ResourceUsageAgentClient::new(channel));
+    }
+}
+
+impl Default for GRPCEndpoint {
+    fn default() -> Self {
+        Self {
+            env: Arc::new(Environment::new(2)),
+            address: "".to_owned(),
+            client: None,
+            limiter: Limiter::default(),
+        }
     }
 }

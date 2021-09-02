@@ -30,7 +30,7 @@ impl Reporter {
 
         let endpoint = config
             .should_report()
-            .then(|| endpoint::init(&config.endpoint, &instance_name, &config.agent_address));
+            .then(|| endpoint::init(&config.endpoint));
 
         let collector = config
             .should_report()
@@ -54,7 +54,7 @@ impl Reporter {
         // Whether endpoint exists or not, records should be taken in order to reset.
         let records = std::mem::take(&mut self.records);
         if let Some(endpoint) = self.endpoint.as_mut() {
-            endpoint.report(records);
+            endpoint.report(&self.instance_name, &self.config.agent_address, records);
         }
     }
 
@@ -74,17 +74,9 @@ impl Reporter {
             self.collector = Some(CollectorImpl::register(self.scheduler.clone()));
         }
 
-        if let Some(ep) = &mut self.endpoint {
-            if ep.name() == self.config.endpoint {
-                ep.update(&self.config.agent_address);
-                return;
-            }
+        if self.endpoint.is_none() {
+            self.endpoint = Some(endpoint::init(&self.config.endpoint));
         }
-        self.endpoint = Some(endpoint::init(
-            &self.config.endpoint,
-            &self.instance_name,
-            &self.config.agent_address,
-        ));
     }
 
     fn reset(&mut self) {

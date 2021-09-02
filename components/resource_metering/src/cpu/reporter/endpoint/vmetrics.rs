@@ -11,52 +11,26 @@ use tikv_util::warn;
 use tokio::runtime::{Builder, Runtime};
 
 pub struct VictoriaMetricsEndpoint {
-    instance_name: String,
-    address: String,
     limiter: Limiter,
     runtime: Runtime,
     client: Client<HttpConnector>,
 }
 
 impl Endpoint for VictoriaMetricsEndpoint {
-    fn init(instance_name: &str, address: &str) -> Box<dyn Endpoint>
-    where
-        Self: Sized,
-    {
-        Box::new(Self {
-            instance_name: instance_name.to_owned(),
-            address: address.to_owned(),
-            limiter: Limiter::default(),
-            runtime: Builder::new_multi_thread()
-                .enable_all()
-                .worker_threads(2)
-                .thread_name("victoria-metrics-endpoint")
-                .build()
-                .expect("fail to build tokio runtime"),
-            client: Client::builder().build_http(),
-        })
-    }
-
-    fn update(&mut self, address: &str) {
-        if self.address != address {
-            self.address = address.to_owned();
-        }
-    }
-
-    fn report(&mut self, records: Records) {
+    fn report(&mut self, instance_name: &str, address: &str, records: Records) {
         let handle = self.limiter.try_acquire();
         if handle.is_none() {
             return;
         }
 
         let client = self.client.clone();
-        let instance_name = self.instance_name.to_owned();
-        let address = self.address.clone();
+        let instance_name = instance_name.to_owned();
+        let address = address.to_owned();
         self.runtime.spawn(async move {
             let _hd = handle;
 
             let mut body_buf = vec![];
-            if !encode_to_metrics_jsonl(&instance_name, records, &mut body_buf) {
+            if !encode_metrics_jsonl(&instance_name, records, &mut body_buf) {
                 return;
             }
 
@@ -81,6 +55,21 @@ impl Endpoint for VictoriaMetricsEndpoint {
     }
 }
 
+impl Default for VictoriaMetricsEndpoint {
+    fn default() -> Self {
+        Self {
+            limiter: Limiter::default(),
+            runtime: Builder::new_multi_thread()
+                .enable_all()
+                .worker_threads(2)
+                .thread_name("victoria-metrics-endpoint")
+                .build()
+                .expect("fail to build tokio runtime"),
+            client: Client::builder().build_http(),
+        }
+    }
+}
+
 #[derive(serde::Serialize)]
 struct Metric<'a> {
     metric: MetricsLabels<'a>,
@@ -101,7 +90,7 @@ struct MetricsLabels<'a> {
     plan_digest: &'a str,
 }
 
-fn encode_to_metrics_jsonl(instance: &str, records: Records, mut buf: &mut Vec<u8>) -> bool {
+fn encode_metrics_jsonl(instance: &str, records: Records, mut buf: &mut Vec<u8>) -> bool {
     let mut sql_digest_hex = String::new();
     let mut plan_digest_hex = String::new();
     for (tag, (ts_list, cpu_list, _)) in records.records {

@@ -10,18 +10,14 @@ pub mod vmetrics;
 mod util;
 
 pub trait Endpoint: Send + 'static {
-    fn init(instance_name: &str, address: &str) -> Box<dyn Endpoint>
-    where
-        Self: Sized;
-    fn update(&mut self, address: &str);
-    fn report(&mut self, records: Records);
+    fn report(&mut self, instance_name: &str, address: &str, records: Records);
     fn name(&self) -> &'static str;
 }
 
-pub fn init(endpoint_type: &str, instance_name: &str, address: &str) -> Box<dyn Endpoint> {
+pub fn init(endpoint_type: &str) -> Box<dyn Endpoint> {
     match endpoint_type {
-        "grpc" => GRPCEndpoint::init(instance_name, address),
-        "victoria-metrics" => VictoriaMetricsEndpoint::init(instance_name, address),
+        "grpc" => Box::new(GRPCEndpoint::default()),
+        "victoria-metrics" => Box::new(VictoriaMetricsEndpoint::default()),
         _ => unreachable!(),
     }
 }
