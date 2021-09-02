@@ -83,7 +83,7 @@ impl Drop for CmdTimer {
     fn drop(&mut self) {
         SCHED_HISTOGRAM_VEC_STATIC
             .get(self.tag)
-            .observe(self.begin.elapsed_secs());
+            .observe(self.begin.saturating_elapsed_secs());
     }
 }
 
@@ -135,7 +135,7 @@ impl TaskContext {
     fn on_schedule(&mut self) {
         SCHED_LATCH_HISTOGRAM_VEC
             .get(self.tag)
-            .observe(self.latch_timer.elapsed_secs());
+            .observe(self.latch_timer.saturating_elapsed_secs());
     }
 }
 
@@ -285,7 +285,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             enable_async_apply_prewrite,
         });
 
-        slow_log!(t.elapsed(), "initialized the transaction scheduler");
+        slow_log!(
+            t.saturating_elapsed(),
+            "initialized the transaction scheduler"
+        );
         Scheduler {
             engine: Some(engine),
             inner,
@@ -582,14 +585,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 };
                 tls_collect_scan_details(tag.get_str(), &statistics);
                 slow_log!(
-                    timer.elapsed(),
+                    timer.saturating_elapsed(),
                     "[region {}] scheduler handle command: {}, ts: {}",
                     region_id,
                     tag,
                     ts
                 );
 
-                tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
+                tls_collect_read_duration(tag.get_str(), read_duration.saturating_elapsed());
             })
             .unwrap();
     }
