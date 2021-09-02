@@ -1008,10 +1008,9 @@ where
             }
             self.register_raft_base_tick();
         }
-        // TODO: It's a little bit tricky
-        if !self.fsm.peer.raft_group.raft.msgs.is_empty() {
-            self.fsm.has_ready = true;
-        }
+
+        self.fsm.has_ready = true;
+
         if let Some(mbt) = self.fsm.delayed_destroy {
             if !self.fsm.peer.has_unpersisted_ready() {
                 self.destroy_peer(mbt);
@@ -2068,7 +2067,12 @@ where
             // The destroy must be delayed if there are some unpersisted readies.
             // Otherwise there is a race of writting kv db and raft db between here
             // and write worker.
-            assert_eq!(self.fsm.delayed_destroy, None);
+            if let Some(mbt) = self.fsm.delayed_destroy {
+                panic!(
+                    "{} destroy peer twice with some unpersisted readies, original {}, now {}",
+                    self.fsm.peer.tag, mbt, merged_by_target
+                );
+            }
             self.fsm.delayed_destroy = Some(merged_by_target);
             // TODO: The destroy process can also be asynchronous as snapshot process,
             // if so, all write db operations are removed in store thread.

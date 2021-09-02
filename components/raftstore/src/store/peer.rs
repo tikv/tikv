@@ -1783,7 +1783,12 @@ where
 
                 if let Some(mut snap_ctx) = self.snap_ctx.take() {
                     // This snapshot must be scheduled
-                    assert!(snap_ctx.scheduled);
+                    if !snap_ctx.scheduled {
+                        panic!(
+                            "{} snapshot was not scheduled before, snap_ctx {:?}",
+                            self.tag, snap_ctx
+                        );
+                    }
 
                     let raft_msgs = mem::take(&mut snap_ctx.msgs);
                     fail_point!("raft_before_follower_send");
@@ -2075,7 +2080,14 @@ where
                 if let Some(last) = self.unpersisted_readies.back_mut() {
                     // Attach to the last unpersisted ready so that it can be considered to be
                     // persisted with the last ready at the same time.
-                    assert!(ready.number() > last.max_empty_number);
+                    if ready.number() <= last.max_empty_number {
+                        panic!(
+                            "{} ready number is not monotonically increaing, {} <= {}",
+                            self.tag,
+                            ready.number(),
+                            last.max_empty_number
+                        );
+                    }
                     last.max_empty_number = ready.number();
                     if !msgs.is_empty() {
                         self.unpersisted_message_count += msgs.capacity();
@@ -2091,8 +2103,19 @@ where
                     // to be persisted. Only the committed entries may not be empty when the size is too
                     // large to be fetched in the previous ready.
                     let mut light_rd = self.raft_group.advance_append(ready);
-                    assert!(light_rd.commit_index().is_none());
-                    assert!(light_rd.messages().is_empty());
+                    if let Some(idx) = light_rd.commit_index() {
+                        panic!(
+                            "{} advance ready that has no io task but commit index is changed to {}",
+                            self.tag, idx
+                        );
+                    }
+                    if !light_rd.messages().is_empty() {
+                        panic!(
+                            "{} advance ready that has no io task but message is not empty {:?}",
+                            self.tag,
+                            light_rd.messages()
+                        );
+                    }
                     if !light_rd.committed_entries().is_empty() {
                         self.handle_raft_committed_entries(ctx, light_rd.take_committed_entries());
                     }
@@ -2107,8 +2130,12 @@ where
         number: u64,
     ) -> PersistSnapshotResult {
         let snap_ctx = self.snap_ctx.as_mut().unwrap();
-        assert_eq!(snap_ctx.ready_number, number);
-        assert!(!snap_ctx.scheduled);
+        if snap_ctx.ready_number != number || snap_ctx.scheduled {
+            panic!(
+                "{} snap_ctx {:?} is not valid after persisting snapshot, persist_number {}",
+                self.tag, snap_ctx, number
+            );
+        }
 
         let persist_res = snap_ctx.persist_res.take().unwrap();
         // Schedule snapshot to apply
@@ -2254,14 +2281,12 @@ where
             return None;
         }
         let last_unpersisted_number = self.unpersisted_readies.back().unwrap().number;
-        assert!(
-            number <= last_unpersisted_number,
-            "{} persisted number {} > last_unpersisted_number {}, unpersisted numbers {:?}",
-            self.tag,
-            number,
-            last_unpersisted_number,
-            self.unpersisted_readies
-        );
+        if number > last_unpersisted_number {
+            panic!(
+                "{} persisted number {} > last_unpersisted_number {}, unpersisted numbers {:?}",
+                self.tag, number, last_unpersisted_number, self.unpersisted_readies
+            );
+        }
         // There must be a match in `self.unpersisted_readies`
         let mut persisted_number = 0;
         while let Some(v) = self.unpersisted_readies.front() {
