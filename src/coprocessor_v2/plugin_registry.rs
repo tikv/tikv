@@ -580,11 +580,11 @@ mod tests {
             &library_path_2
         );
 
-        // trigger unloading
         std::fs::remove_file(&library_path_2).unwrap();
         // fs watcher detects changes in every 3 seconds, therefore, wait 4 seconds so as to make sure the watcher is triggered.
         std::thread::sleep(Duration::from_secs(4));
 
-        assert!(registry.get_plugin(plugin_name).is_none());
+        // plugin will not unloading
+        assert!(registry.get_plugin(plugin_name).is_some());
     }
 }
