@@ -132,12 +132,6 @@ impl PluginRegistry {
                         hot_reload_registry.load_plugin(file).ok();
                     }
                 };
-                let unload = |file: &PathBuf| {
-                    let mut hot_reload_registry = hot_reload_registry.write().unwrap();
-                    if let Some(plugin) = hot_reload_registry.get_plugin_by_path(file) {
-                        hot_reload_registry.unload_plugin(plugin.name());
-                    }
-                };
                 let rename = |old_path: &PathBuf, new_path: &PathBuf| {
                     let mut hot_reload_registry = hot_reload_registry.write().unwrap();
                     if let Some(plugin) = hot_reload_registry.get_plugin_by_path(old_path) {
@@ -151,7 +145,8 @@ impl PluginRegistry {
                             maybe_load(&file);
                         }
                         Ok(DebouncedEvent::Remove(file)) => {
-                            unload(&file);
+                            // We cannot do much when the file is deleted. See issue #10854
+                            warn!("a loaded coprocessor plugin is removed. Be aware that original plugin is still running"; "plugin_path" => ?file);
                         }
                         Ok(DebouncedEvent::Rename(old_file, new_file)) => {
                             // If the file is renamed with a different parent directory, we will receive a `Remove` instead.
@@ -159,8 +154,8 @@ impl PluginRegistry {
                             rename(&old_file, &new_file);
                         }
                         Ok(DebouncedEvent::Write(file)) => {
-                            warn!("another process is overwriting a coprocessor plugin while the plugin is loaded. Unloading the plugin..."; "plugin_path" => ?file);
-                            unload(&file);
+                            // We cannot do much when the file is deleted. See issue #10854
+                            warn!("another process is overwriting a coprocessor plugin while the plugin is loaded. Be aware that original plugin is still running"; "plugin_path" => ?file);
                         }
                         Ok(_) => (),
                         Err(_) => break, // Stop when watcher is dropped.
