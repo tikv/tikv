@@ -724,7 +724,7 @@ pub mod test_util {
         one_pc_max_commit_ts: Option<u64>,
     ) -> Result<PrewriteResult> {
         let cm = ConcurrencyManager::new(start_ts.into());
-        pessimsitic_prewrite_with_cm(
+        pessimistic_prewrite_with_cm(
             engine,
             cm,
             statistics,
@@ -736,7 +736,7 @@ pub mod test_util {
         )
     }
 
-    pub fn pessimsitic_prewrite_with_cm<E: Engine>(
+    pub fn pessimistic_prewrite_with_cm<E: Engine>(
         engine: &E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,
