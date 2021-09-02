@@ -1090,6 +1090,7 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         mut m: eraftpb::Message,
+        peer_disk_usage: DiskUsage,
     ) -> Result<()> {
         fail_point!(
             "step_message_3_1",
@@ -1134,7 +1135,7 @@ where
                 self.should_wake_up = state == LeaseState::Expired;
             }
         } else if msg_type == MessageType::MsgTransferLeader {
-            self.execute_transfer_leader(ctx, &m);
+            self.execute_transfer_leader(ctx, &m, peer_disk_usage);
             return Ok(());
         }
 
@@ -3068,6 +3069,7 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         msg: &eraftpb::Message,
+        peer_disk_usage: DiskUsage,
     ) {
         // log_term is set by original leader, represents the term last log is written
         // in, which should be equal to the original leader's term.
@@ -3105,7 +3107,8 @@ where
             || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
             // For followers whose disk is full.
-            || !matches!(ctx.self_disk_usage, DiskUsage::Normal)
+            || (!matches!(ctx.self_disk_usage, DiskUsage::Normal) &&
+            matches!(peer_disk_usage,DiskUsage::Normal))
         {
             info!(
                 "reject transferring leader";
@@ -3416,7 +3419,7 @@ where
         });
 
         let (mut potential_quorum, mut quorum_ok) = (HashSet::default(), false);
-        for &(peer_id, _, _) in &next_idxs {
+        for &(peer_id, ..) in &next_idxs {
             potential_quorum.insert(peer_id);
             if raft.prs().has_quorum(&potential_quorum) {
                 quorum_ok = true;

@@ -1344,6 +1344,7 @@ where
 
     fn on_raft_message(&mut self, msg: InspectedRaftMessage) -> Result<()> {
         let InspectedRaftMessage { heap_size, mut msg } = msg;
+        let peer_disk_usage = msg.disk_usage;
         let stepped = Cell::new(false);
         let memtrace_raft_entries = &mut self.fsm.peer.memtrace_raft_entries as *mut usize;
         defer!({
@@ -1438,7 +1439,10 @@ where
         let from_peer_id = msg.get_from_peer().get_id();
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
 
-        let result = self.fsm.peer.step(self.ctx, msg.take_message());
+        let result = self
+            .fsm
+            .peer
+            .step(self.ctx, msg.take_message(), peer_disk_usage);
         stepped.set(result.is_ok());
 
         if is_snapshot {
