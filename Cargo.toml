@@ -241,8 +241,8 @@ zipf = "6.1.0"
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.
 # After the PR on kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
-[patch.'https://github.com/pingcap/kvproto']
-kvproto = {git = "https://github.com/andylokandy/kvproto", branch="ctl" }
+# [patch.'https://github.com/pingcap/kvproto']
+# kvproto = {git = "https://github.com/your_name/kvproto", branch="your_branch" }
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
