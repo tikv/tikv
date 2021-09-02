@@ -214,6 +214,10 @@ impl EntryCache {
             self.cache.push_back(e.to_owned());
             mem_size_change += (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
         }
+        // In the past, the entry cache will be truncated if its size exceeds a certain number.
+        // However, after introducing async write io, the entry must stay in cache if it's not
+        // persisted to raft db because the raft-rs may need to read entries.(e.g. leader sends
+        // MsgAppend)
 
         mem_size_change
     }
@@ -1231,6 +1235,16 @@ where
             .mut_truncated_state()
             .set_term(snap.get_metadata().get_term());
 
+        // `region` will be updated after persisting.
+        // Although there is an interval that other metadata are updated while `region`
+        // is not after handing snapshot from ready, at the time of writing, it's no
+        // problem for now.
+        // The reason why the update of `region` is delayed is we expect `region` stays
+        // consistent with the one in `StoreMeta::regions` which should be updated after
+        // persisting due to atomic snapshot and peer create process. So if we can fix
+        // these issues in future(maybe not?), the `region` and `StoreMeta::regions`
+        // can updated here immediately.
+
         info!(
             "apply snapshot with state ok";
             "region_id" => self.region.get_id(),
@@ -1443,7 +1457,6 @@ where
     /// This function only write data to `ready_ctx`'s `WriteBatch`. It's caller's duty to write
     /// it explicitly to disk. If it's flushed to disk successfully, `post_ready` should be called
     /// to update the memory states properly.
-    /// WARNING: If this function returns error, the caller must panic(details in `append` function).
     pub fn handle_raft_ready(
         &mut self,
         ready: &mut Ready,
@@ -1493,9 +1506,6 @@ where
             // but not write raft_local_state to raft db in time.
             // We write raft state to kv db, with last index set to snap index,
             // in case of recv raft log after snapshot.
-            if write_task.kv_wb.is_none() {
-                write_task.kv_wb = Some(self.engines.kv.write_batch());
-            }
             self.save_snapshot_raft_state_to(
                 ready.snapshot().get_metadata().get_index(),
                 write_task.kv_wb.as_mut().unwrap(),
@@ -1551,6 +1561,9 @@ where
 
         self.schedule_applying_snapshot();
 
+        // The `region` is updated after persisting in order to stay consistent with the one
+        // in `StoreMeta::regions` (will be updated soon).
+        // See comments in `apply_snapshot` for more details.
         self.set_region(res.region.clone());
     }
 
