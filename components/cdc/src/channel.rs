@@ -27,27 +27,35 @@ pub const CDC_EVENT_MAX_BATCH_SIZE: usize = 2;
 
 #[derive(Clone)]
 pub struct MemoryQuota {
-    capacity: usize,
+    capacity: Arc<AtomicUsize>,
     in_use: Arc<AtomicUsize>,
 }
 
 impl MemoryQuota {
     pub fn new(capacity: usize) -> MemoryQuota {
         MemoryQuota {
-            capacity,
+            capacity: Arc::new(AtomicUsize::new(capacity)),
             in_use: Arc::new(AtomicUsize::new(0)),
         }
     }
+
     pub fn in_use(&self) -> usize {
         self.in_use.load(Ordering::Relaxed)
     }
-    pub fn cap(&self) -> usize {
-        self.capacity
+
+    pub(crate) fn capacity(&self) -> usize {
+        self.capacity.load(Ordering::Acquire)
     }
+
+    pub(crate) fn set_capacity(&self, capacity: usize) {
+        self.capacity.store(capacity, Ordering::Release)
+    }
+
     fn alloc(&self, bytes: usize) -> bool {
         let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
+        let capacity = self.capacity.load(Ordering::Acquire);
         loop {
-            if in_use_bytes + bytes > self.capacity {
+            if in_use_bytes + bytes > capacity {
                 return false;
             }
             let new_in_use_bytes = in_use_bytes + bytes;
@@ -62,6 +70,7 @@ impl MemoryQuota {
             }
         }
     }
+
     fn free(&self, bytes: usize) {
         let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
         loop {
@@ -253,7 +262,7 @@ impl Drop for Drain {
             memory_quota.free(total_bytes);
         });
         block_on(&mut drain);
-        let takes = start.elapsed();
+        let takes = start.saturating_elapsed();
         if takes >= Duration::from_millis(200) {
             warn!("drop Drain too slow"; "takes" => ?takes);
         }
@@ -378,6 +387,58 @@ mod tests {
             send(CdcEvent::Event(e.clone())).unwrap();
         }
         assert_matches!(send(CdcEvent::Event(e)).unwrap_err(), SendError::Congested);
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn test_set_capacity() {
+        let mut e = kvproto::cdcpb::Event::default();
+        e.region_id = 1;
+        let event = CdcEvent::Event(e.clone());
+        assert!(event.size() != 0);
+        // 1KB
+        let max_pending_bytes = 1024;
+        let buffer = max_pending_bytes / event.size();
+        let force_send = false;
+
+        // Make sure we can increase the memory quota capacity.
+        {
+            let (mut send, rx) = new_test_cancal(buffer as _, max_pending_bytes as _, force_send);
+            for _ in 0..buffer {
+                send(CdcEvent::Event(e.clone())).unwrap();
+            }
+
+            assert_matches!(
+                send(CdcEvent::Event(e.clone())).unwrap_err(),
+                SendError::Congested
+            );
+
+            let memory_quota = rx.memory_quota.clone();
+            assert_eq!(memory_quota.capacity(), 1024);
+
+            let new_capacity = 1024 + event.size();
+            memory_quota.set_capacity(new_capacity as usize);
+            send(CdcEvent::Event(e.clone())).unwrap();
+            assert_eq!(memory_quota.capacity(), new_capacity as usize);
+        }
+
+        // Make sure we can reduce the memory quota capacity.
+        {
+            let (mut send, rx) = new_test_cancal(buffer as _, max_pending_bytes as _, force_send);
+            // Send one less event.
+            let count = buffer - 1;
+            for _ in 0..count {
+                send(CdcEvent::Event(e.clone())).unwrap();
+            }
+
+            let memory_quota = rx.memory_quota.clone();
+            assert_eq!(memory_quota.capacity(), 1024);
+
+            let new_capacity = 1024 - event.size();
+            memory_quota.set_capacity(new_capacity as usize);
+            assert_matches!(send(CdcEvent::Event(e)).unwrap_err(), SendError::Congested);
+            assert_eq!(memory_quota.capacity(), new_capacity as usize);
+        }
     }
 
     #[test]
