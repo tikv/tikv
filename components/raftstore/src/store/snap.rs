@@ -1532,7 +1532,7 @@ pub mod tests {
     use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, AtomicUsize};
-    use std::sync::{Arc, RwLock};
+    use std::sync::Arc;
 
     use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
     use encryption_export::data_key_manager_from_config;
@@ -1553,7 +1553,6 @@ pub mod tests {
 
     use protobuf::Message;
     use tempfile::{Builder, TempDir};
-    use tikv_util::map;
     use tikv_util::time::Limiter;
 
     use super::{
