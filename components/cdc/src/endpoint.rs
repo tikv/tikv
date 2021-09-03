@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
+use configuration::{ConfigChange, Configuration};
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::compat::Future01CompatExt;
@@ -145,6 +146,7 @@ pub enum Task {
     },
     TxnExtra(TxnExtra),
     Validate(Validate),
+    ChangeConfig(ConfigChange),
 }
 
 impl_display_as_debug!(Task);
@@ -203,6 +205,10 @@ impl fmt::Debug for Task {
                 Validate::Region(region_id, _) => de.field("region_id", &region_id).finish(),
                 Validate::OldValueCache(_) => de.finish(),
             },
+            Task::ChangeConfig(change) => de
+                .field("type", &"change_config")
+                .field("change", change)
+                .finish(),
         }
     }
 }
@@ -218,24 +224,23 @@ pub struct Endpoint<T> {
 
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
-    min_ts_interval: Duration,
     tso_worker: Runtime,
     store_meta: Arc<Mutex<StoreMeta>>,
     /// The concurrency manager for transactions. It's needed for CDC to check locks when
     /// calculating resolved_ts.
     concurrency_manager: ConcurrencyManager,
 
+    config: CdcConfig,
     workers: Runtime,
     scan_concurrency_semaphore: Arc<Semaphore>,
 
-    scan_speed_limter: Limiter,
+    scan_speed_limiter: Limiter,
     max_scan_batch_bytes: usize,
     max_scan_batch_size: usize,
 
     min_resolved_ts: TimeStamp,
     min_ts_region_id: u64,
     old_value_cache: OldValueCache,
-    hibernate_regions_compatible: bool,
 
     // stats
     resolved_region_count: usize,
@@ -251,7 +256,7 @@ pub struct Endpoint<T> {
 
 impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     pub fn new(
-        cfg: &CdcConfig,
+        config: &CdcConfig,
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
         raft_router: T,
@@ -265,24 +270,27 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let workers = Builder::new()
             .threaded_scheduler()
             .thread_name("cdcwkr")
-            .core_threads(cfg.incremental_scan_threads)
+            .core_threads(config.incremental_scan_threads)
             .build()
             .unwrap();
-        let scan_concurrency_semaphore = Arc::new(Semaphore::new(cfg.incremental_scan_concurrency));
         let tso_worker = Builder::new()
             .threaded_scheduler()
             .thread_name("tso")
             .core_threads(1)
             .build()
             .unwrap();
-        CDC_SINK_CAP.set(sink_memory_quota.cap() as i64);
-        CDC_OLD_VALUE_CACHE_MEMORY_QUOTA.set(cfg.old_value_cache_memory_quota.0 as i64);
-        let old_value_cache = OldValueCache::new(cfg.old_value_cache_memory_quota);
-        let speed_limter = Limiter::new(if cfg.incremental_scan_speed_limit.0 > 0 {
-            cfg.incremental_scan_speed_limit.0 as f64
+
+        // Initialized for the first time, subsequent adjustments will be made based on configuration updates.
+        let scan_concurrency_semaphore =
+            Arc::new(Semaphore::new(config.incremental_scan_concurrency));
+        let old_value_cache = OldValueCache::new(config.old_value_cache_memory_quota);
+        let speed_limiter = Limiter::new(if config.incremental_scan_speed_limit.0 > 0 {
+            config.incremental_scan_speed_limit.0 as f64
         } else {
             INFINITY
         });
+
+        CDC_SINK_CAP.set(sink_memory_quota.capacity() as i64);
         // For scan efficiency, the scan batch bytes should be around 1MB.
         // TODO: To avoid consume too much memory when there are many concurrent
         //       scan tasks (peak memory = 1MB * N tasks), we reduce the size
@@ -290,6 +298,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let max_scan_batch_bytes = 16 * 1024;
         // Assume 1KB per entry.
         let max_scan_batch_size = 1024;
+
         let ep = Endpoint {
             env,
             security_mgr,
@@ -299,31 +308,74 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             pd_client,
             tso_worker,
             timer: SteadyTimer::default(),
-            scan_speed_limter: speed_limter,
+            scan_speed_limiter: speed_limiter,
             max_scan_batch_bytes,
             max_scan_batch_size,
+            config: config.clone(),
             workers,
             scan_concurrency_semaphore,
             raft_router,
             observer,
             store_meta,
             concurrency_manager,
-            min_ts_interval: cfg.min_ts_interval.0,
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
             resolved_region_count: 0,
             unresolved_region_count: 0,
             old_value_cache,
             sink_memory_quota,
-            hibernate_regions_compatible: cfg.hibernate_regions_compatible,
             tikv_clients: Arc::new(Mutex::new(HashMap::default())),
         };
         ep.register_min_ts_event();
         ep
     }
 
-    pub fn set_min_ts_interval(&mut self, dur: Duration) {
-        self.min_ts_interval = dur;
+    fn on_change_cfg(&mut self, change: ConfigChange) {
+        // Validate first.
+        let mut validate_cfg = self.config.clone();
+        validate_cfg.update(change.clone());
+        if let Err(e) = validate_cfg.validate() {
+            warn!("cdc config update failed"; "error" => ?e);
+            return;
+        }
+
+        info!(
+            "cdc config updated";
+            "current config" => ?self.config,
+            "change" => ?change
+        );
+        // Update the config here. The following adjustments will all use the new values.
+        self.config.update(change.clone());
+
+        // Maybe the cache will be lost due to smaller capacity,
+        // but it is acceptable.
+        if change.get("old_value_cache_memory_quota").is_some() {
+            self.old_value_cache
+                .resize(self.config.old_value_cache_memory_quota);
+        }
+
+        // Maybe the limit will be exceeded for a while after the concurrency becomes smaller,
+        // but it is acceptable.
+        if change.get("incremental_scan_concurrency").is_some() {
+            self.scan_concurrency_semaphore =
+                Arc::new(Semaphore::new(self.config.incremental_scan_concurrency))
+        }
+
+        if change.get("sink_memory_quota").is_some() {
+            self.sink_memory_quota
+                .set_capacity(self.config.sink_memory_quota.0 as usize);
+            CDC_SINK_CAP.set(self.sink_memory_quota.capacity() as i64);
+        }
+
+        if change.get("incremental_scan_speed_limit").is_some() {
+            let new_speed_limit = if self.config.incremental_scan_speed_limit.0 > 0 {
+                self.config.incremental_scan_speed_limit.0 as f64
+            } else {
+                INFINITY
+            };
+
+            self.scan_speed_limiter.set_speed_limit(new_speed_limit);
+        }
     }
 
     pub fn set_max_scan_batch_size(&mut self, max_scan_batch_size: usize) {
@@ -524,7 +576,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             request_id: request.get_request_id(),
             downstream_state,
             txn_extra_op: delegate.txn_extra_op,
-            speed_limter: self.scan_speed_limter.clone(),
+            speed_limiter: self.scan_speed_limiter.clone(),
             max_scan_batch_bytes: self.max_scan_batch_bytes,
             max_scan_batch_size: self.max_scan_batch_size,
             observe_id: delegate.id,
@@ -717,7 +769,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     }
 
     fn register_min_ts_event(&self) {
-        let timeout = self.timer.delay(self.min_ts_interval);
+        let timeout = self.timer.delay(self.config.min_ts_interval.0);
         let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let raft_router = self.raft_router.clone();
@@ -731,7 +783,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let security_mgr = self.security_mgr.clone();
         let store_meta = self.store_meta.clone();
         let tikv_clients = self.tikv_clients.clone();
-        let hibernate_regions_compatible = self.hibernate_regions_compatible;
+        let hibernate_regions_compatible = self.config.hibernate_regions_compatible;
 
         let fut = async move {
             let _ = timeout.compat().await;
@@ -1026,7 +1078,7 @@ struct Initializer {
     checkpoint_ts: TimeStamp,
     txn_extra_op: TxnExtraOp,
 
-    speed_limter: Limiter,
+    speed_limiter: Limiter,
     max_scan_batch_bytes: usize,
     max_scan_batch_size: usize,
 
@@ -1202,7 +1254,7 @@ impl Initializer {
             }
         }
         if total_bytes > 0 {
-            self.speed_limter.consume(total_bytes).await;
+            self.speed_limiter.consume(total_bytes).await;
             CDC_SCAN_BYTES.inc_by(total_bytes as _);
         }
 
@@ -1305,6 +1357,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
 
     fn run(&mut self, task: Task) {
         debug!("cdc run task"; "task" => %task);
+
         match task {
             Task::MinTS { regions, min_ts } => self.on_min_ts(regions, min_ts),
             Task::Register {
@@ -1348,6 +1401,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
                     validate(&self.old_value_cache);
                 }
             },
+            Task::ChangeConfig(change) => self.on_change_cfg(change),
         }
     }
 }
@@ -1427,7 +1481,7 @@ mod tests {
     use tikv::storage::kv::Engine;
     use tikv::storage::txn::tests::{must_acquire_pessimistic_lock, must_prewrite_put};
     use tikv::storage::TestEngineBuilder;
-    use tikv_util::config::ReadableDuration;
+    use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker::{dummy_scheduler, LazyWorker, ReceiverWrapper};
     use time::Timespec;
 
@@ -1487,7 +1541,7 @@ mod tests {
             conn_id: ConnID::new(),
             request_id: 0,
             checkpoint_ts: 1.into(),
-            speed_limter: Limiter::new(speed_limit as _),
+            speed_limiter: Limiter::new(speed_limit as _),
             max_scan_batch_bytes: 1024 * 1024,
             max_scan_batch_size: 1024,
             txn_extra_op: TxnExtraOp::Noop,
@@ -1758,6 +1812,129 @@ mod tests {
         res.unwrap_err();
 
         worker.stop();
+    }
+
+    #[test]
+    fn test_change_endpoint_cfg() {
+        let cfg = CdcConfig::default();
+        let (mut ep, _raft_router, mut _task_rx) = mock_endpoint(&cfg);
+
+        // Modify min_ts_interval and hibernate_regions_compatible.
+        {
+            let mut updated_cfg = cfg.clone();
+            {
+                // Update it to 0, this will be an invalid change and will be lost.
+                updated_cfg.min_ts_interval = ReadableDuration::secs(0);
+            }
+            let diff = cfg.diff(&updated_cfg);
+            ep.run(Task::ChangeConfig(diff));
+            assert_eq!(ep.config.min_ts_interval, ReadableDuration::secs(1));
+            assert_eq!(ep.config.hibernate_regions_compatible, true);
+
+            {
+                // update fields.
+                updated_cfg.min_ts_interval = ReadableDuration::secs(100);
+                updated_cfg.hibernate_regions_compatible = false
+            }
+            let diff = cfg.diff(&updated_cfg);
+            ep.run(Task::ChangeConfig(diff));
+            assert_eq!(ep.config.min_ts_interval, ReadableDuration::secs(100));
+            assert_eq!(ep.config.hibernate_regions_compatible, false);
+        }
+
+        // Modify old_value_cache_memory_quota.
+        {
+            let mut updated_cfg = cfg.clone();
+            {
+                updated_cfg.old_value_cache_memory_quota = ReadableSize::mb(1024);
+            }
+            let diff = cfg.diff(&updated_cfg);
+
+            assert_eq!(
+                ep.config.old_value_cache_memory_quota,
+                ReadableSize::mb(512)
+            );
+            assert_eq!(
+                ep.old_value_cache.capacity(),
+                ReadableSize::mb(512).0 as usize
+            );
+            ep.run(Task::ChangeConfig(diff));
+            assert_eq!(
+                ep.config.old_value_cache_memory_quota,
+                ReadableSize::mb(1024)
+            );
+            assert_eq!(
+                ep.old_value_cache.capacity(),
+                ReadableSize::mb(1024).0 as usize
+            );
+        }
+
+        // Modify incremental_scan_concurrency.
+        {
+            let mut updated_cfg = cfg.clone();
+            {
+                // Update it to be smaller than incremental_scan_threads,
+                // which will be an invalid change and will be lost.
+                updated_cfg.incremental_scan_concurrency = 2;
+            }
+            let diff = cfg.diff(&updated_cfg);
+            ep.run(Task::ChangeConfig(diff));
+            assert_eq!(ep.config.incremental_scan_concurrency, 6);
+            assert_eq!(ep.scan_concurrency_semaphore.available_permits(), 6);
+
+            {
+                // Correct update.
+                updated_cfg.incremental_scan_concurrency = 8;
+            }
+            let diff = cfg.diff(&updated_cfg);
+            ep.run(Task::ChangeConfig(diff));
+            assert_eq!(ep.config.incremental_scan_concurrency, 8);
+            assert_eq!(ep.scan_concurrency_semaphore.available_permits(), 8);
+        }
+
+        // Modify sink_memory_quota.
+        {
+            let mut updated_cfg = cfg.clone();
+            {
+                updated_cfg.sink_memory_quota = ReadableSize::mb(1024);
+            }
+            let diff = cfg.diff(&updated_cfg);
+
+            assert_eq!(ep.sink_memory_quota.capacity(), usize::MAX);
+            ep.run(Task::ChangeConfig(diff));
+            assert_eq!(ep.config.sink_memory_quota, ReadableSize::mb(1024));
+            assert_eq!(
+                ep.sink_memory_quota.capacity(),
+                ReadableSize::mb(1024).0 as usize
+            );
+        }
+
+        // Modify incremental_scan_speed_limit.
+        {
+            let mut updated_cfg = cfg.clone();
+            {
+                updated_cfg.incremental_scan_speed_limit = ReadableSize::mb(1024);
+            }
+            let diff = cfg.diff(&updated_cfg);
+
+            assert_eq!(
+                ep.config.incremental_scan_speed_limit,
+                ReadableSize::mb(128)
+            );
+            assert!(
+                (ep.scan_speed_limiter.speed_limit() - ReadableSize::mb(128).0 as f64).abs()
+                    < f64::EPSILON
+            );
+            ep.run(Task::ChangeConfig(diff));
+            assert_eq!(
+                ep.config.incremental_scan_speed_limit,
+                ReadableSize::mb(1024)
+            );
+            assert!(
+                (ep.scan_speed_limiter.speed_limit() - ReadableSize::mb(1024).0 as f64).abs()
+                    < f64::EPSILON
+            );
+        }
     }
 
     #[test]

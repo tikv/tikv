@@ -499,6 +499,7 @@ dependencies = [
  "bitflags",
  "collections",
  "concurrency_manager",
+ "configuration",
  "criterion",
  "crossbeam 0.8.0",
  "engine_rocks",
@@ -2227,7 +2228,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#72334ceb658740d2addae0c57b8156a46f7a8f19"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#53ff7e7a8fff03058ce03b9d520227cc4aff90b8"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2246,7 +2247,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#72334ceb658740d2addae0c57b8156a46f7a8f19"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#53ff7e7a8fff03058ce03b9d520227cc4aff90b8"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3856,7 +3857,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#72334ceb658740d2addae0c57b8156a46f7a8f19"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#53ff7e7a8fff03058ce03b9d520227cc4aff90b8"
 dependencies = [
  "libc 0.2.86",
  "librocksdb_sys",
@@ -4095,6 +4096,12 @@ name = "scopeguard"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d29ab0c6d3fc0ee92fe66e2d99f700eab17a8d57d1c1d3b748380fb20baa78cd"
+
+[[package]]
+name = "seahash"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 
 [[package]]
 name = "security"
@@ -5192,6 +5199,7 @@ dependencies = [
  "rand 0.7.3",
  "regex",
  "rev_lines",
+ "seahash",
  "security",
  "serde",
  "serde_derive",

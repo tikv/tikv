@@ -34,12 +34,6 @@ use tikv_util::worker::Scheduler;
 use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
 
-// When merge raft messages into a batch message, leave a buffer.
-const GRPC_SEND_MSG_BUF: usize = 64 * 1024;
-const QUEUE_CAPACITY: usize = 4096;
-
-const RAFT_MSG_MAX_BATCH_SIZE: usize = 128;
-
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
 const _ON_RESOLVE_FP: &str = "transport_snapshot_on_resolve";
@@ -186,8 +180,9 @@ impl Buffer for BatchMessageBuffer {
         // To avoid building too large batch, we limit each batch's size. Since `msg_size`
         // is estimated, `GRPC_SEND_MSG_BUF` is reserved for errors.
         if self.size > 0
-            && (self.size + msg_size + GRPC_SEND_MSG_BUF >= self.cfg.max_grpc_send_msg_len as usize
-                || self.batch.get_msgs().len() >= RAFT_MSG_MAX_BATCH_SIZE)
+            && (self.size + msg_size + self.cfg.raft_client_grpc_send_msg_buffer
+                >= self.cfg.max_grpc_send_msg_len as usize
+                || self.batch.get_msgs().len() >= self.cfg.raft_msg_max_batch_size)
         {
             self.overflowing = Some(msg);
             return;
@@ -755,6 +750,7 @@ pub struct RaftClient<S, R> {
     full_stores: Vec<(u64, usize)>,
     future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
+    last_hash: (u64, u64),
 }
 
 impl<S, R> RaftClient<S, R>
@@ -775,6 +771,7 @@ where
             full_stores: vec![],
             future_pool,
             builder,
+            last_hash: (0, 0),
         }
     }
 
@@ -795,7 +792,9 @@ where
                 .connections
                 .entry((store_id, conn_id))
                 .or_insert_with(|| {
-                    let queue = Arc::new(Queue::with_capacity(QUEUE_CAPACITY));
+                    let queue = Arc::new(Queue::with_capacity(
+                        self.builder.cfg.raft_client_queue_size,
+                    ));
                     let back_end = StreamBackEnd {
                         store_id,
                         queue: queue.clone(),
@@ -827,7 +826,18 @@ where
     /// are sent out.
     pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
         let store_id = msg.get_to_peer().store_id;
-        let conn_id = (msg.region_id % self.builder.cfg.grpc_raft_conn_num as u64) as usize;
+        let conn_id = if self.builder.cfg.grpc_raft_conn_num == 1 {
+            0
+        } else {
+            if self.last_hash.0 == 0 || msg.region_id != self.last_hash.0 {
+                self.last_hash = (
+                    msg.region_id,
+                    seahash::hash(msg.region_id.as_ne_bytes())
+                        % self.builder.cfg.grpc_raft_conn_num as u64,
+                );
+            };
+            self.last_hash.1 as usize
+        };
         #[allow(unused_mut)]
         let mut transport_on_send_store_fp = || {
             fail_point!(
@@ -942,6 +952,7 @@ where
             full_stores: vec![],
             future_pool: self.future_pool.clone(),
             builder: self.builder.clone(),
+            last_hash: (0, 0),
         }
     }
 }
