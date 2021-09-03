@@ -74,7 +74,8 @@ impl Reporter {
             self.collector = Some(CollectorImpl::register(self.scheduler.clone()));
         }
 
-        if self.endpoint.is_none() {
+        if self.endpoint.is_none() || self.endpoint.as_ref().unwrap().name() != self.config.endpoint
+        {
             self.endpoint = Some(endpoint::init(&self.config.endpoint));
         }
     }
