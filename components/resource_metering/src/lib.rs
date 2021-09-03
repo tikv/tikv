@@ -62,12 +62,9 @@ const MIN_REPORT_AGENT_INTERVAL: ReadableDuration = ReadableDuration::secs(5);
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub enabled: bool,
-
     pub agent_address: String,
-    pub endpoint: String,
     pub report_agent_interval: ReadableDuration,
     pub max_resource_groups: usize,
-
     pub precision: ReadableDuration,
 }
 
@@ -76,7 +73,6 @@ impl Default for Config {
         Config {
             enabled: true,
             agent_address: "".to_owned(),
-            endpoint: "grpc".to_owned(),
             report_agent_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
             precision: ReadableDuration::secs(1),
@@ -88,13 +84,6 @@ impl Config {
     pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
         if !self.agent_address.is_empty() {
             tikv_util::config::check_addr(&self.agent_address)?;
-        }
-
-        match self.endpoint.as_str() {
-            "victoria-metrics" | "grpc" => {}
-            _ => {
-                return Err("endpoint can only be one of [grpc, victoria-metrics]".into());
-            }
         }
 
         if self.precision < MIN_PRECISION || self.precision > MAX_PRECISION {

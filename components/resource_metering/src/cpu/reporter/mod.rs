@@ -3,7 +3,7 @@
 mod endpoint;
 mod record;
 
-use self::endpoint::Endpoint;
+use self::endpoint::{grpc::GRPCEndpoint, Endpoint};
 use self::record::Records;
 use crate::cpu::collector::{register_collector, Collector, CollectorHandle};
 use crate::cpu::recorder::CpuRecords;
@@ -21,16 +21,13 @@ pub struct Reporter {
     endpoint: Option<Box<dyn Endpoint>>,
     collector: Option<CollectorHandle>,
     records: Records,
-    instance_name: String,
 }
 
 impl Reporter {
-    pub fn new(status_addr: &str, config: Config, scheduler: Scheduler<Task>) -> Self {
-        let instance_name = instance_name(status_addr);
-
+    pub fn new(config: Config, scheduler: Scheduler<Task>) -> Self {
         let endpoint = config
             .should_report()
-            .then(|| endpoint::init(&config.endpoint));
+            .then(|| Box::new(GRPCEndpoint::default()) as _);
 
         let collector = config
             .should_report()
@@ -41,7 +38,6 @@ impl Reporter {
             scheduler,
             endpoint,
             collector,
-            instance_name,
             records: Records::default(),
         }
     }
@@ -54,7 +50,7 @@ impl Reporter {
         // Whether endpoint exists or not, records should be taken in order to reset.
         let records = std::mem::take(&mut self.records);
         if let Some(endpoint) = self.endpoint.as_mut() {
-            endpoint.report(&self.instance_name, &self.config.agent_address, records);
+            endpoint.report(&self.config.agent_address, records);
         }
     }
 
@@ -74,9 +70,8 @@ impl Reporter {
             self.collector = Some(CollectorImpl::register(self.scheduler.clone()));
         }
 
-        if self.endpoint.is_none() || self.endpoint.as_ref().unwrap().name() != self.config.endpoint
-        {
-            self.endpoint = Some(endpoint::init(&self.config.endpoint));
+        if self.endpoint.is_none() {
+            self.endpoint = Some(Box::new(GRPCEndpoint::default()));
         }
     }
 
@@ -151,21 +146,4 @@ impl Config {
     fn should_report(&self) -> bool {
         self.enabled && !self.agent_address.is_empty() && self.max_resource_groups != 0
     }
-}
-
-fn instance_name(status_addr: &str) -> String {
-    let hostname = (|| {
-        let hostname = hostname::get().ok()?;
-        hostname.into_string().ok()
-    })()
-    .unwrap_or_else(|| "<unknown>".to_owned());
-
-    let mut split = status_addr.split(':');
-    let _host = split.next().expect("invalid status address");
-    let port = split.next().expect("invalid status address");
-
-    let mut instance_name = hostname;
-    instance_name.push(':');
-    instance_name.push_str(port);
-    instance_name
 }

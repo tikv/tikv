@@ -20,7 +20,7 @@ pub struct GRPCEndpoint {
 }
 
 impl Endpoint for GRPCEndpoint {
-    fn report(&mut self, _instance_name: &str, address: &str, records: Records) {
+    fn report(&mut self, address: &str, records: Records) {
         if address.is_empty() {
             return;
         }
@@ -82,10 +82,6 @@ impl Endpoint for GRPCEndpoint {
                 warn!("failed to receive from a grpc call"; "error" => ?err);
             }
         });
-    }
-
-    fn name(&self) -> &'static str {
-        "grpc"
     }
 }
 
