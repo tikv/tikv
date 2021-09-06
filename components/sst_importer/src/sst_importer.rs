@@ -899,7 +899,7 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
         return Err(Error::InvalidSSTPath(path.to_owned()));
     }
     let elems: Vec<_> = file_name.trim_end_matches(SST_SUFFIX).split('_').collect();
-    if elems.len() < 5 {
+    if elems.len() < 4 {
         return Err(Error::InvalidSSTPath(path.to_owned()));
     }
 
