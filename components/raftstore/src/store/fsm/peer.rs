@@ -601,10 +601,10 @@ where
                     {
                         self.fsm.batch_req_builder.add(cmd, req_size);
                         if self.fsm.batch_req_builder.should_finish() {
-                            self.propose_batch_raft_command();
+                            self.propose_batch_raft_command(true);
                         }
                     } else {
-                        self.propose_batch_raft_command();
+                        self.propose_batch_raft_command(true);
                         self.propose_raft_command(
                             cmd.request,
                             cmd.callback,
@@ -648,11 +648,14 @@ where
             }
         }
         // Propose batch request which may be still waiting for more raft-command
-        self.propose_batch_raft_command();
+        self.propose_batch_raft_command(false);
         self.collect_ready();
     }
 
-    fn propose_batch_raft_command(&mut self) {
+    fn propose_batch_raft_command(&mut self, force: bool) {
+        if !force && self.fsm.peer.unpersisted_ready_len() >= self.ctx.cfg.concurrent_ready_max_count {
+            return;
+        }
         if let Some((request, callback)) =
             self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics)
         {

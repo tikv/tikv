@@ -197,6 +197,8 @@ pub struct Config {
 
     pub cmd_batch: bool,
 
+    pub concurrent_ready_max_count: usize,
+
     /// When the size of ready entries exceeds this value, ready will be fetched and handled.
     pub raft_ready_size_limit: ReadableSize,
 
@@ -296,6 +298,7 @@ impl Default for Config {
             perf_level: PerfLevel::EnableTime,
             evict_cache_on_memory_ratio: 0.2,
             cmd_batch: true,
+            concurrent_ready_max_count: 10,
             raft_ready_size_limit: ReadableSize::mb(1),
             raft_write_size_limit: ReadableSize::mb(1),
             waterfall_metrics: false,

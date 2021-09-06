@@ -2339,6 +2339,10 @@ where
         }
     }
 
+    pub fn unpersisted_ready_len(&self) -> usize {
+        self.unpersisted_readies.len()
+    }
+
     pub fn has_unpersisted_ready(&self) -> bool {
         !self.unpersisted_readies.is_empty()
     }
