@@ -72,6 +72,7 @@ test_raftstore = { path = "../test_raftstore" }
 test_util = { path = "../test_util" }
 panic_hook = { path = "../panic_hook" }
 time = "0.1"
+criterion = "0.3"
 
 [[test]]
 name = "integrations"
@@ -82,3 +83,8 @@ path = "tests/integrations/mod.rs"
 name = "failpoints"
 path = "tests/failpoints/mod.rs"
 required-features = ["failpoints"]
+
+[[bench]]
+name = "cdc_event"
+harness = false
+required-features = ["protobuf-codec"]
