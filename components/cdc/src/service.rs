@@ -299,6 +299,7 @@ impl Conn {
 /// It's a front-end of the CDC service, schedules requests to the `Endpoint`.
 #[derive(Clone)]
 pub struct Service {
+    cluster_id: u64,
     scheduler: Scheduler<Task>,
     memory_quota: MemoryQuota,
 }
@@ -307,8 +308,9 @@ impl Service {
     /// Create a ChangeData service.
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
-    pub fn new(scheduler: Scheduler<Task>, memory_quota: MemoryQuota) -> Service {
+    pub fn new(cluster_id: u64, scheduler: Scheduler<Task>, memory_quota: MemoryQuota) -> Service {
         Service {
+            cluster_id,
             scheduler,
             memory_quota,
         }
@@ -346,7 +348,11 @@ impl ChangeData for Service {
 
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
+        let cluster_id = self.cluster_id;
         let recv_req = stream.try_for_each(move |request| {
+            if cluster_id != request.get_header().get_cluster_id() {
+                panic!("TODO")
+            }
             let region_epoch = request.get_region_epoch().clone();
             let req_id = request.get_request_id();
             let enable_old_value = request.get_extra_op() == TxnExtraOp::ReadOldValue;
@@ -440,6 +446,7 @@ mod tests {
     };
     #[cfg(not(feature = "prost-codec"))]
     use kvproto::cdcpb::{EventEntries, EventRow, Event_oneof_event};
+    use tikv::server::DEFAULT_CLUSTER_ID;
 
     use crate::channel::{poll_timeout, recv_timeout, CDC_EVENT_MAX_BATCH_SIZE};
     use crate::service::{CdcEvent, EventBatcher, CDC_MAX_RESP_SIZE};
@@ -582,7 +589,7 @@ mod tests {
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = MemoryQuota::new(capacity);
         let (scheduler, rx) = dummy_scheduler();
-        let cdc_service = Service::new(scheduler, memory_quota);
+        let cdc_service = Service::new(DEFAULT_CLUSTER_ID, scheduler, memory_quota);
         let env = Arc::new(EnvBuilder::new().build());
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));

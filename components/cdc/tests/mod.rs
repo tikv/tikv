@@ -15,6 +15,7 @@ use online_config::OnlineConfig;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
 use tikv::config::CdcConfig;
+use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::{LazyWorker, Runnable};
 use tikv_util::HandyRwLock;
@@ -133,6 +134,7 @@ impl TestSuiteBuilder {
                 .or_default()
                 .push(Box::new(move || {
                     create_change_data(cdc::Service::new(
+                        DEFAULT_CLUSTER_ID,
                         scheduler.clone(),
                         MemoryQuota::new(memory_quota),
                     ))

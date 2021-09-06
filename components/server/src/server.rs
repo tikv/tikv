@@ -1015,6 +1015,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         backup_worker.start(backup_endpoint);
 
         let cdc_service = cdc::Service::new(
+            self.config.server.cluster_id,
             servers.cdc_scheduler.clone(),
             servers.cdc_memory_quota.clone(),
         );
