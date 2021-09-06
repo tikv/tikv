@@ -14,6 +14,7 @@ extern crate tikv_util;
 extern crate assert_matches;
 
 mod channel;
+mod config;
 mod delegate;
 mod endpoint;
 mod errors;
@@ -23,6 +24,7 @@ mod old_value;
 mod service;
 
 pub use channel::{recv_timeout, MemoryQuota};
+pub use config::CdcConfigManager;
 pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task, Validate};
 pub use errors::{Error, Result};
 pub use observer::CdcObserver;

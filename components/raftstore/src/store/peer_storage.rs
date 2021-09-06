@@ -5,7 +5,6 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
-use std::time::Instant;
 use std::{cmp, error, u64};
 
 use engine_traits::CF_RAFT;
@@ -25,6 +24,7 @@ use crate::store::ProposalContext;
 use crate::{Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
+use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
 
 use super::metrics::*;
@@ -1520,7 +1520,7 @@ where
         "meta_key" => 1,
         "apply_key" => 1,
         "raft_key" => 1,
-        "takes" => ?t.elapsed(),
+        "takes" => ?t.saturating_elapsed(),
     );
     Ok(())
 }
