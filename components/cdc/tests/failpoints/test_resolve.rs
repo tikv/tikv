@@ -1,5 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use crate::{new_event_feed, TestSuite};
+use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 use futures::sink::Sink;
 use futures::Future;
 use grpcio::WriteFlags;
@@ -135,7 +135,7 @@ fn test_stale_resolver() {
 fn test_region_error() {
     let mut cluster = new_server_cluster(1, 1);
     cluster.cfg.cdc.min_ts_interval = ReadableDuration::millis(100);
-    let mut suite = TestSuite::with_cluster(1, cluster);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
 
     let multi_batch_fp = "cdc_before_handle_multi_batch";
     fail::cfg(multi_batch_fp, "return").unwrap();
