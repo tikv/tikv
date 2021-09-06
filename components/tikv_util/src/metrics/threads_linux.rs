@@ -3,12 +3,14 @@
 use std::fs;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use collections::HashMap;
 use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, CounterVec, IntCounterVec, IntGaugeVec, Opts};
+
+use crate::time::Instant;
 
 use procinfo::pid;
 
@@ -380,7 +382,10 @@ impl ThreadInfoStatistics {
 
     pub fn record(&mut self) {
         let current_instant = Instant::now();
-        let time_delta = (current_instant - self.last_instant).as_millis() as f64 / 1000.0;
+        let time_delta = current_instant
+            .saturating_duration_since(self.last_instant)
+            .as_millis() as f64
+            / 1000.0;
         self.last_instant = current_instant;
         self.metrics_rate.clear();
 
@@ -464,7 +469,7 @@ impl TidRetriever {
     pub fn get_tids(&mut self) -> &[pid_t] {
         // Update the tid list according to tid_buffer_update_interval.
         // If tid is not changed, update the tid list less frequently.
-        if self.tid_buffer_last_update.elapsed() >= self.tid_buffer_update_interval {
+        if self.tid_buffer_last_update.saturating_elapsed() >= self.tid_buffer_update_interval {
             let new_tid_buffer = get_thread_ids(self.pid).unwrap();
             if new_tid_buffer == self.tid_buffer {
                 self.tid_buffer_update_interval *= 2;
@@ -638,7 +643,7 @@ mod tests {
 
                 let start = Instant::now();
                 loop {
-                    if (Instant::now() - start).as_millis() > duration_ms.into() {
+                    if start.saturating_elapsed().as_millis() > duration_ms.into() {
                         break;
                     }
                 }

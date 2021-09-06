@@ -16,10 +16,10 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{atomic::AtomicU64, Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-use cdc::MemoryQuota;
+use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
@@ -81,7 +81,7 @@ use tikv_util::{
     config::{ensure_dir_exist, VersionTrack},
     sys::sys_quota::SysQuota,
     thread_group::GroupProperties,
-    time::Monitor,
+    time::{Instant, Monitor},
     timer::GLOBAL_TIMER_HANDLE,
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
 };
@@ -609,9 +609,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cop_read_pools.handle()
         };
 
-        // Register cdc
+        // Register cdc.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // Register cdc config.
+        cfg_controller.register(
+            tikv::config::Module::CDC,
+            Box::new(CdcConfigManager(cdc_worker.scheduler())),
+        );
 
         let server_config = Arc::new(self.config.server.clone());
 
@@ -892,7 +897,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     fn init_metrics_flusher(&mut self, fetcher: BytesFetcher) {
         let handle = self.background_worker.clone_raw_handle();
         let mut interval = GLOBAL_TIMER_HANDLE
-            .interval(Instant::now(), DEFAULT_METRICS_FLUSH_INTERVAL)
+            .interval(std::time::Instant::now(), DEFAULT_METRICS_FLUSH_INTERVAL)
             .compat();
         let mut engine_metrics =
             EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
@@ -1221,7 +1226,7 @@ impl<R: RaftEngine> EngineMetricsManager<R> {
     pub fn flush(&mut self, now: Instant) {
         self.engines.kv.flush_metrics("kv");
         self.engines.raft.flush_metrics("raft");
-        if now.duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
+        if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
             self.engines.kv.reset_statistics();
             self.engines.raft.reset_statistics();
             self.last_reset = now;
