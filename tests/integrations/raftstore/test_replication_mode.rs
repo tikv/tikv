@@ -1,8 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use kvproto::raft_cmdpb::*;
 use kvproto::replication_modepb::*;
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
@@ -436,4 +438,55 @@ fn test_loading_label_after_rolling_start() {
     let state = cluster.pd_client.region_replication_status(r);
     assert_eq!(state.state_id, 1);
     assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
+}
+
+#[test]
+fn test_assign_commit_groups_with_migrate_region() {
+    let mut cluster = new_node_cluster(0, 3);
+    // config for snapshot.
+    cluster.cfg.raft_store.future_poll_size = 2;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.run_conf_change();
+
+    // split 1 region into 2 regions.
+    let region = cluster.get_region(b"");
+    let mut admin_req = AdminRequest::default();
+    admin_req.set_cmd_type(AdminCmdType::BatchSplit);
+    let mut batch_split_req = BatchSplitRequest::default();
+    batch_split_req.mut_requests().push(SplitRequest::default());
+    batch_split_req.mut_requests()[0].set_split_key(b"s".to_vec());
+    batch_split_req.mut_requests()[0].set_new_region_id(1000);
+    batch_split_req.mut_requests()[0].set_new_peer_ids(vec![1001]);
+    batch_split_req.mut_requests()[0].set_right_derive(true);
+    admin_req.set_splits(batch_split_req);
+    let epoch = region.get_region_epoch().clone();
+    let req = new_admin_request(1, &epoch, admin_req);
+    let resp = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+
+    thread::sleep(Duration::from_millis(100));
+
+    // add a peer of region 1 to store 2.
+    let fp1 = "after_assign_commit_groups_on_apply_snapshot";
+    fail::cfg(fp1, "pause").unwrap();
+    pd_client.add_peer(1, new_peer(2, 2));
+    thread::sleep(Duration::from_millis(300));
+
+    // add a peer to region 1000.
+    let fp2 = "after_acquire_store_meta_on_maybe_create_peer_internal";
+    fail::cfg(fp2, "pause").unwrap();
+    pd_client.add_peer(1000, new_peer(2, 1002));
+    thread::sleep(Duration::from_millis(300));
+
+    // remove failpoints
+    fail::remove(fp1);
+    fail::remove(fp2);
+
+    // deadlock should not happen
+    thread::sleep(Duration::from_millis(300));
+    cluster.must_region_exist(1000, 2);
+    cluster.must_region_exist(1, 2);
 }
