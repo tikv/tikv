@@ -481,11 +481,11 @@ fn test_assign_commit_groups_with_migrate_region() {
     pd_client.add_peer(1000, new_peer(2, 1002));
     thread::sleep(Duration::from_millis(300));
 
-    // remove failpoints
+    // remove failpoints.
     fail::remove(fp1);
     fail::remove(fp2);
 
-    // deadlock should not happen
+    // deadlock should not happen.
     thread::sleep(Duration::from_millis(300));
     cluster.must_region_exist(1000, 2);
     cluster.must_region_exist(1, 2);
