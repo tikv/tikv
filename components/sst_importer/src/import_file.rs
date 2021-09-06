@@ -367,6 +367,8 @@ pub fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
     meta.mut_region_epoch().set_conf_ver(elems[2].parse()?);
     meta.mut_region_epoch().set_version(elems[3].parse()?);
     if elems.len() > 4 {
+        // If we upgrade TiKV from 3.0.x to 4.0.x and higher version, we can not read cf_name from
+        // the file path, because TiKV 3.0.x does not encode cf_name to path.
         meta.set_cf_name(elems[4].to_owned());
     }
     Ok(meta)
