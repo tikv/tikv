@@ -207,19 +207,20 @@ impl LeaderClient {
                     .inc();
                 return Err(e);
             }
-            Ok(tuple) => {
+            Ok(None) => {
+                 PD_RECONNECT_COUNTER_VEC
+                    .with_label_values(&["no-need"])
+                    .inc();
+                return Ok(());
+            }
+            Ok(Some(pair)) => {
                 PD_RECONNECT_COUNTER_VEC
                     .with_label_values(&["success"])
                     .inc();
-                tuple
+                pair
             }
         };
-        fail_point!("leader_client_reconnect", |_| Ok(()));
 
-        let (client, members) = match future.await? {
-            Some(pair) => pair,
-            None => return Ok(()),
-        };
         fail_point!("leader_client_reconnect", |_| Ok(()));
 
         {

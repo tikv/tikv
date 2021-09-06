@@ -21,7 +21,7 @@ use tikv_util::{Either, HandyRwLock};
 use txn_types::TimeStamp;
 
 use super::metrics::*;
-use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient, PdConnector};
+use super::util::{check_resp_header, sync_request, Inner, LeaderClient, PdConnector};
 use super::{Config, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
