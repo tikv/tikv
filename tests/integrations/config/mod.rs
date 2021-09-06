@@ -2,12 +2,13 @@
 
 use std::fs::File;
 use std::io::Read;
+use std::iter::FromIterator;
 use std::path::PathBuf;
 
 use slog::Level;
 
 use batch_system::Config as BatchSystemConfig;
-use collections::HashSet;
+use collections::{HashMap, HashSet};
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
 use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::raw::{
@@ -68,7 +69,7 @@ fn test_serde_custom_tikv_config() {
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
         addr: "example.com:443".to_owned(),
-        labels: map! { "a".to_owned() => "b".to_owned() },
+        labels: HashMap::from_iter([("a".to_owned(), "b".to_owned())]),
         advertise_addr: "example.com:443".to_owned(),
         status_addr: "example.com:443".to_owned(),
         advertise_status_addr: "example.com:443".to_owned(),
