@@ -208,7 +208,7 @@ impl LeaderClient {
                 return Err(e);
             }
             Ok(None) => {
-                 PD_RECONNECT_COUNTER_VEC
+                PD_RECONNECT_COUNTER_VEC
                     .with_label_values(&["no-need"])
                     .inc();
                 return Ok(());

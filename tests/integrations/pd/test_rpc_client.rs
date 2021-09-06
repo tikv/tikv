@@ -6,12 +6,13 @@ use std::thread;
 use std::time::Duration;
 
 use futures::Future;
+use futures03::executor::block_on;
 use futures_cpupool::Builder;
 use grpcio::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
-use pd_client::{validate_endpoints, Error as PdError, PdConnector, PdClient, RegionStat, RpcClient};
+use pd_client::{Error as PdError, PdClient, PdConnector, RegionStat, RpcClient};
 use raftstore::store;
 use security::{SecurityConfig, SecurityManager};
 use tikv_util::config::ReadableDuration;
