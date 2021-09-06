@@ -1717,6 +1717,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gag"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cc0b9f53275dc5fada808f1d2f82e3688a6c14d735633d1590b7be8eb2307b5"
+dependencies = [
+ "libc 0.2.86",
+ "tempfile",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5302,6 +5312,7 @@ dependencies = [
  "fs2",
  "futures 0.3.8",
  "futures-util",
+ "gag",
  "grpcio",
  "http",
  "kvproto",
@@ -5310,6 +5321,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "minitrace",
+ "nix 0.11.1",
  "num_cpus",
  "openssl",
  "panic_hook",
