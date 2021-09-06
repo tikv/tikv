@@ -19,7 +19,7 @@ use std::{
     time::Duration,
 };
 
-use cdc::MemoryQuota;
+use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
@@ -609,9 +609,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cop_read_pools.handle()
         };
 
-        // Register cdc
+        // Register cdc.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // Register cdc config.
+        cfg_controller.register(
+            tikv::config::Module::CDC,
+            Box::new(CdcConfigManager(cdc_worker.scheduler())),
+        );
 
         let server_config = Arc::new(self.config.server.clone());
 
