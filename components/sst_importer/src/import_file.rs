@@ -397,7 +397,6 @@ mod test {
 
     #[test]
     fn test_path_to_sst_meta() {
-        let importer_dir = tempfile::tempdir().unwrap();
         let uuid = Uuid::new_v4();
         let mut meta = SstMeta::default();
         meta.set_uuid(uuid.as_bytes().to_vec());
