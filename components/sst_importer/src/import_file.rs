@@ -356,7 +356,7 @@ pub fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
         return Err(Error::InvalidSSTPath(path.to_owned()));
     }
     let elems: Vec<_> = file_name.trim_end_matches(SST_SUFFIX).split('_').collect();
-    if elems.len() != 5 {
+    if elems.len() < 4 {
         return Err(Error::InvalidSSTPath(path.to_owned()));
     }
 
@@ -366,7 +366,9 @@ pub fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
     meta.set_region_id(elems[1].parse()?);
     meta.mut_region_epoch().set_conf_ver(elems[2].parse()?);
     meta.mut_region_epoch().set_version(elems[3].parse()?);
-    meta.set_cf_name(elems[4].to_owned());
+    if elems.len() > 4 {
+        meta.set_cf_name(elems[4].to_owned());
+    }
     Ok(meta)
 }
 
@@ -390,6 +392,27 @@ mod test {
         assert_eq!(path.to_str().unwrap(), &expected_path);
 
         let new_meta = path_to_sst_meta(path).unwrap();
+        assert_eq!(meta, new_meta);
+    }
+
+    #[test]
+    fn test_path_to_sst_meta() {
+        let importer_dir = tempfile::tempdir().unwrap();
+        let uuid = Uuid::new_v4();
+        let mut meta = SstMeta::default();
+        meta.set_uuid(uuid.as_bytes().to_vec());
+        meta.set_region_id(1);
+        meta.mut_region_epoch().set_conf_ver(222);
+        meta.mut_region_epoch().set_version(333);
+        let path = PathBuf::from(format!(
+            "{}_{}_{}_{}{}",
+            UuidBuilder::from_slice(meta.get_uuid()).unwrap().build(),
+            meta.get_region_id(),
+            meta.get_region_epoch().get_conf_ver(),
+            meta.get_region_epoch().get_version(),
+            SST_SUFFIX,
+        ));
+        let new_meta = path_to_sst_meta(&path).unwrap();
         assert_eq!(meta, new_meta);
     }
 }
