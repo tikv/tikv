@@ -67,6 +67,14 @@ impl SysQuota {
     }
 
     pub fn log_quota() {
+        #[cfg(target_os = "linux")]
+        info!(
+            "cgroup quota: memory={:?}, cpu={:?}, cores={:?}",
+            ReadableSize(SELF_CGROUP.memory_limit_in_bytes() as u64),
+            SELF_CGROUP.cpu_quota(),
+            SELF_CGROUP.cpuset_cores(),
+        );
+
         info!(
             "memory limit in bytes: {}, cpu cores quota: {}",
             Self::memory_limit_in_bytes(),

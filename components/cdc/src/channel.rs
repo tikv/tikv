@@ -3,8 +3,6 @@
 use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::time::Duration;
 
-use tikv_util::time::Instant;
-
 use futures::{
     channel::mpsc::{
         channel as bounded, unbounded, Receiver, SendError as FuturesSendError, Sender,
@@ -16,8 +14,10 @@ use futures::{
 use grpcio::WriteFlags;
 use kvproto::cdcpb::ChangeDataEvent;
 
+use tikv_util::time::Instant;
 use tikv_util::{impl_display_as_debug, warn};
 
+use crate::metrics::*;
 use crate::service::{CdcEvent, EventBatcher};
 
 const CDC_MSG_MAX_BATCH_SIZE: usize = 128;
@@ -27,31 +27,39 @@ pub const CDC_EVENT_MAX_BATCH_SIZE: usize = 2;
 
 #[derive(Clone)]
 pub struct MemoryQuota {
-    capacity: usize,
+    capacity: Arc<AtomicUsize>,
     in_use: Arc<AtomicUsize>,
 }
 
 impl MemoryQuota {
     pub fn new(capacity: usize) -> MemoryQuota {
         MemoryQuota {
-            capacity,
+            capacity: Arc::new(AtomicUsize::new(capacity)),
             in_use: Arc::new(AtomicUsize::new(0)),
         }
     }
+
     pub fn in_use(&self) -> usize {
         self.in_use.load(Ordering::Relaxed)
     }
-    pub fn cap(&self) -> usize {
-        self.capacity
+
+    pub(crate) fn capacity(&self) -> usize {
+        self.capacity.load(Ordering::Acquire)
     }
+
+    pub(crate) fn set_capacity(&self, capacity: usize) {
+        self.capacity.store(capacity, Ordering::Release)
+    }
+
     fn alloc(&self, bytes: usize) -> bool {
         let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
+        let capacity = self.capacity.load(Ordering::Acquire);
         loop {
-            if in_use_bytes + bytes > self.capacity {
+            if in_use_bytes + bytes > capacity {
                 return false;
             }
             let new_in_use_bytes = in_use_bytes + bytes;
-            match self.in_use.compare_exchange(
+            match self.in_use.compare_exchange_weak(
                 in_use_bytes,
                 new_in_use_bytes,
                 Ordering::Acquire,
@@ -62,12 +70,13 @@ impl MemoryQuota {
             }
         }
     }
+
     fn free(&self, bytes: usize) {
         let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
         loop {
             // Saturating at the numeric bounds instead of overflowing.
             let new_in_use_bytes = in_use_bytes - std::cmp::min(bytes, in_use_bytes);
-            match self.in_use.compare_exchange(
+            match self.in_use.compare_exchange_weak(
                 in_use_bytes,
                 new_in_use_bytes,
                 Ordering::Acquire,
@@ -207,6 +216,10 @@ impl<'a> Drain {
     where
         S: futures::Sink<(ChangeDataEvent, WriteFlags), Error = E> + Unpin,
     {
+        let total_event_bytes = CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["event"]);
+        let total_resolved_ts_bytes =
+            CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["resolved_ts"]);
+
         let memory_quota = self.memory_quota.clone();
         let mut chunks = self.drain().ready_chunks(CDC_MSG_MAX_BATCH_SIZE);
         while let Some(events) = chunks.next().await {
@@ -216,6 +229,7 @@ impl<'a> Drain {
                 bytes += size;
                 batcher.push(e);
             });
+            let (event_bytes, resolved_ts_bytes) = batcher.statistics();
             let resps = batcher.build();
             let last_idx = resps.len() - 1;
             // Events are about to be sent, free pending events memory counter.
@@ -226,6 +240,8 @@ impl<'a> Drain {
                 sink.feed((e, write_flags)).await?;
             }
             sink.flush().await?;
+            total_event_bytes.inc_by(event_bytes as u64);
+            total_resolved_ts_bytes.inc_by(resolved_ts_bytes as u64);
         }
         Ok(())
     }
@@ -253,7 +269,7 @@ impl Drop for Drain {
     }
 }
 
-#[cfg(test)]
+#[allow(clippy::result_unit_err)]
 pub fn recv_timeout<S, I>(s: &mut S, dur: std::time::Duration) -> Result<Option<I>, ()>
 where
     S: Stream<Item = I> + Unpin,
@@ -261,7 +277,6 @@ where
     poll_timeout(&mut s.next(), dur)
 }
 
-#[cfg(test)]
 pub fn poll_timeout<F, I>(fut: &mut F, dur: std::time::Duration) -> Result<I, ()>
 where
     F: std::future::Future<Output = I> + Unpin,
@@ -373,6 +388,57 @@ mod tests {
             send(CdcEvent::Event(e.clone())).unwrap();
         }
         assert_matches!(send(CdcEvent::Event(e)).unwrap_err(), SendError::Congested);
+    }
+
+    #[test]
+    fn test_set_capacity() {
+        let mut e = kvproto::cdcpb::Event::default();
+        e.region_id = 1;
+        let event = CdcEvent::Event(e.clone());
+        assert!(event.size() != 0);
+        // 1KB
+        let max_pending_bytes = 1024;
+        let buffer = max_pending_bytes / event.size();
+        let force_send = false;
+
+        // Make sure we can increase the memory quota capacity.
+        {
+            let (mut send, rx) = new_test_cancal(buffer as _, max_pending_bytes as _, force_send);
+            for _ in 0..buffer {
+                send(CdcEvent::Event(e.clone())).unwrap();
+            }
+
+            assert_matches!(
+                send(CdcEvent::Event(e.clone())).unwrap_err(),
+                SendError::Congested
+            );
+
+            let memory_quota = rx.memory_quota.clone();
+            assert_eq!(memory_quota.capacity(), 1024);
+
+            let new_capacity = 1024 + event.size();
+            memory_quota.set_capacity(new_capacity as usize);
+            send(CdcEvent::Event(e.clone())).unwrap();
+            assert_eq!(memory_quota.capacity(), new_capacity as usize);
+        }
+
+        // Make sure we can reduce the memory quota capacity.
+        {
+            let (mut send, rx) = new_test_cancal(buffer as _, max_pending_bytes as _, force_send);
+            // Send one less event.
+            let count = buffer - 1;
+            for _ in 0..count {
+                send(CdcEvent::Event(e.clone())).unwrap();
+            }
+
+            let memory_quota = rx.memory_quota.clone();
+            assert_eq!(memory_quota.capacity(), 1024);
+
+            let new_capacity = 1024 - event.size();
+            memory_quota.set_capacity(new_capacity as usize);
+            assert_matches!(send(CdcEvent::Event(e)).unwrap_err(), SendError::Congested);
+            assert_eq!(memory_quota.capacity(), new_capacity as usize);
+        }
     }
 
     #[test]

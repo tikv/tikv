@@ -199,6 +199,9 @@ pub struct Config {
 
     pub waterfall_metrics: bool,
 
+    pub io_reschedule_concurrent_max_count: usize,
+    pub io_reschedule_hotpot_duration: ReadableDuration,
+
     // Deprecated! These configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
@@ -214,6 +217,9 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub clean_stale_peer_delay: ReadableDuration,
+
+    // Interval to inspect the latency of raftstore for slow store detection.
+    pub inspect_interval: ReadableDuration,
 }
 
 impl Default for Config {
@@ -284,11 +290,14 @@ impl Default for Config {
             cmd_batch: true,
             raft_write_size_limit: ReadableSize::mb(1),
             waterfall_metrics: false,
+            io_reschedule_concurrent_max_count: 4,
+            io_reschedule_hotpot_duration: ReadableDuration::secs(5),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
+            inspect_interval: ReadableDuration::millis(500),
         }
     }
 }
@@ -664,6 +673,12 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["waterfall_metrics"])
             .set((self.waterfall_metrics as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["io_reschedule_concurrent_max_count"])
+            .set((self.io_reschedule_concurrent_max_count as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["io_reschedule_hotpot_duration"])
+            .set(self.io_reschedule_hotpot_duration.as_secs() as f64);
     }
 
     fn write_change_into_metrics(change: ConfigChange) {

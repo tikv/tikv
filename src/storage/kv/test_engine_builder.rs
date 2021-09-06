@@ -96,6 +96,12 @@ impl TestEngineBuilder {
     }
 }
 
+impl Default for TestEngineBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::CfStatistics;

@@ -75,6 +75,12 @@ impl CbContext {
     }
 }
 
+impl Default for CbContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Modify {
     Delete(CfName, Key),
@@ -128,12 +134,16 @@ impl WriteData {
         Self::new(modifies, TxnExtra::default())
     }
 
-    pub fn set_allowed_on_disk_almost_full(&mut self) {
-        self.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull
+    pub fn size(&self) -> usize {
+        let mut total = 0;
+        for m in &self.modifies {
+            total += m.size();
+        }
+        total
     }
 
-    pub fn set_allowed_on_disk_already_full(&mut self) {
-        self.disk_full_opt = DiskFullOpt::AllowedOnAlreadyFull
+    pub fn set_allowed_on_disk_almost_full(&mut self) {
+        self.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull
     }
 
     pub fn set_disk_full_opt(&mut self, level: DiskFullOpt) {

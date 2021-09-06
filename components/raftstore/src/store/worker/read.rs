@@ -196,6 +196,12 @@ impl TrackVer {
     }
 }
 
+impl Default for TrackVer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Clone for TrackVer {
     fn clone(&self) -> Self {
         TrackVer {

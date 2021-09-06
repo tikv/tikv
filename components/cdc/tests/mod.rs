@@ -6,21 +6,21 @@ use std::time::Duration;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use futures::executor::block_on;
-use futures::StreamExt;
 use grpcio::{ChannelBuilder, Environment};
 use grpcio::{ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver};
 use kvproto::cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest};
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
+use online_config::OnlineConfig;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
 use tikv::config::CdcConfig;
-use tikv_util::worker::LazyWorker;
+use tikv_util::config::ReadableDuration;
+use tikv_util::worker::{LazyWorker, Runnable};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
-use cdc::{CdcObserver, MemoryQuota, Task};
+use cdc::{recv_timeout, CdcObserver, FeatureGate, MemoryQuota, Task};
 static INIT: Once = Once::new();
 
 pub fn init() {
@@ -57,16 +57,17 @@ pub fn new_event_feed(
             let mut event_feed = event_feed_wrap_clone.lock().unwrap();
             events = event_feed.take();
         }
-        let events_rx = if let Some(events_rx) = events.as_mut() {
+        let mut events_rx = if let Some(events_rx) = events.as_mut() {
             events_rx
         } else {
             return ChangeDataEvent::default();
         };
-        let change_data = if let Some(event) = block_on(events_rx.next()) {
-            event
-        } else {
-            return ChangeDataEvent::default();
-        };
+        let change_data =
+            if let Some(event) = recv_timeout(&mut events_rx, Duration::from_secs(5)).unwrap() {
+                event
+            } else {
+                return ChangeDataEvent::default();
+            };
         {
             let mut event_feed = event_feed_wrap_clone.lock().unwrap();
             *event_feed = events;
@@ -158,8 +159,9 @@ impl TestSuiteBuilder {
             let cdc_ob = obs.get(id).unwrap().clone();
             let cm = sim.get_concurrency_manager(*id);
             let env = Arc::new(Environment::new(1));
+            let cfg = CdcConfig::default();
             let mut cdc_endpoint = cdc::Endpoint::new(
-                &CdcConfig::default(),
+                &cfg,
                 pd_cli.clone(),
                 worker.scheduler(),
                 raft_router,
@@ -170,7 +172,9 @@ impl TestSuiteBuilder {
                 sim.security_mgr.clone(),
                 MemoryQuota::new(usize::MAX),
             );
-            cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
+            let mut updated_cfg = cfg.clone();
+            updated_cfg.min_ts_interval = ReadableDuration::millis(100);
+            cdc_endpoint.run(Task::ChangeConfig(cfg.diff(&updated_cfg)));
             cdc_endpoint.set_max_scan_batch_size(2);
             concurrency_managers.insert(*id, cm);
             worker.start(cdc_endpoint);
@@ -199,6 +203,12 @@ pub struct TestSuite {
     env: Arc<Environment>,
 }
 
+impl Default for TestSuiteBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TestSuite {
     pub fn new(count: usize) -> TestSuite {
         let mut cluster = new_server_cluster(1, count);
@@ -222,10 +232,9 @@ impl TestSuite {
             ..Default::default()
         };
         req.set_region_epoch(self.get_context(region_id).take_region_epoch());
-        // Assume batch resolved ts will be release in v4.0.7
-        // For easy of testing (nightly CI), we lower the gate to v4.0.6
-        // TODO bump the version when cherry pick to release branch.
-        req.mut_header().set_ticdc_version("4.0.6".into());
+        // Enable batch resolved ts feature.
+        req.mut_header()
+            .set_ticdc_version(FeatureGate::batch_resolved_ts().to_string());
         req
     }
 

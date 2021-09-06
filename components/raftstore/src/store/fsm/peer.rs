@@ -29,12 +29,13 @@ use kvproto::raft_serverpb::{
 };
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use protobuf::Message;
-use raft::eraftpb::{ConfChangeType, EntryType, MessageType};
+use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, Progress, ReadState, Ready, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
 use smallvec::{smallvec, SmallVec};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::sys::{disk, memory_usage_reaches_high_water};
+use tikv_util::sys::disk::DiskUsage;
+use tikv_util::sys::memory_usage_reaches_high_water;
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::worker::{ScheduleError, Scheduler};
 use tikv_util::{box_err, debug, defer, error, info, trace, warn};
@@ -585,8 +586,13 @@ where
 
                     let req_size = cmd.request.compute_size();
                     if self.ctx.cfg.cmd_batch
-                        && cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull
                         && self.fsm.batch_req_builder.can_batch(&cmd.request, req_size)
+                        // Avoid to merge requests with different `DiskFullOpt`s into one,
+                        // so that normal writes can be rejected when proposing if the
+                        // store's disk is full.
+                        && ((self.ctx.self_disk_usage == DiskUsage::Normal
+                            && !self.fsm.peer.disk_full_peers.majority())
+                            || cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull)
                     {
                         self.fsm.batch_req_builder.add(cmd, req_size);
                         if self.fsm.batch_req_builder.should_finish() {
@@ -740,11 +746,8 @@ where
                 msg.msg_type = MessageType::MsgUnreachable;
                 msg.to = peer_id;
                 msg.from = self.fsm.peer.peer_id();
-                self.fsm.peer.send(
-                    &mut self.ctx.trans,
-                    vec![msg],
-                    &mut self.ctx.raft_metrics.send_message,
-                );
+                let ctx = &mut self.ctx;
+                self.fsm.peer.send(ctx, vec![msg]);
             }
         }
     }
@@ -947,7 +950,7 @@ where
             SignificantMsg::CatchUpLogs(catch_up_logs) => {
                 self.on_catch_up_logs_for_merge(catch_up_logs);
             }
-            SignificantMsg::StoreResolved { store_id, group_id } => {
+            SignificantMsg::StoreResolved { group_id, .. } => {
                 let state = self.ctx.global_replication_state.lock().unwrap();
                 if state.status().get_mode() != ReplicationMode::DrAutoSync {
                     return;
@@ -960,7 +963,7 @@ where
                     .peer
                     .raft_group
                     .raft
-                    .assign_commit_groups(&[(store_id, group_id)]);
+                    .assign_commit_groups(&[(self.fsm.peer_id(), group_id)]);
             }
             SignificantMsg::CaptureChange {
                 cmd,
@@ -1225,6 +1228,12 @@ where
             return;
         }
 
+        // Keep ticking if there are disk full peers for the Region.
+        if !self.fsm.peer.disk_full_peers.is_empty() {
+            self.register_raft_base_tick();
+            return;
+        }
+
         debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
         self.fsm.reset_hibernate_state(GroupState::Idle);
         // Followers will stop ticking at L789. Keep ticking for followers
@@ -1291,6 +1300,46 @@ where
         }
     }
 
+    fn handle_reported_disk_usage(&mut self, msg: &RaftMessage) {
+        // Mocked
+        if matches!(msg.disk_usage, DiskUsage::Normal) {
+            return;
+        }
+        let store_id = msg.get_from_peer().get_store_id();
+        let peer_id = msg.get_from_peer().get_id();
+        let refill_disk_usages = if matches!(msg.disk_usage, DiskUsage::Normal) {
+            self.ctx.store_disk_usages.remove(&store_id);
+            if !self.fsm.peer.is_leader() {
+                return;
+            }
+            self.fsm.peer.disk_full_peers.has(peer_id)
+        } else {
+            self.ctx.store_disk_usages.insert(store_id, msg.disk_usage);
+            if !self.fsm.peer.is_leader() {
+                return;
+            }
+            let disk_full_peers = &self.fsm.peer.disk_full_peers;
+            disk_full_peers.is_empty()
+                || disk_full_peers
+                    .get(peer_id)
+                    .map_or(true, |x| x != msg.disk_usage)
+        };
+        if refill_disk_usages {
+            let prev = self.fsm.peer.disk_full_peers.get(peer_id);
+            info!(
+                "reported disk usage changes {:?} -> {:?}", prev, msg.disk_usage;
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => peer_id,
+            );
+            self.fsm.peer.refill_disk_full_peers(self.ctx);
+            debug!(
+                "raft message refills disk full peers to {:?}",
+                self.fsm.peer.disk_full_peers;
+                "region_id" => self.fsm.region_id(),
+            );
+        }
+    }
+
     fn on_raft_message(&mut self, msg: InspectedRaftMessage) -> Result<()> {
         let InspectedRaftMessage { heap_size, mut msg } = msg;
         let stepped = Cell::new(false);
@@ -1315,32 +1364,23 @@ where
             "to_peer_id" => msg.get_to_peer().get_id(),
         );
 
+        self.handle_reported_disk_usage(&msg);
+
         let msg_type = msg.get_message().get_msg_type();
-
-        if !matches!(self.ctx.disk_usage, disk::DiskUsage::Normal) {
-            // only leader transfer and winning log are allowed.
-            let mut allowed = true;
-            if MessageType::MsgAppend == msg_type {
-                let entries = msg.get_message().get_entries();
-                for i in entries {
-                    let entry_type = i.get_entry_type();
-                    if EntryType::EntryNormal == entry_type && !i.get_data().is_empty() {
-                        allowed = false;
-                        break;
-                    }
-                }
-            } else if MessageType::MsgTimeoutNow == msg_type {
-                allowed = false;
-            }
-
-            if !allowed {
-                debug!(
-                    "skip {:?} because of disk full", msg_type;
-                    "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
-                );
-                self.ctx.raft_metrics.message_dropped.disk_full += 1;
-                return Ok(());
-            }
+        if matches!(self.ctx.self_disk_usage, DiskUsage::AlreadyFull)
+            && [
+                MessageType::MsgSnapshot,
+                MessageType::MsgAppend,
+                MessageType::MsgTimeoutNow,
+            ]
+            .contains(&msg_type)
+        {
+            debug!(
+                "skip {:?} because of disk full", msg_type;
+                "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
+            );
+            self.ctx.raft_metrics.message_dropped.disk_full += 1;
+            return Ok(());
         }
 
         if !self.validate_raft_msg(&msg) {
@@ -2254,6 +2294,15 @@ where
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
 
+            if !self.fsm.peer.disk_full_peers.is_empty() {
+                self.fsm.peer.refill_disk_full_peers(self.ctx);
+                debug!(
+                    "conf change refills disk full peers to {:?}",
+                    self.fsm.peer.disk_full_peers;
+                    "region_id" => self.fsm.region_id(),
+                );
+            }
+
             // Remove or demote leader will cause this raft group unavailable
             // until new leader elected, but we can't revert this operation
             // because its result is already persisted in apply worker
@@ -3108,13 +3157,11 @@ where
             "region" => ?region,
         );
 
-        if prev_region.get_peers() != region.get_peers() {
-            let mut state = self.ctx.global_replication_state.lock().unwrap();
-            let gb = state
-                .calculate_commit_group(self.fsm.peer.replication_mode_version, region.get_peers());
-            self.fsm.peer.raft_group.raft.clear_commit_group();
-            self.fsm.peer.raft_group.raft.assign_commit_groups(gb);
-        }
+        let mut state = self.ctx.global_replication_state.lock().unwrap();
+        let gb = state
+            .calculate_commit_group(self.fsm.peer.replication_mode_version, region.get_peers());
+        self.fsm.peer.raft_group.raft.clear_commit_group();
+        self.fsm.peer.raft_group.raft.assign_commit_groups(gb);
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
         debug!(
@@ -3261,10 +3308,6 @@ where
         self.ctx.store_stat.lock_cf_bytes_written += metrics.lock_cf_written_bytes;
         self.ctx.store_stat.engine_total_bytes_written += metrics.written_bytes;
         self.ctx.store_stat.engine_total_keys_written += metrics.written_keys;
-        self.ctx
-            .store_stat
-            .engine_total_query_stats
-            .add_query_stats(&metrics.written_query_stats.0);
     }
 
     /// Check if a request is valid if it has valid prepare_merge/commit_merge proposal.

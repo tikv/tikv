@@ -412,7 +412,7 @@ impl<R: Read> Read for Sha256Reader<R> {
     }
 }
 
-const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
+pub const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
 
 /// Create a file with hole, to reserve space for TiKV.
 pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) -> io::Result<()> {

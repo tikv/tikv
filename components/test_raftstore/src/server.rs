@@ -56,6 +56,7 @@ use tikv::server::{
     Server, ServerTransport,
 };
 use tikv::storage;
+use tikv::storage::txn::flow_controller::FlowController;
 use tikv::{
     config::{ConfigController, TiKvConfig},
     server::raftkv::ReplicaReadLockChecker,
@@ -256,7 +257,7 @@ impl Simulator for ServerCluster {
         let pd_sender = pd_worker.scheduler();
         let storage_read_pool = ReadPool::from(storage::build_read_pool(
             &tikv::config::StorageReadPoolConfig::default_for_test(),
-            pd_sender,
+            pd_sender.clone(),
             raft_engine.clone(),
         ));
 
@@ -315,6 +316,8 @@ impl Simulator for ServerCluster {
             lock_mgr.clone(),
             concurrency_manager.clone(),
             lock_mgr.get_pipelined(),
+            Arc::new(FlowController::empty()),
+            pd_sender,
         )?;
         self.storages.insert(node_id, raft_engine);
 
@@ -526,17 +529,18 @@ impl Simulator for ServerCluster {
         self.metas.keys().cloned().collect()
     }
 
-    fn async_command_on_node(
+    fn async_command_on_node_with_opts(
         &self,
         node_id: u64,
         request: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
+        opts: RaftCmdExtraOpts,
     ) -> Result<()> {
         let router = match self.metas.get(&node_id) {
             None => return Err(box_err!("missing sender for store {}", node_id)),
             Some(meta) => meta.sim_router.clone(),
         };
-        router.send_command(request, cb, RaftCmdExtraOpts::default())
+        router.send_command(request, cb, opts)
     }
 
     fn async_read(

@@ -60,6 +60,9 @@ impl ColumnFamilyOptions for PanicColumnFamilyOptions {
     fn get_disable_auto_compactions(&self) -> bool {
         panic!()
     }
+    fn get_disable_write_stall(&self) -> bool {
+        panic!()
+    }
     fn set_sst_partitioner_factory<F: SstPartitionerFactory>(&mut self, factory: F) {
         panic!()
     }

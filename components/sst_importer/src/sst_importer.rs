@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use futures::executor::ThreadPool;
-use kvproto::backup::StorageBackend;
+use kvproto::brpb::StorageBackend;
 #[cfg(feature = "prost-codec")]
 use kvproto::import_sstpb::pair::Op as PairOp;
 #[cfg(not(feature = "prost-codec"))]
@@ -554,9 +554,9 @@ mod tests {
         // Test ImportDir::delete()
         {
             if let Some(ref manager) = key_manager {
-                manager.create_file(&path.temp).unwrap();
-                manager.create_file(&path.save).unwrap();
-                manager.create_file(&path.clone).unwrap();
+                manager.create_file_for_write(&path.temp).unwrap();
+                manager.create_file_for_write(&path.save).unwrap();
+                manager.create_file_for_write(&path.clone).unwrap();
             } else {
                 File::create(&path.temp).unwrap();
                 File::create(&path.save).unwrap();
