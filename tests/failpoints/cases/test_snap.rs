@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use raft::eraftpb::MessageType;
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
@@ -10,7 +9,7 @@ use raft::eraftpb::MessageType;
 use raftstore::store::*;
 use std::fs::File;
 use std::io::prelude::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::time::Instant;
@@ -511,7 +510,47 @@ fn test_snapshot_gc_after_failed() {
     }
     let now = Instant::now();
     loop {
-        let snap_keys = cluster.get_snap_mgr(3).list_idle_snap().unwrap();
+        let snap_dir = cluster.get_snap_dir(3);
+        let read_dir = fs::read_dir(Path::new(&snap_dir)).unwrap();
+        // Remove the duplicate snap keys.
+        let mut snap_keys: Vec<_> = read_dir
+            .filter_map(|p| {
+                let p = match p {
+                    Err(_) => panic!("failed to list content of directory"),
+                    Ok(p) => p,
+                };
+                match p.file_type() {
+                    Ok(t) if t.is_file() => {}
+                    _ => return None,
+                }
+                let file_name = p.file_name();
+                let name = match file_name.to_str() {
+                    None => return None,
+                    Some(n) => n,
+                };
+                let is_sending = name.starts_with("gen");
+                if !is_sending {
+                    return None;
+                }
+                let numbers: Vec<u64> = name.split('.').next().map_or_else(Vec::new, |s| {
+                    s.split('_')
+                        .skip(1)
+                        .filter_map(|s| s.parse().ok())
+                        .collect()
+                });
+                if numbers.len() != 3 {
+                    error!(
+                        "failed to parse snapkey";
+                        "snap_key" => %name,
+                    );
+                    return None;
+                }
+                let snap_key = SnapKey::new(numbers[0], numbers[1], numbers[2]);
+                Some((snap_key, is_sending))
+            })
+            .collect();
+        snap_keys.sort();
+        snap_keys.dedup();
         if snap_keys.is_empty() {
             panic!("no snapshot file is found");
         }
