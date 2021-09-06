@@ -9,12 +9,13 @@
 extern crate slog_global;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
+#[macro_use]
+extern crate fail;
 
 use std::io;
 use std::marker::Unpin;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
 
 use futures_io::AsyncRead;
 #[cfg(feature = "protobuf-codec")]
@@ -22,6 +23,7 @@ use kvproto::backup::StorageBackend_oneof_backend as Backend;
 #[cfg(feature = "prost-codec")]
 use kvproto::backup::{storage_backend::Backend, Local};
 use kvproto::backup::{Gcs, Noop, StorageBackend, S3};
+use tikv_util::time::Instant;
 
 mod local;
 pub use local::LocalStorage;
@@ -60,7 +62,7 @@ pub fn create_storage(backend: &StorageBackend) -> io::Result<Arc<dyn ExternalSt
     };
     EXT_STORAGE_CREATE_HISTOGRAM
         .with_label_values(&[label])
-        .observe(start.elapsed().as_secs_f64());
+        .observe(start.saturating_elapsed().as_secs_f64());
     storage
 }
 

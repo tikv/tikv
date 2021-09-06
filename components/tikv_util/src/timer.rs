@@ -85,9 +85,11 @@ lazy_static! {
 
 fn start_global_timer() -> Handle {
     let (tx, rx) = mpsc::channel();
+    let props = crate::thread_group::current_properties();
     Builder::new()
         .name(thd_name!("timer"))
         .spawn(move || {
+            crate::thread_group::set_properties(props);
             let mut timer = tokio_timer::Timer::default();
             tx.send(timer.handle()).unwrap();
             loop {
@@ -182,9 +184,11 @@ fn start_global_steady_timer() -> SteadyTimer {
     let (tx, rx) = mpsc::channel();
     let clock = SteadyClock::default();
     let clock_ = clock.clone();
+    let props = crate::thread_group::current_properties();
     Builder::new()
         .name(thd_name!("steady-timer"))
         .spawn(move || {
+            crate::thread_group::set_properties(props);
             let c = Clock::new_with_now(clock_);
             let mut timer = tokio_timer::Timer::new_with_now(ParkThread::new(), c);
             tx.send(timer.handle()).unwrap();
@@ -202,6 +206,7 @@ fn start_global_steady_timer() -> SteadyTimer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::time::InstantExt;
     use crate::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
     use futures::Future;
     use std::sync::mpsc::RecvTimeoutError;
@@ -316,7 +321,7 @@ mod tests {
             handle.delay(::std::time::Instant::now() + std::time::Duration::from_millis(100));
         let timer = Instant::now();
         delay.wait().unwrap();
-        assert!(timer.elapsed() >= Duration::from_millis(100));
+        assert!(timer.saturating_elapsed() >= Duration::from_millis(100));
     }
 
     #[test]
@@ -325,6 +330,6 @@ mod tests {
         let timer = t.clock.now();
         let delay = t.delay(Duration::from_millis(100));
         delay.wait().unwrap();
-        assert!(timer.elapsed() >= Duration::from_millis(100));
+        assert!(timer.saturating_elapsed() >= Duration::from_millis(100));
     }
 }

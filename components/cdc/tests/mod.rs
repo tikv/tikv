@@ -20,7 +20,7 @@ use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
-use cdc::{CdcObserver, Task};
+use cdc::{CdcObserver, MemoryQuota, Task};
 
 #[allow(clippy::type_complexity)]
 pub fn new_event_feed(
@@ -45,31 +45,39 @@ pub fn new_event_feed(
         if !keep_resolved_ts && change_data_event.has_resolved_ts() {
             continue;
         }
-        tikv_util::info!("receive event {:?}", change_data_event);
+        tikv_util::info!("cdc receive event {:?}", change_data_event);
         break change_data_event;
     };
     (req_tx, event_feed_wrap, receive_event)
 }
 
-pub struct TestSuite {
-    pub cluster: Cluster<ServerCluster>,
-    pub endpoints: HashMap<u64, Worker<Task>>,
-    pub obs: HashMap<u64, CdcObserver>,
-    tikv_cli: HashMap<u64, TikvClient>,
-    cdc_cli: HashMap<u64, ChangeDataClient>,
-
-    env: Arc<Environment>,
+pub struct TestSuiteBuilder {
+    cluster: Option<Cluster<ServerCluster>>,
+    memory_quota: Option<usize>,
 }
 
-impl TestSuite {
-    pub fn new(count: usize) -> TestSuite {
-        let mut cluster = new_server_cluster(1, count);
-        // Increase the Raft tick interval to make this test case running reliably.
-        configure_for_lease_read(&mut cluster, Some(100), None);
-        Self::with_cluster(count, cluster)
+impl TestSuiteBuilder {
+    pub fn new() -> TestSuiteBuilder {
+        TestSuiteBuilder {
+            cluster: None,
+            memory_quota: None,
+        }
     }
 
-    pub fn with_cluster(count: usize, mut cluster: Cluster<ServerCluster>) -> TestSuite {
+    pub fn cluster(mut self, cluster: Cluster<ServerCluster>) -> TestSuiteBuilder {
+        self.cluster = Some(cluster);
+        self
+    }
+
+    pub fn memory_quota(mut self, memory_quota: usize) -> TestSuiteBuilder {
+        self.memory_quota = Some(memory_quota);
+        self
+    }
+
+    pub fn build(self) -> TestSuite {
+        let memory_quota = self.memory_quota.unwrap_or(std::usize::MAX);
+        let mut cluster = self.cluster.unwrap();
+        let count = cluster.count;
         let pd_cli = cluster.pd_client.clone();
         let mut endpoints = HashMap::default();
         let mut obs = HashMap::default();
@@ -86,7 +94,11 @@ impl TestSuite {
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone(), security_mgr.clone()))
+                    create_change_data(cdc::Service::new(
+                        scheduler.clone(),
+                        security_mgr.clone(),
+                        MemoryQuota::new(memory_quota),
+                    ))
                 }));
             let scheduler = worker.scheduler();
             let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
@@ -111,9 +123,10 @@ impl TestSuite {
                 raft_router,
                 cdc_ob,
                 cluster.store_metas[id].clone(),
+                MemoryQuota::new(std::usize::MAX),
             );
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
-            cdc_endpoint.set_scan_batch_size(2);
+            cdc_endpoint.set_max_scan_batch_size(2);
             worker.start(cdc_endpoint).unwrap();
         }
 
@@ -125,6 +138,27 @@ impl TestSuite {
             tikv_cli: HashMap::default(),
             cdc_cli: HashMap::default(),
         }
+    }
+}
+
+pub struct TestSuite {
+    pub cluster: Cluster<ServerCluster>,
+    pub endpoints: HashMap<u64, Worker<Task>>,
+    pub obs: HashMap<u64, CdcObserver>,
+    tikv_cli: HashMap<u64, TikvClient>,
+    cdc_cli: HashMap<u64, ChangeDataClient>,
+
+    env: Arc<Environment>,
+}
+
+impl TestSuite {
+    pub fn new(count: usize) -> TestSuite {
+        let mut cluster = new_server_cluster(1, count);
+        // Increase the Raft tick interval to make this test case running reliably.
+        configure_for_lease_read(&mut cluster, Some(100), None);
+
+        let builder = TestSuiteBuilder::new();
+        builder.cluster(cluster).build()
     }
 
     pub fn stop(mut self) {

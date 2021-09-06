@@ -257,13 +257,26 @@ macro_rules! loop_ob {
 }
 
 /// Admin and invoke all coprocessors.
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct CoprocessorHost {
     pub registry: Registry,
+    pub cfg: Config,
+}
+
+impl Default for CoprocessorHost {
+    fn default() -> Self {
+        CoprocessorHost {
+            registry: Default::default(),
+            cfg: Default::default(),
+        }
+    }
 }
 
 impl CoprocessorHost {
-    pub fn new<C: CasualRouter<RocksEngine> + Clone + Send + 'static>(ch: C) -> CoprocessorHost {
+    pub fn new<C: CasualRouter<RocksEngine> + Clone + Send + 'static>(
+        ch: C,
+        cfg: Config,
+    ) -> CoprocessorHost {
         let mut registry = Registry::default();
         registry.register_split_check_observer(
             200,
@@ -279,7 +292,7 @@ impl CoprocessorHost {
             400,
             BoxSplitCheckObserver::new(TableCheckObserver::default()),
         );
-        CoprocessorHost { registry }
+        CoprocessorHost { registry, cfg }
     }
 
     /// Call all propose hooks until bypass is set to true.
@@ -372,14 +385,13 @@ impl CoprocessorHost {
     }
 
     pub fn new_split_checker_host<'a>(
-        &self,
-        cfg: &'a Config,
+        &'a self,
         region: &Region,
         engine: &RocksEngine,
         auto_split: bool,
         policy: CheckPolicy,
     ) -> SplitCheckerHost<'a, RocksEngine> {
-        let mut host = SplitCheckerHost::new(auto_split, cfg);
+        let mut host = SplitCheckerHost::new(auto_split, &self.cfg);
         loop_ob!(
             region,
             &self.registry.split_check_observers,

@@ -1,6 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
+use batch_system::{
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
+    TrackedFsm,
+};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::DB;
@@ -234,8 +237,6 @@ impl Clone for PeerTickBatch {
 }
 
 pub struct PollContext<T, C: 'static> {
-    /// The count of processed normal Fsm.
-    pub processed_fsm_count: usize,
     pub cfg: Config,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask>,
@@ -249,6 +250,16 @@ pub struct PollContext<T, C: 'static> {
     pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
+    /// region_id -> (peer_id, is_splitting)
+    /// Used for handling race between splitting and creating new peer.
+    /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
+    ///
+    /// WARNING:
+    /// To avoid deadlock, if you want to use `store_meta` and `pending_create_peers` together,
+    /// the lock sequence MUST BE:
+    /// 1. lock the store_meta.
+    /// 2. lock the pending_create_peers.
+    pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     pub raft_metrics: RaftMetrics,
     pub snap_mgr: SnapManager,
     pub applying_snap_count: Arc<AtomicUsize>,
@@ -266,6 +277,7 @@ pub struct PollContext<T, C: 'static> {
     pub has_ready: bool,
     pub ready_res: Vec<CollectedReady>,
     pub need_flush_trans: bool,
+    pub readonly_ready_res: Vec<CollectedReady>,
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
     pub tick_batch: Vec<PeerTickBatch>,
@@ -309,7 +321,7 @@ impl<T, C> PollContext<T, C> {
     /// https://github.com/tikv/tikv/issues/7747
     pub fn is_hibernate_timeout(&mut self) -> bool {
         let timeout = match self.node_start_time {
-            Some(t) => t.elapsed() >= self.cfg.hibernate_timeout.0,
+            Some(t) => t.saturating_elapsed() >= self.cfg.hibernate_timeout.0,
             None => return true,
         };
         if timeout {
@@ -362,7 +374,6 @@ impl<T: Transport, C> PollContext<T, C> {
         &mut self,
         msg: &RaftMessage,
         cur_epoch: RegionEpoch,
-        need_gc: bool,
         target_region: Option<metapb::Region>,
     ) {
         let region_id = msg.get_region_id();
@@ -370,23 +381,14 @@ impl<T: Transport, C> PollContext<T, C> {
         let to_peer = msg.get_to_peer();
         let msg_type = msg.get_message().get_msg_type();
 
-        if !need_gc {
-            info!(
-                "raft message is stale, ignore it";
-                "region_id" => region_id,
-                "current_region_epoch" => ?cur_epoch,
-                "msg_type" => ?msg_type,
-            );
-            self.raft_metrics.message_dropped.stale_msg += 1;
-            return;
-        }
-
         info!(
             "raft message is stale, tell to gc";
             "region_id" => region_id,
             "current_region_epoch" => ?cur_epoch,
             "msg_type" => ?msg_type,
         );
+
+        self.raft_metrics.message_dropped.stale_msg += 1;
 
         let mut gc_msg = RaftMessage::default();
         gc_msg.set_region_id(region_id);
@@ -466,7 +468,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSST => self.on_cleanup_import_sst_tick(),
         }
-        let elapsed = t.elapsed();
+        let elapsed = t.saturating_elapsed();
         RAFT_EVENT_DURATION
             .with_label_values(&[tick.tag()])
             .observe(duration_to_sec(elapsed) as f64);
@@ -538,7 +540,11 @@ pub struct RaftPoller<T: 'static, C: 'static> {
 }
 
 impl<T: Transport, C: PdClient> RaftPoller<T, C> {
-    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<RocksEngine>>]) {
+    fn handle_raft_ready(
+        &mut self,
+        peers: &mut [Option<impl TrackedFsm<Target = PeerFsm<RocksEngine>>>],
+        to_skip_end: &mut Vec<usize>,
+    ) {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
@@ -549,22 +555,48 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                     .schedule_task(prop.region_id, ApplyTask::Proposal(prop));
             }
         }
+        let ready_cnt = self.poll_ctx.ready_res.len() + self.poll_ctx.readonly_ready_res.len();
+        let early_apply = self.poll_ctx.cfg.early_apply;
+        if !self.poll_ctx.readonly_ready_res.is_empty() {
+            let mut readonly_ready_res = mem::take(&mut self.poll_ctx.readonly_ready_res);
+            for mut ready in readonly_ready_res.drain(..) {
+                to_skip_end.push(ready.batch_offset);
+                let mut delegate = PeerFsmDelegate::new(
+                    peers[ready.batch_offset].as_mut().unwrap(),
+                    &mut self.poll_ctx,
+                );
+                if early_apply {
+                    delegate.handle_raft_ready_apply(&mut ready);
+                }
+                delegate.post_raft_ready_append(ready);
+            }
+            self.poll_ctx.readonly_ready_res = readonly_ready_res;
+        }
         if self.poll_ctx.need_flush_trans
             && (!self.poll_ctx.kv_wb.is_empty() || !self.poll_ctx.raft_wb.is_empty())
         {
             self.poll_ctx.trans.flush();
             self.poll_ctx.need_flush_trans = false;
         }
-        let ready_cnt = self.poll_ctx.ready_res.len();
-        if ready_cnt != 0 && self.poll_ctx.cfg.early_apply {
+        if !self.poll_ctx.ready_res.is_empty() && early_apply {
             let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
             for ready in &mut ready_res {
-                PeerFsmDelegate::new(&mut peers[ready.batch_offset], &mut self.poll_ctx)
-                    .handle_raft_ready_apply(ready);
+                PeerFsmDelegate::new(
+                    peers[ready.batch_offset].as_mut().unwrap(),
+                    &mut self.poll_ctx,
+                )
+                .handle_raft_ready_apply(ready);
             }
             self.poll_ctx.ready_res = ready_res;
         }
         self.poll_ctx.raft_metrics.ready.has_ready_region += ready_cnt as u64;
+    }
+
+    fn handle_raft_ready_write(
+        &mut self,
+        peers: &mut [Option<impl TrackedFsm<Target = PeerFsm<RocksEngine>>>],
+    ) {
+        let ready_cnt = self.poll_ctx.ready_res.len();
         fail_point!("raft_before_save");
         if !self.poll_ctx.kv_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
@@ -622,11 +654,14 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         if ready_cnt != 0 {
             let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
             for ready in ready_res.drain(..) {
-                PeerFsmDelegate::new(&mut peers[ready.batch_offset], &mut self.poll_ctx)
-                    .post_raft_ready_append(ready);
+                PeerFsmDelegate::new(
+                    &mut peers[ready.batch_offset].as_mut().unwrap(),
+                    &mut self.poll_ctx,
+                )
+                .post_raft_ready_append(ready);
             }
         }
-        let dur = self.timer.elapsed();
+        let dur = self.timer.saturating_elapsed();
         if !self.poll_ctx.store_stat.is_busy {
             let election_timeout = Duration::from_millis(
                 self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
@@ -682,7 +717,6 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
 impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for RaftPoller<T, C> {
     fn begin(&mut self, batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
-        self.poll_ctx.processed_fsm_count = 0;
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
@@ -738,8 +772,11 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
         expected_msg_count
     }
 
-    fn handle_normal(&mut self, peer: &mut PeerFsm<RocksEngine>) -> Option<usize> {
-        let mut expected_msg_count = None;
+    fn handle_normal(
+        &mut self,
+        peer: &mut impl TrackedFsm<Target = PeerFsm<RocksEngine>>,
+    ) -> HandleResult {
+        let mut handle_result = HandleResult::KeepProcessing;
 
         fail_point!(
             "pause_on_peer_collect_message",
@@ -771,33 +808,48 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
                     self.peer_msg_buf.push(msg)
                 }
                 Err(TryRecvError::Empty) => {
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
                     peer.stop();
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
             }
         }
+        let offset = peer.offset();
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
-        delegate.collect_ready(&mut self.pending_proposals);
-        self.poll_ctx.processed_fsm_count += 1;
-        expected_msg_count
+        // No readiness is generated, skipping calling ready and release early.
+        if !delegate.collect_ready(&mut self.pending_proposals, offset) {
+            if let HandleResult::StopAt { skip_end, .. } = &mut handle_result {
+                *skip_end = true;
+            }
+        }
+        handle_result
     }
 
-    fn end(&mut self, peers: &mut [Box<PeerFsm<RocksEngine>>]) {
+    fn light_end(
+        &mut self,
+        peers: &mut [Option<impl TrackedFsm<Target = PeerFsm<RocksEngine>>>],
+        to_skip_end: &mut Vec<usize>,
+    ) {
         self.flush_ticks();
         if self.poll_ctx.has_ready {
-            self.handle_raft_ready(peers);
+            self.handle_raft_ready(peers, to_skip_end);
+        }
+    }
+
+    fn end(&mut self, peers: &mut [Option<impl TrackedFsm<Target = PeerFsm<RocksEngine>>>]) {
+        if self.poll_ctx.has_ready {
+            self.handle_raft_ready_write(peers);
         }
         self.poll_ctx.current_time = None;
         self.poll_ctx
             .raft_metrics
             .process_ready
-            .observe(duration_to_sec(self.timer.elapsed()) as f64);
+            .observe(duration_to_sec(self.timer.saturating_elapsed()) as f64);
         self.poll_ctx.raft_metrics.flush();
         self.poll_ctx.store_stat.flush();
     }
@@ -822,7 +874,8 @@ pub struct RaftPollerBuilder<T, C> {
     apply_router: ApplyRouter,
     pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
-    store_meta: Arc<Mutex<StoreMeta>>,
+    pub store_meta: Arc<Mutex<StoreMeta>>,
+    pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     snap_mgr: SnapManager,
     pub coprocessor_host: CoprocessorHost,
     trans: T,
@@ -847,7 +900,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let mut applying_count = 0;
         let mut region_peers = vec![];
 
-        let t = Instant::now();
+        let t = TiInstant::now();
         let mut kv_wb = self.engines.kv.c().write_batch();
         let mut raft_wb = self.engines.raft.c().write_batch();
         let mut applying_regions = vec![];
@@ -944,7 +997,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
             "tombstone_count" => tombstone_count,
             "applying_count" =>  applying_count,
             "merge_count" => merging_count,
-            "takes" => ?t.elapsed(),
+            "takes" => ?t.saturating_elapsed(),
         );
 
         self.clear_stale_data(&meta)?;
@@ -974,7 +1027,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
 
     /// `clear_stale_data` clean up all possible garbage data.
     fn clear_stale_data(&self, meta: &StoreMeta) -> Result<()> {
-        let t = Instant::now();
+        let t = TiInstant::now();
 
         let mut ranges = Vec::new();
         let mut last_start_key = keys::data_key(b"");
@@ -992,7 +1045,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
             "cleans up garbage data";
             "store_id" => self.store.get_id(),
             "garbage_range_count" => ranges.len(),
-            "takes" => ?t.elapsed()
+            "takes" => ?t.saturating_elapsed()
         );
 
         Ok(())
@@ -1008,7 +1061,6 @@ where
 
     fn build(&mut self) -> RaftPoller<T, C> {
         let mut ctx = PollContext {
-            processed_fsm_count: 0,
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
@@ -1021,6 +1073,7 @@ where
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
             importer: self.importer.clone(),
             store_meta: self.store_meta.clone(),
+            pending_create_peers: self.pending_create_peers.clone(),
             raft_metrics: RaftMetrics::default(),
             snap_mgr: self.snap_mgr.clone(),
             applying_snap_count: self.applying_snap_count.clone(),
@@ -1038,6 +1091,7 @@ where
             has_ready: false,
             ready_res: Vec::new(),
             need_flush_trans: false,
+            readonly_ready_res: Vec::new(),
             current_time: None,
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
             tick_batch: vec![PeerTickBatch::default(); 256],
@@ -1139,6 +1193,7 @@ impl RaftBatchSystem {
             snap_mgr: mgr,
             global_stat: GlobalStoreStat::default(),
             store_meta,
+            pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
         };
         let region_peers = builder.init()?;
@@ -1231,7 +1286,7 @@ impl RaftBatchSystem {
 
         let region_runner = RegionRunner::new(
             engines.kv.c().clone(),
-            snap_mgr,
+            snap_mgr.clone(),
             cfg.snap_apply_batch_size.0 as usize,
             cfg.use_delete_range,
             workers.coprocessor_host.clone(),
@@ -1260,6 +1315,7 @@ impl RaftBatchSystem {
             workers.pd_worker.scheduler(),
             cfg.pd_store_heartbeat_tick_interval.as_secs(),
             auto_split_controller,
+            snap_mgr,
         );
         box_try!(workers.pd_worker.start(pd_runner));
 
@@ -1289,6 +1345,7 @@ impl RaftBatchSystem {
         handles.push(workers.cleanup_worker.stop());
         handles.push(workers.raftlog_gc_worker.stop());
         self.apply_system.shutdown();
+        fail_point!("after_shutdown_apply");
         self.system.shutdown();
         for h in handles {
             if let Some(h) = h {
@@ -1315,11 +1372,21 @@ pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter<RocksEngine>, RaftB
     (raft_router, system)
 }
 
+#[derive(Debug, PartialEq)]
+enum CheckMsgStatus {
+    // The message is the first message to an existing peer.
+    FirstRequest,
+    // The message can be dropped silently
+    DropMsg,
+    // Try to create the peer
+    NewPeer,
+    // Try to create the peer which is the first one of this region on local store.
+    NewPeerFirst,
+}
+
 impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     /// Checks if the message is targeting a stale peer.
-    ///
-    /// Returns true means the message can be dropped silently.
-    fn check_msg(&mut self, msg: &RaftMessage) -> Result<bool> {
+    fn check_msg(&mut self, msg: &RaftMessage) -> Result<CheckMsgStatus> {
         let region_id = msg.get_region_id();
         let from_epoch = msg.get_region_epoch();
         let msg_type = msg.get_message().get_msg_type();
@@ -1331,37 +1398,24 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let local_state: RegionLocalState =
             match self.ctx.engines.kv.c().get_msg_cf(CF_RAFT, &state_key)? {
                 Some(state) => state,
-                None => return Ok(false),
+                None => return Ok(CheckMsgStatus::NewPeerFirst),
             };
 
         if local_state.get_state() != PeerState::Tombstone {
             // Maybe split, but not registered yet.
-            self.ctx.raft_metrics.message_dropped.region_nonexistent += 1;
-            if util::is_first_message(msg.get_message()) {
-                let mut meta = self.ctx.store_meta.lock().unwrap();
-                // Last check on whether target peer is created, otherwise, the
-                // vote message will never be consumed.
-                if meta.regions.contains_key(&region_id) {
-                    return Ok(false);
-                }
-
-                // Save one pending message for a peer is enough, remove
-                // the previous pending message of this peer
-                meta.pending_msgs
-                    .swap_remove_front(|m| m.get_to_peer() == msg.get_to_peer());
-                meta.pending_msgs.push(msg.to_owned());
-
-                info!(
-                    "region doesn't exist yet, wait for it to be split";
-                    "region_id" => region_id
-                );
-                return Ok(true);
+            if !util::is_first_message(msg.get_message()) {
+                self.ctx.raft_metrics.message_dropped.region_nonexistent += 1;
+                return Err(box_err!(
+                    "[region {}] region not exist but not tombstone: {:?}",
+                    region_id,
+                    local_state
+                ));
             }
-            return Err(box_err!(
-                "[region {}] region not exist but not tombstone: {:?}",
-                region_id,
-                local_state
-            ));
+            info!(
+                "region doesn't exist yet, wait for it to be split";
+                "region_id" => region_id
+            );
+            return Ok(CheckMsgStatus::FirstRequest);
         }
         debug!(
             "region is in tombstone state";
@@ -1391,8 +1445,8 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 None
             };
             self.ctx
-                .handle_stale_msg(msg, region_epoch.clone(), true, merge_target);
-            return Ok(true);
+                .handle_stale_msg(msg, region_epoch.clone(), merge_target);
+            return Ok(CheckMsgStatus::DropMsg);
         }
         // The region in this peer is already destroyed
         if util::is_epoch_stale(from_epoch, region_epoch) {
@@ -1404,39 +1458,39 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 "current_region_epoch" => ?region_epoch,
                 "msg_type" => ?msg_type,
             );
-
-            let mut need_gc_msg = util::is_vote_msg(msg.get_message());
-            if msg.has_extra_msg() {
-                // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
-                // it is removed due to conf change or merge.
-                need_gc_msg |=
-                    msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
-                // For backward compatibility
-                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
-            }
-            let not_exist = util::find_peer(region, from_store_id).is_none();
-            self.ctx
-                .handle_stale_msg(msg, region_epoch.clone(), need_gc_msg && not_exist, None);
-
-            if need_gc_msg && !not_exist {
-                let mut send_msg = RaftMessage::default();
-                send_msg.set_region_id(region_id);
-                send_msg.set_from_peer(msg.get_to_peer().clone());
-                send_msg.set_to_peer(msg.get_from_peer().clone());
-                send_msg.set_region_epoch(region_epoch.clone());
-                let extra_msg = send_msg.mut_extra_msg();
-                extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
-                extra_msg.set_check_peers(region.get_peers().into());
-                if let Err(e) = self.ctx.trans.send(send_msg) {
-                    error!(?e;
-                        "send check stale peer response message failed";
-                        "region_id" => region_id,
-                    );
+            if util::find_peer(region, from_store_id).is_none() {
+                self.ctx.handle_stale_msg(msg, region_epoch.clone(), None);
+            } else {
+                let mut need_gc_msg = util::is_vote_msg(msg.get_message());
+                if msg.has_extra_msg() {
+                    // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
+                    // it is removed due to conf change or merge.
+                    need_gc_msg |=
+                        msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
+                    // For backward compatibility
+                    need_gc_msg |=
+                        msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
+                }
+                if need_gc_msg {
+                    let mut send_msg = RaftMessage::default();
+                    send_msg.set_region_id(region_id);
+                    send_msg.set_from_peer(msg.get_to_peer().clone());
+                    send_msg.set_to_peer(msg.get_from_peer().clone());
+                    send_msg.set_region_epoch(region_epoch.clone());
+                    let extra_msg = send_msg.mut_extra_msg();
+                    extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
+                    extra_msg.set_check_peers(region.get_peers().into());
+                    if let Err(e) = self.ctx.trans.send(send_msg) {
+                        error!(?e;
+                            "send check stale peer response message failed";
+                            "region_id" => region_id,
+                        );
+                    }
                 }
                 self.ctx.need_flush_trans = true;
             }
 
-            return Ok(true);
+            return Ok(CheckMsgStatus::DropMsg);
         }
         // A tombstone peer may not apply the conf change log which removes itself.
         // In this case, the local epoch is stale and the local peer can be found from region.
@@ -1453,10 +1507,10 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                     "to_peer_id" => to_peer_id,
                     "msg_type" => ?msg_type
                 );
-                return Ok(true);
+                return Ok(CheckMsgStatus::DropMsg);
             }
         }
-        Ok(false)
+        Ok(CheckMsgStatus::NewPeer)
     }
 
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
@@ -1503,34 +1557,46 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             // Target tombstone peer doesn't exist, so ignore it.
             return Ok(());
         }
-        if self.check_msg(&msg)? {
-            return Ok(());
-        }
-        if !self.maybe_create_peer(region_id, &msg)? {
-            if util::is_first_message(msg.get_message()) {
-                // Failed to create peer, to void losing messages, either
-                // put it to pending_msgs or force send.
-                let mut meta = self.ctx.store_meta.lock().unwrap();
-                if !meta.regions.contains_key(&region_id) {
-                    // Save one pending message for a peer is enough, remove
-                    // the previous pending message of this peer
-                    meta.pending_msgs
-                        .swap_remove_front(|m| m.get_to_peer() == msg.get_to_peer());
-                    meta.pending_msgs.push(msg);
-                } else {
-                    drop(meta);
-                    if let Err(e) = self
-                        .ctx
-                        .router
-                        .force_send(region_id, PeerMsg::RaftMessage(msg))
-                    {
-                        warn!("handle first request failed"; "region_id" => region_id, "error" => ?e);
-                    }
+        let check_msg_status = self.check_msg(&msg)?;
+        let is_first_request = match check_msg_status {
+            CheckMsgStatus::DropMsg => return Ok(()),
+            CheckMsgStatus::FirstRequest => true,
+            CheckMsgStatus::NewPeer | CheckMsgStatus::NewPeerFirst => {
+                if self.maybe_create_peer(
+                    region_id,
+                    &msg,
+                    check_msg_status == CheckMsgStatus::NewPeerFirst,
+                )? {
+                    // Peer created, send the message again
+                    let _ = self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
+                    return Ok(());
+                }
+                // Can't create peer, see if we should keep this message
+                util::is_first_message(msg.get_message())
+            }
+        };
+        if is_first_request {
+            // To void losing messages, either put it to pending_msg or force send.
+            let mut store_meta = self.ctx.store_meta.lock().unwrap();
+            if !store_meta.regions.contains_key(&region_id) {
+                // Save one pending message for a peer is enough, remove
+                // the previous pending message of this peer
+                store_meta
+                    .pending_msgs
+                    .swap_remove_front(|m| m.get_to_peer() == msg.get_to_peer());
+
+                store_meta.pending_msgs.push(msg);
+            } else {
+                drop(store_meta);
+                if let Err(e) = self
+                    .ctx
+                    .router
+                    .force_send(region_id, PeerMsg::RaftMessage(msg))
+                {
+                    warn!("handle first request failed"; "region_id" => region_id, "error" => ?e);
                 }
             }
-            return Ok(());
         }
-        let _ = self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
         Ok(())
     }
 
@@ -1538,26 +1604,81 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     ///
     /// return false to indicate that target peer is in invalid state or
     /// doesn't exist and can't be created.
-    fn maybe_create_peer(&mut self, region_id: u64, msg: &RaftMessage) -> Result<bool> {
-        let target = msg.get_to_peer();
-        // we may encounter a message with larger peer id, which means
-        // current peer is stale, then we should remove current peer
-        let mut guard = self.ctx.store_meta.lock().unwrap();
-        let meta: &mut StoreMeta = &mut *guard;
-        if meta.regions.contains_key(&region_id) {
-            return Ok(true);
-        }
-
+    fn maybe_create_peer(
+        &mut self,
+        region_id: u64,
+        msg: &RaftMessage,
+        is_local_first: bool,
+    ) -> Result<bool> {
         if !is_initial_msg(msg.get_message()) {
             let msg_type = msg.get_message().get_msg_type();
             debug!(
                 "target peer doesn't exist, stale message";
-                "target_peer" => ?target,
+                "target_peer" => ?msg.get_to_peer(),
                 "region_id" => region_id,
                 "msg_type" => ?msg_type,
             );
             self.ctx.raft_metrics.message_dropped.stale_msg += 1;
             return Ok(false);
+        }
+
+        if is_local_first {
+            let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+            if pending_create_peers.contains_key(&region_id) {
+                return Ok(false);
+            }
+            pending_create_peers.insert(region_id, (msg.get_to_peer().get_id(), false));
+        }
+
+        let res = self.maybe_create_peer_internal(region_id, &msg, is_local_first);
+        // If failed, i.e. Err or Ok(false), remove this peer data from `pending_create_peers`.
+        if res.as_ref().map_or(true, |b| !*b) && is_local_first {
+            let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+            if let Some(status) = pending_create_peers.get(&region_id) {
+                if *status == (msg.get_to_peer().get_id(), false) {
+                    pending_create_peers.remove(&region_id);
+                }
+            }
+        }
+        res
+    }
+
+    fn maybe_create_peer_internal(
+        &mut self,
+        region_id: u64,
+        msg: &RaftMessage,
+        is_local_first: bool,
+    ) -> Result<bool> {
+        if is_local_first
+            && self
+                .ctx
+                .engines
+                .kv
+                .c()
+                .get_value_cf(CF_RAFT, &keys::region_state_key(region_id))?
+                .is_some()
+        {
+            return Ok(false);
+        }
+
+        let target = msg.get_to_peer();
+
+        let mut meta = self.ctx.store_meta.lock().unwrap();
+        if meta.regions.contains_key(&region_id) {
+            return Ok(true);
+        }
+
+        if is_local_first {
+            let pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+            match pending_create_peers.get(&region_id) {
+                Some(status) if *status == (msg.get_to_peer().get_id(), false) => (),
+                // If changed, it means this peer has been/will be replaced from the new one from splitting.
+                _ => return Ok(false),
+            }
+            // Note that `StoreMeta` lock is held and status is (peer_id, false) in `pending_create_peers` now.
+            // If this peer is created from splitting latter and then status in `pending_create_peers` is changed,
+            // that peer creation in `on_ready_split_region` must be executed **after** current peer creation
+            // because of the `StoreMeta` lock.
         }
 
         let mut is_overlapped = false;
@@ -1578,7 +1699,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 "exist_region" => ?exist_region,
             );
             let (can_destroy, merge_to_this_peer) = maybe_destroy_source(
-                meta,
+                &meta,
                 region_id,
                 target.get_id(),
                 exist_region.get_id(),
@@ -1604,13 +1725,14 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             if msg.get_region_epoch().get_version() > exist_region.get_region_epoch().get_version()
             {
                 // If new region's epoch version is greater than exist region's, the exist region
-                // may has been merged already.
+                // may has been merged/splitted already.
                 let _ = self.ctx.router.force_send(
                     exist_region.get_id(),
                     PeerMsg::CasualMessage(CasualMessage::RegionOverlapped),
                 );
             }
         }
+
         if is_overlapped {
             self.ctx.raft_metrics.message_dropped.region_overlap += 1;
             return Ok(false);
@@ -1629,8 +1751,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 )
                 .unwrap();
         }
+
         // New created peers should know it's learner or not.
-        let (tx, peer) = PeerFsm::replicate(
+        let (tx, mut peer) = PeerFsm::replicate(
             self.ctx.store_id(),
             &self.ctx.cfg,
             self.ctx.region_scheduler.clone(),
@@ -1638,10 +1761,17 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             region_id,
             target.clone(),
         )?;
-        // following snapshot may overlap, should insert into region_ranges after
+
+        // WARNING: The checking code must be above this line.
+        // Now all checking passed
+
+        peer.peer.local_first_replicate = is_local_first;
+
+        // Following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.
         meta.regions
             .insert(region_id, peer.get_peer().region().to_owned());
+
         let mailbox = BasicMailbox::new(tx, peer);
         self.ctx.router.register(region_id, mailbox);
         self.ctx
@@ -1781,8 +1911,6 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     fn store_heartbeat_pd(&mut self) {
         let mut stats = StoreStats::default();
 
-        let used_size = self.ctx.snap_mgr.get_total_snap_size();
-        stats.set_used_size(used_size);
         stats.set_store_id(self.ctx.store_id());
         {
             let meta = self.ctx.store_meta.lock().unwrap();
@@ -1881,11 +2009,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                         "snaps" => ?snaps,
                     );
                     for (key, is_sending) in snaps {
-                        let snap = if is_sending {
-                            self.ctx.snap_mgr.get_snapshot_for_sending(&key)?
-                        } else {
-                            self.ctx.snap_mgr.get_snapshot_for_applying(&key)?
-                        };
+                        let snap = self.ctx.snap_mgr.get_snapshot_for_gc(&key, is_sending)?;
                         self.ctx
                             .snap_mgr
                             .delete_snapshot(&key, snap.as_ref(), false);
@@ -2178,7 +2302,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             .store
             .last_unreachable_report
             .get(&store_id)
-            .map_or(UNREACHABLE_BACKOFF, |t| now.duration_since(*t))
+            .map_or(UNREACHABLE_BACKOFF, |t| now.saturating_duration_since(*t))
             < UNREACHABLE_BACKOFF
         {
             return;

@@ -20,6 +20,7 @@ use raftstore::coprocessor::{
     BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
     RegionChangeEvent, RegionChangeObserver, RoleObserver,
 };
+use raftstore::store::util::is_region_initialized;
 use security::{check_common_name, SecurityManager};
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
@@ -67,7 +68,7 @@ impl Locks {
 
     /// Returns true if the `Locks` is expired.
     fn is_expired(&self, now: Instant, ttl: Duration) -> bool {
-        now.duration_since(self.last_detect_time) >= ttl
+        now.saturating_duration_since(self.last_detect_time) >= ttl
     }
 }
 
@@ -226,7 +227,8 @@ impl DetectTable {
     /// Iterates the whole table to remove all expired entries.
     fn active_expire(&mut self) {
         if self.wait_for_map.len() >= Self::ACTIVE_EXPIRE_THRESHOLD
-            && self.now.duration_since(self.last_active_expire) >= Self::ACTIVE_EXPIRE_INTERVAL
+            && self.now.saturating_duration_since(self.last_active_expire)
+                >= Self::ACTIVE_EXPIRE_INTERVAL
         {
             let now = self.now;
             let ttl = self.ttl;
@@ -398,7 +400,7 @@ impl RoleChangeNotifier {
         // of the deadlock detector stepping down.
         //
         // If the peers of a region is not empty, the region info is complete.
-        !region.get_peers().is_empty()
+        is_region_initialized(region)
             && region.get_start_key() <= LEADER_KEY
             && (region.get_end_key().is_empty() || LEADER_KEY < region.get_end_key())
     }

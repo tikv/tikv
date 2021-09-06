@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
-use std::time::Instant;
 
 use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
@@ -23,6 +22,7 @@ use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
 use engine_rocks::CompactedEvent;
 use tikv_util::escape;
+use tikv_util::time::Instant;
 
 use super::RegionSnapshot;
 
@@ -259,7 +259,7 @@ pub enum CasualMessage<E: KvEngine> {
         hash: Vec<u8>,
     },
 
-    /// Approximate size of target region.
+    /// Approximate size of target region. This message can only be sent by split-check thread.
     RegionApproximateSize {
         size: u64,
     },
@@ -390,7 +390,9 @@ pub enum PeerMsg<E: KvEngine> {
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
     /// Result of applying committed entries. The message can't be lost.
-    ApplyRes { res: ApplyTaskRes },
+    ApplyRes {
+        res: ApplyTaskRes,
+    },
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg),
@@ -402,6 +404,7 @@ pub enum PeerMsg<E: KvEngine> {
     CasualMessage(CasualMessage<E>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
+    Destroy(u64),
 }
 
 impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
@@ -420,6 +423,7 @@ impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
+            PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
         }
     }
 }
