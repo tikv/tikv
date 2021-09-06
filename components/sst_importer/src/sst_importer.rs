@@ -1979,7 +1979,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_path_to_sst_meta() {
         let uuid = Uuid::new_v4();
