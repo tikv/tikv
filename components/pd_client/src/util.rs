@@ -398,7 +398,7 @@ where
         }
         // try reconnect
         retry -= 1;
-        if let Err(e) = block_on(client.reconnect()) {
+        if let Err(e) = block_on(client.reconnect(true)) {
             error!(?e; "reconnect failed");
             thread::sleep(REQUEST_RECONNECT_INTERVAL);
         }
