@@ -20,7 +20,7 @@ use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
-use cdc::{CdcObserver, MemoryQuota, Task};
+use cdc::{CdcObserver, FeatureGate, MemoryQuota, Task};
 
 #[allow(clippy::type_complexity)]
 pub fn new_event_feed(
@@ -172,8 +172,9 @@ impl TestSuite {
         let mut req = ChangeDataRequest::default();
         req.region_id = region_id;
         req.set_region_epoch(self.get_context(region_id).take_region_epoch());
-        // Batch resolved ts is supported by TiCDC in v4.0.8 release.
-        req.mut_header().set_ticdc_version("4.0.8".into());
+        // Enable batch resolved ts feature.
+        req.mut_header()
+            .set_ticdc_version(FeatureGate::batch_resolved_ts().to_string());
         req
     }
 
