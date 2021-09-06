@@ -11,10 +11,17 @@ use crate::range::Range;
 
 #[derive(Clone, Debug)]
 pub enum DeleteStrategy {
+    /// Delete the SST files that are fullly fit in range. However, the SST files that are partially
+    /// overlapped with the range will not be touched.
     DeleteFiles,
+    /// Delete the data stored in Titan.
     DeleteBlobs,
+    /// Scan for keys and then delete. Useful when we know the keys in range are not too many.
     DeleteByKey,
+    /// Delete by range. Note that this is experimental and you should check whether it is enbaled
+    /// in config before using it.
     DeleteByRange,
+    /// Delete by ingesting a SST file with deletions. Useful when the number of ranges is too many.
     DeleteByWriter { sst_path: String },
 }
 

@@ -2255,7 +2255,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-5.1#768c114017e87dff8e35f62fdfed26e86cfbee84"
+=======
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-5.0#7d7377864e93be88508a52cae3b3f9a6f4137f57"
+>>>>>>> c5848a337... tikv-ctl: allow get_all_regions from remote, drop-unapplied-raftlog (#10794)
 dependencies = [
  "futures 0.3.8",
  "grpcio",

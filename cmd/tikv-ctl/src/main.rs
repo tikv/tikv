@@ -6,6 +6,14 @@ extern crate clap;
 extern crate log;
 
 use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
+<<<<<<< HEAD:cmd/tikv-ctl/src/main.rs
+=======
+use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
+use grpcio::{CallOption, ChannelBuilder, Environment};
+use protobuf::Message;
+use serde_json::json;
+
+>>>>>>> c5848a337... tikv-ctl: allow get_all_regions from remote, drop-unapplied-raftlog (#10794):cmd/src/bin/tikv-ctl.rs
 use encryption_export::{
     create_backend, data_key_manager_from_config, encryption_method_from_db_encryption_method,
     DataKeyManager, DecrypterReader, Iv,
@@ -178,7 +186,7 @@ trait DebugExecutor {
     }
 
     fn dump_all_region_size(&self, cfs: Vec<&str>) {
-        let regions = self.get_all_meta_regions();
+        let regions = self.get_all_regions_in_store();
         let regions_number = regions.len();
         let mut total_size = 0;
         for region in regions {
@@ -188,14 +196,67 @@ trait DebugExecutor {
         println!("total region size: {}", convert_gbmb(total_size as u64));
     }
 
-    fn dump_region_info(&self, region: u64, skip_tombstone: bool) {
-        let r = self.get_region_info(region);
-        if skip_tombstone {
-            let region_state = r.region_local_state.as_ref();
-            if region_state.map_or(false, |s| s.get_state() == PeerState::Tombstone) {
-                return;
+    fn dump_region_info(&self, region_ids: Option<Vec<u64>>, skip_tombstone: bool) {
+        let region_ids = region_ids.unwrap_or_else(|| self.get_all_regions_in_store());
+        let mut region_objects = serde_json::map::Map::new();
+        for region_id in region_ids {
+            let r = self.get_region_info(region_id);
+            if skip_tombstone {
+                let region_state = r.region_local_state.as_ref();
+                if region_state.map_or(false, |s| s.get_state() == PeerState::Tombstone) {
+                    return;
+                }
             }
+            let region_object = json!({
+                "region_id": region_id,
+                "region_local_state": r.region_local_state.map(|s| {
+                    let r = s.get_region();
+                    let region_epoch = r.get_region_epoch();
+                    let peers = r.get_peers();
+                    json!({
+                        "region": json!({
+                            "id": r.get_id(),
+                            "start_key": hex::encode_upper(r.get_start_key()),
+                            "end_key": hex::encode_upper(r.get_end_key()),
+                            "region_epoch": json!({
+                                "conf_ver": region_epoch.get_conf_ver(),
+                                "version": region_epoch.get_version()
+                            }),
+                            "peers": peers.iter().map(|p| json!({
+                                "id": p.get_id(),
+                                "store_id": p.get_store_id(),
+                                "role": format!("{:?}", p.get_role()),
+                            })).collect::<Vec<_>>(),
+                        }),
+                    })
+                }),
+                "raft_local_state": r.raft_local_state.map(|s| {
+                    let hard_state = s.get_hard_state();
+                    json!({
+                        "hard_state": json!({
+                            "term": hard_state.get_term(),
+                            "vote": hard_state.get_vote(),
+                            "commit": hard_state.get_commit(),
+                        }),
+                        "last_index": s.get_last_index(),
+                    })
+                }),
+                "raft_apply_state": r.raft_apply_state.map(|s| {
+                    let truncated_state = s.get_truncated_state();
+                    json!({
+                        "applied_index": s.get_applied_index(),
+                        "commit_index": s.get_commit_index(),
+                        "commit_term": s.get_commit_term(),
+                        "truncated_state": json!({
+                            "index": truncated_state.get_index(),
+                            "term": truncated_state.get_term(),
+                        })
+                    })
+                })
+            });
+            region_objects.insert(region_id.to_string(), region_object);
         }
+<<<<<<< HEAD:cmd/tikv-ctl/src/main.rs
         let region_state_key = keys::region_state_key(region);
         let raft_state_key = keys::raft_state_key(region);
         let apply_state_key = keys::apply_state_key(region);
@@ -207,11 +268,13 @@ trait DebugExecutor {
         println!("apply state key: {}", escape(&apply_state_key));
         println!("apply state: {:?}", r.raft_apply_state);
     }
+=======
+>>>>>>> c5848a337... tikv-ctl: allow get_all_regions from remote, drop-unapplied-raftlog (#10794):cmd/src/bin/tikv-ctl.rs
 
-    fn dump_all_region_info(&self, skip_tombstone: bool) {
-        for region in self.get_all_meta_regions() {
-            self.dump_region_info(region, skip_tombstone);
-        }
+        v1!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "region_infos": region_objects })).unwrap()
+        );
     }
 
     fn dump_raft_log(&self, region: u64, index: u64) {
@@ -530,7 +593,14 @@ trait DebugExecutor {
     }
 
     /// Recover the cluster when given `store_ids` are failed.
-    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>);
+    fn remove_fail_stores(
+        &self,
+        store_ids: Vec<u64>,
+        region_ids: Option<Vec<u64>>,
+        promote_learner: bool,
+    );
+
+    fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>);
 
     /// Recreate the region with metadata from pd, but alloc new id for it.
     fn recreate_region(&self, sec_mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64);
@@ -570,7 +640,7 @@ trait DebugExecutor {
         self.recover_all(threads, read_only);
     }
 
-    fn get_all_meta_regions(&self) -> Vec<u64>;
+    fn get_all_regions_in_store(&self) -> Vec<u64>;
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8>;
 
@@ -621,8 +691,10 @@ impl DebugExecutor for DebugClient {
         process::exit(-1);
     }
 
-    fn get_all_meta_regions(&self) -> Vec<u64> {
-        unimplemented!();
+    fn get_all_regions_in_store(&self) -> Vec<u64> {
+        DebugClient::get_all_regions_in_store(&self, &GetAllRegionsInStoreRequest::default())
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_all_regions_in_store", e))
+            .take_regions()
     }
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
@@ -758,12 +830,16 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only available for local mode");
     }
 
-    fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>) {
-        self.check_local_mode();
+    fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>, _: bool) {
+        unimplemented!("only available for local mode");
+    }
+
+    fn drop_unapplied_raftlog(&self, _: Option<Vec<u64>>) {
+        unimplemented!("only available for local mode");
     }
 
     fn recreate_region(&self, _: Arc<SecurityManager>, _: &PdConfig, _: u64) {
-        self.check_local_mode();
+        unimplemented!("only available for local mode");
     }
 
     fn check_region_consistency(&self, region_id: u64) {
@@ -818,9 +894,9 @@ impl DebugExecutor for DebugClient {
 impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     fn check_local_mode(&self) {}
 
-    fn get_all_meta_regions(&self) -> Vec<u64> {
-        self.get_all_meta_regions()
-            .unwrap_or_else(|e| perror_and_exit("Debugger::get_all_meta_regions", e))
+    fn get_all_regions_in_store(&self) -> Vec<u64> {
+        self.get_all_regions_in_store()
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_all_regions_in_store", e))
     }
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
@@ -936,9 +1012,27 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         println!("all regions are healthy")
     }
 
+<<<<<<< HEAD:cmd/tikv-ctl/src/main.rs
     fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>) {
         println!("removing stores {:?} from configurations...", store_ids);
         self.remove_failed_stores(store_ids, region_ids)
+=======
+    fn remove_fail_stores(
+        &self,
+        store_ids: Vec<u64>,
+        region_ids: Option<Vec<u64>>,
+        promote_learner: bool,
+    ) {
+        v1!("removing stores {:?} from configurations...", store_ids);
+        self.remove_failed_stores(store_ids, region_ids, promote_learner)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
+        v1!("success");
+    }
+
+    fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) {
+        v1!("removing unapplied raftlog on region {:?} ...", region_ids);
+        self.drop_unapplied_raftlog(region_ids)
+>>>>>>> c5848a337... tikv-ctl: allow get_all_regions from remote, drop-unapplied-raftlog (#10794):cmd/src/bin/tikv-ctl.rs
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         println!("success");
     }
@@ -1200,10 +1294,25 @@ fn main() {
                     SubCommand::with_name("region")
                         .about("print region info")
                         .arg(
-                            Arg::with_name("region")
-                                .short("r")
+                            Arg::with_name("regions")
+                                .aliases(&["region"])
+                                .required_unless("all-regions")
+                                .conflicts_with("all-regions")
                                 .takes_value(true)
-                                .help("Set the region id, if not specified, print all regions"),
+                                .short("r")
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .help("Print info for these regions"),
+                        )
+                        .arg(
+                            Arg::with_name("all-regions")
+                                .required_unless("regions")
+                                .conflicts_with("regions")
+                                .long("all-regions")
+                                .takes_value(false)
+                                .help("Print info for all regions"),
                         )
                         .arg(
                             Arg::with_name("skip-tombstone")
@@ -1562,6 +1671,7 @@ fn main() {
                 .about("Unsafely recover the cluster when the majority replicas are failed")
                 .subcommand(
                     SubCommand::with_name("remove-fail-stores")
+                        .about("Remove the failed machines from the peer list for the regions")
                         .arg(
                             Arg::with_name("stores")
                                 .required(true)
@@ -1573,6 +1683,37 @@ fn main() {
                                 .value_delimiter(",")
                                 .help("Stores to be removed"),
                         )
+                        .arg(
+                            Arg::with_name("regions")
+                                .required_unless("all-regions")
+                                .conflicts_with("all-regions")
+                                .takes_value(true)
+                                .short("r")
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .help("Only for these regions"),
+                        )
+                        .arg(
+                            Arg::with_name("promote-learner")
+                                .long("promote-learner")
+                                .takes_value(false)
+                                .required(false)
+                                .help("Promote learner to voter"),
+                        )
+                        .arg(
+                            Arg::with_name("all-regions")
+                                .required_unless("regions")
+                                .conflicts_with("regions")
+                                .long("all-regions")
+                                .takes_value(false)
+                                .help("Do the command for all regions"),
+                        )
+                )
+                .subcommand(
+                    SubCommand::with_name("drop-unapplied-raftlog")
+                        .about("Remove unapplied raftlogs on the regions")
                         .arg(
                             Arg::with_name("regions")
                                 .required_unless("all-regions")
@@ -1913,7 +2054,11 @@ fn main() {
         println!("{}", escape(&from_hex(hex).unwrap()));
         return;
     } else if let Some(escaped) = matches.value_of("escaped-to-hex") {
+<<<<<<< HEAD:cmd/tikv-ctl/src/main.rs
         println!("{}", log_wrappers::hex_encode_upper(unescape(escaped)));
+=======
+        v1!("{}", hex::encode_upper(unescape(escaped)));
+>>>>>>> c5848a337... tikv-ctl: allow get_all_regions from remote, drop-unapplied-raftlog (#10794):cmd/src/bin/tikv-ctl.rs
         return;
     } else if let Some(encoded) = matches.value_of("decode") {
         match Key::from_encoded(unescape(encoded)).into_raw() {
@@ -2054,11 +2199,13 @@ fn main() {
             debug_executor.dump_raft_log(id, index);
         } else if let Some(matches) = matches.subcommand_matches("region") {
             let skip_tombstone = matches.is_present("skip-tombstone");
-            if let Some(id) = matches.value_of("region") {
-                debug_executor.dump_region_info(id.parse().unwrap(), skip_tombstone);
-            } else {
-                debug_executor.dump_all_region_info(skip_tombstone);
-            }
+            let regions = matches.values_of("regions").map(|values| {
+                values
+                    .map(str::parse)
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("parse regions fail")
+            });
+            debug_executor.dump_region_info(regions, skip_tombstone);
         } else {
             let _ = app.print_help();
         }
@@ -2196,7 +2343,18 @@ fn main() {
                     .collect::<Result<Vec<_>, _>>()
                     .expect("parse regions fail")
             });
-            debug_executor.remove_fail_stores(store_ids, region_ids);
+            debug_executor.remove_fail_stores(
+                store_ids,
+                region_ids,
+                matches.is_present("promote-learner"),
+            );
+        } else if let Some(matches) = matches.subcommand_matches("drop-unapplied-raftlog") {
+            let region_ids = matches.values_of("regions").map(|ids| {
+                ids.map(str::parse)
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("parse regions fail")
+            });
+            debug_executor.drop_unapplied_raftlog(region_ids);
         } else {
             println!("{}", matches.usage());
         }

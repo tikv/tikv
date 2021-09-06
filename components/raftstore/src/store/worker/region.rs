@@ -565,6 +565,7 @@ where
 
     fn delete_all_in_range(&self, ranges: &[Range]) -> Result<()> {
         for cf in self.engine.cf_names() {
+            // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
             let strategy = if cf == CF_LOCK {
                 DeleteStrategy::DeleteByKey
             } else if self.use_delete_range {
