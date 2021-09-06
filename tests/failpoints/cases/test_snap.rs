@@ -6,14 +6,10 @@ use std::time::*;
 use std::{fs, io, mem, thread};
 
 use raft::eraftpb::MessageType;
-<<<<<<< HEAD
-
 use raftstore::store::*;
-=======
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::PathBuf;
->>>>>>> 56b3ae673... raftstore: continue GC  snapshot files when it encounters a corrupted snapshot (#10831)
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
@@ -476,8 +472,6 @@ fn test_gen_snapshot_with_no_committed_entries_ready() {
     // response from peer 3.
     must_get_equal(&cluster.get_engine(3), b"k9", b"v1");
 }
-<<<<<<< HEAD
-=======
 
 // Test snapshot generating can be canceled by Raft log GC correctly. It does
 // 1. pause snapshot generating with a failpoint, and then add a new peer;
@@ -606,4 +600,3 @@ fn test_snapshot_gc_after_failed() {
     fail::cfg("get_snapshot_for_gc", "off").unwrap();
     cluster.sim.wl().clear_recv_filters(3);
 }
->>>>>>> 56b3ae673... raftstore: continue GC  snapshot files when it encounters a corrupted snapshot (#10831)
