@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "5.0.2"
+version = "5.0.3"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -208,6 +208,7 @@ vlog = "0.1.4"
 walkdir = "2"
 minitrace = { git = "https://github.com/pingcap-incubator/minitrace-rust.git", branch = "master" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+seahash = "4.1.0"
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
@@ -218,8 +219,8 @@ zipf = "6.1.0"
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
-raft = { git = "https://github.com/tikv/raft-rs", branch = "master", default-features = false }
-raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master", default-features = false }
+raft = { git = "https://github.com/tikv/raft-rs", rev = "91a60ce417d55d4ca4d96b29963e3e3fa7f7d8d7", default-features = false }
+raft-proto = { git = "https://github.com/tikv/raft-rs", rev = "91a60ce417d55d4ca4d96b29963e3e3fa7f7d8d7", default-features = false }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
 openssl-src = { git = "https://github.com/busyjay/openssl-src-rs", branch = "patch-for-m1" }

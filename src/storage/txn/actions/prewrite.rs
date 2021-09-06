@@ -6,7 +6,7 @@ use crate::storage::{
             CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM, MVCC_CONFLICT_COUNTER,
             MVCC_DUPLICATE_CMD_COUNTER_VEC,
         },
-        Error, ErrorInner, Lock, LockType, MvccTxn, Result,
+        Error, ErrorInner, Lock, LockType, MvccTxn, Result, TxnCommitRecord,
     },
     txn::actions::check_data_constraint::check_data_constraint,
     txn::LockInfo,
@@ -56,6 +56,41 @@ pub fn prewrite<S: Snapshot>(
 
     if let LockStatus::Locked(ts) = lock_status {
         return Ok((ts, OldValue::Unspecified));
+    }
+
+    // For keys that do not need pessimistic locks in a pessimistic async-commit transaction,
+    // we need to check the key has not been committed before if it is a retry request.
+    //
+    // It is to prevent the following case:
+    // The key was prewritten successfully before, but the response is lost. The client resends
+    // the same request after the transaction is resolved (to become committed). If we still
+    // write the lock, the client might commit these keys more than once.
+    //
+    // If the commit record is Rollback, it is still safe for us to write the Lock because the primary
+    // key of the transaction must also be rolled back, and this lock will be eventually rolled back.
+    // For simplicity, we don't handle this case specially, making it the same behavior as the Rollback
+    // record is collapsed.
+    if txn_props.is_pessimistic()
+        && !is_pessimistic_lock
+        && txn_props.is_retry_request
+        && matches!(txn_props.commit_kind, CommitKind::Async(..))
+    {
+        match txn
+            .reader
+            .get_txn_commit_record(&mutation.key, txn.start_ts)?
+        {
+            TxnCommitRecord::SingleRecord { commit_ts, write }
+                if write.write_type != WriteType::Rollback =>
+            {
+                info!("prewrited transaction has been committed";
+                        "start_ts" => txn_props.start_ts, "commit_ts" => commit_ts,
+                        "key" => ?mutation.key, "mutation_type" => ?mutation.mutation_type,
+                        "write_type" => ?write.write_type);
+                txn.clear();
+                return Ok((commit_ts, OldValue::Unspecified));
+            }
+            _ => {}
+        }
     }
 
     // Note that the `prev_write` may have invalid GC fence.
@@ -132,6 +167,7 @@ pub struct TransactionProperties<'a> {
     pub lock_ttl: u64,
     pub min_commit_ts: TimeStamp,
     pub need_old_value: bool,
+    pub is_retry_request: bool,
 }
 
 impl<'a> TransactionProperties<'a> {
@@ -512,13 +548,7 @@ pub mod tests {
     #[cfg(test)]
     use crate::storage::{
         kv::RocksSnapshot,
-        txn::{
-            commands::prewrite::fallback_1pc_locks,
-            tests::{
-                must_acquire_pessimistic_lock, must_cleanup_with_gc_fence, must_commit,
-                must_prewrite_delete, must_prewrite_lock, must_prewrite_put, must_rollback,
-            },
-        },
+        txn::{commands::prewrite::fallback_1pc_locks, tests::*},
     };
     use crate::storage::{mvcc::tests::*, Engine};
     use concurrency_manager::ConcurrencyManager;
@@ -540,6 +570,7 @@ pub mod tests {
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
             need_old_value: false,
+            is_retry_request: false,
         }
     }
 
@@ -564,6 +595,7 @@ pub mod tests {
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
             need_old_value: true,
+            is_retry_request: false,
         }
     }
 
@@ -850,6 +882,7 @@ pub mod tests {
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
                 need_old_value: true,
+                is_retry_request: false,
             },
             Mutation::CheckNotExists(Key::from_raw(key)),
             &None,
@@ -879,6 +912,7 @@ pub mod tests {
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
             need_old_value: true,
+            is_retry_request: false,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         let (_, old_value) = prewrite(
@@ -924,6 +958,7 @@ pub mod tests {
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
             need_old_value: true,
+            is_retry_request: false,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         let (_, old_value) = prewrite(
@@ -1028,6 +1063,7 @@ pub mod tests {
             lock_ttl: 2000,
             min_commit_ts: 51.into(),
             need_old_value: true,
+            is_retry_request: false,
         };
 
         let cases = vec![
@@ -1083,6 +1119,7 @@ pub mod tests {
             lock_ttl: 2000,
             min_commit_ts: 51.into(),
             need_old_value: true,
+            is_retry_request: false,
         };
 
         let cases: Vec<_> = vec![
@@ -1119,6 +1156,63 @@ pub mod tests {
     }
 
     #[test]
+    fn test_resend_prewrite_non_pessimistic_lock() {
+        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+
+        must_acquire_pessimistic_lock(&engine, b"k1", b"k1", 10, 10);
+        must_pessimistic_prewrite_put_async_commit(
+            &engine,
+            b"k1",
+            b"v1",
+            b"k1",
+            &Some(vec![b"k2".to_vec()]),
+            10,
+            10,
+            true,
+            15,
+        );
+        must_pessimistic_prewrite_put_async_commit(
+            &engine,
+            b"k2",
+            b"v2",
+            b"k1",
+            &Some(vec![]),
+            10,
+            10,
+            false,
+            15,
+        );
+
+        // The transaction may be committed by another reader.
+        must_commit(&engine, b"k1", 10, 20);
+        must_commit(&engine, b"k2", 10, 20);
+
+        // This is a resent prewrite
+        must_prewrite_put_impl(
+            &engine,
+            b"k2",
+            b"v2",
+            b"k1",
+            &Some(vec![]),
+            10.into(),
+            false,
+            100,
+            10.into(),
+            1,
+            15.into(),
+            TimeStamp::default(),
+            true,
+        );
+        // Commit repeatedly, these operations should have no effect.
+        must_commit(&engine, b"k1", 10, 25);
+        must_commit(&engine, b"k2", 10, 25);
+
+        // Seek from 30, we should read commit_ts = 20 instead of 25.
+        must_seek_write(&engine, b"k1", 30, 10, 20, WriteType::Put);
+        must_seek_write(&engine, b"k2", 30, 10, 20, WriteType::Put);
+    }
+
+    #[test]
     fn test_old_value_rollback_and_lock() {
         let engine_rollback = crate::storage::TestEngineBuilder::new().build().unwrap();
 
@@ -1147,6 +1241,7 @@ pub mod tests {
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
                 need_old_value: true,
+                is_retry_request: false,
             };
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let cm = ConcurrencyManager::new(start_ts);
@@ -1197,6 +1292,7 @@ pub mod tests {
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
             need_old_value: true,
+            is_retry_request: false,
         };
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new(start_ts);
@@ -1334,6 +1430,7 @@ pub mod tests {
                     lock_ttl: 0,
                     min_commit_ts: TimeStamp::default(),
                     need_old_value: true,
+                    is_retry_request: false,
                 };
                 let (_, old_value) = prewrite(
                     &mut txn,
@@ -1366,6 +1463,7 @@ pub mod tests {
                     lock_ttl: 0,
                     min_commit_ts: TimeStamp::default(),
                     need_old_value: true,
+                    is_retry_request: false,
                 };
                 let (_, old_value) = prewrite(
                     &mut txn,
