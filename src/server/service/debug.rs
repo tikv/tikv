@@ -484,6 +484,30 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
 
         self.handle_response(ctx, sink, f, TAG);
     }
+
+    fn get_all_regions_in_store(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _: GetAllRegionsInStoreRequest,
+        sink: UnarySink<GetAllRegionsInStoreResponse>,
+    ) {
+        const TAG: &str = "debug_get_all_regions_in_store";
+        let debugger = self.debugger.clone();
+
+        let f = self
+            .pool
+            .spawn(async move {
+                let mut resp = GetAllRegionsInStoreResponse::default();
+                match debugger.get_all_regions_in_store() {
+                    Ok(regions) => resp.set_regions(regions),
+                    Err(_) => resp.set_regions(vec![]),
+                }
+                Ok(resp)
+            })
+            .map(|res| res.unwrap());
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
 }
 
 fn region_detail<T: RaftStoreRouter<RocksEngine>>(
