@@ -1315,6 +1315,7 @@ dependencies = [
  "libc 0.2.86",
  "maligned",
  "nix 0.19.0",
+ "num-traits",
  "online_config",
  "openssl",
  "parking_lot",

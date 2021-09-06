@@ -225,20 +225,20 @@ macro_rules! request_imp {
             return amount;
         }
         let remains = (-remains) as usize;
+        // Wait for next refill.
         let mut wait = {
             let now = Instant::now_coarse();
             let mut locked = $limiter.protected.lock();
-            // Calculate wait duration by queue_len / served_per_epoch.
             if locked.next_refill_time <= now {
                 $limiter.refill(&mut locked, now);
-                // `(a-1)/b` is equivalent to `roundup(a.saturating_sub(b)/b)`.
-                DEFAULT_REFILL_PERIOD * ((remains - 1) / cached_bytes_per_epoch) as u32
+                Duration::default()
             } else {
-                // `(a-1)/b` is equivalent to `roundup(a.saturating_sub(b)/b)`.
                 locked.next_refill_time - now
-                    + DEFAULT_REFILL_PERIOD * ((remains - 1) / cached_bytes_per_epoch) as u32
             }
         };
+        // Wait for additional refills.
+        // `(a-1)/b` is equivalent to `roundup(a.saturating_sub(b)/b)`.
+        wait += DEFAULT_REFILL_PERIOD * ((remains - 1) / cached_bytes_per_epoch) as u32;
         if wait > MAX_WAIT_DURATION_PER_REQUEST {
             // Long wait duration could freeze request thread not to react to latest budgets
             // adjustment. Exit early by returning partial quotas.
@@ -253,8 +253,8 @@ macro_rules! request_imp {
             debug_assert!(redundant > 0);
             $limiter.bytes_available[priority_idx].fetch_add(redundant, Ordering::Relaxed);
         }
-        tls_collect_rate_limiter_request_wait($priority.as_str(), wait);
         do_sleep!(wait, $mode);
+        tls_collect_rate_limiter_request_wait($priority.as_str(), wait);
         amount
     }};
 }
@@ -333,29 +333,30 @@ impl PriorityBasedIORateLimiter {
         for pri in &[IOPriority::High, IOPriority::Medium, IOPriority::Low] {
             let p = *pri as usize;
 
+            if *pri != IOPriority::High {
+                match *pri {
+                    IOPriority::Medium => RATE_LIMITER_MAX_BYTES_PER_SEC
+                        .medium
+                        .set((budgets * DEFAULT_REFILLS_PER_SEC) as i64),
+                    IOPriority::Low => {
+                        // Only apply rate limit adjustments on low-priority IOs.
+                        if let Some(adjustor) = &locked.adjustor {
+                            budgets = adjustor.adjust(budgets);
+                        }
+                        RATE_LIMITER_MAX_BYTES_PER_SEC
+                            .low
+                            .set((budgets * DEFAULT_REFILLS_PER_SEC) as i64);
+                    }
+                    _ => unreachable!(),
+                }
+                self.bytes_per_epoch[p].store(budgets, Ordering::Relaxed);
+            }
             let max_refill = (budgets as f32 * elapsed_epochs) as i64;
             let unused = self.bytes_available[p].load(Ordering::Relaxed);
             let til_full = budgets as i64 - unused;
             self.bytes_available[p]
                 .fetch_add(std::cmp::min(max_refill, til_full), Ordering::Relaxed);
             budgets = std::cmp::max(unused, 1) as usize;
-
-            if p > 0 {
-                self.bytes_per_epoch[p - 1].store(budgets, Ordering::Relaxed);
-            }
-            if *pri == IOPriority::High {
-                RATE_LIMITER_MAX_BYTES_PER_SEC
-                    .medium
-                    .set((budgets * DEFAULT_REFILLS_PER_SEC) as i64);
-            } else if *pri == IOPriority::Medium {
-                RATE_LIMITER_MAX_BYTES_PER_SEC
-                    .low
-                    .set((budgets * DEFAULT_REFILLS_PER_SEC) as i64);
-                // Only apply rate limit adjustments on low-priority IOs.
-                if let Some(adjustor) = &locked.adjustor {
-                    budgets = adjustor.adjust(budgets);
-                }
-            }
         }
     }
 
