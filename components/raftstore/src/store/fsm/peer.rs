@@ -3217,6 +3217,9 @@ where
             .calculate_commit_group(self.fsm.peer.replication_mode_version, region.get_peers());
         self.fsm.peer.raft_group.raft.clear_commit_group();
         self.fsm.peer.raft_group.raft.assign_commit_groups(gb);
+        fail_point!("after_assign_commit_groups_on_apply_snapshot");
+        // drop it before access `store_meta`.
+        drop(state);
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
         debug!(
