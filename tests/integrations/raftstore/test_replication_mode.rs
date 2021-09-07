@@ -453,7 +453,7 @@ fn test_assign_commit_groups_with_migrate_region() {
     cluster.must_split(&region, &b"k".to_vec());
     // Put a key value pair.
     cluster.must_put(b"k1", b"v0");
-    let r1= cluster.get_region(b"k1");
+    let r1 = cluster.get_region(b"k1");
     let r2 = cluster.get_region(b"");
 
     // Add a peer of region 1 to store 2.
