@@ -1938,7 +1938,7 @@ where
             for entry in ready.entries() {
                 if let Some((term, times)) = self.proposals.find_request_times(entry.get_index()) {
                     if entry.term == term {
-                        request_times.extend_from_slice(&times);
+                        request_times.extend_from_slice(times);
                         if now.is_none() {
                             now = Some(TiInstant::now());
                         }
