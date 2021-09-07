@@ -15,8 +15,8 @@ sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
 bcc-iosnoop = ["tikv/bcc-iosnoop"]
-cloud-aws = [ "encryption_export/cloud-aws" ]
-cloud-gcp = [ "encryption_export/cloud-gcp" ]
+cloud-aws = ["encryption_export/cloud-aws"]
+cloud-gcp = ["encryption_export/cloud-gcp"]
 protobuf-codec = [
   "protobuf/bytes",
   "backup/protobuf-codec",
@@ -66,7 +66,6 @@ test-engines-rocksdb = [
 test-engines-panic = [
   "tikv/test-engines-panic",
 ]
-
 nortcheck = ["engine_rocks/nortcheck"]
 
 [dependencies]
