@@ -1,14 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use futures::compat::Future01CompatExt;
+use futures::executor::block_on;
 use kvproto::diagnosticspb::{ServerInfoRequest, ServerInfoResponse, ServerInfoType};
 use protobuf::Message;
 use raftstore::engine_store_ffi::interfaces::root::DB::{
     BaseBuffView, RaftStoreProxyPtr, RawVoidPtr,
 };
-use raftstore::engine_store_ffi::{get_engine_store_server_helper, ProtoMsgBaseBuff};
-
-use futures::compat::Future01CompatExt;
-use futures::executor::block_on;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 use tikv::server::service::diagnostics::sys;
@@ -75,7 +73,7 @@ pub extern "C" fn ffi_server_info(
     req.merge_from_bytes(view.to_slice()).unwrap();
 
     let resp = server_info_for_ffi(req);
-    let r = ProtoMsgBaseBuff::new(&resp);
-    get_engine_store_server_helper().set_server_info_resp(Pin::new(&r).into(), res);
+    let r = raftstore::engine_store_ffi::ProtoMsgBaseBuff::new(&resp);
+    raftstore::engine_store_ffi::set_server_info_resp(Pin::new(&r).into(), res);
     0
 }

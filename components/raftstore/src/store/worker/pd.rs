@@ -37,7 +37,6 @@ use crate::store::{
     Callback, CasualMessage, PeerMsg, RaftCommand, RaftRouter, SnapManager, StoreInfo, StoreMsg,
 };
 
-use crate::engine_store_ffi::get_engine_store_server_helper;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use futures::compat::Future01CompatExt;
@@ -499,6 +498,7 @@ where
     ER: RaftEngine,
     T: PdClient + 'static,
 {
+    engine_store_server_helper: &'static crate::engine_store_ffi::EngineStoreServerHelper,
     store_id: u64,
     pd_client: Arc<T>,
     router: RaftRouter<EK, ER>,
@@ -527,6 +527,7 @@ where
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
+        config: &crate::store::Config,
         store_id: u64,
         pd_client: Arc<T>,
         router: RaftRouter<EK, ER>,
@@ -543,6 +544,9 @@ where
         }
 
         Runner {
+            engine_store_server_helper: crate::engine_store_ffi::gen_engine_store_server_helper(
+                config.engine_store_server_helper,
+            ),
             store_id,
             pd_client,
             router,
@@ -719,7 +723,7 @@ where
     }
 
     fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats, store_info: StoreInfo<EK>) {
-        let store_stats = get_engine_store_server_helper().handle_compute_store_stats();
+        let store_stats = self.engine_store_server_helper.handle_compute_store_stats();
         if store_stats.fs_stats.ok == 0 {
             return;
         }

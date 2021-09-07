@@ -31,7 +31,6 @@ use file_system::{IOType, WithIOType};
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
-use crate::engine_store_ffi;
 
 const GENERATE_POOL_SIZE: usize = 2;
 
@@ -224,6 +223,8 @@ struct SnapContext<EK, R>
 where
     EK: KvEngine,
 {
+    engine_store_server_helper: &'static crate::engine_store_ffi::EngineStoreServerHelper,
+
     engine: EK,
     mgr: SnapManager,
     use_delete_range: bool,
@@ -334,7 +335,8 @@ where
             return Err(box_err!("missing snapshot file {}", s.path()));
         }
         check_abort(&abort)?;
-        let res = s.pre_handle_snapshot(&region, peer_id, idx, term);
+        let res =
+            s.pre_handle_snapshot(self.engine_store_server_helper, &region, peer_id, idx, term);
 
         info!(
             "pre handle snapshot";
@@ -413,7 +415,7 @@ where
             );
             assert_eq!(idx, snap.index);
             assert_eq!(term, snap.term);
-            engine_store_ffi::get_engine_store_server_helper()
+            self.engine_store_server_helper
                 .apply_pre_handled_snapshot(snap.inner);
         } else {
             info!(
@@ -425,8 +427,9 @@ where
                 return Err(box_err!("missing snapshot file {}", s.path()));
             }
             check_abort(&abort)?;
-            let pre_handled_snap = s.pre_handle_snapshot(&region, peer_id, idx, term);
-            engine_store_ffi::get_engine_store_server_helper()
+            let pre_handled_snap =
+                s.pre_handle_snapshot(self.engine_store_server_helper, &region, peer_id, idx, term);
+            self.engine_store_server_helper
                 .apply_pre_handled_snapshot(pre_handled_snap.inner);
         }
 
@@ -657,14 +660,18 @@ where
     R: CasualRouter<EK>,
 {
     pub fn new(
+        config: &crate::store::Config,
         engine: EK,
         mgr: SnapManager,
-        snap_handle_pool_size: usize,
         region_worker_tick_interval: tikv_util::config::ReadableDuration,
         use_delete_range: bool,
         coprocessor_host: CoprocessorHost<EK>,
         router: R,
     ) -> Runner<EK, R> {
+        let snap_handle_pool_size = config.snap_handle_pool_size;
+        let engine_store_server_helper = crate::engine_store_ffi::gen_engine_store_server_helper(
+            config.engine_store_server_helper,
+        );
         let (pool_size, pre_handle_snap) = if snap_handle_pool_size == 0 {
             (GENERATE_POOL_SIZE, false)
         } else {
@@ -681,6 +688,7 @@ where
                 .max_thread_count(pool_size)
                 .build_future_pool(),
             ctx: SnapContext {
+                engine_store_server_helper,
                 engine,
                 mgr,
                 use_delete_range,

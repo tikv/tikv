@@ -5,9 +5,6 @@ use std::process;
 
 use crate::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
 use clap::{App, Arg};
-use raftstore::engine_store_ffi::{
-    get_engine_store_server_helper, init_engine_store_server_helper,
-};
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use tikv::config::TiKvConfig;
@@ -17,7 +14,10 @@ pub unsafe fn run_proxy(
     argv: *const *const c_char,
     engine_store_server_helper: *const u8,
 ) {
-    init_engine_store_server_helper(engine_store_server_helper);
+    raftstore::engine_store_ffi::init_engine_store_server_helper(engine_store_server_helper);
+    let engine_store_server_helper = raftstore::engine_store_ffi::gen_engine_store_server_helper(
+        engine_store_server_helper as isize,
+    );
 
     let mut args = vec![];
 
@@ -26,7 +26,7 @@ pub unsafe fn run_proxy(
         args.push(raw.to_str().unwrap());
     }
 
-    get_engine_store_server_helper().check();
+    engine_store_server_helper.check();
 
     let matches = App::new("RaftStore Proxy")
         .about("RaftStore proxy to connect TiKV cluster")
@@ -223,5 +223,7 @@ pub unsafe fn run_proxy(
         process::exit(0)
     }
 
-    crate::server::run_tikv(config);
+    assert!(config.raft_store.engine_store_server_helper == 0);
+    config.raft_store.engine_store_server_helper = engine_store_server_helper as *const _ as isize;
+    crate::server::run_tikv(config, engine_store_server_helper);
 }

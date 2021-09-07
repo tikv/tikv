@@ -76,8 +76,7 @@ use crate::{bytes_capacity, store::QueryStats, Error, Result};
 
 use super::metrics::*;
 use crate::engine_store_ffi::{
-    get_engine_store_server_helper, ColumnFamilyType, EngineStoreApplyRes, RaftCmdHeader,
-    WriteCmdType, WriteCmds,
+    ColumnFamilyType, EngineStoreApplyRes, RaftCmdHeader, WriteCmdType, WriteCmds,
 };
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
@@ -360,6 +359,8 @@ where
     EK: KvEngine,
     W: WriteBatch<EK>,
 {
+    pub engine_store_server_helper: &'static crate::engine_store_ffi::EngineStoreServerHelper,
+
     tag: String,
     timer: Option<Instant>,
     host: CoprocessorHost<EK>,
@@ -429,6 +430,10 @@ where
         let kv_wb = W::with_capacity(&engine, DEFAULT_APPLY_WB_SIZE);
 
         ApplyContext {
+            engine_store_server_helper: crate::engine_store_ffi::gen_engine_store_server_helper(
+                cfg.engine_store_server_helper,
+            ),
+
             tag,
             timer: None,
             host,
@@ -1031,7 +1036,7 @@ where
         {
             // hacked by solotzg.
             let cmds = WriteCmds::new();
-            get_engine_store_server_helper().handle_write_raft_cmd(
+            apply_ctx.engine_store_server_helper.handle_write_raft_cmd(
                 &cmds,
                 RaftCmdHeader::new(self.region.get_id(), index, term),
             );
@@ -1221,7 +1226,7 @@ where
                 {
                     // hacked by solotzg.
                     let cmds = WriteCmds::new();
-                    get_engine_store_server_helper().handle_write_raft_cmd(
+                    ctx.engine_store_server_helper.handle_write_raft_cmd(
                         &cmds,
                         RaftCmdHeader::new(self.region.get_id(), index, term),
                     );
@@ -1454,8 +1459,7 @@ where
         let flash_res = if let ApplyResult::WaitMergeSource(_) = &exec_result {
             EngineStoreApplyRes::None
         } else {
-            // hacked by solotzg.
-            get_engine_store_server_helper().handle_admin_raft_cmd(
+            ctx.engine_store_server_helper.handle_admin_raft_cmd(
                 &request,
                 &response,
                 RaftCmdHeader::new(
@@ -1577,7 +1581,7 @@ where
             }
         } else {
             let flash_res = {
-                get_engine_store_server_helper().handle_write_raft_cmd(
+                ctx.engine_store_server_helper.handle_write_raft_cmd(
                     &cmds,
                     RaftCmdHeader::new(
                         self.region.get_id(),
@@ -1790,7 +1794,7 @@ where
             sst_views.push((path.to_str().unwrap().as_bytes(), *cf));
         }
 
-        get_engine_store_server_helper().handle_ingest_sst(
+        ctx.engine_store_server_helper.handle_ingest_sst(
             sst_views,
             RaftCmdHeader::new(
                 self.region.get_id(),

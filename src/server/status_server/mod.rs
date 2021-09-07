@@ -41,7 +41,6 @@ use tokio_openssl::SslStream;
 use collections::HashMap;
 use online_config::OnlineConfig;
 use pd_client::{RpcClient, REQUEST_RECONNECT_INTERVAL};
-use raftstore::engine_store_ffi::{get_engine_store_server_helper, HttpRequestStatus};
 use security::{self, SecurityConfig};
 use tikv_alloc::error::ProfError;
 use tikv_util::logger::set_log_level;
@@ -100,6 +99,7 @@ pub struct LogLevelRequest {
 }
 
 pub struct StatusServer<E, R> {
+    engine_store_server_helper: &'static raftstore::engine_store_ffi::EngineStoreServerHelper,
     thread_pool: Runtime,
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
@@ -156,6 +156,7 @@ where
     R: 'static + Send,
 {
     pub fn new(
+        engine_store_server_helper: &'static raftstore::engine_store_ffi::EngineStoreServerHelper,
         status_thread_pool_size: usize,
         pd_client: Option<Arc<RpcClient>>,
         cfg_controller: ConfigController,
@@ -175,6 +176,7 @@ where
             .build()?;
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         Ok(StatusServer {
+            engine_store_server_helper,
             thread_pool,
             tx,
             rx: Some(rx),
@@ -690,7 +692,10 @@ where
         ))
     }
 
-    pub async fn handle_http_request(req: Request<Body>) -> hyper::Result<Response<Body>> {
+    pub async fn handle_http_request(
+        req: Request<Body>,
+        engine_store_server_helper: &'static raftstore::engine_store_ffi::EngineStoreServerHelper,
+    ) -> hyper::Result<Response<Body>> {
         fn err_resp(
             status_code: StatusCode,
             msg: impl Into<Body>,
@@ -698,8 +703,8 @@ where
             Ok(StatusServer::err_response(status_code, msg))
         }
 
-        let res = get_engine_store_server_helper().handle_http_request(req.uri().path());
-        if res.status != HttpRequestStatus::Ok {
+        let res = engine_store_server_helper.handle_http_request(req.uri().path());
+        if res.status != raftstore::engine_store_ffi::HttpRequestStatus::Ok {
             return err_resp(
                 StatusCode::BAD_REQUEST,
                 format!("error uri path: {}", req.uri().path()),
@@ -727,6 +732,7 @@ where
         let security_config = self.security_config.clone();
         let cfg_controller = self.cfg_controller.clone();
         let router = self.router.clone();
+        let engine_store_server_helper = self.engine_store_server_helper;
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -799,10 +805,9 @@ where
                             }
 
                             (Method::GET, path)
-                                if get_engine_store_server_helper()
-                                    .check_http_uri_available(path) =>
+                                if engine_store_server_helper.check_http_uri_available(path) =>
                             {
-                                Self::handle_http_request(req).await
+                                Self::handle_http_request(req, engine_store_server_helper).await
                             }
 
                             _ => Ok(StatusServer::err_response(

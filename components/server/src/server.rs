@@ -101,14 +101,14 @@ use crate::raft_engine_switch::{check_and_dump_raft_db, check_and_dump_raft_engi
 use crate::util::ffi_server_info;
 use crate::{memory::*, setup::*};
 use raftstore::engine_store_ffi::{
-    get_engine_store_server_helper, EngineStoreServerStatus, RaftProxyStatus, RaftStoreProxy,
+    EngineStoreServerHelper, EngineStoreServerStatus, RaftProxyStatus, RaftStoreProxy,
     RaftStoreProxyFFIHelper, ReadIndexClient,
 };
 use std::sync::atomic::{AtomicBool, AtomicU8};
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
-pub unsafe fn run_tikv(config: TiKvConfig) {
+pub unsafe fn run_tikv(config: TiKvConfig, engine_store_server_helper: &EngineStoreServerHelper) {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
@@ -156,16 +156,16 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
 
             info!("set raft-store proxy helper");
 
-            get_engine_store_server_helper().handle_set_proxy(&proxy_helper);
+            engine_store_server_helper.handle_set_proxy(&proxy_helper);
 
             info!("wait for engine-store server to start");
-            while get_engine_store_server_helper().handle_get_engine_store_server_status()
+            while engine_store_server_helper.handle_get_engine_store_server_status()
                 == EngineStoreServerStatus::Idle
             {
                 thread::sleep(Duration::from_millis(200));
             }
 
-            if get_engine_store_server_helper().handle_get_engine_store_server_status()
+            if engine_store_server_helper.handle_get_engine_store_server_status()
                 != EngineStoreServerStatus::Running
             {
                 info!("engine-store server is not running, make proxy exit");
@@ -189,7 +189,7 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
             {
                 let _ = tikv.engines.take().unwrap().engines;
                 loop {
-                    if get_engine_store_server_helper().handle_check_terminated() {
+                    if engine_store_server_helper.handle_check_terminated() {
                         break;
                     }
                     thread::sleep(Duration::from_millis(200));
@@ -205,7 +205,7 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
             info!("all services in raft-store proxy are stopped");
 
             info!("wait for engine-store server to stop");
-            while get_engine_store_server_helper().handle_get_engine_store_server_status()
+            while engine_store_server_helper.handle_get_engine_store_server_status()
                 != EngineStoreServerStatus::Stopped
             {
                 thread::sleep(Duration::from_millis(200));
@@ -979,6 +979,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let status_enabled = !self.config.server.status_addr.is_empty();
         if status_enabled {
             let mut status_server = match StatusServer::new(
+                raftstore::engine_store_ffi::gen_engine_store_server_helper(
+                    self.config.raft_store.engine_store_server_helper,
+                ),
                 self.config.server.status_thread_pool_size,
                 Some(self.pd_client.clone()),
                 self.cfg_controller.take().unwrap(),

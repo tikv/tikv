@@ -391,6 +391,7 @@ impl LockCFFileReader {
 impl Snapshot {
     pub fn pre_handle_snapshot(
         &self,
+        engine_store_server_helper: &'static crate::engine_store_ffi::EngineStoreServerHelper,
         region: &kvproto::metapb::Region,
         peer_id: u64,
         index: u64,
@@ -413,7 +414,7 @@ impl Snapshot {
             ));
         }
 
-        let res = engine_store_ffi::get_engine_store_server_helper()
+        let res = engine_store_server_helper
             .pre_handle_snapshot(&region, peer_id, sst_views, index, term);
 
         PreHandledSnapshot {

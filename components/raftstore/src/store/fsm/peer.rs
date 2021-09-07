@@ -40,7 +40,6 @@ use txn_types::WriteBatchFlags;
 
 use self::memtrace::*;
 use crate::coprocessor::RegionChangeEvent;
-use crate::engine_store_ffi::get_engine_store_server_helper;
 use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::fsm::store::{PollContext, StoreMeta};
 use crate::store::fsm::{
@@ -1961,8 +1960,11 @@ where
         self.fsm.peer.pending_remove = true;
 
         {
-            // hacked by solotzg
-            get_engine_store_server_helper().handle_destroy(region_id);
+            let engine_store_server_helper =
+                crate::engine_store_ffi::gen_engine_store_server_helper(
+                    self.ctx.cfg.engine_store_server_helper,
+                );
+            engine_store_server_helper.handle_destroy(region_id);
         }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();

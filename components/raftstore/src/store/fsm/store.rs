@@ -1231,9 +1231,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         };
         mgr.init()?;
         let region_runner = RegionRunner::new(
+            &*cfg.value(),
             engines.kv.clone(),
             mgr.clone(),
-            cfg.value().snap_handle_pool_size,
             cfg.value().region_worker_tick_interval,
             cfg.value().use_delete_range,
             workers.coprocessor_host.clone(),
@@ -1376,6 +1376,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .spawn("apply".to_owned(), apply_poller_builder);
 
         let pd_runner = PdRunner::new(
+            &cfg,
             store.get_id(),
             Arc::clone(&pd_client),
             self.router.clone(),
