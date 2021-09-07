@@ -458,7 +458,10 @@ where
         fail_point!("raft_between_save");
 
         if !self.batch.raft_wb.is_empty() {
-            fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
+            let raft_before_save_on_store_1 = || {
+                fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
+            };
+            raft_before_save_on_store_1();
 
             let now = Instant::now();
             self.perf_context.start_observe();
