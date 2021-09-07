@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use engine::rocks::util::compact_files_in_range;
 use engine::rocks::DB;
 use engine_rocks::util::ingest_maybe_slowdown_writes;
-use engine_traits::{name_to_cf, CF_DEFAULT};
+use engine_traits::CF_DEFAULT;
 use futures::Future;
 use futures03::compat::{Compat, Future01CompatExt, Stream01CompatExt};
 use futures03::executor::{ThreadPool, ThreadPoolBuilder};
@@ -14,7 +14,6 @@ use futures03::future::FutureExt;
 use futures03::TryStreamExt;
 use std::collections::HashSet;
 
-use engine_traits::{KvEngine, CF_WRITE};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::errorpb;
 
@@ -28,7 +27,6 @@ use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_rocks::RocksEngine;
-use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
 use security::{check_common_name, SecurityManager};
