@@ -438,8 +438,8 @@ name = "cdc"
 version = "0.0.1"
 dependencies = [
  "bitflags",
- "criterion",
  "configuration",
+ "criterion",
  "crossbeam",
  "engine",
  "engine_rocks",

@@ -4,6 +4,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::*;
 
+use cdc::{CdcObserver, FeatureGate, MemoryQuota, Task};
 use cdc::{CdcObserver, MemoryQuota, Task};
 use configuration::Configuration;
 use futures::{Future, Stream};
@@ -22,11 +23,6 @@ use tikv_util::worker::{Runnable, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
-<<<<<<< HEAD
-use cdc::{CdcObserver, FeatureGate, MemoryQuota, Task};
-
-=======
->>>>>>> 2c3115976 (cdc: Support changing CDC configs dynamically)
 #[allow(clippy::type_complexity)]
 pub fn new_event_feed(
     client: &ChangeDataClient,
