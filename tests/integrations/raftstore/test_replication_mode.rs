@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use kvproto::raft_cmdpb::*;
 use kvproto::replication_modepb::*;
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
@@ -443,50 +442,40 @@ fn test_loading_label_after_rolling_start() {
 #[test]
 fn test_assign_commit_groups_with_migrate_region() {
     let mut cluster = new_node_cluster(0, 3);
-    // config for snapshot.
-    cluster.cfg.raft_store.future_poll_size = 2;
+    cluster.cfg.raft_store.store_batch_system.pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     cluster.run_conf_change();
 
-    // split 1 region into 2 regions.
+    // Split 1 region into 2 regions.
     let region = cluster.get_region(b"");
-    let mut admin_req = AdminRequest::default();
-    admin_req.set_cmd_type(AdminCmdType::BatchSplit);
-    let mut batch_split_req = BatchSplitRequest::default();
-    batch_split_req.mut_requests().push(SplitRequest::default());
-    batch_split_req.mut_requests()[0].set_split_key(b"s".to_vec());
-    batch_split_req.mut_requests()[0].set_new_region_id(1000);
-    batch_split_req.mut_requests()[0].set_new_peer_ids(vec![1001]);
-    batch_split_req.mut_requests()[0].set_right_derive(true);
-    admin_req.set_splits(batch_split_req);
-    let epoch = region.get_region_epoch().clone();
-    let req = new_admin_request(1, &epoch, admin_req);
-    let resp = cluster
-        .call_command_on_leader(req, Duration::from_secs(3))
-        .unwrap();
-    assert!(!resp.get_header().has_error(), "{:?}", resp);
-
     thread::sleep(Duration::from_millis(100));
+    cluster.must_split(&region, &b"k".to_vec());
+    // Put a key value pair.
+    cluster.must_put(b"k1", b"v0");
+    let r1= cluster.get_region(b"k1");
+    let r2 = cluster.get_region(b"");
 
-    // add a peer of region 1 to store 2.
+    // Add a peer of region 1 to store 2.
     let fp1 = "after_assign_commit_groups_on_apply_snapshot";
     fail::cfg(fp1, "pause").unwrap();
-    pd_client.add_peer(1, new_peer(2, 2));
-    thread::sleep(Duration::from_millis(300));
+    pd_client.add_peer(r1.get_id(), new_peer(2, 2));
+    sleep_ms(100);
 
-    // add a peer to region 1000.
+    // Add a peer of region 1000 to store 2.
     let fp2 = "after_acquire_store_meta_on_maybe_create_peer_internal";
     fail::cfg(fp2, "pause").unwrap();
-    pd_client.add_peer(1000, new_peer(2, 1002));
-    thread::sleep(Duration::from_millis(300));
+    pd_client.add_peer(r2.get_id(), new_peer(2, 1002));
+    sleep_ms(100);
 
-    // remove failpoints.
+    // Remove failpoints.
     fail::remove(fp1);
     fail::remove(fp2);
 
-    // deadlock should not happen.
-    thread::sleep(Duration::from_millis(300));
-    cluster.must_region_exist(1000, 2);
-    cluster.must_region_exist(1, 2);
+    // Deadlock should not happen.
+    sleep_ms(100);
+    cluster.must_region_exist(r2.get_id(), 2);
+    cluster.must_region_exist(r1.get_id(), 2);
+    // Must get the key value pair in node 2.
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v0");
 }
