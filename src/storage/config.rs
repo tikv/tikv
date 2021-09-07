@@ -218,7 +218,7 @@ impl Default for FlowControlConfig {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(1024),
             memtables_threshold: 5,
-            l0_files_threshold: 9,
+            l0_files_threshold: 30,
         }
     }
 }

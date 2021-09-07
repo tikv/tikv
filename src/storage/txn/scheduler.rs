@@ -30,7 +30,6 @@ use std::u64;
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use futures::compat::Future01CompatExt;
-use futures::{select, FutureExt as _};
 use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
 use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
@@ -931,46 +930,45 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                     .get(tag)
                                     .observe(rows as f64);
 
-                                if ok {
-                                    // consume the quota only when write succeeds, otherwise failed write requests may exhaust
+                                if !ok {
+                                    // Only consume the quota when write succeeds, otherwise failed write requests may exhaust
                                     // the quota and other write requests would be in long delay.
                                     if sched.inner.flow_controller.enabled() {
-                                        if sched.inner.flow_controller.is_unlimited() {
-                                            // no need to delay if unthrottled, just call consume to record write flow
-                                            let _ = sched.inner.flow_controller.consume(write_size);
-                                        } else {
-                                            // Control mutex is used to ensure there is only one request consuming the quota.
-                                            // The delay may exceed 1s, and the speed limit is changed every second.
-                                            // If the speed of next second is larger than the one of first second,
-                                            // without the mutex, the write flow can't throttled strictly.
-                                            let _guard = sched.control_mutex.lock().await;
-                                            let delay =
-                                                sched.inner.flow_controller.consume(write_size);
-                                            delay.await;
-                                        }
+                                        sched.inner.flow_controller.revert_consume(write_size);
                                     }
                                 }
                             })
                             .unwrap()
                     });
 
-                    if self.inner.flow_controller.enabled()
-                        && !self.inner.flow_controller.is_unlimited()
-                    {
-                        let mut deadline_fut = GLOBAL_TIMER_HANDLE
-                            .delay(deadline.to_std_instant())
-                            .compat()
-                            .fuse();
-                        let start = Instant::now_coarse();
-                        // Wait for the delay. But don't wait beyond the deadline.
-                        let _guard = select! {
-                            _ = deadline_fut => {
-                                scheduler.finish_with_err(cid, StorageErrorInner::DeadlineExceeded);
-                                return;
-                            },
-                            guard = self.control_mutex.lock().fuse() => guard,
-                        };
-                        SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
+                    if self.inner.flow_controller.enabled() {
+                        if self.inner.flow_controller.is_unlimited() {
+                            // no need to delay if unthrottled, just call consume to record write flow
+                            let _ = self.inner.flow_controller.consume(write_size);
+                        } else {
+                            let start = Instant::now_coarse();
+                            // Control mutex is used to ensure there is only one request consuming the quota.
+                            // The delay may exceed 1s, and the speed limit is changed every second.
+                            // If the speed of next second is larger than the one of first second,
+                            // without the mutex, the write flow can't throttled strictly.
+                            let _guard = self.control_mutex.lock().await;
+                            let delay =
+                                self.inner.flow_controller.consume(write_size);
+                            let delay_end = Instant::now_coarse() + delay;
+                            while !self.inner.flow_controller.is_unlimited() {
+                                let now = Instant::now_coarse();
+                                if now >= delay_end { 
+                                    break;
+                                }
+                                if now >= deadline.inner() {
+                                    scheduler.finish_with_err(cid, StorageErrorInner::DeadlineExceeded);
+                                    SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
+                                    return;
+                                }
+                                async_std::task::sleep(Duration::from_millis(1)).await;
+                            }
+                            SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
+                        }
                     }
 
                     to_be_write.deadline = Some(deadline);

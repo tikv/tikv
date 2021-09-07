@@ -128,6 +128,7 @@ name = "tikv"
 anyhow = "1.0"
 async-stream = "0.2"
 async-trait = "0.1"
+async-std = "1.10"
 backtrace = "0.3"
 batch-system = { path = "components/batch-system", default-features = false }
 byteorder = "1.2"

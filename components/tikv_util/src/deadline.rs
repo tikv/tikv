@@ -36,6 +36,10 @@ impl Deadline {
         Self { deadline }
     }
 
+    pub fn inner(&self) -> Instant {
+        self.deadline
+    }
+
     /// Returns error if the deadline is exceeded.
     pub fn check(&self) -> std::result::Result<(), DeadlineError> {
         fail_point!("deadline_check_fail", |_| Err(DeadlineError));
