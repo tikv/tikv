@@ -10,9 +10,9 @@ name = "gen-proxy-ffi"
 [dependencies.bindgen]
 version = ""
 default-features = false
-features = ["which-rustfmt"]
+# features = ["which-rustfmt"]
 
 [dependencies]
 walkdir = "2"
-md5 = ""
+# md5 = ""
 clap = ""

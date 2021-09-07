@@ -143,7 +143,7 @@ struct RaftStoreProxyFFIHelper {
 struct EngineStoreServerHelper {
   uint32_t magic_number;  // use a very special number to check whether this
                           // struct is legal
-  uint32_t version;       // version of function interface
+  uint64_t version;       // version of function interface
   //
 
   EngineStoreServerWrap *inner;

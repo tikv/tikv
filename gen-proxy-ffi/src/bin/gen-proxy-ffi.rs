@@ -1,10 +1,14 @@
 use bindgen::EnumVariation;
-use clap::{App, Arg};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
 use walkdir::WalkDir;
+
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+type VersionType = u64;
 
 fn read_file_to_string<P: AsRef<Path>>(path: P, expect: &str) -> String {
     let mut file = fs::File::open(path).expect("Couldn't open headers");
@@ -13,7 +17,7 @@ fn read_file_to_string<P: AsRef<Path>>(path: P, expect: &str) -> String {
     buff
 }
 
-fn scan_ffi_src_head(dir: &str) -> (Vec<String>, String) {
+fn scan_ffi_src_head(dir: &str) -> (Vec<String>, VersionType) {
     let mut headers = Vec::new();
     let mut headers_buff = HashMap::new();
     for result in WalkDir::new(Path::new(dir)) {
@@ -30,80 +34,69 @@ fn scan_ffi_src_head(dir: &str) -> (Vec<String>, String) {
         headers_buff.insert(head_file_path, buff);
     }
     headers.sort();
-    let md5_sum = {
-        let mut context = md5::Context::new();
+    let hash_version = {
+        let mut hasher = DefaultHasher::new();
         for name in &headers {
             let buff = headers_buff.get(name).unwrap();
-            context.consume(buff);
+            buff.hash(&mut hasher);
         }
-        let digest = context.compute();
-        format!("{:x}", digest)
+        hasher.finish()
     };
-    (headers, md5_sum)
+    (headers, hash_version)
 }
 
-fn read_version_file(version_cpp_file: &str) -> (String, u32) {
+fn read_version_file(version_cpp_file: &str) -> VersionType {
     let buff = read_file_to_string(version_cpp_file, "Couldn't open version file");
-    let md5_version: Vec<_> = buff.split("//").collect();
-    let (md5_sum, version) = (md5_version[1], md5_version[2]);
-    let version = version.parse::<u32>().unwrap();
-    (md5_sum.to_string(), version)
+    let data: Vec<_> = buff.split("/**/").collect();
+    let data = data[1];
+    let len = data.len();
+    let num = &data[1..(len - 3 - 1)];
+    let version = num.parse::<VersionType>().unwrap();
+    version
 }
 
-fn make_version_file(md5_sum: String, version: u32, tar_version_head_path: &str) {
+fn make_version_file(version: VersionType, tar_version_head_path: &str) {
     let buff = format!(
-        "//{}//{}//\n#pragma once\n#include <cstdint>\nnamespace DB {{ constexpr uint32_t RAFT_STORE_PROXY_VERSION = {}; }}",
-        md5_sum, version, version
+        "#pragma once\n#include <cstdint>\nnamespace DB {{ constexpr uint64_t RAFT_STORE_PROXY_VERSION = {}ull; }}",
+        version
     );
     let tmp_path = format!("{}.tmp", tar_version_head_path);
     let mut file = fs::File::create(&tmp_path).expect("Couldn't create tmp cpp version head file");
     file.write(buff.as_bytes()).unwrap();
-    fs::rename(tmp_path.as_str(), tar_version_head_path)
-        .expect("Couldn't make cpp version head file");
+    fs::rename(&tmp_path, tar_version_head_path).expect("Couldn't make cpp version head file");
 }
 
 fn gen_ffi_code() {
-    const OVERWRITE_VERSION: &str = "overwrite-version";
-    let matches = App::new("RaftStore Proxy FFI Generator")
-        .author("tongzhigao@pingcap.com")
-        .arg(
-            Arg::with_name(OVERWRITE_VERSION)
-                .long(OVERWRITE_VERSION)
-                .takes_value(true)
-                .help("overwrite version forcibly"),
-        )
-        .get_matches();
-
-    let src_dir = "raftstore-proxy/ffi/src/RaftStoreProxyFFI";
-    let tar_file = "components/raftstore/src/engine_store_ffi/interfaces.rs";
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let src_dir = format!(
+        "{}/../raftstore-proxy/ffi/src/RaftStoreProxyFFI",
+        manifest_dir
+    );
+    let tar_file = format!(
+        "{}/../components/raftstore/src/engine_store_ffi/interfaces.rs",
+        manifest_dir
+    );
     let version_cpp_file = format!("{}/@version", src_dir);
 
-    let (ori_md5_sum, ori_version) = read_version_file(version_cpp_file.as_str());
+    let ori_version = read_version_file(&version_cpp_file);
     println!("\nFFI src dir path is {}", src_dir);
     println!("Original version is {}", ori_version);
-    let new_version = match matches.value_of(OVERWRITE_VERSION) {
-        Some(overwritten_version) => {
-            println!("Overwrite version to {}", overwritten_version);
-            overwritten_version.parse::<_>().unwrap()
-        }
-        None => ori_version + 1,
-    };
 
-    let (headers, md5_sum) = scan_ffi_src_head(src_dir);
+    let (headers, hash_version) = scan_ffi_src_head(&src_dir);
 
     {
         println!("Scan and get src files");
         for f in &headers {
             println!("    {}", f);
         }
-        if md5_sum == ori_md5_sum && !matches.is_present(OVERWRITE_VERSION) {
-            println!("Check md5 sum equal & NOT overwrite version");
+        if ori_version == hash_version {
+            println!("Check hash version equal & NOT overwrite version");
         } else {
             println!(
-                "Current md5 sum is {}, start to generate rust code with version {}",
-                md5_sum, new_version
+                "Current hash version is {}, start to generate rust code with version {}",
+                ori_version, hash_version
             );
-            make_version_file(md5_sum, new_version, version_cpp_file.as_str());
+            make_version_file(hash_version, &version_cpp_file);
         }
     }
 
@@ -126,7 +119,7 @@ fn gen_ffi_code() {
     let bindings = builder.generate().unwrap();
 
     let buff = bindings.to_string();
-    let ori_buff = read_file_to_string(tar_file, "Couldn't open rust ffi code file");
+    let ori_buff = read_file_to_string(&tar_file, "Couldn't open rust ffi code file");
     if ori_buff == buff {
         println!("There is no need to overwrite rust ffi code file");
     } else {

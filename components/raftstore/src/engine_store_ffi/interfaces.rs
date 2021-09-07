@@ -730,7 +730,7 @@ pub mod root {
         #[derive(Debug)]
         pub struct EngineStoreServerHelper {
             pub magic_number: u32,
-            pub version: u32,
+            pub version: u64,
             pub inner: *mut root::DB::EngineStoreServerWrap,
             pub fn_gen_cpp_string: ::std::option::Option<
                 unsafe extern "C" fn(arg1: root::DB::BaseBuffView) -> root::DB::RawCppPtr,
@@ -818,7 +818,7 @@ pub mod root {
                 unsafe extern "C" fn(arg1: root::DB::BaseBuffView, arg2: root::DB::RawVoidPtr),
             >,
         }
-        pub const RAFT_STORE_PROXY_VERSION: u32 = 501002;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 11799158326068500997;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }
