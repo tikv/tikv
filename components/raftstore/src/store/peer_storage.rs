@@ -14,11 +14,10 @@ use engine_traits::{Engines, KvEngine, Mutable, Peekable};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
-    MergeState, PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftSnapshotData,
-    RegionLocalState,
+    MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
 };
 use protobuf::Message;
-use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
+use raft::eraftpb::{self, ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
 use crate::store::async_io::write::WriteTask;
@@ -419,14 +418,12 @@ impl From<Error> for RaftError {
 pub enum HandleReadyResult {
     SendIOTask,
     Snapshot {
-        msgs: Vec<RaftMessage>,
+        msgs: Vec<eraftpb::Message>,
         snap_region: metapb::Region,
         /// The regions whose range are overlapped with this region
         destroy_regions: Vec<Region>,
     },
-    NoIOTask {
-        msgs: Vec<RaftMessage>,
-    },
+    NoIOTask,
 }
 
 pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
@@ -1460,7 +1457,6 @@ where
         &mut self,
         ready: &mut Ready,
         destroy_regions: Vec<metapb::Region>,
-        mut msgs: Vec<RaftMessage>,
         request_times: Vec<Instant>,
     ) -> Result<(HandleReadyResult, WriteTask<EK, ER>)> {
         let region_id = self.get_region_id();
@@ -1475,7 +1471,7 @@ where
                 self.apply_snapshot(ready.snapshot(), &mut write_task, &destroy_regions)?;
 
             res = HandleReadyResult::Snapshot {
-                msgs: std::mem::take(&mut msgs),
+                msgs: ready.take_persisted_messages(),
                 snap_region,
                 destroy_regions,
             };
@@ -1512,10 +1508,8 @@ where
             self.save_apply_state_to(write_task.kv_wb.as_mut().unwrap())?;
         }
 
-        if write_task.has_data() {
-            write_task.messages = msgs;
-        } else {
-            res = HandleReadyResult::NoIOTask { msgs };
+        if !write_task.has_data() {
+            res = HandleReadyResult::NoIOTask;
         }
 
         Ok((res, write_task))

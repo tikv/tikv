@@ -417,7 +417,7 @@ pub struct SnapshotContext {
     /// Whether this snapshot is scheduled.
     pub scheduled: bool,
     /// The message should be sent after snapshot is applied.
-    pub msgs: Vec<RaftMessage>,
+    pub msgs: Vec<eraftpb::Message>,
     pub persist_res: Option<PersistSnapshotResult>,
 }
 
@@ -435,7 +435,7 @@ pub struct UnpersistedReady {
     pub number: u64,
     /// Max number of following ready whose data to be persisted is empty.
     pub max_empty_number: u64,
-    pub raft_msgs: Vec<Vec<RaftMessage>>,
+    pub raft_msgs: Vec<Vec<eraftpb::Message>>,
 }
 
 pub struct Peer<EK, ER>
@@ -1783,7 +1783,7 @@ where
             CheckApplyingSnapStatus::Success => {
                 fail_point!("raft_before_applying_snap_finished");
 
-                if let Some(mut snap_ctx) = self.snap_ctx.take() {
+                if let Some(snap_ctx) = self.snap_ctx.take() {
                     // This snapshot must be scheduled
                     if !snap_ctx.scheduled {
                         panic!(
@@ -1792,9 +1792,9 @@ where
                         );
                     }
 
-                    let raft_msgs = mem::take(&mut snap_ctx.msgs);
                     fail_point!("raft_before_follower_send");
-                    self.send_raft_messages(ctx, raft_msgs);
+                    let msgs = self.build_raft_messages(ctx, snap_ctx.msgs);
+                    self.send_raft_messages(ctx, msgs);
 
                     // Snapshot has been persisted.
                     self.last_applying_idx = self.get_store().truncated_index();
@@ -1835,7 +1835,7 @@ where
     pub fn handle_raft_ready_append<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
-    ) -> Option<CollectedReady> {
+    ) -> Option<CollectedReady<EK, ER>> {
         if self.pending_remove {
             return None;
         }
@@ -1981,13 +1981,6 @@ where
             self.send_raft_messages(ctx, raft_msgs);
         }
 
-        let persisted_msgs = if !ready.persisted_messages().is_empty() {
-            assert!(!self.is_leader());
-            self.build_raft_messages(ctx, ready.take_persisted_messages())
-        } else {
-            Vec::new()
-        };
-
         self.apply_reads(ctx, &ready);
 
         if !ready.committed_entries().is_empty() {
@@ -2005,108 +1998,84 @@ where
         }
 
         let has_new_entries = !ready.entries().is_empty();
-        let (ready_res, task) = match self.mut_store().handle_raft_ready(
-            &mut ready,
-            destroy_regions,
-            persisted_msgs,
-            request_times,
-        ) {
-            Ok(r) => r,
-            Err(e) => {
-                // We may have written something to writebatch and it can't be reverted, so has
-                // to panic here.
-                panic!("{} failed to handle raft ready: {:?}", self.tag, e)
-            }
-        };
-
-        match &ready_res {
-            HandleReadyResult::SendIOTask | HandleReadyResult::Snapshot { .. } => {
-                if let Some(write_worker) = ctx.write_worker.as_mut() {
-                    write_worker.batch.add_write_task(task);
-                } else {
-                    self.write_router.send_write_msg(
-                        ctx,
-                        self.unpersisted_readies.back().map(|r| r.number),
-                        WriteMsg::WriteTask(task),
-                    );
+        let (ready_res, task) =
+            match self
+                .mut_store()
+                .handle_raft_ready(&mut ready, destroy_regions, request_times)
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    // We may have written something to writebatch and it can't be reverted, so has
+                    // to panic here.
+                    panic!("{} failed to handle raft ready: {:?}", self.tag, e)
                 }
-            }
-            _ => (),
-        }
+            };
 
-        Some(CollectedReady::new(ready_res, ready, has_new_entries))
+        Some(CollectedReady::new(ready, has_new_entries, ready_res, task))
     }
 
     pub fn post_raft_ready_append<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
-        res: HandleReadyResult,
-        ready: Ready,
+        mut collected: CollectedReady<EK, ER>,
     ) {
-        match res {
-            HandleReadyResult::SendIOTask => {
-                self.unpersisted_readies.push_back(UnpersistedReady {
-                    number: ready.number(),
-                    max_empty_number: ready.number(),
-                    raft_msgs: vec![],
-                });
-                self.raft_group.advance_append_async(ready);
-            }
-            HandleReadyResult::Snapshot {
-                msgs,
-                snap_region,
-                destroy_regions,
-            } => {
-                // When applying snapshot, there is no log applied and not compacted yet.
-                self.raft_log_size_hint = 0;
+        let ready_number = collected.ready.number();
+        let persisted_msgs = collected.ready.take_persisted_messages();
+
+        match &collected.res {
+            HandleReadyResult::SendIOTask | HandleReadyResult::Snapshot { .. } => {
+                if !persisted_msgs.is_empty() {
+                    collected.write_task.messages = self.build_raft_messages(ctx, persisted_msgs);
+                }
+
+                if let Some(write_worker) = ctx.write_worker.as_mut() {
+                    write_worker.batch.add_write_task(collected.write_task);
+                } else {
+                    self.write_router.send_write_msg(
+                        ctx,
+                        self.unpersisted_readies.back().map(|r| r.number),
+                        WriteMsg::WriteTask(collected.write_task),
+                    );
+                }
 
                 self.unpersisted_readies.push_back(UnpersistedReady {
-                    number: ready.number(),
-                    max_empty_number: ready.number(),
+                    number: ready_number,
+                    max_empty_number: ready_number,
                     raft_msgs: vec![],
                 });
-                self.snap_ctx = Some(SnapshotContext {
-                    ready_number: ready.number(),
-                    scheduled: false,
-                    msgs,
-                    persist_res: Some(PersistSnapshotResult {
-                        prev_region: self.region().clone(),
-                        region: snap_region,
-                        destroy_regions,
-                    }),
-                });
-                // Snapshot will be scheduled after persisting this ready
-                self.raft_group.advance_append_async(ready);
 
-                // Pause `read_progress` to prevent serving stale read while applying snapshot
-                self.read_progress.pause();
+                self.raft_group.advance_append_async(collected.ready);
             }
-            HandleReadyResult::NoIOTask { msgs } => {
+            HandleReadyResult::NoIOTask => {
                 if let Some(last) = self.unpersisted_readies.back_mut() {
                     // Attach to the last unpersisted ready so that it can be considered to be
                     // persisted with the last ready at the same time.
-                    if ready.number() <= last.max_empty_number {
+                    if ready_number <= last.max_empty_number {
                         panic!(
                             "{} ready number is not monotonically increaing, {} <= {}",
-                            self.tag,
-                            ready.number(),
-                            last.max_empty_number
+                            self.tag, ready_number, last.max_empty_number
                         );
                     }
-                    last.max_empty_number = ready.number();
-                    if !msgs.is_empty() {
-                        self.unpersisted_message_count += msgs.capacity();
-                        last.raft_msgs.push(msgs);
+                    last.max_empty_number = ready_number;
+
+                    if !persisted_msgs.is_empty() {
+                        self.unpersisted_message_count += persisted_msgs.capacity();
+                        last.raft_msgs.push(persisted_msgs);
                     }
                 } else {
                     // If this ready don't need to be persisted and there is no previous unpersisted ready,
                     // we can safely consider it is persisted so the persisted msgs can be sent immediately.
-                    self.persisted_number = ready.number();
-                    fail_point!("raft_before_follower_send");
-                    self.send_raft_messages(ctx, msgs);
+                    self.persisted_number = ready_number;
+
+                    if !persisted_msgs.is_empty() {
+                        fail_point!("raft_before_follower_send");
+                        let msgs = self.build_raft_messages(ctx, persisted_msgs);
+                        self.send_raft_messages(ctx, msgs);
+                    }
+
                     // The commit index and messages of light ready should be empty because no data needs
                     // to be persisted.
-                    let mut light_rd = self.raft_group.advance_append(ready);
+                    let mut light_rd = self.raft_group.advance_append(collected.ready);
                     if let Some(idx) = light_rd.commit_index() {
                         panic!(
                             "{} advance ready that has no io task but commit index is changed to {}",
@@ -2127,6 +2096,29 @@ where
                     }
                 }
             }
+        }
+
+        if let HandleReadyResult::Snapshot {
+            msgs,
+            snap_region,
+            destroy_regions,
+        } = collected.res
+        {
+            // When applying snapshot, there is no log applied and not compacted yet.
+            self.raft_log_size_hint = 0;
+
+            self.snap_ctx = Some(SnapshotContext {
+                ready_number,
+                scheduled: false,
+                msgs,
+                persist_res: Some(PersistSnapshotResult {
+                    prev_region: self.region().clone(),
+                    region: snap_region,
+                    destroy_regions,
+                }),
+            });
+            // Pause `read_progress` to prevent serving stale read while applying snapshot
+            self.read_progress.pause();
         }
     }
 
@@ -2300,7 +2292,8 @@ where
             self.unpersisted_message_count -= v.raft_msgs.capacity();
             for msgs in v.raft_msgs {
                 fail_point!("raft_before_follower_send");
-                self.send_raft_messages(ctx, msgs);
+                let m = self.build_raft_messages(ctx, msgs);
+                self.send_raft_messages(ctx, m);
             }
             if number == v.number {
                 persisted_number = v.max_empty_number;
@@ -4381,7 +4374,7 @@ mod memtrace {
             // Ignore more heap content in `raft::eraftpb::Message`.
             + (self.unpersisted_message_count
                 + self.snap_ctx.as_ref().map_or(0, |ctx| ctx.msgs.len()))
-                * mem::size_of::<RaftMessage>()
+                * mem::size_of::<eraftpb::Message>()
             + mem::size_of_val(self.pending_request_snapshot_count.as_ref())
         }
     }

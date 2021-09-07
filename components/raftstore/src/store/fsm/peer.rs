@@ -45,6 +45,7 @@ use txn_types::WriteBatchFlags;
 
 use self::memtrace::*;
 use crate::coprocessor::RegionChangeEvent;
+use crate::store::async_io::write::WriteTask;
 use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::fsm::store::{PollContext, StoreMeta};
 use crate::store::fsm::{
@@ -82,18 +83,33 @@ pub struct DestroyPeerJob {
     pub peer: metapb::Peer,
 }
 
-pub struct CollectedReady {
-    pub res: HandleReadyResult,
+pub struct CollectedReady<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     pub ready: Ready,
     pub has_new_entries: bool,
+    pub res: HandleReadyResult,
+    pub write_task: WriteTask<EK, ER>,
 }
 
-impl CollectedReady {
-    pub fn new(res: HandleReadyResult, ready: Ready, has_new_entries: bool) -> CollectedReady {
-        CollectedReady {
-            res,
+impl<EK, ER> CollectedReady<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    pub fn new(
+        ready: Ready,
+        has_new_entries: bool,
+        res: HandleReadyResult,
+        write_task: WriteTask<EK, ER>,
+    ) -> Self {
+        Self {
             ready,
             has_new_entries,
+            res,
+            write_task,
         }
     }
 }
@@ -1076,9 +1092,7 @@ where
             self.ctx.ready_count += 1;
             self.ctx.raft_metrics.ready.has_ready_region += 1;
 
-            self.fsm
-                .peer
-                .post_raft_ready_append(self.ctx, r.res, r.ready);
+            self.fsm.peer.post_raft_ready_append(self.ctx, r);
 
             if self.fsm.peer.leader_unreachable {
                 self.fsm.reset_hibernate_state(GroupState::Chaos);
