@@ -449,9 +449,9 @@ fn test_assign_commit_groups_with_migrate_region() {
 
     // Split 1 region into 2 regions.
     let region = cluster.get_region(b"");
-    thread::sleep(Duration::from_millis(100));
     cluster.must_split(&region, &b"k".to_vec());
     // Put a key value pair.
+    cluster.must_put(b"a1", b"v0");
     cluster.must_put(b"k1", b"v0");
     let r1 = cluster.get_region(b"k1");
     let r2 = cluster.get_region(b"");
@@ -478,4 +478,5 @@ fn test_assign_commit_groups_with_migrate_region() {
     cluster.must_region_exist(r1.get_id(), 2);
     // Must get the key value pair in node 2.
     must_get_equal(&cluster.get_engine(2), b"k1", b"v0");
+    must_get_equal(&cluster.get_engine(2), b"a1", b"v0");
 }
