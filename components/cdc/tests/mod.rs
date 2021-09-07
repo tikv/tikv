@@ -5,7 +5,6 @@ use std::rc::Rc;
 use std::sync::*;
 
 use cdc::{CdcObserver, FeatureGate, MemoryQuota, Task};
-use cdc::{CdcObserver, MemoryQuota, Task};
 use configuration::Configuration;
 use futures::{Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
