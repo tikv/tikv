@@ -113,6 +113,8 @@ impl<S: Snapshot> ProposalQueue<S> {
         }
     }
 
+    /// Find the request times of given index.
+    /// Caller should check if term is matched before using request times.
     fn find_request_times(&self, index: u64) -> Option<(u64, &SmallVec<[TiInstant; 4]>)> {
         self.queue
             .binary_search_by_key(&index, |p: &Proposal<_>| p.index)
@@ -1142,7 +1144,7 @@ where
     }
 
     #[inline]
-    pub fn send_raft_msg<T: Transport>(
+    pub fn send_raft_messages<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         msgs: Vec<RaftMessage>,
@@ -1189,14 +1191,14 @@ where
     }
 
     #[inline]
-    pub fn switch_to_raft_msg<T>(
+    pub fn build_raft_messages<T>(
         &mut self,
         ctx: &PollContext<EK, ER, T>,
         msgs: Vec<eraftpb::Message>,
     ) -> Vec<RaftMessage> {
         let mut raft_msgs = Vec::with_capacity(msgs.len());
         for msg in msgs {
-            if let Some(m) = self.fill_raft_message(msg, ctx.self_disk_usage) {
+            if let Some(m) = self.build_raft_message(msg, ctx.self_disk_usage) {
                 raft_msgs.push(m);
             }
         }
@@ -1283,7 +1285,7 @@ where
     }
 
     fn report_persist_log_duration(&self, pre_persist_index: u64, metrics: &RaftMetrics) {
-        if !metrics.waterfall_metrics {
+        if !metrics.waterfall_metrics || self.proposals.is_empty() {
             return;
         }
         let mut now = None;
@@ -1309,7 +1311,7 @@ where
     }
 
     fn report_commit_log_duration(&self, pre_commit_index: u64, metrics: &RaftMetrics) {
-        if !metrics.waterfall_metrics {
+        if !metrics.waterfall_metrics || self.proposals.is_empty() {
             return;
         }
         let mut now = None;
@@ -1752,8 +1754,8 @@ where
         if let Some(snap_ctx) = self.snap_ctx.as_ref() {
             if !snap_ctx.scheduled {
                 // There is a snapshot from ready but it is not scheduled because the ready has
-                // not been persisted yet. We should wait for the notify of persisting ready and
-                // do not get a new ready.
+                // not been persisted yet. We should wait for the notification of persisting ready
+                // and do not get a new ready.
                 return false;
             }
         }
@@ -1792,7 +1794,7 @@ where
 
                     let raft_msgs = mem::take(&mut snap_ctx.msgs);
                     fail_point!("raft_before_follower_send");
-                    self.send_raft_msg(ctx, raft_msgs);
+                    self.send_raft_messages(ctx, raft_msgs);
 
                     // Snapshot has been persisted.
                     self.last_applying_idx = self.get_store().truncated_index();
@@ -1859,7 +1861,7 @@ where
 
             if !self.unpersisted_readies.is_empty() {
                 debug!(
-                    "not ready to apply snapshot because some unpersisted readies have not persisted yet";
+                    "not ready to apply snapshot because there are some unpersisted readies";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "unpersisted_readies" => ?self.unpersisted_readies,
@@ -1936,7 +1938,7 @@ where
             for entry in ready.entries() {
                 if let Some((term, times)) = self.proposals.find_request_times(entry.get_index()) {
                     if entry.term == term {
-                        request_times.append(&mut times.clone().into_vec());
+                        request_times.extend_from_slice(&times);
                         if now.is_none() {
                             now = Some(TiInstant::now());
                         }
@@ -1975,13 +1977,13 @@ where
 
         if !ready.messages().is_empty() {
             assert!(self.is_leader());
-            let raft_msgs = self.switch_to_raft_msg(ctx, ready.take_messages());
-            self.send_raft_msg(ctx, raft_msgs);
+            let raft_msgs = self.build_raft_messages(ctx, ready.take_messages());
+            self.send_raft_messages(ctx, raft_msgs);
         }
 
         let persisted_msgs = if !ready.persisted_messages().is_empty() {
             assert!(!self.is_leader());
-            self.switch_to_raft_msg(ctx, ready.take_persisted_messages())
+            self.build_raft_messages(ctx, ready.take_persisted_messages())
         } else {
             Vec::new()
         };
@@ -2098,7 +2100,7 @@ where
                     // we can safely consider it is persisted so the persisted msgs can be sent immediately.
                     self.persisted_number = ready.number();
                     fail_point!("raft_before_follower_send");
-                    self.send_raft_msg(ctx, msgs);
+                    self.send_raft_messages(ctx, msgs);
                     // The commit index and messages of light ready should be empty because no data needs
                     // to be persisted. Only the committed entries may not be empty when the size is too
                     // large to be fetched in the previous ready.
@@ -2297,7 +2299,7 @@ where
             self.unpersisted_message_count -= v.raft_msgs.capacity();
             for msgs in v.raft_msgs {
                 fail_point!("raft_before_follower_send");
-                self.send_raft_msg(ctx, msgs);
+                self.send_raft_messages(ctx, msgs);
             }
             if number == v.number {
                 persisted_number = v.max_empty_number;
@@ -3995,7 +3997,7 @@ where
         }
     }
 
-    fn fill_raft_message(
+    fn build_raft_message(
         &mut self,
         msg: eraftpb::Message,
         disk_usage: DiskUsage,

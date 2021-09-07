@@ -641,7 +641,7 @@ where
 
     fn propose_batch_raft_command(&mut self, force: bool) {
         if !force
-            && self.ctx.cfg.cmd_batch_concurrent_ready_max_count != 0 
+            && self.ctx.cfg.cmd_batch_concurrent_ready_max_count != 0
             && self.fsm.peer.unpersisted_ready_len()
                 >= self.ctx.cfg.cmd_batch_concurrent_ready_max_count
         {
@@ -753,8 +753,8 @@ where
                 msg.to = peer_id;
                 msg.from = self.fsm.peer.peer_id();
 
-                let raft_msg = self.fsm.peer.switch_to_raft_msg(self.ctx, vec![msg]);
-                self.fsm.peer.send_raft_msg(&mut self.ctx, raft_msg);
+                let raft_msg = self.fsm.peer.build_raft_messages(self.ctx, vec![msg]);
+                self.fsm.peer.send_raft_messages(&mut self.ctx, raft_msg);
             }
         }
     }

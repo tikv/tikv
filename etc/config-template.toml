@@ -415,7 +415,7 @@
 ## in store threads.
 # store-io-pool-size = 0
 
-## When the count of concurrent ready exceeds this value, cmd will not be proposed and continue
+## When the number of concurrent ready exceeds this value, cmd will not be proposed and continue
 ## to batch until the previous ready has been persisted.
 ## If it is 0, it means no limit.
 # cmd-batch-concurrent-ready-max-count = 1
