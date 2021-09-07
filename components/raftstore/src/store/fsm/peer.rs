@@ -348,10 +348,7 @@ where
     fn new(cfg: &Config) -> BatchRaftCmdRequestBuilder<E> {
         BatchRaftCmdRequestBuilder {
             can_batch_limit: (cfg.raft_entry_max_size.0 as f64 * 0.2) as u64,
-            should_propose_size: cmp::min(
-                (cfg.raft_entry_max_size.0 as f64 * 0.4) as u64,
-                cfg.raft_ready_size_limit.0,
-            ),
+            should_propose_size: (cfg.raft_entry_max_size.0 as f64 * 0.4) as u64,
             batch_req_size: 0,
             request: None,
             callbacks: vec![],
@@ -572,11 +569,6 @@ where
                             "peer_id" => self.fsm.peer_id(),
                         );
                     }
-                    if self.fsm.peer.raft_group.raft.raft_log.unstable.entries_size
-                        >= self.ctx.cfg.raft_ready_size_limit.0 as usize
-                    {
-                        self.collect_ready();
-                    }
                 }
                 PeerMsg::RaftCommand(cmd) => {
                     self.ctx
@@ -610,11 +602,6 @@ where
                             cmd.callback,
                             cmd.extra_opts.disk_full_opt,
                         )
-                    }
-                    if self.fsm.peer.raft_group.raft.raft_log.unstable.entries_size
-                        >= self.ctx.cfg.raft_ready_size_limit.0 as usize
-                    {
-                        self.collect_ready();
                     }
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
@@ -653,7 +640,11 @@ where
     }
 
     fn propose_batch_raft_command(&mut self, force: bool) {
-        if !force && self.fsm.peer.unpersisted_ready_len() >= self.ctx.cfg.concurrent_ready_max_count {
+        if !force
+            && self.ctx.cfg.cmd_batch_concurrent_ready_max_count != 0 
+            && self.fsm.peer.unpersisted_ready_len()
+                >= self.ctx.cfg.cmd_batch_concurrent_ready_max_count
+        {
             return;
         }
         if let Some((request, callback)) =
