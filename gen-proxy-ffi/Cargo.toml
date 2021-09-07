@@ -4,8 +4,13 @@ version = "0.1.0"
 authors = ["Tong Zhigao <tongzhigao@pingcap.com>"]
 edition = "2018"
 
+[lib]
+name = "gen_proxy_ffi_lib"
+path = "src/lib.rs"
+
 [[bin]]
-name = "gen-proxy-ffi"
+name = "gen_proxy_ffi"
+path = "bin.rs"
 
 [dependencies.bindgen]
 version = ""

@@ -164,8 +164,6 @@ debug:
 release:
 	./release.sh
 
-gen_proxy_ffi:
-	./gen-proxy-ffi.sh
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
@@ -271,6 +269,9 @@ unset-override:
 
 pre-format: unset-override
 	@rustup component add rustfmt
+
+gen_proxy_ffi: pre-format
+	./gen-proxy-ffi.sh
 
 format: pre-format
 	@cargo fmt -- --check >/dev/null || \

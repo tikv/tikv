@@ -134,7 +134,7 @@ engine" is forbidden in dynamic config and should be specified when compiling.
 
 - install `grpc`, `protobuf`, `c++`
 - include this project as submodule
-- modify [FFI Source Code](raftstore-proxy/ffi/src/RaftStoreProxyFFI) and run `make gen_proxy_ffi` if needed
+- modify [FFI Source Code](raftstore-proxy/ffi/src/RaftStoreProxyFFI), it will be generated automaticly by make. However `make gen_proxy_ffi` will enforce generating.
 - implement related interfaces(
   mainly [struct EngineStoreServerHelper](raftstore-proxy/ffi/src/RaftStoreProxyFFI/ProxyFFI.h)) by `c++`
 - run `export ENGINE_LABEL_VALUE=xxx` # labels "engine":"xxx" will be added to store info automatically

@@ -234,7 +234,6 @@ panic_hook = { path = "components/panic_hook" }
 tokio = { version = "1.5", features = ["macros", "rt-multi-thread", "time"] }
 zipf = "6.1.0"
 
-
 [patch.crates-io]
 prometheus = { git = "https://github.com/solotzg/rust-prometheus.git", rev = "3bc64acb5f7a23685f9c8f54d4067eb4273260c7" }
 
@@ -295,7 +294,7 @@ members = [
   "components/resource_metering",
 
   "raftstore-proxy",
-  "gen-proxy-ffi"
+  "gen-proxy-ffi",
 ]
 default-members = ["raftstore-proxy"]
 
