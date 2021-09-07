@@ -33,7 +33,6 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
 use security::{check_common_name, SecurityManager};
 
-use raftstore::router::RaftStoreRouter;
 use sst_importer::send_rpc_response;
 use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_std_future_callback;
@@ -214,7 +213,7 @@ where
             // Records how long the download task waits to be scheduled.
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
-                .observe(start.elapsed().as_secs_f64());
+                .observe(start.saturating_elapsed().as_secs_f64());
 
             // FIXME: download() should be an async fn, to allow BR to cancel
             // a download task.
@@ -226,7 +225,7 @@ where
                 req.get_name(),
                 req.get_rewrite_rule(),
                 limiter,
-                engine,
+                RocksEngine::from_db(engine),
             );
             let mut resp = DownloadResponse::default();
             match res {
