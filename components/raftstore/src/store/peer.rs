@@ -2057,6 +2057,9 @@ where
                 snap_region,
                 destroy_regions,
             } => {
+                // When applying snapshot, there is no log applied and not compacted yet.
+                self.raft_log_size_hint = 0;
+
                 self.unpersisted_readies.push_back(UnpersistedReady {
                     number: ready.number(),
                     max_empty_number: ready.number(),
@@ -2102,8 +2105,7 @@ where
                     fail_point!("raft_before_follower_send");
                     self.send_raft_messages(ctx, msgs);
                     // The commit index and messages of light ready should be empty because no data needs
-                    // to be persisted. Only the committed entries may not be empty when the size is too
-                    // large to be fetched in the previous ready.
+                    // to be persisted.
                     let mut light_rd = self.raft_group.advance_append(ready);
                     if let Some(idx) = light_rd.commit_index() {
                         panic!(
@@ -2118,6 +2120,8 @@ where
                             light_rd.messages()
                         );
                     }
+                    // The committed entries may not be empty when the size is too large to
+                    // be fetched in the previous ready.
                     if !light_rd.committed_entries().is_empty() {
                         self.handle_raft_committed_entries(ctx, light_rd.take_committed_entries());
                     }
@@ -2144,12 +2148,7 @@ where
         snap_ctx.scheduled = true;
         self.mut_store().persist_snapshot(&persist_res);
 
-        // When applying snapshot, there is no log applied and not compacted yet.
-        self.raft_log_size_hint = 0;
-
-        self.activate(ctx);
-
-        // The peer may change from learner to voter after snapshot applied.
+        // The peer may change from learner to voter after snapshot persisted.
         let peer = self
             .region()
             .get_peers()
@@ -2167,6 +2166,8 @@ where
             );
             self.peer = peer;
         };
+
+        self.activate(ctx);
 
         persist_res
     }
