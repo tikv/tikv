@@ -19,28 +19,30 @@ enum CoprocessorError {
 /// A pool to build and run Coprocessor request handlers.
 #[derive(Clone)]
 pub struct Endpoint {
-    plugin_registry: Arc<PluginRegistry>,
+    plugin_registry: Option<Arc<PluginRegistry>>,
 }
 
 impl tikv_util::AssertSend for Endpoint {}
 
 impl Endpoint {
     pub fn new(copr_cfg: &Config) -> Self {
-        let mut plugin_registry = PluginRegistry::new();
+        let plugin_registry =
+            copr_cfg
+                .coprocessor_plugin_directory
+                .as_ref()
+                .map(|plugin_directory| {
+                    let mut plugin_registry = PluginRegistry::new();
 
-        // Enable hot-reloading of plugins if the user configured a directory.
-        if let Some(plugin_directory) = &copr_cfg.coprocessor_plugin_directory {
-            let r = plugin_registry.start_hot_reloading(plugin_directory);
-            if let Err(err) = r {
-                warn!("unable to start hot-reloading for coprocessor plugins.";
+                    if let Err(err) = plugin_registry.start_hot_reloading(plugin_directory) {
+                        warn!("unable to start hot-reloading for coprocessor plugins.";
                     "coprocessor_directory" => plugin_directory.display(),
                     "error" => ?err);
-            }
-        }
+                    }
 
-        Self {
-            plugin_registry: Arc::new(plugin_registry),
-        }
+                    Arc::new(plugin_registry)
+                });
+
+        Self { plugin_registry }
     }
 
     /// Handles a request to the coprocessor framework.
@@ -72,15 +74,17 @@ impl Endpoint {
         storage: &Storage<E, L>,
         mut req: kvrpcpb::RawCoprocessorRequest,
     ) -> Result<RawResponse, CoprocessorError> {
-        let plugin = self
+        let plugin_registry = self
             .plugin_registry
-            .get_plugin(&req.copr_name)
-            .ok_or_else(|| {
-                CoprocessorError::Other(format!(
-                    "No registered coprocessor with name '{}'",
-                    req.copr_name
-                ))
-            })?;
+            .as_ref()
+            .ok_or_else(|| CoprocessorError::Other("Coprocessor plugin is disabled!".to_owned()))?;
+
+        let plugin = plugin_registry.get_plugin(&req.copr_name).ok_or_else(|| {
+            CoprocessorError::Other(format!(
+                "No registered coprocessor with name '{}'",
+                req.copr_name
+            ))
+        })?;
 
         // Check whether the found plugin satisfies the version constraint.
         let version_req = VersionReq::parse(&req.copr_version_req)
