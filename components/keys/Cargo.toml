@@ -19,7 +19,7 @@ prost-codec = [
 byteorder = "1.2"
 derive_more = "0.99.3"
 failure = "0.1"
-kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-5.0", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-5.0-20210906", default-features = false }
 log_wrappers = { path = "../log_wrappers" }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }

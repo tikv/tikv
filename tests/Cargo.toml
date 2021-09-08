@@ -122,7 +122,7 @@ futures = "0.3"
 grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
 grpcio-health = { version = "0.8", default-features = false }
 log_wrappers = { path = "../components/log_wrappers" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-5.0", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-5.0-20210906", default-features = false }
 paste = "1.0"
 pd_client = { path = "../components/pd_client", default-features = false }
 protobuf = "2.8"

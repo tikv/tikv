@@ -19,7 +19,7 @@ derive_more = "0.99.3"
 error_code = { path = "../error_code", default-features = false }
 failure = "0.1"
 futures-io = "0.3"
-kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-5.0", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-5.0-20210906", default-features = false }
 openssl = "0.10"
 protobuf = "2.8"
 rusoto_core = "0.45.0"
