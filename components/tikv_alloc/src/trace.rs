@@ -254,11 +254,6 @@ pub struct MemoryTraceGuard<T: Default> {
 }
 
 impl<T: Default> MemoryTraceGuard<T> {
-    pub fn new(item: T, size: usize, node: Arc<dyn MemoryTrace + Send + Sync>) -> Self {
-        let node = Some(node);
-        MemoryTraceGuard { item, size, node }
-    }
-
     pub fn map<F, U: Default>(mut self, f: F) -> MemoryTraceGuard<U>
     where
         F: FnOnce(T) -> U,
