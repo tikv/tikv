@@ -44,17 +44,13 @@ lazy_static! {
         "Total number of tikv pending delete range of stale peer"
     )
     .unwrap();
-<<<<<<< HEAD
-    pub static ref LOCAL_READ_REJECT: IntCounterVec = register_int_counter_vec!(
-=======
     pub static ref CLEAN_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_raftstore_clean_region_count",
         "Total number of region-worker clean range operations",
         &["type"]
     )
     .unwrap();
-    pub static ref LOCAL_READ_REJECT_VEC: IntCounterVec = register_int_counter_vec!(
->>>>>>> a9854fec7... raftstore: Fix delete by ingest cause too many L0 files (#9200)
+    pub static ref LOCAL_READ_REJECT: IntCounterVec = register_int_counter_vec!(
         "tikv_raftstore_local_read_reject_total",
         "Total number of rejections from the local reader.",
         &["reason"]

@@ -38,7 +38,10 @@ use super::metrics::*;
 const GENERATE_POOL_SIZE: usize = 2;
 
 // used to periodically check whether we should delete a stale peer's range in region runner
+#[cfg(not(test))]
 pub const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // 10000 milliseconds
+#[cfg(test)]
+pub const STALE_PEER_CHECK_INTERVAL: u64 = 1_000; // 10000 milliseconds
 
 // used to periodically check whether schedule pending applies in region runner
 #[cfg(not(test))]
@@ -680,15 +683,7 @@ where
                 // there might be a coprocessor request related to this range
                 self.ctx
                     .insert_pending_delete_range(region_id, &start_key, &end_key);
-<<<<<<< HEAD
-
-                // try to delete stale ranges if there are any
-                if !self.ctx.ingest_maybe_stall() {
-                    self.ctx.clean_timeout_ranges();
-                }
-=======
-                self.ctx.clean_stale_ranges();
->>>>>>> a9854fec7... raftstore: Fix delete by ingest cause too many L0 files (#9200)
+                self.ctx.clean_timeout_ranges();
             }
         }
     }
@@ -741,20 +736,10 @@ mod tests {
     use crate::store::snap::tests::get_test_db_for_regions;
     use crate::store::worker::RegionRunner;
     use crate::store::{CasualMessage, SnapKey, SnapManager};
-<<<<<<< HEAD
     use engine::rocks;
     use engine::rocks::{ColumnFamilyOptions, Writable};
     use engine_rocks::{Compat, RocksSnapshot};
     use engine_traits::{Mutable, Peekable, WriteBatchExt};
-=======
-    use engine_test::ctor::CFOptions;
-    use engine_test::ctor::ColumnFamilyOptions;
-    use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::KvEngine;
-    use engine_traits::{
-        CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt,
-    };
->>>>>>> a9854fec7... raftstore: Fix delete by ingest cause too many L0 files (#9200)
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use raft::eraftpb::Entry;
@@ -762,14 +747,11 @@ mod tests {
     use tikv_util::timer::Timer;
     use tikv_util::worker::Worker;
 
-<<<<<<< HEAD
     use super::Event;
     use super::PendingDeleteRanges;
     use super::Task;
-=======
     use super::*;
     use keys::data_key;
->>>>>>> a9854fec7... raftstore: Fix delete by ingest cause too many L0 files (#9200)
 
     fn insert_range(
         pending_delete_ranges: &mut PendingDeleteRanges,
@@ -936,26 +918,18 @@ mod tests {
         )
         .unwrap();
 
-<<<<<<< HEAD
-        for cf_name in engine.kv.cf_names() {
-            let cf = engine.kv.cf_handle(cf_name).unwrap();
-            for i in 0..6 {
-                engine.kv.put_cf(cf, &[i], &[i]).unwrap();
-                engine.kv.put_cf(cf, &[i + 1], &[i + 1]).unwrap();
-                engine.kv.flush_cf(cf, true).unwrap();
-=======
         for cf_name in &["default", "write", "lock"] {
+            let cf = engine.kv.cf_handle(cf_name).unwrap();
             for i in 0..7 {
                 engine
                     .kv
-                    .put_cf(cf_name, &data_key(i.to_string().as_bytes()), &[i])
+                    .put_cf(cf, &data_key(i.to_string().as_bytes()), &[i])
                     .unwrap();
                 engine
                     .kv
-                    .put_cf(cf_name, &data_key((i + 1).to_string().as_bytes()), &[i + 1])
+                    .put_cf(cf, &data_key((i + 1).to_string().as_bytes()), &[i + 1])
                     .unwrap();
-                engine.kv.flush_cf(cf_name, true).unwrap();
->>>>>>> a9854fec7... raftstore: Fix delete by ingest cause too many L0 files (#9200)
+                engine.kv.flush_cf(cf, true).unwrap();
                 // check level 0 files
                 assert_eq!(
                     engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
@@ -979,6 +953,10 @@ mod tests {
         );
         let mut timer = Timer::new(1);
         timer.add_task(Duration::from_millis(100), Event::CheckApply);
+        timer.add_task(
+            Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
+            Event::CheckStalePeer,
+        );
         worker.start_with_timer(runner, timer).unwrap();
 
         let gen_and_apply_snap = |id: u64| {
@@ -1058,7 +1036,7 @@ mod tests {
 
         let check_region_exist = |id: u64| -> bool {
             let key = data_key(id.to_string().as_bytes());
-            let v = engine.kv.get_value(&key).unwrap();
+            let v = engine.kv.get(&key).unwrap();
             v.is_some()
         };
 
@@ -1084,17 +1062,8 @@ mod tests {
         // snapshot will not ingest cause already write stall
         gen_and_apply_snap(1);
         assert_eq!(
-<<<<<<< HEAD
             engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
-            6
-=======
-            engine
-                .kv
-                .get_cf_num_files_at_level(CF_DEFAULT, 0)
-                .unwrap()
-                .unwrap(),
             7
->>>>>>> a9854fec7... raftstore: Fix delete by ingest cause too many L0 files (#9200)
         );
 
         // compact all files to the bottomest level
@@ -1172,7 +1141,7 @@ mod tests {
             engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             2
         );
-        thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
+        thread::sleep(Duration::from_millis(STALE_PEER_CHECK_INTERVAL * 2));
         assert!(!check_region_exist(6));
     }
 }
