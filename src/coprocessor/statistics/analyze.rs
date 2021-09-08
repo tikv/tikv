@@ -23,7 +23,7 @@ use tidb_query_executors::{
     interface::BatchExecutor, runner::MAX_TIME_SLICE, BatchTableScanExecutor,
 };
 use tidb_query_expr::BATCH_MAX_SIZE;
-use tikv_alloc::trace::{MemTraced, TraceEvent};
+use tikv_alloc::trace::{memory_trace_guard, MemoryTraceGuard, TraceEvent};
 use tikv_util::time::Instant;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use yatp::task::future::reschedule;
@@ -211,7 +211,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
 
 #[async_trait]
 impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
-    async fn handle_request(&mut self) -> Result<MemTraced<Response>> {
+    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
                 let req = self.req.take_idx_req();
@@ -276,10 +276,9 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
         match ret {
             Ok(data) => {
                 let memory_size = data.capacity();
-                MEMTRACE_ANALYZE.trace(TraceEvent::Add(memory_size));
                 let mut resp = Response::default();
                 resp.set_data(data);
-                Ok(MemTraced::new(resp, memory_size, MEMTRACE_ANALYZE.clone()))
+                Ok(memory_trace_guard(&MEMTRACE_ANALYZE, resp, memory_size))
             }
             Err(Error::Other(e)) => {
                 let mut resp = Response::default();
@@ -527,13 +526,13 @@ impl RowSampleCollector {
         if need_push {
             self.memory_usage += data.iter().map(|x| x.capacity()).sum::<usize>();
             self.samples.push(Reverse((cur_rng, data)));
-            self.maybe_report_memory_usage(false);
+            self.report_memory_usage(false);
         }
     }
 
     pub fn to_proto(&mut self) -> tipb::RowSampleCollector {
         self.memory_usage = 0;
-        self.maybe_report_memory_usage(true);
+        self.report_memory_usage(true);
 
         let mut s = tipb::RowSampleCollector::default();
         let samples = mem::take(&mut self.samples)
@@ -557,7 +556,7 @@ impl RowSampleCollector {
         s
     }
 
-    fn maybe_report_memory_usage(&mut self, on_finish: bool) {
+    fn report_memory_usage(&mut self, on_finish: bool) {
         let diff = self.memory_usage as isize - self.reported_memory_usage as isize;
         if on_finish || diff.abs() > 1024 * 1024 {
             let event = if diff >= 0 {
@@ -574,7 +573,7 @@ impl RowSampleCollector {
 impl Drop for RowSampleCollector {
     fn drop(&mut self) {
         self.memory_usage = 0;
-        self.maybe_report_memory_usage(true);
+        self.report_memory_usage(true);
     }
 }
 
@@ -1042,7 +1041,7 @@ mod tests {
             }
 
             // Test memory usage tracing is correct.
-            collector.maybe_report_memory_usage(true);
+            collector.report_memory_usage(true);
             assert_eq!(collector.reported_memory_usage, collector.memory_usage);
             if loop_i % 2 == 0 {
                 collector.to_proto();

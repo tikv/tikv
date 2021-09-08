@@ -237,24 +237,34 @@ macro_rules! mem_trace {
     }
 }
 
-pub struct MemTraced<T: Default> {
+pub fn memory_trace_guard<T: Default>(
+    node: &Arc<dyn MemoryTrace + Send + Sync>,
+    item: T,
+    size: usize,
+) -> MemoryTraceGuard<T> {
+    node.trace(TraceEvent::Add(size));
+    let node = Some(node.clone());
+    MemoryTraceGuard { item, size, node }
+}
+
+pub struct MemoryTraceGuard<T: Default> {
     item: T,
     size: usize,
     node: Option<Arc<dyn MemoryTrace + Send + Sync>>,
 }
 
-impl<T: Default> MemTraced<T> {
+impl<T: Default> MemoryTraceGuard<T> {
     pub fn new(item: T, size: usize, node: Arc<dyn MemoryTrace + Send + Sync>) -> Self {
         let node = Some(node);
-        MemTraced { item, size, node }
+        MemoryTraceGuard { item, size, node }
     }
 
-    pub fn map<F, U: Default>(mut self, f: F) -> MemTraced<U>
+    pub fn map<F, U: Default>(mut self, f: F) -> MemoryTraceGuard<U>
     where
         F: FnOnce(T) -> U,
     {
         let item = std::mem::take(&mut self.item);
-        MemTraced {
+        MemoryTraceGuard {
             item: f(item),
             size: self.size,
             node: self.node.take(),
@@ -269,7 +279,7 @@ impl<T: Default> MemTraced<T> {
     }
 }
 
-impl<T: Default> Drop for MemTraced<T> {
+impl<T: Default> Drop for MemoryTraceGuard<T> {
     fn drop(&mut self) {
         if let Some(node) = self.node.take() {
             node.trace(TraceEvent::Sub(self.size));
@@ -277,9 +287,9 @@ impl<T: Default> Drop for MemTraced<T> {
     }
 }
 
-impl<T: Default> From<T> for MemTraced<T> {
+impl<T: Default> From<T> for MemoryTraceGuard<T> {
     fn from(item: T) -> Self {
-        MemTraced {
+        MemoryTraceGuard {
             item,
             size: 0,
             node: None,
@@ -287,22 +297,22 @@ impl<T: Default> From<T> for MemTraced<T> {
     }
 }
 
-impl<T: Default> Deref for MemTraced<T> {
+impl<T: Default> Deref for MemoryTraceGuard<T> {
     type Target = T;
     fn deref(&self) -> &T {
         &self.item
     }
 }
 
-impl<T: Default> DerefMut for MemTraced<T> {
+impl<T: Default> DerefMut for MemoryTraceGuard<T> {
     fn deref_mut(&mut self) -> &mut T {
         &mut self.item
     }
 }
 
-impl<T: Default> Debug for MemTraced<T> {
+impl<T: Default> Debug for MemoryTraceGuard<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MemTraced")
+        f.debug_struct("MemoryTraceGuard")
             .field("size", &self.size)
             .finish()
     }

@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use kvproto::coprocessor::Response;
-use tikv_alloc::trace::MemTraced;
+use tikv_alloc::trace::MemoryTraceGuard;
 
 use crate::coprocessor::RequestHandler;
 use crate::coprocessor::*;
@@ -26,7 +26,7 @@ impl CachedRequestHandler {
 
 #[async_trait]
 impl RequestHandler for CachedRequestHandler {
-    async fn handle_request(&mut self) -> Result<MemTraced<Response>> {
+    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
         let mut resp = Response::default();
         resp.set_is_cache_hit(true);
         if let Some(v) = self.data_version {

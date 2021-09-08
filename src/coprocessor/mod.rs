@@ -44,7 +44,7 @@ use metrics::ReqTag;
 use rand::prelude::*;
 use std::sync::Arc;
 use tidb_query_common::execute_stats::ExecSummary;
-use tikv_alloc::{mem_trace, Id, MemTraced, MemoryTrace, MemoryTraceNode};
+use tikv_alloc::{mem_trace, Id, MemoryTrace, MemoryTraceGuard, MemoryTraceNode};
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
 use txn_types::TsSet;
@@ -59,7 +59,7 @@ type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 #[async_trait]
 pub trait RequestHandler: Send {
     /// Processes current request and produces a response.
-    async fn handle_request(&mut self) -> Result<MemTraced<coppb::Response>> {
+    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<coppb::Response>> {
         panic!("unary request is not supported for this handler");
     }
 

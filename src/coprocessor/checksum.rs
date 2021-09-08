@@ -7,7 +7,7 @@ use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query_common::storage::Range;
 use tidb_query_executors::runner::MAX_TIME_SLICE;
 use tidb_query_expr::BATCH_MAX_SIZE;
-use tikv_alloc::trace::MemTraced;
+use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::time::Instant;
 use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 use yatp::task::future::reschedule;
@@ -54,7 +54,7 @@ impl<S: Snapshot> ChecksumContext<S> {
 
 #[async_trait]
 impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
-    async fn handle_request(&mut self) -> Result<MemTraced<Response>> {
+    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
         let algorithm = self.req.get_algorithm();
         if algorithm != ChecksumAlgorithm::Crc64Xor {
             return Err(box_err!("unknown checksum algorithm {:?}", algorithm));

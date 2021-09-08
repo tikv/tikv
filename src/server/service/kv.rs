@@ -45,7 +45,7 @@ use raftstore::store::memory::{MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
 use raftstore::store::CheckLeaderTask;
 use raftstore::store::{Callback, CasualMessage, RaftCmdExtraOpts};
 use raftstore::{DiscardReason, Error as RaftStoreError};
-use tikv_alloc::trace::MemTraced;
+use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::sys::memory_usage_reaches_high_water;
@@ -1150,7 +1150,7 @@ fn response_batch_commands_request<F, T>(
     begin: Instant,
     label: GrpcTypeKind,
 ) where
-    MemTraced<batch_commands_response::Response>: From<T>,
+    MemoryTraceGuard<batch_commands_response::Response>: From<T>,
     F: Future<Output = Result<T, ()>> + Send + 'static,
 {
     let task = async move {
@@ -1825,7 +1825,7 @@ fn future_copr<E: Engine>(
     copr: &Endpoint<E>,
     peer: Option<String>,
     req: Request,
-) -> impl Future<Output = ServerResult<MemTraced<Response>>> {
+) -> impl Future<Output = ServerResult<MemoryTraceGuard<Response>>> {
     let ret = copr.parse_and_handle_unary_request(req, peer);
     async move { Ok(ret.await) }
 }
@@ -2024,13 +2024,13 @@ impl GrpcRequestDuration {
 #[derive(Debug)]
 pub struct MeasuredSingleResponse {
     pub id: u64,
-    pub resp: MemTraced<batch_commands_response::Response>,
+    pub resp: MemoryTraceGuard<batch_commands_response::Response>,
     pub measure: GrpcRequestDuration,
 }
 impl MeasuredSingleResponse {
     pub fn new<T>(id: u64, resp: T, measure: GrpcRequestDuration) -> Self
     where
-        MemTraced<batch_commands_response::Response>: From<T>,
+        MemoryTraceGuard<batch_commands_response::Response>: From<T>,
     {
         let resp = resp.into();
         MeasuredSingleResponse { id, resp, measure }
