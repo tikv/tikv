@@ -42,11 +42,11 @@ tiup playground --mode tikv-slim
 
 You can see [TiKV in 5 Minutes](https://tikv.org/docs/5.1/concepts/tikv-in-5-minutes/) for a step by step tutorial.
 
-For productization deployment, please refer to [deploy](https://tikv.org/docs/5.1/deploy/deploy/) for details. You can also see [this manual](./doc/deploy.md) of production-like cluster deployment presented by @c4pt0r.
+For deployment in your production environment, please refer to [deploy](https://tikv.org/docs/5.1/deploy/deploy/) for details. You can also see [this manual](./doc/deploy.md) of production-like cluster deployment presented by @c4pt0r.
 
 ## Client Drivers
 
-Currently, the most mature TiKV clients are the [Go](https://github.com/tikv/client-go) and [Java](https://github.com/tikv/client-java) clients, clients for other languages are under development. All the supported clients are:
+Currently, the most stable TiKV clients are the [Go](https://github.com/tikv/client-go) and [Java](https://github.com/tikv/client-java) clients. Clients for other languages are under development. The complete list of supported clients are:
 
 - [Go](https://github.com/tikv/client-go): The most stable and widely used client, see [examples](https://github.com/tikv/client-go/tree/master/examples) for how to use.
 - [Java](https://github.com/tikv/client-java)
@@ -81,9 +81,9 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 ### Contribute to TiKV
 
-The design of TiKV is inspired by some great distributed systems from Google, such as BigTable, Spanner, and Percolator, and some of the latest achievements in academia in recent years, such as the Raft consensus algorithm. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
+The design and implementation of TiKV is inspired by some great distributed systems from Google, such as BigTable, Spanner, and Percolator, and some of the latest achievements in academia such as the Raft consensus algorithm. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
 
-If you're interested in contributing to TiKV, or want to build it from source, see [CONTRIBUTING.md](./CONTRIBUTING.md).
+If you're interested in contributing to TiKV or want to build it from the source, see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ### Community Governance
 
@@ -125,7 +125,7 @@ We will invite you in right away.
 
 ### Security Audit
 
-A third-party security auditing was performed by Cure53. See the full report [here](./security/Security-Audit.pdf).
+A CNCF sponsored third-party security auditing was performed by Cure53. See the full report [here](./security/Security-Audit.pdf).
 
 ### Reporting Security Vulnerabilities
 
