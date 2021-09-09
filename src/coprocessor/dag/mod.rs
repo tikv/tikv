@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query_common::{execute_stats::ExecSummary, storage::IntervalRange};
+use tikv_alloc::trace::MemoryTraceGuard;
 use tipb::{DagRequest, SelectResponse, StreamResponse};
 
 use crate::coprocessor::metrics::*;
@@ -100,9 +101,9 @@ impl BatchDAGHandler {
 
 #[async_trait]
 impl RequestHandler for BatchDAGHandler {
-    async fn handle_request(&mut self) -> Result<Response> {
+    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
         let result = self.runner.handle_request().await;
-        handle_qe_response(result, self.runner.can_be_cached(), self.data_version)
+        handle_qe_response(result, self.runner.can_be_cached(), self.data_version).map(|x| x.into())
     }
 
     fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
