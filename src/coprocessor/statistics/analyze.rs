@@ -23,7 +23,7 @@ use tidb_query_executors::{
     interface::BatchExecutor, runner::MAX_TIME_SLICE, BatchTableScanExecutor,
 };
 use tidb_query_expr::BATCH_MAX_SIZE;
-use tikv_alloc::trace::{memory_trace_guard, MemoryTraceGuard, TraceEvent};
+use tikv_alloc::trace::{MemoryTraceGuard, TraceEvent};
 use tikv_util::time::Instant;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use yatp::task::future::reschedule;
@@ -278,7 +278,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let memory_size = data.capacity();
                 let mut resp = Response::default();
                 resp.set_data(data);
-                Ok(memory_trace_guard(&MEMTRACE_ANALYZE, resp, memory_size))
+                Ok(MEMTRACE_ANALYZE.trace_guard(resp, memory_size))
             }
             Err(Error::Other(e)) => {
                 let mut resp = Response::default();

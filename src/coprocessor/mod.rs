@@ -44,7 +44,7 @@ use metrics::ReqTag;
 use rand::prelude::*;
 use std::sync::Arc;
 use tidb_query_common::execute_stats::ExecSummary;
-use tikv_alloc::{mem_trace, Id, MemoryTrace, MemoryTraceGuard, MemoryTraceNode};
+use tikv_alloc::{mem_trace, Id, MemoryTrace, MemoryTraceGuard};
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
 use txn_types::TsSet;
@@ -208,8 +208,8 @@ impl ReqContext {
 }
 
 lazy_static! {
-    pub static ref MEMTRACE_ROOT: Arc<MemoryTraceNode> = mem_trace!(coprocessor, [analyze]);
-    pub static ref MEMTRACE_ANALYZE: Arc<dyn MemoryTrace + Send + Sync> =
+    pub static ref MEMTRACE_ROOT: Arc<MemoryTrace> = mem_trace!(coprocessor, [analyze]);
+    pub static ref MEMTRACE_ANALYZE: Arc<MemoryTrace> =
         MEMTRACE_ROOT.sub_trace(Id::Name("analyze"));
 }
 

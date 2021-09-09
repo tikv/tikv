@@ -13,7 +13,7 @@
 //! enumerates instead.
 //!
 //! To define a memory trace tree, we can use the `mem_trace` macro. The `mem_trace`
-//! macro constructs every node as a `MemoryTraceNode` which implements `MemoryTrace` trait.
+//! macro constructs every node as a `MemoryTrace` which implements `MemoryTrace` trait.
 //! We can also define a specified tree node by implementing `MemoryTrace` trait.
 
 use std::fmt::{self, Debug, Display, Formatter};
@@ -118,34 +118,22 @@ impl Add for TraceEvent {
     }
 }
 
-pub trait MemoryTrace {
-    fn trace(&self, event: TraceEvent);
-    fn snapshot(&self) -> MemoryTraceSnapshot;
-    fn sub_trace(&self, id: Id) -> Arc<dyn MemoryTrace + Send + Sync>;
-    fn add_sub_trace(&mut self, id: Id, trace: Arc<dyn MemoryTrace + Send + Sync>);
-    fn sum(&self) -> usize;
-    fn name(&self) -> String;
-    fn get_children_ids(&self) -> Vec<Id>;
-}
-
-pub struct MemoryTraceNode {
+pub struct MemoryTrace {
     pub id: Id,
     trace: AtomicUsize,
-    children: HashMap<Id, Arc<dyn MemoryTrace + Send + Sync>>,
+    children: HashMap<Id, Arc<MemoryTrace>>,
 }
 
-impl MemoryTraceNode {
-    pub fn new(id: impl Into<Id>) -> MemoryTraceNode {
-        MemoryTraceNode {
+impl MemoryTrace {
+    pub fn new(id: impl Into<Id>) -> MemoryTrace {
+        MemoryTrace {
             id: id.into(),
             trace: std::sync::atomic::AtomicUsize::default(),
             children: HashMap::default(),
         }
     }
-}
 
-impl MemoryTrace for MemoryTraceNode {
-    fn trace(&self, event: TraceEvent) {
+    pub fn trace(&self, event: TraceEvent) {
         match event {
             TraceEvent::Add(val) => {
                 self.trace.fetch_add(val, Ordering::Relaxed);
@@ -159,7 +147,17 @@ impl MemoryTrace for MemoryTraceNode {
         }
     }
 
-    fn snapshot(&self) -> MemoryTraceSnapshot {
+    pub fn trace_guard<T: Default>(
+        self: &Arc<MemoryTrace>,
+        item: T,
+        size: usize,
+    ) -> MemoryTraceGuard<T> {
+        self.trace(TraceEvent::Add(size));
+        let node = Some(self.clone());
+        MemoryTraceGuard { item, size, node }
+    }
+
+    pub fn snapshot(&self) -> MemoryTraceSnapshot {
         MemoryTraceSnapshot {
             id: self.id,
             trace: self.trace.load(Ordering::Relaxed),
@@ -167,25 +165,25 @@ impl MemoryTrace for MemoryTraceNode {
         }
     }
 
-    fn sub_trace(&self, id: Id) -> Arc<dyn MemoryTrace + Send + Sync> {
+    pub fn sub_trace(&self, id: Id) -> Arc<MemoryTrace> {
         self.children.get(&id).cloned().unwrap()
     }
 
-    fn add_sub_trace(&mut self, id: Id, trace: Arc<dyn MemoryTrace + Send + Sync>) {
+    pub fn add_sub_trace(&mut self, id: Id, trace: Arc<MemoryTrace>) {
         self.children.insert(id, trace);
     }
 
     // TODO: Maybe need a cache to reduce read cost.
-    fn sum(&self) -> usize {
+    pub fn sum(&self) -> usize {
         let sum: usize = self.children.values().map(|c| c.sum()).sum();
         sum + self.trace.load(Ordering::Relaxed)
     }
 
-    fn name(&self) -> String {
+    pub fn name(&self) -> String {
         self.id.name()
     }
 
-    fn get_children_ids(&self) -> Vec<Id> {
+    pub fn get_children_ids(&self) -> Vec<Id> {
         let mut ids = vec![];
         for id in self.children.keys() {
             ids.push(*id);
@@ -215,15 +213,13 @@ pub struct MemoryTraceSnapshot {
 macro_rules! mem_trace {
     ($name: ident) => {
         {
-            use tikv_alloc::trace::MemoryTraceNode;
+            use tikv_alloc::trace::MemoryTrace;
 
-            std::sync::Arc::new(MemoryTraceNode::new(stringify!($name)))
+            std::sync::Arc::new(MemoryTrace::new(stringify!($name)))
         }
     };
     ($name: ident, [$($child:tt),+]) => {
         {
-            use tikv_alloc::trace::MemoryTrace;
-
             let mut node = mem_trace!($name);
             $(
                 let child = mem_trace!($child);
@@ -237,20 +233,10 @@ macro_rules! mem_trace {
     }
 }
 
-pub fn memory_trace_guard<T: Default>(
-    node: &Arc<dyn MemoryTrace + Send + Sync>,
-    item: T,
-    size: usize,
-) -> MemoryTraceGuard<T> {
-    node.trace(TraceEvent::Add(size));
-    let node = Some(node.clone());
-    MemoryTraceGuard { item, size, node }
-}
-
 pub struct MemoryTraceGuard<T: Default> {
     item: T,
     size: usize,
-    node: Option<Arc<dyn MemoryTrace + Send + Sync>>,
+    node: Option<Arc<MemoryTrace>>,
 }
 
 impl<T: Default> MemoryTraceGuard<T> {
