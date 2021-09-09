@@ -1,4 +1,3 @@
-use bindgen::EnumVariation;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -10,28 +9,31 @@ use std::hash::{Hash, Hasher};
 
 type VersionType = u64;
 
+const RAFT_STORE_PROXY_VERSION_PREFIX: &str = "RAFT_STORE_PROXY_VERSION";
+const DB_PREFIX: &str = "    pub mod DB {\n";
+const DB_SUFFIX: &str = "\n    }";
+const ROOT_PREFIX: &str = "pub mod root {\n";
+const ROOT_SUFFIX: &str = "\n}\n";
+
 fn read_file_to_string<P: AsRef<Path>>(path: P, expect: &str) -> String {
-    let msg = &format!(
-        "{} {}",
-        "Couldn't open headers",
-        path.as_ref().to_str().unwrap()
-    );
-    let mut file = fs::File::open(path).expect(msg);
+    let mut file = fs::File::open(path).expect(expect);
     let mut buff = String::new();
     file.read_to_string(&mut buff).expect(expect);
     buff
 }
 
-fn maybe_read_file_to_string<P: AsRef<Path>>(path: P, expect: &str) -> String {
-    let mut file = fs::File::open(path);
-    let mut buff = String::new();
-    match file.as_mut() {
-        Ok(v) => {
-            v.read_to_string(&mut buff).expect(expect);
-            buff
-        }
-        Err(_) => buff,
-    }
+fn filter_by_namespace(buff: &str) -> String {
+    let mut res = String::new();
+    // pub mod root {?
+    let a1 = buff.find(ROOT_PREFIX).unwrap() + ROOT_PREFIX.len();
+    res.push_str(&buff[..a1]);
+    // ?    pub mod DB {
+    let b1 = buff.find(DB_PREFIX).unwrap();
+    let b2 = (&buff[b1..]).find(DB_SUFFIX).unwrap() + DB_SUFFIX.len() + b1;
+    // println!("{}", &buff[b1..b2]);
+    res.push_str(&buff[b1..b2]);
+    res.push_str(ROOT_SUFFIX);
+    res
 }
 
 fn scan_ffi_src_head(dir: &str) -> (Vec<String>, VersionType) {
@@ -64,18 +66,18 @@ fn scan_ffi_src_head(dir: &str) -> (Vec<String>, VersionType) {
 
 fn read_version_file(version_cpp_file: &str) -> VersionType {
     let buff = read_file_to_string(version_cpp_file, "Couldn't open version file");
-    let data: Vec<_> = buff.split("/**/").collect();
-    let data = data[1];
-    let len = data.len();
-    let num = &data[1..(len - 3 - 1)];
-    let version = num.parse::<VersionType>().unwrap();
+    let begin = buff.find(RAFT_STORE_PROXY_VERSION_PREFIX).unwrap();
+    let buff = &buff[(begin + RAFT_STORE_PROXY_VERSION_PREFIX.len() + 3)..buff.len()];
+    let end = buff.find("ull").unwrap();
+    let buff = &buff[..end];
+    let version = buff.parse::<VersionType>().unwrap();
     version
 }
 
 fn make_version_file(version: VersionType, tar_version_head_path: &str) {
     let buff = format!(
-        "#pragma once\n#include <cstdint>\nnamespace DB {{ constexpr uint64_t RAFT_STORE_PROXY_VERSION = {}ull; }}",
-        version
+        "#pragma once\n#include <cstdint>\nnamespace DB {{ constexpr uint64_t {} = {}ull; }}",
+        RAFT_STORE_PROXY_VERSION_PREFIX, version
     );
     let tmp_path = format!("{}.tmp", tar_version_head_path);
     let mut file = fs::File::create(&tmp_path).expect("Couldn't create tmp cpp version head file");
@@ -118,14 +120,14 @@ pub fn gen_ffi_code() {
     }
 
     let mut builder = bindgen::Builder::default()
+        .clang_arg("-xc++")
         .clang_arg("-std=c++11")
-        .clang_arg("-x")
-        .clang_arg("c++")
         .clang_arg("-Wno-pragma-once-outside-header")
         .layout_tests(false)
         .derive_copy(false)
         .enable_cxx_namespaces()
-        .default_enum_style(EnumVariation::Rust {
+        .disable_header_comment()
+        .default_enum_style(bindgen::EnumVariation::Rust {
             non_exhaustive: false,
         });
 
@@ -136,7 +138,8 @@ pub fn gen_ffi_code() {
     let bindings = builder.generate().unwrap();
 
     let buff = bindings.to_string();
-    let ori_buff = maybe_read_file_to_string(&tar_file, "Couldn't open rust ffi code file");
+    let buff = filter_by_namespace(&buff);
+    let ori_buff = read_file_to_string(&tar_file, "Couldn't open rust ffi code file");
     if ori_buff == buff {
         println!("There is no need to overwrite rust ffi code file");
     } else {

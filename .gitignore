@@ -39,5 +39,4 @@ fuzz-incremental/
 /last_tikv.toml
 /raft/
 core.*
-components/raftstore/src/engine_store_ffi/interfaces.rs
 

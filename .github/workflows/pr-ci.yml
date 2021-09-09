@@ -41,6 +41,7 @@ jobs:
         run: |
           cd ${{github.workspace}}
           make gen_proxy_ffi
+          [[ -z $(git status -s) ]]
           cargo fmt -- --check >/dev/null
       - name: test
         run: |

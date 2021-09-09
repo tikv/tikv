@@ -3154,7 +3154,6 @@ dependencies = [
  "fs2",
  "futures 0.3.15",
  "futures-util",
- "gen-proxy-ffi",
  "into_other",
  "itertools 0.10.0",
  "keys",
