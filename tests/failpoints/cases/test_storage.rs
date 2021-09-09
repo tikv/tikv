@@ -1142,6 +1142,77 @@ fn test_before_propose_deadline() {
     ));
 }
 
+#[test]
+fn test_resolve_lock_deadline() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+
+    let engine = cluster.sim.read().unwrap().storages[&1].clone();
+    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+        engine,
+        DummyLockManager {},
+    )
+    .build()
+    .unwrap();
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(1);
+    ctx.set_region_epoch(cluster.get_region_epoch(1));
+    ctx.set_peer(cluster.leader_of_region(1).unwrap());
+
+    // One resolve lock batch is 256 keys. So we need to prewrite more than that.
+    let mutations = (1i32..300)
+        .map(|i| {
+            let data = i.to_le_bytes();
+            Mutation::Put((Key::from_raw(&data), data.to_vec()))
+        })
+        .collect();
+    let cmd = commands::Prewrite::new(
+        mutations,
+        1i32.to_le_bytes().to_vec(),
+        10.into(),
+        1,
+        false,
+        299,
+        15.into(),
+        20.into(),
+        None,
+        false,
+        ctx.clone(),
+    );
+    let (tx, rx) = channel();
+    storage
+        .sched_txn_command(
+            cmd,
+            Box::new(move |res: storage::Result<_>| {
+                tx.send(res).unwrap();
+            }),
+        )
+        .unwrap();
+    assert!(rx.recv().unwrap().is_ok());
+
+    // Resolve lock, this needs two rounds, two process_read and two process_write.
+    // So it needs more than 400ms. It will exceed the deadline.
+    ctx.max_execution_duration_ms = 300;
+    fail::cfg("txn_before_process_read", "sleep(100)").unwrap();
+    fail::cfg("txn_before_process_write", "sleep(100)").unwrap();
+    let (tx, rx) = channel();
+    let mut txn_status = HashMap::default();
+    txn_status.insert(TimeStamp::new(10), TimeStamp::new(0));
+    storage
+        .sched_txn_command(
+            commands::ResolveLockReadPhase::new(txn_status, None, ctx),
+            Box::new(move |res: storage::Result<_>| {
+                tx.send(res).unwrap();
+            }),
+        )
+        .unwrap();
+    assert!(matches!(
+        rx.recv().unwrap(),
+        Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+    ));
+}
+
 /// Checks if concurrent transaction works correctly during shutdown.
 ///
 /// During shutdown, all pending writes will fail with error so its latch will be released.

@@ -34,9 +34,7 @@ use futures::{select, FutureExt as _};
 use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
 use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
-use tikv_util::{
-    callback::must_call, deadline::Deadline, time::Instant, timer::GLOBAL_TIMER_HANDLE,
-};
+use tikv_util::{callback::must_call, time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::TimeStamp;
 
 use crate::server::lock_manager::waiter_manager;
@@ -67,31 +65,22 @@ const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
 // The default limit is set to be very large. Then, requests without `max_exectuion_duration`
 // will not be aborted unexpectedly.
-const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
+pub const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Task is a running command.
 pub(super) struct Task {
     pub(super) cid: u64,
     pub(super) cmd: Command,
     pub(super) extra_op: ExtraOp,
-    pub(super) deadline: Deadline,
 }
 
 impl Task {
     /// Creates a task for a running command.
     pub(super) fn new(cid: u64, cmd: Command) -> Task {
-        let max_execution_duration_ms = cmd.ctx().max_execution_duration_ms;
-        let execution_duration_limit = if max_execution_duration_ms == 0 {
-            DEFAULT_EXECUTION_DURATION_LIMIT
-        } else {
-            Duration::from_millis(max_execution_duration_ms)
-        };
-        let deadline = Deadline::from_now(execution_duration_limit);
         Task {
             cid,
             cmd,
             extra_op: ExtraOp::Noop,
-            deadline,
         }
     }
 }
@@ -272,7 +261,7 @@ impl<L: LockManager> SchedulerInner<L> {
         let tctx = task_slot.get_mut(&cid).unwrap();
         // Check deadline early during acquiring latches to avoid expired requests blocking
         // other requests.
-        if let Err(e) = tctx.task.as_ref().unwrap().deadline.check() {
+        if let Err(e) = tctx.task.as_ref().unwrap().cmd.deadline().check() {
             // `acquire_lock_on_wakeup` is called when another command releases its locks and wakes up
             // command `cid`. This command inserted its lock before and now the lock is at the
             // front of the queue. The actual acquired count is one more than the `owned_count`
@@ -395,7 +384,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tctx = task_slot
             .entry(cid)
             .or_insert_with(|| self.inner.new_task_context(Task::new(cid, cmd), callback));
-        let deadline = tctx.task.as_ref().unwrap().deadline;
+        let deadline = tctx.task.as_ref().unwrap().cmd.deadline();
         if self.inner.latches.acquire(&mut tctx.lock, cid) {
             fail_point!("txn_scheduler_acquire_success");
             tctx.on_schedule();
@@ -780,7 +769,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .load(Ordering::Relaxed);
         let pipelined = pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
 
-        let deadline = task.deadline;
+        let deadline = task.cmd.deadline();
         let write_result = {
             let context = WriteContext {
                 lock_mgr: &self.inner.lock_mgr,
@@ -1007,7 +996,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// the task with a `DeadlineExceeded` error.
     #[inline]
     fn check_task_deadline_exceeded(&self, task: &Task) -> bool {
-        if let Err(e) = task.deadline.check() {
+        if let Err(e) = task.cmd.deadline().check() {
             self.finish_with_err(task.cid, e);
             true
         } else {
