@@ -49,6 +49,7 @@ raftstore = { path = "../raftstore" }
 resolved_ts = { path = "../resolved_ts" }
 security = { path = "../security" }
 semver = "0.9"
+configuration = { path = "../configuration" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 tikv = { path = "../../", default-features = false }
