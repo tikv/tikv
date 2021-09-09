@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use engine::rocks::util::compact_files_in_range;
 use engine::rocks::DB;
 use engine_rocks::util::ingest_maybe_slowdown_writes;
-use engine_traits::{name_to_cf, CF_DEFAULT};
+use engine_traits::CF_DEFAULT;
 use futures::Future;
 use futures03::compat::{Compat, Future01CompatExt, Stream01CompatExt};
 use futures03::executor::{ThreadPool, ThreadPoolBuilder};
@@ -27,11 +27,10 @@ use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_rocks::RocksEngine;
-use engine_traits::{SstExt, SstWriterBuilder};
+use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
 use security::{check_common_name, SecurityManager};
 
-use raftstore::router::RaftStoreRouter;
 use sst_importer::send_rpc_response;
 use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_std_future_callback;
@@ -213,16 +212,6 @@ where
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
                 .observe(start.saturating_elapsed().as_secs_f64());
-            // SST writer must not be opened in gRPC threads, because it may be
-            // blocked for a long time due to IO, especially, when encryption at rest
-            // is enabled, and it leads to gRPC keepalive timeout.
-            let cf_name = req.get_sst().get_cf_name();
-            let sst_writer = <RocksEngine as SstExt>::SstWriterBuilder::new()
-                .set_db(RocksEngine::from_ref(&engine))
-                .set_cf(name_to_cf(cf_name).unwrap())
-                .set_compression_type(importer.get_compression_type(cf_name))
-                .build(importer.get_path(req.get_sst()).to_str().unwrap())
-                .unwrap();
 
             // FIXME: download() should be an async fn, to allow BR to cancel
             // a download task.
@@ -234,7 +223,7 @@ where
                 req.get_name(),
                 req.get_rewrite_rule(),
                 limiter,
-                sst_writer,
+                RocksEngine::from_db(engine),
             );
             let mut resp = DownloadResponse::default();
             match res {

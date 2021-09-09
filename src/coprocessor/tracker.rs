@@ -232,7 +232,7 @@ impl Tracker {
 
         let total_storage_stats = std::mem::take(&mut self.total_storage_stats);
 
-        if self.req_lifetime > self.slow_log_threshold {
+        if self.total_process_time > self.slow_log_threshold {
             let some_table_id = self.req_ctx.first_range.as_ref().map(|range| {
                 tidb_query::codec::table::decode_table_id(range.get_start()).unwrap_or_default()
             });

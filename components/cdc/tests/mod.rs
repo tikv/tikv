@@ -3,8 +3,9 @@
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::*;
-use std::time::Duration;
 
+use cdc::{CdcObserver, FeatureGate, MemoryQuota, Task};
+use configuration::Configuration;
 use futures::{Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
 use grpcio::{ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver};
@@ -16,11 +17,10 @@ use security::*;
 use test_raftstore::*;
 use tikv::config::CdcConfig;
 use tikv_util::collections::HashMap;
-use tikv_util::worker::Worker;
+use tikv_util::config::ReadableDuration;
+use tikv_util::worker::{Runnable, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
-
-use cdc::{CdcObserver, MemoryQuota, Task};
 
 #[allow(clippy::type_complexity)]
 pub fn new_event_feed(
@@ -51,25 +51,33 @@ pub fn new_event_feed(
     (req_tx, event_feed_wrap, receive_event)
 }
 
-pub struct TestSuite {
-    pub cluster: Cluster<ServerCluster>,
-    pub endpoints: HashMap<u64, Worker<Task>>,
-    pub obs: HashMap<u64, CdcObserver>,
-    tikv_cli: HashMap<u64, TikvClient>,
-    cdc_cli: HashMap<u64, ChangeDataClient>,
-
-    env: Arc<Environment>,
+pub struct TestSuiteBuilder {
+    cluster: Option<Cluster<ServerCluster>>,
+    memory_quota: Option<usize>,
 }
 
-impl TestSuite {
-    pub fn new(count: usize) -> TestSuite {
-        let mut cluster = new_server_cluster(1, count);
-        // Increase the Raft tick interval to make this test case running reliably.
-        configure_for_lease_read(&mut cluster, Some(100), None);
-        Self::with_cluster(count, cluster)
+impl TestSuiteBuilder {
+    pub fn new() -> TestSuiteBuilder {
+        TestSuiteBuilder {
+            cluster: None,
+            memory_quota: None,
+        }
     }
 
-    pub fn with_cluster(count: usize, mut cluster: Cluster<ServerCluster>) -> TestSuite {
+    pub fn cluster(mut self, cluster: Cluster<ServerCluster>) -> TestSuiteBuilder {
+        self.cluster = Some(cluster);
+        self
+    }
+
+    pub fn memory_quota(mut self, memory_quota: usize) -> TestSuiteBuilder {
+        self.memory_quota = Some(memory_quota);
+        self
+    }
+
+    pub fn build(self) -> TestSuite {
+        let memory_quota = self.memory_quota.unwrap_or(std::usize::MAX);
+        let mut cluster = self.cluster.unwrap();
+        let count = cluster.count;
         let pd_cli = cluster.pd_client.clone();
         let mut endpoints = HashMap::default();
         let mut obs = HashMap::default();
@@ -86,11 +94,10 @@ impl TestSuite {
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    let memory_quota = MemoryQuota::new(std::usize::MAX);
                     create_change_data(cdc::Service::new(
                         scheduler.clone(),
                         security_mgr.clone(),
-                        memory_quota,
+                        MemoryQuota::new(memory_quota),
                     ))
                 }));
             let scheduler = worker.scheduler();
@@ -109,8 +116,9 @@ impl TestSuite {
             let sim = cluster.sim.rl();
             let raft_router = sim.get_server_router(*id);
             let cdc_ob = obs.get(&id).unwrap().clone();
+            let cfg = CdcConfig::default();
             let mut cdc_endpoint = cdc::Endpoint::new(
-                &CdcConfig::default(),
+                &cfg,
                 pd_cli.clone(),
                 worker.scheduler(),
                 raft_router,
@@ -118,7 +126,9 @@ impl TestSuite {
                 cluster.store_metas[id].clone(),
                 MemoryQuota::new(std::usize::MAX),
             );
-            cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
+            let mut updated_cfg = cfg.clone();
+            updated_cfg.min_ts_interval = ReadableDuration::millis(100);
+            cdc_endpoint.run(Task::ChangeConfig(cfg.diff(&updated_cfg)));
             cdc_endpoint.set_max_scan_batch_size(2);
             worker.start(cdc_endpoint).unwrap();
         }
@@ -132,6 +142,27 @@ impl TestSuite {
             cdc_cli: HashMap::default(),
         }
     }
+}
+
+pub struct TestSuite {
+    pub cluster: Cluster<ServerCluster>,
+    pub endpoints: HashMap<u64, Worker<Task>>,
+    pub obs: HashMap<u64, CdcObserver>,
+    tikv_cli: HashMap<u64, TikvClient>,
+    cdc_cli: HashMap<u64, ChangeDataClient>,
+
+    env: Arc<Environment>,
+}
+
+impl TestSuite {
+    pub fn new(count: usize) -> TestSuite {
+        let mut cluster = new_server_cluster(1, count);
+        // Increase the Raft tick interval to make this test case running reliably.
+        configure_for_lease_read(&mut cluster, Some(100), None);
+
+        let builder = TestSuiteBuilder::new();
+        builder.cluster(cluster).build()
+    }
 
     pub fn stop(mut self) {
         for (_, mut worker) in self.endpoints {
@@ -144,8 +175,9 @@ impl TestSuite {
         let mut req = ChangeDataRequest::default();
         req.region_id = region_id;
         req.set_region_epoch(self.get_context(region_id).take_region_epoch());
-        // Batch resolved ts is supported by TiCDC in v4.0.8 release.
-        req.mut_header().set_ticdc_version("4.0.8".into());
+        // Enable batch resolved ts feature.
+        req.mut_header()
+            .set_ticdc_version(FeatureGate::batch_resolved_ts().to_string());
         req
     }
 
