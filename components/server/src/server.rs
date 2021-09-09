@@ -557,11 +557,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_servers(&mut self) -> Arc<VersionTrack<ServerConfig>> {
-        let flow_controller = Arc::new(FlowController::new(
-            &self.config.storage.flow_control,
-            self.engines.as_ref().unwrap().engine.kv_engine(),
-            self.flow_info_receiver.take().unwrap(),
-        ));
+        let flow_controller = if let Some(flow_info_receiver) = self.flow_info_receiver.take() {
+            Arc::new(FlowController::new(
+                &self.config.storage.flow_control,
+                self.engines.as_ref().unwrap().engine.kv_engine(),
+                flow_info_receiver,
+            ))
+        } else {
+            Arc::new(FlowController::empty())
+        };
         let gc_worker = self.init_gc_worker();
         let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
         let ttl_scheduler = ttl_checker.scheduler();
