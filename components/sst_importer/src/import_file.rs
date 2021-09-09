@@ -303,6 +303,10 @@ impl ImportDir {
         for (cf, cf_paths) in paths {
             let files: Vec<&str> = cf_paths.iter().map(|p| p.clone.to_str().unwrap()).collect();
             engine.ingest_external_file_cf(cf, &files)?;
+            info!(
+                "[ingest] engine ingest_external_file_cf, cf={:?}, files={:?}",
+                cf, files
+            );
         }
         INPORTER_INGEST_COUNT.observe(metas.len() as _);
         IMPORTER_INGEST_BYTES.observe(ingest_bytes as _);

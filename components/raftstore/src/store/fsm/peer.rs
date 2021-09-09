@@ -1316,23 +1316,31 @@ where
             }
             self.fsm.peer.disk_full_peers.has(peer_id)
         } else {
+            let cur = Instant::now();
             self.ctx.store_disk_usages.insert(store_id, msg.disk_usage);
             if !self.fsm.peer.is_leader() {
                 return;
             }
             let disk_full_peers = &self.fsm.peer.disk_full_peers;
+
             disk_full_peers.is_empty()
                 || disk_full_peers
                     .get(peer_id)
                     .map_or(true, |x| x != msg.disk_usage)
+                || cur
+                    .duration_since(self.fsm.peer.latest_majority_set_update_on_disk_full)
+                    .as_secs()
+                    > 10 // update refill every 10s when disk full happen.
         };
         if refill_disk_usages {
             let prev = self.fsm.peer.disk_full_peers.get(peer_id);
-            info!(
-                "reported disk usage changes {:?} -> {:?}", prev, msg.disk_usage;
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => peer_id,
-            );
+            if Some(msg.disk_usage) != prev {
+                info!(
+                    "reported disk usage changes {:?} -> {:?}", prev, msg.disk_usage;
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => peer_id,
+                );
+            }
             self.fsm.peer.refill_disk_full_peers(self.ctx);
             debug!(
                 "raft message refills disk full peers to {:?}",

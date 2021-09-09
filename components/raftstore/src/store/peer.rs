@@ -521,6 +521,10 @@ where
 
     pub disk_full_peers: DiskFullPeers,
 
+    pub latest_majority_set_update_on_disk_full: Instant,
+
+    pub dangerous_majority_set: bool,
+
     pub read_progress: Arc<RegionReadProgress>,
 
     pub memtrace_raft_entries: usize,
@@ -619,6 +623,8 @@ where
             cmd_epoch_checker: Default::default(),
             last_unpersisted_number: 0,
             disk_full_peers: DiskFullPeers::default(),
+            dangerous_majority_set: false,
+            latest_majority_set_update_on_disk_full: Instant::now(),
             read_progress: Arc::new(RegionReadProgress::new(
                 region,
                 applied_index,
@@ -733,7 +739,8 @@ where
         let first = entries.first().unwrap();
         // make sure message should be with index not smaller than committed
         let mut log_idx = first.get_index() - 1;
-        debug!(
+        // TODO keep this until merge
+        info!(
             "append merge entries";
             "log_index" => log_idx,
             "merge_commit" => merge.get_commit(),
@@ -2321,9 +2328,66 @@ where
             }
             Ok(RequestPolicy::ProposeNormal) => {
                 let mut stores = Vec::new();
-                if self.check_disk_usages_before_propose(ctx, disk_full_opt, &mut stores)
-                    || req.has_admin_request()
-                {
+                let mut allowed = true;
+                if self.check_disk_usages_before_propose(ctx, disk_full_opt, &mut stores) {
+                    allowed = true;
+                } else {
+                    if req.has_admin_request() {
+                        let admin_type = req.get_admin_request().get_cmd_type();
+                        if admin_type == AdminCmdType::PrepareMerge {
+                            allowed = false;
+                        }
+                    } else {
+                        allowed = false;
+                    }
+                }
+                // TODO keep this until merge
+                if req.has_admin_request() {
+                    let admin_type = req.get_admin_request().get_cmd_type();
+                    match admin_type {
+                        AdminCmdType::PrepareMerge => {
+                            info!(
+                                "get a merge propose: merge type={:?}, self regionId={:?}, cmd diskFullOpt={:?}, allowed={:?}, lead diskUsage={:?}, target region={:?}",
+                                AdminCmdType::PrepareMerge,
+                                self.region_id,
+                                disk_full_opt,
+                                allowed,
+                                ctx.self_disk_usage,
+                                req.get_admin_request()
+                                    .get_prepare_merge()
+                                    .get_target()
+                                    .get_id()
+                            );
+                        }
+                        AdminCmdType::CommitMerge => {
+                            info!(
+                                "get a merge propose: merge type={:?}, self regionId={:?}, cmd diskFullOpt={:?}, allowed={:?}, lead diskUsage={:?}, source region={:?}",
+                                AdminCmdType::CommitMerge,
+                                self.region_id,
+                                disk_full_opt,
+                                allowed,
+                                ctx.self_disk_usage,
+                                req.get_admin_request()
+                                    .get_commit_merge()
+                                    .get_source()
+                                    .get_id()
+                            );
+                        }
+                        AdminCmdType::RollbackMerge => {
+                            info!(
+                                "get a merge propose: merge type={:?}, self regionId={:?}, cmd diskFullOpt={:?}, allowed={:?}, lead diskUsage={:?}",
+                                AdminCmdType::RollbackMerge,
+                                self.region_id,
+                                disk_full_opt,
+                                allowed,
+                                ctx.self_disk_usage
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+
+                if allowed {
                     self.propose_normal(ctx, req)
                 } else {
                     let errmsg = format!(
@@ -3350,6 +3414,7 @@ where
 
     pub fn refill_disk_full_peers<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
         self.clear_disk_full_peers(ctx);
+        let cur = Instant::now();
 
         // Collect disk full peers and all peers' `next_idx` to find a potential quorum.
         let peers_len = self.get_store().region().get_peers().len();
@@ -3363,7 +3428,19 @@ where
                 normal_peers.insert(peer_id);
             }
             if let Some(pr) = self.raft_group.raft.prs().get(peer_id) {
-                next_idxs.push((peer_id, pr.next_idx, usage));
+                // status 3-normal, 2-almostfull, 1-alreadyfull, only for simplying the sort func belowing.
+                let mut status = 3;
+                if let Some(usg) = usage {
+                    status = match usg {
+                        DiskUsage::Normal => 3,
+                        DiskUsage::AlmostFull => 2,
+                        DiskUsage::AlreadyFull => 1,
+                    };
+                }
+
+                if !self.down_peer_ids.contains(&peer_id) {
+                    next_idxs.push((peer_id, pr.next_idx, usage, status));
+                }
             }
         }
 
@@ -3371,9 +3448,19 @@ where
             return;
         }
 
+        self.latest_majority_set_update_on_disk_full = cur;
+        // Reverse sort peers based on `next_idx`, `usage` and `store healthy status`, then try to get a potential quorum.
+        next_idxs.sort_by(|x, y| {
+            if x.3 == y.3 {
+                return y.1.cmp(&x.1);
+            } else {
+                return y.3.cmp(&x.3);
+            }
+        });
+
         let raft = &mut self.raft_group.raft;
         self.disk_full_peers.majority = !raft.prs().has_quorum(&normal_peers);
-        for &(peer, _, usage) in &next_idxs {
+        for &(peer, _, usage, ..) in &next_idxs {
             if let Some(usage) = usage {
                 self.disk_full_peers.peers.insert(peer, (*usage, false));
                 raft.adjust_max_inflight_msgs(peer, 0);
@@ -3385,47 +3472,19 @@ where
             return;
         }
 
-        // Reverse sort peers based on `next_idx` and `usage`, then try to get a potential quorum.
-        next_idxs.sort_by(|x, y| {
-            if y.2.is_some() {
-                if matches!(y.2.unwrap(), DiskUsage::AlreadyFull) {
-                    if x.2.is_some() {
-                        if matches!(x.2.unwrap(), DiskUsage::AlreadyFull) {
-                            return y.1.cmp(&x.1);
-                        } else {
-                            return std::cmp::Ordering::Less;
-                        }
-                    } else {
-                        return std::cmp::Ordering::Less;
-                    }
-                } else {
-                    if x.2.is_some() {
-                        if matches!(x.2.unwrap(), DiskUsage::AlreadyFull) {
-                            return std::cmp::Ordering::Greater;
-                        } else {
-                            return y.1.cmp(&x.1);
-                        }
-                    } else {
-                        return std::cmp::Ordering::Less;
-                    }
-                }
-            } else {
-                if x.2.is_some() {
-                    return std::cmp::Ordering::Greater;
-                } else {
-                    return y.1.cmp(&x.1);
-                }
-            }
-        });
-
         let (mut potential_quorum, mut quorum_ok) = (HashSet::default(), false);
-        for &(peer_id, ..) in &next_idxs {
+        let mut has_dangurous_set = false;
+        for &(peer_id, _, _, status) in &next_idxs {
+            if status == 1 {
+                has_dangurous_set = true;
+            }
             potential_quorum.insert(peer_id);
             if raft.prs().has_quorum(&potential_quorum) {
                 quorum_ok = true;
                 break;
             }
         }
+        self.dangerous_majority_set = has_dangurous_set;
 
         if quorum_ok {
             for peer in potential_quorum {
@@ -3453,6 +3512,12 @@ where
         };
         if !self_allowed {
             disk_full_stores.push(ctx.store.id);
+            return false;
+        }
+
+        // This function is only used to check the normal proposal.
+        // So if dangerous majority happen, then set false to only allowed CCs.
+        if self.dangerous_majority_set {
             return false;
         }
 
