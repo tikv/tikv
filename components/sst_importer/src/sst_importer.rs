@@ -24,8 +24,8 @@ use uuid::{Builder as UuidBuilder, Uuid};
 use encryption::{DataKeyManager, EncrypterWriter};
 use engine_rocks::{encryption::get_env, RocksSstReader};
 use engine_traits::{
-    name_to_cf, CfName, EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, 
-    SeekKey, SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, 
+    name_to_cf, CfName, EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine,
+    SeekKey, SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
     CF_WRITE,
 };
 use external_storage::{block_on_external_io, create_storage, url_of_backend, READ_BUF_SIZE};
@@ -404,7 +404,7 @@ impl SSTImporter {
         let mut sst_writer = <E as SstExt>::SstWriterBuilder::new()
             .set_db(&engine)
             .set_cf(cf_name)
-            .set_compression_type(importer.get_compression_type(cf_name))
+            .set_compression_type(self.get_compression_type(cf_name))
             .build(path.save.to_str().unwrap())
             .unwrap();
 
@@ -2107,7 +2107,7 @@ mod tests {
             let sst_file_path = importer.dir.join(&meta).unwrap().save;
             assert!(sst_file_path.is_file());
 
-            let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+            let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
             let expected_compression_name = match &*meta.cf_name {
                 CF_DEFAULT => "ZSTD",
                 CF_WRITE => "LZ4", // Lz4 is the default if unspecified.
