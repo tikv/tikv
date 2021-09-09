@@ -303,7 +303,7 @@ impl<T: Default> Debug for MemoryTraceGuard<T> {
 mod tests {
     use crate::{
         self as tikv_alloc,
-        trace::{Id, MemoryTrace, TraceEvent},
+        trace::{Id, TraceEvent},
     };
 
     #[test]
