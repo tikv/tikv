@@ -119,21 +119,19 @@ impl<S: Snapshot> ProposalQueue<S> {
         self.queue
             .binary_search_by_key(&index, |p: &Proposal<_>| p.index)
             .ok()
-            .map(|i| {
+            .and_then(|i| {
                 self.queue[i]
                     .cb
                     .get_request_times()
                     .map(|ts| (self.queue[i].term, ts))
             })
-            .flatten()
     }
 
     fn find_propose_time(&self, term: u64, index: u64) -> Option<Timespec> {
         self.queue
             .binary_search_by_key(&(term, index), |p: &Proposal<_>| (p.term, p.index))
             .ok()
-            .map(|i| self.queue[i].propose_time)
-            .flatten()
+            .and_then(|i| self.queue[i].propose_time)
     }
 
     // Find proposal in front or at the given term and index
@@ -2269,10 +2267,7 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         number: u64,
     ) -> Option<PersistSnapshotResult> {
-        if self.unpersisted_readies.is_empty()
-            || self.persisted_number >= number
-            || number < self.unpersisted_readies.front().unwrap().number
-        {
+        if self.persisted_number >= number {
             return None;
         }
         let last_unpersisted_number = self.unpersisted_readies.back().unwrap().number;
@@ -2283,30 +2278,24 @@ where
             );
         }
         // There must be a match in `self.unpersisted_readies`
-        let mut persisted_number = 0;
-        while let Some(v) = self.unpersisted_readies.front() {
+        while let Some(v) = self.unpersisted_readies.pop_front() {
             if number < v.number {
-                break;
+                panic!(
+                    "{} no match of persisted number {}, unpersisted readies: {:?} {:?}",
+                    self.tag, number, v, self.unpersisted_readies
+                );
             }
-            let v = self.unpersisted_readies.pop_front().unwrap();
-            self.unpersisted_message_count -= v.raft_msgs.capacity();
             for msgs in v.raft_msgs {
                 fail_point!("raft_before_follower_send");
+                self.unpersisted_message_count -= msgs.capacity();
                 let m = self.build_raft_messages(ctx, msgs);
                 self.send_raft_messages(ctx, m);
             }
             if number == v.number {
-                persisted_number = v.max_empty_number;
+                self.persisted_number = v.max_empty_number;
                 break;
             }
         }
-        if persisted_number == 0 {
-            panic!(
-                "{} no match of persisted number {}, unpersisted numbers {:?}",
-                self.tag, number, self.unpersisted_readies
-            );
-        }
-        self.persisted_number = persisted_number;
 
         if ctx.write_worker.is_none() {
             self.write_router
@@ -2318,7 +2307,7 @@ where
             // update persist index.
             let pre_persist_index = self.raft_group.raft.raft_log.persisted;
             let pre_commit_index = self.raft_group.raft.raft_log.committed;
-            self.raft_group.on_persist_ready(persisted_number);
+            self.raft_group.on_persist_ready(self.persisted_number);
             self.report_persist_log_duration(pre_persist_index, &ctx.raft_metrics);
             self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
 
