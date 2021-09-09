@@ -1011,7 +1011,7 @@ where
             return;
         }
         if let Some(persist_snap_res) = self.fsm.peer.on_persist_ready(self.ctx, ready_number) {
-            self.on_ready_apply_snapshot(persist_snap_res);
+            self.on_ready_persist_snapshot(persist_snap_res);
             if self.fsm.peer.pending_merge_state.is_some() {
                 // After applying a snapshot, merge is rollbacked implicitly.
                 self.on_ready_rollback_merge(0, None);
@@ -3201,7 +3201,7 @@ where
         self.handle_destroy_peer(job);
     }
 
-    fn on_ready_apply_snapshot(&mut self, persist_res: PersistSnapshotResult) {
+    fn on_ready_persist_snapshot(&mut self, persist_res: PersistSnapshotResult) {
         let prev_region = persist_res.prev_region;
         let region = persist_res.region;
 
@@ -3262,7 +3262,7 @@ where
 
         if util::is_region_initialized(&prev_region) {
             info!(
-                "region changed after applying snapshot";
+                "region changed after persisting snapshot";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
                 "prev_region" => ?prev_region,
