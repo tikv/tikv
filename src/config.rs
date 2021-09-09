@@ -2726,6 +2726,7 @@ impl From<&str> for Module {
             "backup" => Module::Backup,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
+            "cdc" => Module::CDC,
             n => Module::Unknown(n.to_owned()),
         }
     }
