@@ -962,19 +962,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Debug service.
-        let debug_service = DebugService::new(
-            engines.engines.clone(),
-            servers.server.get_debug_thread_pool().clone(),
-            self.router.clone(),
-            self.cfg_controller.as_ref().unwrap().clone(),
+        <RocksEngine as CreateKvEngine<ER>>::start_debug_service(
+            &engines,
+            servers,
+            &self.router,
+            &mut self.cfg_controller,
         );
-        if servers
-            .server
-            .register_service(create_debug(debug_service))
-            .is_some()
-        {
-            fatal!("failed to register debug service");
-        }
 
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(
@@ -1375,6 +1368,44 @@ impl TiKVServer<RaftLogEngine> {
         ));
 
         (engines, engines_info)
+    }
+}
+
+trait CreateKvEngine<ER>: KvEngine
+where
+    ER: RaftEngine,
+{
+    fn start_debug_service(
+        engines: &TiKVEngines<Self, ER>,
+        servers: &mut Servers<Self, ER>,
+        router: &RaftRouter<Self, ER>,
+        cfg_controller: &mut Option<ConfigController>,
+    );
+}
+
+impl<ER> CreateKvEngine<ER> for RocksEngine
+where
+    ER: RaftEngine,
+{
+    fn start_debug_service(
+        engines: &TiKVEngines<Self, ER>,
+        servers: &mut Servers<Self, ER>,
+        router: &RaftRouter<Self, ER>,
+        cfg_controller: &mut Option<ConfigController>,
+    ) {
+        let debug_service = DebugService::new(
+            engines.engines.clone(),
+            servers.server.get_debug_thread_pool().clone(),
+            router.clone(),
+            cfg_controller.as_ref().unwrap().clone(),
+        );
+        if servers
+            .server
+            .register_service(create_debug(debug_service))
+            .is_some()
+        {
+            fatal!("failed to register debug service");
+        }
     }
 }
 
