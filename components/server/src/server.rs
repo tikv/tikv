@@ -137,8 +137,7 @@ pub fn run_tikv(config: TiKvConfig) {
             tikv.init_yatp();
             tikv.init_encryption();
             let fetcher = tikv.init_io_utility();
-            let listener = tikv.init_flow_receiver();
-            let (engines, engines_info) = tikv.init_raw_engines(listener);
+            let (engines, engines_info) = tikv.init_raw_engines();
             tikv.init_engines(engines.clone());
             let server_config = tikv.init_servers();
             tikv.register_services();
@@ -1244,7 +1243,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 impl TiKVServer<RocksEngine> {
     fn init_raw_engines(
         &mut self,
-        flow_listener: engine_rocks::FlowListener,
     ) -> (Engines<RocksEngine, RocksEngine>, Arc<EnginesResourceInfo>) {
         let env = get_env(self.encryption_key_manager.clone(), get_io_rate_limiter()).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
@@ -1263,6 +1261,7 @@ impl TiKVServer<RocksEngine> {
         .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
 
         // Create kv engine.
+        let flow_listener = self.init_flow_receiver();
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
@@ -1320,7 +1319,6 @@ impl TiKVServer<RocksEngine> {
 impl TiKVServer<RaftLogEngine> {
     fn init_raw_engines(
         &mut self,
-        flow_listener: engine_rocks::FlowListener,
     ) -> (
         Engines<RocksEngine, RaftLogEngine>,
         Arc<EnginesResourceInfo>,
@@ -1337,6 +1335,7 @@ impl TiKVServer<RaftLogEngine> {
         check_and_dump_raft_db(&self.config, &raft_engine, &env, 8);
 
         // Create kv engine.
+        let flow_listener = self.init_flow_receiver();
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
