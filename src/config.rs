@@ -2703,9 +2703,9 @@ pub enum Module {
     Backup,
     PessimisticTxn,
     Gc,
+    CDC,
     Split,
     Unknown(String),
-    CDC,
 }
 
 impl From<&str> for Module {
