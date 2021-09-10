@@ -31,7 +31,7 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{from_rocks_compression_type, get_env, FlowInfo, RocksEngine};
 use engine_traits::{
-    compaction_job::CompactionJobInfo, ColumnFamilyOptions, Engines, KvEngine, MiscExt, RaftEngine,
+    compaction_job::CompactionJobInfo, ColumnFamilyOptions, Engines, KvEngine, RaftEngine,
     CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
@@ -125,7 +125,7 @@ pub fn run_tikv(config: TiKvConfig) {
 
     macro_rules! run_impl {
         ($ER: ty) => {{
-            let mut tikv = TiKVServer::<$ER>::init(config);
+            let mut tikv = TiKVServer::<RocksEngine, $ER>::init(config);
 
             // Must be called after `TiKVServer::init`.
             let memory_limit = tikv.config.memory_usage_limit.0.unwrap().0;
@@ -166,24 +166,24 @@ const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60
 const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A complete TiKV server.
-struct TiKVServer<ER: RaftEngine> {
+struct TiKVServer<EK: KvEngine, ER: RaftEngine> {
     config: TiKvConfig,
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
-    router: RaftRouter<RocksEngine, ER>,
+    router: RaftRouter<EK, ER>,
     flow_info_sender: Option<mpsc::Sender<FlowInfo>>,
     flow_info_receiver: Option<mpsc::Receiver<FlowInfo>>,
-    system: Option<RaftBatchSystem<RocksEngine, ER>>,
+    system: Option<RaftBatchSystem<EK, ER>>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
     store_path: PathBuf,
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     encryption_key_manager: Option<Arc<DataKeyManager>>,
-    engines: Option<TiKVEngines<RocksEngine, ER>>,
-    servers: Option<Servers<RocksEngine, ER>>,
+    engines: Option<TiKVEngines<EK, ER>>,
+    servers: Option<Servers<EK, ER>>,
     region_info_accessor: RegionInfoAccessor,
-    coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
+    coprocessor_host: Option<CoprocessorHost<EK>>,
     to_stop: Vec<Box<dyn Stop>>,
     lock_files: Vec<File>,
     concurrency_manager: ConcurrencyManager,
@@ -210,8 +210,12 @@ type LocalServer<EK, ER> =
     Server<RaftRouter<EK, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
 type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
-impl<ER: RaftEngine> TiKVServer<ER> {
-    fn init(mut config: TiKvConfig) -> TiKVServer<ER> {
+impl<EK, ER> TiKVServer<EK, ER>
+where
+    EK: KvEngine + CreateKvEngine<ER>,
+    ER: RaftEngine,
+{
+    fn init(mut config: TiKvConfig) -> TiKVServer<EK, ER> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -470,7 +474,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         .map(Arc::new);
     }
 
-    fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
+    fn init_engines(&mut self, engines: Engines<EK, ER>) {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let engine = RaftKv::new(
             ServerRaftStoreRouter::new(
@@ -489,10 +493,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn init_gc_worker(
         &mut self,
-    ) -> GcWorker<
-        RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>,
-        RaftRouter<RocksEngine, ER>,
-    > {
+    ) -> GcWorker<RaftKv<EK, ServerRaftStoreRouter<EK, ER>>, RaftRouter<EK, ER>> {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -927,7 +928,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Debug service.
-        <RocksEngine as CreateKvEngine<ER>>::start_debug_service(
+        <EK as CreateKvEngine<ER>>::start_debug_service(
             &engines,
             servers,
             &self.router,
@@ -969,7 +970,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .unwrap_or_else(|e| fatal!("failed to start lock manager: {}", e));
 
         // Backup service.
-        <RocksEngine as CreateKvEngine<ER>>::start_backup_service(
+        <EK as CreateKvEngine<ER>>::start_backup_service(
             &self.config,
             &engines,
             servers,
@@ -1017,11 +1018,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     fn init_metrics_flusher(
         &mut self,
         fetcher: BytesFetcher,
-        engines_info: Arc<EnginesResourceInfo<RocksEngine>>,
+        engines_info: Arc<EnginesResourceInfo<EK>>,
     ) {
-        let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
-            self.engines.as_ref().unwrap().engines.clone(),
-        );
+        let mut engine_metrics =
+            EngineMetricsManager::<EK, ER>::new(self.engines.as_ref().unwrap().engines.clone());
         let mut io_metrics = IOMetricsManager::new(fetcher);
         let engines_info_clone = engines_info.clone();
         self.background_worker
@@ -1045,7 +1045,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             });
     }
 
-    fn init_storage_stats_task(&self, engines: Engines<RocksEngine, ER>) {
+    fn init_storage_stats_task(&self, engines: Engines<EK, ER>) {
         let config_disk_capacity: u64 = self.config.raft_store.capacity.0;
         let data_dir = self.config.storage.data_dir.clone();
         let store_path = self.store_path.clone();
@@ -1183,13 +1183,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 }
 
-impl TiKVServer<RocksEngine> {
-    fn init_raw_engines(
-        &mut self,
-    ) -> (
-        Engines<RocksEngine, RocksEngine>,
-        Arc<EnginesResourceInfo<RocksEngine>>,
-    ) {
+impl<EK> TiKVServer<EK, RocksEngine>
+where
+    EK: KvEngine + CreateKvEngine<RocksEngine>,
+{
+    fn init_raw_engines(&mut self) -> (Engines<EK, RocksEngine>, Arc<EnginesResourceInfo<EK>>) {
         let env = get_env(self.encryption_key_manager.clone(), get_io_rate_limiter()).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
@@ -1206,7 +1204,7 @@ impl TiKVServer<RocksEngine> {
         )
         .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
 
-        let kv_engine = <RocksEngine as CreateKvEngine<RocksEngine>>::create_kv_engine(
+        let kv_engine = <EK as CreateKvEngine<RocksEngine>>::create_kv_engine(
             &self.config,
             &self.region_info_accessor,
             &self.store_path,
@@ -1223,7 +1221,7 @@ impl TiKVServer<RocksEngine> {
 
         check_and_dump_raft_engine(&self.config, &engines.raft, 8);
 
-        <RocksEngine as CreateKvEngine<RocksEngine>>::register_kv_config(
+        <EK as CreateKvEngine<RocksEngine>>::register_kv_config(
             &engines.kv,
             &self.config,
             &mut self.cfg_controller,
@@ -1248,13 +1246,11 @@ impl TiKVServer<RocksEngine> {
     }
 }
 
-impl TiKVServer<RaftLogEngine> {
-    fn init_raw_engines(
-        &mut self,
-    ) -> (
-        Engines<RocksEngine, RaftLogEngine>,
-        Arc<EnginesResourceInfo<RocksEngine>>,
-    ) {
+impl<EK> TiKVServer<EK, RaftLogEngine>
+where
+    EK: KvEngine + CreateKvEngine<RaftLogEngine>,
+{
+    fn init_raw_engines(&mut self) -> (Engines<EK, RaftLogEngine>, Arc<EnginesResourceInfo<EK>>) {
         let env = get_env(self.encryption_key_manager.clone(), get_io_rate_limiter()).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
@@ -1267,7 +1263,7 @@ impl TiKVServer<RaftLogEngine> {
         check_and_dump_raft_db(&self.config, &raft_engine, &env, 8);
 
         // Create kv engine.
-        let kv_engine = <RocksEngine as CreateKvEngine<RaftLogEngine>>::create_kv_engine(
+        let kv_engine = <EK as CreateKvEngine<RaftLogEngine>>::create_kv_engine(
             &self.config,
             &self.region_info_accessor,
             &self.store_path,
@@ -1279,7 +1275,7 @@ impl TiKVServer<RaftLogEngine> {
 
         let engines = Engines::new(kv_engine, raft_engine);
 
-        <RocksEngine as CreateKvEngine<RaftLogEngine>>::register_kv_config(
+        <EK as CreateKvEngine<RaftLogEngine>>::register_kv_config(
             &engines.kv,
             &self.config,
             &mut self.cfg_controller,
