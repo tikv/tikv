@@ -470,13 +470,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         .map(Arc::new);
     }
 
-    fn init_flow_receiver(&mut self) -> engine_rocks::FlowListener {
-        let (tx, rx) = mpsc::channel();
-        self.flow_info_sender = Some(tx.clone());
-        self.flow_info_receiver = Some(rx);
-        engine_rocks::FlowListener::new(tx)
-    }
-
     fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let engine = RaftKv::new(
@@ -1210,29 +1203,18 @@ impl TiKVServer<RocksEngine> {
         )
         .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
 
-        // Create kv engine.
-        let flow_listener = self.init_flow_receiver();
-        let mut kv_db_opts = self.config.rocksdb.build_opt();
-        kv_db_opts.set_env(env);
-        kv_db_opts.add_event_listener(create_rocks_raftstore_compaction_listener(&self.router));
-        kv_db_opts.add_event_listener(flow_listener);
-        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
+        let kv_engine = <RocksEngine as CreateKvEngine<RocksEngine>>::create_kv_engine(
+            &self.config,
+            &self.region_info_accessor,
+            &self.store_path,
+            &self.router,
+            env,
             &block_cache,
-            Some(&self.region_info_accessor),
-            self.config.storage.enable_ttl,
+            &mut self.flow_info_receiver,
         );
-        let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
-        let kv_engine = engine_rocks::raw_util::new_engine_opt(
-            db_path.to_str().unwrap(),
-            kv_db_opts,
-            kv_cfs_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
-        let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
         let mut raft_engine = RocksEngine::from_db(Arc::new(raft_engine));
         let shared_block_cache = block_cache.is_some();
-        kv_engine.set_shared_block_cache(shared_block_cache);
         raft_engine.set_shared_block_cache(shared_block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
 
@@ -1282,27 +1264,16 @@ impl TiKVServer<RaftLogEngine> {
         check_and_dump_raft_db(&self.config, &raft_engine, &env, 8);
 
         // Create kv engine.
-        let flow_listener = self.init_flow_receiver();
-        let mut kv_db_opts = self.config.rocksdb.build_opt();
-        kv_db_opts.set_env(env);
-        kv_db_opts.add_event_listener(create_rocks_raftstore_compaction_listener(&self.router));
-        kv_db_opts.add_event_listener(flow_listener);
-        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
+        let kv_engine = <RocksEngine as CreateKvEngine<RaftLogEngine>>::create_kv_engine(
+            &self.config,
+            &self.region_info_accessor,
+            &self.store_path,
+            &self.router,
+            env,
             &block_cache,
-            Some(&self.region_info_accessor),
-            self.config.storage.enable_ttl,
+            &mut self.flow_info_receiver,
         );
-        let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
-        let kv_engine = engine_rocks::raw_util::new_engine_opt(
-            db_path.to_str().unwrap(),
-            kv_db_opts,
-            kv_cfs_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
-        let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
-        let shared_block_cache = block_cache.is_some();
-        kv_engine.set_shared_block_cache(shared_block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
 
         <RocksEngine as CreateKvEngine<RaftLogEngine>>::register_kv_config(
@@ -1325,6 +1296,16 @@ trait CreateKvEngine<ER>: KvEngine
 where
     ER: RaftEngine,
 {
+    fn create_kv_engine(
+        config: &TiKvConfig,
+        region_info_accessor: &RegionInfoAccessor,
+        store_path: &Path,
+        router: &RaftRouter<Self, ER>,
+        env: Arc<engine_rocks::raw::Env>,
+        block_cache: &Option<engine_rocks::raw::Cache>,
+        flow_info_receiver: &mut Option<mpsc::Receiver<FlowInfo>>,
+    ) -> Self;
+
     fn start_debug_service(
         engines: &TiKVEngines<Self, ER>,
         servers: &mut Servers<Self, ER>,
@@ -1353,6 +1334,46 @@ impl<ER> CreateKvEngine<ER> for RocksEngine
 where
     ER: RaftEngine,
 {
+    fn create_kv_engine(
+        config: &TiKvConfig,
+        region_info_accessor: &RegionInfoAccessor,
+        store_path: &Path,
+        router: &RaftRouter<Self, ER>,
+        env: Arc<engine_rocks::raw::Env>,
+        block_cache: &Option<engine_rocks::raw::Cache>,
+        flow_info_receiver: &mut Option<mpsc::Receiver<FlowInfo>>,
+    ) -> Self {
+        let flow_listener = {
+            let (tx, rx) = mpsc::channel();
+            *flow_info_receiver = Some(rx);
+            engine_rocks::FlowListener::new(tx)
+        };
+
+        let mut kv_db_opts = config.rocksdb.build_opt();
+        kv_db_opts.set_env(env);
+        kv_db_opts.add_event_listener(create_rocks_raftstore_compaction_listener(router));
+        kv_db_opts.add_event_listener(flow_listener);
+        let kv_cfs_opts = config.rocksdb.build_cf_opts(
+            block_cache,
+            Some(region_info_accessor),
+            config.storage.enable_ttl,
+        );
+        let db_path = store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
+        let kv_engine = engine_rocks::raw_util::new_engine_opt(
+            db_path.to_str().unwrap(),
+            kv_db_opts,
+            kv_cfs_opts,
+        )
+        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
+
+        let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
+
+        let shared_block_cache = block_cache.is_some();
+        kv_engine.set_shared_block_cache(shared_block_cache);
+
+        kv_engine
+    }
+
     fn start_debug_service(
         engines: &TiKVEngines<Self, ER>,
         servers: &mut Servers<Self, ER>,
