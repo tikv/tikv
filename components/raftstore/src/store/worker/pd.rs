@@ -918,6 +918,42 @@ where
         self.remote.spawn(f);
     }
 
+    fn execute_recovery_plan(recovery_plan: pdpb::RecoveryPlan, kv_engine: EK) {
+	let mut wb = kv_engine.write_batch();
+        let failed_stores = HashSet::<u64>::from_iter(recovery_plan.failed_stores());
+        {
+            let remove_stores = |key: &[u8], value: &[u8], kv_wb: &mut RocksWriteBatch| {
+                let (_, suffix_type) = box_try!(keys::decode_region_meta_key(key));
+                if suffix_type != keys::REGION_STATE_SUFFIX {
+                    return Ok(());
+                }
+
+                let mut region_state = RegionLocalState::default();
+                box_try!(region_state.merge_from_bytes(value));
+                if region_state.get_state() == PeerState::Tombstone {
+                    return Ok(());
+                }
+
+                let mut new_peers = region_state.get_region().get_peers().to_owned();
+                new_peers.retain(|peer| !store_ids.contains(&peer.get_store_id()));
+                region_state.mut_region().set_peers(new_peers.into());
+                box_try!(kv_wb.put_msg_cf(CF_RAFT, key, &region_state));
+                Ok(())
+            };
+
+            box_try!(kv_engine.scan_cf(
+                CF_RAFT,
+                keys::REGION_META_MIN_KEY,
+                keys::REGION_META_MAX_KEY,
+                false,
+                |key, value| remove_stores(key, value, &mut wb).map(|_| true)));
+        }
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        box_try!(wb.write_opt(&write_opts));
+    }
+
+
     fn handle_store_heartbeat(
         &mut self,
         mut stats: pdpb::StoreStats,
