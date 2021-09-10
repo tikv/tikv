@@ -6,7 +6,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use encryption::{DataKeyManager, EncrypterWriter};
+use encryption::{CrypterWriter, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{EncryptionKeyManager, KvEngine, SSTMetaInfo, SstReader};
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
@@ -29,7 +29,7 @@ impl SyncableWrite for File {
     }
 }
 
-impl SyncableWrite for EncrypterWriter<File> {
+impl SyncableWrite for CrypterWriter<File> {
     fn sync(&self) -> io::Result<()> {
         self.sync_all()
     }

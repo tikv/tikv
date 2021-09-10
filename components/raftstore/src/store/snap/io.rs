@@ -5,8 +5,7 @@ use std::sync::Arc;
 use std::{fs, usize};
 
 use encryption::{
-    encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader, EncrypterWriter,
-    Iv,
+    encryption_method_from_db_encryption_method, CrypterReader, CrypterWriter, DataKeyManager, Iv,
 };
 use engine_traits::{
     CfName, EncryptionKeyManager, Error as EngineError, Iterable, KvEngine, Mutable,
@@ -47,14 +46,14 @@ where
     let mut file = Some(box_try!(
         OpenOptions::new().write(true).create_new(true).open(path)
     ));
-    let mut encrypted_file: Option<EncrypterWriter<File>> = None;
+    let mut encrypted_file: Option<CrypterWriter<File>> = None;
     let mut should_encrypt = false;
 
     if let Some(key_mgr) = key_mgr {
         let enc_info = box_try!(key_mgr.new_file(path));
         let mthd = encryption_method_from_db_encryption_method(enc_info.method);
         if mthd != EncryptionMethod::Plaintext {
-            let writer = box_try!(EncrypterWriter::new(
+            let writer = box_try!(CrypterWriter::new_encypter(
                 file.take().unwrap(),
                 mthd,
                 &enc_info.key,
@@ -85,7 +84,7 @@ where
         let file = if !should_encrypt {
             file.unwrap()
         } else {
-            encrypted_file.unwrap().finalize()
+            encrypted_file.unwrap().finalize().unwrap()
         };
         box_try!(file.sync_all());
     } else {
@@ -235,7 +234,7 @@ pub fn get_decrypter_reader(
     }
     let iv = box_try!(Iv::from_slice(&enc_info.iv));
     let f = box_try!(File::open(file));
-    let r = box_try!(DecrypterReader::new(f, mthd, &enc_info.key, iv));
+    let r = box_try!(CrypterReader::new_decrypter(f, mthd, &enc_info.key, iv));
     Ok(Box::new(r) as Box<dyn Read + Send>)
 }
 
