@@ -2,7 +2,7 @@
 
 ## [Website](https://tikv.org) | [Documentation](https://tikv.org/docs/latest/concepts/overview/) | [Community Chat](https://tikv.org/chat)
 
-[![Build Status](https://internal.pingcap.net/idc-jenkins/buildStatus/icon?job=build_tikv_multi_branch%2Fmaster)](https://internal.pingcap.net/idc-jenkins/job/build_tikv_multi_branch/)
+[![Build Status](https://ci.pingcap.net/buildStatus/icon?job=tikv_ghpr_build_master)](https://ci.pingcap.net/blue/organizations/jenkins/tikv_ghpr_build_master/activity)
 [![Coverage Status](https://codecov.io/gh/tikv/tikv/branch/master/graph/badge.svg)](https://codecov.io/gh/tikv/tikv)
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/2574/badge)](https://bestpractices.coreinfrastructure.org/projects/2574)
 
