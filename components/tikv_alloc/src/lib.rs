@@ -125,6 +125,7 @@ mod imp;
 mod imp;
 
 pub use crate::imp::*;
+pub use crate::trace::*;
 
 #[global_allocator]
 static ALLOC: imp::Allocator = imp::allocator();

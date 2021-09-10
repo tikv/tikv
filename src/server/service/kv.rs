@@ -45,6 +45,7 @@ use raftstore::store::memory::{MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
 use raftstore::store::CheckLeaderTask;
 use raftstore::store::{Callback, CasualMessage, RaftCmdExtraOpts};
 use raftstore::{DiscardReason, Error as RaftStoreError};
+use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::sys::memory_usage_reaches_high_water;
@@ -353,7 +354,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         let begin_instant = Instant::now_coarse();
         let future = future_copr(&self.copr, Some(ctx.peer()), req);
         let task = async move {
-            let resp = future.await?;
+            let resp = future.await?.consume();
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .coprocessor
@@ -1142,14 +1143,15 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
     }
 }
 
-fn response_batch_commands_request<F>(
+fn response_batch_commands_request<F, T>(
     id: u64,
     resp: F,
     tx: Sender<MeasuredSingleResponse>,
     begin: Instant,
     label: GrpcTypeKind,
 ) where
-    F: Future<Output = Result<batch_commands_response::Response, ()>> + Send + 'static,
+    MemoryTraceGuard<batch_commands_response::Response>: From<T>,
+    F: Future<Output = Result<T, ()>> + Send + 'static,
 {
     let task = async move {
         if let Ok(resp) = resp.await {
@@ -1218,6 +1220,15 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get);
                     }
                 },
+                Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
+                    let begin_instant = Instant::now();
+                    let resp = future_copr(copr, Some(peer.to_string()), req)
+                        .map_ok(|resp| {
+                            resp.map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
+                        })
+                        .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::coprocessor);
+                },
                 $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
                     let begin_instant = Instant::now();
                     let resp = $future_fn($($arg,)* req)
@@ -1252,7 +1263,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         RawScan, future_raw_scan(storage), raw_scan;
         RawDeleteRange, future_raw_delete_range(storage), raw_delete_range;
         RawBatchScan, future_raw_batch_scan(storage), raw_batch_scan;
-        Coprocessor, future_copr(copr, Some(peer.to_string())), coprocessor;
         RawCoprocessor, future_raw_coprocessor(copr_v2, storage), coprocessor;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
@@ -1815,7 +1825,7 @@ fn future_copr<E: Engine>(
     copr: &Endpoint<E>,
     peer: Option<String>,
     req: Request,
-) -> impl Future<Output = ServerResult<Response>> {
+) -> impl Future<Output = ServerResult<MemoryTraceGuard<Response>>> {
     let ret = copr.parse_and_handle_unary_request(req, peer);
     async move { Ok(ret.await) }
 }
@@ -2014,15 +2024,15 @@ impl GrpcRequestDuration {
 #[derive(Debug)]
 pub struct MeasuredSingleResponse {
     pub id: u64,
-    pub resp: batch_commands_response::Response,
+    pub resp: MemoryTraceGuard<batch_commands_response::Response>,
     pub measure: GrpcRequestDuration,
 }
 impl MeasuredSingleResponse {
-    pub fn new(
-        id: u64,
-        resp: batch_commands_response::Response,
-        measure: GrpcRequestDuration,
-    ) -> Self {
+    pub fn new<T>(id: u64, resp: T, measure: GrpcRequestDuration) -> Self
+    where
+        MemoryTraceGuard<batch_commands_response::Response>: From<T>,
+    {
+        let resp = resp.into();
         MeasuredSingleResponse { id, resp, measure }
     }
 }
@@ -2046,10 +2056,10 @@ impl BatchCollector<MeasuredBatchResponse, MeasuredSingleResponse> for BatchResp
     fn collect(
         &mut self,
         v: &mut MeasuredBatchResponse,
-        e: MeasuredSingleResponse,
+        mut e: MeasuredSingleResponse,
     ) -> Option<MeasuredSingleResponse> {
         v.batch_resp.mut_request_ids().push(e.id);
-        v.batch_resp.mut_responses().push(e.resp);
+        v.batch_resp.mut_responses().push(e.resp.consume());
         v.measures.push(e.measure);
         None
     }
