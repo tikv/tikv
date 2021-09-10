@@ -1266,15 +1266,12 @@ impl TiKVServer<RocksEngine> {
 
         check_and_dump_raft_engine(&self.config, &engines.raft, 8);
 
-        let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        cfg_controller.register(
-            tikv::config::Module::Rocksdb,
-            Box::new(DBConfigManger::new(
-                engines.kv.clone(),
-                DBType::Kv,
-                self.config.storage.block_cache.shared,
-            )),
+        <RocksEngine as CreateKvEngine<RocksEngine>>::register_kv_config(
+            &engines.kv,
+            &self.config,
+            &mut self.cfg_controller,
         );
+        let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Raftdb,
             Box::new(DBConfigManger::new(
@@ -1336,14 +1333,10 @@ impl TiKVServer<RaftLogEngine> {
         kv_engine.set_shared_block_cache(shared_block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
 
-        let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        cfg_controller.register(
-            tikv::config::Module::Rocksdb,
-            Box::new(DBConfigManger::new(
-                engines.kv.clone(),
-                DBType::Kv,
-                self.config.storage.block_cache.shared,
-            )),
+        <RocksEngine as CreateKvEngine<RaftLogEngine>>::register_kv_config(
+            &engines.kv,
+            &self.config,
+            &mut self.cfg_controller,
         );
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
@@ -1374,6 +1367,12 @@ where
         background_worker: &Worker,
         region_info_accessor: &RegionInfoAccessor,
         concurrency_manager: &ConcurrencyManager,
+        cfg_controller: &mut Option<ConfigController>,
+    );
+
+    fn register_kv_config(
+        &self,
+        config: &TiKvConfig,
         cfg_controller: &mut Option<ConfigController>,
     );
 }
@@ -1436,6 +1435,22 @@ where
             Box::new(backup_endpoint.get_config_manager()),
         );
         backup_worker.start(backup_endpoint);
+    }
+
+    fn register_kv_config(
+        &self,
+        config: &TiKvConfig,
+        cfg_controller: &mut Option<ConfigController>,
+    ) {
+        let cfg_controller = cfg_controller.as_mut().unwrap();
+        cfg_controller.register(
+            tikv::config::Module::Rocksdb,
+            Box::new(DBConfigManger::new(
+                self.clone(),
+                DBType::Kv,
+                config.storage.block_cache.shared,
+            )),
+        );
     }
 }
 
