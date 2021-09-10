@@ -1893,6 +1893,7 @@ mod tests {
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn test_collect_stats() {
+        use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
         use std::sync::Mutex;
         use std::time::Instant;
         use tikv_util::worker::LazyWorker;
