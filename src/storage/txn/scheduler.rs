@@ -29,10 +29,12 @@ use std::u64;
 
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
+use futures::compat::Future01CompatExt;
+use futures::{select, FutureExt as _};
 use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
 use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
-use tikv_util::{callback::must_call, deadline::Deadline, time::Instant};
+use tikv_util::{callback::must_call, time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::TimeStamp;
 
 use crate::server::lock_manager::waiter_manager;
@@ -63,31 +65,22 @@ const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
 // The default limit is set to be very large. Then, requests without `max_exectuion_duration`
 // will not be aborted unexpectedly.
-const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
+pub const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Task is a running command.
 pub(super) struct Task {
     pub(super) cid: u64,
     pub(super) cmd: Command,
     pub(super) extra_op: ExtraOp,
-    pub(super) deadline: Deadline,
 }
 
 impl Task {
     /// Creates a task for a running command.
     pub(super) fn new(cid: u64, cmd: Command) -> Task {
-        let max_execution_duration_ms = cmd.ctx().max_execution_duration_ms;
-        let execution_duration_limit = if max_execution_duration_ms == 0 {
-            DEFAULT_EXECUTION_DURATION_LIMIT
-        } else {
-            Duration::from_millis(max_execution_duration_ms)
-        };
-        let deadline = Deadline::from_now(execution_duration_limit);
         Task {
             cid,
             cmd,
             extra_op: ExtraOp::Noop,
-            deadline,
         }
     }
 }
@@ -112,6 +105,9 @@ struct TaskContext {
     lock: Lock,
     cb: Option<StorageCallback>,
     pr: Option<ProcessResult>,
+    // The one who sets `owned` from false to true is allowed to take
+    // `cb` and `pr` safely.
+    owned: AtomicBool,
     write_bytes: usize,
     tag: metrics::CommandKind,
     // How long it waits on latches.
@@ -140,6 +136,7 @@ impl TaskContext {
             lock,
             cb: Some(cb),
             pr: None,
+            owned: AtomicBool::new(false),
             write_bytes,
             tag,
             latch_timer: Instant::now_coarse(),
@@ -154,6 +151,14 @@ impl TaskContext {
         SCHED_LATCH_HISTOGRAM_VEC
             .get(self.tag)
             .observe(self.latch_timer.saturating_elapsed_secs());
+    }
+
+    // Try to own this TaskContext by setting `owned` from false to true.
+    // Returns whether it succeeds to own the TaskContext.
+    fn try_own(&self) -> bool {
+        self.owned
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
+            .is_ok()
     }
 }
 
@@ -256,7 +261,7 @@ impl<L: LockManager> SchedulerInner<L> {
         let tctx = task_slot.get_mut(&cid).unwrap();
         // Check deadline early during acquiring latches to avoid expired requests blocking
         // other requests.
-        if let Err(e) = tctx.task.as_ref().unwrap().deadline.check() {
+        if let Err(e) = tctx.task.as_ref().unwrap().cmd.deadline().check() {
             // `acquire_lock_on_wakeup` is called when another command releases its locks and wakes up
             // command `cid`. This command inserted its lock before and now the lock is at the
             // front of the queue. The actual acquired count is one more than the `owned_count`
@@ -379,6 +384,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tctx = task_slot
             .entry(cid)
             .or_insert_with(|| self.inner.new_task_context(Task::new(cid, cmd), callback));
+        let deadline = tctx.task.as_ref().unwrap().cmd.deadline();
         if self.inner.latches.acquire(&mut tctx.lock, cid) {
             fail_point!("txn_scheduler_acquire_success");
             tctx.on_schedule();
@@ -387,6 +393,29 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             self.execute(task);
             return;
         }
+        // Check deadline in background.
+        let sched = self.clone();
+        self.inner
+            .high_priority_pool
+            .pool
+            .spawn(async move {
+                GLOBAL_TIMER_HANDLE
+                    .delay(deadline.to_std_instant())
+                    .compat()
+                    .await
+                    .unwrap();
+                let cb = sched
+                    .inner
+                    .get_task_slot(cid)
+                    .get_mut(&cid)
+                    .and_then(|tctx| if tctx.try_own() { tctx.cb.take() } else { None });
+                if let Some(cb) = cb {
+                    cb.execute(ProcessResult::Failed {
+                        err: StorageErrorInner::DeadlineExceeded.into(),
+                    })
+                }
+            })
+            .unwrap();
         fail_point!("txn_scheduler_acquire_fail");
     }
 
@@ -440,6 +469,27 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 match snapshot {
                     Ok(snapshot) => {
                         SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
+
+                        if !sched
+                            .inner
+                            .get_task_slot(task.cid)
+                            .get(&task.cid)
+                            .unwrap()
+                            .try_own()
+                        {
+                            sched
+                                .get_sched_pool(task.cmd.priority())
+                                .clone()
+                                .pool
+                                .spawn(async move {
+                                    sched.finish_with_err(
+                                        task.cid,
+                                        StorageErrorInner::DeadlineExceeded,
+                                    );
+                                })
+                                .unwrap();
+                            return;
+                        }
 
                         if let Some(term) = cb_ctx.term {
                             task.cmd.ctx_mut().set_term(term);
@@ -507,7 +557,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let pr = ProcessResult::Failed {
             err: StorageError::from(err),
         };
-        tctx.cb.unwrap().execute(pr);
+        if let Some(cb) = tctx.cb {
+            cb.execute(pr);
+        }
 
         self.release_lock(&tctx.lock, cid);
     }
@@ -717,7 +769,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .load(Ordering::Relaxed);
         let pipelined = pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
 
-        let deadline = task.deadline;
+        let deadline = task.cmd.deadline();
         let write_result = {
             let context = WriteContext {
                 lock_mgr: &self.inner.lock_mgr,
@@ -894,9 +946,19 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     if self.inner.flow_controller.enabled()
                         && !self.inner.flow_controller.is_unlimited()
                     {
+                        let mut deadline_fut = GLOBAL_TIMER_HANDLE
+                            .delay(deadline.to_std_instant())
+                            .compat()
+                            .fuse();
                         let start = Instant::now_coarse();
-                        // Wait for the delay
-                        let _guard = self.control_mutex.lock().await;
+                        // Wait for the delay. But don't wait beyond the deadline.
+                        let _guard = select! {
+                            _ = deadline_fut => {
+                                scheduler.finish_with_err(cid, StorageErrorInner::DeadlineExceeded);
+                                return;
+                            },
+                            guard = self.control_mutex.lock().fuse() => guard,
+                        };
                         SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
                     }
 
@@ -934,7 +996,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// the task with a `DeadlineExceeded` error.
     #[inline]
     fn check_task_deadline_exceeded(&self, task: &Task) -> bool {
-        if let Err(e) = task.deadline.check() {
+        if let Err(e) = task.cmd.deadline().check() {
             self.finish_with_err(task.cid, e);
             true
         } else {
@@ -952,13 +1014,14 @@ mod tests {
         lock_manager::DummyLockManager,
         mvcc::{self, Mutation},
         txn::commands::TypedCommand,
+        TxnStatus,
     };
     use crate::storage::{
         txn::{commands, latch::*},
         TestEngineBuilder,
     };
     use futures_executor::block_on;
-    use kvproto::kvrpcpb::{BatchRollbackRequest, Context};
+    use kvproto::kvrpcpb::{BatchRollbackRequest, CheckTxnStatusRequest, Context};
     use raftstore::store::{ReadStats, WriteStats};
     use tikv_util::config::ReadableSize;
     use tikv_util::future::paired_future_callback;
@@ -1120,21 +1183,23 @@ mod tests {
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
 
         // The task waits for 200ms until it acquires the latch, but the execution
-        // time limit is 100ms.
+        // time limit is 100ms. Before the latch is released, it should return
+        // DeadlineExceeded error.
         thread::sleep(Duration::from_millis(200));
-        scheduler.release_lock(&lock, cid);
         assert!(matches!(
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
+        scheduler.release_lock(&lock, cid);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();
+        req.mut_context().max_execution_duration_ms = 100;
         req.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
         let cmd: TypedCommand<()> = req.into();
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
-        assert!(block_on(f).is_ok());
+        assert!(block_on(f).unwrap().is_ok());
     }
 
     #[test]
@@ -1181,11 +1246,69 @@ mod tests {
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();
+        req.mut_context().max_execution_duration_ms = 100;
         req.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
         let cmd: TypedCommand<()> = req.into();
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
-        assert!(block_on(f).is_ok());
+        assert!(block_on(f).unwrap().is_ok());
+    }
+
+    #[test]
+    fn test_flow_control_trottle_deadline() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let config = Config {
+            scheduler_concurrency: 1024,
+            scheduler_worker_pool_size: 1,
+            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
+            enable_async_apply_prewrite: false,
+            ..Default::default()
+        };
+        let scheduler = Scheduler::new(
+            engine,
+            DummyLockManager,
+            ConcurrencyManager::new(1.into()),
+            &config,
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(FlowController::empty()),
+            DummyReporter,
+        );
+
+        let mut req = CheckTxnStatusRequest::default();
+        req.mut_context().max_execution_duration_ms = 100;
+        req.set_primary_key(b"a".to_vec());
+        req.set_lock_ts(10);
+        req.set_rollback_if_not_exist(true);
+
+        let cmd: TypedCommand<TxnStatus> = req.into();
+        let (cb, f) = paired_future_callback();
+
+        // Lock the control_mutex to simulate flow control.
+        scheduler.inner.flow_controller.enable(true);
+        scheduler.inner.flow_controller.set_speed_limit(1e9);
+        let guard = block_on(scheduler.control_mutex.lock());
+        scheduler.run_cmd(cmd.cmd, StorageCallback::TxnStatus(cb));
+        // The task waits for 200ms until it locks the control_mutex, but the execution
+        // time limit is 100ms. Before the mutex is locked, it should return
+        // DeadlineExceeded error.
+        thread::sleep(Duration::from_millis(200));
+        assert!(matches!(
+            block_on(f).unwrap(),
+            Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+        ));
+
+        drop(guard);
+        // A new request should not be blocked after releasing the lock.
+        let mut req = CheckTxnStatusRequest::default();
+        req.mut_context().max_execution_duration_ms = 100;
+        req.set_primary_key(b"a".to_vec());
+        req.set_lock_ts(10);
+        req.set_rollback_if_not_exist(true);
+
+        let cmd: TypedCommand<TxnStatus> = req.into();
+        let (cb, f) = paired_future_callback();
+        scheduler.run_cmd(cmd.cmd, StorageCallback::TxnStatus(cb));
+        assert!(block_on(f).unwrap().is_ok());
     }
 
     #[test]
