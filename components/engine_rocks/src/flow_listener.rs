@@ -11,6 +11,8 @@ pub enum FlowInfo {
     L0Intra(String, u64),
     Flush(String, u64),
     Compaction(String),
+    BeforeUnsafeDestroyRange,
+    AfterUnsafeDestroyRange,
 }
 
 pub struct FlowListener {

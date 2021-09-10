@@ -172,6 +172,7 @@ struct TiKVServer<ER: RaftEngine> {
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
     router: RaftRouter<RocksEngine, ER>,
+    flow_info_sender: Option<mpsc::Sender<FlowInfo>>,
     flow_info_receiver: Option<mpsc::Receiver<FlowInfo>>,
     system: Option<RaftBatchSystem<RocksEngine, ER>>,
     resolver: resolve::PdStoreAddrResolver,
@@ -275,6 +276,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             concurrency_manager,
             env,
             background_worker,
+            flow_info_sender: None,
             flow_info_receiver: None,
         }
     }
@@ -488,6 +490,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn init_flow_receiver(&mut self) -> engine_rocks::FlowListener {
         let (tx, rx) = mpsc::channel();
+        self.flow_info_sender = Some(tx.clone());
         self.flow_info_receiver = Some(rx);
         engine_rocks::FlowListener::new(tx)
     }
@@ -519,6 +522,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
             self.router.clone(),
+            self.flow_info_sender.take().unwrap(),
             self.config.gc.clone(),
             self.pd_client.feature_gate().clone(),
         );
@@ -542,14 +546,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_servers(&mut self) -> Arc<VersionTrack<ServerConfig>> {
-        let gc_worker = self.init_gc_worker();
-        let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
-        let ttl_scheduler = ttl_checker.scheduler();
         let flow_controller = Arc::new(FlowController::new(
             &self.config.storage.flow_control,
             self.engines.as_ref().unwrap().engine.kv_engine(),
             self.flow_info_receiver.take().unwrap(),
         ));
+        let gc_worker = self.init_gc_worker();
+        let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
+        let ttl_scheduler = ttl_checker.scheduler();
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(

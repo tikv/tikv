@@ -5,10 +5,12 @@ use std::fmt::{self, Display, Formatter};
 use std::iter::Peekable;
 use std::mem;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
 
 use concurrency_manager::ConcurrencyManager;
+use engine_rocks::FlowInfo;
 use engine_traits::{
     DeleteStrategy, KvEngine, MiscExt, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK,
     CF_WRITE,
@@ -176,6 +178,7 @@ where
     engine: E,
 
     raft_store_router: RR,
+    flow_info_sender: Sender<FlowInfo>,
 
     /// Used to limit the write flow of GC.
     limiter: Limiter,
@@ -194,6 +197,7 @@ where
     pub fn new(
         engine: E,
         raft_store_router: RR,
+        flow_info_sender: Sender<FlowInfo>,
         cfg_tracker: Tracker<GcConfig>,
         cfg: GcConfig,
     ) -> Self {
@@ -205,6 +209,7 @@ where
         Self {
             engine,
             raft_store_router,
+            flow_info_sender,
             limiter,
             cfg,
             cfg_tracker,
@@ -391,6 +396,9 @@ where
             "start_key" => %start_key, "end_key" => %end_key
         );
 
+        self.flow_info_sender
+            .send(FlowInfo::BeforeUnsafeDestroyRange)
+            .unwrap();
         let local_storage = self.engine.kv_engine();
 
         // Convert keys to RocksDB layer form
@@ -455,6 +463,9 @@ where
             "unsafe destroy range finished cleaning up all";
             "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.saturating_elapsed(),
         );
+        self.flow_info_sender
+            .send(FlowInfo::AfterUnsafeDestroyRange)
+            .unwrap();
 
         self.raft_store_router
             .send_store_msg(StoreMsg::ClearRegionSizeInRange {
@@ -692,6 +703,8 @@ where
 
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
     raft_store_router: RR,
+    /// Used to signal unsafe destroy range is executed.
+    flow_info_sender: Option<Sender<FlowInfo>>,
 
     config_manager: GcWorkerConfigManager,
 
@@ -722,6 +735,7 @@ where
         Self {
             engine: self.engine.clone(),
             raft_store_router: self.raft_store_router.clone(),
+            flow_info_sender: self.flow_info_sender.clone(),
             config_manager: self.config_manager.clone(),
             scheduled_tasks: self.scheduled_tasks.clone(),
             refs: self.refs.clone(),
@@ -762,6 +776,7 @@ where
     pub fn new(
         engine: E,
         raft_store_router: RR,
+        flow_info_sender: Sender<FlowInfo>,
         cfg: GcConfig,
         feature_gate: FeatureGate,
     ) -> GcWorker<E, RR> {
@@ -771,6 +786,7 @@ where
         GcWorker {
             engine,
             raft_store_router,
+            flow_info_sender: Some(flow_info_sender),
             config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
             scheduled_tasks: Arc::new(AtomicUsize::new(0)),
             refs: Arc::new(AtomicUsize::new(1)),
@@ -821,6 +837,7 @@ where
         let runner = GcRunner::new(
             self.engine.clone(),
             self.raft_store_router.clone(),
+            self.flow_info_sender.take().unwrap(),
             self.config_manager.0.clone().tracker("gc-woker".to_owned()),
             self.config_manager.value().clone(),
         );

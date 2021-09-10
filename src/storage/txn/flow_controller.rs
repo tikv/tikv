@@ -15,7 +15,7 @@ use engine_rocks::FlowInfo;
 use engine_traits::KvEngine;
 use num_traits::cast::{AsPrimitive, FromPrimitive};
 use rand::Rng;
-use tikv_util::time::{duration_to_sec, Instant, Limiter};
+use tikv_util::time::{Instant, Limiter};
 
 use crate::storage::config::FlowControlConfig;
 use crate::storage::metrics::*;
@@ -129,7 +129,11 @@ impl FlowController {
         engine: E,
         flow_info_receiver: Receiver<FlowInfo>,
     ) -> Self {
-        let limiter = Arc::new(<Limiter>::builder(f64::INFINITY).refill(Duration::from_millis(10)).build());
+        let limiter = Arc::new(
+            <Limiter>::builder(f64::INFINITY)
+                .refill(Duration::from_millis(1))
+                .build(),
+        );
         let discard_ratio = Arc::new(AtomicU32::new(0));
         let checker = FlowChecker::new(config, engine, discard_ratio.clone(), limiter.clone());
         let (tx, rx) = mpsc::sync_channel(5);
@@ -295,34 +299,6 @@ where
         v[((self.records.len() - 1) as f64 * 0.90) as usize].0
     }
 
-    pub fn slope(&self) -> f64 {
-        if self.records.len() <= 1 {
-            return 0.0;
-        }
-
-        // calculate the average of left and right parts
-        let half = self.records.len() / 2;
-        let mut left = T::default();
-        let mut right = T::default();
-        for (i, r) in self.records.iter().enumerate() {
-            if i < half {
-                left += r.0;
-            } else if self.records.len() - i - 1 < half {
-                right += r.0;
-            }
-        }
-        // use the two averages with the time span of oldest and latest records
-        // to get a slope
-        let elapsed = duration_to_sec(
-            self.records
-                .back()
-                .unwrap()
-                .1
-                .duration_since(self.records.front().unwrap().1),
-        );
-        (right - left).as_() / half as f64 / (elapsed / 2.0)
-    }
-
     pub fn trend(&self) -> Trend {
         if self.records.len() <= 1 {
             return Trend::NoTrend;
@@ -392,6 +368,7 @@ struct CFFlowChecker {
 
     // Pending compaction bytes related
     long_term_pending_bytes: Smoother<f64, 60>,
+    pending_bytes_before_unsafe_destroy_range: Option<f64>,
 
     // On start related markers. Because after restart, the memtable, l0 files
     // and compaction pending bytes may be high on start. If throttle on start
@@ -413,7 +390,6 @@ impl Default for CFFlowChecker {
             last_num_l0_files: 0,
             last_num_l0_files_from_flush: 0,
             long_term_num_l0_files: Smoother::default(),
-            long_term_pending_bytes: Smoother::default(),
             last_flush_bytes: 0,
             last_flush_bytes_time: Instant::now_coarse(),
             short_term_l0_production_flow: Smoother::default(),
@@ -421,6 +397,8 @@ impl Default for CFFlowChecker {
             last_l0_bytes: 0,
             last_l0_bytes_time: Instant::now_coarse(),
             short_term_l0_consumption_flow: Smoother::default(),
+            long_term_pending_bytes: Smoother::default(),
+            pending_bytes_before_unsafe_destroy_range: None,
             on_start_memtable: true,
             on_start_l0_files: true,
             on_start_pending_bytes: true,
@@ -453,6 +431,7 @@ struct FlowChecker<E: KvEngine> {
     limiter: Arc<Limiter>,
     // Records the foreground write flow at scheduler level of last few seconds.
     write_flow_recorder: Smoother<u64, 30>,
+
     last_record_time: Instant,
     last_speed: f64,
 }
@@ -552,6 +531,33 @@ impl<E: KvEngine> FlowChecker<E> {
                                 }
                             }
                             checker.on_pending_compaction_bytes_change(cf);
+                        }
+                        Ok(FlowInfo::BeforeUnsafeDestroyRange) => {
+                            for (_, cf_checker) in &mut checker.cf_checkers {
+                                cf_checker.pending_bytes_before_unsafe_destroy_range =
+                                    Some(cf_checker.long_term_pending_bytes.get_recent());
+                            }
+                        }
+                        Ok(FlowInfo::AfterUnsafeDestroyRange) => {
+                            for (cf, cf_checker) in &mut checker.cf_checkers {
+                                if let Some(before) =
+                                    cf_checker.pending_bytes_before_unsafe_destroy_range
+                                {
+                                    let soft =
+                                        (checker.soft_pending_compaction_bytes_limit as f64).log2();
+                                    let after = (checker
+                                        .engine
+                                        .get_cf_pending_compaction_bytes(&cf)
+                                        .unwrap_or(None)
+                                        .unwrap_or(0)
+                                        as f64)
+                                        .log2();
+
+                                    if !(before < soft && after >= soft) {
+                                        cf_checker.pending_bytes_before_unsafe_destroy_range = None;
+                                    }
+                                }
+                            }
                         }
                         Err(RecvTimeoutError::Timeout) => {
                             spare_ticks += 1;
@@ -667,6 +673,15 @@ impl<E: KvEngine> FlowChecker<E> {
             }
         }
 
+        let ignore = if let Some(before) = checker.pending_bytes_before_unsafe_destroy_range {
+            if soft <= before {
+                checker.pending_bytes_before_unsafe_destroy_range = None;
+            }
+            true
+        } else {
+            false
+        };
+
         let pending_compaction_bytes = checker.long_term_pending_bytes.get_avg();
 
         for checker in self.cf_checkers.values() {
@@ -675,7 +690,7 @@ impl<E: KvEngine> FlowChecker<E> {
             }
         }
 
-        let ratio = if pending_compaction_bytes < soft {
+        let ratio = if pending_compaction_bytes < soft || ignore {
             0
         } else {
             let new_ratio = (pending_compaction_bytes - soft) / (hard - soft);
@@ -866,8 +881,7 @@ impl<E: KvEngine> FlowChecker<E> {
                 .inc();
             self.throttle_cf = Some(cf.clone());
             let x = if self.last_speed < f64::EPSILON {
-                16.0 * 1024.0 * 1024.0
-                // self.write_flow_recorder.get_percentile_90() as f64
+                self.write_flow_recorder.get_percentile_90() as f64
             } else {
                 self.last_speed
             };
@@ -876,11 +890,7 @@ impl<E: KvEngine> FlowChecker<E> {
             self.limiter.speed_limit() * 0.6
         } else if is_throttled && !should_throttle {
             self.last_speed = self.limiter.speed_limit() * 1.4;
-            if checker.long_term_num_l0_files.get_avg() <= self.l0_files_threshold as f64 {
-                f64::INFINITY
-            } else {
-                self.last_speed
-            }
+            f64::INFINITY
         } else {
             f64::INFINITY
         };
@@ -984,8 +994,7 @@ impl<E: KvEngine> FlowChecker<E> {
                 .inc();
             self.throttle_cf = Some(cf.clone());
             let x = if self.last_speed < f64::EPSILON {
-                16.0 * 1024.0 * 1024.0
-                // self.write_flow_recorder.get_percentile_90() as f64
+                self.write_flow_recorder.get_percentile_90() as f64
             } else {
                 self.last_speed
             };
@@ -994,95 +1003,13 @@ impl<E: KvEngine> FlowChecker<E> {
             self.limiter.speed_limit() * 0.6
         } else if is_throttled && !should_throttle {
             self.last_speed = self.limiter.speed_limit() * 1.4;
-            if checker.long_term_num_l0_files.get_avg() <= self.l0_files_threshold as f64 {
-                f64::INFINITY
-            } else {
-                self.last_speed
-            }
+            f64::INFINITY
         } else {
             f64::INFINITY
         };
 
         self.update_speed_limit(throttle)
-
-            // // adjust throttle speed based on flush flow and target flow
-            // if let Some(_num_l0_for_last_update_target_flow) =
-            //     self.num_l0_for_last_update_target_flow
-            // {
-            //     if self.cf_checkers[&cf].long_term_l0_production_flow.get_avg()
-            //         > self.l0_target_flow
-            //         && self.cf_checkers[&cf]
-            //             .short_term_l0_production_flow
-            //             .get_recent() as f64
-            //             > self.l0_target_flow
-            //     {
-            //         SCHED_THROTTLE_ACTION_COUNTER
-            //             .with_label_values(&[&cf, "down_flow"])
-            //             .inc();
-            //         self.decrease_speed_limit(cf);
-            //     } else if (self.cf_checkers[&cf]
-            //         .short_term_l0_production_flow
-            //         .get_avg()
-            //         < self.l0_target_flow
-            //         || (self.cf_checkers[&cf]
-            //             .short_term_l0_production_flow
-            //             .get_recent() as f64)
-            //             < self.l0_target_flow)
-            //         && self.write_flow_recorder.get_recent() as f64
-            //             > self.limiter.speed_limit() * 0.95
-            //     {
-            //         SCHED_THROTTLE_ACTION_COUNTER
-            //             .with_label_values(&[&cf, "up_flow"])
-            //             .inc();
-            //         self.increase_speed_limit(cf);
-            //     } else {
-            //         SCHED_THROTTLE_ACTION_COUNTER
-            //             .with_label_values(&[&cf, "keep_flow"])
-            //             .inc();
-            //     }
-            // } else {
-            //     SCHED_THROTTLE_ACTION_COUNTER
-            //         .with_label_values(&[&cf, "no_target_flow"])
-            //         .inc();
-            // }
     }
-
-    // fn increase_speed_limit(&mut self, cf: String) {
-    //     let throttle = if self.limiter.speed_limit() == f64::INFINITY {
-    //         self.throttle_cf = Some(cf);
-    //         let x = self.write_flow_recorder.get_percentile_90();
-    //         if x == 0 { f64::INFINITY } else { x as f64 }
-    //     } else {
-    //         // Use PID algorithm to change the flow so up flow can be increased
-    //         // rapidly when the target flow is quite larger than flush flow.
-    //         let mut u = PID_KP_FACTOR
-    //             * (self.l0_target_flow
-    //                 - self.cf_checkers[&cf]
-    //                     .short_term_l0_production_flow
-    //                     .get_avg()
-    //                 + PID_KD_FACTOR * -self.cf_checkers[&cf].short_term_l0_production_flow.slope());
-    //         if u > self.limiter.speed_limit() {
-    //             u = self.limiter.speed_limit();
-    //         } else if u < 0.0 {
-    //             u = 0.0;
-    //         };
-    //         SCHED_UP_FLOW_GAUGE.set((u * RATIO_SCALE_FACTOR) as i64);
-
-    //         self.limiter.speed_limit() + u
-    //     };
-    //     self.update_speed_limit(throttle)
-    // }
-
-    // fn decrease_speed_limit(&mut self, cf: String) {
-    //     let throttle = if self.limiter.speed_limit() == f64::INFINITY {
-    //         self.throttle_cf = Some(cf);
-    //         let x = self.write_flow_recorder.get_percentile_90();
-    //         if x == 0 { f64::INFINITY } else { x as f64 }
-    //     } else {
-    //         self.limiter.speed_limit() * (1.0 - LIMIT_DOWN_PERCENT)
-    //     };
-    //     self.update_speed_limit(throttle)
-    // }
 }
 
 #[cfg(test)]

@@ -952,16 +952,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             // If the speed of next second is larger than the one of first second,
                             // without the mutex, the write flow can't throttled strictly.
                             let _guard = self.control_mutex.lock().await;
-                            let delay =
-                                self.inner.flow_controller.consume(write_size);
+                            let delay = self.inner.flow_controller.consume(write_size);
                             let delay_end = Instant::now_coarse() + delay;
                             while !self.inner.flow_controller.is_unlimited() {
                                 let now = Instant::now_coarse();
-                                if now >= delay_end { 
+                                if now >= delay_end {
                                     break;
                                 }
                                 if now >= deadline.inner() {
-                                    scheduler.finish_with_err(cid, StorageErrorInner::DeadlineExceeded);
+                                    scheduler
+                                        .finish_with_err(cid, StorageErrorInner::DeadlineExceeded);
                                     SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
                                     return;
                                 }
