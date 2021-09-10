@@ -58,7 +58,7 @@ use raftstore::{
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_MSG_CAP},
-        memory::MEMTRACE_ROOT,
+        memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
         AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMsg,
     },
@@ -66,7 +66,8 @@ use raftstore::{
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR},
-    coprocessor, coprocessor_v2,
+    coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
+    coprocessor_v2,
     import::{ImportSSTService, SSTImporter},
     read_pool::{build_yatp_read_pool, ReadPool},
     server::raftkv::ReplicaReadLockChecker,
@@ -1069,7 +1070,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         let mut mem_trace_metrics = MemoryTraceManager::default();
-        mem_trace_metrics.register_provider((&*MEMTRACE_ROOT).to_owned());
+        mem_trace_metrics.register_provider(MEMTRACE_RAFTSTORE.clone());
+        mem_trace_metrics.register_provider(MEMTRACE_COPROCESSOR.clone());
         self.background_worker
             .spawn_interval_task(DEFAULT_MEMTRACE_FLUSH_INTERVAL, move || {
                 let now = Instant::now();

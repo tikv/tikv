@@ -23,7 +23,7 @@ pub fn handle_request<E>(copr: &Endpoint<E>, req: Request) -> Response
 where
     E: Engine,
 {
-    block_on(copr.parse_and_handle_unary_request(req, None))
+    block_on(copr.parse_and_handle_unary_request(req, None)).consume()
 }
 
 pub fn handle_select<E>(copr: &Endpoint<E>, req: Request) -> SelectResponse
