@@ -320,6 +320,7 @@ impl TiKVServer {
             &self.config.storage.data_dir,
             self.config.storage.reserve_space.0,
         )
+        .map_err(|e| panic!("Failed to reserve space for recovery: {}.", e))
         .unwrap();
     }
 
