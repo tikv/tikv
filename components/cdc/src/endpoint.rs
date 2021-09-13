@@ -7,6 +7,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use configuration::{ConfigChange, Configuration};
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::RocksEngine;
 use futures::future::Future;
@@ -37,7 +38,7 @@ use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
 use tikv::storage::Statistics;
-use tikv_util::collections::HashMap;
+use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::{Instant, Limiter};
 use tikv_util::timer::{SteadyTimer, Timer};
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
@@ -150,6 +151,7 @@ pub enum Task {
         cb: InitCallback,
     },
     Validate(Validate),
+    ChangeConfig(ConfigChange),
 }
 
 impl fmt::Display for Task {
@@ -211,6 +213,10 @@ impl fmt::Debug for Task {
                 Validate::Region(region_id, _) => de.field("region_id", &region_id).finish(),
                 Validate::OldValueCache(_) => de.finish(),
             },
+            Task::ChangeConfig(change) => de
+                .field("type", &"change_config")
+                .field("change", change)
+                .finish(),
         }
     }
 }
@@ -233,15 +239,15 @@ pub struct Endpoint<T> {
 
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
-    min_ts_interval: Duration,
     tso_worker: Runtime,
     store_meta: Arc<Mutex<StoreMeta>>,
 
+    config: CdcConfig,
     workers: Runtime,
     scan_concurrency_semaphore: Arc<Semaphore>,
 
     sink_memory_quota: MemoryQuota,
-    scan_speed_limter: Limiter,
+    scan_speed_limiter: Limiter,
     max_scan_batch_bytes: usize,
     max_scan_batch_size: usize,
 
@@ -256,7 +262,7 @@ pub struct Endpoint<T> {
 
 impl<T: 'static + RaftStoreRouter> Endpoint<T> {
     pub fn new(
-        cfg: &CdcConfig,
+        config: &CdcConfig,
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
         raft_router: T,
@@ -267,22 +273,24 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         let workers = Builder::new()
             .threaded_scheduler()
             .thread_name("cdcwkr")
-            .core_threads(cfg.incremental_scan_threads)
+            .core_threads(config.incremental_scan_threads)
             .build()
             .unwrap();
-        let scan_concurrency_semaphore = Arc::new(Semaphore::new(cfg.incremental_scan_concurrency));
         let tso_worker = Builder::new()
             .threaded_scheduler()
             .thread_name("tso")
             .core_threads(1)
             .build()
             .unwrap();
-        CDC_SINK_CAP.set(sink_memory_quota.cap() as i64);
-        let speed_limter = Limiter::new(if cfg.incremental_scan_speed_limit.0 > 0 {
-            cfg.incremental_scan_speed_limit.0 as f64
+        // Initialized for the first time, subsequent adjustments will be made based on configuration updates.
+        let scan_concurrency_semaphore =
+            Arc::new(Semaphore::new(config.incremental_scan_concurrency));
+        let speed_limiter = Limiter::new(if config.incremental_scan_speed_limit.0 > 0 {
+            config.incremental_scan_speed_limit.0 as f64
         } else {
             INFINITY
         });
+        CDC_SINK_CAP.set(sink_memory_quota.capacity() as i64);
         // For scan efficiency, the scan batch bytes should be around 1MB.
         // TODO: To avoid consume too much memory when there are many concurrent
         //       scan tasks (peak memory = 1MB * N tasks), we reduce the size
@@ -298,15 +306,15 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             tso_worker,
             timer: SteadyTimer::default(),
             sink_memory_quota,
-            scan_speed_limter: speed_limter,
+            scan_speed_limiter: speed_limiter,
             max_scan_batch_bytes,
             max_scan_batch_size,
+            config: config.clone(),
             workers,
             scan_concurrency_semaphore,
             raft_router,
             observer,
             store_meta,
-            min_ts_interval: cfg.min_ts_interval.0,
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
             resolved_region_count: 0,
@@ -317,16 +325,53 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         ep
     }
 
+    fn on_change_cfg(&mut self, change: ConfigChange) {
+        // Validate first.
+        let mut validate_cfg = self.config.clone();
+        validate_cfg.update(change.clone());
+        if let Err(e) = validate_cfg.validate() {
+            warn!("cdc config update failed"; "error" => ?e);
+            return;
+        }
+
+        info!(
+            "cdc config updated";
+            "current config" => ?self.config,
+            "change" => ?change
+        );
+        // Update the config here. The following adjustments will all use the new values.
+        self.config.update(change.clone());
+
+        // Maybe the limit will be exceeded for a while after the concurrency becomes smaller,
+        // but it is acceptable.
+        if change.get("incremental_scan_concurrency").is_some() {
+            self.scan_concurrency_semaphore =
+                Arc::new(Semaphore::new(self.config.incremental_scan_concurrency))
+        }
+
+        if change.get("sink_memory_quota").is_some() {
+            self.sink_memory_quota
+                .set_capacity(self.config.sink_memory_quota.0 as usize);
+            CDC_SINK_CAP.set(self.sink_memory_quota.capacity() as i64);
+        }
+
+        if change.get("incremental_scan_speed_limit").is_some() {
+            let new_speed_limit = if self.config.incremental_scan_speed_limit.0 > 0 {
+                self.config.incremental_scan_speed_limit.0 as f64
+            } else {
+                INFINITY
+            };
+
+            self.scan_speed_limiter.set_speed_limit(new_speed_limit);
+        }
+    }
+
     pub fn new_timer(&self) -> Timer<()> {
         // Currently there is only one timeout for CDC.
         let cdc_timer_cap = 1;
         let mut timer = Timer::new(cdc_timer_cap);
         timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
         timer
-    }
-
-    pub fn set_min_ts_interval(&mut self, dur: Duration) {
-        self.min_ts_interval = dur;
     }
 
     pub fn set_max_scan_batch_size(&mut self, max_scan_batch_size: usize) {
@@ -535,7 +580,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             request_id: request.get_request_id(),
             downstream_state,
             txn_extra_op: delegate.txn_extra_op,
-            speed_limter: self.scan_speed_limter.clone(),
+            speed_limiter: self.scan_speed_limiter.clone(),
             max_scan_batch_bytes: self.max_scan_batch_bytes,
             max_scan_batch_size: self.max_scan_batch_size,
             observe_id,
@@ -616,7 +661,10 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp) {
         let total_region_count = regions.len();
-        let mut resolved_regions = Vec::with_capacity(regions.len());
+        // TODO: figure out how to avoid create a hashset every time,
+        //       saving some CPU.
+        let mut resolved_regions =
+            HashSet::with_capacity_and_hasher(regions.len(), Default::default());
         self.min_resolved_ts = TimeStamp::max();
         for region_id in regions {
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
@@ -625,7 +673,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                         self.min_resolved_ts = resolved_ts;
                         self.min_ts_region_id = region_id;
                     }
-                    resolved_regions.push(region_id);
+                    resolved_regions.insert(region_id);
                 }
             }
         }
@@ -634,16 +682,30 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         self.broadcast_resolved_ts(resolved_regions);
     }
 
-    fn broadcast_resolved_ts(&self, regions: Vec<u64>) {
-        let mut resolved_ts = ResolvedTs::default();
-        resolved_ts.regions = regions;
-        resolved_ts.ts = self.min_resolved_ts.into_inner();
-
-        let send_cdc_event = |conn: &Conn, event| {
+    fn broadcast_resolved_ts(&self, regions: HashSet<u64>) {
+        let min_resolved_ts = self.min_resolved_ts.into_inner();
+        let send_cdc_event = |regions: &HashSet<u64>, min_resolved_ts: u64, conn: &Conn| {
+            let downstream_regions = conn.get_downstreams();
+            let mut resolved_ts = ResolvedTs::default();
+            resolved_ts.ts = min_resolved_ts;
+            resolved_ts.regions = Vec::with_capacity(downstream_regions.len());
+            // Only send region ids that are captured by the connection.
+            for region_id in conn.get_downstreams().keys() {
+                if regions.contains(region_id) {
+                    resolved_ts.regions.push(*region_id);
+                }
+            }
+            if resolved_ts.regions.is_empty() {
+                // Skip empty resolved ts message.
+                return;
+            }
             // No need force send, as resolved ts messages is sent regularly.
             // And errors can be ignored.
             let force_send = false;
-            match conn.get_sink().unbounded_send(event, force_send) {
+            match conn
+                .get_sink()
+                .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), force_send)
+            {
                 Ok(_) => (),
                 Err(SendError::Disconnected) => {
                     debug!("cdc send event failed, disconnected";
@@ -664,11 +726,11 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             };
 
             if features.contains(FeatureGate::BATCH_RESOLVED_TS) {
-                send_cdc_event(conn, CdcEvent::ResolvedTs(resolved_ts.clone()));
+                send_cdc_event(&regions, min_resolved_ts, conn);
             } else {
                 // Fallback to previous non-batch resolved ts event.
-                for region_id in &resolved_ts.regions {
-                    self.broadcast_resolved_ts_compact(*region_id, resolved_ts.ts, conn);
+                for region_id in &regions {
+                    self.broadcast_resolved_ts_compact(*region_id, min_resolved_ts, conn);
                 }
             }
         }
@@ -712,7 +774,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
     }
 
     fn register_min_ts_event(&self) {
-        let timeout = self.timer.delay(self.min_ts_interval);
+        let timeout = self.timer.delay(self.config.min_ts_interval.0);
         let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let raft_router = self.raft_router.clone();
@@ -810,7 +872,7 @@ struct Initializer {
     checkpoint_ts: TimeStamp,
     txn_extra_op: TxnExtraOp,
 
-    speed_limter: Limiter,
+    speed_limiter: Limiter,
     max_scan_batch_bytes: usize,
     max_scan_batch_size: usize,
 
@@ -983,7 +1045,7 @@ impl Initializer {
             }
         }
         if total_bytes > 0 {
-            self.speed_limter.consume(total_bytes).await;
+            self.speed_limiter.consume(total_bytes).await;
             CDC_SCAN_BYTES.inc_by(total_bytes as _);
         }
 
@@ -1122,6 +1184,7 @@ impl<T: 'static + RaftStoreRouter> Runnable<Task> for Endpoint<T> {
                     validate(&self.old_value_stats);
                 }
             },
+            Task::ChangeConfig(change) => self.on_change_cfg(change),
         }
     }
 }
@@ -1179,7 +1242,7 @@ mod tests {
     use tikv::storage::mvcc::tests::*;
     use tikv::storage::TestEngineBuilder;
     use tikv_util::collections::HashSet;
-    use tikv_util::config::ReadableDuration;
+    use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker::{dummy_scheduler, Builder as WorkerBuilder, Worker};
     use time::Timespec;
 
@@ -1228,7 +1291,6 @@ mod tests {
         let initializer = Initializer {
             sched: receiver_worker.scheduler(),
             sink,
-
             region_id: 1,
             region_epoch: RegionEpoch::default(),
             observe_id: ObserveID::new(),
@@ -1237,7 +1299,7 @@ mod tests {
             conn_id: ConnID::new(),
             request_id: 0,
             checkpoint_ts: 1.into(),
-            speed_limter: Limiter::new(speed_limit as _),
+            speed_limiter: Limiter::new(speed_limit as _),
             max_scan_batch_bytes: 1024 * 1024,
             max_scan_batch_size: 1024,
             txn_extra_op: TxnExtraOp::Noop,
@@ -1467,6 +1529,112 @@ mod tests {
     }
 
     #[test]
+    fn test_change_endpoint_cfg() {
+        let cfg = CdcConfig::default();
+        let (task_sched, _task_rx) = dummy_scheduler();
+        let raft_router = MockRaftStoreRouter::new();
+        let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
+        let observer = CdcObserver::new(task_sched.clone());
+        let pd_client = Arc::new(TestPdClient::new(0, true));
+        let mut ep = Endpoint::new(
+            &cfg,
+            pd_client,
+            task_sched,
+            raft_router.clone(),
+            observer,
+            Arc::new(Mutex::new(StoreMeta::new(0))),
+            MemoryQuota::new(std::usize::MAX),
+        );
+
+        // Modify min_ts_interval.
+        {
+            let mut updated_cfg = cfg.clone();
+            {
+                // Update it to 0, this will be an invalid change and will be lost.
+                updated_cfg.min_ts_interval = ReadableDuration::secs(0);
+            }
+            let diff = cfg.diff(&updated_cfg);
+            ep.run(Task::ChangeConfig(diff));
+            assert_eq!(ep.config.min_ts_interval, ReadableDuration::secs(1));
+
+            {
+                // update fields.
+                updated_cfg.min_ts_interval = ReadableDuration::secs(100);
+            }
+            let diff = cfg.diff(&updated_cfg);
+            ep.run(Task::ChangeConfig(diff));
+            assert_eq!(ep.config.min_ts_interval, ReadableDuration::secs(100));
+        }
+
+        // Modify incremental_scan_concurrency.
+        {
+            let mut updated_cfg = cfg.clone();
+            {
+                // Update it to be smaller than incremental_scan_threads,
+                // which will be an invalid change and will be lost.
+                updated_cfg.incremental_scan_concurrency = 2;
+            }
+            let diff = cfg.diff(&updated_cfg);
+            ep.run(Task::ChangeConfig(diff));
+            assert_eq!(ep.config.incremental_scan_concurrency, 6);
+            assert_eq!(ep.scan_concurrency_semaphore.available_permits(), 6);
+
+            {
+                // Correct update.
+                updated_cfg.incremental_scan_concurrency = 8;
+            }
+            let diff = cfg.diff(&updated_cfg);
+            ep.run(Task::ChangeConfig(diff));
+            assert_eq!(ep.config.incremental_scan_concurrency, 8);
+            assert_eq!(ep.scan_concurrency_semaphore.available_permits(), 8);
+        }
+
+        // Modify sink_memory_quota.
+        {
+            let mut updated_cfg = cfg.clone();
+            {
+                updated_cfg.sink_memory_quota = ReadableSize::mb(1024);
+            }
+            let diff = cfg.diff(&updated_cfg);
+
+            assert_eq!(ep.sink_memory_quota.capacity(), std::usize::MAX);
+            ep.run(Task::ChangeConfig(diff));
+            assert_eq!(ep.config.sink_memory_quota, ReadableSize::mb(1024));
+            assert_eq!(
+                ep.sink_memory_quota.capacity(),
+                ReadableSize::mb(1024).0 as usize
+            );
+        }
+
+        // Modify incremental_scan_speed_limit.
+        {
+            let mut updated_cfg = cfg.clone();
+            {
+                updated_cfg.incremental_scan_speed_limit = ReadableSize::mb(1024);
+            }
+            let diff = cfg.diff(&updated_cfg);
+
+            assert_eq!(
+                ep.config.incremental_scan_speed_limit,
+                ReadableSize::mb(128)
+            );
+            assert!(
+                (ep.scan_speed_limiter.speed_limit() - ReadableSize::mb(128).0 as f64).abs()
+                    < std::f64::EPSILON
+            );
+            ep.run(Task::ChangeConfig(diff));
+            assert_eq!(
+                ep.config.incremental_scan_speed_limit,
+                ReadableSize::mb(1024)
+            );
+            assert!(
+                (ep.scan_speed_limiter.speed_limit() - ReadableSize::mb(1024).0 as f64).abs()
+                    < std::f64::EPSILON
+            );
+        }
+    }
+
+    #[test]
     fn test_raftstore_is_busy() {
         let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
@@ -1557,11 +1725,13 @@ mod tests {
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
         let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id, true);
+        // Enable batch resolved ts in the test.
+        let version = FeatureGate::batch_resolved_ts();
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
             conn_id,
-            version: semver::Version::new(4, 0, 8),
+            version: version.clone(),
         });
         assert_eq!(ep.capture_regions.len(), 1);
         task_rx
@@ -1574,7 +1744,7 @@ mod tests {
             request: req.clone(),
             downstream,
             conn_id,
-            version: semver::Version::new(4, 0, 8),
+            version: version.clone(),
         });
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
@@ -1603,6 +1773,7 @@ mod tests {
             request: req,
             downstream,
             conn_id,
+            // The version that does not support batch resolved ts.
             version: semver::Version::new(0, 0, 0),
         });
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
@@ -1639,7 +1810,7 @@ mod tests {
             request: req.clone(),
             downstream,
             conn_id,
-            version: semver::Version::new(4, 0, 8),
+            version: version.clone(),
         });
         // Region 100 is inserted into capture_regions.
         assert_eq!(ep.capture_regions.len(), 2);
@@ -1660,7 +1831,7 @@ mod tests {
             request: req,
             downstream,
             conn_id,
-            version: semver::Version::new(4, 0, 8),
+            version,
         });
         // Drop CaptureChange message, it should cause scan task failure.
         let _ = raft_rx.recv_timeout(Duration::from_millis(100)).unwrap();
@@ -1709,11 +1880,13 @@ mod tests {
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
         let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
+        // Enable batch resolved ts in the test.
+        let version = FeatureGate::batch_resolved_ts();
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
             conn_id,
-            version: semver::Version::new(4, 0, 8),
+            version: version.clone(),
         });
         let mut resolver = Resolver::new(1);
         resolver.init();
@@ -1740,7 +1913,7 @@ mod tests {
             request: req.clone(),
             downstream,
             conn_id,
-            version: semver::Version::new(4, 0, 8),
+            version,
         });
         let mut resolver = Resolver::new(2);
         resolver.init();
@@ -1793,9 +1966,9 @@ mod tests {
             .unwrap();
         if let CdcEvent::ResolvedTs(mut r) = cdc_event.0 {
             r.regions.as_mut_slice().sort();
-            // Although region 3 is not register in the first conn, batch resolved ts
-            // sends all region ids.
-            assert_eq!(r.regions, vec![1, 2, 3]);
+            // Region 3 resolved ts must not be send to the first conn when
+            // batch resolved ts is enabled.
+            assert_eq!(r.regions, vec![1, 2]);
             assert_eq!(r.ts, 3);
         } else {
             panic!("unknown cdc event {:?}", cdc_event);
@@ -1962,5 +2135,121 @@ mod tests {
             Ok(other) => panic!("unknown event {:?}", other),
         }
         assert_eq!(ep.capture_regions.len(), 1);
+    }
+
+    #[test]
+    fn test_broadcast_resolved_ts() {
+        let (task_sched, _task_rx) = dummy_scheduler();
+        let raft_router = MockRaftStoreRouter::new();
+        let observer = CdcObserver::new(task_sched.clone());
+        let pd_client = Arc::new(TestPdClient::new(0, true));
+        let mut ep = Endpoint::new(
+            &CdcConfig {
+                min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+                ..Default::default()
+            },
+            pd_client,
+            task_sched,
+            raft_router.clone(),
+            observer,
+            Arc::new(Mutex::new(StoreMeta::new(0))),
+            MemoryQuota::new(std::usize::MAX),
+        );
+
+        // Open two connections a and b, registers region 1, 2 to conn a and
+        // region 3 to conn b.
+        let mut conn_rxs = vec![];
+        let quota = channel::MemoryQuota::new(std::usize::MAX);
+        // Hold raft_rxs to avoid SendError panic.
+        let mut raft_rxs = vec![];
+        for region_ids in vec![vec![1, 2], vec![3]] {
+            let (tx, rx) = channel::channel(1, quota.clone());
+            conn_rxs.push(rx);
+            let conn = Conn::new(tx, String::new());
+            let conn_id = conn.get_id();
+            ep.run(Task::OpenConn { conn });
+
+            for region_id in region_ids {
+                let raft_rx = raft_router.add_region(region_id, 100 /* cap */);
+                raft_rxs.push(raft_rx);
+                let mut req_header = Header::default();
+                req_header.set_cluster_id(0);
+                let mut req = ChangeDataRequest::default();
+                req.set_region_id(region_id);
+                let region_epoch = req.get_region_epoch().clone();
+                let downstream =
+                    Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
+                ep.run(Task::Register {
+                    request: req.clone(),
+                    downstream,
+                    conn_id,
+                    version: FeatureGate::batch_resolved_ts(),
+                });
+                let mut resolver = Resolver::new(region_id);
+                resolver.init();
+                let observe_id = ep.capture_regions[&region_id].id;
+                let mut region = Region::default();
+                region.set_id(region_id);
+                ep.on_region_ready(observe_id, resolver, region);
+            }
+        }
+
+        let assert_batch_resolved_ts = |drain: &mut channel::Drain,
+                                        regions: Vec<u64>,
+                                        resolved_ts: u64| {
+            let cdc_event = channel::recv_timeout(&mut drain.drain(), Duration::from_millis(500))
+                .unwrap()
+                .unwrap();
+            if let CdcEvent::ResolvedTs(r) = cdc_event.0 {
+                assert_eq!(r.regions, regions);
+                assert_eq!(r.ts, resolved_ts);
+            } else {
+                panic!("unknown cdc event {:?}", cdc_event);
+            }
+        };
+
+        ep.run(Task::MinTS {
+            regions: vec![1],
+            min_ts: TimeStamp::from(1),
+        });
+        // conn a must receive a resolved ts that only contains region 1.
+        assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1], 1);
+        // conn b must not receive any messages.
+        channel::recv_timeout(
+            &mut conn_rxs.get_mut(0).unwrap().drain(),
+            Duration::from_millis(100),
+        )
+        .unwrap_err();
+
+        ep.run(Task::MinTS {
+            regions: vec![1, 2],
+            min_ts: TimeStamp::from(2),
+        });
+        // conn a must receive a resolved ts that contains region 1 and region 2.
+        assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1, 2], 2);
+        // conn b must not receive any messages.
+        channel::recv_timeout(
+            &mut conn_rxs.get_mut(1).unwrap().drain(),
+            Duration::from_millis(100),
+        )
+        .unwrap_err();
+
+        ep.run(Task::MinTS {
+            regions: vec![1, 2, 3],
+            min_ts: TimeStamp::from(3),
+        });
+        // conn a must receive a resolved ts that contains region 1 and region 2.
+        assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1, 2], 3);
+        // conn b must receive a resolved ts that contains region 3.
+        assert_batch_resolved_ts(conn_rxs.get_mut(1).unwrap(), vec![3], 3);
+
+        ep.run(Task::MinTS {
+            regions: vec![1, 3],
+            min_ts: TimeStamp::from(4),
+        });
+        // conn a must receive a resolved ts that only contains region 1.
+        assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1], 4);
+        // conn b must receive a resolved ts that contains region 3.
+        assert_batch_resolved_ts(conn_rxs.get_mut(1).unwrap(), vec![3], 4);
     }
 }
