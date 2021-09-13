@@ -38,12 +38,18 @@ use super::metrics::*;
 const GENERATE_POOL_SIZE: usize = 2;
 
 // used to periodically check whether we should delete a stale peer's range in region runner
+#[cfg(not(test))]
 pub const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // 10000 milliseconds
+#[cfg(test)]
+pub const STALE_PEER_CHECK_INTERVAL: u64 = 1_000; // 10000 milliseconds
 
 // used to periodically check whether schedule pending applies in region runner
+#[cfg(not(test))]
 pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
+#[cfg(test)]
+pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 200; // 200 milliseconds
 
-const CLEANUP_MAX_REGION_COUNT: usize = 128;
+const CLEANUP_MAX_REGION_COUNT: usize = 64;
 
 /// Region related task
 #[derive(Debug)]
@@ -314,7 +320,15 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
-        self.cleanup_overlap_ranges(&start_key, &end_key)?;
+        let overlap_ranges = self
+            .pending_delete_ranges
+            .drain_overlap_ranges(&start_key, &end_key);
+        if !overlap_ranges.is_empty() {
+            CLEAN_COUNTER_VEC
+                .with_label_values(&["overlap-with-apply"])
+                .inc();
+            self.cleanup_overlap_regions(overlap_ranges)?;
+        }
         self.delete_all_in_range(&[Range::new(&start_key, &end_key)])?;
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
@@ -417,13 +431,10 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
     }
 
     /// Gets the overlapping ranges and cleans them up.
-    fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let overlap_ranges = self
-            .pending_delete_ranges
-            .drain_overlap_ranges(start_key, end_key);
-        if overlap_ranges.is_empty() {
-            return Ok(());
-        }
+    fn cleanup_overlap_regions(
+        &mut self,
+        overlap_ranges: Vec<(u64, Vec<u8>, Vec<u8>, u64)>,
+    ) -> Result<()> {
         let oldest_sequence = self
             .engine
             .get_oldest_snapshot_sequence_number()
@@ -456,21 +467,27 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
 
     /// Inserts a new pending range, and it will be cleaned up with some delay.
     fn insert_pending_delete_range(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8]) {
-        if let Err(e) = self.cleanup_overlap_ranges(start_key, end_key) {
-            warn!("cleanup_overlap_ranges failed";
-                "region_id" => region_id,
-                "start_key" => log_wrappers::Value::key(start_key),
-                "end_key" => log_wrappers::Value::key(end_key),
-                "err" => %e,
-            );
-        } else {
-            info!("register deleting data in range";
-                "region_id" => region_id,
-                "start_key" => log_wrappers::Value::key(start_key),
-                "end_key" => log_wrappers::Value::key(end_key),
-            );
+        let overlap_ranges = self
+            .pending_delete_ranges
+            .drain_overlap_ranges(start_key, end_key);
+        if !overlap_ranges.is_empty() {
+            CLEAN_COUNTER_VEC
+                .with_label_values(&["overlap-with-destroy"])
+                .inc();
+            if let Err(e) = self.cleanup_overlap_regions(overlap_ranges) {
+                warn!("cleanup_overlap_ranges failed";
+                    "region_id" => region_id,
+                    "start_key" => log_wrappers::Value::key(start_key),
+                    "end_key" => log_wrappers::Value::key(end_key),
+                    "err" => %e,
+                );
+            }
         }
-
+        info!("register deleting data in range";
+            "region_id" => region_id,
+            "start_key" => log_wrappers::Value::key(start_key),
+            "end_key" => log_wrappers::Value::key(end_key),
+        );
         let seq = self.engine.get_latest_sequence_number();
         self.pending_delete_ranges
             .insert(region_id, start_key, end_key, seq);
@@ -479,7 +496,9 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
     /// Cleans up timeouted ranges.
     fn clean_timeout_ranges(&mut self) {
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
-
+        if self.ingest_maybe_stall() {
+            return;
+        }
         let oldest_sequence = self
             .engine
             .get_oldest_snapshot_sequence_number()
@@ -489,6 +508,10 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
             .stale_ranges(oldest_sequence)
             .map(|(region_id, s, e)| (region_id, s.to_vec(), e.to_vec()))
             .collect();
+        if cleanup_ranges.is_empty() {
+            return;
+        }
+        CLEAN_COUNTER_VEC.with_label_values(&["destroy"]).inc_by(1);
         cleanup_ranges.sort_by(|a, b| a.1.cmp(&b.1));
         while cleanup_ranges.len() > CLEANUP_MAX_REGION_COUNT {
             cleanup_ranges.pop();
@@ -660,11 +683,7 @@ where
                 // there might be a coprocessor request related to this range
                 self.ctx
                     .insert_pending_delete_range(region_id, &start_key, &end_key);
-
-                // try to delete stale ranges if there are any
-                if !self.ctx.ingest_maybe_stall() {
-                    self.ctx.clean_timeout_ranges();
-                }
+                self.ctx.clean_timeout_ranges();
             }
         }
     }
@@ -731,6 +750,8 @@ mod tests {
     use super::Event;
     use super::PendingDeleteRanges;
     use super::Task;
+    use super::*;
+    use keys::data_key;
 
     fn insert_range(
         pending_delete_ranges: &mut PendingDeleteRanges,
@@ -893,15 +914,21 @@ mod tests {
             Some(raft_cfs_opt),
             None,
             Some(kv_cfs_opts),
-            &[1, 2, 3, 4, 5, 6],
+            &[1, 2, 3, 4, 5, 6, 7],
         )
         .unwrap();
 
-        for cf_name in engine.kv.cf_names() {
+        for cf_name in &["default", "write", "lock"] {
             let cf = engine.kv.cf_handle(cf_name).unwrap();
-            for i in 0..6 {
-                engine.kv.put_cf(cf, &[i], &[i]).unwrap();
-                engine.kv.put_cf(cf, &[i + 1], &[i + 1]).unwrap();
+            for i in 0..7 {
+                engine
+                    .kv
+                    .put_cf(cf, &data_key(i.to_string().as_bytes()), &[i])
+                    .unwrap();
+                engine
+                    .kv
+                    .put_cf(cf, &data_key((i + 1).to_string().as_bytes()), &[i + 1])
+                    .unwrap();
                 engine.kv.flush_cf(cf, true).unwrap();
                 // check level 0 files
                 assert_eq!(
@@ -926,6 +953,10 @@ mod tests {
         );
         let mut timer = Timer::new(1);
         timer.add_task(Duration::from_millis(100), Event::CheckApply);
+        timer.add_task(
+            Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
+            Event::CheckStalePeer,
+        );
         worker.start_with_timer(runner, timer).unwrap();
 
         let gen_and_apply_snap = |id: u64| {
@@ -990,6 +1021,25 @@ mod tests {
                 })
                 .unwrap();
         };
+        let destroy_region = |id: u64| {
+            let start_key = data_key(id.to_string().as_bytes());
+            let end_key = data_key((id + 1).to_string().as_bytes());
+            // destroy region
+            sched
+                .schedule(Task::Destroy {
+                    region_id: id,
+                    start_key,
+                    end_key,
+                })
+                .unwrap();
+        };
+
+        let check_region_exist = |id: u64| -> bool {
+            let key = data_key(id.to_string().as_bytes());
+            let v = engine.kv.get(&key).unwrap();
+            v.is_some()
+        };
+
         let wait_apply_finish = |id: u64| {
             let region_key = keys::region_state_key(id);
             loop {
@@ -1013,7 +1063,7 @@ mod tests {
         gen_and_apply_snap(1);
         assert_eq!(
             engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
-            6
+            7
         );
 
         // compact all files to the bottomest level
@@ -1053,6 +1103,9 @@ mod tests {
             4
         );
         gen_and_apply_snap(5);
+        destroy_region(6);
+        thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
+        assert!(check_region_exist(6));
         assert_eq!(
             engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             4
@@ -1088,5 +1141,7 @@ mod tests {
             engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             2
         );
+        thread::sleep(Duration::from_millis(STALE_PEER_CHECK_INTERVAL * 2));
+        assert!(!check_region_exist(6));
     }
 }
