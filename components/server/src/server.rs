@@ -1215,14 +1215,10 @@ where
             &self.config,
             &mut self.cfg_controller,
         );
-        let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        cfg_controller.register(
-            tikv::config::Module::Raftdb,
-            Box::new(DBConfigManger::new(
-                engines.raft.clone(),
-                DBType::Raft,
-                self.config.storage.block_cache.shared,
-            )),
+        <RocksEngine as CreateRaftEngine>::register_raft_config(
+            &engines.raft,
+            &self.config,
+            &mut self.cfg_controller,
         );
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
@@ -1265,6 +1261,11 @@ where
 
         <EK as CreateKvEngine<RaftLogEngine>>::register_kv_config(
             &engines.kv,
+            &self.config,
+            &mut self.cfg_controller,
+        );
+        <RaftLogEngine as CreateRaftEngine>::register_raft_config(
+            &engines.raft,
             &self.config,
             &mut self.cfg_controller,
         );
@@ -1443,6 +1444,12 @@ trait CreateRaftEngine: RaftEngine {
         env: Arc<engine_rocks::raw::Env>,
         block_cache: &Option<engine_rocks::raw::Cache>,
     ) -> Self;
+
+    fn register_raft_config(
+        &self,
+        config: &TiKvConfig,
+        cfg_controller: &mut Option<ConfigController>,
+    );
 }
 
 impl CreateRaftEngine for RocksEngine {
@@ -1471,6 +1478,22 @@ impl CreateRaftEngine for RocksEngine {
 
         raft_engine
     }
+
+    fn register_raft_config(
+        &self,
+        config: &TiKvConfig,
+        cfg_controller: &mut Option<ConfigController>,
+    ) {
+        let cfg_controller = cfg_controller.as_mut().unwrap();
+        cfg_controller.register(
+            tikv::config::Module::Raftdb,
+            Box::new(DBConfigManger::new(
+                self.clone(),
+                DBType::Raft,
+                config.storage.block_cache.shared,
+            )),
+        );
+    }
 }
 
 impl CreateRaftEngine for RaftLogEngine {
@@ -1487,6 +1510,13 @@ impl CreateRaftEngine for RaftLogEngine {
         check_and_dump_raft_db(config, &raft_engine, &env, 8);
 
         raft_engine
+    }
+
+    fn register_raft_config(
+        &self,
+        _config: &TiKvConfig,
+        _cfg_controller: &mut Option<ConfigController>,
+    ) {
     }
 }
 
