@@ -475,6 +475,7 @@ dependencies = [
  "panic_hook",
  "pd_client",
  "prometheus",
+ "prometheus-static-metric",
  "prost",
  "protobuf",
  "raft",
