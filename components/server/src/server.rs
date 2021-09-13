@@ -213,7 +213,7 @@ type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 impl<EK, ER> TiKVServer<EK, ER>
 where
     EK: KvEngine + CreateKvEngine<ER>,
-    ER: RaftEngine,
+    ER: RaftEngine + CreateRaftEngine<EK>,
 {
     fn init(mut config: TiKvConfig) -> TiKVServer<EK, ER> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
@@ -472,6 +472,45 @@ where
         })
         .unwrap()
         .map(Arc::new);
+    }
+
+    fn init_raw_engines(&mut self) -> (Engines<EK, ER>, Arc<EnginesResourceInfo<EK>>) {
+        let env = get_env(self.encryption_key_manager.clone(), get_io_rate_limiter()).unwrap();
+        let block_cache = self.config.storage.block_cache.build_shared_cache();
+
+        // Create raft engine.
+        let raft_engine = <ER as CreateRaftEngine<EK>>::create_raft_engine(
+            &self.config,
+            env.clone(),
+            &block_cache,
+        );
+
+        let kv_engine = <EK as CreateKvEngine<ER>>::create_kv_engine(
+            &self.config,
+            &self.region_info_accessor,
+            &self.store_path,
+            &self.router,
+            env,
+            &block_cache,
+            &mut self.flow_info_receiver,
+        );
+
+        let engines = Engines::new(kv_engine, raft_engine);
+
+        <EK as CreateKvEngine<ER>>::register_kv_config(
+            &engines.kv,
+            &self.config,
+            &mut self.cfg_controller,
+        );
+        <ER as CreateRaftEngine<EK>>::register_raft_config(
+            &engines.raft,
+            &self.config,
+            &mut self.cfg_controller,
+        );
+
+        let engines_info = <ER as CreateRaftEngine<EK>>::create_engines_info(&engines);
+
+        (engines, engines_info)
     }
 
     fn init_engines(&mut self, engines: Engines<EK, ER>) {
@@ -1180,95 +1219,6 @@ where
         servers.lock_mgr.stop();
 
         self.to_stop.into_iter().for_each(|s| s.stop());
-    }
-}
-
-impl<EK> TiKVServer<EK, RocksEngine>
-where
-    EK: KvEngine + CreateKvEngine<RocksEngine>,
-{
-    fn init_raw_engines(&mut self) -> (Engines<EK, RocksEngine>, Arc<EnginesResourceInfo<EK>>) {
-        let env = get_env(self.encryption_key_manager.clone(), get_io_rate_limiter()).unwrap();
-        let block_cache = self.config.storage.block_cache.build_shared_cache();
-
-        // Create raft engine.
-        let raft_engine = <RocksEngine as CreateRaftEngine<EK>>::create_raft_engine(
-            &self.config,
-            env.clone(),
-            &block_cache,
-        );
-
-        let kv_engine = <EK as CreateKvEngine<RocksEngine>>::create_kv_engine(
-            &self.config,
-            &self.region_info_accessor,
-            &self.store_path,
-            &self.router,
-            env,
-            &block_cache,
-            &mut self.flow_info_receiver,
-        );
-
-        let engines = Engines::new(kv_engine, raft_engine);
-
-        <EK as CreateKvEngine<RocksEngine>>::register_kv_config(
-            &engines.kv,
-            &self.config,
-            &mut self.cfg_controller,
-        );
-        <RocksEngine as CreateRaftEngine<EK>>::register_raft_config(
-            &engines.raft,
-            &self.config,
-            &mut self.cfg_controller,
-        );
-
-        let engines_info = <RocksEngine as CreateRaftEngine<EK>>::create_engines_info(&engines);
-
-        (engines, engines_info)
-    }
-}
-
-impl<EK> TiKVServer<EK, RaftLogEngine>
-where
-    EK: KvEngine + CreateKvEngine<RaftLogEngine>,
-{
-    fn init_raw_engines(&mut self) -> (Engines<EK, RaftLogEngine>, Arc<EnginesResourceInfo<EK>>) {
-        let env = get_env(self.encryption_key_manager.clone(), get_io_rate_limiter()).unwrap();
-        let block_cache = self.config.storage.block_cache.build_shared_cache();
-
-        // Create raft engine.
-        let raft_engine = <RaftLogEngine as CreateRaftEngine<EK>>::create_raft_engine(
-            &self.config,
-            env.clone(),
-            &block_cache,
-        );
-
-        // Create kv engine.
-        let kv_engine = <EK as CreateKvEngine<RaftLogEngine>>::create_kv_engine(
-            &self.config,
-            &self.region_info_accessor,
-            &self.store_path,
-            &self.router,
-            env,
-            &block_cache,
-            &mut self.flow_info_receiver,
-        );
-
-        let engines = Engines::new(kv_engine, raft_engine);
-
-        <EK as CreateKvEngine<RaftLogEngine>>::register_kv_config(
-            &engines.kv,
-            &self.config,
-            &mut self.cfg_controller,
-        );
-        <RaftLogEngine as CreateRaftEngine<EK>>::register_raft_config(
-            &engines.raft,
-            &self.config,
-            &mut self.cfg_controller,
-        );
-
-        let engines_info = <RaftLogEngine as CreateRaftEngine<EK>>::create_engines_info(&engines);
-
-        (engines, engines_info)
     }
 }
 
