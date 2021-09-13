@@ -1291,6 +1291,9 @@ where
     }
 }
 
+/// This trait handles setup steps that differ between implementations of
+/// KvEngine. As alternate engines reach feature parity with RocksEngine, it
+/// should be possible to remove methods or even the whole trait.
 trait CreateKvEngine<ER>: KvEngine
 where
     ER: RaftEngine,
