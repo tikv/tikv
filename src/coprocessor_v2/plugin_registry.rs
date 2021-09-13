@@ -279,7 +279,7 @@ struct PluginRegistryInner {
     /// Provides a mapping from the plugin's name to the actual instance.
     loaded_plugins: HashMap<String, (OsString, Arc<LoadedPlugin>)>,
 
-    /// Paths of loaded *and* unloaded plugins.
+    /// Original paths that plugins loaded from.
     /// Files in this list should not be loaded again.
     library_paths: HashSet<OsString>,
 }
