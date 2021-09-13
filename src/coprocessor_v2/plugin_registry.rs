@@ -584,7 +584,7 @@ mod tests {
         // fs watcher detects changes in every 3 seconds, therefore, wait 4 seconds so as to make sure the watcher is triggered.
         std::thread::sleep(Duration::from_secs(4));
 
-        // plugin will not unloading
+        // plugin will not be unloadad
         assert!(registry.get_plugin(plugin_name).is_some());
     }
 }
