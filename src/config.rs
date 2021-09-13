@@ -4257,7 +4257,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_str() {
+    fn test_module_from_str() {
         let cases = vec![
             ("readpool", Module::Readpool),
             ("server", Module::Server),
