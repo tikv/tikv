@@ -91,4 +91,10 @@ lazy_static! {
         exponential_buckets(0.0001, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref CDC_GRPC_ACCUMULATE_MESSAGE_BYTES: IntCounterVec = register_int_counter_vec!(
+        "tikv_cdc_grpc_message_sent_bytes",
+        "Accumulated bytes of sent CDC gRPC messages",
+        &["type"]
+    )
+    .unwrap();
 }

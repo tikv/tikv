@@ -9,7 +9,7 @@
 //! We keep these components in the `TiKVServer` struct.
 
 use crate::{setup::*, signal_handler};
-use cdc::MemoryQuota;
+use cdc::{CdcConfigManager, MemoryQuota};
 use encryption::DataKeyManager;
 use engine::rocks;
 use engine_rocks::{
@@ -525,6 +525,11 @@ impl TiKVServer {
         let cdc_scheduler = cdc_worker.scheduler();
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(&mut coprocessor_host);
+        // Register cdc config.
+        cfg_controller.register(
+            tikv::config::Module::CDC,
+            Box::new(CdcConfigManager(cdc_worker.scheduler())),
+        );
 
         let server_config = Arc::new(self.config.server.clone());
 

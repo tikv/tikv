@@ -2015,6 +2015,8 @@ impl Default for BackupConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
+    // TODO(hi-rustin): Consider resizing the thread pool based on `incremental_scan_threads`.
+    #[config(skip)]
     pub incremental_scan_threads: usize,
     pub incremental_scan_concurrency: usize,
     pub incremental_scan_speed_limit: ReadableSize,
@@ -2038,7 +2040,7 @@ impl Default for CdcConfig {
 }
 
 impl CdcConfig {
-    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         if self.min_ts_interval == ReadableDuration::secs(0) {
             return Err("cdc.min-ts-interval can't be 0s".into());
         }
@@ -2701,6 +2703,7 @@ pub enum Module {
     Backup,
     PessimisticTxn,
     Gc,
+    CDC,
     Split,
     Unknown(String),
 }
@@ -2723,6 +2726,7 @@ impl From<&str> for Module {
             "backup" => Module::Backup,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
+            "cdc" => Module::CDC,
             n => Module::Unknown(n.to_owned()),
         }
     }
