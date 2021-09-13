@@ -27,7 +27,7 @@ pub mod errors;
 pub use self::client::RpcClient;
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
-pub use self::util::validate_endpoints;
+pub use self::util::PdConnector;
 pub use self::util::REQUEST_RECONNECT_INTERVAL;
 
 use std::ops::Deref;
