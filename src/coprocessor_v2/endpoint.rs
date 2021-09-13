@@ -34,9 +34,11 @@ impl Endpoint {
                     let mut plugin_registry = PluginRegistry::new();
 
                     if let Err(err) = plugin_registry.start_hot_reloading(plugin_directory) {
-                        warn!("unable to start hot-reloading for coprocessor plugins.";
-                    "coprocessor_directory" => plugin_directory.display(),
-                    "error" => ?err);
+                        warn!(
+                            "unable to start hot-reloading for coprocessor plugins.";
+                            "coprocessor_directory" => plugin_directory.display(),
+                            "error" => ?err
+                        );
                     }
 
                     Arc::new(plugin_registry)
