@@ -62,15 +62,10 @@ impl<S: Snapshot> AnalyzeContext<S> {
     fn handle_column(builder: &mut SampleBuilder<S>) -> Result<Vec<u8>> {
         let (collectors, pk_builder) = builder.collect_columns_stats()?;
 
-<<<<<<< HEAD
         let pk_hist = pk_builder.into_proto();
         let cols: Vec<tipb::SampleCollector> =
             collectors.into_iter().map(|col| col.into_proto()).collect();
 
-=======
-    async fn handle_full_sampling(builder: &mut RowSampleBuilder<S>) -> Result<Vec<u8>> {
-        let sample_res = builder.collect_column_stats().await?;
->>>>>>> acb9747d6... coprocessor: tag analyze requests correctly (#10817)
         let res_data = {
             let mut res = tipb::AnalyzeColumnsResp::default();
             res.set_collectors(cols.into());
