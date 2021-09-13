@@ -1413,8 +1413,8 @@ where
         let raft_db_path = Path::new(&config.raft_store.raftdb_path);
         let config_raftdb = &config.raftdb;
         let mut raft_db_opts = config_raftdb.build_opt();
-        raft_db_opts.set_env(env.clone());
-        let raft_db_cf_opts = config_raftdb.build_cf_opts(&block_cache);
+        raft_db_opts.set_env(env);
+        let raft_db_cf_opts = config_raftdb.build_cf_opts(block_cache);
         let raft_engine = engine_rocks::raw_util::new_engine_opt(
             raft_db_path.to_str().unwrap(),
             raft_db_opts,
