@@ -407,6 +407,7 @@ impl Simulator for ServerCluster {
                 self.env.clone(),
                 None,
                 debug_thread_pool.clone(),
+                cfg.trace,
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));

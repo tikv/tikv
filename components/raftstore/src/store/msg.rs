@@ -21,7 +21,7 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
 use crate::store::SnapKey;
-use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
+use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant, trace::Span};
 
 use super::{AbstractPeer, RegionSnapshot};
 
@@ -66,7 +66,7 @@ pub enum Callback<S: Snapshot> {
     /// No callback.
     None,
     /// Read callback.
-    Read(ReadCallback<S>),
+    Read { cb: ReadCallback<S>, span: Span },
     /// Write callback.
     Write {
         cb: WriteCallback,
@@ -78,6 +78,7 @@ pub enum Callback<S: Snapshot> {
         /// it's guaranteed that the request will be successfully applied soon.
         committed_cb: Option<ExtCallback>,
         request_times: SmallVec<[Instant; 4]>,
+        span: Span,
     },
 }
 
@@ -87,6 +88,13 @@ impl<S> Callback<S>
 where
     S: Snapshot,
 {
+    pub fn read(cb: ReadCallback<S>) -> Self {
+        Callback::Read {
+            cb,
+            span: Span::empty(),
+        }
+    }
+
     pub fn write(cb: WriteCallback) -> Self {
         Self::write_ext(cb, None, None)
     }
@@ -101,6 +109,7 @@ where
             proposed_cb,
             committed_cb,
             request_times: SmallVec::new(),
+            span: Span::empty(),
         }
     }
 
@@ -114,15 +123,19 @@ where
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
         match self {
             Callback::None => (),
-            Callback::Read(read) => {
+            Callback::Read { cb, span } => {
+                let _g = span.try_enter();
+
                 let resp = ReadResponse {
                     response: resp,
                     snapshot: None,
                     txn_extra_op: TxnExtraOp::Noop,
                 };
-                read(resp);
+                cb(resp);
             }
-            Callback::Write { cb, .. } => {
+            Callback::Write { cb, span, .. } => {
+                let _g = span.try_enter();
+
                 let resp = WriteResponse { response: resp };
                 cb(resp);
             }
@@ -130,16 +143,24 @@ where
     }
 
     pub fn invoke_proposed(&mut self) {
-        if let Callback::Write { proposed_cb, .. } = self {
+        if let Callback::Write {
+            proposed_cb, span, ..
+        } = self
+        {
             if let Some(cb) = proposed_cb.take() {
+                let _g = span.try_enter();
                 cb()
             }
         }
     }
 
     pub fn invoke_committed(&mut self) {
-        if let Callback::Write { committed_cb, .. } = self {
+        if let Callback::Write {
+            committed_cb, span, ..
+        } = self
+        {
             if let Some(cb) = committed_cb.take() {
+                let _g = span.try_enter();
                 cb()
             }
         }
@@ -147,13 +168,37 @@ where
 
     pub fn invoke_read(self, args: ReadResponse<S>) {
         match self {
-            Callback::Read(read) => read(args),
+            Callback::Read { cb, span } => {
+                let _g = span.try_enter();
+                cb(args)
+            }
             other => panic!("expect Callback::Read(..), got {:?}", other),
         }
     }
 
     pub fn is_none(&self) -> bool {
         matches!(self, Callback::None)
+    }
+
+    pub fn in_span(mut self, span: Span) -> Self {
+        match &mut self {
+            Callback::Read { span: s, .. } => {
+                *s = span;
+            }
+            Callback::Write { span: s, .. } => {
+                *s = span;
+            }
+            _ => {}
+        }
+        self
+    }
+
+    pub fn access_span(&self, f: impl FnOnce(&Span)) {
+        match self {
+            Callback::Read { span, .. } if !span.is_empty() => f(span),
+            Callback::Write { span, .. } if !span.is_empty() => f(span),
+            _ => {}
+        }
     }
 }
 
@@ -164,7 +209,7 @@ where
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Callback::None => write!(fmt, "Callback::None"),
-            Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
+            Callback::Read { .. } => write!(fmt, "Callback::Read(..)"),
             Callback::Write { .. } => write!(fmt, "Callback::Write(..)"),
         }
     }

@@ -16,6 +16,7 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::row;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
+use tikv_util::trace::*;
 
 pub struct BatchTableScanExecutor<S: Storage>(ScanExecutor<S, TableScanExecutorImpl>);
 
@@ -110,6 +111,7 @@ impl<S: Storage> BatchExecutor for BatchTableScanExecutor<S> {
     }
 
     #[inline]
+    #[trace("BatchTableScanExecutor::next_batch")]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(scan_rows)
     }

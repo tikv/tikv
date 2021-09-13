@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::config::TraceConfig;
 use crate::server::metrics::GRPC_MSG_HISTOGRAM_STATIC;
 use crate::server::metrics::REQUEST_BATCH_SIZE_HISTOGRAM_VEC;
 use crate::server::service::kv::batch_commands_response;
@@ -11,10 +12,14 @@ use crate::storage::{
     Storage,
 };
 use crate::storage::{ResponseBatchConsumer, Result};
+use crate::trace_and_fill_resp;
+
+use collections::HashMap;
 use kvproto::kvrpcpb::*;
 use tikv_util::future::poll_future_notify;
 use tikv_util::mpsc::batch::Sender;
 use tikv_util::time::Instant;
+use tikv_util::trace::Span;
 
 pub const MAX_BATCH_GET_REQUEST_COUNT: usize = 10;
 pub const MIN_BATCH_GET_REQUEST_COUNT: usize = 4;
@@ -25,20 +30,28 @@ pub struct ReqBatcher {
     raw_gets: Vec<RawGetRequest>,
     get_ids: Vec<u64>,
     raw_get_ids: Vec<u64>,
+    get_trace: HashMap<u64, Trace<GetResponse>>,
+    raw_get_trace: HashMap<u64, Trace<RawGetResponse>>,
     begin_instant: Instant,
     batch_size: usize,
+    begin_unix_time_ns: u64,
 }
 
+type Trace<T> = (Span, Box<dyn FnOnce(&mut T) + Send>);
+
 impl ReqBatcher {
-    pub fn new(batch_size: usize) -> ReqBatcher {
+    pub fn new(batch_size: usize, begin_unix_time_ns: u64) -> ReqBatcher {
         let begin_instant = Instant::now_coarse();
         ReqBatcher {
             gets: vec![],
             raw_gets: vec![],
             get_ids: vec![],
             raw_get_ids: vec![],
+            get_trace: HashMap::default(),
+            raw_get_trace: HashMap::default(),
             begin_instant,
             batch_size: std::cmp::min(batch_size, MAX_BATCH_GET_REQUEST_COUNT),
+            begin_unix_time_ns,
         }
     }
 
@@ -50,14 +63,28 @@ impl ReqBatcher {
         req.get_context().get_priority() == CommandPri::Normal
     }
 
-    pub fn add_get_request(&mut self, req: GetRequest, id: u64) {
+    pub fn add_get_request(&mut self, mut req: GetRequest, id: u64, trace_config: &TraceConfig) {
+        let ns = self.begin_unix_time_ns;
+        let (span, fill_resp) = trace_and_fill_resp!(get, trace_config, &mut req, GetResponse, ns);
+
         self.gets.push(req);
         self.get_ids.push(id);
+        self.get_trace.insert(id, (span, Box::new(fill_resp)));
     }
 
-    pub fn add_raw_get_request(&mut self, req: RawGetRequest, id: u64) {
+    pub fn add_raw_get_request(
+        &mut self,
+        mut req: RawGetRequest,
+        id: u64,
+        trace_config: &TraceConfig,
+    ) {
+        let ns = self.begin_unix_time_ns;
+        let (span, fill_resp) =
+            trace_and_fill_resp!(raw_get, trace_config, &mut req, RawGetResponse, ns);
+
         self.raw_gets.push(req);
         self.raw_get_ids.push(id);
+        self.raw_get_trace.insert(id, (span, Box::new(fill_resp)));
     }
 
     pub fn maybe_commit<E: Engine, L: LockManager>(
@@ -68,13 +95,34 @@ impl ReqBatcher {
         if self.gets.len() >= self.batch_size {
             let gets = std::mem::take(&mut self.gets);
             let ids = std::mem::take(&mut self.get_ids);
-            future_batch_get_command(storage, ids, gets, tx.clone(), self.begin_instant);
+            let get_trace = std::mem::take(&mut self.get_trace);
+            let span = Span::from_parents("BatchGetCommand", get_trace.values().map(|t| &t.0));
+            let _g = span.enter();
+            future_batch_get_command(
+                storage,
+                ids,
+                gets,
+                tx.clone(),
+                self.begin_instant,
+                get_trace,
+            );
         }
 
         if self.raw_gets.len() >= self.batch_size {
             let gets = std::mem::take(&mut self.raw_gets);
             let ids = std::mem::take(&mut self.raw_get_ids);
-            future_batch_raw_get_command(storage, ids, gets, tx.clone(), self.begin_instant);
+            let raw_get_trace = std::mem::take(&mut self.raw_get_trace);
+            let span =
+                Span::from_parents("BatchRawGetCommand", raw_get_trace.values().map(|t| &t.0));
+            let _g = span.enter();
+            future_batch_raw_get_command(
+                storage,
+                ids,
+                gets,
+                tx.clone(),
+                self.begin_instant,
+                raw_get_trace,
+            );
         }
     }
 
@@ -90,6 +138,7 @@ impl ReqBatcher {
                 self.gets,
                 tx.clone(),
                 self.begin_instant,
+                self.get_trace,
             );
         }
         if !self.raw_gets.is_empty() {
@@ -99,6 +148,7 @@ impl ReqBatcher {
                 self.raw_gets,
                 tx.clone(),
                 self.begin_instant,
+                self.raw_get_trace,
             );
         }
     }
@@ -116,33 +166,50 @@ impl BatcherBuilder {
             pool_size,
         }
     }
-    pub fn build(&self, queue_per_worker: usize, req_batch_size: usize) -> Option<ReqBatcher> {
+    pub fn build(
+        &self,
+        queue_per_worker: usize,
+        req_batch_size: usize,
+        begin_unix_time_ns: u64,
+    ) -> Option<ReqBatcher> {
         if !self.enable_batch {
             return None;
         }
         if req_batch_size > self.pool_size * MIN_BATCH_GET_REQUEST_COUNT
             && queue_per_worker >= MIN_BATCH_GET_REQUEST_COUNT
         {
-            return Some(ReqBatcher::new(req_batch_size / self.pool_size));
+            return Some(ReqBatcher::new(
+                req_batch_size / self.pool_size,
+                begin_unix_time_ns,
+            ));
         }
         if req_batch_size >= MIN_BATCH_GET_REQUEST_COUNT
             && queue_per_worker >= MAX_QUEUE_SIZE_PER_WORKER
         {
-            return Some(ReqBatcher::new(req_batch_size));
+            return Some(ReqBatcher::new(req_batch_size, begin_unix_time_ns));
         }
         None
     }
 }
 
-pub struct GetCommandResponseConsumer {
+pub struct GetCommandResponseConsumer<T> {
     tx: Sender<(u64, batch_commands_response::Response)>,
+    trace: HashMap<u64, Trace<T>>,
 }
 
 impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>
-    for GetCommandResponseConsumer
+    for GetCommandResponseConsumer<GetResponse>
 {
-    fn consume(&self, id: u64, res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>) {
+    fn consume(
+        &mut self,
+        id: u64,
+        res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
+    ) {
+        let (span, fill_resp) = self.trace.remove(&id).unwrap();
+        drop(span);
+
         let mut resp = GetResponse::default();
+        fill_resp(&mut resp);
         if let Some(err) = extract_region_error(&res) {
             resp.set_region_error(err);
         } else {
@@ -170,9 +237,13 @@ impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>
     }
 }
 
-impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer {
-    fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>) {
+impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer<RawGetResponse> {
+    fn consume(&mut self, id: u64, res: Result<Option<Vec<u8>>>) {
+        let (span, fill_resp) = self.trace.remove(&id).unwrap();
+        drop(span);
         let mut resp = RawGetResponse::default();
+        fill_resp(&mut resp);
+
         if let Some(err) = extract_region_error(&res) {
             resp.set_region_error(err);
         } else {
@@ -198,6 +269,7 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
     gets: Vec<GetRequest>,
     tx: Sender<(u64, batch_commands_response::Response)>,
     begin_instant: tikv_util::time::Instant,
+    get_trace: HashMap<u64, Trace<GetResponse>>,
 ) {
     REQUEST_BATCH_SIZE_HISTOGRAM_VEC
         .kv_get
@@ -206,7 +278,10 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
     let res = storage.batch_get_command(
         gets,
         requests,
-        GetCommandResponseConsumer { tx: tx.clone() },
+        GetCommandResponseConsumer {
+            tx: tx.clone(),
+            trace: get_trace,
+        },
     );
     let f = async move {
         // This error can only cause by readpool busy.
@@ -237,6 +312,7 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
     gets: Vec<RawGetRequest>,
     tx: Sender<(u64, batch_commands_response::Response)>,
     begin_instant: tikv_util::time::Instant,
+    raw_get_trace: HashMap<u64, Trace<RawGetResponse>>,
 ) {
     REQUEST_BATCH_SIZE_HISTOGRAM_VEC
         .raw_get
@@ -245,7 +321,10 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
     let res = storage.raw_batch_get_command(
         gets,
         requests,
-        GetCommandResponseConsumer { tx: tx.clone() },
+        GetCommandResponseConsumer {
+            tx: tx.clone(),
+            trace: raw_get_trace,
+        },
     );
     let f = async move {
         // This error can only cause by readpool busy.

@@ -14,6 +14,7 @@ use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 use tidb_query_datatype::match_template_evaltype;
 use tidb_query_expr::RpnStackNode;
 use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
+use tikv_util::trace::*;
 
 pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     context: EvalContext,
@@ -176,6 +177,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     }
 
     #[inline]
+    #[trace("BatchSelectionExecutor::next_batch")]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let mut src_result = self.src.next_batch(scan_rows);
 

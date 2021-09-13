@@ -87,13 +87,14 @@ use kvproto::kvrpcpb::{
 use kvproto::pdpb::QueryKind;
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
-use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
+use resource_metering::{cpu::FutureExt as _, ResourceMeteringTag};
 use std::{
     borrow::Cow,
     iter,
     sync::{atomic, Arc},
 };
 use tikv_util::time::{Instant, ThreadReadId};
+use tikv_util::trace::{FutureExt as _, *};
 use txn_types::{Key, KvPair, Lock, Mutation, OldValues, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -393,6 +394,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Ok((result?, statistics, perf_statistics.delta()))
                 }
             }
+            .in_span(Span::from_local_parent("Storage::get"))
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
@@ -412,7 +414,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         &self,
         requests: Vec<GetRequest>,
         ids: Vec<u64>,
-        consumer: P,
+        mut consumer: P,
     ) -> impl Future<Output = Result<()>> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
@@ -535,7 +537,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .observe(command_duration.saturating_elapsed_secs());
 
                 Ok(())
-            },
+            }
+            .in_span(Span::from_local_parent("Storage::batch_get_command")),
             priority,
             thread_rng().next_u64(),
         );
@@ -638,6 +641,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Ok((result?, statistics, perf_statistics.delta()))
                 }
             }
+            .in_span(Span::from_local_parent("Storage::batch_get"))
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
@@ -783,6 +787,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     })
                 }
             }
+            .in_span(Span::from_local_parent("Storage::scan"))
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
@@ -907,6 +912,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Ok(locks)
                 }
             }
+            .in_span(Span::from_local_parent("Storage::scan_lock"))
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
@@ -1047,7 +1053,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .observe(command_duration.saturating_elapsed_secs());
                     r
                 }
-            },
+            }
+            .in_span(Span::from_local_parent("Storage::raw_get")),
             priority,
             thread_rng().next_u64(),
         );
@@ -1063,7 +1070,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         &self,
         gets: Vec<RawGetRequest>,
         ids: Vec<u64>,
-        consumer: P,
+        mut consumer: P,
     ) -> impl Future<Output = Result<()>> {
         const CMD: CommandKind = CommandKind::raw_batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
@@ -1138,7 +1145,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(CMD)
                     .observe(command_duration.saturating_elapsed_secs());
                 Ok(())
-            },
+            }
+            .in_span(Span::from_local_parent("Storage::raw_batch_get_command")),
             priority,
             thread_rng().next_u64(),
         );
@@ -1490,7 +1498,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     result
                 }
-            },
+            }
+            .in_span(Span::from_local_parent("Storage::raw_scan")),
             priority,
             thread_rng().next_u64(),
         );
@@ -1603,7 +1612,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .observe(command_duration.saturating_elapsed_secs());
                     Ok(result)
                 }
-            },
+            }
+            .in_span(Span::from_local_parent("Storage::raw_batch_scan")),
             priority,
             thread_rng().next_u64(),
         );
@@ -1665,7 +1675,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .observe(command_duration.saturating_elapsed_secs());
                     r
                 }
-            },
+            }
+            .in_span(Span::from_local_parent("Storage::raw_get_key_ttl")),
             priority,
             thread_rng().next_u64(),
         );
@@ -1785,7 +1796,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .observe(command_duration.saturating_elapsed().as_secs_f64());
 
                 ret
-            },
+            }
+            .in_span(Span::from_local_parent("Storage::raw_checksum")),
             priority,
             thread_rng().next_u64(),
         );
@@ -1945,7 +1957,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
 }
 
 pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
-    fn consume(&self, id: u64, res: Result<ConsumeResponse>);
+    fn consume(&mut self, id: u64, res: Result<ConsumeResponse>);
 }
 
 pub mod test_util {
@@ -2114,7 +2126,7 @@ pub mod test_util {
 
     impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)> for GetConsumer {
         fn consume(
-            &self,
+            &mut self,
             id: u64,
             res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
         ) {
@@ -2126,7 +2138,7 @@ pub mod test_util {
     }
 
     impl ResponseBatchConsumer<Option<Vec<u8>>> for GetConsumer {
-        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>) {
+        fn consume(&mut self, id: u64, res: Result<Option<Vec<u8>>>) {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
     }

@@ -32,8 +32,9 @@ use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
-use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
+use resource_metering::{cpu::FutureExt as _, ResourceMeteringTag};
 use tikv_util::time::Instant;
+use tikv_util::trace::{FutureExt as _, *};
 use txn_types::Lock;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
@@ -471,6 +472,9 @@ impl<E: Engine> Endpoint<E> {
             .read_pool
             .spawn_handle(
                 Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                    .in_span(Span::from_local_parent(
+                        "Endpoint::handle_unary_request_impl",
+                    ))
                     .in_resource_metering_tag(resource_tag),
                 priority,
                 task_id,
@@ -483,6 +487,7 @@ impl<E: Engine> Endpoint<E> {
     /// errors during parsing or handling, they will be converted into a `Response` as the success
     /// result of the future.
     #[inline]
+    #[trace("Endpoint::parse_and_handle_unary_request")]
     pub fn parse_and_handle_unary_request(
         &self,
         req: coppb::Request,

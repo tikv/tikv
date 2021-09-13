@@ -30,7 +30,8 @@ use std::u64;
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
-use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
+use resource_metering::{cpu::FutureExt as _, ResourceMeteringTag};
+use tikv_util::trace::{FutureExt as _, *};
 use tikv_util::{callback::must_call, deadline::Deadline, time::Instant};
 use txn_types::TimeStamp;
 
@@ -662,6 +663,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
                     tls_collect_read_duration(tag.get_str(), elapsed);
                 }
+                .in_span(Span::from_local_parent("Scheduler::process_by_worker"))
                 .in_resource_metering_tag(resource_tag),
             )
             .unwrap();
@@ -669,6 +671,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
     /// `Scheduler`.
+    #[trace("Scheduler::process_read")]
     fn process_read(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_read");
         debug!("process read cmd in worker pool"; "cid" => task.cid);
@@ -684,6 +687,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Processes a write command within a worker thread, then posts either a `WriteFinished`
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
+    #[trace_async("Scheduler::process_write")]
     async fn process_write(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_write");
         let tag = task.cmd.tag();

@@ -22,6 +22,7 @@ use crate::storage::{
     lock_manager::LockManager,
     SecondaryLocksStatus, Storage, TxnStatus,
 };
+use crate::trace_and_fill_resp;
 use crate::{forward_duplex, forward_unary};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
@@ -32,13 +33,15 @@ use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult,
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
-use kvproto::coprocessor::*;
+use kvproto::coprocessor::{Request as CoprocessorRequest, Response as CoprocessorResponse, *};
 use kvproto::errorpb::{Error as RegionError, *};
 use kvproto::kvrpcpb::*;
 use kvproto::mpp::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
-use kvproto::tikvpb::*;
+use kvproto::tikvpb::{
+    BatchCommandsEmptyRequest as EmptyRequest, BatchCommandsEmptyResponse as EmptyResponse, *,
+};
 use raft::eraftpb::MessageType;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::memory::{MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
@@ -48,6 +51,7 @@ use raftstore::{DiscardReason, Error as RaftStoreError};
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::sys::memory_usage_reaches_high_water;
+use tikv_util::trace::span::DefaultClock;
 use tikv_util::worker::Scheduler;
 use txn_types::{self, Key};
 
@@ -80,6 +84,8 @@ pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockMan
 
     // Go `server::Config` to get more details.
     reject_messages_on_memory_ratio: f64,
+
+    trace_config: TraceConfig,
 }
 
 impl<T: RaftStoreRouter<E::Local> + Clone + 'static, E: Engine + Clone, L: LockManager + Clone>
@@ -99,6 +105,7 @@ impl<T: RaftStoreRouter<E::Local> + Clone + 'static, E: Engine + Clone, L: LockM
             grpc_thread_load: self.grpc_thread_load.clone(),
             proxy: self.proxy.clone(),
             reject_messages_on_memory_ratio: self.reject_messages_on_memory_ratio,
+            trace_config: self.trace_config,
         }
     }
 }
@@ -118,6 +125,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
         enable_req_batch: bool,
         proxy: Proxy,
         reject_messages_on_memory_ratio: f64,
+        trace_config: TraceConfig,
     ) -> Self {
         Service {
             store_id,
@@ -132,6 +140,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
             grpc_thread_load,
             proxy,
             reject_messages_on_memory_ratio,
+            trace_config,
         }
     }
 
@@ -166,13 +175,18 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
 
 macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
-        fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
+        fn $fn_name(&mut self, ctx: RpcContext<'_>, mut req: $req_ty, sink: UnarySink<$resp_ty>) {
             forward_unary!(self.proxy, $fn_name, ctx, req, sink);
             let begin_instant = Instant::now_coarse();
 
+            let (span, fill_resp) = trace_and_fill_resp!($fn_name, self.trace_config, &mut req, $resp_ty, 0);
+            let _g = span.enter();
+
             let resp = $future_name(&self.storage, req);
             let task = async move {
-                let resp = resp.await?;
+                let mut resp = resp.await?;
+                drop(span);
+                fill_resp(&mut resp);
                 sink.success(resp).await?;
                 GRPC_MSG_HISTOGRAM_STATIC
                     .$fn_name
@@ -348,12 +362,29 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         );
     }
 
-    fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
+    fn coprocessor(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut req: CoprocessorRequest,
+        sink: UnarySink<CoprocessorResponse>,
+    ) {
         forward_unary!(self.proxy, coprocessor, ctx, req, sink);
         let begin_instant = Instant::now_coarse();
+
+        let (span, fill_resp) = trace_and_fill_resp!(
+            coprocessor,
+            &self.trace_config,
+            &mut req,
+            CoprocessorResponse,
+            0
+        );
+        let _g = span.enter();
+
         let future = future_copr(&self.copr, Some(ctx.peer()), req);
         let task = async move {
-            let resp = future.await?;
+            let mut resp = future.await?;
+            drop(span);
+            fill_resp(&mut resp);
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .coprocessor
@@ -619,8 +650,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
     fn coprocessor_stream(
         &mut self,
         ctx: RpcContext<'_>,
-        req: Request,
-        mut sink: ServerStreamingSink<Response>,
+        req: CoprocessorRequest,
+        mut sink: ServerStreamingSink<CoprocessorResponse>,
     ) {
         let begin_instant = Instant::now_coarse();
 
@@ -628,7 +659,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             .copr
             .parse_and_handle_stream_request(req, Some(ctx.peer()))
             .map(|resp| {
-                GrpcResult::<(Response, WriteFlags)>::Ok((
+                GrpcResult::<(CoprocessorResponse, WriteFlags)>::Ok((
                     resp,
                     WriteFlags::default().buffer_hint(true),
                 ))
@@ -882,7 +913,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         // so just send it as an command.
         if let Err(e) = self
             .ch
-            .send_command(cmd, Callback::Read(cb), RaftCmdExtraOpts::default())
+            .send_command(cmd, Callback::read(cb), RaftCmdExtraOpts::default())
         {
             // Retrun region error instead a gRPC error.
             let mut resp = ReadIndexResponse::default();
@@ -958,11 +989,13 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         let copr_v2 = self.copr_v2.clone();
         let pool_size = storage.get_normal_pool_size();
         let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
+        let trace_config = self.trace_config;
         let request_handler = stream.try_for_each(move |mut req| {
+            let begin_unix_time_ns = DefaultClock::now().into_unix_time_ns(DefaultClock::anchor());
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
             let queue = storage.get_readpool_queue_per_worker();
-            let mut batcher = batch_builder.build(queue, request_ids.len());
+            let mut batcher = batch_builder.build(queue, request_ids.len(), begin_unix_time_ns);
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
                 handle_batch_commands_request(
@@ -974,6 +1007,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
                     id,
                     req,
                     &tx,
+                    &trace_config,
+                    begin_unix_time_ns,
                 );
                 if let Some(batch) = batcher.as_mut() {
                     batch.maybe_commit(&storage, &tx);
@@ -1167,6 +1202,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     id: u64,
     req: batch_commands_request::Request,
     tx: &Sender<(u64, batch_commands_response::Response)>,
+    trace_config: &TraceConfig,
+    begin_unix_ns: u64,
 ) {
     // To simplify code and make the logic more clear.
     macro_rules! oneof {
@@ -1187,36 +1224,60 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                     let resp = future::ok(batch_commands_response::Response::default());
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid);
                 },
-                Some(batch_commands_request::request::Cmd::Get(req)) => {
+                Some(batch_commands_request::request::Cmd::Get(mut req)) => {
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_get(&req)
                     }) {
-                        batcher.as_mut().unwrap().add_get_request(req, id);
+                        batcher.as_mut().unwrap().add_get_request(req, id, trace_config);
                     } else {
                        let begin_instant = Instant::now();
+
+                       let (span, fill_resp) = trace_and_fill_resp!(get, trace_config, &mut req, GetResponse, begin_unix_ns);
+                       let _g = span.enter();
+
                        let resp = future_get(storage, req)
-                            .map_ok(oneof!(batch_commands_response::response::Cmd::Get))
+                            .map_ok(move |mut resp| {
+                                drop(span);
+                                fill_resp(&mut resp);
+                                oneof!(batch_commands_response::response::Cmd::Get)(resp)
+                            })
                             .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get);
                     }
                 },
-                Some(batch_commands_request::request::Cmd::RawGet(req)) => {
+                Some(batch_commands_request::request::Cmd::RawGet(mut req)) => {
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_raw_get(&req)
                     }) {
-                        batcher.as_mut().unwrap().add_raw_get_request(req, id);
+                        batcher.as_mut().unwrap().add_raw_get_request(req, id, trace_config);
                     } else {
                        let begin_instant = Instant::now();
+
+                       let (span, fill_resp) = trace_and_fill_resp!(raw_get, trace_config, &mut req, RawGetResponse, begin_unix_ns);
+                       let _g = span.enter();
+
                        let resp = future_raw_get(storage, req)
-                            .map_ok(oneof!(batch_commands_response::response::Cmd::RawGet))
+                            .map_ok(move |mut resp| {
+                                drop(span);
+                                fill_resp(&mut resp);
+                                oneof!(batch_commands_response::response::Cmd::RawGet)(resp)
+                            })
                             .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get);
                     }
                 },
-                $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
+                $(Some(batch_commands_request::request::Cmd::$cmd(mut req)) => {
                     let begin_instant = Instant::now();
+
+                    let (span, fill_resp) = trace_and_fill_resp!($metric_name, trace_config, &mut req, concat_idents!($cmd, Response), begin_unix_ns);
+                    let _g = span.enter();
+
                     let resp = $future_fn($($arg,)* req)
-                        .map_ok(oneof!(batch_commands_response::response::Cmd::$cmd))
+                        .map_ok(move |mut resp| {
+                            drop(span);
+                            fill_resp(&mut resp);
+                            oneof!(batch_commands_response::response::Cmd::$cmd)(resp)
+                        })
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name);
                 })*
@@ -1255,10 +1316,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     }
 }
 
-async fn future_handle_empty(
-    req: BatchCommandsEmptyRequest,
-) -> ServerResult<BatchCommandsEmptyResponse> {
-    let mut res = BatchCommandsEmptyResponse::default();
+async fn future_handle_empty(req: EmptyRequest) -> ServerResult<EmptyResponse> {
+    let mut res = EmptyResponse::default();
     res.set_test_id(req.get_test_id());
     // `BatchCommandsWaker` processes futures in notify. If delay_time is too small, notify
     // can be called immediately, so the future is polled recursively and lead to deadlock.
@@ -1809,8 +1868,8 @@ fn future_raw_checksum<E: Engine, L: LockManager>(
 fn future_copr<E: Engine>(
     copr: &Endpoint<E>,
     peer: Option<String>,
-    req: Request,
-) -> impl Future<Output = ServerResult<Response>> {
+    req: CoprocessorRequest,
+) -> impl Future<Output = ServerResult<CoprocessorResponse>> {
     let ret = copr.parse_and_handle_unary_request(req, peer);
     async move { Ok(ret.await) }
 }
@@ -1987,6 +2046,7 @@ pub mod batch_commands_request {
     }
 }
 
+use crate::config::TraceConfig;
 #[cfg(feature = "prost-codec")]
 pub use kvproto::tikvpb::batch_commands_request;
 #[cfg(feature = "prost-codec")]
@@ -2005,6 +2065,43 @@ impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Respon
         v.mut_request_ids().push(e.0);
         v.mut_responses().push(e.1);
         None
+    }
+
+    fn finish(&mut self, collection: &mut BatchCommandsResponse) {
+        let now = DefaultClock::now().into_unix_time_ns(DefaultClock::anchor());
+        for resp in collection.mut_responses().iter_mut() {
+            if resp.cmd.is_none() {
+                continue;
+            }
+
+            macro_rules! set_batch_duration {
+                ($($resp: ident,)*) => {{
+                    let cmd = resp.cmd.as_mut().unwrap();
+                    match cmd {
+                        $(BatchCommandsResponse_Response_oneof_cmd::$resp(resp) => {
+                            if !resp.has_meta() || !resp.get_meta().has_trace_detail() {
+                                continue;
+                            }
+                            if let Some(ss) = resp.mut_meta().mut_trace_detail().mut_span_sets().last_mut() {
+                                if let Some(span) = ss.mut_spans().last_mut() {
+                                    if span.get_duration_ns() == 0 && now > span.get_begin_unix_time_ns() {
+                                        span.set_duration_ns(now - span.get_begin_unix_time_ns());
+                                    }
+                                }
+                            }
+                        })*
+                    }
+                }}
+            }
+
+            set_batch_duration! {
+                Get, Scan, Prewrite, Commit, Import, Cleanup, BatchGet, BatchRollback,
+                ScanLock, ResolveLock, Gc, DeleteRange, RawGet, RawBatchGet, RawPut,
+                RawBatchPut, RawDelete, RawBatchDelete, RawScan, RawDeleteRange, RawBatchScan,
+                Coprocessor, PessimisticLock, PessimisticRollback, CheckTxnStatus, TxnHeartBeat,
+                CheckSecondaryLocks, RawCoprocessor, Empty,
+            };
+        }
     }
 }
 

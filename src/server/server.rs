@@ -37,6 +37,7 @@ use super::service::*;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
 use super::transport::ServerTransport;
 use super::{Config, Error, Result};
+use crate::config::TraceConfig;
 use crate::read_pool::ReadPool;
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
@@ -93,6 +94,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         env: Arc<Environment>,
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
+        trace_config: TraceConfig,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.value().stats_concurrency > 0 {
@@ -126,6 +128,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             cfg.value().enable_request_batch,
             proxy,
             cfg.value().reject_messages_on_memory_ratio,
+            trace_config,
         );
 
         let addr = SocketAddr::from_str(&cfg.value().addr)?;
@@ -525,6 +528,7 @@ mod tests {
             env,
             None,
             debug_thread_pool,
+            TraceConfig::default(),
         )
         .unwrap();
 

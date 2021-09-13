@@ -2305,6 +2305,32 @@ impl Default for ResolvedTsConfig {
     }
 }
 
+#[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct TraceConfig {
+    pub duration_threshold: ReadableDuration,
+    pub max_spans_length: usize,
+}
+
+impl TraceConfig {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.max_spans_length == 0 {
+            return Err("tracing.max_spans_length cannot be 0".into());
+        }
+        Ok(())
+    }
+}
+
+impl Default for TraceConfig {
+    fn default() -> Self {
+        Self {
+            duration_threshold: ReadableDuration::millis(5),
+            max_spans_length: 100,
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -2413,6 +2439,9 @@ pub struct TiKvConfig {
 
     #[online_config(submodule)]
     pub resource_metering: ResourceMeteringConfig,
+
+    #[online_config(skip)]
+    pub trace: TraceConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2451,6 +2480,7 @@ impl Default for TiKvConfig {
             cdc: CdcConfig::default(),
             resolved_ts: ResolvedTsConfig::default(),
             resource_metering: ResourceMeteringConfig::default(),
+            trace: TraceConfig::default(),
         }
     }
 }
@@ -2573,6 +2603,7 @@ impl TiKvConfig {
         self.gc.validate()?;
         self.resolved_ts.validate()?;
         self.resource_metering.validate()?;
+        self.trace.validate()?;
 
         if self.storage.flow_control.enable {
             // using raftdb write stall to control memtables as a safety net

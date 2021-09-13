@@ -17,6 +17,7 @@ pub mod server;
 pub mod service;
 pub mod snap;
 pub mod status_server;
+pub mod trace;
 pub mod transport;
 pub mod ttl;
 

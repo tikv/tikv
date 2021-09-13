@@ -45,6 +45,7 @@ use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::sys::disk::{get_disk_status, DiskUsage};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
+use tikv_util::trace::*;
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 use tikv_util::{
     box_err, box_try, debug, defer, error, info, is_zero_duration, slow_log, sys as sys_util, warn,
@@ -59,6 +60,7 @@ use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
 };
+use crate::store::fsm::tracer::RaftTracer;
 use crate::store::fsm::ApplyNotifier;
 use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
@@ -678,6 +680,7 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
+    #[trace("RaftPoller::handle_raft_ready")]
     fn handle_raft_ready(
         &mut self,
         peers: &mut [Option<impl TrackedFsm<Target = PeerFsm<EK, ER>>>],
@@ -702,6 +705,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
         if self.poll_ctx.trans.need_flush()
             && (!self.poll_ctx.kv_wb.is_empty() || !self.poll_ctx.raft_wb.is_empty())
         {
+            let _g = LocalSpan::enter("RaftPoller::trans.flush");
             self.poll_ctx.trans.flush();
         }
         self.poll_ctx.raft_metrics.ready.has_ready_region += ready_cnt as u64;
@@ -714,6 +718,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
         let ready_cnt = self.poll_ctx.ready_res.len();
         fail_point!("raft_before_save");
         if !self.poll_ctx.kv_wb.is_empty() {
+            let _g = LocalSpan::enter("RaftPoller::engines.kv.write_opt");
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             self.poll_ctx
@@ -732,6 +737,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
         fail_point!("raft_between_save");
 
         if !self.poll_ctx.raft_wb.is_empty() {
+            let _g = LocalSpan::enter("RaftPoller::engines.raft.consume_and_shrink");
             fail_point!(
                 "raft_before_save_on_store_1",
                 self.poll_ctx.store_id() == 1,
@@ -826,6 +832,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.timer = TiInstant::now_coarse();
         // update config
         self.poll_ctx.perf_context.start_observe();
+        RaftTracer::begin();
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(
                 &incoming.messages_per_tick,
@@ -963,6 +970,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             // TODO: Maybe we need to inspect the latency related to apply worker later.
             inspector.finish();
         }
+        RaftTracer::end();
     }
 
     fn pause(&mut self) {

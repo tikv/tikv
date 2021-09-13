@@ -39,6 +39,7 @@ use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::sys::disk::DiskUsage;
 use tikv_util::sys::memory_usage_reaches_high_water;
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
+use tikv_util::trace::{trace as fn_trace, *};
 use tikv_util::worker::{ScheduleError, Scheduler};
 use tikv_util::{box_err, debug, defer, error, info, trace, warn};
 use tikv_util::{escape, is_zero_duration, Either};
@@ -48,6 +49,7 @@ use self::memtrace::*;
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::fsm::store::{PollContext, StoreMeta};
+use crate::store::fsm::tracer::RaftTracer;
 use crate::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
     ExecResult,
@@ -485,6 +487,15 @@ where
                 })
                 .collect();
 
+            let span = Span::from_parents(
+                "BatchRaftCmdRequest",
+                cbs.iter().filter_map(|(cb, ..)| match cb {
+                    Callback::Read { span, .. } if !span.is_empty() => Some(span),
+                    Callback::Write { span, .. } if !span.is_empty() => Some(span),
+                    _ => None,
+                }),
+            );
+
             let mut cb = Callback::write_ext(
                 Box::new(move |resp| {
                     let mut last_index = 0;
@@ -504,7 +515,8 @@ where
                 }),
                 proposed_cb,
                 committed_cb,
-            );
+            )
+            .in_span(span);
 
             if let Callback::Write { request_times, .. } = &mut cb {
                 *request_times = times;
@@ -582,6 +594,9 @@ where
                     }
                 }
                 PeerMsg::RaftCommand(cmd) => {
+                    cmd.callback.access_span(|span| {
+                        RaftTracer::add_span(Span::from_parent("Raft Poll", span))
+                    });
                     self.ctx
                         .raft_metrics
                         .propose
@@ -902,7 +917,7 @@ where
         let apply_router = self.ctx.apply_router.clone();
         self.propose_raft_command(
             msg,
-            Callback::Read(Box::new(move |resp| {
+            Callback::read(Box::new(move |resp| {
                 // Return the error
                 if resp.response.get_header().has_error() {
                     cb.invoke_read(resp);
@@ -3278,6 +3293,7 @@ where
         }
     }
 
+    #[fn_trace("PeerFsmDelegate::on_ready_result")]
     fn on_ready_result(
         &mut self,
         exec_results: &mut VecDeque<ExecResult<EK::Snapshot>>,
@@ -3498,6 +3514,7 @@ where
         }
     }
 
+    #[fn_trace("PeerFsmDelegate::propose_raft_command")]
     fn propose_raft_command(
         &mut self,
         mut msg: RaftCmdRequest,

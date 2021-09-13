@@ -52,6 +52,7 @@ use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::memory::HeapSize;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
+use tikv_util::trace::*;
 use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, box_try, debug, error, info, safe_panic, slow_log, warn};
 use tikv_util::{Either, MustConsumeVec};
@@ -62,6 +63,7 @@ use self::memtrace::*;
 use crate::coprocessor::{
     Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
 };
+use crate::store::fsm::tracer::ApplyTracer;
 use crate::store::fsm::RaftPollerBuilder;
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::memory::*;
@@ -503,6 +505,7 @@ where
 
     /// Writes all the changes into RocksDB.
     /// If it returns true, all pending writes are persisted in engines.
+    #[trace("ApplyContext::write_to_db")]
     pub fn write_to_db(&mut self) -> bool {
         let need_sync = self.sync_log_hint;
         // There may be put and delete requests after ingest request in the same fsm.
@@ -554,6 +557,7 @@ where
             batch_max_level,
             mut cb_batch,
         } = mem::replace(&mut self.applied_batch, ApplyCallbackBatch::new());
+        ApplyTracer::truncate();
         // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
         self.host
             .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
@@ -566,6 +570,13 @@ where
                         .observe(duration_to_sec(now.saturating_duration_since(*t)));
                 }
             }
+            cb.access_span(|span| {
+                ApplyTracer::partial_submit(|s| {
+                    for spans in s {
+                        span.mount_local_spans(spans.clone())
+                    }
+                })
+            });
             cb.invoke_with_response(resp);
         }
         self.apply_time.flush();
@@ -612,6 +623,7 @@ where
 
     /// Flush all pending writes to engines.
     /// If it returns true, all pending writes are persisted in engines.
+    #[trace("ApplyContext::flush")]
     pub fn flush(&mut self) -> bool {
         // TODO: this check is too hacky, need to be more verbose and less buggy.
         let t = match self.timer.take() {
@@ -1031,6 +1043,7 @@ where
         });
     }
 
+    #[trace("ApplyDelegate::handle_raft_entry_normal")]
     fn handle_raft_entry_normal<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
@@ -1092,6 +1105,7 @@ where
         ApplyResult::None
     }
 
+    #[trace("ApplyDelegate::handle_raft_entry_conf_change")]
     fn handle_raft_entry_conf_change<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
@@ -1169,6 +1183,7 @@ where
         None
     }
 
+    #[trace("ApplyDelegate::process_raft_cmd")]
     fn process_raft_cmd<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
@@ -3207,6 +3222,7 @@ where
     }
 
     /// Handles apply tasks, and uses the apply delegate to handle the committed entries.
+    #[trace("ApplyFsm::handle_apply")]
     fn handle_apply<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
@@ -3697,6 +3713,7 @@ where
             }
         }
         self.apply_ctx.perf_context.start_observe();
+        ApplyTracer::begin();
     }
 
     fn handle_control(&mut self, control: &mut ControlFsm) -> Option<usize> {
@@ -3792,6 +3809,7 @@ where
             fsm.delegate.update_memory_trace(&mut self.trace_event);
         }
         MEMTRACE_APPLYS.trace(mem::take(&mut self.trace_event));
+        ApplyTracer::end();
     }
 
     fn get_priority(&self) -> Priority {
@@ -5322,7 +5340,7 @@ mod tests {
                     rts_id: Some(observe_handle.clone()),
                     region_id: 1,
                 },
-                cb: Callback::Read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
+                cb: Callback::read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
                     assert!(!resp.response.get_header().has_error());
                     assert!(resp.snapshot.is_some());
                     let snap = resp.snapshot.unwrap();
@@ -5396,7 +5414,7 @@ mod tests {
                     rts_id: Some(observe_handle),
                     region_id: 2,
                 },
-                cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
+                cb: Callback::read(Box::new(|resp: ReadResponse<_>| {
                     assert!(
                         resp.response
                             .get_header()
@@ -5573,7 +5591,7 @@ mod tests {
                     rts_id: Some(observe_handle.clone()),
                     region_id: 1,
                 },
-                cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
+                cb: Callback::read(Box::new(|resp: ReadResponse<_>| {
                     assert!(!resp.response.get_header().has_error(), "{:?}", resp);
                     assert!(resp.snapshot.is_some());
                 })),
@@ -5732,7 +5750,7 @@ mod tests {
                     rts_id: Some(observe_handle),
                     region_id: 1,
                 },
-                cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
+                cb: Callback::read(Box::new(move |resp: ReadResponse<_>| {
                     assert!(
                         resp.response.get_header().get_error().has_epoch_not_match(),
                         "{:?}",

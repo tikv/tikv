@@ -36,6 +36,7 @@ use raftstore::{
 };
 use tikv_util::codec::number::NumberEncoder;
 use tikv_util::time::Instant;
+use tikv_util::trace::*;
 use txn_types::{Key, TimeStamp, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
@@ -234,10 +235,11 @@ where
             .read(
                 ctx.read_id,
                 cmd,
-                StoreCallback::Read(Box::new(move |resp| {
+                StoreCallback::read(Box::new(move |resp| {
                     let (cb_ctx, res) = on_read_result(resp, 1);
                     cb((cb_ctx, res.map_err(Error::into)));
-                })),
+                }))
+                .in_span(Span::from_local_parent("snapshot::RaftReadRequest")),
             )
             .map_err(From::from)
     }
@@ -293,7 +295,8 @@ where
             }),
             proposed_cb,
             committed_cb,
-        );
+        )
+        .in_span(Span::from_local_parent("write_requests::RaftWriteRequest"));
         let extra_opts = RaftCmdExtraOpts {
             deadline: batch.deadline,
             disk_full_opt: batch.disk_full_opt,
@@ -377,6 +380,7 @@ where
         write_modifies(&self.engine, modifies)
     }
 
+    #[trace("RaftKv::async_write")]
     fn async_write(
         &self,
         ctx: &Context,
@@ -434,6 +438,7 @@ where
         })
     }
 
+    #[trace("RaftKv::async_snapshot")]
     fn async_snapshot(&self, mut ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> kv::Result<()> {
         fail_point!("raftkv_async_snapshot_err", |_| Err(box_err!(
             "injected error for async_snapshot"

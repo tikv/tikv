@@ -18,6 +18,7 @@ use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalConfig;
 use tidb_query_datatype::match_template_evaltype;
 use tidb_query_expr::RpnStackNode;
+use tikv_util::trace::*;
 
 pub struct BatchSimpleAggregationExecutor<Src: BatchExecutor>(
     AggregationExecutor<Src, SimpleAggregationImpl>,
@@ -32,6 +33,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     }
 
     #[inline]
+    #[trace("BatchSimpleAggregationExecutor::next_batch")]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(scan_rows)
     }

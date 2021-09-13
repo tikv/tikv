@@ -735,6 +735,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
+            self.config.trace,
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(

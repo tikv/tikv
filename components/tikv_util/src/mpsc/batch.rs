@@ -252,6 +252,8 @@ pub trait BatchCollector<Collection, Elem> {
     /// If `elem` is collected into `collection` successfully, return `None`.
     /// Otherwise return `elem` back, and `collection` should be spilled out.
     fn collect(&mut self, collection: &mut Collection, elem: Elem) -> Option<Elem>;
+
+    fn finish(&mut self, _collection: &mut Collection) {}
 }
 
 pub struct VecCollector;
@@ -332,13 +334,14 @@ where
         } else if ctx.elem.is_none() {
             return Poll::Pending;
         }
-        let elem = ctx.elem.take();
+        let mut elem = ctx.elem.take().unwrap();
         if let Some(m) = received {
             let collection = ctx.elem.get_or_insert_with(&ctx.initializer);
             let _received = ctx.collector.collect(collection, m);
             debug_assert!(_received.is_none());
         }
-        Poll::Ready(elem)
+        ctx.collector.finish(&mut elem);
+        Poll::Ready(Some(elem))
     }
 }
 
