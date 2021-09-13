@@ -929,7 +929,7 @@ where
 
         // Debug service.
         <EK as CreateKvEngine<ER>>::start_debug_service(
-            &engines,
+            engines,
             servers,
             &self.router,
             &mut self.cfg_controller,
@@ -972,7 +972,7 @@ where
         // Backup service.
         <EK as CreateKvEngine<ER>>::start_backup_service(
             &self.config,
-            &engines,
+            engines,
             servers,
             &self.background_worker,
             &self.region_info_accessor,
