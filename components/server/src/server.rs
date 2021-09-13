@@ -123,39 +123,41 @@ pub fn run_tikv(config: TiKvConfig) {
 
     let _m = Monitor::default();
 
-    macro_rules! run_impl {
-        ($ER: ty) => {{
-            let mut tikv = TiKVServer::<RocksEngine, $ER>::init(config);
-
-            // Must be called after `TiKVServer::init`.
-            let memory_limit = tikv.config.memory_usage_limit.0.unwrap().0;
-            let high_water = (tikv.config.memory_usage_high_water * memory_limit as f64) as u64;
-            register_memory_usage_high_water(high_water);
-
-            tikv.check_conflict_addr();
-            tikv.init_fs();
-            tikv.init_yatp();
-            tikv.init_encryption();
-            let fetcher = tikv.init_io_utility();
-            let (engines, engines_info) = tikv.init_raw_engines();
-            tikv.init_engines(engines.clone());
-            let server_config = tikv.init_servers();
-            tikv.register_services();
-            tikv.init_metrics_flusher(fetcher, engines_info);
-            tikv.init_storage_stats_task(engines);
-            tikv.run_server(server_config);
-            tikv.run_status_server();
-
-            signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
-            tikv.stop();
-        }};
-    }
-
     if !config.raft_engine.enable {
-        run_impl!(RocksEngine)
+        run_server::<RocksEngine, RocksEngine>(config);
     } else {
-        run_impl!(RaftLogEngine)
+        run_server::<RocksEngine, RaftLogEngine>(config);
     }
+}
+
+fn run_server<EK, ER>(config: TiKvConfig)
+where
+    EK: KvEngine + CreateKvEngine<ER>,
+    ER: RaftEngine + CreateRaftEngine<EK>,
+{
+    let mut tikv = TiKVServer::<EK, ER>::init(config);
+
+    // Must be called after `TiKVServer::init`.
+    let memory_limit = tikv.config.memory_usage_limit.0.unwrap().0;
+    let high_water = (tikv.config.memory_usage_high_water * memory_limit as f64) as u64;
+    register_memory_usage_high_water(high_water);
+
+    tikv.check_conflict_addr();
+    tikv.init_fs();
+    tikv.init_yatp();
+    tikv.init_encryption();
+    let fetcher = tikv.init_io_utility();
+    let (engines, engines_info) = tikv.init_raw_engines();
+    tikv.init_engines(engines.clone());
+    let server_config = tikv.init_servers();
+    tikv.register_services();
+    tikv.init_metrics_flusher(fetcher, engines_info);
+    tikv.init_storage_stats_task(engines);
+    tikv.run_server(server_config);
+    tikv.run_status_server();
+
+    signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
+    tikv.stop();
 }
 
 const RESERVED_OPEN_FDS: u64 = 1000;
