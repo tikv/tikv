@@ -1192,7 +1192,7 @@ where
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
-        let raft_engine = <RocksEngine as CreateRaftEngine>::create_raft_engine(
+        let raft_engine = <RocksEngine as CreateRaftEngine<EK>>::create_raft_engine(
             &self.config,
             env.clone(),
             &block_cache,
@@ -1215,17 +1215,13 @@ where
             &self.config,
             &mut self.cfg_controller,
         );
-        <RocksEngine as CreateRaftEngine>::register_raft_config(
+        <RocksEngine as CreateRaftEngine<EK>>::register_raft_config(
             &engines.raft,
             &self.config,
             &mut self.cfg_controller,
         );
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(
-            engines.kv.clone(),
-            Some(engines.raft.clone()),
-            180, /*max_samples_to_preserve*/
-        ));
+        let engines_info = <RocksEngine as CreateRaftEngine<EK>>::create_engines_info(&engines);
 
         (engines, engines_info)
     }
@@ -1240,7 +1236,7 @@ where
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
-        let raft_engine = <RaftLogEngine as CreateRaftEngine>::create_raft_engine(
+        let raft_engine = <RaftLogEngine as CreateRaftEngine<EK>>::create_raft_engine(
             &self.config,
             env.clone(),
             &block_cache,
@@ -1264,17 +1260,13 @@ where
             &self.config,
             &mut self.cfg_controller,
         );
-        <RaftLogEngine as CreateRaftEngine>::register_raft_config(
+        <RaftLogEngine as CreateRaftEngine<EK>>::register_raft_config(
             &engines.raft,
             &self.config,
             &mut self.cfg_controller,
         );
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(
-            engines.kv.clone(),
-            None, /*raft_engine*/
-            180,  /*max_samples_to_preserve*/
-        ));
+        let engines_info = <RaftLogEngine as CreateRaftEngine<EK>>::create_engines_info(&engines);
 
         (engines, engines_info)
     }
@@ -1438,7 +1430,10 @@ where
     }
 }
 
-trait CreateRaftEngine: RaftEngine {
+trait CreateRaftEngine<EK>: RaftEngine
+where
+    EK: KvEngine,
+{
     fn create_raft_engine(
         config: &TiKvConfig,
         env: Arc<engine_rocks::raw::Env>,
@@ -1450,9 +1445,14 @@ trait CreateRaftEngine: RaftEngine {
         config: &TiKvConfig,
         cfg_controller: &mut Option<ConfigController>,
     );
+
+    fn create_engines_info(engines: &Engines<EK, Self>) -> Arc<EnginesResourceInfo<EK>>;
 }
 
-impl CreateRaftEngine for RocksEngine {
+impl<EK> CreateRaftEngine<EK> for RocksEngine
+where
+    EK: KvEngine,
+{
     fn create_raft_engine(
         config: &TiKvConfig,
         env: Arc<engine_rocks::raw::Env>,
@@ -1494,9 +1494,20 @@ impl CreateRaftEngine for RocksEngine {
             )),
         );
     }
+
+    fn create_engines_info(engines: &Engines<EK, Self>) -> Arc<EnginesResourceInfo<EK>> {
+        Arc::new(EnginesResourceInfo::new(
+            engines.kv.clone(),
+            Some(engines.raft.clone()),
+            180, /*max_samples_to_preserve*/
+        ))
+    }
 }
 
-impl CreateRaftEngine for RaftLogEngine {
+impl<EK> CreateRaftEngine<EK> for RaftLogEngine
+where
+    EK: KvEngine,
+{
     fn create_raft_engine(
         config: &TiKvConfig,
         env: Arc<engine_rocks::raw::Env>,
@@ -1517,6 +1528,14 @@ impl CreateRaftEngine for RaftLogEngine {
         _config: &TiKvConfig,
         _cfg_controller: &mut Option<ConfigController>,
     ) {
+    }
+
+    fn create_engines_info(engines: &Engines<EK, Self>) -> Arc<EnginesResourceInfo<EK>> {
+        Arc::new(EnginesResourceInfo::new(
+            engines.kv.clone(),
+            None,
+            180, /*max_samples_to_preserve*/
+        ))
     }
 }
 
