@@ -62,8 +62,15 @@ impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
                 // All locks are scanned
                 None
             };
+            let next_cmd = ResolveLock {
+                ctx,
+                deadline: self.deadline,
+                txn_status,
+                scan_key: next_scan_key,
+                key_locks: kv_pairs,
+            };
             Ok(ProcessResult::NextCommand {
-                cmd: ResolveLock::new(txn_status, next_scan_key, kv_pairs, ctx).into(),
+                cmd: Command::ResolveLock(next_cmd),
             })
         }
     }

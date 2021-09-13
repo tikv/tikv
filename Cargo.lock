@@ -2111,7 +2111,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#317f69fb54b44619271df82ec163764032184a85"
+source = "git+https://github.com/pingcap/kvproto.git#dc1709169bb155de3bea6b28c871215387942994"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3446,6 +3446,7 @@ dependencies = [
  "raft",
  "raft-proto",
  "rand 0.8.3",
+ "resource_metering",
  "serde",
  "serde_derive",
  "serde_with",
@@ -5110,7 +5111,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "5.1.0-alpha"
+version = "5.3.0-alpha"
 dependencies = [
  "anyhow",
  "async-stream",
