@@ -89,6 +89,7 @@ mod linux {
                                     t.extend_from_slice(tag.as_bytes());
                                     t
                                 },
+                                key_label: 0,
                             }));
 
                             guard = Some(tag.attach());

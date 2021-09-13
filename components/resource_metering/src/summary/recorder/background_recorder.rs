@@ -14,6 +14,7 @@ use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 use std::thread;
+use std::thread::Builder;
 use std::time::Duration;
 
 use collections::{HashMap, HashSet};
@@ -22,40 +23,36 @@ use libc::pid_t;
 use std::borrow::Borrow;
 use tikv_util::time::Instant;
 
-const GC_INTERVAL_SECS: u64 = 1 * 60;
+const GC_INTERVAL_SECS: u64 = 60;
+
+lazy_static! {
+    /// static background thread creation
+    static ref HANDLE: RecorderHandle = {
+        let config = crate::Config::default();
+        let pause = Arc::new(AtomicBool::new(config.enabled));
+        let precision_ms = Arc::new(AtomicU64::new(config.precision.0.as_millis() as _));
+        let pause0 = pause.clone();
+        let precision_ms0 = precision_ms.clone();
+        let join_handle = Builder::new()
+            .name("summary-recorder".to_owned())
+            .spawn(move || {
+                let mut recorder = ReqSummaryRecorder::new(pause0,precision_ms0);
+                loop {
+                    recorder.handle_pause();
+                    recorder.handle_collector_registration();
+                    recorder.handle_thread_registration();
+                    recorder.record();
+                    recorder.may_advance_window();
+                    recorder.may_gc();
+                    std::thread::sleep(Duration::from_millis(recorder.precision_ms.load(Relaxed)));
+                }
+            })
+            .expect("Failed to create recorder thread");
+        RecorderHandle::new(join_handle, pause, precision_ms)
+    };
+}
 
 pub fn init_recorder() -> RecorderHandle {
-    lazy_static! {
-        static ref HANDLE: RecorderHandle = {
-            let config = crate::Config::default();
-
-            let pause = Arc::new(AtomicBool::new(config.enabled));
-            let pause0 = pause.clone();
-            let precision_ms = Arc::new(AtomicU64::new(config.precision.0.as_millis() as _));
-            let precision_ms0 = precision_ms.clone();
-
-            let join_handle = std::thread::Builder::new()
-                .name("summary-recorder".to_owned())
-                .spawn(move || {
-                    let mut recorder = ReqSummaryRecorder::new(pause, precision_ms);
-
-                    loop {
-                        recorder.handle_pause();
-                        recorder.handle_collector_registration();
-                        recorder.handle_thread_registration();
-                        recorder.record();
-                        recorder.may_advance_window();
-                        recorder.may_gc();
-
-                        std::thread::sleep(Duration::from_millis(
-                            recorder.precision_ms.load(Relaxed),
-                        ));
-                    }
-                })
-                .expect("Failed to create recorder thread");
-            RecorderHandle::new(join_handle, pause0, precision_ms0)
-        };
-    }
     HANDLE.clone()
 }
 
@@ -64,6 +61,7 @@ lazy_static! {
 }
 
 struct ReqSummaryRecorder {
+    // TODO: Arc with atomic?
     pause: Arc<AtomicBool>,
     precision_ms: Arc<AtomicU64>,
     thread_stats: HashMap<pid_t, ThreadStat>,
@@ -140,7 +138,10 @@ impl ReqSummaryRecorder {
             .for_each(|(_tid, thread_stat)| {
                 let mut map_guard = thread_stat.records_by_tag.lock().unwrap();
                 for (k, v) in map_guard.drain() {
-                    records.entry(k).or_insert(ReqSummary::default()).merge(&v);
+                    records
+                        .entry(k)
+                        .or_insert_with(ReqSummary::default)
+                        .merge(&v);
                 }
                 let cur_tag = thread_stat.shared_ptr.take().map(|req_tag| {
                     let tag = req_tag.clone();
@@ -155,7 +156,7 @@ impl ReqSummaryRecorder {
                     let tag = TagInfo::new(tag.clone());
                     records
                         .entry(tag)
-                        .or_insert(ReqSummary::default())
+                        .or_insert_with(ReqSummary::default)
                         .merge(&cur_req_summary);
                 }
             });

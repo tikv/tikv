@@ -30,7 +30,9 @@ use std::u64;
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
-use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
+use resource_metering::{
+    cpu::FutureExt, summary::recorder::add_thread_write_key, ResourceMeteringTag,
+};
 use tikv_util::{callback::must_call, deadline::Deadline, time::Instant};
 use txn_types::TimeStamp;
 
@@ -797,11 +799,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                     // the `pr` to the tctx instead of capturing it to the closure.
                                     self.inner.store_pr(cid, pr.take().unwrap());
                                     let sched = scheduler.clone();
+                                    let mods = to_be_write.modifies.len();
                                     // Currently, the only case that response is returned after finishing
                                     // proposed phase is pipelined pessimistic lock.
                                     // TODO: Unify the code structure of pipelined pessimistic lock and
                                     // async apply prewrite.
                                     let proposed_cb = Box::new(move || {
+                                        // write thread write key
+                                        add_thread_write_key(mods as _);
                                         fail_point!("before_pipelined_write_finish", |_| {});
                                         let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
                                         Self::early_response(
