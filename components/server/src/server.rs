@@ -1192,17 +1192,11 @@ where
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
-        let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
-        let config_raftdb = &self.config.raftdb;
-        let mut raft_db_opts = config_raftdb.build_opt();
-        raft_db_opts.set_env(env.clone());
-        let raft_db_cf_opts = config_raftdb.build_cf_opts(&block_cache);
-        let raft_engine = engine_rocks::raw_util::new_engine_opt(
-            raft_db_path.to_str().unwrap(),
-            raft_db_opts,
-            raft_db_cf_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
+        let raft_engine = <RocksEngine as CreateRaftEngine>::create_raft_engine(
+            &self.config,
+            env.clone(),
+            &block_cache,
+        );
 
         let kv_engine = <EK as CreateKvEngine<RocksEngine>>::create_kv_engine(
             &self.config,
@@ -1214,12 +1208,7 @@ where
             &mut self.flow_info_receiver,
         );
 
-        let mut raft_engine = RocksEngine::from_db(Arc::new(raft_engine));
-        let shared_block_cache = block_cache.is_some();
-        raft_engine.set_shared_block_cache(shared_block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
-
-        check_and_dump_raft_engine(&self.config, &engines.raft, 8);
 
         <EK as CreateKvEngine<RocksEngine>>::register_kv_config(
             &engines.kv,
@@ -1255,12 +1244,11 @@ where
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
-        let raft_config = self.config.raft_engine.config();
-        let raft_engine = RaftLogEngine::new(raft_config)
-            .unwrap_or_else(|e| fatal!("failed to create raft engine: {}", e));
-
-        // Try to dump and recover raft data.
-        check_and_dump_raft_db(&self.config, &raft_engine, &env, 8);
+        let raft_engine = <RaftLogEngine as CreateRaftEngine>::create_raft_engine(
+            &self.config,
+            env.clone(),
+            &block_cache,
+        );
 
         // Create kv engine.
         let kv_engine = <EK as CreateKvEngine<RaftLogEngine>>::create_kv_engine(
@@ -1446,6 +1434,59 @@ where
                 config.storage.block_cache.shared,
             )),
         );
+    }
+}
+
+trait CreateRaftEngine: RaftEngine {
+    fn create_raft_engine(
+        config: &TiKvConfig,
+        env: Arc<engine_rocks::raw::Env>,
+        block_cache: &Option<engine_rocks::raw::Cache>,
+    ) -> Self;
+}
+
+impl CreateRaftEngine for RocksEngine {
+    fn create_raft_engine(
+        config: &TiKvConfig,
+        env: Arc<engine_rocks::raw::Env>,
+        block_cache: &Option<engine_rocks::raw::Cache>,
+    ) -> Self {
+        let raft_db_path = Path::new(&config.raft_store.raftdb_path);
+        let config_raftdb = &config.raftdb;
+        let mut raft_db_opts = config_raftdb.build_opt();
+        raft_db_opts.set_env(env.clone());
+        let raft_db_cf_opts = config_raftdb.build_cf_opts(&block_cache);
+        let raft_engine = engine_rocks::raw_util::new_engine_opt(
+            raft_db_path.to_str().unwrap(),
+            raft_db_opts,
+            raft_db_cf_opts,
+        )
+        .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
+        let mut raft_engine = RocksEngine::from_db(Arc::new(raft_engine));
+
+        let shared_block_cache = block_cache.is_some();
+        raft_engine.set_shared_block_cache(shared_block_cache);
+
+        check_and_dump_raft_engine(config, &raft_engine, 8);
+
+        raft_engine
+    }
+}
+
+impl CreateRaftEngine for RaftLogEngine {
+    fn create_raft_engine(
+        config: &TiKvConfig,
+        env: Arc<engine_rocks::raw::Env>,
+        _block_cache: &Option<engine_rocks::raw::Cache>,
+    ) -> Self {
+        let raft_config = config.raft_engine.config();
+        let raft_engine = RaftLogEngine::new(raft_config)
+            .unwrap_or_else(|e| fatal!("failed to create raft engine: {}", e));
+
+        // Try to dump and recover raft data.
+        check_and_dump_raft_db(config, &raft_engine, &env, 8);
+
+        raft_engine
     }
 }
 
