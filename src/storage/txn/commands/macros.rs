@@ -8,6 +8,9 @@ macro_rules! ctx {
         fn get_ctx_mut(&mut self) -> &mut crate::storage::Context {
             &mut self.ctx
         }
+        fn deadline(&self) -> ::tikv_util::deadline::Deadline {
+            self.deadline
+        }
     };
 }
 
@@ -34,6 +37,7 @@ macro_rules! command {
         $(#[$outer_doc])*
         pub struct $cmd {
             pub ctx: crate::storage::Context,
+            pub deadline: ::tikv_util::deadline::Deadline,
             $($(#[$inner_doc])* pub $arg: $arg_ty,)*
         }
 
@@ -43,8 +47,15 @@ macro_rules! command {
                 $($arg: $arg_ty,)*
                 ctx: crate::storage::Context,
             ) -> TypedCommand<$cmd_ty> {
+                let execution_duration_limit = if ctx.max_execution_duration_ms == 0 {
+                    crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT
+                } else {
+                    ::std::time::Duration::from_millis(ctx.max_execution_duration_ms)
+                };
+                let deadline = ::tikv_util::deadline::Deadline::from_now(execution_duration_limit);
                 Command::$cmd($cmd {
                         ctx,
+                        deadline,
                         $($arg,)*
                 }).into()
             }
