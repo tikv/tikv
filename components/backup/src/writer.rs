@@ -11,7 +11,7 @@ use external_storage_export::ExternalStorage;
 use file_system::Sha256Reader;
 use futures_util::io::AllowStdIo;
 use kvproto::brpb::File;
-use kvproto::encryptionpb::{self, EncryptionMethod};
+use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::metapb::Region;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;

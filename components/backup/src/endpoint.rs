@@ -123,8 +123,8 @@ impl Task {
                 cf,
                 compression_type: req.get_compression_type(),
                 compression_level: req.get_compression_level(),
-                crypter_type: req.get_crypter(),
-                crypter_key: req.get_cipher_key().to_string(),
+                crypter_type: req.get_cipherinfo().get_crypter(),
+                crypter_key: req.get_cipherinfo().get_cipher_key().to_string(),
             },
             resp,
         };
