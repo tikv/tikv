@@ -56,6 +56,7 @@ impl CommandExt for CheckTxnStatus {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
+    // [PerformanceCriticalPath]
     /// checks whether a transaction has expired its primary lock's TTL, rollback the
     /// transaction if expired, or update the transaction's min_commit_ts according to the metadata
     /// in the primary lock.

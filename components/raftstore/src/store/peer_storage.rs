@@ -1493,6 +1493,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     /// Save memory states to disk.
     ///
     /// This function only write data to `ready_ctx`'s `WriteBatch`. It's caller's duty to write

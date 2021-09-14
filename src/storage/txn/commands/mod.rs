@@ -432,6 +432,7 @@ type LockWritesVals = (
     Vec<(TimeStamp, Value)>,
 );
 
+// [PerformanceCriticalPath]
 fn find_mvcc_infos_by_key<S: Snapshot>(
     reader: &mut MvccReader<S>,
     key: &Key,

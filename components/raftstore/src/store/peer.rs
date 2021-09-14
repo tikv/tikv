@@ -1063,6 +1063,7 @@ where
         })
     }
 
+    // [PerformanceCriticalPath] 
     #[inline]
     pub(crate) fn send<T, I>(&mut self, ctx: &mut PollContext<EK, ER, T>, msgs: I)
     where
@@ -1085,6 +1086,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     /// Steps the raft message.
     pub fn step<T>(
         &mut self,
@@ -1567,6 +1569,7 @@ where
             && !self.replication_sync
     }
 
+    // [PerformanceCriticalPath]
     pub fn handle_raft_ready_append<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
@@ -1648,6 +1651,7 @@ where
             if let Some(wait_destroy_regions) = meta.atomic_snap_regions.get(&self.region_id) {
                 for (source_region_id, is_ready) in wait_destroy_regions {
                     if !is_ready {
+                        // [PerformanceCriticalPath]?? could this be debug!? logging inside a lock is not recommended.
                         info!(
                             "snapshot range overlaps, wait source destroy finish";
                             "region_id" => self.region_id,
@@ -1817,6 +1821,7 @@ where
         apply_snap_result
     }
 
+    // [PerformanceCriticalPath]
     pub fn handle_raft_committed_entries<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
@@ -2135,6 +2140,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     pub fn post_apply<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
@@ -2158,6 +2164,7 @@ where
         );
 
         if !self.is_leader() {
+            // [PerformanceCriticalPath]?? should it be done async?
             self.mut_store()
                 .compact_cache_to(apply_state.applied_index + 1);
         }
@@ -2284,6 +2291,7 @@ where
         true
     }
 
+    // [PerformanceCriticalPath]
     /// Propose a request.
     ///
     /// Return true means the request has been proposed successfully.
@@ -2613,6 +2621,7 @@ where
         None
     }
 
+    // [PerformanceCriticalPath]
     fn read_local<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
@@ -2682,6 +2691,7 @@ where
         );
     }
 
+    // [PerformanceCriticalPath]
     // Returns a boolean to indicate whether the `read` is proposed or not.
     // For these cases it won't be proposed:
     // 1. The region is in merging or splitting;
@@ -2991,6 +3001,7 @@ where
         Ok(ctx)
     }
 
+    // [PerformanceCriticalPath]
     /// Propose normal request to raft
     ///
     /// Returns Ok(Either::Left(index)) means the proposal is proposed successfully and is located on `index` position.
@@ -3738,6 +3749,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     pub fn send_want_rollback_merge<T: Transport>(
         &self,
         premerge_commit: u64,
@@ -3758,6 +3770,7 @@ where
         let mut extra_msg = ExtraMessage::default();
         extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
         extra_msg.set_premerge_commit(premerge_commit);
+        // [PerformanceCriticalPath]?? could it be sent async?
         self.send_extra_message(extra_msg, &mut ctx.trans, &to_peer);
     }
 

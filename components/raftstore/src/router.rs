@@ -237,6 +237,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for ServerRaftStoreRouter
 }
 
 impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter<EK, ER> {
+    // [PerformanceCriticalPath]
     fn read(
         &self,
         read_id: Option<ThreadReadId>,

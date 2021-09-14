@@ -8,6 +8,7 @@ use crate::storage::txn::actions::check_data_constraint::check_data_constraint;
 use crate::storage::Snapshot;
 use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, Value, Write, WriteType};
 
+// [PerformanceCriticalPath]
 pub fn acquire_pessimistic_lock<S: Snapshot>(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<S>,

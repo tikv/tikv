@@ -62,6 +62,7 @@ impl CommandExt for ResolveLock {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
+    // [PerformanceCriticalPath]
     fn process_write(
         mut self,
         snapshot: S,

@@ -106,6 +106,7 @@ impl<T: Display + Send> Scheduler<T> {
         }
     }
 
+    // [PerformanceCriticalPath]
     /// Schedules a task to run.
     ///
     /// If the worker is stopped or number pending tasks exceeds capacity, an error will return.

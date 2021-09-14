@@ -111,6 +111,7 @@ impl RaftEngine for RocksEngine {
         self.sync_wal()
     }
 
+    // [PerformanceCriticalPath]
     fn consume(&self, batch: &mut Self::LogBatch, sync_log: bool) -> Result<usize> {
         let bytes = batch.data_size();
         let mut opts = WriteOptions::default();
@@ -120,6 +121,7 @@ impl RaftEngine for RocksEngine {
         Ok(bytes)
     }
 
+    // [PerformanceCriticalPath]
     fn consume_and_shrink(
         &self,
         batch: &mut Self::LogBatch,

@@ -38,6 +38,7 @@ impl CommandExt for Commit {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
+    // [PerformanceCriticalPath]
     fn process_write(self, snapshot: S, mut context: WriteContext<'_, L>) -> Result<WriteResult> {
         if self.commit_ts <= self.lock_ts {
             return Err(Error::from(ErrorInner::InvalidTxnTso {

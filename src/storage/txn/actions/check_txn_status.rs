@@ -139,6 +139,7 @@ pub fn check_txn_status_missing_lock(
     }
 }
 
+// [PerformanceCriticalPath]
 pub fn rollback_lock(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,

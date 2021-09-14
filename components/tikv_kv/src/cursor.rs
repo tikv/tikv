@@ -75,6 +75,7 @@ impl<I: Iterator> Cursor<I> {
         self.cur_value_has_read.replace(true)
     }
 
+    // [PerformanceCriticalPath]
     pub fn seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         fail_point!("kv_cursor_seek", |_| {
             Err(box_err!("kv cursor seek error"))

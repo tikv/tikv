@@ -251,6 +251,7 @@ impl<L: LockManager> SchedulerInner<L> {
             || self.flow_controller.should_drop()
     }
 
+    // [PerformanceCriticalPath]
     /// Tries to acquire all the required latches for a command when waken up by
     /// another finished command.
     ///
@@ -349,6 +350,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.inner.dump_wait_for_entries(cb);
     }
 
+    // [PerformanceCriticalPath]
     pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
         // write flow control
         if cmd.need_flow_control() && self.inner.too_busy() {
@@ -361,6 +363,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.schedule_command(cmd, callback);
     }
 
+    // [PerformanceCriticalPath]
     /// Releases all the latches held by a command.
     fn release_lock(&self, lock: &Lock, cid: u64) {
         let wakeup_list = self.inner.latches.release(lock, cid);
@@ -369,6 +372,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
+    // [PerformanceCriticalPath]
     fn schedule_command(&self, cmd: Command, callback: StorageCallback) {
         let cid = self.inner.gen_id();
         debug!("received new command"; "cid" => cid, "cmd" => ?cmd);
@@ -451,6 +455,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
+    // [PerformanceCriticalPath]
     /// Initiates an async operation to get a snapshot from the storage engine, then execute the
     /// task in the sched pool.
     fn execute(&self, mut task: Task) {
@@ -544,6 +549,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
+    // [PerformanceCriticalPath]
     /// Calls the callback with an error.
     fn finish_with_err<ER>(&self, cid: u64, err: ER)
     where
@@ -583,6 +589,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.release_lock(&tctx.lock, cid);
     }
 
+    // [PerformanceCriticalPath]
     /// Event handler for the success of write.
     fn on_write_finished(
         &self,
@@ -637,6 +644,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.release_lock(&tctx.lock, cid);
     }
 
+    // [PerformanceCriticalPath]
     /// Event handler for the request of waiting for lock
     fn on_wait_for_lock(
         &self,
@@ -676,6 +684,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         // It won't release locks here until write finished.
     }
 
+    // [PerformanceCriticalPath]
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(self, snapshot: E::Snap, task: Task) {
         if self.check_task_deadline_exceeded(&task) {
@@ -688,6 +697,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .clone()
             .pool
             .spawn(
+                // [PerformanceCriticalPath]
                 async move {
                     fail_point!("scheduler_async_snapshot_finish");
                     SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
@@ -739,6 +749,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .unwrap();
     }
 
+    // [PerformanceCriticalPath]
     /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
     /// `Scheduler`.
     fn process_read(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
@@ -754,6 +765,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.on_read_finished(task.cid, pr, tag);
     }
 
+    // [PerformanceCriticalPath]
     /// Processes a write command within a worker thread, then posts either a `WriteFinished`
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
     async fn process_write(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {

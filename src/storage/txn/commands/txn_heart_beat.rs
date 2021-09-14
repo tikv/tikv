@@ -42,6 +42,7 @@ impl CommandExt for TxnHeartBeat {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
+    // [PerformanceCriticalPath]
     fn process_write(self, snapshot: S, mut context: WriteContext<'_, L>) -> Result<WriteResult> {
         // TxnHeartBeat never remove locks. No need to wake up waiters.
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);

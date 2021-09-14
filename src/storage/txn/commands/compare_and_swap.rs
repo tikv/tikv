@@ -39,6 +39,7 @@ impl CommandExt for RawCompareAndSwap {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
+    // [PerformanceCriticalPath]
     fn process_write(self, snapshot: S, _: WriteContext<'_, L>) -> Result<WriteResult> {
         let (cf, key, value, previous_value, ctx) =
             (self.cf, self.key, self.value, self.previous_value, self.ctx);

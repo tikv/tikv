@@ -39,6 +39,8 @@ use crate::store::fsm::store::StoreMeta;
 pub trait ReadExecutor<E: KvEngine> {
     fn get_engine(&self) -> &E;
     fn get_snapshot(&mut self, ts: Option<ThreadReadId>) -> Arc<E::Snapshot>;
+
+    // [PerformanceCriticalPath]
     fn get_value(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
@@ -76,6 +78,7 @@ pub trait ReadExecutor<E: KvEngine> {
         Ok(resp)
     }
 
+    // [PerformanceCriticalPath]
     fn execute(
         &mut self,
         msg: &RaftCmdRequest,
@@ -255,6 +258,7 @@ impl ReadDelegate {
         }
     }
 
+    // [PerformanceCriticalPath]
     fn is_in_leader_lease(&self, ts: Timespec, metrics: &mut ReadMetrics) -> bool {
         if let Some(ref lease) = self.leader_lease {
             let term = lease.term();
@@ -409,6 +413,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     fn redirect(&mut self, mut cmd: RaftCommand<E::Snapshot>) {
         debug!("localreader redirects command"; "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
@@ -441,6 +446,7 @@ where
         cmd.callback.invoke_read(read_resp);
     }
 
+    // [PerformanceCriticalPath]
     // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the lifetime of
     // the returned `&ReadDelegate` will bind to `self`, and make it impossible to use `&mut self`
     // while the `&ReadDelegate` is alive, a better choice is use `Rc` but `LocalReader: Send` will be
@@ -476,6 +482,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     fn pre_propose_raft_command(
         &mut self,
         req: &RaftCmdRequest,
@@ -544,6 +551,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     pub fn propose_raft_command(
         &mut self,
         mut read_id: Option<ThreadReadId>,
@@ -621,6 +629,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     /// If read requests are received at the same RPC request, we can create one snapshot for all
     /// of them and check whether the time when the snapshot was created is in lease. We use
     /// ThreadReadId to figure out whether this RaftCommand comes from the same RPC request with
@@ -741,6 +750,7 @@ impl Default for ReadMetrics {
 }
 
 impl ReadMetrics {
+    // [PerformanceCriticalPath]
     pub fn maybe_flush(&mut self) {
         if self.last_flush_time.saturating_elapsed()
             >= Duration::from_millis(METRICS_FLUSH_INTERVAL)
@@ -750,6 +760,7 @@ impl ReadMetrics {
         }
     }
 
+    // [PerformanceCriticalPath]
     fn flush(&mut self) {
         if self.rejected_by_store_id_mismatch > 0 {
             LOCAL_READ_REJECT

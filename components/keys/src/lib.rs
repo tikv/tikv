@@ -204,6 +204,7 @@ pub fn validate_data_key(key: &[u8]) -> bool {
     key.starts_with(DATA_PREFIX_KEY)
 }
 
+// [PerformanceCriticalPath]
 pub fn data_key(key: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(DATA_PREFIX_KEY.len() + key.len());
     v.extend_from_slice(DATA_PREFIX_KEY);

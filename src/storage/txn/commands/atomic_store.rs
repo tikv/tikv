@@ -51,6 +51,7 @@ impl CommandExt for RawAtomicStore {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
+    // [PerformanceCriticalPath]
     fn process_write(self, _: S, _: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut data = vec![];
         let rows = self.mutations.len();

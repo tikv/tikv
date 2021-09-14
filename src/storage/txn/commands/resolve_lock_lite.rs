@@ -36,6 +36,7 @@ impl CommandExt for ResolveLockLite {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
+    // [PerformanceCriticalPath]
     fn process_write(self, snapshot: S, mut context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(

@@ -567,6 +567,7 @@ where
         PeerFsmDelegate { fsm, ctx }
     }
 
+    // [PerformanceCriticalPath]
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
         for m in msgs.drain(..) {
             match m {
@@ -637,6 +638,7 @@ where
                         match self.fsm.peer.maybe_destroy(self.ctx) {
                             None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
                             Some(job) => {
+                                // [PerformanceCriticalPath]?? could it be done async?
                                 self.handle_destroy_peer(job);
                             }
                         }
@@ -664,6 +666,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
         match msg {
             CasualMessage::SplitRegion {
@@ -698,6 +701,7 @@ where
                 self.on_schedule_half_split_region(&region_epoch, policy, source);
             }
             CasualMessage::GcSnap { snaps } => {
+                // [PerformanceCriticalPath]?? should it be done in background thread?
                 self.on_gc_snap(snaps);
             }
             CasualMessage::ClearRegionSize => {
@@ -717,11 +721,13 @@ where
                 }
             }
             CasualMessage::SnapshotGenerated => {
+                // [PerformanceCriticalPath]?? should it be done in background thread? 
                 // Resume snapshot handling again to avoid waiting another heartbeat.
                 self.fsm.peer.ping();
                 self.fsm.has_ready = true;
             }
             CasualMessage::ForceCompactRaftLogs => {
+                // [PerformanceCriticalPath]?? should it be done in background thread? 
                 self.on_raft_gc_log_tick(true);
             }
             CasualMessage::AccessPeer(cb) => cb(self.fsm as &mut dyn AbstractPeer),
@@ -919,6 +925,7 @@ where
         );
     }
 
+    // [PerformanceCriticalPath]
     fn on_significant_msg(&mut self, msg: SignificantMsg<EK::Snapshot>) {
         match msg {
             SignificantMsg::SnapshotStatus {
@@ -1041,6 +1048,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     pub fn collect_ready(&mut self) {
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
@@ -1063,6 +1071,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     pub fn post_raft_ready_append(&mut self, ready: CollectedReady) {
         if ready.ctx.region_id != self.fsm.region_id() {
             panic!(
@@ -1251,6 +1260,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     fn on_apply_res(&mut self, res: ApplyTaskRes<EK::Snapshot>) {
         fail_point!("on_apply_res", |_| {});
         match res {
@@ -1285,6 +1295,7 @@ where
             } => {
                 assert_eq!(peer_id, self.fsm.peer.peer_id());
                 if !merge_from_snapshot {
+                    // [PerformanceCriticalPath]?? should it be done async? 
                     self.destroy_peer(false);
                 } else {
                     // Wait for its target peer to apply snapshot and then send `MergeResult` back
@@ -1306,6 +1317,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     fn handle_reported_disk_usage(&mut self, msg: &RaftMessage) {
         // Mocked
         if matches!(msg.disk_usage, DiskUsage::Normal) {
@@ -1346,6 +1358,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     fn on_raft_message(&mut self, msg: InspectedRaftMessage) -> Result<()> {
         let InspectedRaftMessage { heap_size, mut msg } = msg;
         let stepped = Cell::new(false);
@@ -1420,6 +1433,9 @@ where
         }
 
         let is_snapshot = msg.get_message().has_snapshot();
+
+        // [PerformanceCriticalPath]??
+        // Can delete_snapshot be put in background thread?
         let regions_to_destroy = match self.check_snapshot(&msg)? {
             Either::Left(key) => {
                 // If the snapshot file is not used again, then it's OK to
@@ -2337,11 +2353,13 @@ where
             self.register_raft_base_tick();
         }
         if need_ping {
+            // [PerformanceCriticalPath]?? should it be done async? 
             // Speed up snapshot instead of waiting another heartbeat.
             self.fsm.peer.ping();
             self.fsm.has_ready = true;
         }
         if remove_self {
+            // [PerformanceCriticalPath]?? should it be done async?
             self.destroy_peer(false);
         }
     }
@@ -2370,6 +2388,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     fn on_ready_split_region(
         &mut self,
         derived: metapb::Region,
@@ -2848,6 +2867,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -3053,6 +3073,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath] 
     fn on_merge_result(
         &mut self,
         target_region_id: u64,
@@ -3104,6 +3125,7 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "target_region" => ?self.fsm.peer.pending_merge_state.as_ref().unwrap().target,
                 );
+                // [PerformanceCriticalPath]?? could it be done async?
                 self.destroy_peer(true);
             }
             MergeResultKind::FromTargetSnapshotStep1 => {
@@ -3121,6 +3143,7 @@ where
                 );
             }
             MergeResultKind::FromTargetSnapshotStep2 => {
+                // [PerformanceCriticalPath]?? could it be done async?
                 // `merge_by_target` is true because this region's range already belongs to
                 // its target region so we must not clear data otherwise its target region's
                 // data will corrupt.
@@ -3266,6 +3289,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     fn on_ready_result(
         &mut self,
         exec_results: &mut VecDeque<ExecResult<EK::Snapshot>>,
@@ -3393,6 +3417,7 @@ where
         Ok(())
     }
 
+    // [PerformanceCriticalPath]
     fn pre_propose_raft_command(
         &mut self,
         msg: &RaftCmdRequest,
@@ -3482,6 +3507,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath]
     fn propose_raft_command(
         &mut self,
         mut msg: RaftCmdRequest,

@@ -37,6 +37,7 @@ impl CommandExt for PessimisticRollback {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
+    // [PerformanceCriticalPath]
     /// Delete any pessimistic lock with small for_update_ts belongs to this transaction.
     fn process_write(
         mut self,

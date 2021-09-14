@@ -72,6 +72,7 @@ fn extract_lock_info_from_result<T>(res: &StorageResult<T>) -> &LockInfo {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock {
+    // [PerformanceCriticalPath]
     fn process_write(
         mut self,
         snapshot: S,

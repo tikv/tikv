@@ -85,6 +85,7 @@ pub fn check_key_in_region_inclusive(key: &[u8], region: &metapb::Region) -> Res
     }
 }
 
+// [PerformanceCriticalPath]
 /// Check if key in region range [`start_key`, `end_key`).
 pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
     let end_key = region.get_end_key();

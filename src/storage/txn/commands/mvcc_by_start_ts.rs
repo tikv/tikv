@@ -33,6 +33,7 @@ impl CommandExt for MvccByStartTs {
 }
 
 impl<S: Snapshot> ReadCommand<S> for MvccByStartTs {
+    // [PerformanceCriticalPath]
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let mut reader = MvccReader::new(
             snapshot,
