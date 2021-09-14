@@ -436,6 +436,10 @@ where
         fail_point!("raft_before_save");
 
         if !self.batch.kv_wb.is_empty() {
+            let raft_before_save_kv_on_store_3 = || {
+                fail_point!("raft_before_save_kv_on_store_3", self.store_id == 3, |_| {});
+            };
+            raft_before_save_kv_on_store_3();
             let now = Instant::now();
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
