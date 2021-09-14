@@ -5,7 +5,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
@@ -601,7 +601,10 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp) {
         let total_region_count = regions.len();
-        let mut resolved_regions = Vec::with_capacity(regions.len());
+        // TODO: figure out how to avoid create a hashset every time,
+        //       saving some CPU.
+        let mut resolved_regions =
+            HashSet::with_capacity_and_hasher(regions.len(), Default::default());
         self.min_resolved_ts = TimeStamp::max();
         for region_id in regions {
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
@@ -610,7 +613,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                         self.min_resolved_ts = resolved_ts;
                         self.min_ts_region_id = region_id;
                     }
-                    resolved_regions.push(region_id);
+                    resolved_regions.insert(region_id);
                 }
             }
         }
@@ -619,18 +622,30 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         self.broadcast_resolved_ts(resolved_regions);
     }
 
-    fn broadcast_resolved_ts(&self, regions: Vec<u64>) {
-        let resolved_ts = ResolvedTs {
-            regions,
-            ts: self.min_resolved_ts.into_inner(),
-            ..Default::default()
-        };
-
-        let send_cdc_event = |conn: &Conn, event| {
+    fn broadcast_resolved_ts(&self, regions: HashSet<u64>) {
+        let min_resolved_ts = self.min_resolved_ts.into_inner();
+        let send_cdc_event = |regions: &HashSet<u64>, min_resolved_ts: u64, conn: &Conn| {
+            let downstream_regions = conn.get_downstreams();
+            let mut resolved_ts = ResolvedTs::default();
+            resolved_ts.ts = min_resolved_ts;
+            resolved_ts.regions = Vec::with_capacity(downstream_regions.len());
+            // Only send region ids that are captured by the connection.
+            for region_id in conn.get_downstreams().keys() {
+                if regions.contains(region_id) {
+                    resolved_ts.regions.push(*region_id);
+                }
+            }
+            if resolved_ts.regions.is_empty() {
+                // Skip empty resolved ts message.
+                return;
+            }
             // No need force send, as resolved ts messages is sent regularly.
             // And errors can be ignored.
             let force_send = false;
-            match conn.get_sink().unbounded_send(event, force_send) {
+            match conn
+                .get_sink()
+                .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), force_send)
+            {
                 Ok(_) => (),
                 Err(SendError::Disconnected) => {
                     debug!("cdc send event failed, disconnected";
@@ -651,11 +666,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             };
 
             if features.contains(FeatureGate::BATCH_RESOLVED_TS) {
-                send_cdc_event(conn, CdcEvent::ResolvedTs(resolved_ts.clone()));
+                send_cdc_event(&regions, min_resolved_ts, conn);
             } else {
                 // Fallback to previous non-batch resolved ts event.
-                for region_id in &resolved_ts.regions {
-                    self.broadcast_resolved_ts_compact(*region_id, resolved_ts.ts, conn);
+                for region_id in &regions {
+                    self.broadcast_resolved_ts_compact(*region_id, min_resolved_ts, conn);
                 }
             }
         }
@@ -1806,11 +1821,13 @@ mod tests {
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
         let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id, true);
+        // Enable batch resolved ts in the test.
+        let version = FeatureGate::batch_resolved_ts();
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
             conn_id,
-            version: semver::Version::new(4, 0, 6),
+            version: version.clone(),
         });
         assert_eq!(ep.capture_regions.len(), 1);
         task_rx
@@ -1823,7 +1840,7 @@ mod tests {
             request: req.clone(),
             downstream,
             conn_id,
-            version: semver::Version::new(4, 0, 6),
+            version: version.clone(),
         });
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
@@ -1852,6 +1869,7 @@ mod tests {
             request: req,
             downstream,
             conn_id,
+            // The version that does not support batch resolved ts.
             version: semver::Version::new(0, 0, 0),
         });
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
@@ -1888,7 +1906,7 @@ mod tests {
             request: req.clone(),
             downstream,
             conn_id,
-            version: semver::Version::new(4, 0, 6),
+            version: version.clone(),
         });
         // Region 100 is inserted into capture_regions.
         assert_eq!(ep.capture_regions.len(), 2);
@@ -1909,7 +1927,7 @@ mod tests {
             request: req,
             downstream,
             conn_id,
-            version: semver::Version::new(4, 0, 6),
+            version,
         });
         // Drop CaptureChange message, it should cause scan task failure.
         let _ = raft_rx.recv_timeout(Duration::from_millis(100)).unwrap();
@@ -1946,11 +1964,13 @@ mod tests {
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
         let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
+        // Enable batch resolved ts in the test.
+        let version = FeatureGate::batch_resolved_ts();
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
             conn_id,
-            version: semver::Version::new(4, 0, 6),
+            version: version.clone(),
         });
         let resolver = Resolver::new(1);
         let observe_id = ep.capture_regions[&1].handle.id;
@@ -1976,7 +1996,7 @@ mod tests {
             request: req.clone(),
             downstream,
             conn_id,
-            version: semver::Version::new(4, 0, 6),
+            version,
         });
         let resolver = Resolver::new(2);
         region.set_id(2);
@@ -2027,9 +2047,9 @@ mod tests {
             .unwrap();
         if let CdcEvent::ResolvedTs(mut r) = cdc_event.0 {
             r.regions.as_mut_slice().sort_unstable();
-            // Although region 3 is not register in the first conn, batch resolved ts
-            // sends all region ids.
-            assert_eq!(r.regions, vec![1, 2, 3]);
+            // Region 3 resolved ts must not be send to the first conn when
+            // batch resolved ts is enabled.
+            assert_eq!(r.regions, vec![1, 2]);
             assert_eq!(r.ts, 3);
         } else {
             panic!("unknown cdc event {:?}", cdc_event);
@@ -2169,5 +2189,108 @@ mod tests {
             Ok(other) => panic!("unknown event {:?}", other),
         }
         assert_eq!(ep.capture_regions.len(), 1);
+    }
+
+    #[test]
+    fn test_broadcast_resolved_ts() {
+        let (mut ep, raft_router, _task_rx) = mock_endpoint(&CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        });
+
+        // Open two connections a and b, registers region 1, 2 to conn a and
+        // region 3 to conn b.
+        let mut conn_rxs = vec![];
+        let quota = channel::MemoryQuota::new(usize::MAX);
+        // Hold raft_rxs to avoid SendError panic.
+        let mut raft_rxs = vec![];
+        for region_ids in vec![vec![1, 2], vec![3]] {
+            let (tx, rx) = channel::channel(1, quota.clone());
+            conn_rxs.push(rx);
+            let conn = Conn::new(tx, String::new());
+            let conn_id = conn.get_id();
+            ep.run(Task::OpenConn { conn });
+
+            for region_id in region_ids {
+                let raft_rx = raft_router.add_region(region_id, 100 /* cap */);
+                raft_rxs.push(raft_rx);
+                let mut req_header = Header::default();
+                req_header.set_cluster_id(0);
+                let mut req = ChangeDataRequest::default();
+                req.set_region_id(region_id);
+                let region_epoch = req.get_region_epoch().clone();
+                let downstream =
+                    Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
+                ep.run(Task::Register {
+                    request: req.clone(),
+                    downstream,
+                    conn_id,
+                    version: FeatureGate::batch_resolved_ts(),
+                });
+                let resolver = Resolver::new(region_id);
+                let observe_id = ep.capture_regions[&region_id].handle.id;
+                let mut region = Region::default();
+                region.set_id(region_id);
+                ep.on_region_ready(observe_id, resolver, region);
+            }
+        }
+
+        let assert_batch_resolved_ts = |drain: &mut channel::Drain,
+                                        regions: Vec<u64>,
+                                        resolved_ts: u64| {
+            let cdc_event = channel::recv_timeout(&mut drain.drain(), Duration::from_millis(500))
+                .unwrap()
+                .unwrap();
+            if let CdcEvent::ResolvedTs(r) = cdc_event.0 {
+                assert_eq!(r.regions, regions);
+                assert_eq!(r.ts, resolved_ts);
+            } else {
+                panic!("unknown cdc event {:?}", cdc_event);
+            }
+        };
+
+        ep.run(Task::MinTS {
+            regions: vec![1],
+            min_ts: TimeStamp::from(1),
+        });
+        // conn a must receive a resolved ts that only contains region 1.
+        assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1], 1);
+        // conn b must not receive any messages.
+        channel::recv_timeout(
+            &mut conn_rxs.get_mut(0).unwrap().drain(),
+            Duration::from_millis(100),
+        )
+        .unwrap_err();
+
+        ep.run(Task::MinTS {
+            regions: vec![1, 2],
+            min_ts: TimeStamp::from(2),
+        });
+        // conn a must receive a resolved ts that contains region 1 and region 2.
+        assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1, 2], 2);
+        // conn b must not receive any messages.
+        channel::recv_timeout(
+            &mut conn_rxs.get_mut(1).unwrap().drain(),
+            Duration::from_millis(100),
+        )
+        .unwrap_err();
+
+        ep.run(Task::MinTS {
+            regions: vec![1, 2, 3],
+            min_ts: TimeStamp::from(3),
+        });
+        // conn a must receive a resolved ts that contains region 1 and region 2.
+        assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1, 2], 3);
+        // conn b must receive a resolved ts that contains region 3.
+        assert_batch_resolved_ts(conn_rxs.get_mut(1).unwrap(), vec![3], 3);
+
+        ep.run(Task::MinTS {
+            regions: vec![1, 3],
+            min_ts: TimeStamp::from(4),
+        });
+        // conn a must receive a resolved ts that only contains region 1.
+        assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1], 4);
+        // conn b must receive a resolved ts that contains region 3.
+        assert_batch_resolved_ts(conn_rxs.get_mut(1).unwrap(), vec![3], 4);
     }
 }
