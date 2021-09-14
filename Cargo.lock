@@ -214,6 +214,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crc64fast",
+ "encryption",
  "engine_rocks",
  "engine_traits",
  "error_code",

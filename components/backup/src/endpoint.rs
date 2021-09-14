@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::f64::INFINITY;
-use std::fmt;
+use std::{fmt};
 use std::sync::atomic::*;
 use std::sync::*;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,6 +16,7 @@ use file_system::{IOType, WithIOType};
 use futures::channel::mpsc::*;
 use kvproto::brpb::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
+use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::metapb::*;
 use online_config::OnlineConfig;
 use raft::StateRole;
@@ -57,6 +58,8 @@ struct Request {
     cf: CfName,
     compression_type: CompressionType,
     compression_level: i32,
+    crypter_type: EncryptionMethod,
+    crypter_key: String,
 }
 
 /// Backup Task.
@@ -120,6 +123,8 @@ impl Task {
                 cf,
                 compression_type: req.get_compression_type(),
                 compression_level: req.get_compression_level(),
+                crypter_type: req.get_crypter(),
+                crypter_key: req.get_cipher_key().to_string(),
             },
             resp,
         };
@@ -381,6 +386,8 @@ impl BackupRange {
         cf: CfName,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
+        crypter_type: EncryptionMethod,
+        crypter_key: String,
     ) -> Result<(Vec<File>, Statistics)> {
         let mut writer = match BackupRawKVWriter::new(
             db,
@@ -389,6 +396,9 @@ impl BackupRange {
             storage.limiter.clone(),
             compression_type,
             compression_level,
+            crypter_type,
+            crypter_key,
+
         ) {
             Ok(w) => w,
             Err(e) => {
@@ -704,6 +714,8 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                                 cf,
                                 ct,
                                 request.compression_level,
+                                request.crypter_type,
+                                request.crypter_key.clone(),
                             ),
                             brange.start_key.map_or_else(Vec::new, |k| k.into_encoded()),
                             brange.end_key.map_or_else(Vec::new, |k| k.into_encoded()),
@@ -717,6 +729,9 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                             ct,
                             request.compression_level,
                             sst_max_size,
+                            request.crypter_type,
+                            request.crypter_key.clone(),
+
                         );
                         (
                             brange.backup(
@@ -1147,6 +1162,8 @@ pub mod tests {
                         cf: engine_traits::CF_DEFAULT,
                         compression_type: CompressionType::Unknown,
                         compression_level: 0,
+                        crypter_type: EncryptionMethod::Unknown,
+                        crypter_key: String::from(""),
                     },
                     resp: tx,
                 };
