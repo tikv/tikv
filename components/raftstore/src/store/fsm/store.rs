@@ -383,7 +383,6 @@ where
     pub engines: Engines<EK, ER>,
     pub pending_count: usize,
     pub ready_count: usize,
-    pub sync_log: bool,
     pub has_ready: bool,
     pub current_time: Option<Timespec>,
     pub perf_context: EK::PerfContext,
@@ -399,7 +398,10 @@ where
     pub store_disk_usages: HashMap<u64, DiskUsage>,
     pub write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
     pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
+    /// `write_worker` and `ready_res` are used for sync io, i.e. `store-io-pool-size` is 0.
     pub write_worker: Option<WriteWorker<EK, ER, T, RaftRouter<EK, ER>>>,
+    /// (peer position, ready number)
+    pub ready_res: Vec<(usize, u64)>,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -647,34 +649,24 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
-        if let Some(mut write_worker) = self.poll_ctx.write_worker.take() {
-            if !write_worker.batch.is_empty() {
-                self.poll_ctx.trans.flush();
-            }
-            let mut readies = write_worker.write_to_db(false);
+
+        if self.poll_ctx.trans.need_flush() {
+            self.poll_ctx.trans.flush();
+        }
+
+        if !self.poll_ctx.ready_res.is_empty() {
+            assert_eq!(self.poll_ctx.cfg.store_io_pool_size, 0);
+
+            let mut write_worker = self.poll_ctx.write_worker.take().unwrap();
+            write_worker.write_to_db(false);
             self.poll_ctx.write_worker = Some(write_worker);
 
-            for fsm in peers {
-                if let Some((peer_id, ready_number)) = readies.get(&fsm.region_id()) {
-                    // It's possible that there are two peers which have the same region id and peer id in
-                    // this batch. In this case, one peer should be uninitialized and the other one should be
-                    // the new split peer. The uninitialized one should not generate write task so here we
-                    // can simply distinguish them by checking whether it has a unpersisted ready.
-                    if fsm.peer.has_unpersisted_ready() {
-                        PeerFsmDelegate::new(fsm, &mut self.poll_ctx)
-                            .on_persisted_msg(*peer_id, *ready_number);
-                        readies.remove(&fsm.region_id());
-                    }
-                }
-                if fsm.peer.has_unpersisted_ready() {
-                    panic!("{} has unpersisted ready after persisting", fsm.peer.tag);
-                }
+            let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
+            for (pos, ready_number) in ready_res.drain(..) {
+                let peer_id = peers[pos].peer_id();
+                PeerFsmDelegate::new(pos, &mut peers[pos], &mut self.poll_ctx)
+                    .on_persisted_msg(peer_id, ready_number);
             }
-            if !readies.is_empty() {
-                panic!("readies are not exhausted, remaining {:?}", readies);
-            }
-        } else {
-            self.poll_ctx.trans.flush();
         }
 
         let dur = self.timer.saturating_elapsed();
@@ -735,7 +727,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.ready_count = 0;
-        self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
         self.poll_ctx.self_disk_usage = get_disk_status(self.poll_ctx.store.get_id());
         self.timer = TiInstant::now();
@@ -787,7 +778,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         expected_msg_count
     }
 
-    fn handle_normal(&mut self, peer: &mut PeerFsm<EK, ER>) -> Option<usize> {
+    fn handle_normal(&mut self, pos: usize, peer: &mut PeerFsm<EK, ER>) -> Option<usize> {
         let mut expected_msg_count = None;
 
         fail_point!(
@@ -830,7 +821,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 }
             }
         }
-        let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
+        let mut delegate = PeerFsmDelegate::new(pos, peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
         expected_msg_count
     }
@@ -1108,7 +1099,6 @@ where
             engines: self.engines.clone(),
             pending_count: 0,
             ready_count: 0,
-            sync_log: false,
             has_ready: false,
             current_time: None,
             perf_context: self
@@ -1124,6 +1114,7 @@ where
             write_senders: self.write_senders.clone(),
             io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
             write_worker,
+            ready_res: vec![],
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());

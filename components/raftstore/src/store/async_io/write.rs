@@ -430,7 +430,7 @@ where
         false
     }
 
-    pub fn write_to_db(&mut self, notify: bool) -> HashMap<u64, (u64, u64)> {
+    pub fn write_to_db(&mut self, notify: bool) {
         self.batch.before_write_to_db(&self.metrics);
 
         fail_point!("raft_before_save");
@@ -526,9 +526,8 @@ where
         STORE_WRITE_SEND_DURATION_HISTOGRAM
             .observe(duration_to_sec(now2.saturating_duration_since(now)));
 
-        let readies = std::mem::take(&mut self.batch.readies);
         if notify {
-            for (region_id, (peer_id, ready_number)) in &readies {
+            for (region_id, (peer_id, ready_number)) in &self.batch.readies {
                 self.notifier
                     .notify_persisted(*region_id, *peer_id, *ready_number);
             }
@@ -545,8 +544,6 @@ where
             self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
         }
-
-        readies
     }
 }
 

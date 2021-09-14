@@ -3707,7 +3707,7 @@ where
         }
     }
 
-    fn handle_normal(&mut self, normal: &mut ApplyFsm<EK>) -> Option<usize> {
+    fn handle_normal(&mut self, _pos: usize, normal: &mut ApplyFsm<EK>) -> Option<usize> {
         let mut expected_msg_count = None;
         normal.delegate.handle_start = Some(Instant::now_coarse());
         if normal.delegate.yield_state.is_some() {

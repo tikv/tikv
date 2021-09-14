@@ -230,9 +230,11 @@ pub trait PollHandler<N, C> {
     fn handle_control(&mut self, control: &mut C) -> Option<usize>;
 
     /// This function is called when handling readiness for normal FSM.
+    /// `pos` represents the index of normal FSM in batch which will be passed
+    /// to `end` function.
     ///
     /// The returned value is handled in the same way as `handle_control`.
-    fn handle_normal(&mut self, normal: &mut N) -> Option<usize>;
+    fn handle_normal(&mut self, pos: usize, normal: &mut N) -> Option<usize>;
 
     /// This function is called at the end of every round.
     fn end(&mut self, batch: &mut [Box<N>]);
@@ -307,7 +309,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
 
             let mut hot_fsm_count = 0;
             for (i, p) in batch.normals.iter_mut().enumerate() {
-                let len = self.handler.handle_normal(p);
+                let len = self.handler.handle_normal(i, p);
                 if p.is_stopped() {
                     reschedule_fsms.push((i, ReschedulePolicy::Remove));
                 } else if p.get_priority() != self.handler.get_priority() {
@@ -339,7 +341,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 if !run || fsm_cnt >= batch.normals.len() {
                     break;
                 }
-                let len = self.handler.handle_normal(&mut batch.normals[fsm_cnt]);
+                let len = self
+                    .handler
+                    .handle_normal(fsm_cnt, &mut batch.normals[fsm_cnt]);
                 if batch.normals[fsm_cnt].is_stopped() {
                     reschedule_fsms.push((fsm_cnt, ReschedulePolicy::Remove));
                 } else if let Some(l) = len {

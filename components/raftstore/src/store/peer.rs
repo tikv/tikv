@@ -1926,8 +1926,10 @@ where
             || true,
             |entry| entry.index == self.raft_group.raft.raft_log.last_index()
         ));
-        MEMTRACE_RAFT_ENTRIES.trace(TraceEvent::Sub(self.memtrace_raft_entries));
-        self.memtrace_raft_entries = 0;
+        if self.memtrace_raft_entries != 0 {
+            MEMTRACE_RAFT_ENTRIES.trace(TraceEvent::Sub(self.memtrace_raft_entries));
+            self.memtrace_raft_entries = 0;
+        }
 
         let mut request_times = vec![];
 
@@ -2026,14 +2028,18 @@ where
                     collected.write_task.messages = self.build_raft_messages(ctx, persisted_msgs);
                 }
 
-                if let Some(write_worker) = ctx.write_worker.as_mut() {
-                    write_worker.batch.add_write_task(collected.write_task);
-                } else {
+                if ctx.cfg.store_io_pool_size > 0 {
                     self.write_router.send_write_msg(
                         ctx,
                         self.unpersisted_readies.back().map(|r| r.number),
                         WriteMsg::WriteTask(collected.write_task),
                     );
+                } else {
+                    ctx.write_worker
+                        .as_mut()
+                        .unwrap()
+                        .batch
+                        .add_write_task(collected.write_task);
                 }
 
                 self.unpersisted_readies.push_back(UnpersistedReady {
@@ -2297,7 +2303,7 @@ where
             }
         }
 
-        if ctx.write_worker.is_none() {
+        if ctx.cfg.store_io_pool_size > 0 {
             self.write_router
                 .check_new_persisted(ctx, self.persisted_number);
         }

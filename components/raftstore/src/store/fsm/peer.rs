@@ -558,6 +558,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    pos: usize,
     fsm: &'a mut PeerFsm<EK, ER>,
     ctx: &'a mut PollContext<EK, ER, T>,
 }
@@ -568,10 +569,11 @@ where
     ER: RaftEngine,
 {
     pub fn new(
+        pos: usize,
         fsm: &'a mut PeerFsm<EK, ER>,
         ctx: &'a mut PollContext<EK, ER, T>,
     ) -> PeerFsmDelegate<'a, EK, ER, T> {
-        PeerFsmDelegate { fsm, ctx }
+        PeerFsmDelegate { pos, fsm, ctx }
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
@@ -1091,6 +1093,10 @@ where
             }
             self.ctx.ready_count += 1;
             self.ctx.raft_metrics.ready.has_ready_region += 1;
+
+            if self.ctx.cfg.store_io_pool_size == 0 {
+                self.ctx.ready_res.push((self.pos, r.ready.number()));
+            }
 
             self.fsm.peer.post_raft_ready_append(self.ctx, r);
 
