@@ -2333,7 +2333,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#651a5c0d17662a0d95c76c18f2bb46036f6c501d"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#2cd2f5a2baaab9fd74fcddc2a0874d81354912cc"
+>>>>>>> 864900681... cmd: Add bad ssts command for tikv-ctl (#10259)
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2352,7 +2356,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#651a5c0d17662a0d95c76c18f2bb46036f6c501d"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#2cd2f5a2baaab9fd74fcddc2a0874d81354912cc"
+>>>>>>> 864900681... cmd: Add bad ssts command for tikv-ctl (#10259)
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4069,7 +4077,11 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#651a5c0d17662a0d95c76c18f2bb46036f6c501d"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#2cd2f5a2baaab9fd74fcddc2a0874d81354912cc"
+>>>>>>> 864900681... cmd: Add bad ssts command for tikv-ctl (#10259)
 dependencies = [
  "libc 0.2.86",
  "librocksdb_sys",
@@ -5552,7 +5564,12 @@ dependencies = [
  "error_code",
  "file_system",
  "fs2",
+<<<<<<< HEAD
  "futures 0.3.8",
+=======
+ "futures 0.3.15",
+ "gag",
+>>>>>>> 864900681... cmd: Add bad ssts command for tikv-ctl (#10259)
  "grpcio",
  "hex 0.4.2",
  "keys",
@@ -5568,7 +5585,12 @@ dependencies = [
  "raft",
  "raft_log_engine",
  "raftstore",
+<<<<<<< HEAD
  "rand 0.7.3",
+=======
+ "rand 0.8.3",
+ "regex",
+>>>>>>> 864900681... cmd: Add bad ssts command for tikv-ctl (#10259)
  "security",
  "serde_json",
  "server",
@@ -5704,7 +5726,7 @@ dependencies = [
  "libc 0.2.86",
  "log",
  "log_wrappers",
- "nix 0.11.1",
+ "nix 0.19.0",
  "num_cpus",
  "openssl",
  "page_size",
