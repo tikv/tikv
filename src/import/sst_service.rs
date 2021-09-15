@@ -277,7 +277,7 @@ macro_rules! impl_write {
                         .await?;
 
                     let metas = writer.finish()?;
-                    import.verify_checksum(metas)?;
+                    import.verify_checksum(&metas)?;
                     let mut resp = $resp_ty::default();
                     resp.set_metas(metas.into());
                     Ok(resp)

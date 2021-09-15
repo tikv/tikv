@@ -121,7 +121,7 @@ impl SSTImporter {
     }
 
     pub fn verify_checksum(&self, metas: &[SstMeta]) -> Result<()> {
-        self.dir.verify_checksum(metas)
+        self.dir.verify_checksum(metas, self.key_manager.clone())
     }
 
     pub fn exist(&self, meta: &SstMeta) -> bool {
@@ -590,9 +590,12 @@ mod tests {
             let mut f = dir.create(&meta, key_manager.clone()).unwrap();
             f.append(&data).unwrap();
             f.finish().unwrap();
-            let info = SSTMetaInfo{ total_bytes: 0, total_kvs: 0, meta: meta.to_owned()};
-            dir.ingest(&[info], &db, key_manager.clone())
-                .unwrap();
+            let info = SSTMetaInfo {
+                total_bytes: 0,
+                total_kvs: 0,
+                meta: meta.to_owned(),
+            };
+            dir.ingest(&[info], &db, key_manager.clone()).unwrap();
             check_db_range(&db, range);
 
             ingested.push(meta);
