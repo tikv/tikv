@@ -260,16 +260,6 @@ pub enum RawMutation {
     Put((Key, Value), Option<u64>),
     /// Delete `Key`.
     Delete(Key),
-    /// Set a lock on `Key`.
-    Lock(Key),
-    /// Put `Value` into `Key` if `Key` does not yet exist.
-    ///
-    /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
-    Insert((Key, Value)),
-    /// Check `key` must be not exist.
-    ///
-    /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
-    CheckNotExists(Key),
 }
 
 impl RawMutation {
@@ -277,9 +267,6 @@ impl RawMutation {
         match self {
             RawMutation::Put((ref key, _), _) => key,
             RawMutation::Delete(ref key) => key,
-            RawMutation::Lock(ref key) => key,
-            RawMutation::Insert((ref key, _)) => key,
-            RawMutation::CheckNotExists(ref key) => key,
         }
     }
 }

@@ -32,15 +32,13 @@ impl CommandExt for RawAtomicStore {
         let mut bytes = 0;
         for m in &self.mutations {
             match *m {
-                RawMutation::Put((ref key, ref value), _)
-                | RawMutation::Insert((ref key, ref value)) => {
+                RawMutation::Put((ref key, ref value), _) => {
                     bytes += key.as_encoded().len();
                     bytes += value.len();
                 }
-                RawMutation::Delete(ref key) | RawMutation::Lock(ref key) => {
+                RawMutation::Delete(ref key) => {
                     bytes += key.as_encoded().len();
                 }
-                RawMutation::CheckNotExists(_) => (),
             }
         }
         bytes
@@ -65,7 +63,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
                 RawMutation::Delete(key) => {
                     data.push(Modify::Delete(cf, key));
                 }
-                _ => panic!("Not support mutation type"),
             }
         }
         let mut to_be_write = WriteData::from_modifies(data);
