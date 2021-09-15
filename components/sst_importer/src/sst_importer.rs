@@ -590,8 +590,8 @@ mod tests {
             let mut f = dir.create(&meta, key_manager.clone()).unwrap();
             f.append(&data).unwrap();
             f.finish().unwrap();
-
-            dir.ingest(&[meta.to_owned()], &db, key_manager.clone())
+            let info = SSTMetaInfo{ total_bytes: 0, total_kvs: 0, meta: meta.to_owned()};
+            dir.ingest(&[info], &db, key_manager.clone())
                 .unwrap();
             check_db_range(&db, range);
 
@@ -1186,7 +1186,7 @@ mod tests {
             meta.set_length(0); // disable validation.
             meta.set_crc32(0);
             let meta_info = importer.validate(&meta).unwrap();
-            let _ = importer.ingest(&[meta], &db).unwrap();
+            let _ = importer.ingest(&[meta_info], &db).unwrap();
             // key1 = "zt9102_r01", value1 = "abc", len = 13
             // key2 = "zt9102_r04", value2 = "xyz", len = 13
             // key3 = "zt9102_r07", value3 = "pqrst", len = 15

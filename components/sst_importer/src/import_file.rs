@@ -292,8 +292,8 @@ impl ImportDir {
         let mut paths = HashMap::new();
         let mut ingest_bytes = 0;
         for info in metas {
-            let path = self.join(info.meta)?;
-            let cf = meta.get_cf_name();
+            let path = self.join(&info.meta)?;
+            let cf = info.meta.get_cf_name();
             super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_deref())?;
             ingest_bytes += info.total_bytes;
             paths.entry(cf).or_insert_with(Vec::new).push(path);
@@ -311,11 +311,15 @@ impl ImportDir {
         Ok(())
     }
 
-    pub fn verify_checksum(&self, metas: &[SstMeta]) -> Result<()> {
+    pub fn verify_checksum(
+        &self,
+        metas: &[SstMeta],
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> Result<()> {
         for meta in metas {
             let path = self.join(meta)?;
             let path_str = path.save.to_str().unwrap();
-            let env = get_env(key_manager, get_io_rate_limiter())?;
+            let env = get_env(key_manager.clone(), get_io_rate_limiter())?;
             let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
             sst_reader.verify_checksum()?;
         }
