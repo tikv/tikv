@@ -210,6 +210,7 @@ impl SSTImporter {
                     ext_storage as _
                 };
 
+                
             let file_crypter = FileEncryptionInfo {
                 method: encryption_method_to_db_encryption_method(crypter.crypter),
                 key: crypter.cipher_key.clone().into_bytes(),

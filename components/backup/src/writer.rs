@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use encryption::EncrypterReader;
+use encryption::{EncrypterReader, Iv};
 use engine_rocks::raw::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{CF_DEFAULT, CF_WRITE, CfName};
@@ -88,11 +88,12 @@ impl Writer {
             .observe(sst_info.file_size() as f64);
         let file_name = format!("{}_{}.sst", name, cf);
 
+        let iv = Iv::from_slice(crypt_key.as_bytes()).unwrap();
         let (encrypter_reader, _) = EncrypterReader::new(
             sst_reader, 
             crypt_method, 
             crypt_key.as_bytes(), 
-            None
+            Some(iv),
         ).unwrap();
         
         let (reader, hasher) = Sha256Reader::new(encrypter_reader)
