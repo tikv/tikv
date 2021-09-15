@@ -6,13 +6,10 @@ use std::time::Duration;
 use std::{fs, io, thread};
 
 use raft::eraftpb::MessageType;
-<<<<<<< HEAD
 use raftstore::store::*;
-=======
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::PathBuf;
->>>>>>> 56b3ae673... raftstore: continue GC  snapshot files when it encounters a corrupted snapshot (#10831)
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::time::Instant;
