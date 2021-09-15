@@ -40,7 +40,7 @@ pub fn build_plain_cf_file<E>(
     cf: &str,
     start_key: &[u8],
     end_key: &[u8],
-    io_limiter: &Limiter, 
+    io_limiter: &Limiter,
 ) -> Result<BuildStatistics, Error>
 where
     E: KvEngine,
@@ -77,9 +77,9 @@ where
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         stats.key_count += 1;
         stats.total_size += key.len() + value.len();
-        // Estimate  both key and value size should be less than 2 << 16. 
+        // Estimate  both key and value size should be less than 2 << 16.
         // Otherwise since the key/value data itself is so large, 2 bytes the difference really does not matter in terms of IO throttle.
-        let entry_len = key.len() + value.len() + 4; 
+        let entry_len = key.len() + value.len() + 4;
         while entry_len > remained_quota {
             // It's possible to acquire more than necessary, but let it be.
             io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
