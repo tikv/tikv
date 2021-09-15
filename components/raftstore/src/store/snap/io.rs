@@ -40,6 +40,7 @@ pub fn build_plain_cf_file<E>(
     cf: &str,
     start_key: &[u8],
     end_key: &[u8],
+    io_limiter: &Limiter, 
 ) -> Result<BuildStatistics, Error>
 where
     E: KvEngine,
@@ -71,10 +72,20 @@ where
         encrypted_file.as_mut().unwrap() as &mut dyn Write
     };
 
+    let mut remained_quota = 0;
     let mut stats = BuildStatistics::default();
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         stats.key_count += 1;
         stats.total_size += key.len() + value.len();
+        // Estimate  both key and value size should be less than 2 << 16. 
+        // Otherwise since the key/value data itself is so large, 2 bytes the difference really does not matter in terms of IO throttle.
+        let entry_len = key.len() + value.len() + 4; 
+        while entry_len > remained_quota {
+            // It's possible to acquire more than necessary, but let it be.
+            io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
+            remained_quota += IO_LIMITER_CHUNK_SIZE;
+        }
+        remained_quota -= entry_len;
         box_try!(BytesEncoder::encode_compact_bytes(&mut writer, key));
         box_try!(BytesEncoder::encode_compact_bytes(&mut writer, value));
         Ok(true)
@@ -262,6 +273,7 @@ mod tests {
     #[test]
     fn test_cf_build_and_apply_plain_files() {
         let db_creaters = &[open_test_empty_db, open_test_db];
+        let limiter = Limiter::new(INFINITY);
         for db_creater in db_creaters {
             for db_opt in vec![None, Some(gen_db_options_with_encryption())] {
                 let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
@@ -285,6 +297,7 @@ mod tests {
                         cf,
                         &keys::data_key(b"a"),
                         &keys::data_end_key(b"z"),
+                        &limiter,
                     )
                     .unwrap();
                     if stats.key_count == 0 {

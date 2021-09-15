@@ -9,7 +9,7 @@ use regex::Regex;
 
 use collections::HashMap;
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
-use tikv_util::config::{self, ReadableDuration, ReadableSize, VersionTrack};
+use tikv_util::config::{self, ReadableDuration, ReadableSize, VersionTrack, GIB};
 use tikv_util::sys::SysQuota;
 use tikv_util::worker::Scheduler;
 
@@ -232,7 +232,7 @@ impl Default for Config {
             ),
             end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
-            snap_max_total_size: ReadableSize(0),
+            snap_max_total_size: ReadableSize(50 * GIB),
             stats_concurrency: 1,
             // 300 means gRPC threads are under heavy load if their total CPU usage
             // is greater than 300%.
