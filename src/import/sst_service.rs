@@ -276,11 +276,11 @@ macro_rules! impl_write {
                         })
                         .await?;
 
-                    writer.finish().map(|metas| {
-                        let mut resp = $resp_ty::default();
-                        resp.set_metas(metas.into());
-                        resp
-                    })
+                    let metas = writer.finish()?;
+                    import.verify_checksum(metas)?;
+                    let mut resp = $resp_ty::default();
+                    resp.set_metas(metas.into());
+                    Ok(resp)
                 }
                 .await;
                 crate::send_rpc_response!(res, sink, label, timer);

@@ -276,7 +276,6 @@ impl ImportDir {
         let path_str = path.save.to_str().unwrap();
         let env = get_env(key_manager, get_io_rate_limiter())?;
         let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
-        sst_reader.verify_checksum()?;
         // TODO: check the length and crc32 of ingested file.
         let meta_info = sst_reader.sst_meta_info(meta.to_owned());
         Ok(meta_info)
@@ -284,7 +283,7 @@ impl ImportDir {
 
     pub fn ingest<E: KvEngine>(
         &self,
-        metas: &[SstMeta],
+        metas: &[SSTMetaInfo],
         engine: &E,
         key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<()> {
@@ -292,11 +291,11 @@ impl ImportDir {
 
         let mut paths = HashMap::new();
         let mut ingest_bytes = 0;
-        for meta in metas {
-            let path = self.join(meta)?;
+        for info in metas {
+            let path = self.join(info.meta)?;
             let cf = meta.get_cf_name();
             super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_deref())?;
-            ingest_bytes += meta.get_length();
+            ingest_bytes += info.total_bytes;
             paths.entry(cf).or_insert_with(Vec::new).push(path);
         }
 
@@ -309,6 +308,17 @@ impl ImportDir {
         IMPORTER_INGEST_DURATION
             .with_label_values(&["ingest"])
             .observe(start.saturating_elapsed().as_secs_f64());
+        Ok(())
+    }
+
+    pub fn verify_checksum(&self, metas: &[SstMeta]) -> Result<()> {
+        for meta in metas {
+            let path = self.join(meta)?;
+            let path_str = path.save.to_str().unwrap();
+            let env = get_env(key_manager, get_io_rate_limiter())?;
+            let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
+            sst_reader.verify_checksum()?;
+        }
         Ok(())
     }
 

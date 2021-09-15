@@ -107,7 +107,7 @@ impl SSTImporter {
         self.dir.validate(meta, self.key_manager.clone())
     }
 
-    pub fn ingest<E: KvEngine>(&self, metas: &[SstMeta], engine: &E) -> Result<()> {
+    pub fn ingest<E: KvEngine>(&self, metas: &[SSTMetaInfo], engine: &E) -> Result<()> {
         match self.dir.ingest(metas, engine, self.key_manager.clone()) {
             Ok(..) => {
                 info!("ingest"; "metas" => ?metas);
@@ -118,6 +118,10 @@ impl SSTImporter {
                 Err(e)
             }
         }
+    }
+
+    pub fn verify_checksum(&self, metas: &[SstMeta]) -> Result<()> {
+        self.dir.verify_checksum(metas)
     }
 
     pub fn exist(&self, meta: &SstMeta) -> bool {
