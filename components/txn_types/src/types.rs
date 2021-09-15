@@ -255,8 +255,8 @@ pub enum MutationType {
 
 /// A row mutation.
 #[derive(Debug, Clone)]
-pub enum AtomicMutation {
-    /// Put `Value` into `Key` with ttl, overwriting any existing value.
+pub enum RawMutation {
+    /// Put `Value` into `Key` with TTL. The TTL will overwrite the existing TTL value.
     Put((Key, Value), Option<u64>),
     /// Delete `Key`.
     Delete(Key),
@@ -272,14 +272,14 @@ pub enum AtomicMutation {
     CheckNotExists(Key),
 }
 
-impl AtomicMutation {
+impl RawMutation {
     pub fn key(&self) -> &Key {
         match self {
-            AtomicMutation::Put((ref key, _), _) => key,
-            AtomicMutation::Delete(ref key) => key,
-            AtomicMutation::Lock(ref key) => key,
-            AtomicMutation::Insert((ref key, _)) => key,
-            AtomicMutation::CheckNotExists(ref key) => key,
+            RawMutation::Put((ref key, _), _) => key,
+            RawMutation::Delete(ref key) => key,
+            RawMutation::Lock(ref key) => key,
+            RawMutation::Insert((ref key, _)) => key,
+            RawMutation::CheckNotExists(ref key) => key,
         }
     }
 }

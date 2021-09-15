@@ -9,7 +9,7 @@ use crate::storage::txn::commands::{
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
 use engine_traits::CfName;
-use txn_types::AtomicMutation;
+use txn_types::RawMutation;
 
 command! {
     /// Run Put or Delete for keys which may be changed by `RawCompareAndSwap`.
@@ -19,7 +19,7 @@ command! {
         content => {
             /// The set of mutations to apply.
             cf: CfName,
-            mutations: Vec<AtomicMutation>,
+            mutations: Vec<RawMutation>,
         }
 }
 
@@ -32,15 +32,15 @@ impl CommandExt for RawAtomicStore {
         let mut bytes = 0;
         for m in &self.mutations {
             match *m {
-                AtomicMutation::Put((ref key, ref value), _)
-                | AtomicMutation::Insert((ref key, ref value)) => {
+                RawMutation::Put((ref key, ref value), _)
+                | RawMutation::Insert((ref key, ref value)) => {
                     bytes += key.as_encoded().len();
                     bytes += value.len();
                 }
-                AtomicMutation::Delete(ref key) | AtomicMutation::Lock(ref key) => {
+                RawMutation::Delete(ref key) | RawMutation::Lock(ref key) => {
                     bytes += key.as_encoded().len();
                 }
-                AtomicMutation::CheckNotExists(_) => (),
+                RawMutation::CheckNotExists(_) => (),
             }
         }
         bytes
@@ -54,7 +54,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
         let (cf, mutations, ctx) = (self.cf, self.mutations, self.ctx);
         for m in mutations {
             match m {
-                AtomicMutation::Put((key, value), ttl) => {
+                RawMutation::Put((key, value), ttl) => {
                     let mut m = Modify::Put(cf, key, value);
                     let expire_ts = ttl.map(convert_to_expire_ts);
                     if let Some(ts) = expire_ts {
@@ -62,7 +62,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
                     }
                     data.push(m);
                 }
-                AtomicMutation::Delete(key) => {
+                RawMutation::Delete(key) => {
                     data.push(Modify::Delete(cf, key));
                 }
                 _ => panic!("Not support mutation type"),
