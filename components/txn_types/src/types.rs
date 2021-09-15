@@ -255,6 +255,37 @@ pub enum MutationType {
 
 /// A row mutation.
 #[derive(Debug, Clone)]
+pub enum AtomicMutation {
+    /// Put `Value` into `Key` with ttl, overwriting any existing value.
+    Put((Key, Value), Option<u64>),
+    /// Delete `Key`.
+    Delete(Key),
+    /// Set a lock on `Key`.
+    Lock(Key),
+    /// Put `Value` into `Key` if `Key` does not yet exist.
+    ///
+    /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
+    Insert((Key, Value)),
+    /// Check `key` must be not exist.
+    ///
+    /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
+    CheckNotExists(Key),
+}
+
+impl AtomicMutation {
+    pub fn key(&self) -> &Key {
+        match self {
+            AtomicMutation::Put((ref key, _), _) => key,
+            AtomicMutation::Delete(ref key) => key,
+            AtomicMutation::Lock(ref key) => key,
+            AtomicMutation::Insert((ref key, _)) => key,
+            AtomicMutation::CheckNotExists(ref key) => key,
+        }
+    }
+}
+
+/// A row mutation.
+#[derive(Debug, Clone)]
 pub enum Mutation {
     /// Put `Value` into `Key`, overwriting any existing value.
     Put((Key, Value)),

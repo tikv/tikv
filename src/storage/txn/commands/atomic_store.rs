@@ -9,7 +9,7 @@ use crate::storage::txn::commands::{
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
 use engine_traits::CfName;
-use txn_types::Mutation;
+use txn_types::AtomicMutation;
 
 command! {
     /// Run Put or Delete for keys which may be changed by `RawCompareAndSwap`.
@@ -19,8 +19,7 @@ command! {
         content => {
             /// The set of mutations to apply.
             cf: CfName,
-            mutations: Vec<Mutation>,
-            ttls: Option<Vec<u64>>,
+            mutations: Vec<AtomicMutation>,
         }
 }
 
@@ -33,14 +32,15 @@ impl CommandExt for RawAtomicStore {
         let mut bytes = 0;
         for m in &self.mutations {
             match *m {
-                Mutation::Put((ref key, ref value)) | Mutation::Insert((ref key, ref value)) => {
+                AtomicMutation::Put((ref key, ref value), _)
+                | AtomicMutation::Insert((ref key, ref value)) => {
                     bytes += key.as_encoded().len();
                     bytes += value.len();
                 }
-                Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
+                AtomicMutation::Delete(ref key) | AtomicMutation::Lock(ref key) => {
                     bytes += key.as_encoded().len();
                 }
-                Mutation::CheckNotExists(_) => (),
+                AtomicMutation::CheckNotExists(_) => (),
             }
         }
         bytes
@@ -52,24 +52,17 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
         let mut data = vec![];
         let rows = self.mutations.len();
         let (cf, mutations, ctx) = (self.cf, self.mutations, self.ctx);
-        let expire_ts: Vec<Option<u64>> = self
-            .ttls
-            .unwrap()
-            .iter()
-            .map(|ttl| Some(convert_to_expire_ts(*ttl)))
-            .collect();
-        let mut idx = 0;
         for m in mutations {
             match m {
-                Mutation::Put((key, value)) => {
+                AtomicMutation::Put((key, value), ttl) => {
                     let mut m = Modify::Put(cf, key, value);
-                    if let Some(ts) = expire_ts[idx] {
+                    let expire_ts = ttl.map(convert_to_expire_ts);
+                    if let Some(ts) = expire_ts {
                         m.with_ttl(ts);
                     }
-                    idx += 1;
                     data.push(m);
                 }
-                Mutation::Delete(key) => {
+                AtomicMutation::Delete(key) => {
                     data.push(Modify::Delete(cf, key));
                 }
                 _ => panic!("Not support mutation type"),

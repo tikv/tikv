@@ -95,7 +95,7 @@ use std::{
     sync::{atomic, Arc},
 };
 use tikv_util::time::{Instant, ThreadReadId};
-use txn_types::{Key, KvPair, Lock, Mutation, OldValues, TimeStamp, TsSet, Value};
+use txn_types::{AtomicMutation, Key, KvPair, Lock, OldValues, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -1783,12 +1783,22 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             return Err(Error::from(ErrorInner::TTLNotEnabled));
         }
         let cf = Self::rawkv_cf(&cf)?;
-        let muations = pairs
-            .into_iter()
-            .map(|(k, v)| Mutation::Put((Key::from_encoded(k), v)))
-            .collect();
-        let ttl = if self.enable_ttl { Some(ttls) } else { None };
-        let cmd = RawAtomicStore::new(cf, muations, ttl, ctx);
+        let muations = if !self.enable_ttl {
+            pairs
+                .into_iter()
+                .map(|(k, v)| AtomicMutation::Put((Key::from_encoded(k), v), None))
+                .collect()
+        } else {
+            pairs
+                .iter()
+                .zip(ttls)
+                .into_iter()
+                .map(|((k, v), ttl)| {
+                    AtomicMutation::Put((Key::from_encoded(k.to_vec()), v.to_vec()), Some(ttl))
+                })
+                .collect()
+        };
+        let cmd = RawAtomicStore::new(cf, muations, ctx);
         self.sched_command(cmd, callback)
     }
 
@@ -1802,9 +1812,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let cf = Self::rawkv_cf(&cf)?;
         let muations = keys
             .into_iter()
-            .map(|k| Mutation::Delete(Key::from_encoded(k)))
+            .map(|k| AtomicMutation::Delete(Key::from_encoded(k)))
             .collect();
-        let cmd = RawAtomicStore::new(cf, muations, None, ctx);
+        let cmd = RawAtomicStore::new(cf, muations, ctx);
         self.sched_command(cmd, callback)
     }
 
