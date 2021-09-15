@@ -103,6 +103,8 @@ mod tests {
                 wb.clear();
             }
         }
+        // Flush one memtable to L0 to make sure that the next sst files to be ingested
+        //  must locate in L0.
         db.flush_cf(CF_DEFAULT, true).unwrap();
         assert_eq!(
             1,
