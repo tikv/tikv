@@ -1211,6 +1211,8 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "bytes 1.0.1",
+ "encryption",
+ "engine_traits",
  "fail",
  "ffi-support",
  "file_system",
@@ -1248,6 +1250,7 @@ dependencies = [
  "aws",
  "cloud",
  "encryption",
+ "engine_traits",
  "external_storage",
  "ffi-support",
  "file_system",

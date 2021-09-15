@@ -13,7 +13,9 @@ use std::marker::Unpin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use engine_traits::FileEncryptionInfo;
 use file_system::File;
+use encryption::{DecrypterReader, Iv, encryption_method_from_db_encryption_method};
 use futures_io::AsyncRead;
 use futures_util::AsyncReadExt;
 use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
@@ -64,16 +66,26 @@ pub trait ExternalStorage: 'static + Send + Sync {
         restore_name: std::path::PathBuf,
         expected_length: u64,
         speed_limiter: &Limiter,
+        file_crypter: &FileEncryptionInfo,
     ) -> io::Result<()> {
-        let mut input = self.read(storage_name);
+        let input = self.read(storage_name);
         let output: &mut dyn Write = &mut File::create(restore_name)?;
         // the minimum speed of reading data, in bytes/second.
         // if reading speed is slower than this rate, we will stop with
         // a "TimedOut" error.
         // (at 8 KB/s for a 2 MB buffer, this means we timeout after 4m16s.)
         let min_read_speed: usize = 8192;
+
+        let iv = Iv::from_slice(&file_crypter.iv)?;
+        let mut decrypter_reader = DecrypterReader::new(
+            input, 
+            encryption_method_from_db_encryption_method(file_crypter.method), 
+            &file_crypter.key,
+            iv,
+        )?;
+
         block_on_external_io(read_external_storage_into_file(
-            &mut input,
+            &mut decrypter_reader,
             output,
             speed_limiter,
             expected_length,

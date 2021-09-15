@@ -88,8 +88,13 @@ impl Writer {
             .observe(sst_info.file_size() as f64);
         let file_name = format!("{}_{}.sst", name, cf);
 
-        let (encrypter_reader, _) = EncrypterReader::new(sst_reader, crypt_method, crypt_key.as_bytes()).unwrap();
-
+        let (encrypter_reader, _) = EncrypterReader::new(
+            sst_reader, 
+            crypt_method, 
+            crypt_key.as_bytes(), 
+            None
+        ).unwrap();
+        
         let (reader, hasher) = Sha256Reader::new(encrypter_reader)
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
             

@@ -7,18 +7,19 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use futures::executor::ThreadPool;
-use kvproto::brpb::StorageBackend;
+use kvproto::brpb::{CipherInfo, StorageBackend};
 #[cfg(feature = "prost-codec")]
 use kvproto::import_sstpb::pair::Op as PairOp;
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::import_sstpb::*;
 
-use encryption::DataKeyManager;
+use encryption::{DataKeyManager, encryption_method_to_db_encryption_method};
 use engine_rocks::{get_env, RocksSstReader};
-use engine_traits::{
-    name_to_cf, CfName, EncryptionKeyManager, Iterator, KvEngine, SSTMetaInfo, SeekKey,
-    SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
-};
+use engine_traits::{CF_DEFAULT, CF_WRITE, CfName, 
+    EncryptionKeyManager, FileEncryptionInfo, Iterator,
+    KvEngine, SSTMetaInfo, SeekKey, SstCompressionType, 
+    SstExt, SstReader, SstWriter, SstWriterBuilder, 
+    name_to_cf};
 use file_system::{get_io_rate_limiter, OpenOptions};
 use tikv_util::time::{Instant, Limiter};
 use txn_types::{Key, TimeStamp, WriteRef};
@@ -146,6 +147,7 @@ impl SSTImporter {
         backend: &StorageBackend,
         name: &str,
         rewrite_rule: &RewriteRule,
+        crypter: &CipherInfo,
         speed_limiter: Limiter,
         engine: E,
     ) -> Result<Option<Range>> {
@@ -156,7 +158,7 @@ impl SSTImporter {
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
         );
-        match self.do_download::<E>(meta, backend, name, rewrite_rule, speed_limiter, engine) {
+        match self.do_download::<E>(meta, backend, name, rewrite_rule, crypter, speed_limiter, engine) {
             Ok(r) => {
                 info!("download"; "meta" => ?meta, "name" => name, "range" => ?r);
                 Ok(r)
@@ -186,6 +188,7 @@ impl SSTImporter {
         backend: &StorageBackend,
         name: &str,
         rewrite_rule: &RewriteRule,
+        crypter: &CipherInfo,
         speed_limiter: Limiter,
         engine: E,
     ) -> Result<Option<Range>> {
@@ -207,8 +210,14 @@ impl SSTImporter {
                     ext_storage as _
                 };
 
+            let file_crypter = FileEncryptionInfo {
+                method: encryption_method_to_db_encryption_method(crypter.crypter),
+                key: crypter.cipher_key.clone().into_bytes(),
+                iv: crypter.cipher_key.clone().into_bytes(),
+            };
+
             let result =
-                ext_storage.restore(name, path.temp.to_owned(), meta.length, &speed_limiter);
+                ext_storage.restore(name, path.temp.to_owned(), meta.length, &speed_limiter, &file_crypter);
             IMPORTER_DOWNLOAD_BYTES.observe(meta.length as _);
             result.map_err(|e| Error::CannotReadExternalStorage {
                 url: url.to_string(),

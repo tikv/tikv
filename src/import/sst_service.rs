@@ -401,6 +401,7 @@ where
                 req.get_storage_backend(),
                 req.get_name(),
                 req.get_rewrite_rule(),
+                req.get_cipherinfo(),
                 limiter,
                 engine,
             );

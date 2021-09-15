@@ -27,8 +27,9 @@ impl<R> EncrypterReader<R> {
         reader: R,
         method: EncryptionMethod,
         key: &[u8],
+        iv: Option<Iv>,
     ) -> Result<(EncrypterReader<R>, Iv)> {
-        let (crypter, iv) = CrypterReader::new(reader, method, key, Mode::Encrypt, None)?;
+        let (crypter, iv) = CrypterReader::new(reader, method, key, Mode::Encrypt, iv)?;
         Ok((EncrypterReader(crypter), iv))
     }
 }
@@ -107,7 +108,7 @@ pub fn create_aes_ctr_crypter(
 }
 
 /// Implementation of EncrypterReader and DecrypterReader.
-struct CrypterReader<R> {
+pub struct CrypterReader<R> {
     reader: R,
 
     method: EncryptionMethod,
@@ -422,7 +423,7 @@ mod tests {
         for method in methods {
             let key = generate_data_key(method);
             let readable_text = std::io::Cursor::new(plaintext.clone());
-            let (encrypter, iv) = EncrypterReader::new(readable_text, method, &key).unwrap();
+            let (encrypter, iv) = EncrypterReader::new(readable_text, method, &key, None).unwrap();
             let mut decrypter = DecrypterReader::new(encrypter, method, &key, iv).unwrap();
             let mut piece = vec![0; 10240];
             for offset in offsets {
