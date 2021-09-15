@@ -223,7 +223,6 @@ pub unsafe fn run_proxy(
         process::exit(0)
     }
 
-    assert!(config.raft_store.engine_store_server_helper == 0);
     config.raft_store.engine_store_server_helper = engine_store_server_helper as *const _ as isize;
     crate::server::run_tikv(config, engine_store_server_helper);
 }
