@@ -55,6 +55,9 @@ pub enum ErrorInner {
 
     #[error("Deadline is exceeded")]
     DeadlineExceeded,
+
+    #[error("The length of ttls does not equal to the length of pairs")]
+    TTLsLenNotEqualsToPairs,
 }
 
 impl From<DeadlineError> for ErrorInner {
@@ -97,6 +100,9 @@ impl ErrorCodeExt for Error {
             ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
             ErrorInner::TTLNotEnabled => error_code::storage::TTL_NOT_ENABLED,
             ErrorInner::DeadlineExceeded => error_code::storage::DEADLINE_EXCEEDED,
+            ErrorInner::TTLsLenNotEqualsToPairs => {
+                error_code::storage::TTLS_LEN_NOT_EQUALS_TO_PAIRS
+            }
         }
     }
 }

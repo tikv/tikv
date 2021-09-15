@@ -1524,7 +1524,7 @@ fn future_raw_put<E: Engine, L: LockManager>(
             req.take_context(),
             req.take_cf(),
             vec![(req.take_key(), req.take_value())],
-            req.get_ttl(),
+            vec![req.get_ttl(); 1],
             cb,
         )
     } else {
@@ -1558,6 +1558,19 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
     mut req: RawBatchPutRequest,
 ) -> impl Future<Output = ServerResult<RawBatchPutResponse>> {
     let cf = req.take_cf();
+    let pairs_len = req.get_pairs().len();
+    // The TTL for each key in seconds.
+    //
+    // In some TiKV of old versions, only one TTL can be provided and the TTL will be applied to all keys in
+    // the request. For compatibility reasons, if the length of `ttls` is exactly one, then the TTL will be applied
+    // to all keys. Otherwise, the length mismatch between `ttls` and `pairs` will return an error.
+    let ttls = if req.get_ttls().is_empty() {
+        vec![0; pairs_len]
+    } else if req.get_ttls().len() == 1 {
+        vec![req.get_ttls()[0]; pairs_len]
+    } else {
+        req.take_ttls()
+    };
     let pairs = req
         .take_pairs()
         .into_iter()
@@ -1567,9 +1580,9 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
     let (cb, f) = paired_future_callback();
     let for_atomic = req.get_for_cas();
     let res = if for_atomic {
-        storage.raw_batch_put_atomic(req.take_context(), cf, pairs, req.get_ttl(), cb)
+        storage.raw_batch_put_atomic(req.take_context(), cf, pairs, ttls, cb)
     } else {
-        storage.raw_batch_put(req.take_context(), cf, pairs, req.get_ttl(), cb)
+        storage.raw_batch_put(req.take_context(), cf, pairs, ttls, cb)
     };
 
     async move {

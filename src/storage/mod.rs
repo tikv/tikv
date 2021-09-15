@@ -1318,7 +1318,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: Context,
         cf: String,
         pairs: Vec<KvPair>,
-        ttl: u64,
+        ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
         let cf = Self::rawkv_cf(&cf)?;
@@ -1329,21 +1329,30 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             callback
         );
 
-        if !self.enable_ttl && ttl != 0 {
+        if self.enable_ttl {
+            if ttls.len() != pairs.len() {
+                return Err(Error::from(ErrorInner::TTLsLenNotEqualsToPairs));
+            }
+        } else if ttls.iter().any(|&x| x != 0) {
             return Err(Error::from(ErrorInner::TTLNotEnabled));
         }
-        let expire_ts = convert_to_expire_ts(ttl);
-
-        let modifies = pairs
-            .into_iter()
-            .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v))
-            .map(|mut m| {
-                if self.enable_ttl {
-                    m.with_ttl(expire_ts)
-                }
-                m
-            })
-            .collect();
+        let modifies = if !self.enable_ttl {
+            pairs
+                .into_iter()
+                .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v))
+                .collect()
+        } else {
+            pairs
+                .iter()
+                .zip(ttls)
+                .into_iter()
+                .map(|((k, v), ttl)| {
+                    let mut m = Modify::Put(cf, Key::from_encoded(k.to_vec()), v.to_vec());
+                    m.with_ttl(convert_to_expire_ts(ttl));
+                    m
+                })
+                .collect()
+        };
 
         let mut batch = WriteData::from_modifies(modifies);
         batch.set_allowed_on_disk_almost_full();
@@ -1763,22 +1772,22 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: Context,
         cf: String,
         pairs: Vec<KvPair>,
-        ttl: u64,
+        ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
+        if self.enable_ttl {
+            if ttls.len() != pairs.len() {
+                return Err(Error::from(ErrorInner::TTLsLenNotEqualsToPairs));
+            }
+        } else if ttls.iter().any(|&x| x != 0) {
+            return Err(Error::from(ErrorInner::TTLNotEnabled));
+        }
         let cf = Self::rawkv_cf(&cf)?;
         let muations = pairs
             .into_iter()
             .map(|(k, v)| Mutation::Put((Key::from_encoded(k), v)))
             .collect();
-        let ttl = if self.enable_ttl {
-            Some(ttl)
-        } else {
-            if ttl != 0 {
-                return Err(Error::from(ErrorInner::TTLNotEnabled));
-            }
-            None
-        };
+        let ttl = if self.enable_ttl { Some(ttls) } else { None };
         let cmd = RawAtomicStore::new(cf, muations, ttl, ctx);
         self.sched_command(cmd, callback)
     }
@@ -3749,7 +3758,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
-                0,
+                vec![0; test_data.len()],
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
@@ -3903,7 +3912,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
-                0,
+                vec![0; test_data.len()],
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -4013,7 +4022,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
-                0,
+                vec![0; test_data.len()],
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
@@ -4397,7 +4406,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
-                0,
+                vec![0; test_data.len()],
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
