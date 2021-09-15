@@ -384,7 +384,7 @@ where
                 Ok(profile) => match profile.encode(&mut body) {
                     Ok(()) => {
                         info!("write report successfully");
-                        Ok(StatusServer::err_response(StatusCode::OK, body))
+                        Ok(Response::new(body.into()))
                     }
                     Err(err) => Ok(StatusServer::err_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -400,7 +400,11 @@ where
             match report.flamegraph(&mut body) {
                 Ok(_) => {
                     info!("write report successfully");
-                    Ok(StatusServer::err_response(StatusCode::OK, body))
+                    Ok(Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "image/svg+xml")
+                        .body(body.into())
+                        .unwrap())
                 }
                 Err(err) => Ok(StatusServer::err_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
