@@ -104,13 +104,13 @@ fn test_async_io_cannot_destroy_when_persist_snapshot() {
     cluster.must_transfer_leader(region.get_id(), peer_1);
 
     let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
-    let recv_filter = Box::new(
+    let send_filter = Box::new(
         RegionPacketFilter::new(region.get_id(), 3)
             .direction(Direction::Send)
             .msg_type(MessageType::MsgAppendResponse)
             .reserve_dropped(Arc::clone(&dropped_msgs)),
     );
-    cluster.sim.wl().add_send_filter(3, recv_filter);
+    cluster.sim.wl().add_send_filter(3, send_filter);
 
     cluster.must_put(b"k1", b"v1");
 
@@ -151,4 +151,54 @@ fn test_async_io_cannot_destroy_when_persist_snapshot() {
     fail::remove(raft_before_save_kv_on_store_3_fp);
 
     must_get_none(&cluster.get_engine(3), b"k1");
+}
+
+/// Test if the peer can handle ready when its snapshot is persisting.
+#[test]
+fn test_async_io_cannot_handle_ready_when_persist_snapshot() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_snapshot(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    cluster.must_put(b"k1", b"v1");
+
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    for i in 2..10 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+
+    let raft_before_save_kv_on_store_3_fp = "raft_before_save_kv_on_store_3";
+    fail::cfg(raft_before_save_kv_on_store_3_fp, "pause").unwrap();
+
+    cluster.clear_send_filters();
+
+    // Wait for leader sending snapshot to peer 3
+    sleep_ms(200);
+
+    let panic_if_handle_ready_3_fp = "panic_if_handle_ready_3";
+    fail::cfg(panic_if_handle_ready_3_fp, "return").unwrap();
+
+    for i in 10..20 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+
+    cluster.must_transfer_leader(r1, new_peer(2, 2));
+
+    for i in 20..30 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+
+    fail::remove(panic_if_handle_ready_3_fp);
+    fail::remove(raft_before_save_kv_on_store_3_fp);
+
+    must_get_equal(&cluster.get_engine(3), b"k29", b"v1");
 }

@@ -1934,6 +1934,12 @@ where
             |_| None
         );
 
+        fail_point!(
+            "panic_if_handle_ready_3",
+            self.peer.get_id() == 3,
+            |_| { panic!("{} wants to handle ready", self.tag); }
+        );
+
         debug!(
             "handle raft ready";
             "region_id" => self.region_id,
