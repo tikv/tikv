@@ -2198,6 +2198,11 @@ fn main() {
     let skip_paranoid_checks = matches.is_present("skip-paranoid-checks");
     let host = matches.value_of("host");
 
+    if host.is_none() && data_dir.is_none() {
+        let _ = app.print_help();
+        return;
+    }
+
     let debug_executor =
         new_debug_executor(&cfg, data_dir, skip_paranoid_checks, host, Arc::clone(&mgr));
 
