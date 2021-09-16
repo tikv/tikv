@@ -1786,15 +1786,21 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let muations = if !self.enable_ttl {
             pairs
                 .into_iter()
-                .map(|(k, v)| RawMutation::Put((Key::from_encoded(k), v), None))
+                .map(|(k, v)| RawMutation::Put {
+                    key: Key::from_encoded(k),
+                    value: v,
+                    ttl: None,
+                })
                 .collect()
         } else {
             pairs
                 .iter()
                 .zip(ttls)
                 .into_iter()
-                .map(|((k, v), ttl)| {
-                    RawMutation::Put((Key::from_encoded(k.to_vec()), v.to_vec()), Some(ttl))
+                .map(|((k, v), ttl)| RawMutation::Put {
+                    key: Key::from_encoded(k.to_vec()),
+                    value: v.to_vec(),
+                    ttl: Some(ttl),
                 })
                 .collect()
         };
@@ -1812,7 +1818,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let cf = Self::rawkv_cf(&cf)?;
         let muations = keys
             .into_iter()
-            .map(|k| RawMutation::Delete(Key::from_encoded(k)))
+            .map(|k| RawMutation::Delete {
+                key: Key::from_encoded(k),
+            })
             .collect();
         let cmd = RawAtomicStore::new(cf, muations, ctx);
         self.sched_command(cmd, callback)

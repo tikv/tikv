@@ -257,16 +257,24 @@ pub enum MutationType {
 #[derive(Debug, Clone)]
 pub enum RawMutation {
     /// Put `Value` into `Key` with TTL. The TTL will overwrite the existing TTL value.
-    Put((Key, Value), Option<u64>),
+    Put {
+        key: Key,
+        value: Value,
+        ttl: Option<u64>,
+    },
     /// Delete `Key`.
-    Delete(Key),
+    Delete { key: Key },
 }
 
 impl RawMutation {
     pub fn key(&self) -> &Key {
         match self {
-            RawMutation::Put((ref key, _), _) => key,
-            RawMutation::Delete(ref key) => key,
+            RawMutation::Put {
+                ref key,
+                value: _,
+                ttl: _,
+            } => key,
+            RawMutation::Delete { ref key } => key,
         }
     }
 }

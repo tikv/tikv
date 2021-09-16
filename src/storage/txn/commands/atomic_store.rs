@@ -32,11 +32,15 @@ impl CommandExt for RawAtomicStore {
         let mut bytes = 0;
         for m in &self.mutations {
             match *m {
-                RawMutation::Put((ref key, ref value), _) => {
+                RawMutation::Put {
+                    ref key,
+                    ref value,
+                    ttl: _,
+                } => {
                     bytes += key.as_encoded().len();
                     bytes += value.len();
                 }
-                RawMutation::Delete(ref key) => {
+                RawMutation::Delete { ref key } => {
                     bytes += key.as_encoded().len();
                 }
             }
@@ -52,7 +56,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
         let (cf, mutations, ctx) = (self.cf, self.mutations, self.ctx);
         for m in mutations {
             match m {
-                RawMutation::Put((key, value), ttl) => {
+                RawMutation::Put { key, value, ttl } => {
                     let mut m = Modify::Put(cf, key, value);
                     let expire_ts = ttl.map(convert_to_expire_ts);
                     if let Some(ts) = expire_ts {
@@ -60,7 +64,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
                     }
                     data.push(m);
                 }
-                RawMutation::Delete(key) => {
+                RawMutation::Delete { key } => {
                     data.push(Modify::Delete(cf, key));
                 }
             }
