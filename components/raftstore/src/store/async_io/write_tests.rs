@@ -163,7 +163,7 @@ fn delete_kv(wb: &mut Option<RocksWriteBatch>, key: &[u8]) {
 }
 
 struct TestWorker {
-    worker: Worker<KvTestEngine, KvTestEngine, TestTransport, TestNotifier>,
+    worker: Worker<KvTestEngine, KvTestEngine, TestNotifier, TestTransport>,
     msg_rx: Receiver<RaftMessage>,
     notify_rx: Receiver<(u64, (u64, u64))>,
 }
