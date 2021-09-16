@@ -1171,6 +1171,17 @@ where
 
             let to_peer_id = msg.get_to_peer().get_id();
             let to_store_id = msg.get_to_peer().get_store_id();
+
+            debug!(
+                "send raft msg";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "msg_type" => ?msg_type,
+                "msg_size" => msg.get_message().compute_size(),
+                "to" => to_peer_id,
+                "disk_usage" => ?msg.get_disk_usage(),
+            );
+
             if let Err(e) = ctx.trans.send(msg) {
                 // We use metrics to observe failure on production.
                 debug!(
@@ -4008,18 +4019,6 @@ where
                 return None;
             }
         };
-
-        let to_peer_id = to_peer.get_id();
-        let msg_type = msg.get_msg_type();
-        debug!(
-            "send raft msg";
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-            "msg_type" => ?msg_type,
-            "msg_size" => msg.compute_size(),
-            "to" => to_peer_id,
-            "disk_usage" => ?send_msg.get_disk_usage(),
-        );
 
         send_msg.set_to_peer(to_peer);
 
