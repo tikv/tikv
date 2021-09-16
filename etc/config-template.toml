@@ -411,9 +411,8 @@
 ## Use how many threads to handle raft messages
 # store-pool-size = 2
 
-## Use how many threads to handle raft io tasks, if it's zero, the io tasks will be handled
-## in store threads.
-# store-io-pool-size = 0
+## Use how many threads to handle raft io tasks
+# store-io-pool-size = 2
 
 ## When the number of concurrent ready exceeds this value, cmd will not be proposed and continue
 ## to batch until the previous ready has been persisted.
@@ -421,7 +420,6 @@
 # cmd-batch-concurrent-ready-max-count = 1
 
 ## When the size of raft db writebatch exceeds this value, write will be triggered.
-## If `store-io-pool-size` is 0, this config will have no effect.
 # raft-write-size-limit = "1MB"
 
 [coprocessor]

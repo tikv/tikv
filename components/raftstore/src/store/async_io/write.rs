@@ -202,7 +202,7 @@ where
     }
 
     /// Add write task to this batch
-    pub fn add_write_task(&mut self, mut task: WriteTask<EK, ER>) {
+    fn add_write_task(&mut self, mut task: WriteTask<EK, ER>) {
         if let Err(e) = task.valid() {
             panic!("task is not valid: {:?}", e);
         }
@@ -251,7 +251,7 @@ where
         self.tasks.push(task);
     }
 
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         // raft_wb doesn't have clear interface and it should be consumed by raft db before
         self.kv_wb.clear();
         self.raft_states.clear();
@@ -261,7 +261,7 @@ where
     }
 
     #[inline]
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.tasks.is_empty()
     }
 
@@ -327,7 +327,7 @@ where
     receiver: Receiver<WriteMsg<EK, ER>>,
     notifier: N,
     trans: T,
-    pub batch: WriteTaskBatch<EK, ER>,
+    batch: WriteTaskBatch<EK, ER>,
     cfg_tracker: Tracker<Config>,
     raft_write_size_limit: usize,
     metrics: StoreWriteMetrics,
@@ -409,7 +409,13 @@ where
 
             STORE_WRITE_TRIGGER_SIZE_HISTOGRAM.observe(self.batch.get_raft_size() as f64);
 
-            self.write_to_db(true);
+            self.write_to_db();
+
+            // update config
+            if let Some(incoming) = self.cfg_tracker.any_new() {
+                self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
+                self.metrics.waterfall_metrics = incoming.waterfall_metrics;
+            }
 
             STORE_WRITE_LOOP_DURATION_HISTOGRAM
                 .observe(duration_to_sec(handle_begin.saturating_elapsed()));
@@ -430,7 +436,7 @@ where
         false
     }
 
-    pub fn write_to_db(&mut self, notify: bool) {
+    fn write_to_db(&mut self) {
         self.batch.before_write_to_db(&self.metrics);
 
         fail_point!("raft_before_save");
@@ -530,24 +536,15 @@ where
         STORE_WRITE_SEND_DURATION_HISTOGRAM
             .observe(duration_to_sec(now2.saturating_duration_since(now)));
 
-        if notify {
-            for (region_id, (peer_id, ready_number)) in &self.batch.readies {
-                self.notifier
-                    .notify_persisted(*region_id, *peer_id, *ready_number);
-            }
-            STORE_WRITE_CALLBACK_DURATION_HISTOGRAM
-                .observe(duration_to_sec(now2.saturating_elapsed()));
+        for (region_id, (peer_id, ready_number)) in &self.batch.readies {
+            self.notifier
+                .notify_persisted(*region_id, *peer_id, *ready_number);
         }
+        STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(duration_to_sec(now2.saturating_elapsed()));
 
         self.metrics.flush();
 
         self.batch.clear();
-
-        // update config
-        if let Some(incoming) = self.cfg_tracker.any_new() {
-            self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
-            self.metrics.waterfall_metrics = incoming.waterfall_metrics;
-        }
     }
 }
 

@@ -1196,13 +1196,6 @@ fn test_node_merge_crash_when_snapshot() {
 }
 
 #[test]
-fn test_node_merge_crash_when_snapshot_async_io() {
-    let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.store_io_pool_size = 2;
-    test_merge_crash_when_snapshot(&mut cluster);
-}
-
-#[test]
 fn test_prewrite_before_max_ts_is_synced() {
     let mut cluster = new_server_cluster(0, 3);
     configure_for_merge(&mut cluster);

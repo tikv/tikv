@@ -33,8 +33,8 @@ use kvproto::replication_modepb::{
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, Entry, EntryType, MessageType};
 use raft::{
-    self, Changer, ProgressState, ProgressTracker, RawNode, Ready, SnapshotStatus, StateRole,
-    INVALID_INDEX, NO_LIMIT,
+    self, Changer, LightReady, ProgressState, ProgressTracker, RawNode, Ready, SnapshotStatus,
+    StateRole, INVALID_INDEX, NO_LIMIT,
 };
 use raft_proto::ConfChangeI;
 use smallvec::SmallVec;
@@ -47,7 +47,7 @@ use crate::store::async_io::write::WriteMsg;
 use crate::store::async_io::write_router::WriteRouter;
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
-use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
+use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal};
 use crate::store::hibernate_state::GroupState;
 use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
 use crate::store::msg::RaftCommand;
@@ -434,6 +434,11 @@ pub struct UnpersistedReady {
     /// Max number of following ready whose data to be persisted is empty.
     pub max_empty_number: u64,
     pub raft_msgs: Vec<Vec<eraftpb::Message>>,
+}
+
+pub struct ReadyResult {
+    pub state_role: Option<StateRole>,
+    pub has_new_entries: bool,
 }
 
 pub struct Peer<EK, ER>
@@ -1132,6 +1137,11 @@ where
         if !ready.snapshot().is_empty() {
             metrics.snapshot += 1;
         }
+    }
+
+    fn add_light_ready_metric(&self, light_ready: &LightReady, metrics: &mut RaftReadyMetrics) {
+        metrics.message += light_ready.messages().len() as u64;
+        metrics.commit += light_ready.committed_entries().len() as u64;
     }
 
     #[inline]
@@ -1833,7 +1843,7 @@ where
     pub fn handle_raft_ready_append<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
-    ) -> Option<CollectedReady<EK, ER>> {
+    ) -> Option<ReadyResult> {
         if self.pending_remove {
             return None;
         }
@@ -1997,8 +2007,9 @@ where
                 .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
         }
 
+        let state_role = ready.ss().map(|ss| ss.raft_state);
         let has_new_entries = !ready.entries().is_empty();
-        let (ready_res, task) =
+        let (res, mut task) =
             match self
                 .mut_store()
                 .handle_raft_ready(&mut ready, destroy_regions, request_times)
@@ -2011,36 +2022,20 @@ where
                 }
             };
 
-        Some(CollectedReady::new(ready, has_new_entries, ready_res, task))
-    }
+        let ready_number = ready.number();
+        let persisted_msgs = ready.take_persisted_messages();
 
-    pub fn post_raft_ready_append<T: Transport>(
-        &mut self,
-        ctx: &mut PollContext<EK, ER, T>,
-        mut collected: CollectedReady<EK, ER>,
-    ) {
-        let ready_number = collected.ready.number();
-        let persisted_msgs = collected.ready.take_persisted_messages();
-
-        match &collected.res {
+        match &res {
             HandleReadyResult::SendIOTask | HandleReadyResult::Snapshot { .. } => {
                 if !persisted_msgs.is_empty() {
-                    collected.write_task.messages = self.build_raft_messages(ctx, persisted_msgs);
+                    task.messages = self.build_raft_messages(ctx, persisted_msgs);
                 }
 
-                if ctx.cfg.store_io_pool_size > 0 {
-                    self.write_router.send_write_msg(
-                        ctx,
-                        self.unpersisted_readies.back().map(|r| r.number),
-                        WriteMsg::WriteTask(collected.write_task),
-                    );
-                } else {
-                    ctx.write_worker
-                        .as_mut()
-                        .unwrap()
-                        .batch
-                        .add_write_task(collected.write_task);
-                }
+                self.write_router.send_write_msg(
+                    ctx,
+                    self.unpersisted_readies.back().map(|r| r.number),
+                    WriteMsg::WriteTask(task),
+                );
 
                 self.unpersisted_readies.push_back(UnpersistedReady {
                     number: ready_number,
@@ -2048,7 +2043,7 @@ where
                     raft_msgs: vec![],
                 });
 
-                self.raft_group.advance_append_async(collected.ready);
+                self.raft_group.advance_append_async(ready);
             }
             HandleReadyResult::NoIOTask => {
                 if let Some(last) = self.unpersisted_readies.back_mut() {
@@ -2079,7 +2074,10 @@ where
 
                     // The commit index and messages of light ready should be empty because no data needs
                     // to be persisted.
-                    let mut light_rd = self.raft_group.advance_append(collected.ready);
+                    let mut light_rd = self.raft_group.advance_append(ready);
+
+                    self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);
+
                     if let Some(idx) = light_rd.commit_index() {
                         panic!(
                             "{} advance ready that has no io task but commit index is changed to {}",
@@ -2106,7 +2104,7 @@ where
             msgs,
             snap_region,
             destroy_regions,
-        } = collected.res
+        } = res
         {
             // When applying snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
@@ -2124,6 +2122,11 @@ where
             // Pause `read_progress` to prevent serving stale read while applying snapshot
             self.read_progress.pause();
         }
+
+        Some(ReadyResult {
+            state_role,
+            has_new_entries,
+        })
     }
 
     pub fn on_persist_snapshot<T>(
@@ -2303,10 +2306,8 @@ where
             }
         }
 
-        if ctx.cfg.store_io_pool_size > 0 {
-            self.write_router
-                .check_new_persisted(ctx, self.persisted_number);
-        }
+        self.write_router
+            .check_new_persisted(ctx, self.persisted_number);
 
         if !self.pending_remove {
             // If `pending_remove` is true, no need to call `on_persist_ready` to

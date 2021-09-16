@@ -45,7 +45,6 @@ use txn_types::WriteBatchFlags;
 
 use self::memtrace::*;
 use crate::coprocessor::RegionChangeEvent;
-use crate::store::async_io::write::WriteTask;
 use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::fsm::store::{PollContext, StoreMeta};
 use crate::store::fsm::{
@@ -58,7 +57,6 @@ use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
 use crate::store::peer::{ConsistencyState, Peer, PersistSnapshotResult, StaleState};
-use crate::store::peer_storage::HandleReadyResult;
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
@@ -81,37 +79,6 @@ pub struct DestroyPeerJob {
     pub initialized: bool,
     pub region_id: u64,
     pub peer: metapb::Peer,
-}
-
-pub struct CollectedReady<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    pub ready: Ready,
-    pub has_new_entries: bool,
-    pub res: HandleReadyResult,
-    pub write_task: WriteTask<EK, ER>,
-}
-
-impl<EK, ER> CollectedReady<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    pub fn new(
-        ready: Ready,
-        has_new_entries: bool,
-        res: HandleReadyResult,
-        write_task: WriteTask<EK, ER>,
-    ) -> Self {
-        Self {
-            ready,
-            has_new_entries,
-            res,
-            write_task,
-        }
-    }
 }
 
 pub struct PeerFsm<EK, ER>
@@ -558,7 +525,6 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    pos: usize,
     fsm: &'a mut PeerFsm<EK, ER>,
     ctx: &'a mut PollContext<EK, ER, T>,
 }
@@ -569,11 +535,10 @@ where
     ER: RaftEngine,
 {
     pub fn new(
-        pos: usize,
         fsm: &'a mut PeerFsm<EK, ER>,
         ctx: &'a mut PollContext<EK, ER, T>,
     ) -> PeerFsmDelegate<'a, EK, ER, T> {
-        PeerFsmDelegate { pos, fsm, ctx }
+        PeerFsmDelegate { fsm, ctx }
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
@@ -1064,10 +1029,10 @@ where
         self.propose_raft_command(msg, cb, DiskFullOpt::NotAllowedOnFull);
     }
 
-    fn on_role_changed(&mut self, ready: &Ready) {
+    fn on_role_changed(&mut self, role: Option<StateRole>) {
         // Update leader lease when the Raft state changes.
-        if let Some(ss) = ready.ss() {
-            if StateRole::Leader == ss.raft_state {
+        if let Some(r) = role {
+            if StateRole::Leader == r {
                 self.fsm.missing_ticks = 0;
                 self.register_split_region_check_tick();
                 self.fsm.peer.heartbeat_pd(self.ctx);
@@ -1086,19 +1051,13 @@ where
         self.ctx.has_ready = true;
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
         if let Some(r) = res {
-            self.on_role_changed(&r.ready);
+            self.on_role_changed(r.state_role);
             if r.has_new_entries {
                 self.register_raft_gc_log_tick();
                 self.register_entry_cache_evict_tick();
             }
             self.ctx.ready_count += 1;
             self.ctx.raft_metrics.ready.has_ready_region += 1;
-
-            if self.ctx.cfg.store_io_pool_size == 0 {
-                self.ctx.ready_res.push((self.pos, r.ready.number()));
-            }
-
-            self.fsm.peer.post_raft_ready_append(self.ctx, r);
 
             if self.fsm.peer.leader_unreachable {
                 self.fsm.reset_hibernate_state(GroupState::Chaos);

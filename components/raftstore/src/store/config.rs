@@ -204,7 +204,6 @@ pub struct Config {
     pub cmd_batch_concurrent_ready_max_count: usize,
 
     /// When the size of raft db writebatch exceeds this value, write will be triggered.
-    /// If `store-io-pool-size` is 0, this config will have no effect.
     pub raft_write_size_limit: ReadableSize,
 
     pub waterfall_metrics: bool,
@@ -290,7 +289,7 @@ impl Default for Config {
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
-            store_io_pool_size: 0,
+            store_io_pool_size: 2,
             store_io_notify_capacity: 40960,
             future_poll_size: 1,
             hibernate_regions: true,
@@ -480,8 +479,16 @@ impl Config {
         } else {
             self.store_batch_system.max_batch_size = Some(1024);
         }
+        if self.store_io_pool_size == 0 {
+            return Err(box_err!("store-io-pool-size should be greater than 0"));
+        }
+        if self.store_io_notify_capacity == 0 {
+            return Err(box_err!(
+                "store-io-notify-capacity should be greater than 0"
+            ));
+        }
         if self.future_poll_size == 0 {
-            return Err(box_err!("future-poll-size should be greater than 0."));
+            return Err(box_err!("future-poll-size should be greater than 0"));
         }
 
         // Avoid hibernated peer being reported as down peer.
