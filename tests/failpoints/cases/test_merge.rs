@@ -1082,7 +1082,9 @@ fn test_node_merge_crash_before_snapshot_then_catch_up_logs() {
 }
 
 /// Test if snapshot is applying correctly when crash happens.
-fn test_merge_crash_when_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+#[test]
+fn test_node_merge_crash_when_snapshot() {
+    let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.merge_max_log_gap = 10;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 11;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(50);
@@ -1187,12 +1189,6 @@ fn test_merge_crash_when_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
             );
         }
     }
-}
-
-#[test]
-fn test_node_merge_crash_when_snapshot() {
-    let mut cluster = new_node_cluster(0, 3);
-    test_merge_crash_when_snapshot(&mut cluster);
 }
 
 #[test]

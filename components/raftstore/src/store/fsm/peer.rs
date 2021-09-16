@@ -31,7 +31,7 @@ use kvproto::raft_serverpb::{
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
-use raft::{self, Progress, ReadState, Ready, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
+use raft::{self, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
@@ -966,7 +966,7 @@ where
         }
     }
 
-    pub fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64) {
+    fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64) {
         if peer_id != self.fsm.peer_id() {
             error!(
                 "peer id not match";

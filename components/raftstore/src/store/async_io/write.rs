@@ -170,7 +170,7 @@ where
 }
 
 /// WriteTaskBatch is used for combining several WriteTask into one.
-pub struct WriteTaskBatch<EK, ER>
+struct WriteTaskBatch<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -315,7 +315,7 @@ where
     }
 }
 
-pub struct Worker<EK, ER, T, N>
+struct Worker<EK, ER, N, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -335,14 +335,14 @@ where
     perf_context: EK::PerfContext,
 }
 
-impl<EK, ER, T, N> Worker<EK, ER, T, N>
+impl<EK, ER, N, T> Worker<EK, ER, N, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
     N: Notifier,
     T: Transport,
 {
-    pub fn new(
+    fn new(
         store_id: u64,
         tag: String,
         engines: Engines<EK, ER>,

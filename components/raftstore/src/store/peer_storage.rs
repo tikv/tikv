@@ -215,7 +215,7 @@ impl EntryCache {
         // In the past, the entry cache will be truncated if its size exceeds a certain number.
         // However, after introducing async write io, the entry must stay in cache if it's not
         // persisted to raft db because the raft-rs may need to read entries.(e.g. leader sends
-        // MsgAppend)
+        // MsgAppend to followers)
 
         mem_size_change
     }
@@ -1235,7 +1235,7 @@ where
         // Although there is an interval that other metadata are updated while `region`
         // is not after handing snapshot from ready, at the time of writing, it's no
         // problem for now.
-        // The reason why the update of `region` is delayed is we expect `region` stays
+        // The reason why the update of `region` is delayed is that we expect `region` stays
         // consistent with the one in `StoreMeta::regions` which should be updated after
         // persisting due to atomic snapshot and peer create process. So if we can fix
         // these issues in future(maybe not?), the `region` and `StoreMeta::regions`

@@ -409,7 +409,7 @@ impl<S: Snapshot> Drop for CmdEpochChecker<S> {
 }
 
 #[derive(PartialEq, Debug)]
-pub struct SnapshotContext {
+pub struct ApplySnapshotContext {
     /// The number of ready which has a snapshot.
     pub ready_number: u64,
     /// Whether this snapshot is scheduled.
@@ -578,7 +578,7 @@ where
     /// The last known persisted number.
     persisted_number: u64,
     /// The context of applying snapshot.
-    snap_ctx: Option<SnapshotContext>,
+    apply_snap_ctx: Option<ApplySnapshotContext>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -683,7 +683,7 @@ where
             unpersisted_readies: VecDeque::default(),
             unpersisted_message_count: 0,
             persisted_number: 0,
-            snap_ctx: None,
+            apply_snap_ctx: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -838,7 +838,7 @@ where
             }
         }
 
-        if let Some(snap_ctx) = self.snap_ctx.as_ref() {
+        if let Some(snap_ctx) = self.apply_snap_ctx.as_ref() {
             if !snap_ctx.scheduled {
                 info!(
                     "stale peer is persisting snapshot, will destroy next time";
@@ -863,7 +863,7 @@ where
                 // should be None only after applying snapshot in normal case.
                 // But here is safe becasue this peer is about to destroy and
                 // `pending_remove` will be true, namely no more ready will be fetched.
-                self.snap_ctx = None;
+                self.apply_snap_ctx = None;
             }
         }
 
@@ -1115,7 +1115,7 @@ where
     /// See the comments of `check_snap_status` for more details.
     #[inline]
     pub fn is_handling_snapshot(&self) -> bool {
-        self.snap_ctx.is_some() || self.get_store().is_applying_snapshot()
+        self.apply_snap_ctx.is_some() || self.get_store().is_applying_snapshot()
     }
 
     /// Returns `true` if the raft group has replicated a snapshot but not committed it yet.
@@ -1759,7 +1759,7 @@ where
     /// 4.  Wait for applying snapshot to complete(`check_snap_status`)
     /// Then it's valid to handle the next ready.
     fn check_snap_status<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
-        if let Some(snap_ctx) = self.snap_ctx.as_ref() {
+        if let Some(snap_ctx) = self.apply_snap_ctx.as_ref() {
             if !snap_ctx.scheduled {
                 // There is a snapshot from ready but it is not scheduled because the ready has
                 // not been persisted yet. We should wait for the notification of persisting ready
@@ -1791,7 +1791,7 @@ where
             CheckApplyingSnapStatus::Success => {
                 fail_point!("raft_before_applying_snap_finished");
 
-                if let Some(snap_ctx) = self.snap_ctx.take() {
+                if let Some(snap_ctx) = self.apply_snap_ctx.take() {
                     // This snapshot must be scheduled
                     if !snap_ctx.scheduled {
                         panic!(
@@ -1831,12 +1831,12 @@ where
                 // the peer, it's still dangerous if continue to handle ready for the
                 // peer. So it's better to revoke `JOB_STATUS_CANCELLING` to ensure all
                 // started tasks can get finished correctly.
-                if self.snap_ctx.is_some() {
+                if self.apply_snap_ctx.is_some() {
                     return false;
                 }
             }
         }
-        assert_eq!(self.snap_ctx, None);
+        assert_eq!(self.apply_snap_ctx, None);
         true
     }
 
@@ -2109,7 +2109,7 @@ where
             // When applying snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
 
-            self.snap_ctx = Some(SnapshotContext {
+            self.apply_snap_ctx = Some(ApplySnapshotContext {
                 ready_number,
                 scheduled: false,
                 msgs,
@@ -2129,49 +2129,7 @@ where
         })
     }
 
-    pub fn on_persist_snapshot<T>(
-        &mut self,
-        ctx: &mut PollContext<EK, ER, T>,
-        number: u64,
-    ) -> PersistSnapshotResult {
-        let snap_ctx = self.snap_ctx.as_mut().unwrap();
-        if snap_ctx.ready_number != number || snap_ctx.scheduled {
-            panic!(
-                "{} snap_ctx {:?} is not valid after persisting snapshot, persist_number {}",
-                self.tag, snap_ctx, number
-            );
-        }
-
-        let persist_res = snap_ctx.persist_res.take().unwrap();
-        // Schedule snapshot to apply
-        snap_ctx.scheduled = true;
-        self.mut_store().persist_snapshot(&persist_res);
-
-        // The peer may change from learner to voter after snapshot persisted.
-        let peer = self
-            .region()
-            .get_peers()
-            .iter()
-            .find(|p| p.get_id() == self.peer.get_id())
-            .unwrap()
-            .clone();
-        if peer != self.peer {
-            info!(
-                "meta changed in applying snapshot";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "before" => ?self.peer,
-                "after" => ?peer,
-            );
-            self.peer = peer;
-        };
-
-        self.activate(ctx);
-
-        persist_res
-    }
-
-    pub fn handle_raft_committed_entries<T>(
+    fn handle_raft_committed_entries<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         committed_entries: Vec<Entry>,
@@ -2271,6 +2229,48 @@ where
         fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
     }
 
+    fn on_persist_snapshot<T>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+        number: u64,
+    ) -> PersistSnapshotResult {
+        let snap_ctx = self.apply_snap_ctx.as_mut().unwrap();
+        if snap_ctx.ready_number != number || snap_ctx.scheduled {
+            panic!(
+                "{} snap_ctx {:?} is not valid after persisting snapshot, persist_number {}",
+                self.tag, snap_ctx, number
+            );
+        }
+
+        let persist_res = snap_ctx.persist_res.take().unwrap();
+        // Schedule snapshot to apply
+        snap_ctx.scheduled = true;
+        self.mut_store().persist_snapshot(&persist_res);
+
+        // The peer may change from learner to voter after snapshot persisted.
+        let peer = self
+            .region()
+            .get_peers()
+            .iter()
+            .find(|p| p.get_id() == self.peer.get_id())
+            .unwrap()
+            .clone();
+        if peer != self.peer {
+            info!(
+                "meta changed in applying snapshot";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "before" => ?self.peer,
+                "after" => ?peer,
+            );
+            self.peer = peer;
+        };
+
+        self.activate(ctx);
+
+        persist_res
+    }
+
     pub fn on_persist_ready<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
@@ -2322,7 +2322,7 @@ where
             self.mut_store().update_cache_persisted(persist_index);
         }
 
-        if self.snap_ctx.is_some() && self.unpersisted_readies.is_empty() {
+        if self.apply_snap_ctx.is_some() && self.unpersisted_readies.is_empty() {
             // Since the snapshot must belong to the last ready, so if `unpersisted_readies`
             // is empty, it means this persisted number is the last one.
             Some(self.on_persist_snapshot(ctx, number))
@@ -4369,7 +4369,7 @@ mod memtrace {
             + 8 * self.want_rollback_merge_peers.capacity()
             // Ignore more heap content in `raft::eraftpb::Message`.
             + (self.unpersisted_message_count
-                + self.snap_ctx.as_ref().map_or(0, |ctx| ctx.msgs.len()))
+                + self.apply_snap_ctx.as_ref().map_or(0, |ctx| ctx.msgs.len()))
                 * mem::size_of::<eraftpb::Message>()
             + mem::size_of_val(self.pending_request_snapshot_count.as_ref())
         }

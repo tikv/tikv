@@ -197,8 +197,8 @@ pub struct Config {
 
     pub cmd_batch: bool,
 
-    /// When the count of concurrent ready exceeds this value, cmd will not be proposed until
-    /// the previous ready has been persisted.
+    /// When the count of concurrent ready exceeds this value, command will not be proposed
+    /// until the previous ready has been persisted.
     /// If `cmd_batch` is 0, this config will have no effect.
     /// If it is 0, it means no limit.
     pub cmd_batch_concurrent_ready_max_count: usize,
