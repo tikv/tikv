@@ -919,6 +919,18 @@ where
 
     fn execute_recovery_plan(recovery_plan: pdpb::RecoveryPlan, kv_engine: EK) {
 	let mut wb = kv_engine.write_batch();
+	for create in recovery_plan.creates() {
+	    let mut region_state = RegionLocalState::default();
+	    region_state.set_state(PeerState::Normal);
+	    region_state.set_region(region);
+	    let key = keys::region_state_key(create.Id());
+	    if box_try!(kv.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)).is_some() {
+                return Err(Error::Other(
+                    "Store already has the RegionLocalState".into(),
+                ));
+            }
+            box_try!(wb.put_msg_cf(CF_RAFT, &key, &region_state));
+	}
         let failed_stores = HashSet::<u64>::from_iter(recovery_plan.failed_stores());
         {
             let remove_stores = |key: &[u8], value: &[u8], kv_wb: &mut RocksWriteBatch| {
@@ -936,7 +948,7 @@ where
                 let mut new_peers = region_state.get_region().get_peers().to_owned();
                 new_peers.retain(|peer| !store_ids.contains(&peer.get_store_id()));
                 region_state.mut_region().set_peers(new_peers.into());
-                box_try!(kv_wb.put_msg_cf(CF_RAFT, key, &region_state));
+                box_try!(wb.put_msg_cf(CF_RAFT, key, &region_state));
                 Ok(())
             };
 
