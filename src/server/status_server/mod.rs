@@ -1495,8 +1495,10 @@ mod tests {
             .thread_pool
             .spawn(async move { client.get(uri).await.unwrap() });
         let resp = block_on(handle).unwrap();
+        let headers = resp.headers();
 
         assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(headers.get("Content-Type").unwrap(), "image/svg+xml");
         status_server.stop();
     }
 
