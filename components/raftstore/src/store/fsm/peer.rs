@@ -64,8 +64,8 @@ use crate::store::worker::{
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, AbstractPeer, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTicks, RaftCommand,
-    SignificantMsg, SnapKey, StoreMsg,
+    util, AbstractPeer, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTicks,
+    RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
 };
 use crate::{Error, Result};
 use keys::{self, enc_end_key, enc_start_key};
@@ -2716,6 +2716,7 @@ where
         let (request, target_id) = {
             let state = self.fsm.peer.pending_merge_state.as_ref().unwrap();
             let expect_region = state.get_target();
+
             if !self.validate_merge_peer(expect_region)? {
                 // Wait till next round.
                 return Ok(());
@@ -2770,7 +2771,14 @@ where
             .router
             .force_send(
                 target_id,
-                PeerMsg::RaftCommand(RaftCommand::new(request, Callback::None)),
+                PeerMsg::RaftCommand(RaftCommand::new_ext(
+                    request,
+                    Callback::None,
+                    RaftCmdExtraOpts {
+                        deadline: None,
+                        disk_full_opt: DiskFullOpt::AllowedOnAlmostFull,
+                    },
+                )),
             )
             .map_err(|_| Error::RegionNotFound(target_id))
     }

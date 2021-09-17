@@ -525,6 +525,11 @@ where
 
     pub dangerous_majority_set: bool,
 
+    // region merge logic need to be broadcast to all followers when disk full happens.
+    pub has_region_merge_proposal: bool,
+
+    pub region_merge_proposal_index: u64,
+
     pub read_progress: Arc<RegionReadProgress>,
 
     pub memtrace_raft_entries: usize,
@@ -624,7 +629,9 @@ where
             last_unpersisted_number: 0,
             disk_full_peers: DiskFullPeers::default(),
             dangerous_majority_set: false,
+            has_region_merge_proposal: false,
             latest_majority_set_update_on_disk_full: Instant::now(),
+            region_merge_proposal_index: 0 as u64,
             read_progress: Arc::new(RegionReadProgress::new(
                 region,
                 applied_index,
@@ -739,8 +746,7 @@ where
         let first = entries.first().unwrap();
         // make sure message should be with index not smaller than committed
         let mut log_idx = first.get_index() - 1;
-        // TODO keep this until merge
-        info!(
+        debug!(
             "append merge entries";
             "log_index" => log_idx,
             "merge_commit" => merge.get_commit(),
@@ -2327,67 +2333,13 @@ where
                 return self.propose_transfer_leader(ctx, req, cb);
             }
             Ok(RequestPolicy::ProposeNormal) => {
+                // For admin cmds, only region split/merge comes here.
                 let mut stores = Vec::new();
-                let mut allowed = true;
-                if self.check_disk_usages_before_propose(ctx, disk_full_opt, &mut stores) {
-                    allowed = true;
-                } else {
-                    if req.has_admin_request() {
-                        let admin_type = req.get_admin_request().get_cmd_type();
-                        if admin_type == AdminCmdType::PrepareMerge {
-                            allowed = false;
-                        }
-                    } else {
-                        allowed = false;
-                    }
-                }
-                // TODO keep this until merge
+                let mut opt = disk_full_opt;
                 if req.has_admin_request() {
-                    let admin_type = req.get_admin_request().get_cmd_type();
-                    match admin_type {
-                        AdminCmdType::PrepareMerge => {
-                            info!(
-                                "get a merge propose: merge type={:?}, self regionId={:?}, cmd diskFullOpt={:?}, allowed={:?}, lead diskUsage={:?}, target region={:?}",
-                                AdminCmdType::PrepareMerge,
-                                self.region_id,
-                                disk_full_opt,
-                                allowed,
-                                ctx.self_disk_usage,
-                                req.get_admin_request()
-                                    .get_prepare_merge()
-                                    .get_target()
-                                    .get_id()
-                            );
-                        }
-                        AdminCmdType::CommitMerge => {
-                            info!(
-                                "get a merge propose: merge type={:?}, self regionId={:?}, cmd diskFullOpt={:?}, allowed={:?}, lead diskUsage={:?}, source region={:?}",
-                                AdminCmdType::CommitMerge,
-                                self.region_id,
-                                disk_full_opt,
-                                allowed,
-                                ctx.self_disk_usage,
-                                req.get_admin_request()
-                                    .get_commit_merge()
-                                    .get_source()
-                                    .get_id()
-                            );
-                        }
-                        AdminCmdType::RollbackMerge => {
-                            info!(
-                                "get a merge propose: merge type={:?}, self regionId={:?}, cmd diskFullOpt={:?}, allowed={:?}, lead diskUsage={:?}",
-                                AdminCmdType::RollbackMerge,
-                                self.region_id,
-                                disk_full_opt,
-                                allowed,
-                                ctx.self_disk_usage
-                            );
-                        }
-                        _ => {}
-                    }
+                    opt = DiskFullOpt::AllowedOnAlmostFull;
                 }
-
-                if allowed {
+                if self.check_proposal_normal_with_disk_usage(ctx, opt, &mut stores) {
                     self.propose_normal(ctx, req)
                 } else {
                     let errmsg = format!(
@@ -3126,6 +3078,29 @@ where
             return Err(Error::NotLeader(self.region_id, None));
         }
 
+        // prepareMerge need to be broadcast to as many as followers when disk full.
+        if req.has_admin_request() {
+            if !matches!(poll_ctx.self_disk_usage, DiskUsage::Normal)
+                || !self.disk_full_peers.is_empty()
+            {
+                match req.get_admin_request().get_cmd_type() {
+                    AdminCmdType::PrepareMerge
+                    | AdminCmdType::CommitMerge
+                    | AdminCmdType::RollbackMerge => {
+                        self.has_region_merge_proposal = true;
+                        self.region_merge_proposal_index = propose_index;
+                        for (k, v) in &mut self.disk_full_peers.peers {
+                            if !matches!(v.0, DiskUsage::AlreadyFull) {
+                                v.1 = true;
+                                self.raft_group.raft.adjust_max_inflight_msgs(*k, 1);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         Ok(Either::Left(propose_index))
     }
 
@@ -3420,6 +3395,7 @@ where
         let peers_len = self.get_store().region().get_peers().len();
         let mut normal_peers = HashSet::default();
         let mut next_idxs = Vec::with_capacity(peers_len);
+        let mut min_peer_index = std::u64::MAX;
         for peer in self.get_store().region().get_peers() {
             let (peer_id, store_id) = (peer.get_id(), peer.get_store_id());
             let usage = ctx.store_disk_usages.get(&store_id);
@@ -3440,7 +3416,16 @@ where
 
                 if !self.down_peer_ids.contains(&peer_id) {
                     next_idxs.push((peer_id, pr.next_idx, usage, status));
+                    if min_peer_index > pr.next_idx {
+                        min_peer_index = pr.next_idx;
+                    }
                 }
+            }
+        }
+
+        if self.has_region_merge_proposal {
+            if min_peer_index >= self.region_merge_proposal_index {
+                self.has_region_merge_proposal = false;
             }
         }
 
@@ -3462,8 +3447,13 @@ where
         self.disk_full_peers.majority = !raft.prs().has_quorum(&normal_peers);
         for &(peer, _, usage, ..) in &next_idxs {
             if let Some(usage) = usage {
-                self.disk_full_peers.peers.insert(peer, (*usage, false));
-                raft.adjust_max_inflight_msgs(peer, 0);
+                if self.has_region_merge_proposal && !matches!(*usage, DiskUsage::AlreadyFull) {
+                    self.disk_full_peers.peers.insert(peer, (*usage, true));
+                    raft.adjust_max_inflight_msgs(peer, 1);
+                } else {
+                    self.disk_full_peers.peers.insert(peer, (*usage, false));
+                    raft.adjust_max_inflight_msgs(peer, 0);
+                }
             }
         }
 
@@ -3475,10 +3465,13 @@ where
         let (mut potential_quorum, mut quorum_ok) = (HashSet::default(), false);
         let mut has_dangurous_set = false;
         for &(peer_id, _, _, status) in &next_idxs {
+            potential_quorum.insert(peer_id);
+
             if status == 1 {
+                // already full peer.
                 has_dangurous_set = true;
             }
-            potential_quorum.insert(peer_id);
+
             if raft.prs().has_quorum(&potential_quorum) {
                 quorum_ok = true;
                 break;
@@ -3499,29 +3492,42 @@ where
 
     // Check disk usages for the peer itself and other peers in the raft group.
     // The return value indicates whether the proposal is allowed or not.
-    fn check_disk_usages_before_propose<T>(
+    fn check_proposal_normal_with_disk_usage<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         disk_full_opt: DiskFullOpt,
         disk_full_stores: &mut Vec<u64>,
     ) -> bool {
-        // Propose can be rejected if the store itself's disk is full.
-        let self_allowed = match disk_full_opt {
-            DiskFullOpt::NotAllowedOnFull => matches!(ctx.self_disk_usage, DiskUsage::Normal),
-            _ => !matches!(ctx.self_disk_usage, DiskUsage::AlreadyFull),
+        // check self disk status.
+        let allowed = match ctx.self_disk_usage {
+            DiskUsage::Normal => true,
+            DiskUsage::AlmostFull => !matches!(disk_full_opt, DiskFullOpt::NotAllowedOnFull),
+            DiskUsage::AlreadyFull => false,
         };
-        if !self_allowed {
+
+        if !allowed {
             disk_full_stores.push(ctx.store.id);
             return false;
         }
 
-        // This function is only used to check the normal proposal.
-        // So if dangerous majority happen, then set false to only allowed CCs.
+        // If all followers diskusage normal, then allowed.
+        if self.disk_full_peers.is_empty() {
+            return true;
+        }
+
+        for peer in self.get_store().region().get_peers() {
+            let (peer_id, store_id) = (peer.get_id(), peer.get_store_id());
+            if self.disk_full_peers.peers.get(&peer_id).is_some() {
+                disk_full_stores.push(store_id);
+            }
+        }
+
+        // if there are some peers with disk already full status in the majority set, should not allowed.
         if self.dangerous_majority_set {
             return false;
         }
 
-        if self.disk_full_peers.is_empty() || !self.disk_full_peers.majority {
+        if !self.disk_full_peers.majority {
             return true;
         }
 
@@ -3531,8 +3537,6 @@ where
             // Majority peers are in disk full status but the request carries a special flag.
             return true;
         }
-
-        disk_full_stores.extend(self.disk_full_peers.peers.keys());
         false
     }
 }

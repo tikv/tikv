@@ -64,10 +64,12 @@ fn test_disk_full_leader_behaviors(usage: DiskUsage) {
     let new_last_index = cluster.raft_local_state(1, 1).last_index;
     assert_eq!(old_last_index, new_last_index);
 
-    // Test split must be allowed when disk is full.
-    let region = cluster.get_region(b"k1");
-    cluster.must_split(&region, b"k1");
-
+    // merge/split is only allowed on disk almost full.
+    if usage != DiskUsage::AlreadyFull {
+        // Test split must be allowed when disk is full.
+        let region = cluster.get_region(b"k1");
+        cluster.must_split(&region, b"k1");
+    }
     // Test transfer leader should be allowed.
     cluster.must_transfer_leader(1, new_peer(2, 2));
 
@@ -298,7 +300,7 @@ fn test_majority_disk_full() {
     let mut opts = RaftCmdExtraOpts::default();
     opts.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
     let ch = cluster.async_request_with_opts(put, opts).unwrap();
-    let resp = ch.recv_timeout(Duration::from_secs(1)).unwrap();
+    let resp = ch.recv_timeout(Duration::from_secs(10)).unwrap();
     assert_eq!(disk_full_stores(&resp), vec![2, 3]);
 
     // Peer 2 disk usage changes from already full to almost full.
