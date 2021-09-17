@@ -20,6 +20,7 @@ command! {
             /// The set of mutations to apply.
             cf: CfName,
             mutations: Vec<RawMutation>,
+            enable_ttl: bool,
         }
 }
 
@@ -58,9 +59,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
             match m {
                 RawMutation::Put { key, value, ttl } => {
                     let mut m = Modify::Put(cf, key, value);
-                    let expire_ts = ttl.map(convert_to_expire_ts);
-                    if let Some(ts) = expire_ts {
-                        m.with_ttl(ts);
+                    let expire_ts = convert_to_expire_ts(ttl);
+                    if self.enable_ttl {
+                        m.with_ttl(expire_ts);
                     }
                     data.push(m);
                 }

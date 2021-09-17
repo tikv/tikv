@@ -257,11 +257,7 @@ pub enum MutationType {
 #[derive(Debug, Clone)]
 pub enum RawMutation {
     /// Put `Value` into `Key` with TTL. The TTL will overwrite the existing TTL value.
-    Put {
-        key: Key,
-        value: Value,
-        ttl: Option<u64>,
-    },
+    Put { key: Key, value: Value, ttl: u64 },
     /// Delete `Key`.
     Delete { key: Key },
 }

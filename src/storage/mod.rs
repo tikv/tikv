@@ -1789,7 +1789,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 .map(|(k, v)| RawMutation::Put {
                     key: Key::from_encoded(k),
                     value: v,
-                    ttl: None,
+                    ttl: 0,
                 })
                 .collect()
         } else {
@@ -1800,11 +1800,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 .map(|((k, v), ttl)| RawMutation::Put {
                     key: Key::from_encoded(k.to_vec()),
                     value: v.to_vec(),
-                    ttl: Some(ttl),
+                    ttl,
                 })
                 .collect()
         };
-        let cmd = RawAtomicStore::new(cf, muations, ctx);
+        let cmd = RawAtomicStore::new(cf, muations, self.enable_ttl, ctx);
         self.sched_command(cmd, callback)
     }
 
@@ -1822,7 +1822,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 key: Key::from_encoded(k),
             })
             .collect();
-        let cmd = RawAtomicStore::new(cf, muations, ctx);
+        let cmd = RawAtomicStore::new(cf, muations, false, ctx);
         self.sched_command(cmd, callback)
     }
 
@@ -2271,6 +2271,7 @@ mod tests {
         },
         time::Duration,
     };
+
     use tikv_util::config::ReadableSize;
     use txn_types::{Mutation, WriteType};
 
@@ -3763,31 +3764,55 @@ mod tests {
         let (tx, rx) = channel();
 
         let test_data = vec![
-            (b"a".to_vec(), b"aa".to_vec()),
-            (b"b".to_vec(), b"bb".to_vec()),
-            (b"c".to_vec(), b"cc".to_vec()),
-            (b"d".to_vec(), b"dd".to_vec()),
-            (b"e".to_vec(), b"ee".to_vec()),
+            (b"a".to_vec(), b"aa".to_vec(), 10),
+            (b"b".to_vec(), b"bb".to_vec(), 20),
+            (b"c".to_vec(), b"cc".to_vec(), 30),
+            (b"d".to_vec(), b"dd".to_vec(), 0),
+            (b"e".to_vec(), b"ee".to_vec(), 40),
         ];
 
+        let kvpairs = test_data
+            .clone()
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        let ttls = if ttl {
+            test_data
+                .clone()
+                .into_iter()
+                .map(|(_, _, ttl)| ttl)
+                .collect()
+        } else {
+            vec![0; test_data.len()]
+        };
         // Write key-value pairs in a batch
         storage
             .raw_batch_put(
                 Context::default(),
                 "".to_string(),
-                test_data.clone(),
-                vec![0; test_data.len()],
+                kvpairs,
+                ttls,
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
         rx.recv().unwrap();
 
         // Verify pairs one by one
-        for (key, val) in test_data {
+        for (key, val, _) in &test_data {
             expect_value(
-                val,
-                block_on(storage.raw_get(Context::default(), "".to_string(), key)).unwrap(),
+                val.to_vec(),
+                block_on(storage.raw_get(Context::default(), "".to_string(), key.to_vec()))
+                    .unwrap(),
             );
+        }
+        if ttl {
+            // Verify ttl one by one
+            for (key, _, ttl) in test_data {
+                let res =
+                    block_on(storage.raw_get_key_ttl(Context::default(), "".to_string(), key))
+                        .unwrap();
+                assert_eq!(res, Some(ttl));
+            }
         }
     }
 

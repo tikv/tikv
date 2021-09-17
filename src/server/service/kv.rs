@@ -1524,7 +1524,7 @@ fn future_raw_put<E: Engine, L: LockManager>(
             req.take_context(),
             req.take_cf(),
             vec![(req.take_key(), req.take_value())],
-            vec![req.get_ttl(); 1],
+            vec![req.get_ttl()],
             cb,
         )
     } else {
