@@ -10,8 +10,7 @@ use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWrite
 use external_storage_export::ExternalStorage;
 use file_system::Sha256Reader;
 use futures_util::io::AllowStdIo;
-use kvproto::brpb::File;
-use kvproto::encryptionpb::EncryptionMethod;
+use kvproto::brpb::{CipherInfo, File};
 use kvproto::metapb::Region;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;
@@ -79,22 +78,19 @@ impl Writer {
         cf: &'static str,
         limiter: Limiter,
         storage: &dyn ExternalStorage,
-        crypt_method: EncryptionMethod,
-        crypt_key: String,
+        cipher: &CipherInfo,
     ) -> Result<File> {
         let (sst_info, sst_reader) = self.writer.finish_read()?;
         BACKUP_RANGE_SIZE_HISTOGRAM_VEC
             .with_label_values(&[cf])
             .observe(sst_info.file_size() as f64);
         let file_name = format!("{}_{}.sst", name, cf);
-
-        let iv = Iv::from_slice(crypt_key.as_bytes()).unwrap();
         let (encrypter_reader, _) = EncrypterReader::new(
             sst_reader, 
-            crypt_method, 
-            crypt_key.as_bytes(), 
-            Some(iv),
-        ).unwrap();
+            cipher.cipher_type, 
+            cipher.cipher_key.as_bytes(), 
+            Iv::from_slice(cipher.cipher_iv.as_bytes()).ok())
+            .map_err(|e| Error::Other(box_err!("new encrypterReader error: {:?}", e)))?;
         
         let (reader, hasher) = Sha256Reader::new(encrypter_reader)
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
@@ -135,8 +131,7 @@ pub struct BackupWriterBuilder {
     compression_type: Option<SstCompressionType>,
     compression_level: i32,
     sst_max_size: u64,
-    crypter: EncryptionMethod,
-    cipher_key: String,
+    cipher: CipherInfo,
 }
 
 impl BackupWriterBuilder {
@@ -148,8 +143,7 @@ impl BackupWriterBuilder {
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
         sst_max_size: u64,
-        crypter: EncryptionMethod,
-        cipher_key: String,
+        cipher: CipherInfo,
     ) -> BackupWriterBuilder {
         Self {
             store_id,
@@ -159,8 +153,7 @@ impl BackupWriterBuilder {
             compression_type,
             compression_level,
             sst_max_size,
-            crypter,
-            cipher_key,
+            cipher,
         }
     }
 
@@ -175,8 +168,7 @@ impl BackupWriterBuilder {
             self.compression_level,
             self.limiter.clone(),
             self.sst_max_size,
-            self.crypter,
-            self.cipher_key.clone(),
+            self.cipher.clone(),
         )
     }
 }
@@ -188,8 +180,7 @@ pub struct BackupWriter {
     write: Writer,
     limiter: Limiter,
     sst_max_size: u64,
-    crypter_type: EncryptionMethod,
-    crypter_key: String,
+    cipher: CipherInfo,
 }
 
 impl BackupWriter {
@@ -201,8 +192,7 @@ impl BackupWriter {
         compression_level: i32,
         limiter: Limiter,
         sst_max_size: u64,
-        crypter_type: EncryptionMethod,
-        crypter_key: String,
+        cipher: CipherInfo,
     ) -> Result<BackupWriter> {
         let default = RocksSstWriterBuilder::new()
             .set_in_memory(true)
@@ -225,8 +215,7 @@ impl BackupWriter {
             write: Writer::new(write),
             limiter,
             sst_max_size,
-            crypter_type,
-            crypter_key,
+            cipher,
         })
     }
 
@@ -272,8 +261,7 @@ impl BackupWriter {
                 CF_DEFAULT,
                 self.limiter.clone(),
                 storage,
-                self.crypter_type,
-                self.crypter_key.clone(),
+                &self.cipher,
             )?;
             files.push(default);
         }
@@ -284,8 +272,7 @@ impl BackupWriter {
                 CF_WRITE,
                 self.limiter.clone(),
                 storage,
-                self.crypter_type,
-                self.crypter_key.clone(),
+                &self.cipher,
             )?;
             files.push(write);
         }
@@ -310,8 +297,7 @@ pub struct BackupRawKVWriter {
     cf: CfName,
     writer: Writer,
     limiter: Limiter,
-    cryper_type: EncryptionMethod,
-    cryper_key: String,
+    cipher: CipherInfo,
 }
 
 impl BackupRawKVWriter {
@@ -323,8 +309,7 @@ impl BackupRawKVWriter {
         limiter: Limiter,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
-        cryper_type: EncryptionMethod,
-        cryper_key: String,
+        cipher: CipherInfo,
     ) -> Result<BackupRawKVWriter> {
         let writer = RocksSstWriterBuilder::new()
             .set_in_memory(true)
@@ -338,8 +323,7 @@ impl BackupRawKVWriter {
             cf,
             writer: Writer::new(writer),
             limiter,
-            cryper_type, 
-            cryper_key,
+            cipher,
         })
     }
 
@@ -374,8 +358,7 @@ impl BackupRawKVWriter {
                 self.cf,
                 self.limiter.clone(),
                 storage,
-                self.cryper_type,
-                self.cryper_key,
+                &self.cipher,
             )?;
             files.push(file);
         }
@@ -462,8 +445,7 @@ mod tests {
             0,
             Limiter::new(INFINITY),
             144 * 1024 * 1024,
-            EncryptionMethod::Unknown,
-            String::from("")
+            CipherInfo::default(),
         )
         .unwrap();
         writer.write(vec![].into_iter(), false).unwrap();
@@ -477,8 +459,7 @@ mod tests {
             0,
             Limiter::new(INFINITY),
             144 * 1024 * 1024,
-            EncryptionMethod::Unknown,
-            String::from("")
+            CipherInfo::default(),
         )
         .unwrap();
         writer
@@ -513,8 +494,7 @@ mod tests {
             0,
             Limiter::new(INFINITY),
             144 * 1024 * 1024,
-            EncryptionMethod::Unknown,
-            String::from("")
+            CipherInfo::default(),
         )
         .unwrap();
         writer

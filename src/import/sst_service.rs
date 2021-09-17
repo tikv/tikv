@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use collections::HashSet;
-
 use super::make_rpc_error;
 use engine_traits::{KvEngine, CF_WRITE};
 use file_system::{set_io_type, IOType};
@@ -396,12 +395,18 @@ where
             // a download task.
             // Unfortunately, this currently can't happen because the S3Storage
             // is not Send + Sync. See the documentation of S3Storage for reason.
+            let cipher = if req.has_cipherinfo() {
+                Some(req.get_cipherinfo().clone())
+            } else {
+                None
+            };
+
             let res = importer.download::<E>(
                 req.get_sst(),
                 req.get_storage_backend(),
                 req.get_name(),
                 req.get_rewrite_rule(),
-                req.get_cipherinfo(),
+                cipher,
                 limiter,
                 engine,
             );

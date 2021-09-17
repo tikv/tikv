@@ -331,22 +331,30 @@ impl ExternalStorage for EncryptedExternalStorage {
         restore_name: std::path::PathBuf,
         expected_length: u64,
         speed_limiter: &Limiter,
-        file_crypter: &FileEncryptionInfo,
+        file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
-        let input = self.read(storage_name);
+        let reader = self.read(storage_name);
         let file_writer: &mut dyn Write =
             &mut self.key_manager.create_file_for_write(&restore_name)?;
         let min_read_speed: usize = 8192;
-        let iv = Iv::from_slice(&file_crypter.iv)?;
-        let mut decrypter_reader = DecrypterReader::new(
-            input,
-            encryption_method_from_db_encryption_method(file_crypter.method),
-            &file_crypter.key,
-            iv,
-        )?;
+
+        let mut input = match file_crypter {
+            Some(x) => {
+               Box::new(
+                   DecrypterReader::new(
+                    reader,
+                    encryption_method_from_db_encryption_method(x.method),
+                    &x.key,
+                    Iv::from_slice(&x.iv)?)?
+                )
+            }
+            None => {
+                reader
+            }
+        };
 
         block_on_external_io(read_external_storage_into_file(
-            &mut decrypter_reader,
+            &mut input,
             file_writer,
             speed_limiter,
             expected_length,

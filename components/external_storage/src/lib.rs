@@ -66,9 +66,9 @@ pub trait ExternalStorage: 'static + Send + Sync {
         restore_name: std::path::PathBuf,
         expected_length: u64,
         speed_limiter: &Limiter,
-        file_crypter: &FileEncryptionInfo,
+        file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
-        let input = self.read(storage_name);
+        let reader = self.read(storage_name);
         let output: &mut dyn Write = &mut File::create(restore_name)?;
         // the minimum speed of reading data, in bytes/second.
         // if reading speed is slower than this rate, we will stop with
@@ -76,16 +76,24 @@ pub trait ExternalStorage: 'static + Send + Sync {
         // (at 8 KB/s for a 2 MB buffer, this means we timeout after 4m16s.)
         let min_read_speed: usize = 8192;
 
-        let iv = Iv::from_slice(&file_crypter.iv)?;
-        let mut decrypter_reader = DecrypterReader::new(
-            input, 
-            encryption_method_from_db_encryption_method(file_crypter.method), 
-            &file_crypter.key,
-            iv,
-        )?;
+        let mut input = match file_crypter {
+            Some(x) => {
+                let iv = Iv::from_slice(&x.iv)?;
+                Box::new(
+                   DecrypterReader::new(
+                    reader,
+                    encryption_method_from_db_encryption_method(x.method),
+                    &x.key,
+                    iv)?,
+                )
+            }
+            None => {
+                reader
+            }
+        };
 
         block_on_external_io(read_external_storage_into_file(
-            &mut decrypter_reader,
+            &mut input,
             output,
             speed_limiter,
             expected_length,
