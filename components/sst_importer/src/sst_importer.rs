@@ -1189,7 +1189,7 @@ mod tests {
             meta.set_length(0); // disable validation.
             meta.set_crc32(0);
             let meta_info = importer.validate(&meta).unwrap();
-            let _ = importer.ingest(&[meta_info], &db).unwrap();
+            let _ = importer.ingest(&[meta_info.clone()], &db).unwrap();
             // key1 = "zt9102_r01", value1 = "abc", len = 13
             // key2 = "zt9102_r04", value2 = "xyz", len = 13
             // key3 = "zt9102_r07", value3 = "pqrst", len = 15
