@@ -574,7 +574,7 @@ pipelined = false
 
 [cdc]
 min-ts-interval = "4s"
-old-value-cache-size = 512
+old-value-cache-size = 0
 hibernate-regions-compatible = false
 incremental-scan-threads = 3
 incremental-scan-concurrency = 4
