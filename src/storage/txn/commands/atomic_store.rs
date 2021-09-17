@@ -59,8 +59,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
             match m {
                 RawMutation::Put { key, value, ttl } => {
                     let mut m = Modify::Put(cf, key, value);
-                    let expire_ts = convert_to_expire_ts(ttl);
                     if self.enable_ttl {
+                        let expire_ts = convert_to_expire_ts(ttl);
                         m.with_ttl(expire_ts);
                     }
                     data.push(m);
