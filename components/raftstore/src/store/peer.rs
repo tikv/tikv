@@ -1806,7 +1806,7 @@ where
                     // This snapshot must be scheduled
                     if !snap_ctx.scheduled {
                         panic!(
-                            "{} snapshot was not scheduled before, snap_ctx {:?}",
+                            "{} snapshot was not scheduled before, apply_snap_ctx {:?}",
                             self.tag, snap_ctx
                         );
                     }
@@ -1824,7 +1824,7 @@ where
                         self.raft_group.store().region(),
                     );
                 }
-                // If `snap_ctx` is none, it means this snapshot does not
+                // If `apply_snap_ctx` is none, it means this snapshot does not
                 // come from the ready but comes from the unfinished snapshot task
                 // after restarting.
 
@@ -1934,11 +1934,9 @@ where
             |_| None
         );
 
-        fail_point!(
-            "panic_if_handle_ready_3",
-            self.peer.get_id() == 3,
-            |_| { panic!("{} wants to handle ready", self.tag); }
-        );
+        fail_point!("panic_if_handle_ready_3", self.peer.get_id() == 3, |_| {
+            panic!("{} wants to handle ready", self.tag);
+        });
 
         debug!(
             "handle raft ready";
@@ -1948,6 +1946,8 @@ where
 
         let mut ready = self.raft_group.ready();
 
+        self.add_ready_metric(&ready, &mut ctx.raft_metrics.ready);
+
         // Update it after unstable entries pagination is introduced.
         debug_assert!(ready.entries().last().map_or_else(
             || true,
@@ -1956,27 +1956,6 @@ where
         if self.memtrace_raft_entries != 0 {
             MEMTRACE_RAFT_ENTRIES.trace(TraceEvent::Sub(self.memtrace_raft_entries));
             self.memtrace_raft_entries = 0;
-        }
-
-        let mut request_times = vec![];
-
-        if ctx.raft_metrics.waterfall_metrics {
-            let mut now = None;
-            for entry in ready.entries() {
-                if let Some((term, times)) = self.proposals.find_request_times(entry.get_index()) {
-                    if entry.term == term {
-                        request_times.extend_from_slice(times);
-                        if now.is_none() {
-                            now = Some(TiInstant::now());
-                        }
-                        for t in times {
-                            ctx.raft_metrics.wf_send_to_queue.observe(duration_to_sec(
-                                now.unwrap().saturating_duration_since(*t),
-                            ));
-                        }
-                    }
-                }
-            }
         }
 
         if !ready.must_sync() {
@@ -1989,8 +1968,6 @@ where
             assert!(ready.entries().is_empty());
             assert!(ready.snapshot().is_empty());
         }
-
-        self.add_ready_metric(&ready, &mut ctx.raft_metrics.ready);
 
         self.on_role_changed(ctx, &ready);
 
@@ -2026,18 +2003,17 @@ where
 
         let state_role = ready.ss().map(|ss| ss.raft_state);
         let has_new_entries = !ready.entries().is_empty();
-        let (res, mut task) =
-            match self
-                .mut_store()
-                .handle_raft_ready(&mut ready, destroy_regions, request_times)
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    // We may have written something to writebatch and it can't be reverted, so has
-                    // to panic here.
-                    panic!("{} failed to handle raft ready: {:?}", self.tag, e)
-                }
-            };
+        let (res, mut task) = match self
+            .mut_store()
+            .handle_raft_ready(&mut ready, destroy_regions)
+        {
+            Ok(r) => r,
+            Err(e) => {
+                // We may have written something to writebatch and it can't be reverted, so has
+                // to panic here.
+                panic!("{} failed to handle raft ready: {:?}", self.tag, e)
+            }
+        };
 
         let ready_number = ready.number();
         let persisted_msgs = ready.take_persisted_messages();
@@ -2046,6 +2022,27 @@ where
             HandleReadyResult::SendIOTask | HandleReadyResult::Snapshot { .. } => {
                 if !persisted_msgs.is_empty() {
                     task.messages = self.build_raft_messages(ctx, persisted_msgs);
+                }
+
+                if ctx.raft_metrics.waterfall_metrics {
+                    let mut now = None;
+                    for entry in ready.entries() {
+                        if let Some((term, times)) =
+                            self.proposals.find_request_times(entry.get_index())
+                        {
+                            if entry.term == term {
+                                task.request_times.extend_from_slice(times);
+                                if now.is_none() {
+                                    now = Some(TiInstant::now());
+                                }
+                                for t in times {
+                                    ctx.raft_metrics.wf_send_to_queue.observe(duration_to_sec(
+                                        now.unwrap().saturating_duration_since(*t),
+                                    ));
+                                }
+                            }
+                        }
+                    }
                 }
 
                 self.write_router.send_write_msg(
@@ -2254,7 +2251,7 @@ where
         let snap_ctx = self.apply_snap_ctx.as_mut().unwrap();
         if snap_ctx.ready_number != number || snap_ctx.scheduled {
             panic!(
-                "{} snap_ctx {:?} is not valid after persisting snapshot, persist_number {}",
+                "{} apply_snap_ctx {:?} is not valid after persisting snapshot, persist_number {}",
                 self.tag, snap_ctx, number
             );
         }

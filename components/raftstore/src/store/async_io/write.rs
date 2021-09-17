@@ -414,6 +414,8 @@ where
 
             self.write_to_db();
 
+            self.metrics.flush();
+
             // update config
             if let Some(incoming) = self.cfg_tracker.any_new() {
                 self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
@@ -567,8 +569,6 @@ where
                 .notify_persisted(*region_id, *peer_id, *ready_number);
         }
         STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(duration_to_sec(now2.saturating_elapsed()));
-
-        self.metrics.flush();
 
         self.batch.clear();
     }

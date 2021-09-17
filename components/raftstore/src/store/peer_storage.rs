@@ -1457,7 +1457,6 @@ where
         &mut self,
         ready: &mut Ready,
         destroy_regions: Vec<metapb::Region>,
-        request_times: Vec<Instant>,
     ) -> Result<(HandleReadyResult, WriteTask<EK, ER>)> {
         let region_id = self.get_region_id();
         let prev_raft_state = self.raft_state.clone();
@@ -1481,7 +1480,6 @@ where
         if !ready.entries().is_empty() {
             self.append(ready.take_entries(), &mut write_task);
         }
-        write_task.request_times = request_times;
 
         // Last index is 0 means the peer is created from raft message
         // and has not applied snapshot yet, so skip persistent hard state.

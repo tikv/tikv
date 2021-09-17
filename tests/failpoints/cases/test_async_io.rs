@@ -1,6 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::AtomicBool;
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
@@ -127,10 +129,22 @@ fn test_async_io_cannot_destroy_when_persist_snapshot() {
     let raft_before_save_kv_on_store_3_fp = "raft_before_save_kv_on_store_3";
     fail::cfg(raft_before_save_kv_on_store_3_fp, "pause").unwrap();
 
+    let (notify_tx, notify_rx) = mpsc::channel();
+    cluster.sim.wl().add_recv_filter(
+        3,
+        Box::new(MessageTypeNotifier::new(
+            MessageType::MsgSnapshot,
+            notify_tx,
+            Arc::new(AtomicBool::new(true)),
+        )),
+    );
+
     cluster.clear_send_filters();
 
     // Wait for leader sending snapshot to peer 3
-    sleep_ms(200);
+    notify_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    // Wait for peer 3 handling snapshot
+    sleep_ms(100);
 
     pd_client.must_remove_peer(region.get_id(), peer_3);
 
@@ -176,13 +190,27 @@ fn test_async_io_cannot_handle_ready_when_persist_snapshot() {
         cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
     }
 
+    must_get_equal(&cluster.get_engine(2), b"k9", b"v1");
+
     let raft_before_save_kv_on_store_3_fp = "raft_before_save_kv_on_store_3";
     fail::cfg(raft_before_save_kv_on_store_3_fp, "pause").unwrap();
+
+    let (notify_tx, notify_rx) = mpsc::channel();
+    cluster.sim.wl().add_recv_filter(
+        3,
+        Box::new(MessageTypeNotifier::new(
+            MessageType::MsgSnapshot,
+            notify_tx,
+            Arc::new(AtomicBool::new(true)),
+        )),
+    );
 
     cluster.clear_send_filters();
 
     // Wait for leader sending snapshot to peer 3
-    sleep_ms(200);
+    notify_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    // Wait for peer 3 handling snapshot
+    sleep_ms(100);
 
     let panic_if_handle_ready_3_fp = "panic_if_handle_ready_3";
     fail::cfg(panic_if_handle_ready_3_fp, "return").unwrap();
