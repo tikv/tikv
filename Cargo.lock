@@ -5423,7 +5423,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "5.1.1"
+version = "5.1.2"
 dependencies = [
  "anyhow",
  "async-stream",
