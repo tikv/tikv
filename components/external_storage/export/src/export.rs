@@ -26,7 +26,9 @@ use crate::dylib;
 #[cfg(any(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
 use cloud::blob::BlobConfig;
 use cloud::blob::BlobStorage;
-use encryption::{DataKeyManager, DecrypterReader, Iv, encryption_method_from_db_encryption_method};
+use encryption::{
+    encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader, Iv,
+};
 #[cfg(feature = "cloud-storage-dylib")]
 use external_storage::dylib_client;
 #[cfg(feature = "cloud-storage-grpc")]
@@ -339,18 +341,13 @@ impl ExternalStorage for EncryptedExternalStorage {
         let min_read_speed: usize = 8192;
 
         let mut input = match file_crypter {
-            Some(x) => {
-               Box::new(
-                   DecrypterReader::new(
-                    reader,
-                    encryption_method_from_db_encryption_method(x.method),
-                    &x.key,
-                    Iv::from_slice(&x.iv)?)?
-                )
-            }
-            None => {
-                reader
-            }
+            Some(x) => Box::new(DecrypterReader::new(
+                reader,
+                encryption_method_from_db_encryption_method(x.method),
+                &x.key,
+                Iv::from_slice(&x.iv)?,
+            )?),
+            None => reader,
         };
 
         block_on_external_io(read_external_storage_into_file(

@@ -13,16 +13,13 @@ use kvproto::import_sstpb::pair::Op as PairOp;
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::import_sstpb::*;
 
-use encryption::{
-    DataKeyManager, 
-    encryption_method_to_db_encryption_method, 
-};
+use encryption::{encryption_method_to_db_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
-use engine_traits::{CF_DEFAULT, CF_WRITE, CfName, 
-    EncryptionKeyManager, FileEncryptionInfo, Iterator,
-    KvEngine, SSTMetaInfo, SeekKey, SstCompressionType, 
-    SstExt, SstReader, SstWriter, SstWriterBuilder, 
-    name_to_cf};
+use engine_traits::{
+    name_to_cf, CfName, EncryptionKeyManager, FileEncryptionInfo, Iterator, KvEngine, SSTMetaInfo,
+    SeekKey, SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
+    CF_WRITE,
+};
 use file_system::{get_io_rate_limiter, OpenOptions};
 use tikv_util::time::{Instant, Limiter};
 use txn_types::{Key, TimeStamp, WriteRef};
@@ -161,7 +158,15 @@ impl SSTImporter {
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
         );
-        match self.do_download::<E>(meta, backend, name, rewrite_rule, crypter, speed_limiter, engine) {
+        match self.do_download::<E>(
+            meta,
+            backend,
+            name,
+            rewrite_rule,
+            crypter,
+            speed_limiter,
+            engine,
+        ) {
             Ok(r) => {
                 info!("download"; "meta" => ?meta, "name" => name, "range" => ?r);
                 Ok(r)
@@ -213,14 +218,19 @@ impl SSTImporter {
                     ext_storage as _
                 };
 
-            let file_crypter =  crypter.map(|c| FileEncryptionInfo {
+            let file_crypter = crypter.map(|c| FileEncryptionInfo {
                 method: encryption_method_to_db_encryption_method(c.cipher_type),
                 key: c.cipher_key.clone().into_bytes(),
                 iv: c.cipher_iv.clone().into_bytes(),
             });
 
-            let result =
-                ext_storage.restore(name, path.temp.to_owned(), meta.length, &speed_limiter, file_crypter);
+            let result = ext_storage.restore(
+                name,
+                path.temp.to_owned(),
+                meta.length,
+                &speed_limiter,
+                file_crypter,
+            );
             IMPORTER_DOWNLOAD_BYTES.observe(meta.length as _);
             result.map_err(|e| Error::CannotReadExternalStorage {
                 url: url.to_string(),

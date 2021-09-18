@@ -5,7 +5,7 @@ use std::sync::Arc;
 use encryption::{EncrypterReader, Iv};
 use engine_rocks::raw::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
-use engine_traits::{CF_DEFAULT, CF_WRITE, CfName};
+use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder};
 use external_storage_export::ExternalStorage;
 use file_system::Sha256Reader;
@@ -86,15 +86,16 @@ impl Writer {
             .observe(sst_info.file_size() as f64);
         let file_name = format!("{}_{}.sst", name, cf);
         let (encrypter_reader, _) = EncrypterReader::new(
-            sst_reader, 
-            cipher.cipher_type, 
-            cipher.cipher_key.as_bytes(), 
-            Iv::from_slice(cipher.cipher_iv.as_bytes()).ok())
-            .map_err(|e| Error::Other(box_err!("new encrypterReader error: {:?}", e)))?;
-        
+            sst_reader,
+            cipher.cipher_type,
+            cipher.cipher_key.as_bytes(),
+            Iv::from_slice(cipher.cipher_iv.as_bytes()).ok(),
+        )
+        .map_err(|e| Error::Other(box_err!("new encrypterReader error: {:?}", e)))?;
+
         let (reader, hasher) = Sha256Reader::new(encrypter_reader)
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
-            
+
         storage.write(
             &file_name,
             Box::new(limiter.limit(AllowStdIo::new(reader))),

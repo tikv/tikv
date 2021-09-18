@@ -13,9 +13,9 @@ use std::marker::Unpin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use encryption::{encryption_method_from_db_encryption_method, DecrypterReader, Iv};
 use engine_traits::FileEncryptionInfo;
 use file_system::File;
-use encryption::{DecrypterReader, Iv, encryption_method_from_db_encryption_method};
 use futures_io::AsyncRead;
 use futures_util::AsyncReadExt;
 use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
@@ -79,17 +79,14 @@ pub trait ExternalStorage: 'static + Send + Sync {
         let mut input = match file_crypter {
             Some(x) => {
                 let iv = Iv::from_slice(&x.iv)?;
-                Box::new(
-                   DecrypterReader::new(
+                Box::new(DecrypterReader::new(
                     reader,
                     encryption_method_from_db_encryption_method(x.method),
                     &x.key,
-                    iv)?,
-                )
+                    iv,
+                )?)
             }
-            None => {
-                reader
-            }
+            None => reader,
         };
 
         block_on_external_io(read_external_storage_into_file(

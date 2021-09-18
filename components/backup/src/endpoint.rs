@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::f64::INFINITY;
-use std::{fmt};
+use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -124,11 +124,11 @@ impl Task {
                 compression_level: req.get_compression_level(),
                 cipher: if req.has_cipher_info() {
                     req.get_cipher_info().clone()
-                }else{
+                } else {
                     let mut cipher = CipherInfo::default();
                     cipher.set_cipher_type(EncryptionMethod::Plaintext);
-                    cipher            
-                }
+                    cipher
+                },
             },
             resp,
         };
@@ -400,7 +400,6 @@ impl BackupRange {
             compression_type,
             compression_level,
             cipher,
-
         ) {
             Ok(w) => w,
             Err(e) => {
