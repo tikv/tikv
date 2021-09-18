@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{collections::HashMap, ops::Deref, str::FromStr};
 
 use bytes::{Buf, Bytes};

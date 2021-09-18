@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use crate::{dfs, table};
 
 pub type Result<T> = std::result::Result<T, Error>;

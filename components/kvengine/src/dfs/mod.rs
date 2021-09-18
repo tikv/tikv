@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::executor::ThreadPool;
@@ -9,7 +11,7 @@ use thiserror::Error;
 pub trait DFS: Sync + Send {
     // open opens an existing file with fileID.
     // It may take a long time if the file need to be cached in local disk.
-    async fn open(&self, file_id: u64, opts: Options) -> Result<Arc<dyn File>>;
+    fn open(&self, file_id: u64, opts: Options) -> Result<Arc<dyn File>>;
 
     // prefetch fetches the data from remote server to local disk cache for lower read latency.
     async fn prefetch(&self, file_id: u64, opts: Options) -> Result<()>;
@@ -61,7 +63,7 @@ impl InMemFS {
 
 #[async_trait]
 impl DFS for InMemFS {
-    async fn open(&self, file_id: u64, opts: Options) -> Result<Arc<dyn File>> {
+    fn open(&self, file_id: u64, opts: Options) -> Result<Arc<dyn File>> {
         if let Some(file) = self.files.get(&file_id).as_deref() {
             return Ok(file.clone());
         }

@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{
     path::PathBuf,
     sync::{atomic::Ordering, mpsc, Arc},
@@ -38,9 +40,17 @@ impl CompactionClient {
         if req.level == 0 {
             let tbls = compact_l0(&req, self.dfs.clone())?;
             comp.set_table_creates(RepeatedField::from_vec(tbls));
+            let mut bot_dels = vec![];
+            for cf_bot_dels in &req.multi_cf_bottoms {
+                bot_dels.extend_from_slice(cf_bot_dels.as_slice());
+            }
+            comp.set_bottom_deletes(bot_dels);
             return Ok(comp);
         }
-        todo!()
+        let tbls = compact_tables(&req, self.dfs.clone())?;
+        comp.set_table_creates(RepeatedField::from_vec(tbls));
+        comp.set_bottom_deletes(req.bottoms.clone());
+        return Ok(comp);
     }
 }
 
@@ -99,6 +109,24 @@ pub struct CompactDef {
 }
 
 impl CompactDef {
+    pub(crate) fn new(cf: usize, level: usize) -> Self {
+        Self {
+            cf,
+            level,
+            top: vec![],
+            bot: vec![],
+            has_overlap: false,
+            this_range: KeyRange::default(),
+            next_range: KeyRange::default(),
+            top_size: 0,
+            top_left_idx: 0,
+            top_right_idx: 0,
+            bot_size: 0,
+            bot_left_idx: 0,
+            bot_right_idx: 0,
+        }
+    }
+
     pub(crate) fn smallest(&self) -> &[u8] {
         if self.bot.len() > 0 && self.next_range.left < self.this_range.left {
             return self.next_range.left.chunk();
@@ -320,12 +348,44 @@ impl Engine {
                 "compact shard {}:{} level {}, cf {} done",
                 shard.id, shard.ver, 0, -1
             );
-            let mut cs = new_change_set(shard.id, shard.ver, shard.get_split_stage());
-            cs.set_compaction(comp);
-            self.meta_sender.send(cs).unwrap();
+            self.handle_compact_response(comp, shard);
             return Ok(());
         }
-        todo!()
+        info!(
+            "start compaction shard {}:{} leve:{} cf:{}, score:{}",
+            shard.id, shard.ver, pri.level, pri.cf, pri.score
+        );
+        let scf = shard.get_cf(pri.cf as usize, g);
+        let this_level = &scf.levels[pri.level - 1];
+        let next_level = &scf.levels[pri.level];
+        let mut cd = CompactDef::new(pri.cf as usize, pri.level);
+        let ok = cd.fill_table(this_level, next_level);
+        assert!(ok);
+        scf.set_has_overlapping(&mut cd);
+        let req = self.build_compact_ln_request(shard, &cd)?;
+        if req.bottoms.len() == 0 && req.cf as usize == WRITE_CF {
+            // Move down. only write CF benefits from this optimization.
+            let mut comp = pb::Compaction::new();
+            comp.set_cf(req.cf as i32);
+            comp.set_level(req.level as u32);
+            comp.set_top_deletes(req.tops.clone());
+            let mut tbl_creates = vec![];
+            for top_tbl in &cd.top {
+                let mut tbl_create = pb::TableCreate::new();
+                tbl_create.set_id(top_tbl.id());
+                tbl_create.set_cf(req.cf as i32);
+                tbl_create.set_level(req.level as u32 + 1);
+                tbl_create.set_smallest(top_tbl.smallest().to_vec());
+                tbl_create.set_biggest(top_tbl.biggest().to_vec());
+                tbl_creates.push(tbl_create);
+            }
+            comp.set_table_creates(RepeatedField::from_vec(tbl_creates));
+            self.handle_compact_response(comp, shard);
+            return Ok(());
+        }
+        let comp = self.comp_client.compact(req)?;
+        self.handle_compact_response(comp, shard);
+        Ok(())
     }
 
     pub(crate) fn build_compact_l0_request(
@@ -392,6 +452,29 @@ impl Engine {
             end_id: 0,
         }
     }
+
+    pub(crate) fn build_compact_ln_request(
+        &self,
+        shard: &Shard,
+        cd: &CompactDef,
+    ) -> Result<CompactionRequest> {
+        let mut req = self.new_compact_request(shard, cd.cf as isize, cd.level);
+        req.overlap = cd.has_overlap;
+        for top in &cd.top {
+            req.tops.push(top.id());
+        }
+        for bot in &cd.bot {
+            req.bottoms.push(bot.id());
+        }
+        self.set_alloc_ids_for_request(&mut req, cd.top_size + cd.bot_size)?;
+        Ok(req)
+    }
+
+    pub(crate) fn handle_compact_response(&self, comp: pb::Compaction, shard: &Shard) {
+        let mut cs = new_change_set(shard.id, shard.ver, shard.get_split_stage());
+        cs.set_compaction(comp);
+        self.meta_sender.send(cs).unwrap();
+    }
 }
 
 #[derive(Clone, Default)]
@@ -403,7 +486,7 @@ pub(crate) struct CompactionPriority {
     pub shard_ver: u64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct KeyRange {
     pub left: Bytes,
     pub right: Bytes,
@@ -593,6 +676,7 @@ impl CompactL0Helper {
             let key = iter.key();
             if self.skip_key.len() > 0 {
                 if key == self.skip_key {
+                    iter.next_all_version();
                     continue;
                 } else {
                     self.skip_key.truncate(0);
@@ -616,11 +700,15 @@ impl CompactL0Helper {
                 if !val.is_deleted() {
                     match filter(self.safe_ts, self.cf, val) {
                         Decision::Keep => {}
-                        Decision::Drop => continue,
+                        Decision::Drop => {
+                            iter.next_all_version();
+                            continue;
+                        }
                         Decision::MarkTombStone => {
                             // There may have old versions for this key, so convert to delete tombstone.
                             self.builder
                                 .add(key, table::Value::new_tombstone(val.version));
+                            iter.next_all_version();
                             continue;
                         }
                     }
@@ -740,7 +828,7 @@ pub(crate) fn compact_tables(
             if let Err(err) = afs.create(tbl_create.id, buf.freeze(), opts).await {
                 atx.send(Err(err)).unwrap();
             } else {
-                atx.send(Ok(tbl_create));
+                atx.send(Ok(tbl_create)).unwrap();
             }
         });
         alloc_id += 1;

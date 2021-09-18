@@ -1,8 +1,9 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{
     collections::HashMap,
     fs::File,
     intrinsics::transmute,
-    str::FromStr,
     sync::{atomic::Ordering, Arc},
     time::Instant,
 };
@@ -102,12 +103,6 @@ impl WriteBatch {
         self.properties.clear();
     }
 
-    pub fn reset_hint(&mut self) {
-        for wb in &mut self.cf_batches {
-            wb.reset_hint();
-        }
-    }
-
     pub fn get_cf_mut(&mut self, cf: usize) -> &mut memtable::WriteBatch {
         &mut self.cf_batches[cf]
     }
@@ -167,7 +162,6 @@ impl Engine {
             let old_mem_tbl = self.switch_mem_table(g, shard, commit_ts);
             self.schedule_flush_task(shard, old_mem_tbl);
             mem_tbl = shard.get_writable_mem_table(g);
-            wb.reset_hint();
         }
 
         for cf in 0..NUM_CFS {
@@ -211,10 +205,6 @@ impl Engine {
         for (key, val) in &wb.properties {
             shard.properties.set(key.as_str(), val.chunk());
         }
-    }
-
-    fn create_l0_file(&self) -> Result<File> {
-        todo!()
     }
 
     fn get_property(shard: &Shard, key: &str) -> Option<Bytes> {

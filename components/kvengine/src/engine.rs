@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use bytes::Bytes;
 use crossbeam::channel;
 use crossbeam_epoch as epoch;
@@ -146,7 +148,7 @@ impl EngineCore {
             scfs.push(scf);
         }
         for (fid, fm) in &meta.files {
-            let file = futures::executor::block_on(self.fs.open(*fid, dfs_opts))?;
+            let file = self.fs.open(*fid, dfs_opts)?;
             if fm.cf == -1 {
                 let l0_tbl = L0Table::new(file, self.cache.clone())?;
                 l0_tbls.push(l0_tbl);

@@ -1,10 +1,9 @@
-use std::sync::Arc;
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::table::{memtable, sstable};
 use crate::*;
 use bytes::BytesMut;
 use crossbeam::channel;
-use futures::executor;
 use kvenginepb as pb;
 use slog_global::info;
 
@@ -33,7 +32,9 @@ impl Engine {
         loop {
             if let Ok(task) = rx.recv() {
                 let result_task = self.flush_mem_table(task);
-                result_tx.send(result_task).unwrap();
+                if let Err(err) = result_tx.send(result_task) {
+                    error!("flush worker failed to send result {:?}", err);
+                }
             } else {
                 break;
             }

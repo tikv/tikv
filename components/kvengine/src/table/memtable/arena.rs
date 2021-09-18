@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use byteorder::{ByteOrder, LittleEndian};
+use rand::Rng;
 use std::fmt::Display;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -25,7 +26,7 @@ const BLOCK_OFF_SHIFT: u64 = 24;
 const BLOCK_OFF_MASK: u64 = 0x0000_ffff_ff00_0000;
 const SIZE_MASK: u64 = 0x0000_0000_00ff_ffff;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ArenaAddr(pub u64);
 
 impl Display for ArenaAddr {
@@ -44,15 +45,20 @@ impl ArenaAddr {
         )
     }
 
+    pub fn null() -> ArenaAddr {
+        ArenaAddr(NULL_ARENA_ADDR)
+    }
+
     pub fn block_idx(self) -> usize {
+        assert!(self.0 > 0);
         (((self.0 & BLOCK_IDX_MASK) >> BLOCK_IDX_SHIFT) - 1) as usize
     }
 
-    fn block_off(self) -> u32 {
+    pub fn block_off(self) -> u32 {
         ((self.0 & BLOCK_OFF_MASK) >> BLOCK_OFF_SHIFT) as u32
     }
 
-    fn size(self) -> usize {
+    pub fn size(self) -> usize {
         (self.0 & SIZE_MASK) as usize
     }
 
@@ -62,6 +68,10 @@ impl ArenaAddr {
 
     pub fn is_value_node_addr(self) -> bool {
         self.0 & VALUE_NODE_MASK != 0
+    }
+
+    pub fn is_null(self) -> bool {
+        return self.0 == NULL_ARENA_ADDR;
     }
 }
 
@@ -105,14 +115,19 @@ const BLOCK_SIZE_ARRAY: [u32; 32] = [
 pub struct Arena {
     blocks: [AtomicPtr<ArenaBlock>; 32],
     block_idx: AtomicU32,
+    pub(crate) rand_id: i32,
 }
 
 #[allow(dead_code)]
 impl Arena {
     pub fn new() -> Self {
+        let mut rng = rand::thread_rng();
+        let rand_id = rng.gen_range(0..i32::MAX);
+
         let s = Self {
             blocks: Default::default(),
             block_idx: Default::default(),
+            rand_id,
         };
         let new_block = Box::into_raw(Box::new(ArenaBlock::new(BLOCK_SIZE_ARRAY[0])));
         s.blocks[0].store(new_block, Ordering::Release);

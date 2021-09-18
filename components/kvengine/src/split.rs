@@ -1,4 +1,6 @@
-use std::collections::HashSet;
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
+use std::{collections::HashSet, thread, time};
 
 use crate::{
     table::sstable::{self, TableIterator},
@@ -13,7 +15,6 @@ use futures::{
 };
 use kvenginepb as pb;
 use slog_global::{info, warn};
-use tokio::time;
 
 impl Engine {
     pub fn get_shard_with_ver<'a>(
@@ -77,11 +78,18 @@ impl Engine {
 
     async fn wait_for_pre_split_flush_state(&self, shard: &Shard) {
         loop {
+            info!(
+                "shard {}:{} split stage {:?}",
+                shard.id,
+                shard.ver,
+                shard.get_split_stage()
+            );
             match shard.get_split_stage() {
                 pb::SplitStage::PreSplitFlushDone | pb::SplitStage::SplitFileDone => {
                     return;
                 }
-                _ => time::sleep(time::Duration::from_millis(100)).await,
+                // _ => time::sleep(time::Duration::from_millis(100)).await,
+                _ => thread::sleep(time::Duration::from_millis(100)),
             }
         }
     }
@@ -312,6 +320,7 @@ impl Engine {
                 self.opts.clone(),
             );
             if new_shard.id == old_shard.id {
+                new_shard.set_active(old_shard.is_active());
                 new_shard.base_ts = old_shard.base_ts;
                 store_u64(&new_shard.meta_seq, sequence);
                 // derived shard need larger mem-table size.
@@ -365,7 +374,9 @@ impl Engine {
             let mem_ts = shard.load_mem_table_ts();
             let mem_tbl = self.switch_mem_table(g, shard, mem_ts);
             self.schedule_flush_task(shard, mem_tbl);
-            info!("new shard {}:{}, mem-ts {}", shard.id, shard.ver, mem_ts);
+            let all_files = shard.get_all_files();
+            info!("new shard {}:{}, start {:x}, end {:x} mem-ts {}， all files {:?}", 
+            shard.id, shard.ver, shard.start, shard.end, mem_ts, all_files);
         }
         Ok(())
     }

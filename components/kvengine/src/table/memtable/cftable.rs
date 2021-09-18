@@ -2,8 +2,7 @@
 
 use std::sync::Arc;
 
-use super::{Arena, Hint, SkipList};
-use crate::table::Value;
+use super::{Arena, SkipList};
 use crate::NUM_CFS;
 
 #[derive(Clone)]

@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes};
 use dashmap::DashMap;
@@ -23,7 +25,7 @@ use crate::{
     },
 };
 use crossbeam_epoch as epoch;
-use epoch::{Atomic, Guard, Owned};
+use epoch::{Atomic, Guard, Owned, Shared};
 use kvenginepb as pb;
 use slog_global::*;
 
@@ -263,6 +265,10 @@ impl Shard {
         ids
     }
 
+    pub fn set_active(&self, active: bool) {
+        self.active.store(active, Release);
+    }
+
     pub fn is_active(&self) -> bool {
         self.active.load(Acquire)
     }
@@ -299,6 +305,7 @@ impl Shard {
         if self.get_split_stage() == pb::SplitStage::Initial {
             self.split_ctx
                 .store(Owned::new(SplitContext::new(keys)), Release);
+            self.set_split_stage(pb::SplitStage::PreSplit);
             return true;
         }
         warn!(
@@ -561,6 +568,11 @@ impl Shard {
     }
 }
 
+pub fn load_resource_with_shared<'a, T>(ptr: &Atomic<T>, g: &'a Guard) -> (Shared<'a, T>, &'a T) {
+    let shared = ptr.load(Acquire, g);
+    (shared, unsafe { shared.deref() })
+}
+
 pub fn load_resource<'a, T>(ptr: &Atomic<T>, g: &'a Guard) -> &'a T {
     let shared = ptr.load(Acquire, g);
     unsafe { shared.deref() }
@@ -617,8 +629,19 @@ impl ShardCF {
         scf
     }
 
-    fn set_has_overlapping(&self, cf: CompactDef) {
-        todo!()
+    pub(crate) fn set_has_overlapping(&self, cd: &mut CompactDef) {
+        if cd.move_down() {
+            return;
+        }
+        let kr = get_key_range(&cd.top);
+        for lvl_idx in (cd.level + 1)..self.levels.len() {
+            let lh = &self.levels[lvl_idx];
+            let (left, right) = lh.overlapping_tables(&kr);
+            if left < right {
+                cd.has_overlap = true;
+                return;
+            }
+        }
     }
 }
 
@@ -638,7 +661,7 @@ impl LevelHandler {
         }
     }
 
-    fn overlapping_tables(&self, key_range: KeyRange) -> (usize, usize) {
+    fn overlapping_tables(&self, key_range: &KeyRange) -> (usize, usize) {
         get_tables_in_range(
             &self.tables,
             key_range.left.chunk(),

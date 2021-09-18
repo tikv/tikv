@@ -1,19 +1,35 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use crate::{dfs::InMemFS, *};
-use crossbeam::channel;
+use bytes::{Buf, Bytes};
+use crossbeam::channel::{self, Sender};
 use crossbeam_epoch as epoch;
-use futures::executor;
 use kvenginepb as pb;
+use protobuf::RepeatedField;
 use std::{
     ops::Deref,
     sync::{atomic::AtomicU64, Arc},
     thread,
     time::Duration,
+    vec,
 };
+
+macro_rules! unwrap_or_return {
+    ( $e:expr, $m:expr ) => {
+        match $e {
+            Ok(x) => x,
+            Err(y) => {
+                error!("{:?} {:?}", y, $m);
+                return;
+            }
+        }
+    };
+}
 
 #[test]
 fn test_engine() {
     init_logger();
-    let (tx, rx) = channel::bounded(256);
+    let (listener_tx, listener_rx) = channel::bounded(256);
     let tester = EngineTester::new();
 
     let engine = Engine::open(
@@ -22,7 +38,7 @@ fn test_engine() {
         tester.clone(),
         tester.clone(),
         tester.core.clone(),
-        tx,
+        listener_tx,
     )
     .unwrap();
     {
@@ -30,26 +46,35 @@ fn test_engine() {
         let shard = engine.get_shard(1, g).unwrap();
         store_bool(&shard.active, true);
     }
-    let meta_applier = TestMetaApplier {
-        meta_rx: rx,
-        engine: engine.clone(),
-    };
+    let (applier_tx, applier_rx) = channel::bounded(256);
+    let (meta_tx, meta_rx) = channel::bounded(256);
+    let meta_listener = MetaListener::new(listener_rx, applier_tx.clone());
+    thread::spawn(move || {
+        meta_listener.run();
+    });
+    let applier = Applier::new(engine.clone(), applier_rx, meta_tx);
+    thread::spawn(move || {
+        applier.run();
+    });
+    let meta_applier = MetaApplier::new(engine.clone(), meta_rx);
     thread::spawn(move || {
         meta_applier.run();
+    });
+    let mut keys = vec![];
+    for i in vec![1000, 3000, 6000, 9000] {
+        keys.push(i_to_key(i));
+    }
+    let mut splitter = Splitter::new(engine.clone(), keys.clone(), applier_tx.clone());
+    thread::spawn(move || {
+        splitter.run();
     });
 
     let (begin, end) = (0, 10000);
     let cf = 0;
     let val_repeat = 10;
-    let mut seq = 1;
-    load_data(&engine, begin, end, 0, 10, &mut seq);
-    let g = &epoch::pin();
-    let shard = engine.get_shard(1, g).unwrap();
-    store_bool(&shard.active, true);
-    thread::sleep(Duration::from_millis(100));
-    let snap = shard.new_snap_access(engine.opts.cfs, g);
-    check_get(&snap, begin, end, cf, val_repeat);
-    check_iterater(&snap, begin, end, cf, val_repeat);
+    load_data(engine.opts.clone(), begin, end, 0, 10, applier_tx.clone());
+    check_get(begin, end, cf, val_repeat, &keys, &engine);
+    check_iterater(begin, end, cf, val_repeat, &engine);
 }
 
 #[derive(Clone)]
@@ -121,24 +146,238 @@ impl IDAllocator for EngineTesterCore {
     }
 }
 
-struct TestMetaApplier {
+struct MetaListener {
+    meta_rx: channel::Receiver<pb::ChangeSet>,
+    applier_tx: channel::Sender<ApplyTask>,
+}
+
+impl MetaListener {
+    fn new(
+        meta_rx: channel::Receiver<pb::ChangeSet>,
+        applier_tx: channel::Sender<ApplyTask>,
+    ) -> Self {
+        Self {
+            meta_rx,
+            applier_tx,
+        }
+    }
+
+    fn run(&self) {
+        loop {
+            let cs = unwrap_or_return!(self.meta_rx.recv(), "meta_listener_a");
+            info!("meta_listener got cs {:?}", &cs);
+            let (tx, rx) = channel::bounded(1);
+            let task = ApplyTask::new_cs(cs, tx);
+            self.applier_tx.send(task).unwrap();
+            info!("meta_listener sent cs");
+            let res = unwrap_or_return!(rx.recv(), "meta_listener_b");
+            unwrap_or_return!(res, "meta_listener_c");
+        }
+    }
+}
+
+struct Applier {
+    engine: Engine,
+    task_rx: channel::Receiver<ApplyTask>,
+    meta_tx: channel::Sender<pb::ChangeSet>,
+}
+
+impl Applier {
+    fn new(
+        engine: Engine,
+        task_rx: channel::Receiver<ApplyTask>,
+        meta_tx: channel::Sender<pb::ChangeSet>,
+    ) -> Self {
+        Self {
+            engine,
+            task_rx,
+            meta_tx,
+        }
+    }
+
+    fn run(&self) {
+        let mut seq = 2;
+        loop {
+            let mut task = unwrap_or_return!(self.task_rx.recv(), "apply recv task");
+            seq += 1;
+            if let Some(wb) = task.wb.as_mut() {
+                wb.set_sequence(seq);
+                self.engine.write(wb);
+            }
+            if let Some(mut cs) = task.cs.take() {
+                cs.set_sequence(seq);
+                info!("applier got cs task {:?}", &cs);
+                if cs.has_pre_split() {
+                    unwrap_or_return!(self.engine.pre_split(cs), "apply pre split");
+                    info!("applier executed pre_split");
+                } else if cs.has_split() {
+                    let mut ids = vec![];
+                    for new_shard in cs.get_split().get_new_shards() {
+                        ids.push(new_shard.shard_id);
+                    }
+                    unwrap_or_return!(self.engine.finish_split(cs), "apply split");
+                    let g = &epoch::pin();
+                    for id in ids {
+                        let shard = self.engine.get_shard(id, g).unwrap();
+                        shard.set_active(true);
+                    }
+                    info!("applier executed split");
+                } else {
+                    unwrap_or_return!(self.meta_tx.send(cs), "apply else");
+                    info!("applier sent cs to meta applier");
+                }
+            }
+            task.result_tx.send(Ok(())).unwrap();
+        }
+    }
+}
+
+struct ApplyTask {
+    wb: Option<WriteBatch>,
+    cs: Option<pb::ChangeSet>,
+    result_tx: channel::Sender<Result<()>>,
+}
+
+impl ApplyTask {
+    fn new_cs(cs: pb::ChangeSet, result_tx: channel::Sender<Result<()>>) -> Self {
+        Self {
+            wb: None,
+            cs: Some(cs),
+            result_tx,
+        }
+    }
+
+    fn new_wb(wb: WriteBatch, result_tx: channel::Sender<Result<()>>) -> Self {
+        Self {
+            wb: Some(wb),
+            cs: None,
+            result_tx,
+        }
+    }
+}
+
+struct MetaApplier {
     engine: Engine,
     meta_rx: channel::Receiver<pb::ChangeSet>,
 }
 
-impl TestMetaApplier {
+impl MetaApplier {
+    fn new(engine: Engine, meta_rx: channel::Receiver<pb::ChangeSet>) -> Self {
+        Self { engine, meta_rx }
+    }
+
     fn run(&self) {
-        let mut seq = 2;
         loop {
-            if let Ok(cs) = self.meta_rx.recv() {
-                let mut cs = cs;
-                cs.set_sequence(seq);
-                seq += 1;
-                if let Err(e) = self.engine.apply_change_set(cs) {
-                    error!("{:?}", e);
-                }
-            }
+            let cs = unwrap_or_return!(self.meta_rx.recv(), "meta_applier recv");
+            info!("meta_applier got change set {:?}", &cs);
+            unwrap_or_return!(self.engine.apply_change_set(cs), "meta_applier cs");
+            info!("meta_applier applied change set");
         }
+    }
+}
+
+struct Splitter {
+    engine: Engine,
+    apply_sender: channel::Sender<ApplyTask>,
+    keys: Vec<Vec<u8>>,
+    shard_ver: u64,
+    new_id: u64,
+}
+
+impl Splitter {
+    fn new(engine: Engine, keys: Vec<Vec<u8>>, apply_sender: channel::Sender<ApplyTask>) -> Self {
+        Self {
+            engine,
+            keys,
+            apply_sender,
+            shard_ver: 1,
+            new_id: 1,
+        }
+    }
+
+    fn run(&mut self) {
+        let keys = self.keys.clone();
+        for key in keys {
+            thread::sleep(Duration::from_millis(200));
+            self.pre_split(key.clone());
+            self.split_files();
+            self.wait_for_split_file_done();
+            self.new_id += 1;
+            self.finish_split(key.clone(), vec![self.new_id, 1]);
+        }
+    }
+
+    fn send_task(&mut self, cs: pb::ChangeSet) {
+        let (tx, rx) = channel::bounded(1);
+        let task = ApplyTask {
+            cs: Some(cs),
+            wb: None,
+            result_tx: tx,
+        };
+        self.apply_sender.send(task).unwrap();
+        let res = unwrap_or_return!(rx.recv(), "splitter recv");
+        res.unwrap();
+    }
+
+    fn pre_split(&mut self, key: Vec<u8>) {
+        info!("splitter pre-split key {}", String::from_utf8_lossy(key.as_slice()));
+        let mut cs = self.new_cs();
+        let mut pre_split = pb::PreSplit::new();
+        pre_split.set_keys(RepeatedField::from_vec(vec![key]));
+        cs.set_pre_split(pre_split);
+        self.send_task(cs);
+    }
+
+    fn split_files(&mut self) {
+        info!(
+            "splitter before block on split-files ver {}",
+            self.shard_ver
+        );
+        let cs =
+            futures::executor::block_on(self.engine.split_shard_files(1, self.shard_ver)).unwrap();
+        self.send_task(cs);
+        info!("splitter sent split-files task to applier");
+    }
+
+    fn new_cs(&mut self) -> pb::ChangeSet {
+        let mut cs = pb::ChangeSet::new();
+        cs.set_shard_id(1);
+        cs.set_shard_ver(self.shard_ver);
+        cs
+    }
+
+    fn wait_for_split_file_done(&mut self) {
+        loop {
+            let g = &epoch::pin();
+            let shard = self.engine.get_shard(1, g).unwrap();
+            if shard.get_split_stage() == pb::SplitStage::SplitFileDone {
+                return;
+            }
+            info!(
+                "splitter wait for split file done current state {:?}",
+                shard.get_split_stage()
+            );
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    fn finish_split(&mut self, key: Vec<u8>, new_ids: Vec<u64>) {
+        let mut cs = pb::ChangeSet::new();
+        cs.set_shard_id(1);
+        cs.set_shard_ver(self.shard_ver);
+        let mut finish_split = pb::Split::new();
+        finish_split.set_keys(protobuf::RepeatedField::from_vec(vec![key.clone()]));
+        let mut new_shards = Vec::new();
+        for new_id in &new_ids {
+            let mut new_shard = pb::Properties::new();
+            new_shard.set_shard_id(*new_id);
+            new_shards.push(new_shard);
+        }
+        finish_split.set_new_shards(protobuf::RepeatedField::from_vec(new_shards));
+        cs.set_split(finish_split);
+        self.send_task(cs);
+        info!("splitter sent split task to applier, ids {:?} key {}", new_ids, String::from_utf8_lossy(key.as_slice()));
+        self.shard_ver += 1;
     }
 }
 
@@ -152,6 +391,7 @@ fn new_initial_cs() -> pb::ChangeSet {
     snap.set_end(GLOBAL_SHARD_END_KEY.to_vec());
     let props = snap.mut_properties();
     props.shard_id = 1;
+    cs.set_snapshot(snap);
     cs
 }
 
@@ -164,45 +404,92 @@ fn new_test_options() -> Options {
     opts
 }
 
-fn load_data(en: &Engine, begin: usize, end: usize, cf: usize, val_repeat: usize, seq: &mut u64) {
-    let mut wb = WriteBatch::new(1, en.opts.cfs.clone());
+fn i_to_key(i: i32) -> Vec<u8> {
+    format!("key{:06}", i).into_bytes()
+}
+
+fn load_data(
+    opts: Arc<Options>,
+    begin: usize,
+    end: usize,
+    cf: usize,
+    val_repeat: usize,
+    tx: Sender<ApplyTask>,
+) {
+    let mut wb = WriteBatch::new(1, opts.cfs.clone());
     for i in begin..end {
         let key = format!("key{:06}", i);
         let val = key.repeat(val_repeat);
         wb.put(cf, key.as_bytes(), val.as_bytes(), 0, &[], 1);
         if i % 100 == 99 {
-            *seq = *seq + 1;
-            wb.set_sequence(*seq);
-            en.write(&mut wb);
-            wb.reset();
+            info!("load data {}:{}", i-99, i);
+            write_data(wb, &tx);
+            wb = WriteBatch::new(1, opts.cfs.clone());
+            thread::sleep(Duration::from_millis(10));
         }
     }
     if wb.num_entries() > 0 {
-        en.write(&mut wb);
+        write_data(wb, &tx);
     }
 }
 
-fn check_get(snap: &SnapAccess, begin: usize, end: usize, cf: usize, val_repeat: usize) {
+fn write_data(wb: WriteBatch, applier_tx: &Sender<ApplyTask>) {
+    let (result_tx, result_rx) = channel::bounded(1);
+    let task = ApplyTask::new_wb(wb, result_tx);
+    applier_tx.send(task).unwrap();
+    result_rx.recv().unwrap().unwrap();
+}
+
+fn check_get(begin: usize, end: usize, cf: usize, val_repeat: usize, split_keys: &Vec<Vec<u8>>, en: &Engine) {
     for i in begin..end {
         let key = format!("key{:06}", i);
-        let item = snap.get(cf, key.as_bytes(), 2).unwrap();
-        assert_eq!(item.get_value(), key.repeat(val_repeat).as_bytes());
+        let g = &epoch::pin();
+        let shard = get_shard_for_key(key.as_bytes(), g, en);
+        let snap = shard.new_snap_access(en.opts.cfs, g);
+        if let Some(item) = snap.get(cf, key.as_bytes(), 2) {
+            assert_eq!(item.get_value(), key.repeat(val_repeat).as_bytes());
+        } else {
+            panic!(format!("failed to get key {}, shard {}:{}, start {:?}, end {:?}", 
+            key, shard.id, shard.ver, bytes_to_str(&shard.start), bytes_to_str(&shard.end)));
+        }
     }
 }
 
-fn check_iterater(snap: &SnapAccess, begin: usize, end: usize, cf: usize, val_repeat: usize) {
-    let mut iter = snap.new_iterator(cf, false, false);
+fn check_iterater(begin: usize, end: usize, cf: usize, val_repeat: usize, en: &Engine) {
+    thread::sleep(Duration::from_secs(1));
+    let g = &epoch::pin();
+    let ids = vec![2, 3, 4, 5, 1];
     let mut i = begin;
-    iter.rewind();
-    while iter.valid() {
-        let key = format!("key{:06}", i);
-        assert_eq!(iter.key(), key.as_bytes());
-        let item = iter.item();
-        assert_eq!(item.get_value(), key.repeat(val_repeat).as_bytes());
-        i += 1;
-        iter.next();
+    for id in ids {
+        let shard = en.get_shard(id, g).unwrap();
+        let snap = shard.new_snap_access(en.opts.cfs.clone(), g);
+        let mut iter = snap.new_iterator(cf, false, false);
+        iter.rewind();
+        while iter.valid() {
+            let key = format!("key{:06}", i);
+            assert_eq!(iter.key(), key.as_bytes());
+            let item = iter.item();
+            assert_eq!(item.get_value(), key.repeat(val_repeat).as_bytes());
+            i += 1;
+            iter.next();
+        }
     }
     assert_eq!(i, end);
+}
+
+fn bytes_to_str(bin: &Bytes) -> String {
+    String::from_utf8_lossy(bin.chunk()).to_string()
+} 
+
+fn get_shard_for_key<'a>(key: &[u8], g: &'a epoch::Guard, en: &Engine) -> &'a Shard {
+    for id in 1_u64..=5 {
+        if let Some(shard) = en.get_shard(id, g) {
+            if shard.overlap_key(key) {
+                return shard
+            }
+        }
+    }
+    return en.get_shard(1, g).unwrap();
 }
 
 fn init_logger() {
