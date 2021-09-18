@@ -395,8 +395,8 @@ where
             // a download task.
             // Unfortunately, this currently can't happen because the S3Storage
             // is not Send + Sync. See the documentation of S3Storage for reason.
-            let cipher = if req.has_cipherinfo() {
-                Some(req.get_cipherinfo().clone())
+            let cipher = if req.has_cipher_info() {
+                Some(req.get_cipher_info().clone())
             } else {
                 None
             };

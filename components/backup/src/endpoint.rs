@@ -122,8 +122,8 @@ impl Task {
                 cf,
                 compression_type: req.get_compression_type(),
                 compression_level: req.get_compression_level(),
-                cipher: if req.has_cipherinfo() {
-                    req.get_cipherinfo().clone()
+                cipher: if req.has_cipher_info() {
+                    req.get_cipher_info().clone()
                 }else{
                     let mut cipher = CipherInfo::default();
                     cipher.set_cipher_type(EncryptionMethod::Plaintext);
