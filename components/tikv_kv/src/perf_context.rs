@@ -141,6 +141,7 @@ impl Default for PerfStatisticsInstant {
         Self::new()
     }
 }
+
 /// Store statistics we need. Data comes from RocksDB's `PerfContext`.
 /// This statistics store delta values between two instant statistics.
 #[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign)]
