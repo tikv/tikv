@@ -2,7 +2,7 @@
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-
+use std::mem;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -23,6 +23,7 @@ use tidb_query_executors::{
     interface::BatchExecutor, runner::MAX_TIME_SLICE, BatchTableScanExecutor,
 };
 use tidb_query_expr::BATCH_MAX_SIZE;
+use tikv_alloc::trace::{MemoryTraceGuard, TraceEvent};
 use tikv_util::time::Instant;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use yatp::task::future::reschedule;
@@ -31,6 +32,7 @@ use super::cmsketch::CmSketch;
 use super::fmsketch::FmSketch;
 use super::histogram::Histogram;
 use crate::coprocessor::dag::TiKVStorage;
+use crate::coprocessor::MEMTRACE_ANALYZE;
 use crate::coprocessor::*;
 use crate::storage::{Snapshot, SnapshotStore, Statistics};
 
@@ -209,7 +211,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
 
 #[async_trait]
 impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
-    async fn handle_request(&mut self) -> Result<Response> {
+    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
                 let req = self.req.take_idx_req();
@@ -273,14 +275,15 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
         };
         match ret {
             Ok(data) => {
+                let memory_size = data.capacity();
                 let mut resp = Response::default();
                 resp.set_data(data);
-                Ok(resp)
+                Ok(MEMTRACE_ANALYZE.trace_guard(resp, memory_size))
             }
             Err(Error::Other(e)) => {
                 let mut resp = Response::default();
                 resp.set_other_error(e);
-                Ok(resp)
+                Ok(resp.into())
             }
             Err(e) => Err(e),
         }
@@ -410,6 +413,8 @@ struct RowSampleCollector {
     rng: StdRng,
     total_sizes: Vec<i64>,
     row_buf: Vec<u8>,
+    memory_usage: usize,
+    reported_memory_usage: usize,
 }
 
 impl Default for RowSampleCollector {
@@ -423,6 +428,8 @@ impl Default for RowSampleCollector {
             rng: StdRng::from_entropy(),
             total_sizes: vec![],
             row_buf: Vec::new(),
+            memory_usage: 0,
+            reported_memory_usage: 0,
         }
     }
 }
@@ -442,6 +449,8 @@ impl RowSampleCollector {
             rng: StdRng::from_entropy(),
             total_sizes: vec![0; col_and_group_len],
             row_buf: Vec::new(),
+            memory_usage: 0,
+            reported_memory_usage: 0,
         }
     }
 
@@ -504,22 +513,29 @@ impl RowSampleCollector {
     }
 
     pub fn sampling(&mut self, data: Vec<Vec<u8>>) {
+        let mut need_push = false;
         let cur_rng = self.rng.gen_range(0, i64::MAX);
         if self.samples.len() < self.max_sample_size {
-            self.samples.push(Reverse((cur_rng, data)));
-            return;
+            need_push = true;
+        } else if self.samples.peek().unwrap().0.0 < cur_rng {
+            need_push = true;
+            let (_, evicted) = self.samples.pop().unwrap().0;
+            self.memory_usage -= evicted.iter().map(|x| x.capacity()).sum::<usize>();
         }
-        if self.samples.len() == self.max_sample_size && self.samples.peek().unwrap().0.0 < cur_rng
-        {
-            self.samples.pop();
+
+        if need_push {
+            self.memory_usage += data.iter().map(|x| x.capacity()).sum::<usize>();
             self.samples.push(Reverse((cur_rng, data)));
+            self.report_memory_usage(false);
         }
     }
 
-    pub fn into_proto(self) -> tipb::RowSampleCollector {
+    pub fn to_proto(&mut self) -> tipb::RowSampleCollector {
+        self.memory_usage = 0;
+        self.report_memory_usage(true);
+
         let mut s = tipb::RowSampleCollector::default();
-        let samples = self
-            .samples
+        let samples = mem::take(&mut self.samples)
             .into_iter()
             .map(|r_tuple| {
                 let mut pb_sample = tipb::RowSample::default();
@@ -529,16 +545,35 @@ impl RowSampleCollector {
             })
             .collect();
         s.set_samples(samples);
-        s.set_null_counts(self.null_count);
+        s.set_null_counts(mem::take(&mut self.null_count));
         s.set_count(self.count as i64);
-        let pb_fm_sketches = self
-            .fm_sketches
+        let pb_fm_sketches = mem::take(&mut self.fm_sketches)
             .into_iter()
             .map(|fm_sketch| fm_sketch.into_proto())
             .collect();
         s.set_fm_sketch(pb_fm_sketches);
-        s.set_total_size(self.total_sizes);
+        s.set_total_size(mem::take(&mut self.total_sizes));
         s
+    }
+
+    fn report_memory_usage(&mut self, on_finish: bool) {
+        let diff = self.memory_usage as isize - self.reported_memory_usage as isize;
+        if on_finish || diff.abs() > 1024 * 1024 {
+            let event = if diff >= 0 {
+                TraceEvent::Add(diff as usize)
+            } else {
+                TraceEvent::Sub(-diff as usize)
+            };
+            MEMTRACE_ANALYZE.trace(event);
+            self.reported_memory_usage = self.memory_usage;
+        }
+    }
+}
+
+impl Drop for RowSampleCollector {
+    fn drop(&mut self) {
+        self.memory_usage = 0;
+        self.report_memory_usage(true);
     }
 }
 
@@ -866,8 +901,8 @@ impl AnalyzeSamplingResult {
         }
     }
 
-    fn into_proto(self) -> tipb::AnalyzeColumnsResp {
-        let pb_collector = self.row_sample_collector.into_proto();
+    fn into_proto(mut self) -> tipb::AnalyzeColumnsResp {
+        let pb_collector = self.row_sample_collector.to_proto();
         let mut res = tipb::AnalyzeColumnsResp::default();
         res.set_row_collector(pb_collector);
         res
@@ -995,16 +1030,28 @@ mod tests {
                 datum::encode_value(&mut EvalContext::default(), &[Datum::I64(i as i64)]).unwrap(),
             );
         }
-        for _loop_i in 0..loop_cnt {
+        for loop_i in 0..loop_cnt {
             let mut collector = RowSampleCollector::new(sample_num, 1000, 1);
             for row in &nums {
                 collector.sampling([row.clone()].to_vec());
             }
             assert_eq!(collector.samples.len(), sample_num);
-            for sample in collector.samples.into_vec() {
+            for sample in &collector.samples {
                 *item_cnt.entry(sample.0.1[0].clone()).or_insert(0) += 1;
             }
+
+            // Test memory usage tracing is correct.
+            collector.report_memory_usage(true);
+            assert_eq!(collector.reported_memory_usage, collector.memory_usage);
+            if loop_i % 2 == 0 {
+                collector.to_proto();
+                assert_eq!(collector.memory_usage, 0);
+                assert_eq!(MEMTRACE_ANALYZE.sum(), 0);
+            }
+            drop(collector);
+            assert_eq!(MEMTRACE_ANALYZE.sum(), 0);
         }
+
         let exp_freq = sample_num as f64 * loop_cnt as f64 / row_num as f64;
         let delta = 0.5;
         for (_, v) in item_cnt.into_iter() {

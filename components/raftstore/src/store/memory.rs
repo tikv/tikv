@@ -5,12 +5,12 @@ use lazy_static::lazy_static;
 use std::sync::Arc;
 use tikv_alloc::{
     mem_trace,
-    trace::{Id, MemoryTrace, MemoryTraceNode},
+    trace::{Id, MemoryTrace},
 };
 use tikv_util::sys::memory_usage_reaches_high_water;
 
 lazy_static! {
-    pub static ref MEMTRACE_ROOT: Arc<MemoryTraceNode> = mem_trace!(
+    pub static ref MEMTRACE_ROOT: Arc<MemoryTrace> = mem_trace!(
         raftstore,
         [
             peers,
@@ -23,35 +23,35 @@ lazy_static! {
         ]
     );
     /// Memory usage for raft peers fsms.
-    pub static ref MEMTRACE_PEERS: Arc<dyn MemoryTrace + Send + Sync> =
+    pub static ref MEMTRACE_PEERS: Arc<MemoryTrace> =
         MEMTRACE_ROOT.sub_trace(Id::Name("peers"));
 
     /// Memory usage for apply fsms.
-    pub static ref MEMTRACE_APPLYS: Arc<dyn MemoryTrace + Send + Sync> =
+    pub static ref MEMTRACE_APPLYS: Arc<MemoryTrace> =
         MEMTRACE_ROOT.sub_trace(Id::Name("applys"));
 
-    pub static ref MEMTRACE_ENTRY_CACHE: Arc<dyn MemoryTrace + Send + Sync> =
+    pub static ref MEMTRACE_ENTRY_CACHE: Arc<MemoryTrace> =
         MEMTRACE_ROOT.sub_trace(Id::Name("entry_cache"));
 
-    pub static ref MEMTRACE_RAFT_ROUTER_ALIVE: Arc<dyn MemoryTrace + Send + Sync> = MEMTRACE_ROOT
+    pub static ref MEMTRACE_RAFT_ROUTER_ALIVE: Arc<MemoryTrace> = MEMTRACE_ROOT
         .sub_trace(Id::Name("raft_router"))
         .sub_trace(Id::Name("alive"));
-    pub static ref MEMTRACE_RAFT_ROUTER_LEAK: Arc<dyn MemoryTrace + Send + Sync> = MEMTRACE_ROOT
+    pub static ref MEMTRACE_RAFT_ROUTER_LEAK: Arc<MemoryTrace> = MEMTRACE_ROOT
         .sub_trace(Id::Name("raft_router"))
         .sub_trace(Id::Name("leak"));
-    pub static ref MEMTRACE_APPLY_ROUTER_ALIVE: Arc<dyn MemoryTrace + Send + Sync> = MEMTRACE_ROOT
+    pub static ref MEMTRACE_APPLY_ROUTER_ALIVE: Arc<MemoryTrace> = MEMTRACE_ROOT
         .sub_trace(Id::Name("apply_router"))
         .sub_trace(Id::Name("alive"));
-    pub static ref MEMTRACE_APPLY_ROUTER_LEAK: Arc<dyn MemoryTrace + Send + Sync> = MEMTRACE_ROOT
+    pub static ref MEMTRACE_APPLY_ROUTER_LEAK: Arc<MemoryTrace> = MEMTRACE_ROOT
         .sub_trace(Id::Name("apply_router"))
         .sub_trace(Id::Name("leak"));
 
     /// Heap size trace for received raft messages.
-    pub static ref MEMTRACE_RAFT_MESSAGES: Arc<dyn MemoryTrace + Send + Sync> =
+    pub static ref MEMTRACE_RAFT_MESSAGES: Arc<MemoryTrace> =
         MEMTRACE_ROOT.sub_trace(Id::Name("raft_messages"));
 
     /// Heap size trace for appended raft entries.
-    pub static ref MEMTRACE_RAFT_ENTRIES: Arc<dyn MemoryTrace + Send + Sync> =
+    pub static ref MEMTRACE_RAFT_ENTRIES: Arc<MemoryTrace> =
         MEMTRACE_ROOT.sub_trace(Id::Name("raft_entries"));
 }
 

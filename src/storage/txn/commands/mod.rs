@@ -37,6 +37,7 @@ pub use resolve_lock::ResolveLock;
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
 pub use rollback::Rollback;
+use tikv_util::deadline::Deadline;
 pub use txn_heart_beat::TxnHeartBeat;
 
 pub use resolve_lock::RESOLVE_LOCK_BATCH_SIZE;
@@ -465,6 +466,8 @@ pub trait CommandExt: Display {
 
     fn get_ctx_mut(&mut self) -> &mut Context;
 
+    fn deadline(&self) -> Deadline;
+
     fn incr_cmd_metric(&self);
 
     fn ts(&self) -> TimeStamp {
@@ -659,6 +662,10 @@ impl Command {
 
     pub fn ctx_mut(&mut self) -> &mut Context {
         self.command_ext_mut().get_ctx_mut()
+    }
+
+    pub fn deadline(&self) -> Deadline {
+        self.command_ext().deadline()
     }
 }
 
