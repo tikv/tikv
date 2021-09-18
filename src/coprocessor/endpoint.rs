@@ -32,7 +32,7 @@ use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
-use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
+use resource_metering::{FutureExt, ResourceMeteringTag};
 use tikv_util::time::Instant;
 use txn_types::Lock;
 

@@ -30,9 +30,7 @@ use std::u64;
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
-use resource_metering::{
-    cpu::FutureExt, summary::recorder::add_thread_write_key, ResourceMeteringTag,
-};
+use resource_metering::{FutureExt, ResourceMeteringTag};
 use tikv_util::{callback::must_call, deadline::Deadline, time::Instant};
 use txn_types::TimeStamp;
 
@@ -806,7 +804,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                     // async apply prewrite.
                                     let proposed_cb = Box::new(move || {
                                         // write thread write key
-                                        add_thread_write_key(mods as _);
+                                        resource_metering::record_write_keys(mods as _);
                                         fail_point!("before_pipelined_write_finish", |_| {});
                                         let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
                                         Self::early_response(

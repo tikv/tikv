@@ -86,8 +86,7 @@ use kvproto::kvrpcpb::{
 use kvproto::pdpb::QueryKind;
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
-use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
-use resource_metering::summary::recorder::add_thread_read_key;
+use resource_metering::{FutureExt, ResourceMeteringTag};
 use std::{
     borrow::Cow,
     iter,
@@ -382,7 +381,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             r
                         });
 
-                    add_thread_read_key(statistics.write.processed_keys as u64);
+                    resource_metering::record_read_keys(statistics.write.processed_keys as u64);
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
@@ -628,7 +627,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             kv_pairs
                         });
 
-                    add_thread_read_key(statistics.write.processed_keys as u64);
+                    resource_metering::record_read_keys(statistics.write.processed_keys as u64);
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
@@ -766,7 +765,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let res = scanner.scan(limit, sample_step);
 
                     let statistics = scanner.take_statistics();
-                    add_thread_read_key(statistics.write.processed_keys as u64);
+                    resource_metering::record_read_keys(statistics.write.processed_keys as u64);
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC

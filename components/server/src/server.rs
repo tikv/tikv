@@ -846,32 +846,23 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Start resource metering.
-        let resource_metering_cpu_recorder = resource_metering::cpu::recorder::init_recorder();
-        let resource_metering_summary_recorder =
-            resource_metering::summary::recorder::init_recorder();
-        let mut resource_metering_reporter_worker = Box::new(
-            WorkerBuilder::new("resource-metering-reporter")
-                .pending_capacity(30)
-                .create()
-                .lazy_build("resource-metering-reporter"),
+        let mut reporter_worker = WorkerBuilder::new("resource-metering-reporter")
+            .pending_capacity(30)
+            .create()
+            .lazy_build("resource-metering-reporter");
+        let reporter =
+            resource_metering::build_default_reporter(self.config.resource_metering.clone());
+        reporter_worker.start_with_timer(reporter);
+        self.to_stop.push(Box::new(reporter_worker));
+        let cfg_manager = resource_metering::ConfigManager::new(
+            self.config.resource_metering.clone(),
+            reporter_worker.scheduler(),
+            resource_metering::build_default_recorder(reporter_worker.scheduler()),
         );
-        let resource_metering_reporter_scheduler = resource_metering_reporter_worker.scheduler();
         cfg_controller.register(
             tikv::config::Module::ResourceMetering,
-            Box::new(resource_metering::ConfigManager::new(
-                self.config.resource_metering.clone(),
-                resource_metering_reporter_scheduler.clone(),
-                resource_metering_cpu_recorder,
-                resource_metering_summary_recorder,
-            )),
+            Box::new(cfg_manager),
         );
-        let resource_metering_reporter = resource_metering::reporter::ResourceMeteringReporter::new(
-            self.config.resource_metering.clone(),
-            resource_metering_reporter_scheduler,
-            self.env.clone(),
-        );
-        resource_metering_reporter_worker.start_with_timer(resource_metering_reporter);
-        self.to_stop.push(resource_metering_reporter_worker);
 
         self.servers = Some(Servers {
             lock_mgr,

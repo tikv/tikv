@@ -2,16 +2,18 @@
 
 #[cfg(target_os = "linux")]
 mod linux {
+    use lazy_static::lazy_static;
+    use resource_metering::{
+        Collector, CpuRecorder, CpuRecords, RecorderBuilder, ResourceMeteringTag, TagInfos,
+    };
     use std::collections::HashMap;
+    use std::sync::atomic::AtomicU64;
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
     use std::time::Duration;
-
-    use lazy_static::lazy_static;
-    use resource_metering::cpu::collector::{register_collector, Collector};
-    use resource_metering::cpu::recorder::{init_recorder, CpuRecords, TEST_TAG_PREFIX};
-    use resource_metering::{ResourceMeteringTag, TagInfos};
     use tikv_util::defer;
+
+    const TEST_TAG_PREFIX: &[u8] = b"__resource_metering::tests::";
 
     enum Operation {
         SetContext(&'static str),
@@ -89,7 +91,6 @@ mod linux {
                                     t.extend_from_slice(tag.as_bytes());
                                     t
                                 },
-                                key_label: 0,
                             }));
 
                             guard = Some(tag.attach());
@@ -143,7 +144,7 @@ mod linux {
         records: Arc<Mutex<HashMap<String, u64>>>,
     }
 
-    impl Collector for DummyCollector {
+    impl Collector<Arc<CpuRecords>> for DummyCollector {
         fn collect(&self, records: Arc<CpuRecords>) {
             if let Ok(mut r) = self.records.lock() {
                 for (tag, ms) in &records.records {
@@ -162,7 +163,13 @@ mod linux {
 
     #[test]
     fn test_cpu_record() {
-        let handle = init_recorder();
+        let precision = Arc::new(AtomicU64::new(1000));
+        let collector = DummyCollector::default();
+        let records = collector.records.clone();
+        let handle = RecorderBuilder::default()
+            .add_sub_recorder(Box::new(CpuRecorder::new(collector, precision)))
+            .spawn()
+            .unwrap();
         handle.resume();
         fail::cfg("cpu-record-test-filter", "return").unwrap();
 
@@ -173,39 +180,30 @@ mod linux {
 
         // Heavy CPU only with 1 thread
         {
-            let collector = DummyCollector::default();
-            let _handle = register_collector(Box::new(collector.clone()));
-
             let (handle, expected) = Operations::begin()
                 .then(SetContext("ctx-0"))
                 .then(CpuHeavy(2000))
                 .then(ResetContext)
                 .spawn();
             handle.join().unwrap();
-
             collector.check(expected);
+            records.lock().unwrap().clear();
         }
 
         // Sleep only with 1 thread
         {
-            let collector = DummyCollector::default();
-            let _handle = register_collector(Box::new(collector.clone()));
-
             let (handle, expected) = Operations::begin()
                 .then(SetContext("ctx-0"))
                 .then(Sleep(2000))
                 .then(ResetContext)
                 .spawn();
             handle.join().unwrap();
-
             collector.check(expected);
+            records.lock().unwrap().clear();
         }
 
         // Hybrid workload with 1 thread
         {
-            let collector = DummyCollector::default();
-            let _handle = register_collector(Box::new(collector.clone()));
-
             let (handle, expected) = Operations::begin()
                 .then(SetContext("ctx-0"))
                 .then(CpuHeavy(600))
@@ -221,15 +219,12 @@ mod linux {
                 .then(ResetContext)
                 .spawn();
             handle.join().unwrap();
-
             collector.check(expected);
+            records.lock().unwrap().clear();
         }
 
         // Heavy CPU with 3 threads
         {
-            let collector = DummyCollector::default();
-            let _handle = register_collector(Box::new(collector.clone()));
-
             let (handle0, expected0) = Operations::begin()
                 .then(SetContext("ctx-0"))
                 .then(CpuHeavy(1500))
@@ -248,15 +243,12 @@ mod linux {
             handle0.join().unwrap();
             handle1.join().unwrap();
             handle2.join().unwrap();
-
             collector.check(merge(vec![expected0, expected1, expected2]));
+            records.lock().unwrap().clear();
         }
 
         // Hybrid workload with 3 threads
         {
-            let collector = DummyCollector::default();
-            let _handle = register_collector(Box::new(collector.clone()));
-
             let (handle0, expected0) = Operations::begin()
                 .then(SetContext("ctx-0"))
                 .then(CpuHeavy(200))
@@ -290,8 +282,8 @@ mod linux {
             handle0.join().unwrap();
             handle1.join().unwrap();
             handle2.join().unwrap();
-
             collector.check(merge(vec![expected0, expected1, expected2]));
+            records.lock().unwrap().clear();
         }
     }
 

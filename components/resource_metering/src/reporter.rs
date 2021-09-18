@@ -1,65 +1,120 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::cpu::collector::{register_collector, Collector, CollectorHandle};
-use crate::summary::collector::{
-    register_collector as summary_register_collector, Collector as SummaryCollector,
-    CollectorHandle as SummaryCollectorHandle,
-};
-use crate::summary::recorder::{ReqSummary, ReqSummaryRecords};
-
-use crate::cpu::recorder::CpuRecords;
-use crate::Config;
-
-use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::SeqCst;
-use std::sync::Arc;
-
+use crate::cpu::RawCpuRecords;
+use crate::summary::SummaryRecord;
+use crate::{Config, CpuReporter, GrpcClient, SummaryReporter};
 use collections::HashMap;
-use futures::SinkExt;
-use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
-use kvproto::resource_usage_agent::{CpuTimeRecord, ResourceUsageAgentClient};
+use std::fmt::{self, Display, Formatter};
+use std::sync::Arc;
 use tikv_util::time::Duration;
-use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
+use tikv_util::worker::{Runnable, RunnableWithTimer};
 
-pub struct CpuRecordsCollector {
-    scheduler: Scheduler<Task>,
+/// This trait defines a general framework for how to process the collected data.
+///
+/// [Reporter] will maintain all sub-reporters, accept external scheduling and task
+/// distribution, and call the corresponding methods of all sub-reporters when appropriate.
+pub trait SubReporter<T> {
+    /// Each batch of collected data will be reported through the this method.
+    ///
+    /// Implementation needs to cache and aggregate the data reported each time.
+    fn report(&mut self, cfg: &Config, v: T);
+
+    /// Whenever the external controller decides to upload data, it will call
+    /// this method.
+    ///
+    /// Implementation needs to upload the data that has been cached in the
+    /// past to the remote in batches.
+    fn upload(&mut self, cfg: &Config);
+
+    /// When the external controller decides to stop scheduling, it will call
+    /// this method to shutdown.
+    ///
+    /// Implementation needs to clean up all inner caches if necessary.
+    fn reset(&mut self);
 }
 
-impl CpuRecordsCollector {
-    pub fn new(scheduler: Scheduler<Task>) -> Self {
-        Self { scheduler }
+/// A structure that combines all the [SubReporter]s.
+///
+/// `Reporter` implements [Runnable] and [RunnableWithTimer] to handle [Task]s
+/// from the [Scheduler], but it does no business logic and instead controls
+/// all sub-reporters to perform logic in different business areas.
+///
+/// [Runnable]: tikv_util::worker::Runnable
+/// [RunnableWithTimer]: tikv_util::worker::RunnableWithTimer
+/// [Scheduler]: tikv_util::worker::Scheduler
+pub struct Reporter<C, S> {
+    config: Config,
+    cpu_reporter: C,
+    summary_reporter: S,
+}
+
+impl<C, S> Runnable for Reporter<C, S>
+where
+    C: SubReporter<Arc<RawCpuRecords>> + Send,
+    S: SubReporter<Arc<HashMap<Vec<u8>, SummaryRecord>>> + Send,
+{
+    type Task = Task;
+
+    fn run(&mut self, task: Self::Task) {
+        match task {
+            Task::ConfigChange(cfg) => self.config_change(cfg),
+            Task::CpuRecords(v) => self.cpu_reporter.report(&self.config, v),
+            Task::SummaryRecords(v) => self.summary_reporter.report(&self.config, v),
+        }
+    }
+
+    fn shutdown(&mut self) {
+        self.reset();
     }
 }
 
-impl Collector for CpuRecordsCollector {
-    fn collect(&self, records: Arc<CpuRecords>) {
-        self.scheduler.schedule(Task::CpuRecords(records)).ok();
+impl<C, S> RunnableWithTimer for Reporter<C, S>
+where
+    C: SubReporter<Arc<RawCpuRecords>> + Send,
+    S: SubReporter<Arc<HashMap<Vec<u8>, SummaryRecord>>> + Send,
+{
+    fn on_timeout(&mut self) {
+        self.cpu_reporter.upload(&self.config);
+        self.summary_reporter.upload(&self.config);
+    }
+
+    fn get_interval(&self) -> Duration {
+        self.config.report_agent_interval.0
     }
 }
 
-pub struct RowRecordsCollector {
-    scheduler: Scheduler<Task>,
-}
+impl<C, S> Reporter<C, S>
+where
+    C: SubReporter<Arc<RawCpuRecords>>,
+    S: SubReporter<Arc<HashMap<Vec<u8>, SummaryRecord>>>,
+{
+    pub fn new(config: Config, cpu_reporter: C, summary_reporter: S) -> Self {
+        Self {
+            config,
+            cpu_reporter,
+            summary_reporter,
+        }
+    }
 
-impl RowRecordsCollector {
-    pub fn new(scheduler: Scheduler<Task>) -> Self {
-        Self { scheduler }
+    fn config_change(&mut self, cfg: Config) {
+        self.config = cfg;
+        if !self.config.should_report() {
+            self.reset();
+            return;
+        }
+    }
+
+    fn reset(&mut self) {
+        self.cpu_reporter.reset();
+        self.summary_reporter.reset();
     }
 }
 
-impl SummaryCollector for RowRecordsCollector {
-    fn collect(&self, records: Arc<ReqSummaryRecords>) {
-        self.scheduler
-            .schedule(Task::ReqSummaryRecords(records))
-            .ok();
-    }
-}
-
+/// `Task` represents a task scheduled in [Reporter].
 pub enum Task {
     ConfigChange(Config),
-    CpuRecords(Arc<CpuRecords>),
-    ReqSummaryRecords(Arc<ReqSummaryRecords>),
+    CpuRecords(Arc<RawCpuRecords>),
+    SummaryRecords(Arc<HashMap<Vec<u8>, SummaryRecord>>),
 }
 
 impl Display for Task {
@@ -71,288 +126,104 @@ impl Display for Task {
             Task::CpuRecords(_) => {
                 write!(f, "CpuRecords")?;
             }
-            Task::ReqSummaryRecords(_) => {
-                write!(f, "ReqSummaryRecords")?;
+            Task::SummaryRecords(_) => {
+                write!(f, "SummaryRecords")?;
             }
         }
-
         Ok(())
     }
 }
 
-pub struct ResourceMeteringReporter {
-    config: Config,
-    env: Arc<Environment>,
-
-    scheduler: Scheduler<Task>,
-
-    // TODO: mock client for testing
-    client: Option<ResourceUsageAgentClient>,
-    reporting: Arc<AtomicBool>,
-    cpu_records_collector: Option<CollectorHandle>,
-    summary_records_collector: Option<SummaryCollectorHandle>,
-
-    // resource_tag -> ([timestamp_secs], [cpu_time_ms], total_cpu_time_ms)
-    records: HashMap<Vec<u8>, ReportRecord>,
-    // timestamp_secs -> OtherRecord
-    others: HashMap<u64, OtherRecord>,
-    find_top_k: Vec<u32>,
+// Helper functions.
+impl Config {
+    fn should_report(&self) -> bool {
+        self.enabled && !self.agent_address.is_empty() && self.max_resource_groups != 0
+    }
 }
 
-struct ReportRecord {
-    timestamp_secs_list: Vec<u64>,
-    cpu_time_ms_list: Vec<u32>,
-    summary_list: Vec<ReqSummary>,
-    total_cpu_time_ms: u32,
+/// Constructs and returns a default [Reporter].
+///
+/// This function is intended to simplify external use.
+pub fn build_default_reporter(
+    cfg: Config,
+) -> Reporter<CpuReporter<GrpcClient>, SummaryReporter<GrpcClient>> {
+    let client = GrpcClient::new();
+    Reporter::new(
+        cfg,
+        CpuReporter::new(client.clone()),
+        SummaryReporter::new(client),
+    )
 }
 
-impl ReportRecord {
-    fn new(timestamp_secs: u64, cpu_time_ms: u32, summary: ReqSummary) -> Self {
-        Self {
-            timestamp_secs_list: vec![timestamp_secs],
-            cpu_time_ms_list: vec![cpu_time_ms],
-            summary_list: vec![summary],
-            total_cpu_time_ms: cpu_time_ms,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering::SeqCst;
+    use tikv_util::config::ReadableDuration;
+    use tikv_util::worker::{Runnable, RunnableWithTimer};
+
+    static SUB_REPORTER_OP_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    struct MockCpuReporter;
+
+    impl SubReporter<Arc<RawCpuRecords>> for MockCpuReporter {
+        fn report(&mut self, cfg: &Config, v: Arc<RawCpuRecords>) {
+            assert_eq!(cfg.agent_address, "abc");
+            assert_eq!(v.begin_unix_time_secs, 123);
+            SUB_REPORTER_OP_COUNT.fetch_add(1, SeqCst);
+        }
+
+        fn upload(&mut self, cfg: &Config) {
+            assert_eq!(cfg.agent_address, "abc");
+            SUB_REPORTER_OP_COUNT.fetch_add(1, SeqCst);
+        }
+
+        fn reset(&mut self) {
+            SUB_REPORTER_OP_COUNT.fetch_add(1, SeqCst);
         }
     }
-    fn add_cpu_time_ms(&mut self, timestamp_secs: u64, cpu_time_ms: u32) {
-        if *self.timestamp_secs_list.last().unwrap() == timestamp_secs {
-            *self.cpu_time_ms_list.last_mut().unwrap() += cpu_time_ms;
-        } else {
-            self.timestamp_secs_list.push(timestamp_secs);
-            self.cpu_time_ms_list.push(cpu_time_ms);
+
+    struct MockSummaryReporter;
+
+    impl SubReporter<Arc<HashMap<Vec<u8>, SummaryRecord>>> for MockSummaryReporter {
+        fn report(&mut self, cfg: &Config, v: Arc<HashMap<Vec<u8>, SummaryRecord>>) {
+            assert_eq!(cfg.agent_address, "abc");
+            assert_eq!(v.len(), 1);
+            SUB_REPORTER_OP_COUNT.fetch_add(1, SeqCst);
         }
-        self.total_cpu_time_ms += cpu_time_ms;
-    }
 
-    fn add_req_summary(&mut self, timestamp_secs: u64, summary: &ReqSummary) {
-        if *self.timestamp_secs_list.last().unwrap() == timestamp_secs {
-            (*self.summary_list.last_mut().unwrap()).merge(summary);
-        } else {
-            self.timestamp_secs_list.push(timestamp_secs);
-            self.summary_list.push(summary.clone());
+        fn upload(&mut self, cfg: &Config) {
+            assert_eq!(cfg.agent_address, "abc");
+            SUB_REPORTER_OP_COUNT.fetch_add(1, SeqCst);
+        }
+
+        fn reset(&mut self) {
+            SUB_REPORTER_OP_COUNT.fetch_add(1, SeqCst);
         }
     }
-}
 
-#[derive(Debug, Default)]
-struct OtherRecord {
-    cpu_time_ms: u32,
-    summary: ReqSummary,
-}
-
-impl OtherRecord {
-    fn merge(&mut self, cpu_time_ms: u32, summary: &ReqSummary) {
-        self.cpu_time_ms += cpu_time_ms;
-        self.summary.merge(summary);
-    }
-}
-
-impl ResourceMeteringReporter {
-    pub fn new(config: Config, scheduler: Scheduler<Task>, env: Arc<Environment>) -> Self {
-        Self {
-            config,
-            env,
-            scheduler,
-            client: None,
-            reporting: Arc::new(AtomicBool::new(false)),
-            cpu_records_collector: None,
-            summary_records_collector: None,
+    #[test]
+    fn test_reporter() {
+        let mut r = Reporter::new(Config::default(), MockCpuReporter, MockSummaryReporter);
+        r.run(Task::ConfigChange(Config {
+            enabled: false,
+            agent_address: "abc".to_string(),
+            report_agent_interval: ReadableDuration::minutes(2),
+            max_resource_groups: 3000,
+            precision: ReadableDuration::secs(2),
+        }));
+        assert_eq!(r.get_interval(), Duration::from_secs(120));
+        r.run(Task::CpuRecords(Arc::new(RawCpuRecords {
+            begin_unix_time_secs: 123,
+            duration: Duration::default(),
             records: HashMap::default(),
-            others: HashMap::default(),
-            find_top_k: Vec::default(),
-        }
-    }
-
-    pub fn init_client(&mut self, addr: &str) {
-        let channel = {
-            let cb = ChannelBuilder::new(self.env.clone())
-                .keepalive_time(Duration::from_secs(10))
-                .keepalive_timeout(Duration::from_secs(3));
-            cb.connect(addr)
-        };
-        self.client = Some(ResourceUsageAgentClient::new(channel));
-        if self.cpu_records_collector.is_none() {
-            self.cpu_records_collector = Some(register_collector(Box::new(
-                CpuRecordsCollector::new(self.scheduler.clone()),
-            )));
-        }
-        if self.summary_records_collector.is_none() {
-            self.summary_records_collector = Some(summary_register_collector(Box::new(
-                RowRecordsCollector::new(self.scheduler.clone()),
-            )));
-        }
-    }
-}
-
-impl Runnable for ResourceMeteringReporter {
-    type Task = Task;
-
-    fn run(&mut self, task: Self::Task) {
-        match task {
-            Task::ConfigChange(new_config) => {
-                if !new_config.should_report() {
-                    self.client.take();
-                    self.cpu_records_collector.take();
-                    self.summary_records_collector.take();
-                } else if new_config.agent_address != self.config.agent_address
-                    || new_config.enabled != self.config.enabled
-                {
-                    self.init_client(&new_config.agent_address);
-                }
-
-                self.config = new_config;
-            }
-            Task::CpuRecords(records) => {
-                let timestamp_secs = records.begin_unix_time_secs;
-
-                for (tag, ms) in &records.records {
-                    let tag = &tag.infos.extra_attachment;
-                    if tag.is_empty() {
-                        continue;
-                    }
-
-                    let ms = *ms as u32;
-                    match self.records.get_mut(tag) {
-                        Some(record) => {
-                            record.add_cpu_time_ms(timestamp_secs, ms);
-                        }
-                        None => {
-                            let record =
-                                ReportRecord::new(timestamp_secs, ms, ReqSummary::default());
-                            self.records.insert(tag.clone(), record);
-                        }
-                    }
-                }
-
-                if self.records.len() > self.config.max_resource_groups {
-                    self.find_top_k.clear();
-                    for record in self.records.values() {
-                        self.find_top_k.push(record.total_cpu_time_ms);
-                    }
-                    pdqselect::select_by(
-                        &mut self.find_top_k,
-                        self.config.max_resource_groups,
-                        |a, b| b.cmp(a),
-                    );
-                    let kth = self.find_top_k[self.config.max_resource_groups];
-                    let others = &mut self.others;
-                    self.records
-                        .drain_filter(|_, record| record.total_cpu_time_ms <= kth)
-                        .for_each(|(_, record)| {
-                            record
-                                .timestamp_secs_list
-                                .into_iter()
-                                .zip(
-                                    record
-                                        .cpu_time_ms_list
-                                        .into_iter()
-                                        .zip(record.summary_list.into_iter()),
-                                )
-                                .for_each(|(secs, (cpu_time, summary))| {
-                                    (*others.entry(secs).or_insert_with(OtherRecord::default))
-                                        .merge(cpu_time, &summary);
-                                })
-                        });
-                }
-            }
-            Task::ReqSummaryRecords(records) => {
-                let timestamp_secs = records.begin_unix_time_secs;
-                for (tag, summary) in &records.records {
-                    let tag = &tag.tag;
-                    match self.records.get_mut(tag) {
-                        Some(record) => {
-                            record.add_req_summary(timestamp_secs, summary);
-                        }
-                        None => {
-                            let record = ReportRecord::new(timestamp_secs, 0, summary.clone());
-                            self.records.insert(tag.clone(), record);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn shutdown(&mut self) {
-        self.cpu_records_collector.take();
-        self.summary_records_collector.take();
-        self.client.take();
-    }
-}
-
-impl RunnableWithTimer for ResourceMeteringReporter {
-    fn on_timeout(&mut self) {
-        if self.records.is_empty() {
-            assert!(self.others.is_empty());
-            return;
-        }
-
-        let records = std::mem::take(&mut self.records);
-        let others = std::mem::take(&mut self.others);
-
-        if self.reporting.load(SeqCst) {
-            return;
-        }
-
-        if let Some(client) = self.client.as_ref() {
-            match client.report_cpu_time_opt(CallOption::default().timeout(Duration::from_secs(2)))
-            {
-                Ok((mut tx, rx)) => {
-                    self.reporting.store(true, SeqCst);
-                    let reporting = self.reporting.clone();
-                    client.spawn(async move {
-                        defer!(reporting.store(false, SeqCst));
-
-                        for (tag, record) in records {
-                            let mut req = CpuTimeRecord::default();
-                            req.set_resource_group_tag(tag);
-                            req.set_record_list_timestamp_sec(record.timestamp_secs_list);
-                            req.set_record_list_cpu_time_ms(record.cpu_time_ms_list);
-                            let mut read_row_count_list = vec![];
-                            for summary in record.summary_list {
-                                read_row_count_list.push(summary.get_read_key_count())
-                            }
-                            // req.set_record_list_scan_rows(read_row_count_list);
-                            if tx.send((req, WriteFlags::default())).await.is_err() {
-                                return;
-                            }
-                        }
-
-                        // others
-
-                        if !others.is_empty() {
-                            let mut timestamp_secs_list = vec![];
-                            let mut cpu_time_ms_list = vec![];
-                            let mut read_row_count_list = vec![];
-                            for (ts, record) in others {
-                                timestamp_secs_list.push(ts);
-                                cpu_time_ms_list.push(record.cpu_time_ms);
-                                read_row_count_list.push(record.summary.get_read_key_count());
-                            }
-                            let mut req = CpuTimeRecord::default();
-                            req.set_record_list_timestamp_sec(timestamp_secs_list);
-                            req.set_record_list_cpu_time_ms(cpu_time_ms_list);
-                            // req.set_record_list_scan_rows(read_row_count_list);
-                            if tx.send((req, WriteFlags::default())).await.is_err() {
-                                return;
-                            }
-                        }
-
-                        if tx.close().await.is_err() {
-                            return;
-                        }
-                        rx.await.ok();
-                    });
-                }
-                Err(err) => {
-                    warn!("failed to connect resource usage agent"; "error" => ?err);
-                }
-            }
-        }
-    }
-
-    fn get_interval(&self) -> Duration {
-        self.config.report_agent_interval.0
+        })));
+        let mut records = HashMap::default();
+        records.insert(b"".to_vec(), SummaryRecord::default());
+        r.run(Task::SummaryRecords(Arc::new(records)));
+        r.on_timeout();
+        r.shutdown();
+        assert_eq!(SUB_REPORTER_OP_COUNT.load(SeqCst), 8);
     }
 }

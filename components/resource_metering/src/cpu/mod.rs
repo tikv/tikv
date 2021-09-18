@@ -1,7 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub mod collector;
-pub mod recorder;
+mod collector;
+mod model;
+mod recorder;
+mod reporter;
 
-mod future_ext;
-pub use future_ext::FutureExt;
+pub use collector::CpuCollector;
+pub use model::{CpuRecords, RawCpuRecords};
+pub use recorder::CpuRecorder;
+pub use reporter::CpuReporter;
