@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use collections::HashSet;
+use kvproto::encryptionpb::EncryptionMethod;
 use super::make_rpc_error;
 use engine_traits::{KvEngine, CF_WRITE};
 use file_system::{set_io_type, IOType};
@@ -396,7 +397,11 @@ where
             // Unfortunately, this currently can't happen because the S3Storage
             // is not Send + Sync. See the documentation of S3Storage for reason.
             let cipher = if req.has_cipher_info() {
-                Some(req.get_cipher_info().clone())
+                let c= req.get_cipher_info().clone();
+                match c.cipher_type {
+                    EncryptionMethod::Plaintext => None,
+                    _ => Some(c),
+                }
             } else {
                 None
             };
