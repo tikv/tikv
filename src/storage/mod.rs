@@ -384,8 +384,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             r
                         });
 
+                    let delta = perf_statistics.delta();
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    metrics::tls_collect_perf_stats(CMD, &delta);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(begin_instant.saturating_elapsed_secs());
@@ -393,7 +395,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.saturating_elapsed_secs());
 
-                    Ok((result?, statistics, perf_statistics.delta()))
+                    Ok((result?, statistics, delta))
                 }
             }
             .in_resource_metering_tag(resource_tag),
@@ -518,12 +520,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     let perf_statistics = PerfStatisticsInstant::new();
                                     let v = point_getter.get(&key);
                                     let stat = point_getter.take_statistics();
+                                    let delta = perf_statistics.delta();
                                     metrics::tls_collect_read_flow(region_id, &stat);
+                                    metrics::tls_collect_perf_stats(CMD, &delta);
                                     statistics.add(&stat);
                                     consumer.consume(
                                         id,
                                         v.map_err(|e| Error::from(txn::Error::from(e)))
-                                            .map(|v| (v, stat, perf_statistics.delta())),
+                                            .map(|v| (v, stat, delta)),
                                         begin_instant,
                                     );
                                 }
@@ -639,8 +643,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             kv_pairs
                         });
 
+                    let delta = perf_statistics.delta();
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    metrics::tls_collect_perf_stats(CMD, &delta);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(begin_instant.saturating_elapsed_secs());
@@ -648,7 +654,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.saturating_elapsed_secs());
 
-                    Ok((result?, statistics, perf_statistics.delta()))
+                    Ok((result?, statistics, delta))
                 }
             }
             .in_resource_metering_tag(resource_tag),
@@ -755,6 +761,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
+                    let perf_statistics = PerfStatisticsInstant::new();
 
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -776,8 +783,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let res = scanner.scan(limit, sample_step);
 
                     let statistics = scanner.take_statistics();
+                    let delta = perf_statistics.delta();
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    metrics::tls_collect_perf_stats(CMD, &delta);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(begin_instant.saturating_elapsed_secs());
@@ -886,6 +895,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
+                    let perf_statistics = PerfStatisticsInstant::new();
                     let mut reader = MvccReader::new(
                         snapshot,
                         Some(ScanMode::Forward),
@@ -908,8 +918,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         locks.push(lock_info);
                     }
 
+                    let delta = perf_statistics.delta();
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    metrics::tls_collect_perf_stats(CMD, &delta);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(begin_instant.saturating_elapsed_secs());
