@@ -3821,8 +3821,6 @@ mod tests {
             ("pessimistic_txn", Module::PessimisticTxn),
             ("gc", Module::Gc),
             ("cdc", Module::CDC),
-            ("resolved_ts", Module::ResolvedTs),
-            ("resource_metering", Module::ResourceMetering),
             ("unknown", Module::Unknown("unknown".to_string())),
         ];
         for (name, module) in cases {
