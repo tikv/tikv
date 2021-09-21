@@ -1832,7 +1832,7 @@ fn main() {
             if let Some(hex) = opt.hex_to_escaped.as_deref() {
                 println!("{}", escape(&from_hex(hex).unwrap()));
             } else if let Some(escaped) = opt.escaped_to_hex.as_deref() {
-                println!("{}", log_wrappers::hex_encode_upper(unescape(escaped)));
+                println!("{}", hex::encode_upper(unescape(escaped)));
             } else if let Some(encoded) = opt.decode.as_deref() {
                 match Key::from_encoded(unescape(encoded)).into_raw() {
                     Ok(k) => println!("{}", escape(&k)),
@@ -1868,24 +1868,6 @@ fn main() {
     if let Cmd::DumpSnapMeta { file } = cmd {
         let path = file.as_ref();
         return dump_snap_meta_file(path);
-    }
-
-    // Deal with arguments about key utils.
-    if let Some(hex) = opt.hex_to_escaped.as_deref() {
-        println!("{}", escape(&from_hex(hex).unwrap()));
-        return;
-    } else if let Some(escaped) = opt.escaped_to_hex.as_deref() {
-        println!("{}", hex::encode_upper(unescape(escaped)));
-        return;
-    } else if let Some(encoded) = opt.decode.as_deref() {
-        match Key::from_encoded(unescape(encoded)).into_raw() {
-            Ok(k) => println!("{}", escape(&k)),
-            Err(e) => println!("decode meets error: {}", e),
-        };
-        return;
-    } else if let Some(decoded) = opt.encode.as_deref() {
-        println!("{}", Key::from_raw(&unescape(decoded)));
-        return;
     }
 
     if let Cmd::DecryptFile { file, out_file } = cmd {
