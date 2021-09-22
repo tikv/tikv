@@ -1,11 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::cpu::{CpuCollector, CpuRecorder};
-use crate::localstorage::{LocalStorage, STORAGE_CHAN};
+use crate::localstorage::{register_storage_chan_sender, LocalStorage, LocalStorageRef};
 use crate::reporter::Task;
 use crate::summary::{SummaryCollector, SummaryRecorder};
 use crate::{utils, SharedTagPtr};
 use collections::HashMap;
+use crossbeam::channel::{unbounded, Receiver};
 use std::io;
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -57,6 +58,7 @@ pub trait SubRecorder {
 /// that the `Recorder` needs to load through the `RecorderBuilder`.
 pub struct Recorder {
     pause: Arc<AtomicBool>,
+    thread_recv: Receiver<LocalStorageRef>,
     recorders: Vec<Box<dyn SubRecorder + Send>>,
     thread_stores: HashMap<usize, LocalStorage>,
     last_cleanup: Instant,
@@ -99,7 +101,7 @@ impl Recorder {
     }
 
     fn handle_thread_registration(&mut self) {
-        while let Ok(lsr) = STORAGE_CHAN.1.try_recv() {
+        while let Ok(lsr) = self.thread_recv.try_recv() {
             self.thread_stores.insert(lsr.id, lsr.storage.clone());
             for r in &mut self.recorders {
                 r.thread_created(lsr.id, lsr.storage.shared_ptr.clone());
@@ -155,10 +157,13 @@ impl RecorderBuilder {
     /// This function does not return the `Recorder` instance directly, instead
     /// it returns a [RecorderHandle] that is used to control the execution.
     pub fn spawn(self) -> io::Result<RecorderHandle> {
-        let pause = Arc::new(AtomicBool::new(false));
+        let pause = Arc::new(AtomicBool::new(true));
         let precision_ms = self.precision_ms.clone();
+        let (sender, receiver) = unbounded();
+        register_storage_chan_sender(sender);
         let mut recorder = Recorder {
             pause: pause.clone(),
+            thread_recv: receiver,
             recorders: self.recorders,
             thread_stores: HashMap::default(),
             last_cleanup: Instant::now(),
@@ -298,9 +303,16 @@ mod tests {
 
     #[test]
     fn test_recorder() {
-        STORAGE.with(|_| {}); // Just to trigger registration.
+        let (sender, receiver) = unbounded();
+        register_storage_chan_sender(sender);
+        std::thread::spawn(|| {
+            STORAGE.with(|_| {});
+        })
+        .join()
+        .unwrap();
         let mut recorder = Recorder {
             pause: Arc::new(AtomicBool::new(false)),
+            thread_recv: receiver,
             recorders: vec![Box::new(MockSubRecorder)],
             thread_stores: HashMap::default(),
             last_cleanup: Instant::now(),
@@ -308,7 +320,7 @@ mod tests {
         recorder.tick();
         recorder.reset();
         recorder.handle_thread_registration();
-        assert_eq!(recorder.thread_stores.len(), 1);
-        assert_eq!(SUB_RECORDER_OP_COUNT.load(SeqCst), 3);
+        assert!(recorder.thread_stores.len() >= 1);
+        assert!(SUB_RECORDER_OP_COUNT.load(SeqCst) >= 3);
     }
 }

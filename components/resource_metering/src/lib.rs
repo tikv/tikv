@@ -5,7 +5,6 @@
 #![feature(shrink_to)]
 #![feature(hash_drain_filter)]
 
-use config::GLOBAL_ENABLE;
 use localstorage::STORAGE;
 use std::pin::Pin;
 use std::sync::atomic::AtomicPtr;
@@ -25,7 +24,7 @@ mod utils;
 
 pub use client::{Client, GrpcClient};
 pub use collector::Collector;
-pub use config::{Config, ConfigManager};
+pub use config::{Config, ConfigManager, GLOBAL_ENABLE};
 pub use cpu::{CpuRecorder, CpuRecords, CpuReporter, RawCpuRecords};
 pub use recorder::{build_default_recorder, Recorder, RecorderBuilder, RecorderHandle};
 pub use reporter::{build_default_reporter, Reporter};
@@ -235,31 +234,37 @@ mod tests {
 
     #[test]
     fn test_attach() {
-        let tag = ResourceMeteringTag {
-            infos: Arc::new(TagInfos {
-                store_id: 1,
-                region_id: 2,
-                peer_id: 3,
-                extra_attachment: b"12345".to_vec(),
-            }),
-        };
-        {
-            let guard = tag.attach();
-            assert_eq!(guard.tag.infos, tag.infos);
+        // Use a thread created by ourself. If we use unit test thread directly,
+        // the test results may be affected by parallel testing.
+        std::thread::spawn(|| {
+            let tag = ResourceMeteringTag {
+                infos: Arc::new(TagInfos {
+                    store_id: 1,
+                    region_id: 2,
+                    peer_id: 3,
+                    extra_attachment: b"12345".to_vec(),
+                }),
+            };
+            {
+                let guard = tag.attach();
+                assert_eq!(guard.tag.infos, tag.infos);
+                STORAGE.with(|s| {
+                    let local_tag = s.shared_ptr.take();
+                    assert!(matches!(local_tag, Some(_)));
+                    let local_tag = local_tag.unwrap();
+                    assert_eq!(local_tag.infos, tag.infos);
+                    assert_eq!(local_tag.infos, guard.tag.infos);
+                    assert!(matches!(s.shared_ptr.swap(local_tag), None));
+                });
+                // drop here.
+            }
             STORAGE.with(|s| {
                 let local_tag = s.shared_ptr.take();
-                assert!(matches!(local_tag, Some(_)));
-                let local_tag = local_tag.unwrap();
-                assert_eq!(local_tag.infos, tag.infos);
-                assert_eq!(local_tag.infos, guard.tag.infos);
-                assert!(matches!(s.shared_ptr.swap(local_tag), None));
+                assert!(matches!(local_tag, None));
             });
-            // drop here.
-        }
-        STORAGE.with(|s| {
-            let local_tag = s.shared_ptr.take();
-            assert!(matches!(local_tag, None));
-        });
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]

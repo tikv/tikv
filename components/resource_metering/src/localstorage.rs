@@ -3,14 +3,14 @@
 use crate::summary::SummaryRecord;
 use crate::SharedTagPtr;
 use collections::HashMap;
-use crossbeam::channel::{unbounded, Receiver, Sender};
+use crossbeam::channel::Sender;
 use lazy_static::lazy_static;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 lazy_static! {
-    /// `STORAGE_CHAN` is used to transfer the necessary thread registration events.
-    pub static ref STORAGE_CHAN: (Sender<LocalStorageRef>, Receiver<LocalStorageRef>) = unbounded();
+    /// `STORAGE_CHANS` is used to transfer the necessary thread registration events.
+    static ref STORAGE_CHANS: Mutex<Vec<Sender<LocalStorageRef>>> = Mutex::new(Vec::new());
 }
 
 thread_local! {
@@ -27,7 +27,10 @@ thread_local! {
             summary_cur_record: Arc::new(SummaryRecord::default()),
             summary_records: Arc::new(Mutex::new(HashMap::default())),
         };
-        STORAGE_CHAN.0.send(LocalStorageRef{id: thread_id::get(), storage: storage.clone()}).ok();
+        let lsr = LocalStorageRef{id: thread_id::get(), storage: storage.clone()};
+        STORAGE_CHANS.lock().unwrap().iter().for_each(|sender| {
+            sender.send(lsr.clone()).ok();
+        });
         storage
     };
 }
@@ -47,17 +50,26 @@ pub struct LocalStorage {
 /// This structure is transmitted as a event in [STORAGE_CHAN].
 ///
 /// See [STORAGE] for more information.
+#[derive(Clone)]
 pub struct LocalStorageRef {
     pub id: usize,
     pub storage: LocalStorage,
 }
 
+/// Register a channel to notify thread creation events.
+pub fn register_storage_chan_sender(sender: Sender<LocalStorageRef>) {
+    STORAGE_CHANS.lock().unwrap().push(sender)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossbeam::channel::unbounded;
 
     #[test]
     fn test_storage_chan() {
+        let (sender, receiver) = unbounded();
+        register_storage_chan_sender(sender);
         STORAGE.with(|_| {}); // Just to trigger registration.
         std::thread::spawn(move || {
             STORAGE.with(|_| {});
@@ -65,10 +77,11 @@ mod tests {
         .join()
         .unwrap();
         let mut count = 0;
-        while let Ok(r) = STORAGE_CHAN.1.try_recv() {
+        while let Ok(r) = receiver.try_recv() {
             assert_ne!(r.id, 0);
             count += 1;
         }
-        assert_eq!(count, 2);
+        // This value may be greater than 2 if other test threads access `STORAGE` in parallel.
+        assert!(count >= 2);
     }
 }

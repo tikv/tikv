@@ -197,7 +197,7 @@ mod tests {
         fn run(&mut self, task: Self::Task) {
             assert!(matches!(task, Task::ConfigChange(_)));
             match task {
-                Task::ConfigChange(cfg) => assert!(cfg.enabled),
+                Task::ConfigChange(cfg) => assert_eq!(cfg.precision.as_millis(), 2000),
                 _ => {}
             }
         }
@@ -213,12 +213,9 @@ mod tests {
         worker.start(MockRunner);
         let mut cm = ConfigManager::new(Config::default(), worker.scheduler(), handle);
         let mut change = HashMap::new();
-        change.insert("enabled".to_owned(), true.into());
         change.insert("precision".to_owned(), ReadableDuration::secs(2).into());
-        assert!(pause.load(SeqCst));
         assert_eq!(precision_ms.load(SeqCst), 0);
         online_config::ConfigManager::dispatch(&mut cm, change).expect("dispatch failed");
-        assert!(!pause.load(SeqCst));
         assert_eq!(precision_ms.load(SeqCst), 2000);
         worker.stop();
     }
