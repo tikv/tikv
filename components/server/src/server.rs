@@ -888,14 +888,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .pending_capacity(30)
             .create()
             .lazy_build("resource-metering-reporter");
+        let reporter_scheduler = reporter_worker.scheduler();
         let reporter =
             resource_metering::build_default_reporter(self.config.resource_metering.clone());
         reporter_worker.start_with_timer(reporter);
         self.to_stop.push(Box::new(reporter_worker));
         let cfg_manager = resource_metering::ConfigManager::new(
             self.config.resource_metering.clone(),
-            reporter_worker.scheduler(),
-            resource_metering::build_default_recorder(reporter_worker.scheduler()),
+            reporter_scheduler.clone(),
+            resource_metering::build_default_recorder(reporter_scheduler),
         );
         cfg_controller.register(
             tikv::config::Module::ResourceMetering,

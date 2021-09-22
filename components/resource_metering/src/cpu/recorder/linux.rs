@@ -1,6 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::collector::Collector;
+use crate::cpu::collector::{
+    DynCpuCollectorId, DynCpuCollectorReg, COLLECTOR_REGISTRATION_CHANNEL,
+};
 use crate::cpu::RawCpuRecords;
 use crate::localstorage::LocalStorage;
 use crate::recorder::SubRecorder;
@@ -42,6 +45,7 @@ lazy_static! {
 /// [Collector]: crate::collector::Collector
 pub struct CpuRecorder<C> {
     collector: C,
+    dyn_collectors: HashMap<DynCpuCollectorId, Box<dyn Collector<Arc<RawCpuRecords>>>>,
     precision_ms: Arc<AtomicU64>,
     thread_stats: HashMap<usize, ThreadStat>,
     current_window_records: RawCpuRecords,
@@ -54,6 +58,7 @@ where
     C: Collector<Arc<RawCpuRecords>>,
 {
     fn tick(&mut self, _thread_stores: &mut HashMap<usize, LocalStorage>) {
+        self.handle_dyn_collector_registration();
         self.record();
         self.may_gc();
         self.may_advance_window();
@@ -90,6 +95,7 @@ where
         Self {
             collector,
             precision_ms,
+            dyn_collectors: HashMap::default(),
             thread_stats: HashMap::default(),
             current_window_records: RawCpuRecords::default(),
             last_collect_instant: now,
@@ -175,11 +181,28 @@ where
             let mut records = std::mem::take(&mut self.current_window_records);
             records.duration = duration;
             if !records.records.is_empty() {
-                self.collector.collect(Arc::new(records));
+                let r = Arc::new(records);
+                self.collector.collect(r.clone());
+                self.dyn_collectors
+                    .values()
+                    .for_each(|c| c.collect(r.clone()));
             }
             self.last_collect_instant = Instant::now();
         }
         need_advance
+    }
+
+    fn handle_dyn_collector_registration(&mut self) {
+        while let Ok(msg) = COLLECTOR_REGISTRATION_CHANNEL.1.try_recv() {
+            match msg {
+                DynCpuCollectorReg::Register { id, collector } => {
+                    self.dyn_collectors.insert(id, collector);
+                }
+                DynCpuCollectorReg::Unregister { id } => {
+                    self.dyn_collectors.remove(&id);
+                }
+            }
+        }
     }
 }
 

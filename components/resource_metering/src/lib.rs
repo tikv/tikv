@@ -25,7 +25,10 @@ mod utils;
 pub use client::{Client, GrpcClient};
 pub use collector::Collector;
 pub use config::{Config, ConfigManager, GLOBAL_ENABLE};
-pub use cpu::{CpuRecorder, CpuRecords, CpuReporter, RawCpuRecords};
+pub use cpu::{
+    register_cpu_dyn_collector, CpuRecorder, CpuRecords, CpuReporter, DynCpuCollectorHandle,
+    RawCpuRecords,
+};
 pub use recorder::{build_default_recorder, Recorder, RecorderBuilder, RecorderHandle};
 pub use reporter::{build_default_reporter, Reporter};
 pub use summary::{
@@ -41,7 +44,7 @@ pub use summary::{
 /// [Future]: futures::Future
 #[derive(Debug, Default, Eq, PartialEq, Clone, Hash)]
 pub struct ResourceMeteringTag {
-    infos: Arc<TagInfos>,
+    pub infos: Arc<TagInfos>,
 }
 
 impl From<Arc<TagInfos>> for ResourceMeteringTag {
@@ -108,14 +111,16 @@ impl Drop for Guard {
             if GLOBAL_ENABLE.load(Relaxed) {
                 let mut records = s.summary_records.lock().unwrap();
                 let k = &self.tag.infos.extra_attachment;
-                match records.get(k) {
-                    Some(record) => {
-                        record.merge(s.summary_cur_record.as_ref());
-                    }
-                    None => {
-                        // See MAX_SUMMARY_RECORDS_LEN.
-                        if records.len() < MAX_SUMMARY_RECORDS_LEN {
-                            records.insert(k.clone(), s.summary_cur_record.as_ref().clone());
+                if !k.is_empty() {
+                    match records.get(k) {
+                        Some(record) => {
+                            record.merge(s.summary_cur_record.as_ref());
+                        }
+                        None => {
+                            // See MAX_SUMMARY_RECORDS_LEN.
+                            if records.len() < MAX_SUMMARY_RECORDS_LEN {
+                                records.insert(k.clone(), s.summary_cur_record.as_ref().clone());
+                            }
                         }
                     }
                 }
@@ -147,6 +152,16 @@ pub trait FutureExt: Sized {
 
 impl<T: std::future::Future> FutureExt for T {}
 
+/// See [FutureExt].
+pub trait StreamExt: Sized {
+    #[inline]
+    fn in_resource_metering_tag(self, tag: ResourceMeteringTag) -> InTags<Self> {
+        InTags { inner: self, tag }
+    }
+}
+
+impl<T: futures::Stream> StreamExt for T {}
+
 /// This structure is the return value of the [FutureExt::in_resource_metering_tag] method,
 /// which wraps the original [Future] with a [ResourceMeteringTag].
 ///
@@ -167,6 +182,16 @@ impl<T: std::future::Future> std::future::Future for InTags<T> {
         let this = self.project();
         let _guard = this.tag.attach();
         this.inner.poll(cx)
+    }
+}
+
+impl<T: futures::Stream> futures::Stream for InTags<T> {
+    type Item = T::Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+        let _guard = this.tag.attach();
+        this.inner.poll_next(cx)
     }
 }
 

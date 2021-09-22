@@ -196,9 +196,8 @@ mod tests {
 
         fn run(&mut self, task: Self::Task) {
             assert!(matches!(task, Task::ConfigChange(_)));
-            match task {
-                Task::ConfigChange(cfg) => assert_eq!(cfg.precision.as_millis(), 2000),
-                _ => {}
+            if let Task::ConfigChange(cfg) = task {
+                assert_eq!(cfg.precision.as_millis(), 2000);
             }
         }
     }
@@ -208,7 +207,7 @@ mod tests {
         let join_handle = std::thread::spawn(|| {});
         let pause = Arc::new(AtomicBool::new(true));
         let precision_ms = Arc::new(AtomicU64::new(0));
-        let handle = RecorderHandle::new(join_handle, pause.clone(), precision_ms.clone());
+        let handle = RecorderHandle::new(join_handle, pause, precision_ms.clone());
         let mut worker = LazyWorker::new("test-worker");
         worker.start(MockRunner);
         let mut cm = ConfigManager::new(Config::default(), worker.scheduler(), handle);

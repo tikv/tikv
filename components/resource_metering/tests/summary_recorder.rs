@@ -13,8 +13,8 @@ use Operation::*;
 enum Operation {
     SetContext(&'static str),
     ResetContext,
-    RecordReadKeys(u64),
-    RecordWriteKeys(u64),
+    RecordReadKeys(u32),
+    RecordWriteKeys(u32),
 }
 
 struct Operations {

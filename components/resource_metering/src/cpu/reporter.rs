@@ -111,7 +111,7 @@ mod tests {
         let mut reporter = CpuReporter::new(MockClient);
         reporter.report(&cfg, raw.clone());
         reporter.report(&cfg, raw.clone());
-        reporter.report(&cfg, raw.clone());
+        reporter.report(&cfg, raw);
         reporter.upload(&cfg);
         reporter.reset();
         assert!(reporter.records.is_empty());

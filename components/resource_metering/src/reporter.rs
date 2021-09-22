@@ -100,7 +100,6 @@ where
         self.config = cfg;
         if !self.config.should_report() {
             self.reset();
-            return;
         }
     }
 

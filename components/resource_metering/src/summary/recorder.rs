@@ -69,10 +69,13 @@ where
             // so it needs to be processed separately. (For example, a slow request that is
             // blocking needs to reflect in real time how many keys have been read currently)
             if let Some(tag) = s.shared_ptr.take_clone() {
-                total
-                    .entry(tag.infos.extra_attachment.clone())
-                    .or_insert_with(SummaryRecord::default)
-                    .merge(&s.summary_cur_record.take_and_reset())
+                let k = &tag.infos.extra_attachment;
+                if !k.is_empty() {
+                    total
+                        .entry(k.clone())
+                        .or_insert_with(SummaryRecord::default)
+                        .merge(&s.summary_cur_record.take_and_reset())
+                }
             }
         });
         self.collector.collect(Arc::new(total));

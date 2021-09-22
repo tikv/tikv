@@ -1567,9 +1567,11 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
     let (cb, f) = paired_future_callback();
     let for_atomic = req.get_for_cas();
     let res = if for_atomic {
-        storage.raw_batch_put_atomic(req.take_context(), cf, pairs, req.get_ttl(), cb)
+        // TODO(mornyx): rollback
+        storage.raw_batch_put_atomic(req.take_context(), cf, pairs, *req.get_ttls().get(0).unwrap(), cb)
     } else {
-        storage.raw_batch_put(req.take_context(), cf, pairs, req.get_ttl(), cb)
+        // TODO(mornyx): rollback
+        storage.raw_batch_put(req.take_context(), cf, pairs, *req.get_ttls().get(0).unwrap(), cb)
     };
 
     async move {

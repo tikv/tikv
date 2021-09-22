@@ -142,7 +142,7 @@ impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let result = self.0.next_batch(scan_rows);
-        resource_metering::record_read_keys(result.physical_columns.rows_len() as u64);
+        resource_metering::record_read_keys(result.physical_columns.rows_len() as u32);
         result
     }
 

@@ -5,7 +5,7 @@ mod model;
 mod recorder;
 mod reporter;
 
-pub use collector::CpuCollector;
+pub use collector::{register_cpu_dyn_collector, CpuCollector, DynCpuCollectorHandle};
 pub use model::{CpuRecords, RawCpuRecords};
 pub use recorder::CpuRecorder;
 pub use reporter::CpuReporter;

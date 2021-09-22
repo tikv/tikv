@@ -54,11 +54,6 @@ impl Default for GrpcClient {
 
 impl Client for GrpcClient {
     fn upload_cpu_records(&mut self, address: &str, records: CpuRecords) {
-        println!(
-            ">>> upload_cpu_records: {}, {:?}, {:?}",
-            address, records.records, records.others
-        );
-
         if address.is_empty() {
             return;
         }
@@ -115,8 +110,6 @@ impl Client for GrpcClient {
     }
 
     fn upload_summary_records(&mut self, address: &str, records: HashMap<Vec<u8>, SummaryRecord>) {
-        println!(">>> upload_summary_records: {}, {:?}", address, records);
-
         if address.is_empty() {
             return;
         }
@@ -143,9 +136,11 @@ impl Client for GrpcClient {
                 req.set_resource_group_tag(tag);
                 req.set_read_keys(record.r_count.load(Ordering::Relaxed));
                 req.set_write_keys(record.w_count.load(Ordering::Relaxed));
-                if let Err(err) = tx.send((req, WriteFlags::default())).await {
-                    warn!("failed to send summary record"; "error" => ?err);
-                    return;
+                if req.get_read_keys() > 0 || req.get_write_keys() > 0 {
+                    if let Err(err) = tx.send((req, WriteFlags::default())).await {
+                        warn!("failed to send summary record"; "error" => ?err);
+                        return;
+                    }
                 }
             }
             if let Err(err) = tx.close().await {

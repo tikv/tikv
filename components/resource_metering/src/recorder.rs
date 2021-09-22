@@ -18,7 +18,7 @@ use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
 
 const RECORD_FREQUENCY: f64 = 99.0;
-const CLEANUP_INTERVAL_SECS: u64 = 1 * 60;
+const CLEANUP_INTERVAL_SECS: u64 = 60;
 
 /// This trait defines a general framework that works at a certain frequency. Typically,
 /// it describes the recorder(sampler) framework for a specific resource.
@@ -320,7 +320,7 @@ mod tests {
         recorder.tick();
         recorder.reset();
         recorder.handle_thread_registration();
-        assert!(recorder.thread_stores.len() >= 1);
+        assert!(!recorder.thread_stores.is_empty());
         assert!(SUB_RECORDER_OP_COUNT.load(SeqCst) >= 3);
     }
 }

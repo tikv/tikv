@@ -46,8 +46,7 @@ use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
-use resource_metering::cpu::collector::{register_collector, Collector, CollectorHandle};
-use resource_metering::cpu::recorder::CpuRecords;
+use resource_metering::{register_cpu_dyn_collector, DynCpuCollectorHandle, Collector, RawCpuRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -170,7 +169,7 @@ where
         id: u64,
         duration: RaftstoreDuration,
     },
-    RegionCPURecords(Arc<CpuRecords>),
+    RegionCPURecords(Arc<RawCpuRecords>),
 }
 
 pub struct StoreStat {
@@ -637,11 +636,11 @@ where
     }
 }
 
-impl<E> Collector for RegionCPUMeteringCollector<E>
+impl<E> Collector<Arc<RawCpuRecords>> for RegionCPUMeteringCollector<E>
 where
     E: KvEngine,
 {
-    fn collect(&self, records: Arc<CpuRecords>) {
+    fn collect(&self, records: Arc<RawCpuRecords>) {
         self.scheduler
             .schedule(Task::RegionCPURecords(records))
             .ok();
@@ -669,7 +668,7 @@ where
     scheduler: Scheduler<Task<EK>>,
     stats_monitor: StatsMonitor<EK>,
 
-    _region_cpu_records_collector: CollectorHandle,
+    _region_cpu_records_collector: DynCpuCollectorHandle,
     // region_id -> total_cpu_time_ms (since last region heartbeat)
     region_cpu_records: HashMap<u64, u32>,
 
@@ -705,8 +704,8 @@ where
             error!("failed to start stats collector, error = {:?}", e);
         }
 
-        let _region_cpu_records_collector =
-            register_collector(Box::new(RegionCPUMeteringCollector::new(scheduler.clone())));
+        let _region_cpu_records_collector = register_cpu_dyn_collector(
+                Box::new(RegionCPUMeteringCollector::new(scheduler.clone())));
 
         Runner {
             store_id,
@@ -1366,14 +1365,14 @@ where
     // CPU time for the write path only takes into account the lock checking,
     // which is the read load portion of the write path.
     // TODO: more accurate CPU consumption of a specified region.
-    fn handle_region_cpu_records(&mut self, records: Arc<CpuRecords>) {
+    fn handle_region_cpu_records(&mut self, records: Arc<RawCpuRecords>) {
         calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records);
     }
 }
 
 fn calculate_region_cpu_records(
     store_id: u64,
-    records: Arc<CpuRecords>,
+    records: Arc<RawCpuRecords>,
     region_cpu_records: &mut HashMap<u64, u32>,
 ) {
     for (tag, ms) in &records.records {
@@ -1998,7 +1997,7 @@ mod tests {
 
         let region_num = 3;
         for i in 0..region_num * 10 {
-            let cpu_records = Arc::new(CpuRecords {
+            let cpu_records = Arc::new(RawCpuRecords {
                 begin_unix_time_secs: UnixSecs::now().into_inner(),
                 duration: Duration::default(),
                 records: {
