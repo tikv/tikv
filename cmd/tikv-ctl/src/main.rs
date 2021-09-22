@@ -2239,9 +2239,9 @@ fn main() {
         let to = matches
             .value_of("to")
             .map_or_else(Vec::new, |to| unescape(to));
-        let limit = matches
-            .value_of("limit")
-            .map_or(0, |s| s.parse().expect("Value of limit should be a u64 value"));
+        let limit = matches.value_of("limit").map_or(0, |s| {
+            s.parse().expect("Value of limit should be a u64 value")
+        });
         if to.is_empty() && limit == 0 {
             println!(r#"please pass "to" or "limit""#);
             process::exit(-1);
