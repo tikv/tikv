@@ -80,14 +80,14 @@ where
 }
 
 /// Records how many keys have been read in the current context.
-pub fn record_read_keys(count: u64) {
+pub fn record_read_keys(count: u32) {
     STORAGE.with(|s| {
         s.summary_cur_record.r_count.fetch_add(count, Relaxed);
     })
 }
 
 /// Records how many keys have been written in the current context.
-pub fn record_write_keys(count: u64) {
+pub fn record_write_keys(count: u32) {
     STORAGE.with(|s| {
         s.summary_cur_record.w_count.fetch_add(count, Relaxed);
     })

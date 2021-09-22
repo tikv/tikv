@@ -54,7 +54,7 @@ where
         // Whether endpoint exists or not, records should be taken in order to reset.
         let records = std::mem::take(&mut self.records);
         self.client
-            .upload_summary_records(&cfg.agent_address, &records);
+            .upload_summary_records(&cfg.agent_address, records);
     }
 
     fn reset(&mut self) {
@@ -65,16 +65,20 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::AtomicU32;
     use std::sync::atomic::Ordering::Relaxed;
     use tikv_util::config::ReadableDuration;
 
     struct MockClient;
 
     impl Client for MockClient {
-        fn upload_summary_records(&mut self, address: &str, v: &HashMap<Vec<u8>, SummaryRecord>) {
+        fn upload_summary_records(
+            &mut self,
+            address: &str,
+            records: HashMap<Vec<u8>, SummaryRecord>,
+        ) {
             assert_eq!(address, "abc");
-            assert_eq!(v.len(), 3);
+            assert_eq!(records.len(), 3);
         }
     }
 
@@ -91,22 +95,22 @@ mod tests {
         records1.insert(
             b"a".to_vec(),
             SummaryRecord {
-                r_count: AtomicU64::new(1),
-                w_count: AtomicU64::new(2),
+                r_count: AtomicU32::new(1),
+                w_count: AtomicU32::new(2),
             },
         );
         records1.insert(
             b"b".to_vec(),
             SummaryRecord {
-                r_count: AtomicU64::new(1),
-                w_count: AtomicU64::new(2),
+                r_count: AtomicU32::new(1),
+                w_count: AtomicU32::new(2),
             },
         );
         records1.insert(
             b"c".to_vec(),
             SummaryRecord {
-                r_count: AtomicU64::new(1),
-                w_count: AtomicU64::new(2),
+                r_count: AtomicU32::new(1),
+                w_count: AtomicU32::new(2),
             },
         );
         let records2 = records1.clone();

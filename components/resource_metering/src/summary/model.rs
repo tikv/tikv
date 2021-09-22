@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 
 /// This structure represents a specific summary statistical item. It records various
@@ -8,17 +8,17 @@ use std::sync::atomic::Ordering::Relaxed;
 #[derive(Debug, Default)]
 pub struct SummaryRecord {
     /// Number of keys that have been read.
-    pub r_count: AtomicU64,
+    pub r_count: AtomicU32,
 
     /// Number of keys that have been written.
-    pub w_count: AtomicU64,
+    pub w_count: AtomicU32,
 }
 
 impl Clone for SummaryRecord {
     fn clone(&self) -> Self {
         Self {
-            r_count: AtomicU64::new(self.r_count.load(Relaxed)),
-            w_count: AtomicU64::new(self.w_count.load(Relaxed)),
+            r_count: AtomicU32::new(self.r_count.load(Relaxed)),
+            w_count: AtomicU32::new(self.w_count.load(Relaxed)),
         }
     }
 }
@@ -39,8 +39,8 @@ impl SummaryRecord {
     /// Gets the value and writes it to zero.
     pub fn take_and_reset(&self) -> Self {
         Self {
-            r_count: AtomicU64::new(self.r_count.swap(0, Relaxed)),
-            w_count: AtomicU64::new(self.w_count.swap(0, Relaxed)),
+            r_count: AtomicU32::new(self.r_count.swap(0, Relaxed)),
+            w_count: AtomicU32::new(self.w_count.swap(0, Relaxed)),
         }
     }
 }
@@ -53,8 +53,8 @@ mod tests {
     #[test]
     fn test_summary_record() {
         let record = SummaryRecord {
-            r_count: AtomicU64::new(1),
-            w_count: AtomicU64::new(2),
+            r_count: AtomicU32::new(1),
+            w_count: AtomicU32::new(2),
         };
         assert_eq!(record.r_count.load(Relaxed), 1);
         assert_eq!(record.w_count.load(Relaxed), 2);
@@ -62,8 +62,8 @@ mod tests {
         assert_eq!(record2.r_count.load(Relaxed), 1);
         assert_eq!(record2.w_count.load(Relaxed), 2);
         record.merge(&SummaryRecord {
-            r_count: AtomicU64::new(3),
-            w_count: AtomicU64::new(4),
+            r_count: AtomicU32::new(3),
+            w_count: AtomicU32::new(4),
         });
         assert_eq!(record.r_count.load(Relaxed), 4);
         assert_eq!(record.w_count.load(Relaxed), 6);

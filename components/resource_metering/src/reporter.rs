@@ -147,7 +147,7 @@ impl Config {
 pub fn build_default_reporter(
     cfg: Config,
 ) -> Reporter<CpuReporter<GrpcClient>, SummaryReporter<GrpcClient>> {
-    let client = GrpcClient::new();
+    let client = GrpcClient::default();
     Reporter::new(
         cfg,
         CpuReporter::new(client.clone()),

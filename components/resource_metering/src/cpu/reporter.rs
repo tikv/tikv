@@ -46,7 +46,7 @@ where
         }
         // Whether endpoint exists or not, records should be taken in order to reset.
         let records = std::mem::take(&mut self.records);
-        self.client.upload_cpu_records(&cfg.agent_address, &records);
+        self.client.upload_cpu_records(&cfg.agent_address, records);
     }
 
     fn reset(&mut self) {
@@ -65,10 +65,10 @@ mod tests {
     struct MockClient;
 
     impl Client for MockClient {
-        fn upload_cpu_records(&mut self, address: &str, v: &CpuRecords) {
+        fn upload_cpu_records(&mut self, address: &str, records: CpuRecords) {
             assert_eq!(address, "abc");
-            assert_eq!(v.records.len(), 2);
-            assert_eq!(v.others.len(), 1);
+            assert_eq!(records.records.len(), 2);
+            assert_eq!(records.others.len(), 1);
         }
     }
 
