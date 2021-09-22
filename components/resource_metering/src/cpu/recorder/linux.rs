@@ -21,6 +21,7 @@ use tikv_util::time::Instant;
 const GC_INTERVAL_SECS: u64 = 15 * 60;
 const THREAD_STAT_LEN_THRESHOLD: usize = 500;
 const RECORD_LEN_THRESHOLD: usize = 20_000;
+const TEST_TAG_PREFIX: &[u8] = b"__resource_metering::tests::";
 
 lazy_static! {
     static ref PID: libc::pid_t = unsafe { libc::getpid() };
@@ -133,7 +134,7 @@ where
                         cur_tag.as_ref().map_or(false, |t| !t
                             .infos
                             .extra_attachment
-                            .starts_with(super::TEST_TAG_PREFIX)),
+                            .starts_with(TEST_TAG_PREFIX)),
                         |_| {}
                     );
 
