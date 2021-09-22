@@ -134,7 +134,7 @@ impl Operator {
         match *self {
             Operator::AddPeer { ref peer, .. } => {
                 if let Either::Left(ref peer) = *peer {
-                    let conf_change_type = if is_learner(&peer) {
+                    let conf_change_type = if is_learner(peer) {
                         ConfChangeType::AddLearnerNode
                     } else {
                         ConfChangeType::AddNode
@@ -184,7 +184,7 @@ impl Operator {
             } => {
                 let mut cps = Vec::with_capacity(to_add_peers.len() + remove_peers.len());
                 for peer in to_add_peers.iter() {
-                    let conf_change_type = if is_learner(&peer) {
+                    let conf_change_type = if is_learner(peer) {
                         ConfChangeType::AddLearnerNode
                     } else {
                         ConfChangeType::AddNode

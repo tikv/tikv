@@ -30,7 +30,7 @@ use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::{Callback, RegionSnapshot};
+use raftstore::store::{Callback, RaftCmdExtraOpts, RegionSnapshot};
 use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Instant, Limiter};
@@ -119,7 +119,7 @@ where
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
         let (cb, future) = paired_future_callback();
-        if let Err(e) = router.send_command(cmd, Callback::Read(cb)) {
+        if let Err(e) = router.send_command(cmd, Callback::Read(cb), RaftCmdExtraOpts::default()) {
             return Err(e.into());
         }
         let mut res = future.await.map_err(|_| {
@@ -196,7 +196,7 @@ where
             // must execute after geting a snapshot from raftstore to make sure that the
             // current leader has applied to current term.
             for sst in ssts.iter() {
-                if !importer.exist(&sst) {
+                if !importer.exist(sst) {
                     warn!(
                         "sst [{:?}] not exist. we may retry an operation that has already succeeded",
                         sst
@@ -212,7 +212,9 @@ where
             }
 
             let (cb, future) = paired_future_callback();
-            if let Err(e) = router.send_command(cmd, Callback::write(cb)) {
+            if let Err(e) =
+                router.send_command(cmd, Callback::write(cb), RaftCmdExtraOpts::default())
+            {
                 resp.set_error(e.into());
                 return Ok(resp);
             }

@@ -66,7 +66,7 @@ impl RpcClient {
         // -1 means the max.
         let retries = match cfg.retry_max_count {
             -1 => std::isize::MAX,
-            v => v.checked_add(1).unwrap_or(std::isize::MAX),
+            v => v.saturating_add(1),
         };
         let monitor = Arc::new(
             yatp::Builder::new(thd_name!("pdmonitor"))
@@ -530,6 +530,7 @@ impl PdClient for RpcClient {
         req.set_query_stats(region_stat.query_stats);
         req.set_approximate_size(region_stat.approximate_size);
         req.set_approximate_keys(region_stat.approximate_keys);
+        req.set_cpu_usage(region_stat.cpu_usage);
         if let Some(s) = replication_status {
             req.set_replication_status(s);
         }
@@ -859,6 +860,12 @@ impl DummyPdClient {
         DummyPdClient {
             next_ts: TimeStamp::zero(),
         }
+    }
+}
+
+impl Default for DummyPdClient {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

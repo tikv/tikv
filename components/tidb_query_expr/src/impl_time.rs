@@ -323,7 +323,7 @@ pub fn add_datetime_and_string(
     arg0: &DateTime,
     arg1: BytesRef,
 ) -> Result<Option<DateTime>> {
-    let arg1 = std::str::from_utf8(&arg1).map_err(Error::Encoding)?;
+    let arg1 = std::str::from_utf8(arg1).map_err(Error::Encoding)?;
     let arg1 = match Duration::parse(ctx, arg1, MAX_FSP) {
         Ok(arg) => arg,
         Err(_) => return Ok(None),
@@ -350,7 +350,7 @@ pub fn add_date_and_string(
     arg0: &DateTime,
     arg1: BytesRef,
 ) -> Result<Option<DateTime>> {
-    let arg1 = std::str::from_utf8(&arg1).map_err(Error::Encoding)?;
+    let arg1 = std::str::from_utf8(arg1).map_err(Error::Encoding)?;
     let arg1 = match Duration::parse(ctx, arg1, MAX_FSP) {
         Ok(arg) => arg,
         Err(_) => return Ok(None),
@@ -423,7 +423,7 @@ pub fn sub_datetime_and_string(
     datetime: &DateTime,
     duration_str: BytesRef,
 ) -> Result<Option<DateTime>> {
-    let duration_str = std::str::from_utf8(&duration_str).map_err(Error::Encoding)?;
+    let duration_str = std::str::from_utf8(duration_str).map_err(Error::Encoding)?;
     let duration = match Duration::parse(ctx, duration_str, MAX_FSP) {
         Ok(duration) => duration,
         Err(_) => return Ok(None),
@@ -450,7 +450,7 @@ pub fn sub_duration_and_string(
     arg1: &Duration,
     arg2: BytesRef,
 ) -> Result<Option<Duration>> {
-    let arg2 = std::str::from_utf8(&arg2).map_err(Error::Encoding)?;
+    let arg2 = std::str::from_utf8(arg2).map_err(Error::Encoding)?;
     let arg2 = match Duration::parse(ctx, arg2, MAX_FSP) {
         Ok(arg) => arg,
         Err(_) => return Ok(None),
@@ -741,7 +741,7 @@ pub fn add_duration_and_string(
     arg1: &Duration,
     arg2: BytesRef,
 ) -> Result<Option<Duration>> {
-    let arg2 = std::str::from_utf8(&arg2).map_err(Error::Encoding)?;
+    let arg2 = std::str::from_utf8(arg2).map_err(Error::Encoding)?;
     let arg2 = match Duration::parse(ctx, arg2, MAX_FSP) {
         Ok(arg) => arg,
         Err(_) => return Ok(None),

@@ -165,7 +165,7 @@ where
 
     let mut wb = db.write_batch();
     let mut write_to_db = |batch: &mut Vec<(Vec<u8>, Vec<u8>)>| -> Result<(), EngineError> {
-        batch.iter().try_for_each(|(k, v)| wb.put_cf(cf, &k, &v))?;
+        batch.iter().try_for_each(|(k, v)| wb.put_cf(cf, k, v))?;
         wb.write()?;
         wb.clear();
         callback(batch);
@@ -211,13 +211,14 @@ where
     E: KvEngine,
 {
     let builder = E::SstWriterBuilder::new()
-        .set_db(&engine)
+        .set_db(engine)
         .set_cf(cf)
         .set_compression_type(Some(SstCompressionType::Zstd));
     let writer = box_try!(builder.build(path));
     Ok(writer)
 }
 
+// TODO: Use DataKeyManager::open_file_for_read() instead.
 pub fn get_decrypter_reader(
     file: &str,
     encryption_key_manager: &DataKeyManager,
@@ -264,21 +265,21 @@ mod tests {
         for db_creater in db_creaters {
             for db_opt in vec![None, Some(gen_db_options_with_encryption())] {
                 let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
-                let db: KvTestEngine = db_creater(&dir.path(), db_opt.clone(), None).unwrap();
+                let db: KvTestEngine = db_creater(dir.path(), db_opt.clone(), None).unwrap();
                 // Collect keys via the key_callback into a collection.
                 let mut applied_keys: HashMap<_, Vec<_>> = HashMap::new();
                 let dir1 = Builder::new()
                     .prefix("test-snap-cf-db-apply")
                     .tempdir()
                     .unwrap();
-                let db1: KvTestEngine = open_test_empty_db(&dir1.path(), db_opt, None).unwrap();
+                let db1: KvTestEngine = open_test_empty_db(dir1.path(), db_opt, None).unwrap();
 
                 let snap = db.snapshot();
                 for cf in SNAPSHOT_CFS {
                     let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                     let plain_file_path = snap_cf_dir.path().join("plain");
                     let stats = build_plain_cf_file::<KvTestEngine>(
-                        &plain_file_path.to_str().unwrap(),
+                        plain_file_path.to_str().unwrap(),
                         None,
                         &snap,
                         cf,
@@ -296,7 +297,7 @@ mod tests {
 
                     let detector = TestStaleDetector {};
                     apply_plain_cf_file(
-                        &plain_file_path.to_str().unwrap(),
+                        plain_file_path.to_str().unwrap(),
                         None,
                         &detector,
                         &db1,
@@ -343,12 +344,12 @@ mod tests {
         for db_creater in db_creaters {
             for db_opt in vec![None, Some(gen_db_options_with_encryption())] {
                 let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
-                let db = db_creater(&dir.path(), db_opt.clone(), None).unwrap();
+                let db = db_creater(dir.path(), db_opt.clone(), None).unwrap();
 
                 let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                 let sst_file_path = snap_cf_dir.path().join("sst");
                 let stats = build_sst_cf_file::<KvTestEngine>(
-                    &sst_file_path.to_str().unwrap(),
+                    sst_file_path.to_str().unwrap(),
                     &db,
                     &db.snapshot(),
                     CF_DEFAULT,
@@ -369,8 +370,8 @@ mod tests {
                     .prefix("test-snap-cf-db-apply")
                     .tempdir()
                     .unwrap();
-                let db1: KvTestEngine = open_test_empty_db(&dir1.path(), db_opt, None).unwrap();
-                apply_sst_cf_file(&sst_file_path.to_str().unwrap(), &db1, CF_DEFAULT).unwrap();
+                let db1: KvTestEngine = open_test_empty_db(dir1.path(), db_opt, None).unwrap();
+                apply_sst_cf_file(sst_file_path.to_str().unwrap(), &db1, CF_DEFAULT).unwrap();
                 assert_eq_db(&db, &db1);
             }
         }

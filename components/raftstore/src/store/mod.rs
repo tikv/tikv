@@ -10,6 +10,7 @@ pub mod transport;
 #[macro_use]
 pub mod util;
 
+mod async_io;
 mod bootstrap;
 mod compaction_guard;
 mod hibernate_state;
@@ -34,8 +35,8 @@ pub use self::hibernate_state::{GroupState, HibernateState};
 pub use self::memory::*;
 pub use self::msg::{
     Callback, CasualMessage, ExtCallback, InspectedRaftMessage, MergeResultKind, PeerMsg,
-    PeerTicks, RaftCommand, ReadCallback, ReadResponse, SignificantMsg, StoreMsg, StoreTick,
-    WriteCallback, WriteResponse,
+    PeerTicks, RaftCmdExtraOpts, RaftCommand, ReadCallback, ReadResponse, SignificantMsg, StoreMsg,
+    StoreTick, WriteCallback, WriteResponse,
 };
 pub use self::peer::{
     AbstractPeer, Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy,
@@ -58,7 +59,7 @@ pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
 pub use self::util::{RegionReadProgress, RegionReadProgressRegistry};
 pub use self::worker::{
     AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, QueryStats, ReadDelegate,
-    ReadStats, SplitConfig, SplitConfigManager, TrackVer,
+    ReadStats, SplitConfig, SplitConfigManager, TrackVer, WriteStats,
 };
 pub use self::worker::{CheckLeaderRunner, CheckLeaderTask};
 pub use self::worker::{KeyEntry, LocalReader, RegionTask};

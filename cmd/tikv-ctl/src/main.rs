@@ -19,6 +19,7 @@ use engine_traits::{
 };
 use file_system::calc_crc32;
 use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
+use gag::BufferRedirect;
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::encryptionpb::EncryptionMethod;
@@ -32,13 +33,15 @@ use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raft_log_engine::RaftLogEngine;
 use raftstore::store::INIT_EPOCH_CONF_VER;
+use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
+use serde_json::json;
 use server::setup::initial_logger;
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::str::FromStr;
@@ -49,7 +52,7 @@ use std::{process, str, thread, u64};
 use tikv::config::{ConfigController, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv_util::config::canonicalize_sub_path;
-use tikv_util::{escape, unescape};
+use tikv_util::{escape, run_and_wait_child_process, unescape};
 use txn_types::Key;
 
 const METRICS_PROMETHEUS: &str = "prometheus";
@@ -142,7 +145,7 @@ fn new_debug_executor(
     } else {
         let mut config = cfg.raft_engine.config();
         config.dir = canonicalize_sub_path(data_dir, &config.dir).unwrap();
-        let raft_db = RaftLogEngine::new(config);
+        let raft_db = RaftLogEngine::new(config).unwrap();
         let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
         Box::new(debugger) as Box<dyn DebugExecutor>
     }
@@ -178,7 +181,7 @@ trait DebugExecutor {
     }
 
     fn dump_all_region_size(&self, cfs: Vec<&str>) {
-        let regions = self.get_all_meta_regions();
+        let regions = self.get_all_regions_in_store();
         let regions_number = regions.len();
         let mut total_size = 0;
         for region in regions {
@@ -188,30 +191,71 @@ trait DebugExecutor {
         println!("total region size: {}", convert_gbmb(total_size as u64));
     }
 
-    fn dump_region_info(&self, region: u64, skip_tombstone: bool) {
-        let r = self.get_region_info(region);
-        if skip_tombstone {
-            let region_state = r.region_local_state.as_ref();
-            if region_state.map_or(false, |s| s.get_state() == PeerState::Tombstone) {
-                return;
+    fn dump_region_info(&self, region_ids: Option<Vec<u64>>, skip_tombstone: bool) {
+        let region_ids = region_ids.unwrap_or_else(|| self.get_all_regions_in_store());
+        let mut region_objects = serde_json::map::Map::new();
+        for region_id in region_ids {
+            let r = self.get_region_info(region_id);
+            if skip_tombstone {
+                let region_state = r.region_local_state.as_ref();
+                if region_state.map_or(false, |s| s.get_state() == PeerState::Tombstone) {
+                    return;
+                }
             }
+            let region_object = json!({
+                "region_id": region_id,
+                "region_local_state": r.region_local_state.map(|s| {
+                    let r = s.get_region();
+                    let region_epoch = r.get_region_epoch();
+                    let peers = r.get_peers();
+                    json!({
+                        "region": json!({
+                            "id": r.get_id(),
+                            "start_key": hex::encode_upper(r.get_start_key()),
+                            "end_key": hex::encode_upper(r.get_end_key()),
+                            "region_epoch": json!({
+                                "conf_ver": region_epoch.get_conf_ver(),
+                                "version": region_epoch.get_version()
+                            }),
+                            "peers": peers.iter().map(|p| json!({
+                                "id": p.get_id(),
+                                "store_id": p.get_store_id(),
+                                "role": format!("{:?}", p.get_role()),
+                            })).collect::<Vec<_>>(),
+                        }),
+                    })
+                }),
+                "raft_local_state": r.raft_local_state.map(|s| {
+                    let hard_state = s.get_hard_state();
+                    json!({
+                        "hard_state": json!({
+                            "term": hard_state.get_term(),
+                            "vote": hard_state.get_vote(),
+                            "commit": hard_state.get_commit(),
+                        }),
+                        "last_index": s.get_last_index(),
+                    })
+                }),
+                "raft_apply_state": r.raft_apply_state.map(|s| {
+                    let truncated_state = s.get_truncated_state();
+                    json!({
+                        "applied_index": s.get_applied_index(),
+                        "commit_index": s.get_commit_index(),
+                        "commit_term": s.get_commit_term(),
+                        "truncated_state": json!({
+                            "index": truncated_state.get_index(),
+                            "term": truncated_state.get_term(),
+                        })
+                    })
+                })
+            });
+            region_objects.insert(region_id.to_string(), region_object);
         }
-        let region_state_key = keys::region_state_key(region);
-        let raft_state_key = keys::raft_state_key(region);
-        let apply_state_key = keys::apply_state_key(region);
-        println!("region id: {}", region);
-        println!("region state key: {}", escape(&region_state_key));
-        println!("region state: {:?}", r.region_local_state);
-        println!("raft state key: {}", escape(&raft_state_key));
-        println!("raft state: {:?}", r.raft_local_state);
-        println!("apply state key: {}", escape(&apply_state_key));
-        println!("apply state: {:?}", r.raft_apply_state);
-    }
 
-    fn dump_all_region_info(&self, skip_tombstone: bool) {
-        for region in self.get_all_meta_regions() {
-            self.dump_region_info(region, skip_tombstone);
-        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "region_infos": region_objects })).unwrap()
+        );
     }
 
     fn dump_raft_log(&self, region: u64, index: u64) {
@@ -530,7 +574,14 @@ trait DebugExecutor {
     }
 
     /// Recover the cluster when given `store_ids` are failed.
-    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>);
+    fn remove_fail_stores(
+        &self,
+        store_ids: Vec<u64>,
+        region_ids: Option<Vec<u64>>,
+        promote_learner: bool,
+    );
+
+    fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>);
 
     /// Recreate the region with metadata from pd, but alloc new id for it.
     fn recreate_region(&self, sec_mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64);
@@ -570,7 +621,7 @@ trait DebugExecutor {
         self.recover_all(threads, read_only);
     }
 
-    fn get_all_meta_regions(&self) -> Vec<u64>;
+    fn get_all_regions_in_store(&self) -> Vec<u64>;
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8>;
 
@@ -621,8 +672,10 @@ impl DebugExecutor for DebugClient {
         process::exit(-1);
     }
 
-    fn get_all_meta_regions(&self) -> Vec<u64> {
-        unimplemented!();
+    fn get_all_regions_in_store(&self) -> Vec<u64> {
+        DebugClient::get_all_regions_in_store(self, &GetAllRegionsInStoreRequest::default())
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_all_regions_in_store", e))
+            .take_regions()
     }
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
@@ -758,12 +811,16 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only available for local mode");
     }
 
-    fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>) {
-        self.check_local_mode();
+    fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>, _: bool) {
+        unimplemented!("only available for local mode");
+    }
+
+    fn drop_unapplied_raftlog(&self, _: Option<Vec<u64>>) {
+        unimplemented!("only available for local mode");
     }
 
     fn recreate_region(&self, _: Arc<SecurityManager>, _: &PdConfig, _: u64) {
-        self.check_local_mode();
+        unimplemented!("only available for local mode");
     }
 
     fn check_region_consistency(&self, region_id: u64) {
@@ -818,9 +875,9 @@ impl DebugExecutor for DebugClient {
 impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     fn check_local_mode(&self) {}
 
-    fn get_all_meta_regions(&self) -> Vec<u64> {
-        self.get_all_meta_regions()
-            .unwrap_or_else(|e| perror_and_exit("Debugger::get_all_meta_regions", e))
+    fn get_all_regions_in_store(&self) -> Vec<u64> {
+        self.get_all_regions_in_store()
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_all_regions_in_store", e))
     }
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
@@ -936,9 +993,21 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         println!("all regions are healthy")
     }
 
-    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>) {
+    fn remove_fail_stores(
+        &self,
+        store_ids: Vec<u64>,
+        region_ids: Option<Vec<u64>>,
+        promote_learner: bool,
+    ) {
         println!("removing stores {:?} from configurations...", store_ids);
-        self.remove_failed_stores(store_ids, region_ids)
+        self.remove_failed_stores(store_ids, region_ids, promote_learner)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
+        println!("success");
+    }
+
+    fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) {
+        println!("removing unapplied raftlog on region {:?} ...", region_ids);
+        self.drop_unapplied_raftlog(region_ids)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         println!("success");
     }
@@ -1200,10 +1269,25 @@ fn main() {
                     SubCommand::with_name("region")
                         .about("print region info")
                         .arg(
-                            Arg::with_name("region")
-                                .short("r")
+                            Arg::with_name("regions")
+                                .aliases(&["region"])
+                                .required_unless("all-regions")
+                                .conflicts_with("all-regions")
                                 .takes_value(true)
-                                .help("Set the region id, if not specified, print all regions"),
+                                .short("r")
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .help("Print info for these regions"),
+                        )
+                        .arg(
+                            Arg::with_name("all-regions")
+                                .required_unless("regions")
+                                .conflicts_with("regions")
+                                .long("all-regions")
+                                .takes_value(false)
+                                .help("Print info for all regions"),
                         )
                         .arg(
                             Arg::with_name("skip-tombstone")
@@ -1559,9 +1643,10 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("unsafe-recover")
-                .about("Unsafely recover the cluster when the majority replicas are failed")
+                .about("Unsafely recover when the store can not start normally, this recover may lose data")
                 .subcommand(
                     SubCommand::with_name("remove-fail-stores")
+                        .about("Remove the failed machines from the peer list for the regions")
                         .arg(
                             Arg::with_name("stores")
                                 .required(true)
@@ -1573,6 +1658,37 @@ fn main() {
                                 .value_delimiter(",")
                                 .help("Stores to be removed"),
                         )
+                        .arg(
+                            Arg::with_name("regions")
+                                .required_unless("all-regions")
+                                .conflicts_with("all-regions")
+                                .takes_value(true)
+                                .short("r")
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .help("Only for these regions"),
+                        )
+                        .arg(
+                            Arg::with_name("promote-learner")
+                                .long("promote-learner")
+                                .takes_value(false)
+                                .required(false)
+                                .help("Promote learner to voter"),
+                        )
+                        .arg(
+                            Arg::with_name("all-regions")
+                                .required_unless("regions")
+                                .conflicts_with("regions")
+                                .long("all-regions")
+                                .takes_value(false)
+                                .help("Do the command for all regions"),
+                        )
+                )
+                .subcommand(
+                    SubCommand::with_name("drop-unapplied-raftlog")
+                        .about("Remove unapplied raftlogs on the regions")
                         .arg(
                             Arg::with_name("regions")
                                 .required_unless("all-regions")
@@ -1874,6 +1990,31 @@ fn main() {
                                 .help("Path to the file. Dump for all files if not provided."),
                         ),
                 ),
+            )
+        .subcommand(
+            SubCommand::with_name("bad-ssts")
+                .about("Print bad ssts related infos")
+                .arg(
+                    Arg::with_name("db")
+                        .long("db")
+                        .required(true)
+                        .takes_value(true)
+                        .help("db directory."),
+                )
+                .arg(
+                    Arg::with_name("manifest")
+                        .long("manifest")
+                        .takes_value(true)
+                        .help("specify manifest, if not set, it will look up manifest file in db path"),
+                )
+                .arg(
+                    Arg::with_name("pd")
+                        .required(true)
+                        .long("pd")
+                        .takes_value(true)
+                        .value_delimiter(",")
+                        .help("PD endpoints"),
+                )
         );
 
     let matches = app.clone().get_matches();
@@ -1883,15 +2024,37 @@ fn main() {
 
     // Initialize configuration and security manager.
     let cfg_path = matches.value_of("config");
-    let cfg = cfg_path.map_or_else(TiKvConfig::default, |path| {
-        let s = fs::read_to_string(&path).unwrap();
-        toml::from_str(&s).unwrap()
-    });
+    let cfg = cfg_path.map_or_else(
+        || {
+            let mut cfg = TiKvConfig::default();
+            cfg.log_level = tikv_util::logger::get_level_by_string("warn").unwrap();
+            cfg
+        },
+        |path| {
+            let s = fs::read_to_string(&path).unwrap();
+            toml::from_str(&s).unwrap()
+        },
+    );
     let mgr = new_security_mgr(&matches);
 
     // Bypass the ldb command to RocksDB.
     if let Some(cmd) = matches.subcommand_matches("ldb") {
-        run_ldb_command(&cmd, &cfg);
+        run_ldb_command(cmd, &cfg);
+        return;
+    }
+
+    // Bypass the sst dump command to RocksDB.
+    if let Some(cmd) = matches.subcommand_matches("sst_dump") {
+        run_sst_dump_command(cmd, &cfg);
+        return;
+    }
+
+    if let Some(matches) = matches.subcommand_matches("bad-ssts") {
+        let db = matches.value_of("db").unwrap();
+        let manifest = matches.value_of("manifest");
+        let pd = matches.value_of("pd").unwrap();
+        let pd_client = get_pd_rpc_client(pd, Arc::clone(&mgr));
+        print_bad_ssts(db, manifest, pd_client, &cfg);
         return;
     }
 
@@ -1913,7 +2076,7 @@ fn main() {
         println!("{}", escape(&from_hex(hex).unwrap()));
         return;
     } else if let Some(escaped) = matches.value_of("escaped-to-hex") {
-        println!("{}", log_wrappers::hex_encode_upper(unescape(escaped)));
+        println!("{}", hex::encode_upper(unescape(escaped)));
         return;
     } else if let Some(encoded) = matches.value_of("decode") {
         match Key::from_encoded(unescape(encoded)).into_raw() {
@@ -2054,11 +2217,13 @@ fn main() {
             debug_executor.dump_raft_log(id, index);
         } else if let Some(matches) = matches.subcommand_matches("region") {
             let skip_tombstone = matches.is_present("skip-tombstone");
-            if let Some(id) = matches.value_of("region") {
-                debug_executor.dump_region_info(id.parse().unwrap(), skip_tombstone);
-            } else {
-                debug_executor.dump_all_region_info(skip_tombstone);
-            }
+            let regions = matches.values_of("regions").map(|values| {
+                values
+                    .map(str::parse)
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("parse regions fail")
+            });
+            debug_executor.dump_region_info(regions, skip_tombstone);
         } else {
             let _ = app.print_help();
         }
@@ -2196,7 +2361,18 @@ fn main() {
                     .collect::<Result<Vec<_>, _>>()
                     .expect("parse regions fail")
             });
-            debug_executor.remove_fail_stores(store_ids, region_ids);
+            debug_executor.remove_fail_stores(
+                store_ids,
+                region_ids,
+                matches.is_present("promote-learner"),
+            );
+        } else if let Some(matches) = matches.subcommand_matches("drop-unapplied-raftlog") {
+            let region_ids = matches.values_of("regions").map(|ids| {
+                ids.map(str::parse)
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("parse regions fail")
+            });
+            debug_executor.drop_unapplied_raftlog(region_ids);
         } else {
             println!("{}", matches.usage());
         }
@@ -2355,8 +2531,7 @@ fn dump_snap_meta_file(path: &str) {
 }
 
 fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
-    let mut cfg = PdConfig::default();
-    cfg.endpoints.push(pd.to_owned());
+    let cfg = PdConfig::new(vec![pd.to_string()]);
     cfg.validate().unwrap();
     RpcClient::new(&cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
 }
@@ -2483,6 +2658,187 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     opts.set_env(env);
 
     engine_rocks::raw::run_ldb_tool(&args, &opts);
+}
+
+fn run_sst_dump_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
+    let mut args: Vec<String> = match cmd.values_of("") {
+        Some(v) => v.map(ToOwned::to_owned).collect(),
+        None => Vec::new(),
+    };
+    args.insert(0, "sst_dump".to_owned());
+    let opts = cfg.rocksdb.build_opt();
+    engine_rocks::raw::run_sst_dump_tool(&args, &opts);
+}
+
+fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &TiKvConfig) {
+    let mut args = vec![
+        "sst_dump".to_string(),
+        "--output_hex".to_string(),
+        "--command=verify".to_string(),
+    ];
+    args.push(format!("--file={}", db));
+
+    let mut stderr = BufferRedirect::stderr().unwrap();
+    let stdout = BufferRedirect::stdout().unwrap();
+    let opts = cfg.rocksdb.build_opt();
+    match run_and_wait_child_process(|| engine_rocks::raw::run_sst_dump_tool(&args, &opts)).unwrap()
+    {
+        0 => {}
+        status => {
+            let mut err = String::new();
+            stderr.read_to_string(&mut err).unwrap();
+            println!("failed to run {}:\n{}", args.join(" "), err);
+            std::process::exit(status);
+        }
+    };
+
+    let mut stderr_buf = stderr.into_inner();
+    drop(stdout);
+    let mut buffer = Vec::new();
+    stderr_buf.read_to_end(&mut buffer).unwrap();
+    let corruptions = unsafe { String::from_utf8_unchecked(buffer) };
+
+    for line in corruptions.lines() {
+        println!("--------------------------------------------------------");
+        // The corruption format may like this:
+        // /path/to/db/057155.sst is corrupted: Corruption: block checksum mismatch: expected 3754995957, got 708533950  in /path/to/db/057155.sst offset 3126049 size 22724
+        println!("corruption info:\n{}", line);
+        let parts = line.splitn(2, ':').collect::<Vec<_>>();
+        let path = Path::new(parts[0]);
+        match path.extension() {
+            Some(ext) if ext.to_str().unwrap() == "sst" => {}
+            _ => {
+                println!("skip bad line format: {}", line);
+                continue;
+            }
+        }
+        let sst_file_number = path.file_stem().unwrap().to_str().unwrap();
+        let mut args1 = vec![
+            "ldb".to_string(),
+            "--hex".to_string(),
+            "manifest_dump".to_string(),
+        ];
+        args1.push(format!("--db={}", db));
+        args1.push(format!("--sst_file_number={}", sst_file_number));
+        if let Some(manifest_path) = manifest {
+            args1.push(format!("--manifest={}", manifest_path));
+        }
+
+        let stdout = BufferRedirect::stdout().unwrap();
+        let stderr = BufferRedirect::stderr().unwrap();
+        match run_and_wait_child_process(|| engine_rocks::raw::run_ldb_tool(&args1, &opts)).unwrap()
+        {
+            0 => {}
+            status => {
+                let mut err = String::new();
+                let mut stderr_buf = stderr.into_inner();
+                drop(stdout);
+                stderr_buf.read_to_string(&mut err).unwrap();
+                println!(
+                    "ldb process return status code {}, failed to run {}:\n{}",
+                    status,
+                    args1.join(" "),
+                    err
+                );
+                continue;
+            }
+        };
+
+        let mut stdout_buf = stdout.into_inner();
+        drop(stderr);
+        let mut output = String::new();
+        stdout_buf.read_to_string(&mut output).unwrap();
+
+        println!("\nsst meta:");
+        // The output may like this:
+        // --------------- Column family "write"  (ID 2) --------------
+        // 63:132906243[3555338 .. 3555338]['7A311B40EFCC2CB4C5911ECF3937D728DED26AE53FA5E61BE04F23F2BE54EACC73' seq:3555338, type:1 .. '7A313030302E25CD5F57252E' seq:3555338, type:1] at level 0
+        let column_r = Regex::new(r"--------------- (.*) --------------\n(.*)").unwrap();
+        if let Some(m) = column_r.captures(&output) {
+            println!(
+                "{} for {}",
+                m.get(2).unwrap().as_str(),
+                m.get(1).unwrap().as_str()
+            );
+            let r = Regex::new(r".*\n\d+:\d+\[\d+ .. \d+\]\['(\w*)' seq:\d+, type:\d+ .. '(\w*)' seq:\d+, type:\d+\] at level \d+").unwrap();
+            let matches = match r.captures(&output) {
+                None => {
+                    println!("sst start key format is not correct: {}", output);
+                    continue;
+                }
+                Some(v) => v,
+            };
+            let start = from_hex(matches.get(1).unwrap().as_str()).unwrap();
+            let end = from_hex(matches.get(2).unwrap().as_str()).unwrap();
+
+            if start.starts_with(&[keys::DATA_PREFIX]) {
+                print_overlap_region_and_suggestions(&pd_client, &start[1..], &end[1..], db, path);
+            } else if start.starts_with(&[keys::LOCAL_PREFIX]) {
+                println!(
+                    "it isn't easy to handle local data, start key:{}",
+                    log_wrappers::Value(&start)
+                );
+
+                // consider the case that include both meta and user data
+                if end.starts_with(&[keys::DATA_PREFIX]) {
+                    print_overlap_region_and_suggestions(&pd_client, &[], &end[1..], db, path);
+                }
+            } else {
+                println!("unexpected key {}", log_wrappers::Value(&start));
+            }
+        } else {
+            // it is expected when the sst is output of a compaction and the sst isn't added to manifest yet.
+            println!(
+                "sst {} is not found in manifest: {}",
+                sst_file_number, output
+            );
+        }
+    }
+    println!("--------------------------------------------------------");
+    println!("corruption analysis has completed");
+}
+
+fn print_overlap_region_and_suggestions(
+    pd_client: &RpcClient,
+    start: &[u8],
+    end: &[u8],
+    db: &str,
+    sst_path: &Path,
+) {
+    let mut key = start.to_vec();
+    let mut regions_to_print = vec![];
+    println!("\noverlap region:");
+    loop {
+        let region = match pd_client.get_region_info(&key) {
+            Err(e) => {
+                println!(
+                    "can not get the region of key {}: {}",
+                    log_wrappers::Value(start),
+                    e
+                );
+                return;
+            }
+            Ok(r) => r,
+        };
+        regions_to_print.push(region.clone());
+        println!("{:?}", region);
+        if region.get_end_key() > end || region.get_end_key().is_empty() {
+            break;
+        }
+        key = region.get_end_key().to_vec();
+    }
+
+    println!("\nsuggested operations:");
+    println!(
+        "tikv-ctl ldb --db={} unsafe_remove_sst_file {:?}",
+        db, sst_path
+    );
+    for region in regions_to_print {
+        println!(
+            "tikv-ctl --db={} tombstone -r {} --pd <endpoint>",
+            db, region.id
+        );
+    }
 }
 
 #[cfg(test)]

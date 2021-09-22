@@ -241,7 +241,7 @@ pub trait JsonDecoder: NumberDecoder {
             }
             JsonType::String => {
                 let value = self.bytes();
-                let (str_len, len_len) = NumberCodec::try_decode_var_u64(&value)?;
+                let (str_len, len_len) = NumberCodec::try_decode_var_u64(value)?;
                 self.read_bytes(str_len as usize + len_len)?
             }
             JsonType::I64 | JsonType::U64 | JsonType::Double => self.read_bytes(NUMBER_LEN)?,

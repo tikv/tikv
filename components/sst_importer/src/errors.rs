@@ -88,7 +88,8 @@ pub enum Error {
 
     #[error(
         "{what} has wrong prefix: key {} does not start with {}",
-        log_wrappers::Value::key(&key), log_wrappers::Value::key(&prefix)
+        log_wrappers::Value::key(key),
+        log_wrappers::Value::key(prefix)
     )]
     WrongKeyPrefix {
         what: &'static str,

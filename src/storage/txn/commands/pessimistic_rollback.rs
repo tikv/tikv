@@ -79,7 +79,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
         }
         released_locks.wake_up(context.lock_mgr);
 
-        let write_data = WriteData::from_modifies(txn.into_modifies());
+        let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx,
             to_be_write: write_data,
@@ -99,10 +100,12 @@ pub mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::commands::{WriteCommand, WriteContext};
+    use crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT;
     use crate::storage::txn::tests::*;
     use crate::storage::TestEngineBuilder;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+    use tikv_util::deadline::Deadline;
     use txn_types::Key;
 
     pub fn must_success<E: Engine>(
@@ -121,6 +124,7 @@ pub mod tests {
             keys: vec![Key::from_raw(key)],
             start_ts,
             for_update_ts,
+            deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
         let lock_mgr = DummyLockManager;
         let write_context = WriteContext {

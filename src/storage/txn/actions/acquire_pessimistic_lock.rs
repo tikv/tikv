@@ -63,7 +63,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 None => OldValue::None,
             })
         } else {
-            reader.get_old_value(&key, for_update_ts, prev_write_loaded, prev_write)
+            reader.get_old_value(key, for_update_ts, prev_write_loaded, prev_write)
         }
     }
 

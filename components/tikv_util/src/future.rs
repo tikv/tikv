@@ -83,7 +83,7 @@ impl ArcWake for BatchCommandsWaker {
     fn wake_by_ref(arc_self: &Arc<Self>) {
         let mut future_slot = arc_self.0.lock().unwrap();
         if let Some(mut future) = future_slot.take() {
-            let waker = task::waker_ref(&arc_self);
+            let waker = task::waker_ref(arc_self);
             let cx = &mut Context::from_waker(&*waker);
             match future.as_mut().poll(cx) {
                 Poll::Pending => {

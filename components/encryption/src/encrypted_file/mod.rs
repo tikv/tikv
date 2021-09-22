@@ -74,7 +74,7 @@ impl<'a> EncryptedFile<'a> {
 
         // Encrypt the content.
         let encrypted_content = master_key
-            .encrypt(&plaintext_content)?
+            .encrypt(plaintext_content)?
             .write_to_bytes()
             .unwrap();
         let header = Header::new(&encrypted_content, Version::V1);

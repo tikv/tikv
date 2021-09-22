@@ -31,6 +31,7 @@ pub enum ErrorInner {
 
     #[error("storage is closed.")]
     Closed,
+
     #[error("{0}")]
     Other(#[from] Box<dyn StdError + Send + Sync>),
 
@@ -139,6 +140,7 @@ impl Display for ErrorHeaderKind {
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
+const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
 
 /// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf message.
 /// Returns `ErrorHeaderKind::Other` if no match found.
@@ -210,7 +212,9 @@ pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
         }
         Err(Error(box ErrorInner::DeadlineExceeded)) => {
             let mut err = errorpb::Error::default();
-            err.set_message("Deadline is exceeded".to_string());
+            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+            server_is_busy_err.set_reason(DEADLINE_EXCEEDED.to_owned());
+            err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
         _ => None,

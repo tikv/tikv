@@ -32,7 +32,8 @@ use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
-use resource_metering::{FutureExt, ResourceMeteringTag};
+use resource_metering::{FutureExt, StreamExt, ResourceMeteringTag};
+use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::time::Instant;
 use txn_types::Lock;
 
@@ -272,15 +273,15 @@ impl<E: Engine> Endpoint<E> {
             REQ_TYPE_ANALYZE => {
                 let mut analyze = AnalyzeReq::default();
                 parser.merge_to(&mut analyze)?;
-                let table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
                 if start_ts == 0 {
                     start_ts = analyze.get_start_ts_fallback();
                 }
 
-                let tag = if table_scan {
-                    ReqTag::analyze_table
-                } else {
-                    ReqTag::analyze_index
+                let tag = match analyze.get_tp() {
+                    AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => ReqTag::analyze_index,
+                    AnalyzeType::TypeColumn | AnalyzeType::TypeMixed => ReqTag::analyze_table,
+                    AnalyzeType::TypeFullSampling => ReqTag::analyze_full_sampling,
+                    AnalyzeType::TypeSampleIndex => unimplemented!(),
                 };
                 req_ctx = ReqContext::new(
                     tag,
@@ -393,7 +394,7 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> Result<coppb::Response> {
+    ) -> Result<MemoryTraceGuard<coppb::Response>> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         tracker.on_scheduled();
@@ -420,8 +421,9 @@ impl<E: Engine> Endpoint<E> {
         tracker.on_begin_all_items();
 
         let deadline = tracker.req_ctx.deadline;
-        let handle_request_future =
-            check_deadline(track(handler.handle_request(), &mut tracker), deadline);
+        let handle_request_future = check_deadline(handler.handle_request(), deadline);
+        let handle_request_future = track(handle_request_future, &mut tracker);
+
         let deadline_res = if let Some(semaphore) = &semaphore {
             limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
@@ -445,7 +447,7 @@ impl<E: Engine> Endpoint<E> {
                 COPR_RESP_SIZE.inc_by(resp.data.len() as u64);
                 resp
             }
-            Err(e) => make_error_response(e),
+            Err(e) => make_error_response(e).into(),
         };
         resp.set_exec_details(exec_details);
         resp.set_exec_details_v2(exec_details_v2);
@@ -460,7 +462,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl Future<Output = Result<coppb::Response>> {
+    ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
         let resource_tag = ResourceMeteringTag::from_rpc_context(&req_ctx.context);
@@ -487,15 +489,17 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Future<Output = coppb::Response> {
+    ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
 
         async move {
             match result_of_future {
-                Err(e) => make_error_response(e),
-                Ok(handle_fut) => handle_fut.await.unwrap_or_else(make_error_response),
+                Err(e) => make_error_response(e).into(),
+                Ok(handle_fut) => handle_fut
+                    .await
+                    .unwrap_or_else(|e| make_error_response(e).into()),
             }
         }
     }
@@ -588,12 +592,14 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
+        let resource_tag = ResourceMeteringTag::from_rpc_context(&req_ctx.context);
         let task_id = req_ctx.build_task_id();
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
         self.read_pool
             .spawn(
                 Self::handle_stream_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                    .in_resource_metering_tag(resource_tag)
                     .then(futures::future::ok::<_, mpsc::SendError>)
                     .forward(tx)
                     .unwrap_or_else(|e| {
@@ -729,19 +735,19 @@ mod tests {
 
     #[async_trait]
     impl RequestHandler for UnaryFixture {
-        async fn handle_request(&mut self) -> Result<coppb::Response> {
+        async fn handle_request(&mut self) -> Result<MemoryTraceGuard<coppb::Response>> {
             if self.yieldable {
-                // We split the task into small executions of 1 second.
-                for _ in 0..self.handle_duration_millis / 1_000 {
-                    thread::sleep(Duration::from_millis(1_000));
+                // We split the task into small executions of 100 milliseconds.
+                for _ in 0..self.handle_duration_millis / 100 {
+                    thread::sleep(Duration::from_millis(100));
                     yatp::task::future::reschedule().await;
                 }
-                thread::sleep(Duration::from_millis(self.handle_duration_millis % 1_000));
+                thread::sleep(Duration::from_millis(self.handle_duration_millis % 100));
             } else {
                 thread::sleep(Duration::from_millis(self.handle_duration_millis));
             }
 
-            self.result.take().unwrap()
+            self.result.take().unwrap().map(|x| x.into())
         }
     }
 
@@ -906,7 +912,7 @@ mod tests {
             req
         };
 
-        let resp: coppb::Response = block_on(copr.parse_and_handle_unary_request(req, None));
+        let resp = block_on(copr.parse_and_handle_unary_request(req, None));
         assert!(!resp.get_other_error().is_empty());
     }
 
@@ -928,7 +934,7 @@ mod tests {
         let mut req = coppb::Request::default();
         req.set_tp(9999);
 
-        let resp: coppb::Response = block_on(copr.parse_and_handle_unary_request(req, None));
+        let resp = block_on(copr.parse_and_handle_unary_request(req, None));
         assert!(!resp.get_other_error().is_empty());
     }
 
@@ -1510,7 +1516,8 @@ mod tests {
             });
             let resp_future_3 = copr
                 .handle_stream_request(req_with_exec_detail, handler_builder)
-                .unwrap();
+                .unwrap()
+                .map(|x| x.map(|x| x.into()));
             thread::spawn(move || {
                 tx.send(
                     block_on_stream(resp_future_3)
@@ -1611,6 +1618,52 @@ mod tests {
                     .get_wait_wall_time_ms(),
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
+        }
+    }
+
+    #[test]
+    fn test_exceed_deadline() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            PerfLevel::EnableCount,
+        );
+
+        {
+            let handler_builder = Box::new(|_, _: &_| {
+                thread::sleep(Duration::from_millis(600));
+                Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
+            });
+
+            let mut config = ReqContext::default_for_test();
+            config.deadline = Deadline::from_now(Duration::from_millis(500));
+
+            let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
+            assert_eq!(resp.get_data().len(), 0);
+            assert!(!resp.get_other_error().is_empty());
+        }
+
+        {
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(
+                    UnaryFixture::new_with_duration_yieldable(Ok(coppb::Response::default()), 1500)
+                        .into_boxed(),
+                )
+            });
+
+            let mut config = ReqContext::default_for_test();
+            config.deadline = Deadline::from_now(Duration::from_millis(500));
+
+            let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
+            assert_eq!(resp.get_data().len(), 0);
+            assert!(!resp.get_other_error().is_empty());
         }
     }
 

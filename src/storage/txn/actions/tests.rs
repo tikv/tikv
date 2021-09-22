@@ -58,7 +58,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
             is_retry_request,
         },
         mutation,
-        &secondary_keys,
+        secondary_keys,
         is_pessimistic_lock,
     )
     .unwrap();

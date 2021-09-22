@@ -8,11 +8,11 @@ use crate::ExternalStorage;
 use anyhow::Context;
 use futures_io::AsyncRead;
 use grpcio::{self};
-use kvproto::backup as proto;
+use kvproto::brpb as proto;
 #[cfg(feature = "prost-codec")]
-pub use kvproto::backup::storage_backend::Backend;
+pub use kvproto::brpb::storage_backend::Backend;
 #[cfg(feature = "protobuf-codec")]
-pub use kvproto::backup::StorageBackend_oneof_backend as Backend;
+pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 use std::io::{self, ErrorKind};
 use std::sync::Arc;
 use tikv_util::time::Limiter;

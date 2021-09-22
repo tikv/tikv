@@ -225,6 +225,12 @@ impl OpenOptions {
     }
 }
 
+impl Default for OpenOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;

@@ -1,10 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::decode_properties::DecodeProperties;
 use crate::{RocksEngine, UserProperties};
-use engine_traits::{
-    DecodeProperties, MvccProperties, MvccPropertiesExt, Result, TableProperties,
-    TablePropertiesCollection, TablePropertiesExt,
-};
+use engine_traits::{MvccProperties, MvccPropertiesExt, Result};
 use txn_types::TimeStamp;
 
 pub(crate) const PROP_NUM_ERRORS: &str = "tikv.num_errors";
@@ -57,13 +55,13 @@ impl MvccPropertiesExt for RocksEngine {
         start_key: &[u8],
         end_key: &[u8],
     ) -> Option<MvccProperties> {
-        let collection = match self.get_range_properties_cf(cf, &start_key, &end_key) {
+        let collection = match self.get_range_properties_cf(cf, start_key, end_key) {
             Ok(c) if !c.is_empty() => c,
             _ => return None,
         };
         let mut props = MvccProperties::new();
         for (_, v) in collection.iter() {
-            let mvcc = match RocksMvccProperties::decode(&v.user_collected_properties()) {
+            let mvcc = match RocksMvccProperties::decode(v.user_collected_properties()) {
                 Ok(m) => m,
                 Err(_) => return None,
             };

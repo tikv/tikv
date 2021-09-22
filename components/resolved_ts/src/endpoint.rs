@@ -474,7 +474,7 @@ where
 
         let mut min_ts = TimeStamp::max();
         for region_id in regions.iter() {
-            if let Some(observe_region) = self.regions.get_mut(&region_id) {
+            if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
                     let resolved_ts = observe_region.resolver.resolve(ts);
                     if resolved_ts < min_ts {
@@ -782,8 +782,7 @@ where
         RTS_MIN_RESOLVED_TS.set(oldest_ts as i64);
         RTS_ZERO_RESOLVED_TS.set(zero_ts_count as i64);
         RTS_MIN_RESOLVED_TS_GAP.set(
-            TimeStamp::physical_now().saturating_sub(TimeStamp::from(oldest_ts).physical()) as i64
-                / 1000i64,
+            TimeStamp::physical_now().saturating_sub(TimeStamp::from(oldest_ts).physical()) as i64,
         );
         RTS_LOCK_HEAP_BYTES_GAUGE.set(lock_heap_size as i64);
         RTS_REGION_RESOLVE_STATUS_GAUGE_VEC

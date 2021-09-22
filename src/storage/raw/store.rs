@@ -162,7 +162,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
     ) -> Result<Vec<Result<KvPair>>> {
         let mut cursor = Cursor::new(self.snapshot.iter_cf(cf, option)?, ScanMode::Forward, false);
         let statistics = statistics.mut_cf_statistics(cf);
-        if !cursor.seek(&start_key, statistics)? {
+        if !cursor.seek(start_key, statistics)? {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
@@ -210,7 +210,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
             false,
         );
         let statistics = statistics.mut_cf_statistics(cf);
-        if !cursor.reverse_seek(&start_key, statistics)? {
+        if !cursor.reverse_seek(start_key, statistics)? {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
