@@ -8,7 +8,7 @@ use crate::cpu::RawCpuRecords;
 use crate::localstorage::LocalStorage;
 use crate::recorder::SubRecorder;
 use crate::utils;
-use crate::{ResourceMeteringTag, SharedTagPtr, TEST_TAG_PREFIX};
+use crate::{SharedTagPtr, TEST_TAG_PREFIX};
 use collections::HashMap;
 use fail::fail_point;
 use lazy_static::lazy_static;
@@ -60,15 +60,15 @@ where
     fn tick(&mut self, _thread_stores: &mut HashMap<usize, LocalStorage>) {
         self.handle_dyn_collector_registration();
         self.record();
-        self.may_gc();
         self.may_advance_window();
+        self.may_gc();
     }
 
     fn reset(&mut self) {
         let now = Instant::now();
         self.current_window_records = RawCpuRecords::default();
-        for v in self.thread_stats.values_mut() {
-            v.prev_tag = None;
+        for (thread_id, stat) in &mut self.thread_stats {
+            stat.stat = procinfo::pid::stat_task(*PID, *thread_id as _).unwrap_or_default();
         }
         self.last_collect_instant = now;
         self.last_gc_instant = now;
@@ -79,8 +79,7 @@ where
             id,
             ThreadStat {
                 shared_ptr,
-                prev_stat: Stat::default(),
-                prev_tag: None,
+                stat: Stat::default(),
             },
         );
     }
@@ -107,41 +106,31 @@ where
         let records = &mut self.current_window_records.records;
         self.thread_stats.iter_mut().for_each(|(tid, thread_stat)| {
             let cur_tag = thread_stat.shared_ptr.take_clone();
-            let prev_tag = thread_stat.prev_tag.take();
 
-            if cur_tag.is_some() || prev_tag.is_some() {
-                STAT_TASK_COUNT.inc();
+            fail_point!(
+                "cpu-record-test-filter",
+                cur_tag.as_ref().map_or(false, |t| !t
+                    .infos
+                    .extra_attachment
+                    .starts_with(TEST_TAG_PREFIX)),
+                |_| {}
+            );
 
-                // If existing current tag, need to store the beginning stat.
-                // If existing previous tag, need to get the end stat to calculate delta.
-                if let Ok(stat) = procinfo::pid::stat_task(*PID, *tid as _) {
-                    // Accumulate the cpu time for the previous tag.
-                    if let Some(prev_tag) = prev_tag {
-                        let prev_cpu_ticks = (thread_stat.prev_stat.utime as u64)
-                            .wrapping_add(thread_stat.prev_stat.stime as u64);
-                        let current_cpu_ticks = (stat.utime as u64).wrapping_add(stat.stime as u64);
-                        let delta_ms = current_cpu_ticks.wrapping_sub(prev_cpu_ticks) * 1_000
-                            / (*CLK_TCK as u64);
+            if let Some(cur_tag) = cur_tag {
+                if let Ok(cur_stat) = procinfo::pid::stat_task(*PID, *tid as _) {
+                    STAT_TASK_COUNT.inc();
 
-                        if delta_ms != 0 {
-                            *records.entry(prev_tag).or_insert(0) += delta_ms;
-                        }
+                    let last_stat = &thread_stat.stat;
+                    let last_cpu_tick = last_stat.utime.wrapping_add(last_stat.stime);
+                    let cur_cpu_tick = cur_stat.utime.wrapping_add(cur_stat.stime);
+                    let delta_ticks = cur_cpu_tick.wrapping_sub(last_cpu_tick);
+
+                    if delta_ticks > 0 {
+                        let delta_ms = (delta_ticks * 1_000 / *CLK_TCK) as u64;
+                        *records.entry(cur_tag).or_insert(0) += delta_ms;
                     }
 
-                    fail_point!(
-                        "cpu-record-test-filter",
-                        cur_tag.as_ref().map_or(false, |t| !t
-                            .infos
-                            .extra_attachment
-                            .starts_with(TEST_TAG_PREFIX)),
-                        |_| {}
-                    );
-
-                    // Store the beginning stat for the current tag.
-                    if cur_tag.is_some() {
-                        thread_stat.prev_tag = cur_tag;
-                        thread_stat.prev_stat = stat;
-                    }
+                    thread_stat.stat = cur_stat;
                 }
             }
         });
@@ -150,6 +139,7 @@ where
     fn may_gc(&mut self) -> bool {
         let duration_secs = self.last_gc_instant.saturating_elapsed().as_secs();
         let need_gc = duration_secs >= GC_INTERVAL_SECS;
+
         if need_gc {
             if let Some(thread_ids) = utils::thread_ids() {
                 self.thread_stats.retain(|k, v| {
@@ -158,11 +148,13 @@ where
                     retain
                 });
             }
+
             if self.thread_stats.capacity() > THREAD_STAT_LEN_THRESHOLD
                 && self.thread_stats.len() < THREAD_STAT_LEN_THRESHOLD / 2
             {
                 self.thread_stats.shrink_to(THREAD_STAT_LEN_THRESHOLD);
             }
+
             if self.current_window_records.records.capacity() > RECORD_LEN_THRESHOLD
                 && self.current_window_records.records.len() < RECORD_LEN_THRESHOLD / 2
             {
@@ -171,24 +163,29 @@ where
                     .shrink_to(RECORD_LEN_THRESHOLD);
             }
         }
+
         need_gc
     }
 
     fn may_advance_window(&mut self) -> bool {
         let duration = self.last_collect_instant.saturating_elapsed();
         let need_advance = duration.as_millis() >= self.precision_ms.load(Relaxed) as _;
+
         if need_advance {
             let mut records = std::mem::take(&mut self.current_window_records);
             records.duration = duration;
+
             if !records.records.is_empty() {
-                let r = Arc::new(records);
-                self.collector.collect(r.clone());
-                self.dyn_collectors
-                    .values()
-                    .for_each(|c| c.collect(r.clone()));
+                let records = Arc::new(records);
+                self.collector.collect(records.clone());
+                for collector in self.dyn_collectors.values() {
+                    collector.collect(records.clone());
+                }
             }
+
             self.last_collect_instant = Instant::now();
         }
+
         need_advance
     }
 
@@ -208,8 +205,7 @@ where
 
 struct ThreadStat {
     shared_ptr: SharedTagPtr,
-    prev_tag: Option<ResourceMeteringTag>,
-    prev_stat: Stat,
+    stat: Stat,
 }
 
 #[cfg(test)]
@@ -258,15 +254,14 @@ mod tests {
             utils::thread_id(),
             ThreadStat {
                 shared_ptr,
-                prev_stat: Stat::default(),
-                prev_tag: None,
+                stat: Stat::default(),
             },
         );
         assert_eq!(recorder.current_window_records.records.len(), 0);
         recorder.record();
         assert_eq!(recorder.current_window_records.records.len(), 0);
         let thread_id = utils::thread_id();
-        let prev_stat = &recorder.thread_stats.get(&thread_id).unwrap().prev_stat;
+        let prev_stat = &recorder.thread_stats.get(&thread_id).unwrap().stat;
         let prev_cpu_ticks = (prev_stat.utime as u64).wrapping_add(prev_stat.stime as u64);
         loop {
             let stat = procinfo::pid::stat_task(*PID, thread_id as _).unwrap();

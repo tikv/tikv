@@ -12,7 +12,6 @@ use grpcio::{Environment, Server};
 use kvproto::kvrpcpb::Context;
 use kvproto::resource_usage_agent::CpuTimeRecord;
 use mock_agent_server::MockAgentServer;
-// use resource_metering::reporter::{ResourceMeteringReporter, Task};
 use resource_metering::{Config, ConfigManager, Task, TEST_TAG_PREFIX};
 use tempfile::TempDir;
 use tikv::config::{ConfigController, Module, TiKvConfig};
