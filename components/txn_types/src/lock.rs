@@ -432,17 +432,17 @@ mod tests {
         let (key, value) = (b"key", b"value");
         let mut tests = vec![
             (
-                Mutation::Put((Key::from_raw(key), value.to_vec())),
+                Mutation::make_put(Key::from_raw(key), value.to_vec()),
                 LockType::Put,
                 FLAG_PUT,
             ),
             (
-                Mutation::Delete(Key::from_raw(key)),
+                Mutation::make_delete(Key::from_raw(key)),
                 LockType::Delete,
                 FLAG_DELETE,
             ),
             (
-                Mutation::Lock(Key::from_raw(key)),
+                Mutation::make_lock(Key::from_raw(key)),
                 LockType::Lock,
                 FLAG_LOCK,
             ),
