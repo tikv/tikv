@@ -17,6 +17,8 @@ use txn_types::{
     is_short_value, Key, Mutation, MutationType, OldValue, TimeStamp, Value, Write, WriteType,
 };
 
+use kvproto::kvrpcpb::Assertion;
+
 /// Prewrite a single mutation by creating and storing a lock and value.
 pub fn prewrite<S: Snapshot>(
     txn: &mut MvccTxn,
@@ -231,6 +233,7 @@ struct PrewriteMutation<'a> {
 
     should_not_exist: bool,
     should_not_write: bool,
+    assertion: Assertion,
     txn_props: &'a TransactionProperties<'a>,
 }
 
@@ -251,6 +254,7 @@ impl<'a> PrewriteMutation<'a> {
         let should_not_exist = mutation.should_not_exists();
         let mutation_type = mutation.mutation_type();
         let lock_type = LockType::from_mutation(&mutation);
+        let assertion = mutation.get_assertion();
         let (key, value) = mutation.into_key_value();
         Ok(PrewriteMutation {
             key,
@@ -264,6 +268,7 @@ impl<'a> PrewriteMutation<'a> {
 
             should_not_exist,
             should_not_write,
+            assertion,
             txn_props,
         })
     }
@@ -358,9 +363,32 @@ impl<'a> PrewriteMutation<'a> {
                 // a lock belonging to a committed transaction which deletes the key.
                 check_data_constraint(reader, self.should_not_exist, &write, commit_ts, &self.key)?;
 
+                if self.assertion == Assertion::NotExist {
+                    return Err(ErrorInner::AssertionFailed {
+                        start_ts: self.txn_props.start_ts,
+                        key: self.key.to_raw()?,
+                        assertion: self.assertion,
+                        existed_start_ts: write.start_ts,
+                        existed_commit_ts: commit_ts,
+                    })
+                    .into();
+                }
+
                 Ok(Some(write))
             }
-            None => Ok(None),
+            None => {
+                if self.assertion == Assertion::Exist {
+                    return Err(ErrorInner::AssertionFailed {
+                        start_ts: self.txn_props.start_ts,
+                        key: self.key.to_raw()?,
+                        assertion: self.assertion,
+                        existed_start_ts: TimeStamp::zero(),
+                        existed_commit_ts: TimeStamp::zero(),
+                    })
+                    .into();
+                }
+                Ok(None)
+            }
         }
     }
 
@@ -434,6 +462,9 @@ impl<'a> PrewriteMutation<'a> {
     }
 
     fn skip_constraint_check(&self) -> bool {
+        if self.assertion != Assertion::None {
+            return false;
+        }
         match &self.txn_props.kind {
             TransactionKind::Optimistic(s) => *s,
             TransactionKind::Pessimistic(_) => true,

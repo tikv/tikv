@@ -145,6 +145,18 @@ pub enum ErrorInner {
         max_commit_ts: TimeStamp,
     },
 
+    #[error(
+        "assertion on data failed, start_ts:{}, key:{}, assertion:{:?}, existed_start_ts:{}, existed_commit_ts:{}",
+        .start_ts, log_wrappers::Value::key(.key), .assertion, .existed_start_ts, .existed_commit_ts
+    )]
+    AssertionFailed {
+        start_ts: TimeStamp,
+        key: Vec<u8>,
+        assertion: Assertion,
+        existed_start_ts: TimeStamp,
+        existed_commit_ts: TimeStamp,
+    },
+
     #[error("{0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
 }
@@ -250,6 +262,19 @@ impl ErrorInner {
                 min_commit_ts: *min_commit_ts,
                 max_commit_ts: *max_commit_ts,
             }),
+            ErrorInner::AssertionFailed {
+                start_ts,
+                key,
+                assertion,
+                existed_start_ts,
+                existed_commit_ts,
+            } => Some(ErrorInner::AssertionFailed {
+                start_ts: *start_ts,
+                key: key.clone(),
+                assertion: *assertion,
+                existed_start_ts: *existed_start_ts,
+                existed_commit_ts: *existed_commit_ts,
+            }),
             ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }
     }
@@ -335,6 +360,7 @@ impl ErrorCodeExt for Error {
                 error_code::storage::PESSIMISTIC_LOCK_NOT_FOUND
             }
             ErrorInner::CommitTsTooLarge { .. } => error_code::storage::COMMIT_TS_TOO_LARGE,
+            ErrorInner::AssertionFailed { .. } => error_code::storage::ASSERTION_FAILED,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }
