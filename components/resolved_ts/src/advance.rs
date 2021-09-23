@@ -169,12 +169,13 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
         for (region_id, (peer_list, leader_info)) in info_map {
             let leader_id = leader_info.get_peer_id();
             // Check if the leader in this store
-            match find_store_by_peer_id(&peer_list, leader_id) {
-                // And the peer should not be a learner
-                Some(peer) if peer.get_role() != PeerRole::Learner => (),
-                _ => continue,
+            if find_store_id(&peer_list, leader_id) != Some(store_id) {
+                continue;
             }
             for peer in &peer_list {
+                if peer.get_role() == PeerRole::Learner {
+                    continue;
+                }
                 if peer.store_id == store_id && peer.id == leader_id {
                     resp_map.entry(region_id).or_default().push(store_id);
                     continue;
@@ -310,10 +311,10 @@ fn region_has_quorum(peers: &[Peer], stores: &[u64]) -> bool {
     has_incoming_majority && has_demoting_majority
 }
 
-fn find_store_by_peer_id(peer_list: &[Peer], peer_id: u64) -> Option<&Peer> {
+fn find_store_id(peer_list: &[Peer], peer_id: u64) -> Option<u64> {
     for peer in peer_list {
         if peer.id == peer_id {
-            return Some(peer);
+            return Some(peer.store_id);
         }
     }
     None
