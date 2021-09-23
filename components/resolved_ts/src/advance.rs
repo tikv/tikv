@@ -173,9 +173,6 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
                 continue;
             }
             for peer in &peer_list {
-                if peer.get_role() == PeerRole::Learner {
-                    continue;
-                }
                 if peer.store_id == store_id && peer.id == leader_id {
                     resp_map.entry(region_id).or_default().push(store_id);
                     continue;
