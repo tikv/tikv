@@ -326,7 +326,10 @@ impl Mutation {
     }
 
     pub fn should_not_exists(&self) -> bool {
-        matches!(self, Mutation::Insert(_, _) | Mutation::CheckNotExists(_, _))
+        matches!(
+            self,
+            Mutation::Insert(_, _) | Mutation::CheckNotExists(_, _)
+        )
     }
 
     pub fn should_not_write(&self) -> bool {
@@ -343,7 +346,7 @@ impl Mutation {
         }
     }
 
-    pub fn set_assertion(&mut self, assertion: Assertion){
+    pub fn set_assertion(&mut self, assertion: Assertion) {
         *match self {
             Mutation::Put(_, ref mut assertion) => assertion,
             Mutation::Delete(_, ref mut assertion) => assertion,

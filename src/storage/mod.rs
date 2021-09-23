@@ -3205,7 +3205,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
-                    vec![Mutation::put((Key::from_raw(b"x"), b"100".to_vec()))],
+                    vec![Mutation::make_put(Key::from_raw(b"x"), b"100".to_vec())],
                     b"x".to_vec(),
                     100.into(),
                 ),
@@ -3215,7 +3215,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
-                    vec![Mutation::put((Key::from_raw(b"y"), b"101".to_vec()))],
+                    vec![Mutation::make_put(Key::from_raw(b"y"), b"101".to_vec())],
                     b"y".to_vec(),
                     101.into(),
                 ),
@@ -3263,7 +3263,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
-                    vec![Mutation::Put((Key::from_raw(b"x"), b"105".to_vec()))],
+                    vec![Mutation::make_put(Key::from_raw(b"x"), b"105".to_vec())],
                     b"x".to_vec(),
                     105.into(),
                 ),
@@ -3303,7 +3303,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
-                    vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
+                    vec![Mutation::make_put(Key::from_raw(b"y"), b"101".to_vec())],
                     b"y".to_vec(),
                     101.into(),
                 ),
@@ -3315,7 +3315,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
-                    vec![Mutation::Put((Key::from_raw(b"z"), b"102".to_vec()))],
+                    vec![Mutation::make_put(Key::from_raw(b"z"), b"102".to_vec())],
                     b"y".to_vec(),
                     102.into(),
                 ),
@@ -3335,7 +3335,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
-                    vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                    vec![Mutation::make_put(Key::from_raw(b"x"), b"100".to_vec())],
                     b"x".to_vec(),
                     100.into(),
                 ),
@@ -3374,7 +3374,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::with_lock_ttl(
-                    vec![Mutation::Put((Key::from_raw(b"x"), b"110".to_vec()))],
+                    vec![Mutation::make_put(Key::from_raw(b"x"), b"110".to_vec())],
                     b"x".to_vec(),
                     ts(110, 0),
                     100,
@@ -3439,7 +3439,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::with_context(
-                    vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                    vec![Mutation::make_put(Key::from_raw(b"x"), b"100".to_vec())],
                     b"x".to_vec(),
                     100.into(),
                     ctx,
@@ -3493,7 +3493,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
-                    vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                    vec![Mutation::make_put(Key::from_raw(b"x"), b"100".to_vec())],
                     b"x".to_vec(),
                     100.into(),
                 ),
@@ -3543,9 +3543,9 @@ mod tests {
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
-                        Mutation::Put((Key::from_raw(b"x"), b"100".to_vec())),
-                        Mutation::Put((Key::from_raw(b"y"), b"100".to_vec())),
-                        Mutation::Put((Key::from_raw(b"z"), b"100".to_vec())),
+                        Mutation::make_put(Key::from_raw(b"x"), b"100".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"y"), b"100".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"z"), b"100".to_vec()),
                     ],
                     b"x".to_vec(),
                     100.into(),
@@ -4736,9 +4736,9 @@ mod tests {
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
-                        Mutation::Put((Key::from_raw(b"x"), b"foo".to_vec())),
-                        Mutation::Put((Key::from_raw(b"y"), b"foo".to_vec())),
-                        Mutation::Put((Key::from_raw(b"z"), b"foo".to_vec())),
+                        Mutation::make_put(Key::from_raw(b"x"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"y"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"z"), b"foo".to_vec()),
                     ],
                     b"x".to_vec(),
                     100.into(),
@@ -4752,9 +4752,9 @@ mod tests {
             .sched_txn_command(
                 commands::Prewrite::new(
                     vec![
-                        Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
-                        Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
-                        Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                        Mutation::make_put(Key::from_raw(b"a"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"b"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"c"), b"foo".to_vec()),
                     ],
                     b"c".to_vec(),
                     101.into(),
@@ -5033,9 +5033,9 @@ mod tests {
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
-                        Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
-                        Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
-                        Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                        Mutation::make_put(Key::from_raw(b"a"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"b"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"c"), b"foo".to_vec()),
                     ],
                     b"c".to_vec(),
                     99.into(),
@@ -5091,10 +5091,10 @@ mod tests {
             for is_rollback in &is_rollback_coll {
                 let mut mutations = vec![];
                 for i in 0..scanned_locks {
-                    mutations.push(Mutation::Put((
+                    mutations.push(Mutation::make_put(
                         Key::from_raw(format!("x{:08}", i).as_bytes()),
                         b"foo".to_vec(),
-                    )));
+                    ));
                 }
 
                 storage
@@ -5143,9 +5143,9 @@ mod tests {
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
-                        Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
-                        Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
-                        Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                        Mutation::make_put(Key::from_raw(b"a"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"b"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"c"), b"foo".to_vec()),
                     ],
                     b"c".to_vec(),
                     99.into(),
@@ -5200,9 +5200,9 @@ mod tests {
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
-                        Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
-                        Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
-                        Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                        Mutation::make_put(Key::from_raw(b"a"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"b"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"c"), b"foo".to_vec()),
                     ],
                     b"c".to_vec(),
                     101.into(),
@@ -5269,7 +5269,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::with_lock_ttl(
-                    vec![Mutation::Put((k.clone(), v.clone()))],
+                    vec![Mutation::make_put(k.clone(), v.clone())],
                     b"k".to_vec(),
                     10.into(),
                     100,
@@ -5390,7 +5390,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
-                    vec![Mutation::Put((k.clone(), v.clone()))],
+                    vec![Mutation::make_put(k.clone(), v.clone())],
                     k.as_encoded().to_vec(),
                     ts(9, 0),
                 ),
@@ -5407,7 +5407,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::new(
-                    vec![Mutation::Put((k.clone(), v.clone()))],
+                    vec![Mutation::make_put(k.clone(), v.clone())],
                     b"k".to_vec(),
                     ts(10, 0),
                     100,
@@ -5490,7 +5490,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::with_lock_ttl(
-                    vec![Mutation::Put((k.clone(), v))],
+                    vec![Mutation::make_put(k.clone(), v)],
                     k.as_encoded().to_vec(),
                     ts(25, 0),
                     100,
@@ -5546,7 +5546,10 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::new(
-                    vec![Mutation::Lock(k1.clone()), Mutation::Lock(k2.clone())],
+                    vec![
+                        Mutation::make_lock(k1.clone()),
+                        Mutation::make_lock(k2.clone()),
+                    ],
                     b"k".to_vec(),
                     10.into(),
                     100,
@@ -5620,7 +5623,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::new(
-                    vec![Mutation::Lock(k3.clone())],
+                    vec![Mutation::make_lock(k3.clone())],
                     b"k".to_vec(),
                     30.into(),
                     100,
@@ -5736,8 +5739,8 @@ mod tests {
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![
-                        (Mutation::Put((key.clone(), val.clone())), true),
-                        (Mutation::Put((key2.clone(), val2.clone())), false),
+                        (Mutation::make_put(key.clone(), val.clone()), true),
+                        (Mutation::make_put(key2.clone(), val2.clone()), false),
                     ],
                     key.to_raw().unwrap(),
                     10.into(),
@@ -5936,7 +5939,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
-                    vec![Mutation::Put((Key::from_raw(&k), v))],
+                    vec![Mutation::make_put(Key::from_raw(&k), v)],
                     k.clone(),
                     10.into(),
                 ),
@@ -6051,7 +6054,7 @@ mod tests {
                 .sched_txn_command(
                     commands::Prewrite::with_defaults(
                         keys.iter()
-                            .map(|k| Mutation::Put((k.clone(), b"v".to_vec())))
+                            .map(|k| Mutation::make_put(k.clone(), b"v".to_vec()))
                             .collect(),
                         keys[0].to_raw().unwrap(),
                         ts,
@@ -6266,7 +6269,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::with_lock_ttl(
-                    vec![Mutation::Put((key.clone(), b"v".to_vec()))],
+                    vec![Mutation::make_put(key.clone(), b"v".to_vec())],
                     key.to_raw().unwrap(),
                     start_ts,
                     100,
@@ -6428,9 +6431,9 @@ mod tests {
             .sched_txn_command(
                 commands::Prewrite::new(
                     vec![
-                        Mutation::Put((Key::from_raw(b"a"), b"v".to_vec())),
-                        Mutation::Put((Key::from_raw(b"b"), b"v".to_vec())),
-                        Mutation::Put((Key::from_raw(b"c"), b"v".to_vec())),
+                        Mutation::make_put(Key::from_raw(b"a"), b"v".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"b"), b"v".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"c"), b"v".to_vec()),
                     ],
                     b"c".to_vec(),
                     100.into(),
@@ -6473,8 +6476,8 @@ mod tests {
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![
-                        (Mutation::Put((Key::from_raw(b"d"), b"v".to_vec())), true),
-                        (Mutation::Put((Key::from_raw(b"e"), b"v".to_vec())), true),
+                        (Mutation::make_put(Key::from_raw(b"d"), b"v".to_vec()), true),
+                        (Mutation::make_put(Key::from_raw(b"e"), b"v".to_vec()), true),
                     ],
                     b"d".to_vec(),
                     200.into(),
@@ -6565,7 +6568,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
-                    vec![(Mutation::Put((key2.clone(), value2.clone())), true)],
+                    vec![(Mutation::make_put(key2.clone(), value2.clone()), true)],
                     k2.to_vec(),
                     10.into(),
                     0,
@@ -6609,8 +6612,8 @@ mod tests {
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![
-                        (Mutation::Put((key1.clone(), value1)), true),
-                        (Mutation::Put((key2.clone(), value2)), false),
+                        (Mutation::make_put(key1.clone(), value1), true),
+                        (Mutation::make_put(key2.clone(), value2), false),
                     ],
                     k1.to_vec(),
                     1.into(),
@@ -6694,8 +6697,8 @@ mod tests {
         let keys = [b"k1", b"k2"];
         let values = [b"v1", b"v2"];
         let mutations = vec![
-            Mutation::Put((Key::from_raw(keys[0]), keys[0].to_vec())),
-            Mutation::Put((Key::from_raw(keys[1]), values[1].to_vec())),
+            Mutation::make_put(Key::from_raw(keys[0]), keys[0].to_vec()),
+            Mutation::make_put(Key::from_raw(keys[1]), values[1].to_vec()),
         ];
 
         let on_applied_case = Case {
@@ -6838,11 +6841,26 @@ mod tests {
             .sched_txn_command(
                 commands::PrewritePessimistic::with_defaults(
                     vec![
-                        (Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())), true),
-                        (Mutation::Put((Key::from_raw(b"k3"), b"v2".to_vec())), true),
-                        (Mutation::Put((Key::from_raw(b"k4"), b"v4".to_vec())), true),
-                        (Mutation::Put((Key::from_raw(b"k5"), b"v5".to_vec())), true),
-                        (Mutation::Put((Key::from_raw(b"k6"), b"v6".to_vec())), true),
+                        (
+                            Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
+                            true,
+                        ),
+                        (
+                            Mutation::make_put(Key::from_raw(b"k3"), b"v2".to_vec()),
+                            true,
+                        ),
+                        (
+                            Mutation::make_put(Key::from_raw(b"k4"), b"v4".to_vec()),
+                            true,
+                        ),
+                        (
+                            Mutation::make_put(Key::from_raw(b"k5"), b"v5".to_vec()),
+                            true,
+                        ),
+                        (
+                            Mutation::make_put(Key::from_raw(b"k6"), b"v6".to_vec()),
+                            true,
+                        ),
                     ],
                     b"k1".to_vec(),
                     10.into(),

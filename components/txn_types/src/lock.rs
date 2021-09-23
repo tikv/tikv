@@ -31,10 +31,10 @@ const ROLLBACK_TS_PREFIX: u8 = b'r';
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
         match *mutation {
-            Mutation::Put(_, _) | Mutation::Insert(_, _) => Some(LockType::Put),
-            Mutation::Delete(_, _) => Some(LockType::Delete),
-            Mutation::Lock(_, _) => Some(LockType::Lock),
-            Mutation::CheckNotExists(_, _) => None,
+            Mutation::Put(..) | Mutation::Insert(..) => Some(LockType::Put),
+            Mutation::Delete(..) => Some(LockType::Delete),
+            Mutation::Lock(..) => Some(LockType::Lock),
+            Mutation::CheckNotExists(..) => None,
         }
     }
 

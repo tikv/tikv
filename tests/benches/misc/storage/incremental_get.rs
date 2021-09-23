@@ -18,7 +18,7 @@ fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
         let user_key = table::encode_row_key(5, i);
         let user_value = vec![b'x'; 60];
         let key = Key::from_raw(&user_key);
-        let mutation = Mutation::Put((key.clone(), user_value));
+        let mutation = Mutation::make_put(key.clone(), user_value);
         mutations.push(mutation);
         keys.push(key);
     }

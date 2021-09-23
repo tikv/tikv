@@ -1160,7 +1160,7 @@ mod tests {
             .map(|key| {
                 let mut value = b"value-".to_vec();
                 value.extend_from_slice(key);
-                Mutation::Put((Key::from_raw(key), value))
+                Mutation::make_put(Key::from_raw(key), value)
             })
             .collect();
         let primary = init_keys[0].clone();
@@ -1326,7 +1326,7 @@ mod tests {
             k.encode_u64(i).unwrap();
             let v = k.clone();
 
-            let mutation = Mutation::Put((Key::from_raw(&k), v));
+            let mutation = Mutation::make_put(Key::from_raw(&k), v);
 
             let lock_ts = 10 + i % 3;
 
