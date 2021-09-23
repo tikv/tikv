@@ -4,6 +4,7 @@ use crate::cpu::RawCpuRecords;
 use crate::summary::SummaryRecord;
 use crate::{Config, CpuReporter, GrpcClient, SummaryReporter};
 use collections::HashMap;
+use grpcio::Environment;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use tikv_util::time::Duration;
@@ -145,8 +146,10 @@ impl Config {
 /// This function is intended to simplify external use.
 pub fn build_default_reporter(
     cfg: Config,
+    env: Arc<Environment>,
 ) -> Reporter<CpuReporter<GrpcClient>, SummaryReporter<GrpcClient>> {
-    let client = GrpcClient::default();
+    let mut client = GrpcClient::default();
+    client.set_env(env);
     Reporter::new(
         cfg,
         CpuReporter::new(client.clone()),

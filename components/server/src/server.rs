@@ -889,8 +889,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .create()
             .lazy_build("resource-metering-reporter");
         let reporter_scheduler = reporter_worker.scheduler();
-        let reporter =
-            resource_metering::build_default_reporter(self.config.resource_metering.clone());
+        let reporter = resource_metering::build_default_reporter(
+            self.config.resource_metering.clone(),
+            self.env.clone(),
+        );
         reporter_worker.start_with_timer(reporter);
         self.to_stop.push(Box::new(reporter_worker));
         let cfg_manager = resource_metering::ConfigManager::new(

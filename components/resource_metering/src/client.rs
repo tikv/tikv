@@ -155,6 +155,10 @@ impl Client for GrpcClient {
 }
 
 impl GrpcClient {
+    pub fn set_env(&mut self, env: Arc<Environment>) {
+        self.env = env;
+    }
+
     fn init_client(&mut self) {
         let channel = {
             let cb = ChannelBuilder::new(self.env.clone())
