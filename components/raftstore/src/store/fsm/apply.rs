@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::borrow::Cow;
 use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::VecDeque;
@@ -499,7 +500,6 @@ where
         self.kv_wb_last_keys = self.kv_wb().count() as u64;
     }
 
-    // [PerformanceCriticalPath]
     /// Writes all the changes into RocksDB.
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> bool {
@@ -939,7 +939,6 @@ where
         self.id
     }
 
-    // [PerformanceCriticalPath]
     /// Handles all the committed_entries, namely, applies the committed entries.
     fn handle_raft_committed_entries<W: WriteBatch<EK>>(
         &mut self,
@@ -3192,7 +3191,6 @@ where
         self.delegate = ApplyDelegate::from_registration(reg);
     }
 
-    // [PerformanceCriticalPath]
     /// Handles apply tasks, and uses the apply delegate to handle the committed entries.
     fn handle_apply<W: WriteBatch<EK>>(
         &mut self,
@@ -3299,7 +3297,6 @@ where
         self.delegate.destroy(ctx);
     }
 
-    // [PerformanceCriticalPath]
     /// Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
     fn handle_destroy<W: WriteBatch<EK>>(&mut self, ctx: &mut ApplyContext<EK, W>, d: Destroy) {
         assert_eq!(d.region_id, self.delegate.region_id());
@@ -3389,7 +3386,6 @@ where
         }
     }
 
-    // [PerformanceCriticalPath]
     #[allow(unused_mut)]
     fn handle_snapshot<W: WriteBatch<EK>>(
         &mut self,
@@ -3445,7 +3441,6 @@ where
         );
     }
 
-    // [PerformanceCriticalPath]
     fn handle_change<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
@@ -3530,7 +3525,6 @@ where
         cb.invoke_read(resp);
     }
 
-    // [PerformanceCriticalPath]
     fn handle_tasks<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
@@ -3690,7 +3684,6 @@ where
         self.apply_ctx.perf_context.start_observe();
     }
 
-    // [PerformanceCriticalPath]
     fn handle_control(&mut self, control: &mut ControlFsm) -> Option<usize> {
         loop {
             match control.receiver.try_recv() {
@@ -3715,7 +3708,6 @@ where
         }
     }
 
-    // [PerformanceCriticalPath]
     fn handle_normal(&mut self, normal: &mut ApplyFsm<EK>) -> Option<usize> {
         let mut expected_msg_count = None;
         normal.delegate.handle_start = Some(Instant::now_coarse());

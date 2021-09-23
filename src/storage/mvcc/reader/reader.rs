@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use crate::storage::mvcc::{
     default_not_found_error,
@@ -148,7 +149,6 @@ impl<S: EngineSnapshot> MvccReader<S> {
         }
     }
 
-    // [PerformanceCriticalPath]
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         if self.scan_mode.is_some() {
             self.create_lock_cursor()?;
@@ -178,7 +178,6 @@ impl<S: EngineSnapshot> MvccReader<S> {
         }
     }
 
-    // [PerformanceCriticalPath]
     /// Return:
     ///   (commit_ts, write_record) of the write record for `key` committed before or equal to`ts`
     /// Post Condition:
@@ -341,7 +340,6 @@ impl<S: EngineSnapshot> MvccReader<S> {
         Ok(())
     }
 
-    // [PerformanceCriticalPath]
     /// Return the first committed key for which `start_ts` equals to `ts`
     pub fn seek_ts(&mut self, ts: TimeStamp) -> Result<Option<Key>> {
         assert!(self.scan_mode.is_some());
@@ -362,7 +360,6 @@ impl<S: EngineSnapshot> MvccReader<S> {
         Ok(None)
     }
 
-    // [PerformanceCriticalPath]
     /// Scan locks that satisfies `filter(lock)` returns true, from the given start key `start`.
     /// At most `limit` locks will be returned. If `limit` is set to `0`, it means unlimited.
     ///

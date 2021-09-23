@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath] Common key utitlies.
+
 //! TiKV key building
 
 #[allow(unused_extern_crates)]
@@ -204,7 +206,6 @@ pub fn validate_data_key(key: &[u8]) -> bool {
     key.starts_with(DATA_PREFIX_KEY)
 }
 
-// [PerformanceCriticalPath]
 pub fn data_key(key: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(DATA_PREFIX_KEY.len() + key.len());
     v.extend_from_slice(DATA_PREFIX_KEY);

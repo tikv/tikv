@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::collections::hash_map::DefaultHasher;
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
@@ -32,7 +33,6 @@ impl Latch {
         }
     }
 
-    // [PerformanceCriticalPath]
     /// Find the first command ID in the queue whose hash value is equal to hash.
     pub fn get_first_req_by_hash(&self, hash: u64) -> Option<u64> {
         for (h, cid) in self.waiting.iter().flatten() {
@@ -155,7 +155,6 @@ impl Latches {
         Latches { slots, size }
     }
 
-    // [PerformanceCriticalPath]
     /// Tries to acquire the latches specified by the `lock` for command with ID `who`.
     ///
     /// This method will enqueue the command ID into the waiting queues of the latches. A latch is
@@ -184,7 +183,6 @@ impl Latches {
         lock.acquired()
     }
 
-    // [PerformanceCriticalPath]
     /// Releases all latches owned by the `lock` of command with ID `who`, returns the wakeup list.
     ///
     /// Preconditions: the caller must ensure the command is at the front of the latches.

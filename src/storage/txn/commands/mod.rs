@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 //! Commands used in the transaction system
 #[macro_use]
 mod macros;
@@ -432,7 +433,6 @@ type LockWritesVals = (
     Vec<(TimeStamp, Value)>,
 );
 
-// [PerformanceCriticalPath]
 fn find_mvcc_infos_by_key<S: Snapshot>(
     reader: &mut MvccReader<S>,
     key: &Key,

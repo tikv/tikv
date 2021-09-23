@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use prometheus::IntGauge;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -106,7 +107,6 @@ impl<T: Display + Send> Scheduler<T> {
         }
     }
 
-    // [PerformanceCriticalPath]
     /// Schedules a task to run.
     ///
     /// If the worker is stopped or number pending tasks exceeds capacity, an error will return.

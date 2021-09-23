@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::mvcc::{
     metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
     ErrorInner, Key, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader, TimeStamp,
@@ -9,7 +10,6 @@ use crate::storage::txn::actions::check_txn_status::{
 };
 use crate::storage::{Snapshot, TxnStatus};
 
-// [PerformanceCriticalPath]
 /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
 /// cleanup the lock without checking TTL. If the lock is the primary lock of a pessimistic
 /// transaction, the rollback record is protected from being collapsed.

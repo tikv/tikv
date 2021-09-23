@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::Bound::{Excluded, Unbounded};
@@ -567,7 +568,6 @@ where
         PeerFsmDelegate { fsm, ctx }
     }
 
-    // [PerformanceCriticalPath]
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
         for m in msgs.drain(..) {
             match m {
@@ -666,7 +666,6 @@ where
         }
     }
 
-    // [PerformanceCriticalPath]
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
         match msg {
             CasualMessage::SplitRegion {
@@ -721,13 +720,13 @@ where
                 }
             }
             CasualMessage::SnapshotGenerated => {
-                // [PerformanceCriticalPath]?? should it be done in background thread? 
+                // [PerformanceCriticalPath]?? should it be done in background thread?
                 // Resume snapshot handling again to avoid waiting another heartbeat.
                 self.fsm.peer.ping();
                 self.fsm.has_ready = true;
             }
             CasualMessage::ForceCompactRaftLogs => {
-                // [PerformanceCriticalPath]?? should it be done in background thread? 
+                // [PerformanceCriticalPath]?? should it be done in background thread?
                 self.on_raft_gc_log_tick(true);
             }
             CasualMessage::AccessPeer(cb) => cb(self.fsm as &mut dyn AbstractPeer),
@@ -925,7 +924,6 @@ where
         );
     }
 
-    // [PerformanceCriticalPath]
     fn on_significant_msg(&mut self, msg: SignificantMsg<EK::Snapshot>) {
         match msg {
             SignificantMsg::SnapshotStatus {
@@ -1048,7 +1046,6 @@ where
         }
     }
 
-    // [PerformanceCriticalPath]
     pub fn collect_ready(&mut self) {
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
@@ -1071,7 +1068,6 @@ where
         }
     }
 
-    // [PerformanceCriticalPath]
     pub fn post_raft_ready_append(&mut self, ready: CollectedReady) {
         if ready.ctx.region_id != self.fsm.region_id() {
             panic!(
@@ -1260,7 +1256,6 @@ where
         }
     }
 
-    // [PerformanceCriticalPath]
     fn on_apply_res(&mut self, res: ApplyTaskRes<EK::Snapshot>) {
         fail_point!("on_apply_res", |_| {});
         match res {
@@ -1295,7 +1290,7 @@ where
             } => {
                 assert_eq!(peer_id, self.fsm.peer.peer_id());
                 if !merge_from_snapshot {
-                    // [PerformanceCriticalPath]?? should it be done async? 
+                    // [PerformanceCriticalPath]?? should it be done async?
                     self.destroy_peer(false);
                 } else {
                     // Wait for its target peer to apply snapshot and then send `MergeResult` back
@@ -1317,7 +1312,6 @@ where
         }
     }
 
-    // [PerformanceCriticalPath]
     fn handle_reported_disk_usage(&mut self, msg: &RaftMessage) {
         // Mocked
         if matches!(msg.disk_usage, DiskUsage::Normal) {
@@ -1358,7 +1352,6 @@ where
         }
     }
 
-    // [PerformanceCriticalPath]
     fn on_raft_message(&mut self, msg: InspectedRaftMessage) -> Result<()> {
         let InspectedRaftMessage { heap_size, mut msg } = msg;
         let stepped = Cell::new(false);
@@ -2353,7 +2346,7 @@ where
             self.register_raft_base_tick();
         }
         if need_ping {
-            // [PerformanceCriticalPath]?? should it be done async? 
+            // [PerformanceCriticalPath]?? should it be done async?
             // Speed up snapshot instead of waiting another heartbeat.
             self.fsm.peer.ping();
             self.fsm.has_ready = true;
@@ -2388,7 +2381,6 @@ where
         }
     }
 
-    // [PerformanceCriticalPath]
     fn on_ready_split_region(
         &mut self,
         derived: metapb::Region,
@@ -2867,7 +2859,6 @@ where
         }
     }
 
-    // [PerformanceCriticalPath]
     fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -3073,7 +3064,6 @@ where
         }
     }
 
-    // [PerformanceCriticalPath] 
     fn on_merge_result(
         &mut self,
         target_region_id: u64,
@@ -3289,7 +3279,6 @@ where
         }
     }
 
-    // [PerformanceCriticalPath]
     fn on_ready_result(
         &mut self,
         exec_results: &mut VecDeque<ExecResult<EK::Snapshot>>,
@@ -3417,7 +3406,6 @@ where
         Ok(())
     }
 
-    // [PerformanceCriticalPath]
     fn pre_propose_raft_command(
         &mut self,
         msg: &RaftCmdRequest,
@@ -3507,7 +3495,6 @@ where
         }
     }
 
-    // [PerformanceCriticalPath]
     fn propose_raft_command(
         &mut self,
         mut msg: RaftCmdRequest,

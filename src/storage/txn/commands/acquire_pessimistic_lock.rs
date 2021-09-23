@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::{ExtraOp, LockInfo};
 use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
 
@@ -72,7 +73,6 @@ fn extract_lock_info_from_result<T>(res: &StorageResult<T>) -> &LockInfo {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock {
-    // [PerformanceCriticalPath]
     fn process_write(
         mut self,
         snapshot: S,

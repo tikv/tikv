@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use txn_types::Key;
 
 use crate::storage::kv::WriteData;
@@ -38,7 +39,6 @@ impl CommandExt for Commit {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
-    // [PerformanceCriticalPath]
     fn process_write(self, snapshot: S, mut context: WriteContext<'_, L>) -> Result<WriteResult> {
         if self.commit_ts <= self.lock_ts {
             return Err(Error::from(ErrorInner::InvalidTxnTso {

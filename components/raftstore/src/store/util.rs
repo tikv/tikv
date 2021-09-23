@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::option::Option;
@@ -85,7 +86,6 @@ pub fn check_key_in_region_inclusive(key: &[u8], region: &metapb::Region) -> Res
     }
 }
 
-// [PerformanceCriticalPath]
 /// Check if key in region range [`start_key`, `end_key`).
 pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
     let end_key = region.get_end_key();

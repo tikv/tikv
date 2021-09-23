@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use fail::fail_point;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -1493,7 +1494,6 @@ where
         }
     }
 
-    // [PerformanceCriticalPath]
     /// Save memory states to disk.
     ///
     /// This function only write data to `ready_ctx`'s `WriteBatch`. It's caller's duty to write

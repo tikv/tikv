@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{MvccTxn, Result as MvccResult, SnapshotReader};
@@ -37,7 +38,6 @@ impl CommandExt for PessimisticRollback {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
-    // [PerformanceCriticalPath]
     /// Delete any pessimistic lock with small for_update_ts belongs to this transaction.
     fn process_write(
         mut self,

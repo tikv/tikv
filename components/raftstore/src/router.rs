@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::cell::RefCell;
 
 use crossbeam::channel::{SendError, TrySendError};
@@ -237,7 +238,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for ServerRaftStoreRouter
 }
 
 impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter<EK, ER> {
-    // [PerformanceCriticalPath]
     fn read(
         &self,
         read_id: Option<ThreadReadId>,

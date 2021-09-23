@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::{
     borrow::Cow,
     fmt::{self, Debug, Display, Formatter},
@@ -212,7 +213,6 @@ where
         header
     }
 
-    // [PerformanceCriticalPath]
     fn exec_snapshot(
         &self,
         ctx: SnapContext<'_>,
@@ -243,7 +243,6 @@ where
             .map_err(From::from)
     }
 
-    // [PerformanceCriticalPath]
     fn exec_write_requests(
         &self,
         ctx: &Context,
@@ -388,7 +387,6 @@ where
         self.async_write_ext(ctx, batch, write_cb, None, None)
     }
 
-    // [PerformanceCriticalPath]
     fn async_write_ext(
         &self,
         ctx: &Context,
@@ -437,7 +435,6 @@ where
         })
     }
 
-    // [PerformanceCriticalPath]
     fn async_snapshot(&self, mut ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> kv::Result<()> {
         fail_point!("raftkv_async_snapshot_err", |_| Err(box_err!(
             "injected error for async_snapshot"

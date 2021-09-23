@@ -5,6 +5,7 @@
 //! represents a peer, the other is control FSM, which usually represents something
 //! that controls how the former is created or metrics are collected.
 
+// #[PerformanceCriticalPath]
 use crate::config::Config;
 use crate::fsm::{Fsm, FsmScheduler, Priority};
 use crate::mailbox::BasicMailbox;
@@ -262,7 +263,6 @@ enum ReschedulePolicy {
 }
 
 impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
-    // [PerformanceCriticalPath]
     fn fetch_fsm(&mut self, batch: &mut Batch<N, C>) -> bool {
         if batch.control.is_some() {
             return true;
@@ -281,7 +281,6 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         !batch.is_empty()
     }
 
-    // [PerformanceCriticalPath]
     // Poll for readiness and forward to handler. Remove stale peer if necessary.
     fn poll(&mut self) {
         let mut batch = Batch::with_capacity(self.max_batch_size);

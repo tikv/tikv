@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use engine_traits::{
     IterOptions, KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot,
 };

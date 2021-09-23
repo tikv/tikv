@@ -184,7 +184,6 @@ impl Engine for RocksEngine {
         self.async_write_ext(ctx, batch, cb, None, None)
     }
 
-    // [PerformanceCriticalPath]
     fn async_write_ext(
         &self,
         _: &Context,
@@ -208,7 +207,6 @@ impl Engine for RocksEngine {
         Ok(())
     }
 
-    // [PerformanceCriticalPath]
     fn async_snapshot(&self, _: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {
         fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
             "snapshot failed"
