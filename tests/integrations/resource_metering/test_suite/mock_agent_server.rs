@@ -10,7 +10,7 @@ use grpcio::{
     ServerBuilder,
 };
 use kvproto::resource_usage_agent::{
-    create_resource_usage_agent, CpuTimeRecord, EmptyResponse, ResourceUsageAgent,
+    create_resource_usage_agent, CpuTimeRecord, EmptyResponse, ResourceUsageAgent, SummaryRecord,
 };
 
 #[derive(Clone)]
@@ -62,5 +62,13 @@ impl ResourceUsageAgent for MockAgentServer {
         .map(|_| {});
 
         ctx.spawn(f);
+    }
+
+    fn report_summary(
+        &mut self,
+        ctx: RpcContext,
+        mut stream: RequestStream<SummaryRecord>,
+        sink: ClientStreamingSink<EmptyResponse>,
+    ) {
     }
 }

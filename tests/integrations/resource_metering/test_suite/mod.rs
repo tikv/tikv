@@ -12,9 +12,8 @@ use grpcio::{Environment, Server};
 use kvproto::kvrpcpb::Context;
 use kvproto::resource_usage_agent::CpuTimeRecord;
 use mock_agent_server::MockAgentServer;
-use resource_metering::cpu::recorder::TEST_TAG_PREFIX;
-use resource_metering::reporter::{ResourceMeteringReporter, Task};
-use resource_metering::{Config, ConfigManager};
+// use resource_metering::reporter::{ResourceMeteringReporter, Task};
+use resource_metering::{Config, ConfigManager, Task, TEST_TAG_PREFIX};
 use tempfile::TempDir;
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::storage::lock_manager::DummyLockManager;
@@ -63,14 +62,12 @@ impl TestSuite {
             Box::new(ConfigManager::new(
                 resource_metering_cfg.clone(),
                 scheduler.clone(),
-                resource_metering::cpu::recorder::init_recorder(),
-                resource_metering::summary::recorder::init_recorder(),
+                resource_metering::build_default_recorder(scheduler.clone()),
             )),
         );
         let env = Arc::new(Environment::new(2));
-        reporter.start_with_timer(ResourceMeteringReporter::new(
+        reporter.start_with_timer(resource_metering::build_default_reporter(
             resource_metering_cfg,
-            scheduler.clone(),
             env.clone(),
         ));
 
