@@ -46,7 +46,9 @@ use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
-use resource_metering::{register_cpu_dyn_collector, DynCpuCollectorHandle, Collector, RawCpuRecords};
+use resource_metering::{
+    register_cpu_dyn_collector, Collector, DynCpuCollectorHandle, RawCpuRecords,
+};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -704,8 +706,9 @@ where
             error!("failed to start stats collector, error = {:?}", e);
         }
 
-        let _region_cpu_records_collector = register_cpu_dyn_collector(
-                Box::new(RegionCPUMeteringCollector::new(scheduler.clone())));
+        let _region_cpu_records_collector = register_cpu_dyn_collector(Box::new(
+            RegionCPUMeteringCollector::new(scheduler.clone()),
+        ));
 
         Runner {
             store_id,
