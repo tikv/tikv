@@ -5,6 +5,7 @@ mod linux {
     use lazy_static::lazy_static;
     use resource_metering::{
         Collector, CpuRecorder, RawCpuRecords, RecorderBuilder, ResourceMeteringTag, TagInfos,
+        TEST_TAG_PREFIX,
     };
     use std::collections::HashMap;
     use std::sync::atomic::AtomicU64;
@@ -12,8 +13,6 @@ mod linux {
     use std::thread::JoinHandle;
     use std::time::Duration;
     use tikv_util::defer;
-
-    const TEST_TAG_PREFIX: &[u8] = b"__resource_metering::tests::";
 
     enum Operation {
         SetContext(&'static str),

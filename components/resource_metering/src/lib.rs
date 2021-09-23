@@ -35,6 +35,8 @@ pub use summary::{
     record_read_keys, record_write_keys, SummaryRecord, SummaryRecorder, SummaryReporter,
 };
 
+pub const TEST_TAG_PREFIX: &[u8] = b"__resource_metering::tests::";
+
 /// This structure is used as a label to distinguish different request contexts.
 ///
 /// In order to associate `ResourceMeteringTag` with a certain piece of code logic,

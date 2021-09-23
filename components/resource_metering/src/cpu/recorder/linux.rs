@@ -8,7 +8,7 @@ use crate::cpu::RawCpuRecords;
 use crate::localstorage::LocalStorage;
 use crate::recorder::SubRecorder;
 use crate::utils;
-use crate::{ResourceMeteringTag, SharedTagPtr};
+use crate::{ResourceMeteringTag, SharedTagPtr, TEST_TAG_PREFIX};
 use collections::HashMap;
 use fail::fail_point;
 use lazy_static::lazy_static;
@@ -21,7 +21,6 @@ use tikv_util::time::Instant;
 const GC_INTERVAL_SECS: u64 = 15 * 60;
 const THREAD_STAT_LEN_THRESHOLD: usize = 500;
 const RECORD_LEN_THRESHOLD: usize = 20_000;
-const TEST_TAG_PREFIX: &[u8] = b"__resource_metering::tests::";
 
 lazy_static! {
     static ref PID: libc::pid_t = unsafe { libc::getpid() };
