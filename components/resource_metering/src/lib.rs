@@ -30,7 +30,7 @@ pub use cpu::{
     RawCpuRecords,
 };
 pub use recorder::{build_default_recorder, Recorder, RecorderBuilder, RecorderHandle};
-pub use reporter::{build_default_reporter, Reporter};
+pub use reporter::{build_default_reporter, Reporter, Task};
 pub use summary::{
     record_read_keys, record_write_keys, SummaryRecord, SummaryRecorder, SummaryReporter,
 };
