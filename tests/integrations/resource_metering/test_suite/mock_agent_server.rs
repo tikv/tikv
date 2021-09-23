@@ -66,9 +66,9 @@ impl ResourceUsageAgent for MockAgentServer {
 
     fn report_summary(
         &mut self,
-        ctx: RpcContext,
-        mut stream: RequestStream<SummaryRecord>,
-        sink: ClientStreamingSink<EmptyResponse>,
+        _ctx: RpcContext,
+        _stream: RequestStream<SummaryRecord>,
+        _sink: ClientStreamingSink<EmptyResponse>,
     ) {
     }
 }
