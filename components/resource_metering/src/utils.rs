@@ -59,6 +59,6 @@ mod tests {
     fn test_thread_ids() {
         let ids = thread_ids();
         assert!(matches!(ids, Some(_)));
-        assert!(ids.unwrap().len() > 0);
+        assert!(!ids.unwrap().is_empty());
     }
 }
