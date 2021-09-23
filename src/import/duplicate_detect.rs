@@ -251,9 +251,9 @@ mod tests {
             data.into_iter()
                 .map(|(key, value)| {
                     if value.is_empty() {
-                        Mutation::Delete(Key::from_raw(&key))
+                        Mutation::make_delete(Key::from_raw(&key))
                     } else {
-                        Mutation::Put((Key::from_raw(&key), value))
+                        Mutation::make_put(Key::from_raw(&key), value)
                     }
                 })
                 .collect(),

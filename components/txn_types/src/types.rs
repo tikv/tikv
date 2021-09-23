@@ -343,7 +343,7 @@ impl Mutation {
         }
     }
 
-    pub fn set_assertion(&self, assertion: Assertion){
+    pub fn set_assertion(&mut self, assertion: Assertion){
         *match self {
             Mutation::Put(_, ref mut assertion) => assertion,
             Mutation::Delete(_, ref mut assertion) => assertion,
