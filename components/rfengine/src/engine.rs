@@ -1,10 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use bytes::{Buf, Bytes};
+use error_code::{ErrorCode, ErrorCodeExt};
 use libc::NOTE_EXITSTATUS;
 use protobuf::ProtobufEnum;
 use raft_proto::eraftpb;
 use slog_global::info;
+use std::sync::{Mutex, RwLock};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     fs, mem,
@@ -21,10 +23,10 @@ use crate::*;
 
 pub struct RFEngine {
     pub(crate) dir: PathBuf,
-    pub(crate) writer: WALWriter,
+    pub(crate) writer: Mutex<WALWriter>,
 
-    pub(crate) entries_map: HashMap<u64, RegionRaftLogs>,
-    pub(crate) states: BTreeMap<StateKey, Bytes>,
+    pub(crate) entries_map: RwLock<HashMap<u64, RegionRaftLogs>>,
+    pub(crate) states: RwLock<BTreeMap<StateKey, Bytes>>,
 
     pub(crate) task_sender: SyncSender<Task>,
     pub(crate) worker_handle: Option<JoinHandle<()>>,
@@ -144,9 +146,9 @@ impl RFEngine {
         let writer = WALWriter::new(dir.clone(), epoch_id, wal_size)?;
         let mut en = Self {
             dir: dir.to_owned(),
-            entries_map: HashMap::new(),
-            states: BTreeMap::new(),
-            writer,
+            entries_map: RwLock::new(HashMap::new()),
+            states: RwLock::new(BTreeMap::new()),
+            writer: Mutex::new(writer),
             task_sender: tx,
             worker_handle: None,
         };
@@ -154,7 +156,7 @@ impl RFEngine {
         for ep in &epoches {
             offset = en.load_epoch(ep)?;
         }
-        en.writer.seek(offset);
+        en.writer.lock().unwrap().seek(offset);
         if epoches.len() > 0 {
             epoches.pop();
         }
@@ -164,65 +166,75 @@ impl RFEngine {
         Ok(en)
     }
 
-    pub fn write(&mut self, wb: &WriteBatch) -> Result<()> {
-        if wb.size as u64 + self.writer.offset() > self.writer.wal_size as u64 {
-            let epoch_id = self.writer.epoch_id;
-            self.writer.rotate()?;
-            let states = self.states.clone();
+    pub fn write(&self, wb: &WriteBatch) -> Result<()> {
+        let mut writer = self.writer.lock().unwrap();
+        if wb.size as u64 + writer.offset() > writer.wal_size as u64 {
+            let epoch_id = writer.epoch_id;
+            writer.rotate()?;
             self.task_sender
-                .send(Task::Rotate { epoch_id, states })
+                .send(Task::Rotate {
+                    epoch_id,
+                    states: self.states.read().unwrap().clone(),
+                })
                 .unwrap();
         }
 
         for op in &wb.raft_log_ops {
-            self.writer.append_raft_log(op.clone());
-            let region_logs = get_region_raft_logs(&mut self.entries_map, op.region_id);
+            writer.append_raft_log(op.clone());
+            self.init_region_raft_logs(op.region_id);
+            let mut entries_map = self.entries_map.write().unwrap();
+            let region_logs = entries_map.get_mut(&op.region_id).unwrap();
             region_logs.append(op.clone());
         }
         for op in &wb.state_ops {
-            self.writer
-                .append_state(op.region_id, op.key.chunk(), op.val.chunk());
+            writer.append_state(op.region_id, op.key.chunk(), op.val.chunk());
             let state_key = StateKey::new(op.region_id, op.key.chunk());
             if op.val.len() > 0 {
-                self.states.insert(state_key, op.val.clone());
+                self.states
+                    .write()
+                    .unwrap()
+                    .insert(state_key, op.val.clone());
             } else {
-                self.states.remove(&state_key);
+                self.states.write().unwrap().remove(&state_key);
             }
         }
         for op in &wb.truncates {
             let region_id = op.region_id;
             let index = op.index;
-            self.writer.append_truncate(region_id, index);
-            let region_logs = get_region_raft_logs(&mut self.entries_map, region_id);
+            writer.append_truncate(region_id, index);
+            self.init_region_raft_logs(op.region_id);
+            let mut entries_map = self.entries_map.write().unwrap();
+            let region_logs = entries_map.get_mut(&op.region_id).unwrap();
             let empty = region_logs.truncate(index);
             if empty {
-                self.entries_map.remove(&op.region_id);
+                entries_map.remove(&op.region_id);
             }
             self.task_sender
                 .send(Task::Truncate { region_id, index })
                 .unwrap();
         }
-        self.writer.flush()
+        writer.flush()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries_map.len() + self.states.len() == 0
+        self.entries_map.read().unwrap().len() + self.states.read().unwrap().len() == 0
     }
 
     pub fn get_state(&self, region_id: u64, key: &[u8]) -> Option<Bytes> {
         self.states
+            .read()
+            .unwrap()
             .get(&StateKey::new(region_id, key))
             .map(|x| x.clone())
     }
 
-    pub fn get_raft_log(&mut self, region_id: u64, index: u64) -> Option<eraftpb::Entry> {
-        let entries = get_region_raft_logs(&mut self.entries_map, region_id);
-        entries.get(index)
-    }
-
-    pub fn get_raft_log_range(&mut self, region_id: u64) -> (u64, u64) {
-        let entries = get_region_raft_logs(&mut self.entries_map, region_id);
-        (entries.range.start_index, entries.range.end_index)
+    pub fn init_region_raft_logs(&self, region_id: u64) {
+        let mut entries_map = self.entries_map.write().unwrap();
+        if entries_map.get(&region_id).is_some() {
+            return;
+        }
+        let region_logs = RegionRaftLogs::default();
+        entries_map.insert(region_id, region_logs);
     }
 
     pub fn iterate_region_states<F>(&self, region_id: u64, desc: bool, f: F)
@@ -231,7 +243,8 @@ impl RFEngine {
     {
         let start_key = StateKey::new(region_id, &[]);
         let end_key = StateKey::new(region_id + 1, &[]);
-        let range = self.states.range(start_key..end_key);
+        let states = self.states.read().unwrap();
+        let range = states.range(start_key..end_key);
         if desc {
             for (k, v) in range.rev() {
                 f(k.key.chunk(), v.chunk())
@@ -247,7 +260,8 @@ impl RFEngine {
     where
         F: Fn(u64, &[u8], &[u8]),
     {
-        let mut iter = self.states.iter();
+        let states = self.states.read().unwrap();
+        let iter = states.iter();
         if desc {
             for (k, v) in iter.rev() {
                 f(k.region_id, k.key.chunk(), v.chunk())

@@ -375,8 +375,10 @@ impl Engine {
             let mem_tbl = self.switch_mem_table(g, shard, mem_ts);
             self.schedule_flush_task(shard, mem_tbl);
             let all_files = shard.get_all_files();
-            info!("new shard {}:{}, start {:x}, end {:x} mem-ts {}， all files {:?}", 
-            shard.id, shard.ver, shard.start, shard.end, mem_ts, all_files);
+            info!(
+                "new shard {}:{}, start {:x}, end {:x} mem-ts {}， all files {:?}",
+                shard.id, shard.ver, shard.start, shard.end, mem_ts, all_files
+            );
         }
         Ok(())
     }

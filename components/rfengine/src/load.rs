@@ -6,9 +6,7 @@ use slog_global::info;
 use std::{
     collections::HashMap,
     fs,
-    os::unix::prelude::OsStrExt,
     path::{Path, PathBuf},
-    rc::Rc,
     sync::Mutex,
 };
 
@@ -131,27 +129,29 @@ impl RFEngine {
 
     pub(crate) fn load_wal_file(&mut self, epoch_id: u32) -> Result<u64> {
         let mut it = WALIterator::new(self.dir.clone(), epoch_id);
+        let mut states = self.states.write().unwrap();
+        let mut entries_map = self.entries_map.write().unwrap();
         it.iterate(|tp, entry| match tp {
             TYPE_STATE => {
                 let (region_id, key, val) = parse_state(entry);
                 let key = StateKey::new(region_id, key);
                 if val.len() > 0 {
-                    self.states.insert(key, Bytes::copy_from_slice(val));
+                    states.insert(key, Bytes::copy_from_slice(val));
                 } else {
-                    self.states.remove(&key);
+                    states.remove(&key);
                 }
             }
             TYPE_RAFT_LOG => {
                 let log_op = parse_log(entry);
-                let entries = get_region_raft_logs(&mut self.entries_map, log_op.region_id);
+                let entries = get_region_raft_logs(&mut entries_map, log_op.region_id);
                 entries.append(log_op);
             }
             TYPE_TRUNCATE => {
                 let (region_id, index) = parse_truncate(entry);
-                let entries = get_region_raft_logs(&mut self.entries_map, region_id);
+                let entries = get_region_raft_logs(&mut entries_map, region_id);
                 let empty = entries.truncate(index);
                 if empty {
-                    self.entries_map.remove(&region_id);
+                    entries_map.remove(&region_id);
                 }
             }
             _ => panic!("unknown state"),
@@ -163,6 +163,7 @@ impl RFEngine {
         let filename = states_file_name(&self.dir, epoch_id);
         let bin = fs::read(filename)?;
         let mut data = bin.as_slice();
+        let mut states = self.states.write().unwrap();
         while data.len() > 0 {
             let region_id = LittleEndian::read_u64(data);
             data = &data[8..];
@@ -175,7 +176,7 @@ impl RFEngine {
             let val = &data[..val_len];
             data = &data[val_len..];
             let state_key = StateKey::new(region_id, key);
-            self.states.insert(state_key, Bytes::copy_from_slice(val));
+            states.insert(state_key, Bytes::copy_from_slice(val));
         }
         Ok(())
     }
@@ -190,6 +191,7 @@ impl RFEngine {
         let bin = read_checksum_file(&rlog_filename)?;
         let mut data = bin.as_slice();
         let mut index = raft_log_range.start_index;
+        let mut entries_map = self.entries_map.write().unwrap();
         while data.len() > 0 {
             let length = LittleEndian::read_u32(data) as usize;
             data = &data[4..];
@@ -206,21 +208,12 @@ impl RFEngine {
                 e_type,
                 data: Bytes::copy_from_slice(entry),
             };
-            let entries = get_region_raft_logs(&mut self.entries_map, region_id);
+            let entries = get_region_raft_logs(&mut entries_map, region_id);
             entries.append(op);
             index += 1;
         }
         assert_eq!(index, raft_log_range.end_index);
         Ok(())
-    }
-
-    pub(crate) fn load_truncate(&mut self, entry: &[u8]) {
-        let (region_id, index) = parse_truncate(entry);
-        let entries = get_region_raft_logs(&mut self.entries_map, region_id);
-        let empty = entries.truncate(index);
-        if empty {
-            self.entries_map.remove(&region_id);
-        }
     }
 }
 

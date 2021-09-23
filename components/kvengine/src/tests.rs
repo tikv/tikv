@@ -320,7 +320,10 @@ impl Splitter {
     }
 
     fn pre_split(&mut self, key: Vec<u8>) {
-        info!("splitter pre-split key {}", String::from_utf8_lossy(key.as_slice()));
+        info!(
+            "splitter pre-split key {}",
+            String::from_utf8_lossy(key.as_slice())
+        );
         let mut cs = self.new_cs();
         let mut pre_split = pb::PreSplit::new();
         pre_split.set_keys(RepeatedField::from_vec(vec![key]));
@@ -376,7 +379,11 @@ impl Splitter {
         finish_split.set_new_shards(protobuf::RepeatedField::from_vec(new_shards));
         cs.set_split(finish_split);
         self.send_task(cs);
-        info!("splitter sent split task to applier, ids {:?} key {}", new_ids, String::from_utf8_lossy(key.as_slice()));
+        info!(
+            "splitter sent split task to applier, ids {:?} key {}",
+            new_ids,
+            String::from_utf8_lossy(key.as_slice())
+        );
         self.shard_ver += 1;
     }
 }
@@ -422,7 +429,7 @@ fn load_data(
         let val = key.repeat(val_repeat);
         wb.put(cf, key.as_bytes(), val.as_bytes(), 0, &[], 1);
         if i % 100 == 99 {
-            info!("load data {}:{}", i-99, i);
+            info!("load data {}:{}", i - 99, i);
             write_data(wb, &tx);
             wb = WriteBatch::new(1, opts.cfs.clone());
             thread::sleep(Duration::from_millis(10));
@@ -440,7 +447,14 @@ fn write_data(wb: WriteBatch, applier_tx: &Sender<ApplyTask>) {
     result_rx.recv().unwrap().unwrap();
 }
 
-fn check_get(begin: usize, end: usize, cf: usize, val_repeat: usize, split_keys: &Vec<Vec<u8>>, en: &Engine) {
+fn check_get(
+    begin: usize,
+    end: usize,
+    cf: usize,
+    val_repeat: usize,
+    split_keys: &Vec<Vec<u8>>,
+    en: &Engine,
+) {
     for i in begin..end {
         let key = format!("key{:06}", i);
         let g = &epoch::pin();
@@ -449,8 +463,14 @@ fn check_get(begin: usize, end: usize, cf: usize, val_repeat: usize, split_keys:
         if let Some(item) = snap.get(cf, key.as_bytes(), 2) {
             assert_eq!(item.get_value(), key.repeat(val_repeat).as_bytes());
         } else {
-            panic!(format!("failed to get key {}, shard {}:{}, start {:?}, end {:?}", 
-            key, shard.id, shard.ver, bytes_to_str(&shard.start), bytes_to_str(&shard.end)));
+            panic!(format!(
+                "failed to get key {}, shard {}:{}, start {:?}, end {:?}",
+                key,
+                shard.id,
+                shard.ver,
+                bytes_to_str(&shard.start),
+                bytes_to_str(&shard.end)
+            ));
         }
     }
 }
@@ -479,13 +499,13 @@ fn check_iterater(begin: usize, end: usize, cf: usize, val_repeat: usize, en: &E
 
 fn bytes_to_str(bin: &Bytes) -> String {
     String::from_utf8_lossy(bin.chunk()).to_string()
-} 
+}
 
 fn get_shard_for_key<'a>(key: &[u8], g: &'a epoch::Guard, en: &Engine) -> &'a Shard {
     for id in 1_u64..=5 {
         if let Some(shard) = en.get_shard(id, g) {
             if shard.overlap_key(key) {
-                return shard
+                return shard;
             }
         }
     }

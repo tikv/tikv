@@ -4,6 +4,7 @@ pub mod apply;
 pub mod compaction;
 pub mod dfs;
 pub mod engine;
+pub mod engine_trait;
 mod error;
 pub mod flush;
 pub mod meta;

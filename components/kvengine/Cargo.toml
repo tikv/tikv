@@ -26,6 +26,9 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 slog-term = "2.4"
 protobuf = "2.8"
 tokio = { version = "1.5", features = ["full"] }
+tikv_util = { path = "../tikv_util", default-features = false}
+engine_traits = { path = "../engine_traits", default-features = false }
+txn_types = { path = "../txn_types", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"

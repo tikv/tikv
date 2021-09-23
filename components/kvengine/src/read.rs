@@ -2,6 +2,7 @@
 
 use core::slice::{self};
 use std::cell::RefCell;
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -44,6 +45,12 @@ pub struct SnapAccess<'a> {
     l0_tbls: &'a L0Tables,
 
     scfs: Vec<&'a ShardCF>,
+}
+
+impl Debug for SnapAccess<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        todo!()
+    }
 }
 
 impl<'a> SnapAccess<'a> {

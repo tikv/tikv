@@ -9,6 +9,7 @@ use fslock;
 use moka::sync::SegmentedCache;
 use slog_global::info;
 use std::collections::{HashMap, HashSet};
+use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -30,6 +31,15 @@ impl Deref for Engine {
 
     fn deref(&self) -> &Self::Target {
         &self.core
+    }
+}
+
+impl Debug for Engine {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // TODO: complete debug info.
+        let cnt = self.shards.len();
+        let str = format!("num_shards: {}", cnt);
+        f.write_str(&str)
     }
 }
 
