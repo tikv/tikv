@@ -4,7 +4,7 @@
 mod linux {
     use lazy_static::lazy_static;
     use resource_metering::{
-        Collector, CpuRecorder, CpuRecords, RecorderBuilder, ResourceMeteringTag, TagInfos,
+        Collector, CpuRecorder, RawCpuRecords, RecorderBuilder, ResourceMeteringTag, TagInfos,
     };
     use std::collections::HashMap;
     use std::sync::atomic::AtomicU64;
@@ -144,8 +144,8 @@ mod linux {
         records: Arc<Mutex<HashMap<String, u64>>>,
     }
 
-    impl Collector<Arc<CpuRecords>> for DummyCollector {
-        fn collect(&self, records: Arc<CpuRecords>) {
+    impl Collector<Arc<RawCpuRecords>> for DummyCollector {
+        fn collect(&self, records: Arc<RawCpuRecords>) {
             if let Ok(mut r) = self.records.lock() {
                 for (tag, ms) in &records.records {
                     let (_, t) = tag.infos.extra_attachment.split_at(TEST_TAG_PREFIX.len());
@@ -167,7 +167,7 @@ mod linux {
         let collector = DummyCollector::default();
         let records = collector.records.clone();
         let handle = RecorderBuilder::default()
-            .add_sub_recorder(Box::new(CpuRecorder::new(collector, precision)))
+            .add_sub_recorder(Box::new(CpuRecorder::new(collector.clone(), precision)))
             .spawn()
             .unwrap();
         handle.resume();

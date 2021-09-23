@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::summary::SummaryRecord;
+use crate::utils;
 use crate::SharedTagPtr;
 use collections::HashMap;
 use crossbeam::channel::Sender;
@@ -27,7 +28,7 @@ thread_local! {
             summary_cur_record: Arc::new(SummaryRecord::default()),
             summary_records: Arc::new(Mutex::new(HashMap::default())),
         };
-        let lsr = LocalStorageRef{id: thread_id::get(), storage: storage.clone()};
+        let lsr = LocalStorageRef{id: utils::thread_id(), storage: storage.clone()};
         STORAGE_CHANS.lock().unwrap().iter().for_each(|sender| {
             sender.send(lsr.clone()).ok();
         });
