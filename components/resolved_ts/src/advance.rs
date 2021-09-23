@@ -25,6 +25,8 @@ use crate::endpoint::Task;
 use crate::errors::Result;
 use crate::metrics::{CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM, CHECK_LEADER_REQ_SIZE_HISTOGRAM};
 
+const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 10_000; // 10s
+
 pub struct AdvanceTsWorker<E: KvEngine> {
     store_meta: Arc<Mutex<StoreMeta>>,
     region_read_progress: RegionReadProgressRegistry,
@@ -54,6 +56,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
         let worker = Builder::new_multi_thread()
             .thread_name("advance-ts")
             .worker_threads(1)
+            .enable_time()
             .build()
             .unwrap();
         Self {
@@ -166,8 +169,10 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
         for (region_id, (peer_list, leader_info)) in info_map {
             let leader_id = leader_info.get_peer_id();
             // Check if the leader in this store
-            if find_store_id(&peer_list, leader_id) != Some(store_id) {
-                continue;
+            match find_store_by_peer_id(&peer_list, leader_id) {
+                // And the peer should not be a learner
+                Some(peer) if peer.get_role() != PeerRole::Learner => (),
+                _ => continue,
             }
             for peer in &peer_list {
                 if peer.store_id == store_id && peer.id == leader_id {
@@ -208,7 +213,13 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
                 req.set_ts(min_ts.into_inner());
-                let res = box_try!(client.check_leader_async(&req)).await;
+                let res = box_try!(
+                    tokio::time::timeout(
+                        Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS),
+                        box_try!(client.check_leader_async(&req))
+                    )
+                    .await
+                );
                 let resp = box_try!(res);
                 Result::Ok((store_id, resp))
             }
@@ -299,10 +310,10 @@ fn region_has_quorum(peers: &[Peer], stores: &[u64]) -> bool {
     has_incoming_majority && has_demoting_majority
 }
 
-fn find_store_id(peer_list: &[Peer], peer_id: u64) -> Option<u64> {
+fn find_store_by_peer_id(peer_list: &[Peer], peer_id: u64) -> Option<&Peer> {
     for peer in peer_list {
         if peer.id == peer_id {
-            return Some(peer.store_id);
+            return Some(peer);
         }
     }
     None
