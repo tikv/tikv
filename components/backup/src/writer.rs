@@ -88,8 +88,8 @@ impl Writer {
         let (encrypter_reader, _) = EncrypterReader::new(
             sst_reader,
             cipher.cipher_type,
-            cipher.cipher_key.as_bytes(),
-            Iv::from_slice(cipher.cipher_iv.as_bytes()).ok(),
+            &cipher.cipher_key,
+            Iv::from_slice(&cipher.cipher_iv).ok(),
         )
         .map_err(|e| Error::Other(box_err!("new encrypterReader error: {:?}", e)))?;
 
@@ -374,6 +374,7 @@ impl BackupRawKVWriter {
 mod tests {
     use super::*;
     use engine_traits::Iterable;
+    use kvproto::encryptionpb;
     use raftstore::store::util::new_peer;
     use std::collections::BTreeMap;
     use std::f64::INFINITY;
@@ -446,7 +447,11 @@ mod tests {
             0,
             Limiter::new(INFINITY),
             144 * 1024 * 1024,
-            CipherInfo::default(),
+            {
+                let mut ci = CipherInfo::default();
+                ci.set_cipher_type(encryptionpb::EncryptionMethod::Plaintext);
+                ci
+            },
         )
         .unwrap();
         writer.write(vec![].into_iter(), false).unwrap();
@@ -460,7 +465,11 @@ mod tests {
             0,
             Limiter::new(INFINITY),
             144 * 1024 * 1024,
-            CipherInfo::default(),
+            {
+                let mut ci = CipherInfo::default();
+                ci.set_cipher_type(encryptionpb::EncryptionMethod::Plaintext);
+                ci
+            },
         )
         .unwrap();
         writer
@@ -495,7 +504,11 @@ mod tests {
             0,
             Limiter::new(INFINITY),
             144 * 1024 * 1024,
-            CipherInfo::default(),
+            {
+                let mut ci = CipherInfo::default();
+                ci.set_cipher_type(encryptionpb::EncryptionMethod::Plaintext);
+                ci
+            },
         )
         .unwrap();
         writer

@@ -220,8 +220,8 @@ impl SSTImporter {
 
             let file_crypter = crypter.map(|c| FileEncryptionInfo {
                 method: encryption_method_to_db_encryption_method(c.cipher_type),
-                key: c.cipher_key.clone().into_bytes(),
-                iv: c.cipher_iv.clone().into_bytes(),
+                key: c.cipher_key,
+                iv: c.cipher_iv,
             });
 
             let result = ext_storage.restore(
