@@ -994,7 +994,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::sync::mpsc::channel;
+    use std::sync::mpsc::{self, channel};
     use std::{thread, time::Duration};
 
     use crate::storage::kv::{
@@ -1159,7 +1159,9 @@ mod tests {
                 .unwrap();
         let gate = FeatureGate::default();
         gate.set_version("5.0.0").unwrap();
-        let mut gc_worker = GcWorker::new(engine, RaftStoreBlackHole, GcConfig::default(), gate);
+        let (tx, _rx) = mpsc::channel();
+        let mut gc_worker =
+            GcWorker::new(engine, RaftStoreBlackHole, tx, GcConfig::default(), gate);
         gc_worker.start().unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
@@ -1319,9 +1321,11 @@ mod tests {
         )
         .build()
         .unwrap();
+        let (tx, _rx) = mpsc::channel();
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
             RaftStoreBlackHole,
+            tx,
             GcConfig::default(),
             FeatureGate::default(),
         );
@@ -1397,11 +1401,13 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let prefixed_engine = PrefixedEngine(engine.clone());
 
+        let (tx, _rx) = mpsc::channel();
         let feature_gate = FeatureGate::default();
         feature_gate.set_version("5.0.0").unwrap();
         let mut gc_worker = GcWorker::new(
             prefixed_engine.clone(),
             RaftStoreBlackHole,
+            tx,
             GcConfig::default(),
             feature_gate,
         );

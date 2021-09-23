@@ -934,7 +934,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                     // Only consume the quota when write succeeds, otherwise failed write requests may exhaust
                                     // the quota and other write requests would be in long delay.
                                     if sched.inner.flow_controller.enabled() {
-                                        sched.inner.flow_controller.revert_consume(write_size);
+                                        sched.inner.flow_controller.unconsume(write_size);
                                     }
                                 }
                             })
