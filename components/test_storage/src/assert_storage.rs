@@ -73,7 +73,7 @@ impl AssertionStorage<SimulateEngine> {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
     ) {
-        let mutations = vec![Mutation::Delete(Key::from_raw(key))];
+        let mutations = vec![Mutation::make_delete(Key::from_raw(key))];
         let commit_keys = vec![Key::from_raw(key)];
         self.two_pc_ok_for_cluster(
             cluster,
@@ -120,7 +120,7 @@ impl AssertionStorage<SimulateEngine> {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
     ) {
-        let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
+        let mutations = vec![Mutation::make_put(Key::from_raw(key), value.to_vec())];
         let commit_keys = vec![Key::from_raw(key)];
         self.two_pc_ok_for_cluster(cluster, mutations, key, commit_keys, start_ts, commit_ts);
     }
@@ -136,7 +136,7 @@ impl AssertionStorage<SimulateEngine> {
         let mutations: Vec<_> = keys
             .iter()
             .zip(vals)
-            .map(|(k, v)| Mutation::Put((Key::from_raw(k.as_ref()), v.to_vec())))
+            .map(|(k, v)| Mutation::make_put(Key::from_raw(k.as_ref()), v.to_vec()))
             .collect();
         let commit_keys: Vec<_> = keys.iter().map(|k| Key::from_raw(k.as_ref())).collect();
         self.two_pc_ok_for_cluster(
@@ -365,7 +365,7 @@ impl<E: Engine> AssertionStorage<E> {
         self.store
             .prewrite(
                 self.ctx.clone(),
-                vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
+                vec![Mutation::make_put(Key::from_raw(key), value.to_vec())],
                 key.to_vec(),
                 start_ts,
             )
@@ -410,7 +410,7 @@ impl<E: Engine> AssertionStorage<E> {
         self.store
             .prewrite(
                 self.ctx.clone(),
-                vec![Mutation::Delete(Key::from_raw(key))],
+                vec![Mutation::make_delete(Key::from_raw(key))],
                 key.to_vec(),
                 start_ts,
             )

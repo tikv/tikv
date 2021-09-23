@@ -1006,7 +1006,7 @@ mod tests {
         ];
         let write_cmds: Vec<Command> = vec![
             commands::Prewrite::with_defaults(
-                vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
+                vec![Mutation::make_put(Key::from_raw(b"k"), b"v".to_vec())],
                 b"k".to_vec(),
                 10.into(),
             )

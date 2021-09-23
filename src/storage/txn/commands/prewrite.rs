@@ -184,14 +184,15 @@ impl CommandExt for Prewrite {
         let mut bytes = 0;
         for m in &self.mutations {
             match *m {
-                Mutation::Put((ref key, ref value)) | Mutation::Insert((ref key, ref value)) => {
+                Mutation::Put((ref key, ref value), _)
+                | Mutation::Insert((ref key, ref value), _) => {
                     bytes += key.as_encoded().len();
                     bytes += value.len();
                 }
-                Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
+                Mutation::Delete(ref key, _) | Mutation::Lock(ref key, _) => {
                     bytes += key.as_encoded().len();
                 }
-                Mutation::CheckNotExists(_) => (),
+                Mutation::CheckNotExists(..) => (),
             }
         }
         bytes
@@ -315,14 +316,15 @@ impl CommandExt for PrewritePessimistic {
         let mut bytes = 0;
         for (m, _) in &self.mutations {
             match *m {
-                Mutation::Put((ref key, ref value)) | Mutation::Insert((ref key, ref value)) => {
+                Mutation::Put((ref key, ref value), _)
+                | Mutation::Insert((ref key, ref value), _) => {
                     bytes += key.as_encoded().len();
                     bytes += value.len();
                 }
-                Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
+                Mutation::Delete(ref key, _) | Mutation::Lock(ref key, _) => {
                     bytes += key.as_encoded().len();
                 }
-                Mutation::CheckNotExists(_) => (),
+                Mutation::CheckNotExists(..) => (),
             }
         }
         bytes
@@ -1778,8 +1780,14 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, b"k2", b"k2", 5, 5);
         // The second key needs a pessimistic lock
         let mutations = vec![
-            (Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())), false),
-            (Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())), true),
+            (
+                Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
+                false,
+            ),
+            (
+                Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
+                true,
+            ),
         ];
         let res = pessimistic_prewrite_with_cm(
             &engine,
