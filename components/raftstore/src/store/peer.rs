@@ -2159,7 +2159,6 @@ where
         );
 
         if !self.is_leader() {
-            // [PerformanceCriticalPath]?? should it be done async?
             self.mut_store()
                 .compact_cache_to(apply_state.applied_index + 1);
         }

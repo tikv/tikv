@@ -638,7 +638,6 @@ where
                         match self.fsm.peer.maybe_destroy(self.ctx) {
                             None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
                             Some(job) => {
-                                // [PerformanceCriticalPath]?? could it be done async?
                                 self.handle_destroy_peer(job);
                             }
                         }
@@ -720,13 +719,11 @@ where
                 }
             }
             CasualMessage::SnapshotGenerated => {
-                // [PerformanceCriticalPath]?? should it be done in background thread?
                 // Resume snapshot handling again to avoid waiting another heartbeat.
                 self.fsm.peer.ping();
                 self.fsm.has_ready = true;
             }
             CasualMessage::ForceCompactRaftLogs => {
-                // [PerformanceCriticalPath]?? should it be done in background thread?
                 self.on_raft_gc_log_tick(true);
             }
             CasualMessage::AccessPeer(cb) => cb(self.fsm as &mut dyn AbstractPeer),
@@ -1290,7 +1287,6 @@ where
             } => {
                 assert_eq!(peer_id, self.fsm.peer.peer_id());
                 if !merge_from_snapshot {
-                    // [PerformanceCriticalPath]?? should it be done async?
                     self.destroy_peer(false);
                 } else {
                     // Wait for its target peer to apply snapshot and then send `MergeResult` back
@@ -2067,6 +2063,7 @@ where
         }
     }
 
+    // [PerformanceCriticalPath] TODO: spin off the I/O code (self.fsm.peer.destroy)
     fn destroy_peer(&mut self, merged_by_target: bool) {
         fail_point!("destroy_peer");
         info!(
@@ -2352,7 +2349,6 @@ where
             self.fsm.has_ready = true;
         }
         if remove_self {
-            // [PerformanceCriticalPath]?? should it be done async?
             self.destroy_peer(false);
         }
     }
@@ -3115,7 +3111,6 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "target_region" => ?self.fsm.peer.pending_merge_state.as_ref().unwrap().target,
                 );
-                // [PerformanceCriticalPath]?? could it be done async?
                 self.destroy_peer(true);
             }
             MergeResultKind::FromTargetSnapshotStep1 => {
@@ -3133,7 +3128,6 @@ where
                 );
             }
             MergeResultKind::FromTargetSnapshotStep2 => {
-                // [PerformanceCriticalPath]?? could it be done async?
                 // `merge_by_target` is true because this region's range already belongs to
                 // its target region so we must not clear data otherwise its target region's
                 // data will corrupt.
