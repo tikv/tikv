@@ -31,8 +31,8 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{from_rocks_compression_type, get_env, FlowInfo, RocksEngine};
 use engine_traits::{
-    compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, MiscExt,
-    RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, KvEngine,
+    MiscExt, RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -180,8 +180,8 @@ struct TiKVServer<ER: RaftEngine> {
     store_path: PathBuf,
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     encryption_key_manager: Option<Arc<DataKeyManager>>,
-    engines: Option<TiKVEngines<ER>>,
-    servers: Option<Servers<ER>>,
+    engines: Option<TiKVEngines<RocksEngine, ER>>,
+    servers: Option<Servers<RocksEngine, ER>>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
@@ -191,24 +191,24 @@ struct TiKVServer<ER: RaftEngine> {
     background_worker: Worker,
 }
 
-struct TiKVEngines<ER: RaftEngine> {
-    engines: Engines<RocksEngine, ER>,
+struct TiKVEngines<EK: KvEngine, ER: RaftEngine> {
+    engines: Engines<EK, ER>,
     store_meta: Arc<Mutex<StoreMeta>>,
-    engine: RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>,
+    engine: RaftKv<EK, ServerRaftStoreRouter<EK, ER>>,
 }
 
-struct Servers<ER: RaftEngine> {
+struct Servers<EK: KvEngine, ER: RaftEngine> {
     lock_mgr: LockManager,
-    server: LocalServer<ER>,
-    node: Node<RpcClient, ER>,
+    server: LocalServer<EK, ER>,
+    node: Node<RpcClient, EK, ER>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
     cdc_memory_quota: MemoryQuota,
 }
 
-type LocalServer<ER> =
-    Server<RaftRouter<RocksEngine, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<ER>>;
-type LocalRaftKv<ER> = RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>;
+type LocalServer<EK, ER> =
+    Server<RaftRouter<EK, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
+type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
 impl<ER: RaftEngine> TiKVServer<ER> {
     fn init(mut config: TiKvConfig) -> TiKVServer<ER> {
@@ -1054,8 +1054,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         fetcher: BytesFetcher,
         engines_info: Arc<EnginesResourceInfo>,
     ) {
-        let mut engine_metrics =
-            EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
+        let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
+            self.engines.as_ref().unwrap().engines.clone(),
+        );
         let mut io_metrics = IOMetricsManager::new(fetcher);
         let engines_info_clone = engines_info.clone();
         self.background_worker
@@ -1473,13 +1474,13 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     }
 }
 
-pub struct EngineMetricsManager<R: RaftEngine> {
-    engines: Engines<RocksEngine, R>,
+pub struct EngineMetricsManager<EK: KvEngine, R: RaftEngine> {
+    engines: Engines<EK, R>,
     last_reset: Instant,
 }
 
-impl<R: RaftEngine> EngineMetricsManager<R> {
-    pub fn new(engines: Engines<RocksEngine, R>) -> Self {
+impl<EK: KvEngine, R: RaftEngine> EngineMetricsManager<EK, R> {
+    pub fn new(engines: Engines<EK, R>) -> Self {
         EngineMetricsManager {
             engines,
             last_reset: Instant::now(),
@@ -1487,10 +1488,10 @@ impl<R: RaftEngine> EngineMetricsManager<R> {
     }
 
     pub fn flush(&mut self, now: Instant) {
-        self.engines.kv.flush_metrics("kv");
+        KvEngine::flush_metrics(&self.engines.kv, "kv");
         self.engines.raft.flush_metrics("raft");
         if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
-            self.engines.kv.reset_statistics();
+            KvEngine::reset_statistics(&self.engines.kv);
             self.engines.raft.reset_statistics();
             self.last_reset = now;
         }
