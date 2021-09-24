@@ -46,9 +46,7 @@ use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
-use resource_metering::{
-    register_cpu_dyn_collector, Collector, DynCpuCollectorHandle, RawCpuRecords,
-};
+use resource_metering::{register_dyn_collector, Collector, DynCollectorHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -171,7 +169,7 @@ where
         id: u64,
         duration: RaftstoreDuration,
     },
-    RegionCPURecords(Arc<RawCpuRecords>),
+    RegionCPURecords(Arc<RawRecords>),
 }
 
 pub struct StoreStat {
@@ -638,11 +636,11 @@ where
     }
 }
 
-impl<E> Collector<Arc<RawCpuRecords>> for RegionCPUMeteringCollector<E>
+impl<E> Collector<Arc<RawRecords>> for RegionCPUMeteringCollector<E>
 where
     E: KvEngine,
 {
-    fn collect(&self, records: Arc<RawCpuRecords>) {
+    fn collect(&self, records: Arc<RawRecords>) {
         self.scheduler
             .schedule(Task::RegionCPURecords(records))
             .ok();
@@ -670,7 +668,7 @@ where
     scheduler: Scheduler<Task<EK>>,
     stats_monitor: StatsMonitor<EK>,
 
-    _region_cpu_records_collector: DynCpuCollectorHandle,
+    _region_cpu_records_collector: DynCollectorHandle,
     // region_id -> total_cpu_time_ms (since last region heartbeat)
     region_cpu_records: HashMap<u64, u32>,
 
@@ -706,9 +704,8 @@ where
             error!("failed to start stats collector, error = {:?}", e);
         }
 
-        let _region_cpu_records_collector = register_cpu_dyn_collector(Box::new(
-            RegionCPUMeteringCollector::new(scheduler.clone()),
-        ));
+        let _region_cpu_records_collector =
+            register_dyn_collector(Box::new(RegionCPUMeteringCollector::new(scheduler.clone())));
 
         Runner {
             store_id,
@@ -1368,23 +1365,24 @@ where
     // CPU time for the write path only takes into account the lock checking,
     // which is the read load portion of the write path.
     // TODO: more accurate CPU consumption of a specified region.
-    fn handle_region_cpu_records(&mut self, records: Arc<RawCpuRecords>) {
+    fn handle_region_cpu_records(&mut self, records: Arc<RawRecords>) {
         calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records);
     }
 }
 
 fn calculate_region_cpu_records(
     store_id: u64,
-    records: Arc<RawCpuRecords>,
+    records: Arc<RawRecords>,
     region_cpu_records: &mut HashMap<u64, u32>,
 ) {
-    for (tag, ms) in &records.records {
+    for (tag, record) in &records.records {
+        let ms = record.cpu_time;
         let record_store_id = tag.infos.store_id;
         if record_store_id != store_id {
             continue;
         }
         // Reporting a region heartbeat later will clear the corresponding record.
-        *region_cpu_records.entry(tag.infos.region_id).or_insert(0) += *ms as u32;
+        *region_cpu_records.entry(tag.infos.region_id).or_insert(0) += ms as u32;
     }
 }
 
@@ -1991,7 +1989,7 @@ mod tests {
     }
 
     use metapb::Peer;
-    use resource_metering::ResourceMeteringTag;
+    use resource_metering::{RawRecord, ResourceMeteringTag};
 
     #[test]
     fn test_calculate_region_cpu_records() {
@@ -2000,7 +1998,7 @@ mod tests {
 
         let region_num = 3;
         for i in 0..region_num * 10 {
-            let cpu_records = Arc::new(RawCpuRecords {
+            let cpu_records = Arc::new(RawRecords {
                 begin_unix_time_secs: UnixSecs::now().into_inner(),
                 duration: Duration::default(),
                 records: {
@@ -2017,7 +2015,14 @@ mod tests {
                     let resource_tag = ResourceMeteringTag::from_rpc_context(&context);
 
                     let mut records = HashMap::default();
-                    records.insert(resource_tag, 10);
+                    records.insert(
+                        resource_tag,
+                        RawRecord {
+                            cpu_time: 10,
+                            read_keys: 0,
+                            write_keys: 0,
+                        },
+                    );
                     records
                 },
             });

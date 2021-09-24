@@ -1,66 +1,38 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::cpu::RawCpuRecords;
-use crate::summary::SummaryRecord;
-use crate::{Config, CpuReporter, GrpcClient, SummaryReporter};
-use collections::HashMap;
-use grpcio::Environment;
+use crate::{Client, Config, RawRecords, Records};
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
-/// This trait defines a general framework for how to process the collected data.
+/// A structure for reporting statistics through [Client].
 ///
-/// [Reporter] will maintain all sub-reporters, accept external scheduling and task
-/// distribution, and call the corresponding methods of all sub-reporters when appropriate.
-pub trait SubReporter<T> {
-    /// Each batch of collected data will be reported through the this method.
-    ///
-    /// Implementation needs to cache and aggregate the data reported each time.
-    fn report(&mut self, cfg: &Config, v: T);
-
-    /// Whenever the external controller decides to upload data, it will call
-    /// this method.
-    ///
-    /// Implementation needs to upload the data that has been cached in the
-    /// past to the remote in batches.
-    fn upload(&mut self, cfg: &Config);
-
-    /// When the external controller decides to stop scheduling, it will call
-    /// this method to shutdown.
-    ///
-    /// Implementation needs to clean up all inner caches if necessary.
-    fn reset(&mut self);
-}
-
-/// A structure that combines all the [SubReporter]s.
-///
-/// `Reporter` implements [Runnable] and [RunnableWithTimer] to handle [Task]s
-/// from the [Scheduler], but it does no business logic and instead controls
-/// all sub-reporters to perform logic in different business areas.
+/// `Reporter` implements [Runnable] and [RunnableWithTimer] to handle [Task]s from
+/// the [Scheduler]. It internally aggregates the reported [RawRecords] into [Records]
+/// and upload them to the remote server through the `Client`.
 ///
 /// [Runnable]: tikv_util::worker::Runnable
 /// [RunnableWithTimer]: tikv_util::worker::RunnableWithTimer
 /// [Scheduler]: tikv_util::worker::Scheduler
-pub struct Reporter<C, S> {
+/// [RawRecords]: crate::model::RawRecords
+/// [Records]: crate::model::Records
+pub struct Reporter<C> {
+    client: C,
     config: Config,
-    cpu_reporter: C,
-    summary_reporter: S,
+    records: Records,
 }
 
-impl<C, S> Runnable for Reporter<C, S>
+impl<C> Runnable for Reporter<C>
 where
-    C: SubReporter<Arc<RawCpuRecords>> + Send,
-    S: SubReporter<Arc<HashMap<Vec<u8>, SummaryRecord>>> + Send,
+    C: Client + Send,
 {
     type Task = Task;
 
     fn run(&mut self, task: Self::Task) {
         match task {
-            Task::ConfigChange(cfg) => self.config_change(cfg),
-            Task::CpuRecords(v) => self.cpu_reporter.report(&self.config, v),
-            Task::SummaryRecords(v) => self.summary_reporter.report(&self.config, v),
+            Task::Records(records) => self.handle_records(records),
+            Task::ConfigChange(cfg) => self.handle_config_change(cfg),
         }
     }
 
@@ -69,14 +41,12 @@ where
     }
 }
 
-impl<C, S> RunnableWithTimer for Reporter<C, S>
+impl<C> RunnableWithTimer for Reporter<C>
 where
-    C: SubReporter<Arc<RawCpuRecords>> + Send,
-    S: SubReporter<Arc<HashMap<Vec<u8>, SummaryRecord>>> + Send,
+    C: Client + Send,
 {
     fn on_timeout(&mut self) {
-        self.cpu_reporter.upload(&self.config);
-        self.summary_reporter.upload(&self.config);
+        self.upload();
     }
 
     fn get_interval(&self) -> Duration {
@@ -84,50 +54,59 @@ where
     }
 }
 
-impl<C, S> Reporter<C, S>
+impl<C> Reporter<C>
 where
-    C: SubReporter<Arc<RawCpuRecords>>,
-    S: SubReporter<Arc<HashMap<Vec<u8>, SummaryRecord>>>,
+    C: Client + Send,
 {
-    pub fn new(config: Config, cpu_reporter: C, summary_reporter: S) -> Self {
+    pub fn new(client: C, config: Config) -> Self {
         Self {
+            client,
             config,
-            cpu_reporter,
-            summary_reporter,
+            records: Records::default(),
         }
     }
 
-    fn config_change(&mut self, cfg: Config) {
+    fn handle_records(&mut self, records: Arc<RawRecords>) {
+        self.records.append(records);
+        self.records.keep_top_k(self.config.max_resource_groups);
+    }
+
+    fn handle_config_change(&mut self, cfg: Config) {
         self.config = cfg;
         if !self.config.should_report() {
             self.reset();
         }
     }
 
+    fn upload(&mut self) {
+        if self.records.is_empty() {
+            return;
+        }
+        // Whether endpoint exists or not, records should be taken in order to reset.
+        let records = std::mem::take(&mut self.records);
+        self.client
+            .upload_records(&self.config.agent_address, records);
+    }
+
     fn reset(&mut self) {
-        self.cpu_reporter.reset();
-        self.summary_reporter.reset();
+        self.records.clear();
     }
 }
 
 /// `Task` represents a task scheduled in [Reporter].
 pub enum Task {
+    Records(Arc<RawRecords>),
     ConfigChange(Config),
-    CpuRecords(Arc<RawCpuRecords>),
-    SummaryRecords(Arc<HashMap<Vec<u8>, SummaryRecord>>),
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Task::Records(_) => {
+                write!(f, "Records")?;
+            }
             Task::ConfigChange(_) => {
                 write!(f, "ConfigChange")?;
-            }
-            Task::CpuRecords(_) => {
-                write!(f, "CpuRecords")?;
-            }
-            Task::SummaryRecords(_) => {
-                write!(f, "SummaryRecords")?;
             }
         }
         Ok(())
@@ -141,73 +120,30 @@ impl Config {
     }
 }
 
-/// Constructs and returns a default [Reporter].
-///
-/// This function is intended to simplify external use.
-pub fn build_default_reporter(
-    cfg: Config,
-    env: Arc<Environment>,
-) -> Reporter<CpuReporter<GrpcClient>, SummaryReporter<GrpcClient>> {
-    let mut client = GrpcClient::default();
-    client.set_env(env);
-    Reporter::new(
-        cfg,
-        CpuReporter::new(client.clone()),
-        SummaryReporter::new(client),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{RawRecord, ResourceMeteringTag, TagInfos};
+    use collections::HashMap;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::SeqCst;
     use tikv_util::config::ReadableDuration;
     use tikv_util::worker::{Runnable, RunnableWithTimer};
 
-    static SUB_REPORTER_OP_COUNT: AtomicUsize = AtomicUsize::new(0);
+    static OP_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-    struct MockCpuReporter;
+    struct MockClient;
 
-    impl SubReporter<Arc<RawCpuRecords>> for MockCpuReporter {
-        fn report(&mut self, cfg: &Config, v: Arc<RawCpuRecords>) {
-            assert_eq!(cfg.agent_address, "abc");
-            assert_eq!(v.begin_unix_time_secs, 123);
-            SUB_REPORTER_OP_COUNT.fetch_add(1, SeqCst);
-        }
-
-        fn upload(&mut self, cfg: &Config) {
-            assert_eq!(cfg.agent_address, "abc");
-            SUB_REPORTER_OP_COUNT.fetch_add(1, SeqCst);
-        }
-
-        fn reset(&mut self) {
-            SUB_REPORTER_OP_COUNT.fetch_add(1, SeqCst);
-        }
-    }
-
-    struct MockSummaryReporter;
-
-    impl SubReporter<Arc<HashMap<Vec<u8>, SummaryRecord>>> for MockSummaryReporter {
-        fn report(&mut self, cfg: &Config, v: Arc<HashMap<Vec<u8>, SummaryRecord>>) {
-            assert_eq!(cfg.agent_address, "abc");
-            assert_eq!(v.len(), 1);
-            SUB_REPORTER_OP_COUNT.fetch_add(1, SeqCst);
-        }
-
-        fn upload(&mut self, cfg: &Config) {
-            assert_eq!(cfg.agent_address, "abc");
-            SUB_REPORTER_OP_COUNT.fetch_add(1, SeqCst);
-        }
-
-        fn reset(&mut self) {
-            SUB_REPORTER_OP_COUNT.fetch_add(1, SeqCst);
+    impl Client for MockClient {
+        fn upload_records(&mut self, address: &str, _records: Records) {
+            assert_eq!(address, "abc");
+            OP_COUNT.fetch_add(1, SeqCst);
         }
     }
 
     #[test]
     fn test_reporter() {
-        let mut r = Reporter::new(Config::default(), MockCpuReporter, MockSummaryReporter);
+        let mut r = Reporter::new(MockClient, Config::default());
         r.run(Task::ConfigChange(Config {
             enabled: false,
             agent_address: "abc".to_string(),
@@ -216,16 +152,29 @@ mod tests {
             precision: ReadableDuration::secs(2),
         }));
         assert_eq!(r.get_interval(), Duration::from_secs(120));
-        r.run(Task::CpuRecords(Arc::new(RawCpuRecords {
+        let mut records = HashMap::default();
+        records.insert(
+            ResourceMeteringTag {
+                infos: Arc::new(TagInfos {
+                    store_id: 0,
+                    region_id: 0,
+                    peer_id: 0,
+                    extra_attachment: b"12345".to_vec(),
+                }),
+            },
+            RawRecord {
+                cpu_time: 1,
+                read_keys: 2,
+                write_keys: 3,
+            },
+        );
+        r.run(Task::Records(Arc::new(RawRecords {
             begin_unix_time_secs: 123,
             duration: Duration::default(),
-            records: HashMap::default(),
+            records,
         })));
-        let mut records = HashMap::default();
-        records.insert(b"".to_vec(), SummaryRecord::default());
-        r.run(Task::SummaryRecords(Arc::new(records)));
         r.on_timeout();
         r.shutdown();
-        assert_eq!(SUB_REPORTER_OP_COUNT.load(SeqCst), 8);
+        assert_eq!(OP_COUNT.load(SeqCst), 1);
     }
 }

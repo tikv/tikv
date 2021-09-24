@@ -15,25 +15,22 @@ use std::task::{Context, Poll};
 mod client;
 mod collector;
 mod config;
-mod cpu;
 mod localstorage;
+mod model;
 mod recorder;
 mod reporter;
-mod summary;
-mod utils;
+pub mod utils;
 
 pub use client::{Client, GrpcClient};
 pub use collector::Collector;
+pub use collector::{register_dyn_collector, DynCollectorHandle, DynCollectorId};
 pub use config::{Config, ConfigManager, GLOBAL_ENABLE};
-pub use cpu::{
-    register_cpu_dyn_collector, CpuRecorder, CpuRecords, CpuReporter, DynCpuCollectorHandle,
-    RawCpuRecords,
+pub use model::*;
+pub use recorder::{
+    build_default_recorder, record_read_keys, record_write_keys, CpuRecorder, Recorder,
+    RecorderBuilder, RecorderHandle, SummaryRecorder,
 };
-pub use recorder::{build_default_recorder, Recorder, RecorderBuilder, RecorderHandle};
-pub use reporter::{build_default_reporter, Reporter, Task};
-pub use summary::{
-    record_read_keys, record_write_keys, SummaryRecord, SummaryRecorder, SummaryReporter,
-};
+pub use reporter::{Reporter, Task};
 
 pub const TEST_TAG_PREFIX: &[u8] = b"__resource_metering::tests::";
 
@@ -112,16 +109,18 @@ impl Drop for Guard {
             // Judge GLOBAL_ENABLE to avoid unnecessary data accumulation when the switch is closed.
             if GLOBAL_ENABLE.load(Relaxed) {
                 let mut records = s.summary_records.lock().unwrap();
-                let k = &self.tag.infos.extra_attachment;
-                if !k.is_empty() {
-                    match records.get(k) {
+                if !self.tag.infos.extra_attachment.is_empty() {
+                    match records.get(&self.tag) {
                         Some(record) => {
                             record.merge(s.summary_cur_record.as_ref());
                         }
                         None => {
                             // See MAX_SUMMARY_RECORDS_LEN.
                             if records.len() < MAX_SUMMARY_RECORDS_LEN {
-                                records.insert(k.clone(), s.summary_cur_record.as_ref().clone());
+                                records.insert(
+                                    self.tag.clone(),
+                                    s.summary_cur_record.as_ref().clone(),
+                                );
                             }
                         }
                     }

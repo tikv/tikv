@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::summary::SummaryRecord;
-use crate::utils;
+use crate::model::SummaryRecord;
 use crate::SharedTagPtr;
+use crate::{utils, ResourceMeteringTag};
 use collections::HashMap;
 use crossbeam::channel::Sender;
 use lazy_static::lazy_static;
@@ -45,7 +45,7 @@ pub struct LocalStorage {
     pub is_set: Arc<AtomicBool>,
     pub shared_ptr: SharedTagPtr,
     pub summary_cur_record: Arc<SummaryRecord>,
-    pub summary_records: Arc<Mutex<HashMap<Vec<u8>, SummaryRecord>>>,
+    pub summary_records: Arc<Mutex<HashMap<ResourceMeteringTag, SummaryRecord>>>,
 }
 
 /// This structure is transmitted as a event in [STORAGE_CHAN].
@@ -58,8 +58,8 @@ pub struct LocalStorageRef {
 }
 
 /// Register a channel to notify thread creation events.
-pub fn register_storage_chan_sender(sender: Sender<LocalStorageRef>) {
-    STORAGE_CHANS.lock().unwrap().push(sender)
+pub fn register_storage_chan_tx(tx: Sender<LocalStorageRef>) {
+    STORAGE_CHANS.lock().unwrap().push(tx)
 }
 
 #[cfg(test)]
@@ -69,8 +69,8 @@ mod tests {
 
     #[test]
     fn test_storage_chan() {
-        let (sender, receiver) = unbounded();
-        register_storage_chan_sender(sender);
+        let (tx, rx) = unbounded();
+        register_storage_chan_tx(tx);
         STORAGE.with(|_| {}); // Just to trigger registration.
         std::thread::spawn(move || {
             STORAGE.with(|_| {});
@@ -78,7 +78,7 @@ mod tests {
         .join()
         .unwrap();
         let mut count = 0;
-        while let Ok(r) = receiver.try_recv() {
+        while let Ok(r) = rx.try_recv() {
             assert_ne!(r.id, 0);
             count += 1;
         }

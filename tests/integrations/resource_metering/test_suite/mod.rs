@@ -10,7 +10,7 @@ use futures::channel::oneshot;
 use futures::{select, FutureExt};
 use grpcio::{Environment, Server};
 use kvproto::kvrpcpb::Context;
-use kvproto::resource_usage_agent::CpuTimeRecord;
+use kvproto::resource_usage_agent::ResourceUsageRecord;
 use mock_agent_server::MockAgentServer;
 use resource_metering::{Config, ConfigManager, Task, TEST_TAG_PREFIX};
 use tempfile::TempDir;
@@ -29,8 +29,8 @@ pub struct TestSuite {
     reporter: Option<Box<LazyWorker<Task>>>,
     cfg_controller: ConfigController,
 
-    tx: Sender<Vec<CpuTimeRecord>>,
-    rx: Receiver<Vec<CpuTimeRecord>>,
+    tx: Sender<Vec<ResourceUsageRecord>>,
+    rx: Receiver<Vec<ResourceUsageRecord>>,
 
     env: Arc<Environment>,
     rt: Runtime,
@@ -61,13 +61,18 @@ impl TestSuite {
             Box::new(ConfigManager::new(
                 resource_metering_cfg.clone(),
                 scheduler.clone(),
-                resource_metering::build_default_recorder(scheduler.clone()),
+                resource_metering::build_default_recorder(
+                    resource_metering_cfg.precision.as_millis(),
+                    scheduler.clone(),
+                ),
             )),
         );
         let env = Arc::new(Environment::new(2));
-        reporter.start_with_timer(resource_metering::build_default_reporter(
+        let mut client = resource_metering::GrpcClient::default();
+        client.set_env(env.clone());
+        reporter.start_with_timer(resource_metering::Reporter::new(
+            client,
             resource_metering_cfg,
-            env.clone(),
         ));
 
         let (tx, rx) = unbounded();

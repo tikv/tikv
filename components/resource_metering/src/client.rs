@@ -1,13 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::cpu::CpuRecords;
-use crate::summary::SummaryRecord;
-use collections::HashMap;
+use crate::model::Records;
 use futures::SinkExt;
 use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
-use kvproto::resource_usage_agent::{
-    CpuTimeRecord, ResourceUsageAgentClient, SummaryRecord as PbSummaryRecord,
-};
+use kvproto::resource_usage_agent::{ResourceUsageAgentClient, ResourceUsageRecord};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,14 +17,7 @@ use tikv_util::warn;
 /// This trait abstracts the interface to communicate with the remote.
 /// We can simply mock this interface to test without RPC.
 pub trait Client {
-    fn upload_cpu_records(&mut self, _address: &str, _records: CpuRecords) {}
-
-    fn upload_summary_records(
-        &mut self,
-        _address: &str,
-        _records: HashMap<Vec<u8>, SummaryRecord>,
-    ) {
-    }
+    fn upload_records(&mut self, address: &str, records: Records);
 }
 
 /// `GrpcClient` is the default implementation of [Client], which uses gRPC
@@ -53,7 +42,7 @@ impl Default for GrpcClient {
 }
 
 impl Client for GrpcClient {
-    fn upload_cpu_records(&mut self, address: &str, records: CpuRecords) {
+    fn upload_records(&mut self, address: &str, records: Records) {
         if address.is_empty() {
             return;
         }
@@ -67,7 +56,7 @@ impl Client for GrpcClient {
         }
         let client = self.client.as_ref().unwrap();
         let call_opt = CallOption::default().timeout(Duration::from_secs(2));
-        let call = client.report_cpu_time_opt(call_opt);
+        let call = client.report_opt(call_opt);
         if let Err(err) = &call {
             warn!("failed to connect to agent"; "error" => ?err);
             return;
@@ -75,72 +64,28 @@ impl Client for GrpcClient {
         let (mut tx, rx) = call.unwrap();
         client.spawn(async move {
             let _hd = handle;
-            let others = records.others;
-            let records = records.records;
-            for (tag, (timestamp_list, cpu_time_ms_list, _)) in records {
-                let mut req = CpuTimeRecord::default();
+            let anonymous = records.anonymous;
+            for (tag, record) in records.records {
+                let mut req = ResourceUsageRecord::default();
                 req.set_resource_group_tag(tag);
-                req.set_record_list_timestamp_sec(timestamp_list);
-                req.set_record_list_cpu_time_ms(cpu_time_ms_list);
+                req.set_record_list_timestamp_sec(record.timestamps);
+                req.set_record_list_cpu_time_ms(record.cpu_time_list);
+                req.set_record_list_read_keys(record.read_keys_list);
+                req.set_record_list_write_keys(record.write_keys_list);
                 if let Err(err) = tx.send((req, WriteFlags::default())).await {
-                    warn!("failed to send cpu records"; "error" => ?err);
+                    warn!("failed to send records"; "error" => ?err);
                     return;
                 }
             }
-            // others
-            if !others.is_empty() {
-                let timestamp_list = others.keys().cloned().collect::<Vec<_>>();
-                let cpu_time_ms_list = others.values().cloned().collect::<Vec<_>>();
-                let mut req = CpuTimeRecord::default();
-                req.set_record_list_timestamp_sec(timestamp_list);
-                req.set_record_list_cpu_time_ms(cpu_time_ms_list);
+            if !anonymous.is_empty() {
+                let mut req = ResourceUsageRecord::default();
+                req.set_record_list_timestamp_sec(anonymous.keys().map(|v| *v).collect());
+                req.set_record_list_cpu_time_ms(anonymous.values().map(|r| r.cpu_time).collect());
+                req.set_record_list_read_keys(anonymous.values().map(|r| r.read_keys).collect());
+                req.set_record_list_write_keys(anonymous.values().map(|r| r.write_keys).collect());
                 if let Err(err) = tx.send((req, WriteFlags::default())).await {
-                    warn!("failed to send cpu records"; "error" => ?err);
+                    warn!("failed to send records"; "error" => ?err);
                     return;
-                }
-            }
-            if let Err(err) = tx.close().await {
-                warn!("failed to close a grpc call"; "error" => ?err);
-                return;
-            }
-            if let Err(err) = rx.await {
-                warn!("failed to receive from a grpc call"; "error" => ?err);
-            }
-        });
-    }
-
-    fn upload_summary_records(&mut self, address: &str, records: HashMap<Vec<u8>, SummaryRecord>) {
-        if address.is_empty() {
-            return;
-        }
-        let handle = self.limiter.try_acquire();
-        if handle.is_none() {
-            return;
-        }
-        if self.address != address || self.client.is_none() {
-            self.address = address.to_owned();
-            self.init_client();
-        }
-        let client = self.client.as_ref().unwrap();
-        let call_opt = CallOption::default().timeout(Duration::from_secs(2));
-        let call = client.report_summary_opt(call_opt);
-        if let Err(err) = &call {
-            warn!("failed to connect to agent"; "error" => ?err);
-            return;
-        }
-        let (mut tx, rx) = call.unwrap();
-        client.spawn(async move {
-            let _hd = handle;
-            for (tag, record) in records {
-                let mut req = PbSummaryRecord::default();
-                req.set_resource_group_tag(tag);
-                req.set_read_keys(record.r_count.load(Ordering::Relaxed));
-                req.set_write_keys(record.w_count.load(Ordering::Relaxed));
-                if req.get_read_keys() > 0 || req.get_write_keys() > 0 {
-                    if let Err(err) = tx.send((req, WriteFlags::default())).await {
-                        warn!("failed to send summary record"; "error" => ?err);
-                        return;
-                    }
                 }
             }
             if let Err(err) = tx.close().await {

@@ -2126,7 +2126,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/mornyx/kvproto?branch=resource-metering#b605fa972de4ebfc4bc92da48d03119e1b2aa197"
+source = "git+https://github.com/mornyx/kvproto?branch=resource-metering#c06d30696f11c318fd3c438f8e16cac33af452f9"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
