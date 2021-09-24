@@ -50,7 +50,7 @@ impl SubRecorder for CpuRecorder {
                     let cur_cpu_tick = cur_stat.utime.wrapping_add(cur_stat.stime);
                     let delta_ticks = cur_cpu_tick.wrapping_sub(last_cpu_tick);
                     if delta_ticks > 0 {
-                        let delta_ms = delta_ticks * 1_000 / utils::clock_tick();
+                        let delta_ms = delta_ticks * 1_000 / (utils::clock_tick() as i64);
                         let record = records.entry(cur_tag).or_insert_with(RawRecord::default);
                         record.cpu_time += delta_ms as u32;
                     }
@@ -93,8 +93,28 @@ struct ThreadStat {
 }
 
 #[cfg(test)]
+#[cfg(not(target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record() {
+        let mut recorder = CpuRecorder::default();
+        let mut records = RawRecords::default();
+        recorder.tick(&mut records, &mut HashMap::default());
+        assert!(records.records.is_empty());
+    }
+}
+
+#[cfg(test)]
 #[cfg(target_os = "linux")]
 mod tests {
+    use super::*;
+    use crate::TagInfos;
+    use crate::{utils, RawRecords};
+    use std::sync::atomic::AtomicPtr;
+    use std::sync::Arc;
+
     fn heavy_job() -> u64 {
         let m: u64 = rand::random();
         let n: u64 = rand::random();
@@ -108,12 +128,6 @@ mod tests {
 
     #[test]
     fn test_record() {
-        use super::*;
-        use crate::TagInfos;
-        use crate::{utils, RawRecords};
-        use std::sync::atomic::AtomicPtr;
-        use std::sync::Arc;
-
         let info = TagInfos {
             store_id: 0,
             region_id: 0,
