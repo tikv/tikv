@@ -385,11 +385,16 @@ impl PriorityBasedIORateLimiter {
                 self.bytes_per_epoch[p].store(budgets, Ordering::Relaxed);
             }
             let max_refill = (budgets as f32 * elapsed_epochs) as i64;
-            let unused = self.bytes_available[p].load(Ordering::Relaxed);
-            let til_full = budgets as i64 - unused;
-            self.bytes_available[p]
-                .fetch_add(std::cmp::min(max_refill, til_full), Ordering::Relaxed);
-            budgets = std::cmp::max(unused, 1) as usize;
+            let r = self.bytes_available[p].fetch_update(
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |unused| {
+                    let til_full = budgets as i64 - unused;
+                    budgets = std::cmp::max(unused, 1) as usize;
+                    Some(unused + std::cmp::min(max_refill, til_full))
+                },
+            );
+            debug_assert!(r.is_ok());
         }
     }
 
