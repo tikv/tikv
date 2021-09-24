@@ -86,6 +86,9 @@ pub use rocks_metrics_defs::*;
 pub mod event_listener;
 pub use event_listener::*;
 
+pub mod flow_listener;
+pub use flow_listener::*;
+
 pub mod config;
 pub use config::*;
 

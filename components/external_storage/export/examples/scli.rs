@@ -12,7 +12,7 @@ use external_storage_export::{
 };
 use futures_util::io::{copy, AllowStdIo};
 use ini::ini::Ini;
-use kvproto::backup::{Bucket, CloudDynamic, Gcs, StorageBackend, S3};
+use kvproto::brpb::{Bucket, CloudDynamic, Gcs, StorageBackend, S3};
 use structopt::clap::arg_enum;
 use structopt::StructOpt;
 use tokio::runtime::Runtime;

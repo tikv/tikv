@@ -433,6 +433,12 @@ impl RegionCollector {
     }
 }
 
+impl Default for RegionCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Runnable for RegionCollector {
     type Task = RegionInfoQuery;
 

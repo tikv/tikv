@@ -19,7 +19,7 @@ use tokio::runtime::Handle;
 use crate::config::ConfigController;
 use crate::server::debug::{Debugger, Error, Result};
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::msg::Callback;
+use raftstore::store::msg::{Callback, RaftCmdExtraOpts};
 use tikv_util::metrics;
 
 fn error_to_status(e: Error) -> RpcStatus {
@@ -484,6 +484,30 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
 
         self.handle_response(ctx, sink, f, TAG);
     }
+
+    fn get_all_regions_in_store(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _: GetAllRegionsInStoreRequest,
+        sink: UnarySink<GetAllRegionsInStoreResponse>,
+    ) {
+        const TAG: &str = "debug_get_all_regions_in_store";
+        let debugger = self.debugger.clone();
+
+        let f = self
+            .pool
+            .spawn(async move {
+                let mut resp = GetAllRegionsInStoreResponse::default();
+                match debugger.get_all_regions_in_store() {
+                    Ok(regions) => resp.set_regions(regions),
+                    Err(_) => resp.set_regions(vec![]),
+                }
+                Ok(resp)
+            })
+            .map(|res| res.unwrap());
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
 }
 
 fn region_detail<T: RaftStoreRouter<RocksEngine>>(
@@ -505,7 +529,7 @@ fn region_detail<T: RaftStoreRouter<RocksEngine>>(
 
     async move {
         raft_router
-            .send_command(raft_cmd, cb)
+            .send_command(raft_cmd, cb, RaftCmdExtraOpts::default())
             .map_err(|e| Error::Other(Box::new(e)))?;
 
         let mut r = rx.map_err(|e| Error::Other(Box::new(e))).await?;
@@ -545,7 +569,7 @@ fn consistency_check<T: RaftStoreRouter<RocksEngine>>(
 
     async move {
         raft_router
-            .send_command(raft_cmd, cb)
+            .send_command(raft_cmd, cb, RaftCmdExtraOpts::default())
             .map_err(|e| Error::Other(Box::new(e)))?;
 
         let r = rx.map_err(|e| Error::Other(Box::new(e))).await?;

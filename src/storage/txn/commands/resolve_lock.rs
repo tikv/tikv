@@ -131,11 +131,18 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
         let pr = if scan_key.is_none() {
             ProcessResult::Res
         } else {
+            let next_cmd = ResolveLockReadPhase {
+                ctx: ctx.clone(),
+                deadline: self.deadline,
+                txn_status,
+                scan_key,
+            };
             ProcessResult::NextCommand {
-                cmd: ResolveLockReadPhase::new(txn_status, scan_key.take(), ctx.clone()).into(),
+                cmd: Command::ResolveLockReadPhase(next_cmd),
             }
         };
-        let write_data = WriteData::from_modifies(txn.into_modifies());
+        let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx,
             to_be_write: write_data,

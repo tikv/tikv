@@ -218,6 +218,7 @@ where
     Ok(writer)
 }
 
+// TODO: Use DataKeyManager::open_file_for_read() instead.
 pub fn get_decrypter_reader(
     file: &str,
     encryption_key_manager: &DataKeyManager,

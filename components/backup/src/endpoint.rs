@@ -14,7 +14,7 @@ use engine_traits::{name_to_cf, CfName, SstCompressionType};
 use external_storage_export::{create_storage, ExternalStorage};
 use file_system::{IOType, WithIOType};
 use futures::channel::mpsc::*;
-use kvproto::backup::*;
+use kvproto::brpb::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
 use online_config::OnlineConfig;

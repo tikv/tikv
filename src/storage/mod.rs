@@ -64,6 +64,7 @@ use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::mvcc::MvccReader;
 use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSwap};
+use crate::storage::txn::flow_controller::FlowController;
 
 use crate::server::lock_manager::waiter_manager;
 use crate::storage::{
@@ -85,6 +86,7 @@ use kvproto::kvrpcpb::{
 };
 use kvproto::pdpb::QueryKind;
 use raftstore::store::util::build_key_range;
+use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
 use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
 use std::{
@@ -93,7 +95,7 @@ use std::{
     sync::{atomic, Arc},
 };
 use tikv_util::time::{Instant, ThreadReadId};
-use txn_types::{Key, KvPair, Lock, Mutation, OldValues, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -196,23 +198,24 @@ macro_rules! check_key_size {
 
 impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Create a `Storage` from given engine.
-    pub fn from_engine(
+    pub fn from_engine<R: FlowStatsReporter>(
         engine: E,
         config: &Config,
         read_pool: ReadPoolHandle,
         lock_mgr: L,
         concurrency_manager: ConcurrencyManager,
         pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
+        flow_controller: Arc<FlowController>,
+        reporter: R,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
             lock_mgr,
             concurrency_manager.clone(),
-            config.scheduler_concurrency,
-            config.scheduler_worker_pool_size,
-            config.scheduler_pending_write_threshold.0 as usize,
+            config,
             pipelined_pessimistic_lock,
-            config.enable_async_apply_prewrite,
+            flow_controller,
+            reporter,
         );
 
         info!("Storage started.");
@@ -381,8 +384,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             r
                         });
 
+                    let delta = perf_statistics.delta();
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    metrics::tls_collect_perf_stats(CMD, &delta);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(begin_instant.saturating_elapsed_secs());
@@ -390,7 +395,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.saturating_elapsed_secs());
 
-                    Ok((result?, statistics, perf_statistics.delta()))
+                    Ok((result?, statistics, delta))
                 }
             }
             .in_resource_metering_tag(resource_tag),
@@ -413,11 +418,19 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         requests: Vec<GetRequest>,
         ids: Vec<u64>,
         consumer: P,
+        begin_instant: tikv_util::time::Instant,
     ) -> impl Future<Output = Result<()>> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
         let concurrency_manager = self.concurrency_manager.clone();
+
+        // The resource tags of these batched requests are not the same, and it is quite expensive
+        // to distinguish them, so we can find random one of them as a representative.
+        let rand_index = rand::thread_rng().gen_range(0, requests.len());
+        let resource_tag =
+            ResourceMeteringTag::from_rpc_context(requests[rand_index].get_context());
+
         let res = self.read_pool.spawn_handle(
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -465,12 +478,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             snap_ctx
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e));
+                            consumer.consume(id, Err(e), begin_instant);
                             continue;
                         }
                     };
 
-                    let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
                     let snap = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx));
                     req_snaps.push((
                         snap,
@@ -481,7 +493,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         bypass_locks,
                         region_id,
                         id,
-                        resource_tag,
                     ));
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
@@ -495,11 +506,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         bypass_locks,
                         region_id,
                         id,
-                        resource_tag,
                     ) = req_snap;
                     match snap.await {
                         Ok(snapshot) => {
-                            let _g = resource_tag.attach();
                             match PointGetterBuilder::new(snapshot, start_ts)
                                 .fill_cache(fill_cache)
                                 .isolation_level(isolation_level)
@@ -511,21 +520,28 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     let perf_statistics = PerfStatisticsInstant::new();
                                     let v = point_getter.get(&key);
                                     let stat = point_getter.take_statistics();
+                                    let delta = perf_statistics.delta();
                                     metrics::tls_collect_read_flow(region_id, &stat);
+                                    metrics::tls_collect_perf_stats(CMD, &delta);
                                     statistics.add(&stat);
                                     consumer.consume(
                                         id,
                                         v.map_err(|e| Error::from(txn::Error::from(e)))
-                                            .map(|v| (v, stat, perf_statistics.delta())),
+                                            .map(|v| (v, stat, delta)),
+                                        begin_instant,
                                     );
                                 }
                                 Err(e) => {
-                                    consumer.consume(id, Err(Error::from(txn::Error::from(e))));
+                                    consumer.consume(
+                                        id,
+                                        Err(Error::from(txn::Error::from(e))),
+                                        begin_instant,
+                                    );
                                 }
                             }
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e));
+                            consumer.consume(id, Err(e), begin_instant);
                         }
                     }
                 }
@@ -535,7 +551,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .observe(command_duration.saturating_elapsed_secs());
 
                 Ok(())
-            },
+            }
+            .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
         );
@@ -626,8 +643,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             kv_pairs
                         });
 
+                    let delta = perf_statistics.delta();
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    metrics::tls_collect_perf_stats(CMD, &delta);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(begin_instant.saturating_elapsed_secs());
@@ -635,7 +654,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.saturating_elapsed_secs());
 
-                    Ok((result?, statistics, perf_statistics.delta()))
+                    Ok((result?, statistics, delta))
                 }
             }
             .in_resource_metering_tag(resource_tag),
@@ -742,6 +761,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
+                    let perf_statistics = PerfStatisticsInstant::new();
 
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -763,8 +783,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let res = scanner.scan(limit, sample_step);
 
                     let statistics = scanner.take_statistics();
+                    let delta = perf_statistics.delta();
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    metrics::tls_collect_perf_stats(CMD, &delta);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(begin_instant.saturating_elapsed_secs());
@@ -873,6 +895,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
+                    let perf_statistics = PerfStatisticsInstant::new();
                     let mut reader = MvccReader::new(
                         snapshot,
                         Some(ScanMode::Forward),
@@ -895,8 +918,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         locks.push(lock_info);
                     }
 
+                    let delta = perf_statistics.delta();
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    metrics::tls_collect_perf_stats(CMD, &delta);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(begin_instant.saturating_elapsed_secs());
@@ -917,7 +942,23 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         }
     }
 
+    // The entry point of all transaction commands. It checks transaction-specific constraints.
     pub fn sched_txn_command<T: StorageCallbackType>(
+        &self,
+        cmd: TypedCommand<T>,
+        callback: Callback<T>,
+    ) -> Result<()> {
+        if self.enable_ttl {
+            return Err(box_err!(
+                "can't sched txn cmd({}) with TTL enabled",
+                cmd.cmd.tag()
+            ));
+        }
+        self.sched_command(cmd, callback)
+    }
+
+    // The entry point of the storage scheduler. Not only transaction commands need to access keys serially.
+    fn sched_command<T: StorageCallbackType>(
         &self,
         cmd: TypedCommand<T>,
         callback: Callback<T>,
@@ -985,9 +1026,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             ));
         }
 
+        let mut batch = WriteData::from_modifies(modifies);
+        batch.set_allowed_on_disk_almost_full();
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(modifies),
+            batch,
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
@@ -1004,6 +1047,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
@@ -1045,7 +1089,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .observe(command_duration.saturating_elapsed_secs());
                     r
                 }
-            },
+            }
+            .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
         );
@@ -1068,6 +1113,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = gets[0].get_context().get_priority();
         let priority_tag = get_priority_tag(priority);
         let enable_ttl = self.enable_ttl;
+
+        // The resource tags of these batched requests are not the same, and it is quite expensive
+        // to distinguish them, so we can find random one of them as a representative.
+        let rand_index = rand::thread_rng().gen_range(0, gets.len());
+        let resource_tag = ResourceMeteringTag::from_rpc_context(gets[rand_index].get_context());
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -1115,16 +1165,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                             &Key::from_encoded(key),
                                             &mut stats,
                                         ),
+                                        begin_instant,
                                     );
                                     tls_collect_read_flow(ctx.get_region_id(), &stats);
                                 }
                                 Err(e) => {
-                                    consumer.consume(id, Err(e));
+                                    consumer.consume(id, Err(e), begin_instant);
                                 }
                             }
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e));
+                            consumer.consume(id, Err(e), begin_instant);
                         }
                     }
                 }
@@ -1136,7 +1187,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(CMD)
                     .observe(command_duration.saturating_elapsed_secs());
                 Ok(())
-            },
+            }
+            .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
         );
@@ -1156,6 +1208,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
@@ -1216,7 +1269,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .observe(command_duration.saturating_elapsed_secs());
                     Ok(result)
                 }
-            },
+            }
+            .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
         );
@@ -1246,9 +1300,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             return Err(Error::from(ErrorInner::TTLNotEnabled));
         }
 
+        let mut batch = WriteData::from_modifies(vec![m]);
+        batch.set_allowed_on_disk_almost_full();
+
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(vec![m]),
+            batch,
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
@@ -1261,7 +1318,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: Context,
         cf: String,
         pairs: Vec<KvPair>,
-        ttl: u64,
+        ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
         let cf = Self::rawkv_cf(&cf)?;
@@ -1272,24 +1329,37 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             callback
         );
 
-        if !self.enable_ttl && ttl != 0 {
+        if self.enable_ttl {
+            if ttls.len() != pairs.len() {
+                return Err(Error::from(ErrorInner::TTLsLenNotEqualsToPairs));
+            }
+        } else if ttls.iter().any(|&x| x != 0) {
             return Err(Error::from(ErrorInner::TTLNotEnabled));
         }
-        let expire_ts = convert_to_expire_ts(ttl);
+        let modifies = if !self.enable_ttl {
+            pairs
+                .into_iter()
+                .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v))
+                .collect()
+        } else {
+            pairs
+                .iter()
+                .zip(ttls)
+                .into_iter()
+                .map(|((k, v), ttl)| {
+                    let mut m = Modify::Put(cf, Key::from_encoded(k.to_vec()), v.to_vec());
+                    m.with_ttl(convert_to_expire_ts(ttl));
+                    m
+                })
+                .collect()
+        };
 
-        let modifies = pairs
-            .into_iter()
-            .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v))
-            .map(|mut m| {
-                if self.enable_ttl {
-                    m.with_ttl(expire_ts)
-                }
-                m
-            })
-            .collect();
+        let mut batch = WriteData::from_modifies(modifies);
+        batch.set_allowed_on_disk_almost_full();
+
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(modifies),
+            batch,
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
@@ -1306,12 +1376,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> Result<()> {
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
 
+        let mut batch = WriteData::from_modifies(vec![Modify::Delete(
+            Self::rawkv_cf(&cf)?,
+            Key::from_encoded(key),
+        )]);
+        batch.set_allowed_on_disk_almost_full();
+
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(vec![Modify::Delete(
-                Self::rawkv_cf(&cf)?,
-                Key::from_encoded(key),
-            )]),
+            batch,
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
@@ -1339,9 +1412,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let start_key = Key::from_encoded(start_key);
         let end_key = Key::from_encoded(end_key);
 
+        let mut batch =
+            WriteData::from_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]);
+        batch.set_allowed_on_disk_almost_full();
+
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]),
+            batch,
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
@@ -1363,9 +1440,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .into_iter()
             .map(|k| Modify::Delete(cf, Key::from_encoded(k)))
             .collect();
+
+        let mut batch = WriteData::from_modifies(modifies);
+        batch.set_allowed_on_disk_almost_full();
+
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(modifies),
+            batch,
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
@@ -1395,6 +1476,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
@@ -1470,7 +1552,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     result
                 }
-            },
+            }
+            .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
         );
@@ -1494,6 +1577,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_batch_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
@@ -1583,7 +1667,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .observe(command_duration.saturating_elapsed_secs());
                     Ok(result)
                 }
-            },
+            }
+            .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
         );
@@ -1604,6 +1689,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_get_key_ttl;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
@@ -1645,7 +1731,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .observe(command_duration.saturating_elapsed_secs());
                     r
                 }
-            },
+            }
+            .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
         );
@@ -1677,7 +1764,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         };
         let cmd =
             RawCompareAndSwap::new(cf, Key::from_encoded(key), previous_value, value, ttl, ctx);
-        self.sched_txn_command(cmd, cb)
+        self.sched_command(cmd, cb)
     }
 
     pub fn raw_batch_put_atomic(
@@ -1685,24 +1772,40 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: Context,
         cf: String,
         pairs: Vec<KvPair>,
-        ttl: u64,
+        ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cf = Self::rawkv_cf(&cf)?;
-        let muations = pairs
-            .into_iter()
-            .map(|(k, v)| Mutation::Put((Key::from_encoded(k), v)))
-            .collect();
-        let ttl = if self.enable_ttl {
-            Some(ttl)
-        } else {
-            if ttl != 0 {
-                return Err(Error::from(ErrorInner::TTLNotEnabled));
+        if self.enable_ttl {
+            if ttls.len() != pairs.len() {
+                return Err(Error::from(ErrorInner::TTLsLenNotEqualsToPairs));
             }
-            None
+        } else if ttls.iter().any(|&x| x != 0) {
+            return Err(Error::from(ErrorInner::TTLNotEnabled));
+        }
+        let cf = Self::rawkv_cf(&cf)?;
+        let muations = if !self.enable_ttl {
+            pairs
+                .into_iter()
+                .map(|(k, v)| RawMutation::Put {
+                    key: Key::from_encoded(k),
+                    value: v,
+                    ttl: 0,
+                })
+                .collect()
+        } else {
+            pairs
+                .iter()
+                .zip(ttls)
+                .into_iter()
+                .map(|((k, v), ttl)| RawMutation::Put {
+                    key: Key::from_encoded(k.to_vec()),
+                    value: v.to_vec(),
+                    ttl,
+                })
+                .collect()
         };
-        let cmd = RawAtomicStore::new(cf, muations, ttl, ctx);
-        self.sched_txn_command(cmd, callback)
+        let cmd = RawAtomicStore::new(cf, muations, self.enable_ttl, ctx);
+        self.sched_command(cmd, callback)
     }
 
     pub fn raw_batch_delete_atomic(
@@ -1715,10 +1818,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let cf = Self::rawkv_cf(&cf)?;
         let muations = keys
             .into_iter()
-            .map(|k| Mutation::Delete(Key::from_encoded(k)))
+            .map(|k| RawMutation::Delete {
+                key: Key::from_encoded(k),
+            })
             .collect();
-        let cmd = RawAtomicStore::new(cf, muations, None, ctx);
-        self.sched_txn_command(cmd, callback)
+        let cmd = RawAtomicStore::new(cf, muations, false, ctx);
+        self.sched_command(cmd, callback)
     }
 
     pub fn raw_checksum(
@@ -1730,6 +1835,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_checksum;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
@@ -1765,7 +1871,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .observe(command_duration.saturating_elapsed().as_secs_f64());
 
                 ret
-            },
+            }
+            .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
         );
@@ -1875,6 +1982,14 @@ impl TestStorageBuilder<RocksEngine, DummyLockManager> {
     }
 }
 
+#[derive(Clone)]
+struct DummyReporter;
+
+impl FlowStatsReporter for DummyReporter {
+    fn report_read_stats(&self, _read_stats: ReadStats) {}
+    fn report_write_stats(&self, _write_stats: WriteStats) {}
+}
+
 impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L) -> Self {
         let config = Config::default();
@@ -1919,12 +2034,14 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             self.lock_mgr,
             ConcurrencyManager::new(1.into()),
             self.pipelined_pessimistic_lock,
+            Arc::new(FlowController::empty()),
+            DummyReporter,
         )
     }
 }
 
 pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
-    fn consume(&self, id: u64, res: Result<ConsumeResponse>);
+    fn consume(&self, id: u64, res: Result<ConsumeResponse>, begin: Instant);
 }
 
 pub mod test_util {
@@ -2091,11 +2208,18 @@ pub mod test_util {
         }
     }
 
+    impl Default for GetConsumer {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)> for GetConsumer {
         fn consume(
             &self,
             id: u64,
             res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
+            _: tikv_util::time::Instant,
         ) {
             self.data.lock().unwrap().push(GetResult {
                 id,
@@ -2105,7 +2229,7 @@ pub mod test_util {
     }
 
     impl ResponseBatchConsumer<Option<Vec<u8>>> for GetConsumer {
-        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>) {
+        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>, _: tikv_util::time::Instant) {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
     }
@@ -2147,6 +2271,7 @@ mod tests {
         },
         time::Duration,
     };
+
     use tikv_util::config::ReadableSize;
     use txn_types::{Mutation, WriteType};
 
@@ -2322,6 +2447,7 @@ mod tests {
             vec![create_get_request(b"c", 1), create_get_request(b"d", 1)],
             vec![1, 2],
             consumer.clone(),
+            Instant::now(),
         ))
         .unwrap();
         let data = consumer.take_data();
@@ -3010,6 +3136,7 @@ mod tests {
             vec![create_get_request(b"c", 2), create_get_request(b"d", 2)],
             vec![1, 2],
             consumer.clone(),
+            Instant::now(),
         ))
         .unwrap();
         let mut x = consumer.take_data();
@@ -3049,6 +3176,7 @@ mod tests {
             ],
             vec![1, 2, 3, 4],
             consumer.clone(),
+            Instant::now(),
         ))
         .unwrap();
 
@@ -3636,31 +3764,55 @@ mod tests {
         let (tx, rx) = channel();
 
         let test_data = vec![
-            (b"a".to_vec(), b"aa".to_vec()),
-            (b"b".to_vec(), b"bb".to_vec()),
-            (b"c".to_vec(), b"cc".to_vec()),
-            (b"d".to_vec(), b"dd".to_vec()),
-            (b"e".to_vec(), b"ee".to_vec()),
+            (b"a".to_vec(), b"aa".to_vec(), 10),
+            (b"b".to_vec(), b"bb".to_vec(), 20),
+            (b"c".to_vec(), b"cc".to_vec(), 30),
+            (b"d".to_vec(), b"dd".to_vec(), 0),
+            (b"e".to_vec(), b"ee".to_vec(), 40),
         ];
 
+        let kvpairs = test_data
+            .clone()
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        let ttls = if ttl {
+            test_data
+                .clone()
+                .into_iter()
+                .map(|(_, _, ttl)| ttl)
+                .collect()
+        } else {
+            vec![0; test_data.len()]
+        };
         // Write key-value pairs in a batch
         storage
             .raw_batch_put(
                 Context::default(),
                 "".to_string(),
-                test_data.clone(),
-                0,
+                kvpairs,
+                ttls,
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
         rx.recv().unwrap();
 
         // Verify pairs one by one
-        for (key, val) in test_data {
+        for (key, val, _) in &test_data {
             expect_value(
-                val,
-                block_on(storage.raw_get(Context::default(), "".to_string(), key)).unwrap(),
+                val.to_vec(),
+                block_on(storage.raw_get(Context::default(), "".to_string(), key.to_vec()))
+                    .unwrap(),
             );
+        }
+        if ttl {
+            // Verify ttl one by one
+            for (key, _, ttl) in test_data {
+                let res =
+                    block_on(storage.raw_get_key_ttl(Context::default(), "".to_string(), key))
+                        .unwrap();
+                assert_eq!(res, Some(ttl));
+            }
         }
     }
 
@@ -3803,7 +3955,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
-                0,
+                vec![0; test_data.len()],
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -3913,7 +4065,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
-                0,
+                vec![0; test_data.len()],
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
@@ -4297,7 +4449,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
-                0,
+                vec![0; test_data.len()],
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
@@ -6249,8 +6401,13 @@ mod tests {
         req2.set_key(b"key".to_vec());
         req2.set_version(100);
         let consumer = GetConsumer::new();
-        block_on(storage.batch_get_command(vec![req1, req2], vec![1, 2], consumer.clone()))
-            .unwrap();
+        block_on(storage.batch_get_command(
+            vec![req1, req2],
+            vec![1, 2],
+            consumer.clone(),
+            Instant::now(),
+        ))
+        .unwrap();
         let res = consumer.take_data();
         assert!(res[0].is_ok());
         let key_error = extract_key_error(res[1].as_ref().unwrap_err());

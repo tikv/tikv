@@ -4,4 +4,4 @@ pub mod collector;
 pub mod recorder;
 
 mod future_ext;
-pub use future_ext::FutureExt;
+pub use future_ext::{FutureExt, StreamExt};

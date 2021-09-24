@@ -5,7 +5,7 @@ use std::sync::atomic::*;
 use futures::channel::mpsc;
 use futures::{FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
-use kvproto::backup::*;
+use kvproto::brpb::*;
 use tikv_util::worker::*;
 use tikv_util::{error, info};
 

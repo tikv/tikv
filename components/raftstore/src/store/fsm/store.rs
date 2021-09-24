@@ -22,6 +22,7 @@ use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use kvproto::import_sstpb::SstMeta;
+use kvproto::import_sstpb::SwitchMode;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::QueryStats;
 use kvproto::pdpb::StoreStats;
@@ -41,7 +42,7 @@ use sst_importer::SSTImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::sys::disk;
+use tikv_util::sys::disk::{get_disk_status, DiskUsage};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
@@ -377,6 +378,11 @@ where
     pub coprocessor_host: CoprocessorHost<EK>,
     pub timer: SteadyTimer,
     pub trans: T,
+    /// WARNING:
+    /// To avoid deadlock, if you want to use `store_meta` and `global_replication_state` together,
+    /// the lock sequence MUST BE:
+    /// 1. lock the store_meta.
+    /// 2. lock the global_replication_state.
     pub global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
@@ -391,7 +397,15 @@ where
     pub perf_context: EK::PerfContext,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
-    pub is_disk_full: bool,
+    pub pending_latency_inspect: Vec<util::LatencyInspector>,
+
+    /// Disk usage for the store itself.
+    pub self_disk_usage: DiskUsage,
+
+    // TODO: how to remove offlined stores?
+    /// Disk usage for other stores. The store itself is not included.
+    /// Only contains items which is not `DiskUsage::Normal`.
+    pub store_disk_usages: HashMap<u64, DiskUsage>,
 }
 
 impl<EK, ER, T> HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch> for PollContext<EK, ER, T>
@@ -621,6 +635,13 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
+                StoreMsg::LatencyInspect {
+                    send_time,
+                    mut inspector,
+                } => {
+                    inspector.record_store_wait(send_time.saturating_elapsed());
+                    self.ctx.pending_latency_inspect.push(inspector);
+                }
             }
         }
     }
@@ -777,7 +798,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
-        self.poll_ctx.is_disk_full = disk::is_disk_full();
+        self.poll_ctx.self_disk_usage = get_disk_status(self.poll_ctx.store.get_id());
         self.timer = TiInstant::now_coarse();
         // update config
         self.poll_ctx.perf_context.start_observe();
@@ -890,6 +911,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             .observe(duration_to_sec(self.timer.saturating_elapsed()) as f64);
         self.poll_ctx.raft_metrics.flush();
         self.poll_ctx.store_stat.flush();
+
+        for mut inspector in std::mem::take(&mut self.poll_ctx.pending_latency_inspect) {
+            inspector.record_store_process(self.timer.saturating_elapsed());
+            // TODO: Maybe we need to inspect the latency related to apply worker later.
+            inspector.finish();
+        }
 
         for peer in peers {
             peer.update_memory_trace(&mut self.trace_event);
@@ -1142,7 +1169,9 @@ where
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
             feature_gate: self.feature_gate.clone(),
-            is_disk_full: false,
+            pending_latency_inspect: vec![],
+            self_disk_usage: DiskUsage::Normal,
+            store_disk_usages: Default::default(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1371,6 +1400,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .spawn("apply".to_owned(), apply_poller_builder);
 
         let pd_runner = PdRunner::new(
+            &cfg,
             store.get_id(),
             Arc::clone(&pd_client),
             self.router.clone(),
@@ -1381,7 +1411,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             snap_mgr,
             workers.pd_worker.remote(),
         );
-        assert!(workers.pd_worker.start(pd_runner));
+        assert!(workers.pd_worker.start_with_timer(pd_runner));
 
         if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
@@ -1736,6 +1766,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         if meta.regions.contains_key(&region_id) {
             return Ok(true);
         }
+        fail_point!("after_acquire_store_meta_on_maybe_create_peer_internal");
 
         if is_local_first {
             let pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
@@ -2085,6 +2116,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "store_id" => self.fsm.store.id,
                 "region_id" => region_id,
             );
+
             let gc_snap = PeerMsg::CasualMessage(CasualMessage::GcSnap { snaps });
             match self.ctx.router.send(region_id, gc_snap) {
                 Ok(()) => Ok(()),
@@ -2101,7 +2133,16 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                         "snaps" => ?snaps,
                     );
                     for (key, is_sending) in snaps {
-                        let snap = self.ctx.snap_mgr.get_snapshot_for_gc(&key, is_sending)?;
+                        let snap = match self.ctx.snap_mgr.get_snapshot_for_gc(&key, is_sending) {
+                            Ok(snap) => snap,
+                            Err(e) => {
+                                error!(%e;
+                                    "failed to load snapshot";
+                                    "snapshot" => ?key,
+                                );
+                                continue;
+                            }
+                        };
                         self.ctx
                             .snap_mgr
                             .delete_snapshot(&key, snap.as_ref(), false);
@@ -2200,7 +2241,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER, T> {
     fn on_validate_sst_result(&mut self, ssts: Vec<SstMeta>) {
-        if ssts.is_empty() {
+        if ssts.is_empty() || self.ctx.importer.get_mode() == SwitchMode::Import {
             return;
         }
         // A stale peer can still ingest a stale SST before it is
@@ -2271,7 +2312,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             }
         }
 
-        if !validate_ssts.is_empty() {
+        // When there is an import job running, the region which this sst belongs may has not been
+        //  split from the origin region because the apply thread is so busy that it can not apply
+        //  SplitRequest as soon as possible. So we can not delete this sst file.
+        if !validate_ssts.is_empty() && self.ctx.importer.get_mode() != SwitchMode::Import {
             let task = CleanupSSTTask::ValidateSST {
                 ssts: validate_ssts,
             };

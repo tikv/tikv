@@ -277,10 +277,6 @@ impl Instant {
         Instant::MonotonicCoarse(monotonic_coarse_now())
     }
 
-    // This function may panic if the current time is earlier than this
-    // instant. Deprecated.
-    // pub fn elapsed(&self) -> Duration;
-
     pub fn saturating_elapsed(&self) -> Duration {
         match *self {
             Instant::Monotonic(t) => {
@@ -490,6 +486,7 @@ impl BlockingClock for CoarseClock {
 
 /// A limiter which uses the coarse clock for measurement.
 pub type Limiter = async_speed_limit::Limiter<CoarseClock>;
+pub type Consume = async_speed_limit::limiter::Consume<CoarseClock, ()>;
 
 /// ReadId to judge whether the read requests come from the same GRPC stream.
 #[derive(Eq, PartialEq, Clone, Debug)]
@@ -511,6 +508,12 @@ impl ThreadReadId {
             sequence,
             create_time: monotonic_raw_now(),
         }
+    }
+}
+
+impl Default for ThreadReadId {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

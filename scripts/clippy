@@ -17,7 +17,6 @@ fi
 
 CLIPPY_LINTS=(-A clippy::module_inception  \
 	-A clippy::should_implement_trait \
-	-A clippy::new_without_default \
 	-A clippy::too_many_arguments \
 	-A clippy::blacklisted_name \
 	-A clippy::redundant_closure \
@@ -35,6 +34,6 @@ CLIPPY_LINTS=(-A clippy::module_inception  \
         -W clippy::dbg_macro \
         -W clippy::todo)
 
-cargo clippy --workspace --fix --allow-staged --no-default-features \
+cargo clippy --workspace --no-default-features \
 	--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
 	--features "${TIKV_ENABLE_FEATURES}" "$@" -- "${CLIPPY_LINTS[@]}"

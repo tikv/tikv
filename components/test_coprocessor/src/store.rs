@@ -114,6 +114,12 @@ impl Store<RocksEngine> {
     }
 }
 
+impl Default for Store<RocksEngine> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<E: Engine> Store<E> {
     pub fn from_engine(engine: E) -> Self {
         Self {

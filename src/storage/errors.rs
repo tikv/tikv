@@ -31,6 +31,7 @@ pub enum ErrorInner {
 
     #[error("storage is closed.")]
     Closed,
+
     #[error("{0}")]
     Other(#[from] Box<dyn StdError + Send + Sync>),
 
@@ -54,6 +55,9 @@ pub enum ErrorInner {
 
     #[error("Deadline is exceeded")]
     DeadlineExceeded,
+
+    #[error("The length of ttls does not equal to the length of pairs")]
+    TTLsLenNotEqualsToPairs,
 }
 
 impl From<DeadlineError> for ErrorInner {
@@ -96,6 +100,9 @@ impl ErrorCodeExt for Error {
             ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
             ErrorInner::TTLNotEnabled => error_code::storage::TTL_NOT_ENABLED,
             ErrorInner::DeadlineExceeded => error_code::storage::DEADLINE_EXCEEDED,
+            ErrorInner::TTLsLenNotEqualsToPairs => {
+                error_code::storage::TTLS_LEN_NOT_EQUALS_TO_PAIRS
+            }
         }
     }
 }
@@ -139,6 +146,7 @@ impl Display for ErrorHeaderKind {
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
+const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
 
 /// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf message.
 /// Returns `ErrorHeaderKind::Other` if no match found.
@@ -210,7 +218,9 @@ pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
         }
         Err(Error(box ErrorInner::DeadlineExceeded)) => {
             let mut err = errorpb::Error::default();
-            err.set_message("Deadline is exceeded".to_string());
+            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+            server_is_busy_err.set_reason(DEADLINE_EXCEEDED.to_owned());
+            err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
         _ => None,

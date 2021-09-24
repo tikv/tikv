@@ -14,6 +14,7 @@ use tikv::storage::{
     test_util::GetConsumer, txn::commands, Engine, PerfStatisticsDelta, PrewriteResult, Result,
     Statistics, Storage, TestEngineBuilder, TestStorageBuilder, TxnStatus,
 };
+use tikv_util::time::Instant;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 
 /// A builder to build a `SyncTestStorage`.
@@ -32,6 +33,12 @@ impl SyncTestStorageBuilder<RocksEngine> {
             config: None,
             gc_config: None,
         }
+    }
+}
+
+impl Default for SyncTestStorageBuilder<RocksEngine> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -142,7 +149,10 @@ impl<E: Engine> SyncTestStorage<E> {
             })
             .collect();
         let p = GetConsumer::new();
-        block_on(self.store.batch_get_command(requests, ids, p.clone()))?;
+        block_on(
+            self.store
+                .batch_get_command(requests, ids, p.clone(), Instant::now()),
+        )?;
         let mut values = vec![];
         for value in p.take_data().into_iter() {
             values.push(value?);
@@ -361,9 +371,9 @@ impl<E: Engine> SyncTestStorage<E> {
         ctx: Context,
         cf: String,
         pairs: Vec<KvPair>,
-        ttl: u64,
+        ttls: Vec<u64>,
     ) -> Result<()> {
-        wait_op!(|cb| self.store.raw_batch_put_atomic(ctx, cf, pairs, ttl, cb)).unwrap()
+        wait_op!(|cb| self.store.raw_batch_put_atomic(ctx, cf, pairs, ttls, cb)).unwrap()
     }
 
     pub fn raw_batch_delete_atomic(

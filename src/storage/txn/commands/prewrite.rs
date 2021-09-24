@@ -468,6 +468,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             let m = m.into_mutation();
             let key = m.key().clone();
             let mutation_type = m.mutation_type();
+
             let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
             if Some(m.key()) == async_commit_pk {
                 secondaries = &self.secondary_keys;
@@ -560,9 +561,12 @@ impl<K: PrewriteKind> Prewriter<K> {
             // If an error (KeyIsLocked or WriteConflict) occurs before, these lock guards
             // are dropped along with `txn` automatically.
             let lock_guards = txn.take_guards();
+            let mut to_be_write = WriteData::new(txn.into_modifies(), extra);
+            to_be_write.set_disk_full_opt(self.ctx.get_disk_full_opt());
+
             WriteResult {
                 ctx: self.ctx,
-                to_be_write: WriteData::new(txn.into_modifies(), extra),
+                to_be_write,
                 rows,
                 pr,
                 lock_info: None,
@@ -1297,14 +1301,14 @@ mod tests {
     #[test]
     fn test_out_of_sync_max_ts() {
         use crate::storage::{kv::Result, CfName, ConcurrencyManager, DummyLockManager, Value};
-        use engine_rocks::RocksEngineIterator;
+        use engine_test::kv::KvTestEngineIterator;
         use engine_traits::{IterOptions, ReadOptions};
         use kvproto::kvrpcpb::ExtraOp;
         #[derive(Clone)]
         struct MockSnapshot;
 
         impl Snapshot for MockSnapshot {
-            type Iter = RocksEngineIterator;
+            type Iter = KvTestEngineIterator;
 
             fn get(&self, _: &Key) -> Result<Option<Value>> {
                 unimplemented!()

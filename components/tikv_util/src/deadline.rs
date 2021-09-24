@@ -46,4 +46,9 @@ impl Deadline {
         }
         Ok(())
     }
+
+    // Returns the deadline instant of the std library.
+    pub fn to_std_instant(&self) -> std::time::Instant {
+        std::time::Instant::now() + self.deadline.duration_since(Instant::now_coarse())
+    }
 }

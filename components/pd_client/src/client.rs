@@ -530,6 +530,7 @@ impl PdClient for RpcClient {
         req.set_query_stats(region_stat.query_stats);
         req.set_approximate_size(region_stat.approximate_size);
         req.set_approximate_keys(region_stat.approximate_keys);
+        req.set_cpu_usage(region_stat.cpu_usage);
         if let Some(s) = replication_status {
             req.set_replication_status(s);
         }
@@ -859,6 +860,12 @@ impl DummyPdClient {
         DummyPdClient {
             next_ts: TimeStamp::zero(),
         }
+    }
+}
+
+impl Default for DummyPdClient {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
