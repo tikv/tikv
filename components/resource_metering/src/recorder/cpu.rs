@@ -4,8 +4,9 @@ use crate::localstorage::LocalStorage;
 use crate::recorder::SubRecorder;
 use crate::utils;
 use crate::utils::Stat;
-use crate::{RawRecord, RawRecords};
-use crate::{SharedTagPtr, TEST_TAG_PREFIX};
+#[cfg(target_feature = "failpoints")]
+use crate::TEST_TAG_PREFIX;
+use crate::{RawRecord, RawRecords, SharedTagPtr};
 use collections::HashMap;
 use fail::fail_point;
 use lazy_static::lazy_static;
@@ -51,7 +52,7 @@ impl SubRecorder for CpuRecorder {
                     let cur_cpu_tick = cur_stat.utime.wrapping_add(cur_stat.stime);
                     let delta_ticks = cur_cpu_tick.wrapping_sub(last_cpu_tick);
                     if delta_ticks > 0 {
-                        let delta_ms = delta_ticks * 1_000 / utils::clock_tick();
+                        let delta_ms = delta_ticks * 1_000 / (utils::clock_tick() as u64);
                         let record = records.entry(cur_tag).or_insert_with(RawRecord::default);
                         record.cpu_time += delta_ms as u32;
                     }

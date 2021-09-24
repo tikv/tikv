@@ -79,7 +79,7 @@ impl Client for GrpcClient {
             }
             if !anonymous.is_empty() {
                 let mut req = ResourceUsageRecord::default();
-                req.set_record_list_timestamp_sec(anonymous.keys().map(|v| *v).collect());
+                req.set_record_list_timestamp_sec(anonymous.keys().copied().collect());
                 req.set_record_list_cpu_time_ms(anonymous.values().map(|r| r.cpu_time).collect());
                 req.set_record_list_read_keys(anonymous.values().map(|r| r.read_keys).collect());
                 req.set_record_list_write_keys(anonymous.values().map(|r| r.write_keys).collect());

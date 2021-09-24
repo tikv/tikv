@@ -371,9 +371,7 @@ mod tests {
         assert_eq!(records.records.len(), 0);
         records.append(Arc::new(raw));
         assert_eq!(records.records.len(), 3);
-        dbg!(&records);
         records.keep_top_k(2);
-        dbg!(&records);
         assert_eq!(records.records.len(), 2);
         assert_eq!(records.anonymous.len(), 1);
     }

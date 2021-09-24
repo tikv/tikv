@@ -333,9 +333,8 @@ impl RecorderHandle {
 ///
 /// This function is intended to simplify external use.
 pub fn build_default_recorder(precision_ms: u64, scheduler: Scheduler<Task>) -> RecorderHandle {
-    let precision_ms = Arc::new(AtomicU64::new(precision_ms));
     RecorderBuilder::default()
-        .precision_ms(precision_ms.clone())
+        .precision_ms(Arc::new(AtomicU64::new(precision_ms)))
         .add_sub_recorder(Box::new(CpuRecorder::default()))
         .add_sub_recorder(Box::new(SummaryRecorder::default()))
         .spawn(RawRecordsCollector::new(scheduler))
