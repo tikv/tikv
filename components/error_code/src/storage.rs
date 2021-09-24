@@ -12,6 +12,7 @@ define_error_codes!(
     KEY_TOO_LARGE => ("KeyTooLarge", "", ""),
     INVALID_CF => ("InvalidCF", "", ""),
     TTL_NOT_ENABLED => ("TTLNotEnabled", "", ""),
+    TTLS_LEN_NOT_EQUALS_TO_PAIRS => ("TTLsLenNotEqualsToPairs", "", ""),
     PROTOBUF => ("Protobuf", "", ""),
     INVALID_TXN_TSO => ("INVALIDTXNTSO", "", ""),
     INVALID_REQ_RANGE => ("InvalidReqRange", "", ""),
