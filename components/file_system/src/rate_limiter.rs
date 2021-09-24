@@ -18,7 +18,7 @@ use tikv_util::time::Instant;
 
 const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(50);
 const DEFAULT_REFILLS_PER_SEC: usize = (1.0 / DEFAULT_REFILL_PERIOD.as_secs_f32()) as usize;
-const MAX_WAIT_DURATION_PER_REQUEST: Duration = Duration::from_millis(500);
+const MAX_DURATION_PER_WAIT: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum IORateLimitMode {
@@ -195,21 +195,23 @@ impl PriorityBasedIORateLimiter {
 
     /// Dynamically changes the total IO flow threshold.
     fn set_bytes_per_sec(&self, bytes_per_sec: usize) {
-        let now = (bytes_per_sec as f64 * DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
-        let before = self.bytes_per_epoch[IOPriority::High as usize].swap(now, Ordering::Relaxed);
-        self.bytes_available[IOPriority::High as usize].store(now as i64, Ordering::Relaxed);
+        let new_rate = (bytes_per_sec as f64 * DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
+        self.bytes_per_epoch[IOPriority::High as usize].store(new_rate, Ordering::Relaxed);
         RATE_LIMITER_MAX_BYTES_PER_SEC
             .high
             .set(bytes_per_sec as i64);
-        if now == 0 || before == 0 {
-            // Toggle on or off rate limit.
-            let _locked = self.protected.lock();
-            self.bytes_per_epoch[IOPriority::Medium as usize].store(now, Ordering::Relaxed);
+        let now = Instant::now_coarse();
+        let mut locked = self.protected.lock();
+        if new_rate == 0 {
+            self.bytes_per_epoch[IOPriority::Medium as usize].store(new_rate, Ordering::Relaxed);
             RATE_LIMITER_MAX_BYTES_PER_SEC
                 .medium
                 .set(bytes_per_sec as i64);
-            self.bytes_per_epoch[IOPriority::Low as usize].store(now, Ordering::Relaxed);
+            self.bytes_per_epoch[IOPriority::Low as usize].store(new_rate, Ordering::Relaxed);
             RATE_LIMITER_MAX_BYTES_PER_SEC.low.set(bytes_per_sec as i64);
+        } else {
+            locked.next_refill_time = now;
+            self.refill(&mut locked, now);
         }
     }
 
@@ -218,43 +220,85 @@ impl PriorityBasedIORateLimiter {
         locked.adjustor = adjustor;
     }
 
+    #[inline]
     fn request(&self, priority: IOPriority, amount: usize) -> usize {
         let (amount, wait) = self.request_imp(priority, amount);
         if let Some(wait) = wait {
-            std::thread::sleep(wait);
-            tls_collect_rate_limiter_request_wait(priority.as_str(), wait);
+            let mut to_wait = wait;
+            loop {
+                if to_wait > MAX_DURATION_PER_WAIT {
+                    std::thread::sleep(MAX_DURATION_PER_WAIT);
+                    if self.recheck(priority) {
+                        break;
+                    }
+                    to_wait -= MAX_DURATION_PER_WAIT;
+                } else {
+                    std::thread::sleep(to_wait);
+                    break;
+                }
+            }
+            tls_collect_rate_limiter_request_wait(priority.as_str(), wait - to_wait);
         }
         amount
     }
 
+    #[inline]
     async fn async_request(&self, priority: IOPriority, amount: usize) -> usize {
         let (amount, wait) = self.request_imp(priority, amount);
         if let Some(wait) = wait {
-            tokio::time::sleep(wait).await;
-            tls_collect_rate_limiter_request_wait(priority.as_str(), wait);
+            let mut to_wait = wait;
+            loop {
+                if to_wait > MAX_DURATION_PER_WAIT {
+                    tokio::time::sleep(MAX_DURATION_PER_WAIT).await;
+                    if self.recheck(priority) {
+                        break;
+                    }
+                    to_wait -= MAX_DURATION_PER_WAIT;
+                } else {
+                    tokio::time::sleep(wait).await;
+                    break;
+                }
+            }
+            tls_collect_rate_limiter_request_wait(priority.as_str(), wait - to_wait);
         }
         amount
     }
 
     #[cfg(test)]
     fn request_with_skewed_clock(&self, priority: IOPriority, amount: usize) -> usize {
-        use rand::Rng;
-        let (amount, wait) = self.request_imp(priority, amount);
-        if let Some(mut wait) = wait {
+        fn skewed_duration(d: Duration) -> Duration {
+            use rand::Rng;
             let mut rng = rand::thread_rng();
             let subtraction: bool = rng.gen();
-            let offset = std::cmp::min(Duration::from_millis(1), wait / 100);
-            if subtraction {
-                wait -= offset;
-            } else {
-                wait += offset;
+            let offset = std::cmp::min(Duration::from_millis(1), d / 100);
+            if subtraction { d - offset } else { d + offset }
+        }
+        let (amount, wait) = self.request_imp(priority, amount);
+        if let Some(wait) = wait {
+            let mut to_wait = wait;
+            loop {
+                if to_wait > MAX_DURATION_PER_WAIT {
+                    std::thread::sleep(skewed_duration(MAX_DURATION_PER_WAIT));
+                    if self.recheck(priority) {
+                        break;
+                    }
+                    to_wait -= MAX_DURATION_PER_WAIT;
+                } else {
+                    std::thread::sleep(skewed_duration(to_wait));
+                    break;
+                }
             }
-            std::thread::sleep(wait);
-            tls_collect_rate_limiter_request_wait(priority.as_str(), wait);
+            tls_collect_rate_limiter_request_wait(priority.as_str(), wait - to_wait);
         }
         amount
     }
 
+    #[inline]
+    fn recheck(&self, priority: IOPriority) -> bool {
+        self.bytes_available[priority as usize].load(Ordering::Relaxed) >= 0
+    }
+
+    #[inline]
     fn request_imp(&self, priority: IOPriority, amount: usize) -> (usize, Option<Duration>) {
         debug_assert!(amount > 0);
         let priority_idx = priority as usize;
@@ -263,7 +307,7 @@ impl PriorityBasedIORateLimiter {
         if cached_bytes_per_epoch == 0 {
             return (amount, None);
         }
-        let mut amount = std::cmp::min(amount, cached_bytes_per_epoch);
+        let amount = std::cmp::min(amount, cached_bytes_per_epoch);
         let remains = self.bytes_available[priority_idx]
             .fetch_sub(amount as i64, Ordering::Relaxed)
             - amount as i64;
@@ -286,24 +330,11 @@ impl PriorityBasedIORateLimiter {
         // Wait for additional refills.
         // `(a-1)/b` is equivalent to `roundup(a.saturating_sub(b)/b)`.
         wait += DEFAULT_REFILL_PERIOD * ((remains - 1) / cached_bytes_per_epoch) as u32;
-        if wait > MAX_WAIT_DURATION_PER_REQUEST {
-            // Long wait duration could freeze request thread not to react to latest budgets
-            // adjustment. Exit early by returning partial quotas.
-            wait = MAX_WAIT_DURATION_PER_REQUEST;
-            amount = std::cmp::max(
-                (MAX_WAIT_DURATION_PER_REQUEST.as_secs_f32() * amount as f32 / wait.as_secs_f32())
-                    as usize,
-                1,
-            );
-            // Subtracting redundant bytes requested before.
-            let redundant = remains as i64 - amount as i64;
-            debug_assert!(redundant > 0);
-            self.bytes_available[priority_idx].fetch_add(redundant, Ordering::Relaxed);
-        }
         (amount, Some(wait))
     }
 
     /// Updates and refills IO budgets for next epoch based on IO priority.
+    /// This method does **nothing** when high-priority IO rate limit equals zero.
     /// Here we provide best-effort priority control:
     /// 1) Limited IO budget is assigned to lower priority to ensure higher priority can at least
     ///    consume the same IO amount as the last few epochs without breaching global threshold.
