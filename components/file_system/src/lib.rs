@@ -11,6 +11,8 @@ extern crate tikv_alloc;
 
 mod file;
 mod iosnoop;
+#[allow(dead_code)]
+mod thread_io;
 mod metrics;
 mod metrics_manager;
 mod rate_limiter;
