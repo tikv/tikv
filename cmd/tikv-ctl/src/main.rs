@@ -1985,7 +1985,7 @@ fn main() {
     let host = opt.host.as_deref();
 
     if host.is_none() && data_dir.is_none() {
-        let _ = app.print_help();
+        Opt::clap().print_help().ok();
         return;
     }
 
