@@ -4,8 +4,6 @@ use crate::localstorage::LocalStorage;
 use crate::recorder::SubRecorder;
 use crate::utils;
 use crate::utils::Stat;
-#[cfg(target_feature = "failpoints")]
-use crate::TEST_TAG_PREFIX;
 use crate::{RawRecord, RawRecords, SharedTagPtr};
 use collections::HashMap;
 use fail::fail_point;
@@ -41,7 +39,7 @@ impl SubRecorder for CpuRecorder {
                 cur_tag.as_ref().map_or(false, |t| !t
                     .infos
                     .extra_attachment
-                    .starts_with(TEST_TAG_PREFIX)),
+                    .starts_with(crate::TEST_TAG_PREFIX)),
                 |_| {}
             );
             if let Some(cur_tag) = cur_tag {
@@ -52,7 +50,7 @@ impl SubRecorder for CpuRecorder {
                     let cur_cpu_tick = cur_stat.utime.wrapping_add(cur_stat.stime);
                     let delta_ticks = cur_cpu_tick.wrapping_sub(last_cpu_tick);
                     if delta_ticks > 0 {
-                        let delta_ms = delta_ticks * 1_000 / (utils::clock_tick() as u64);
+                        let delta_ms = delta_ticks * 1_000 / utils::clock_tick();
                         let record = records.entry(cur_tag).or_insert_with(RawRecord::default);
                         record.cpu_time += delta_ms as u32;
                     }
@@ -135,8 +133,7 @@ mod tests {
         loop {
             let stat = utils::stat_task(utils::process_id(), thread_id).unwrap();
             let cpu_ticks = (stat.utime as u64).wrapping_add(stat.stime as u64);
-            let delta_ms =
-                cpu_ticks.wrapping_sub(prev_cpu_ticks) * 1_000 / (utils::clock_tick() as u64);
+            let delta_ms = cpu_ticks.wrapping_sub(prev_cpu_ticks) * 1_000 / utils::clock_tick();
             if delta_ms != 0 {
                 break;
             }

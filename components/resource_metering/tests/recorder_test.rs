@@ -140,8 +140,8 @@ impl Operations {
                                 utils::stat_task(utils::process_id(), utils::thread_id()).unwrap();
                             let later_ticks =
                                 (later_stat.utime as u64).wrapping_add(later_stat.stime as u64);
-                            let delta_ms = later_ticks.wrapping_sub(begin_ticks) * 1_000
-                                / (utils::clock_tick() as u64);
+                            let delta_ms =
+                                later_ticks.wrapping_sub(begin_ticks) * 1_000 / utils::clock_tick();
                             if delta_ms >= ms as u64 {
                                 break;
                             }

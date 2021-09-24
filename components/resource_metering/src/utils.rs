@@ -50,7 +50,7 @@ pub fn thread_ids() -> Option<HashSet<usize>> {
 }
 
 #[cfg(target_os = "linux")]
-pub fn clock_tick() -> i64 {
+pub fn clock_tick() -> u64 {
     lazy_static::lazy_static! {
         static ref CLK_TCK: libc::c_long = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
     }
@@ -58,7 +58,7 @@ pub fn clock_tick() -> i64 {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn clock_tick() -> i64 {
+pub fn clock_tick() -> u64 {
     1
 }
 
