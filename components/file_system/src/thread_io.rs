@@ -32,7 +32,7 @@ pub(crate) fn fetch_io_bytes(_io_type: IOType) -> IOBytes {
         .join(format!("{}", tid))
         .join("io");
 
-    if let Ok(io_file) = File::open(io_file_path.clone()) {
+    if let Ok(io_file) = File::open(io_file_path) {
         return IOBytes::from_io_file(io_file);
     }
 
@@ -44,20 +44,18 @@ impl IOBytes {
         let reader = BufReader::new(r);
         let mut io_bytes = IOBytes::default();
 
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                if line.is_empty() || !line.contains(' ') {
-                    continue;
-                }
-                let mut s = line.split_whitespace();
+        for line in reader.lines().flatten() {
+            if line.is_empty() || !line.contains(' ') {
+                continue;
+            }
+            let mut s = line.split_whitespace();
 
-                if let (Some(field), Some(value)) = (s.next(), s.next()) {
-                    if let Ok(value) = u64::from_str(value) {
-                        match &field[..field.len() - 1] {
-                            "read_bytes" => io_bytes.read = value,
-                            "write_bytes" => io_bytes.write = value,
-                            _ => continue,
-                        }
+            if let (Some(field), Some(value)) = (s.next(), s.next()) {
+                if let Ok(value) = u64::from_str(value) {
+                    match &field[..field.len() - 1] {
+                        "read_bytes" => io_bytes.read = value,
+                        "write_bytes" => io_bytes.write = value,
+                        _ => continue,
                     }
                 }
             }
@@ -81,7 +79,7 @@ mod tests {
 
         let origin_io_bytes = fetch_io_bytes(IOType::Other);
         for i in 1..100 {
-            file.write_all(format!(" ").as_bytes()).unwrap();
+            file.write_all(" ".to_string().as_bytes()).unwrap();
             file.sync_all().unwrap();
 
             let io_bytes = fetch_io_bytes(IOType::Other);
