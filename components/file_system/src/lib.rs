@@ -11,11 +11,11 @@ extern crate tikv_alloc;
 
 mod file;
 mod iosnoop;
-#[allow(dead_code)]
-mod thread_io;
 mod metrics;
 mod metrics_manager;
 mod rate_limiter;
+#[allow(dead_code)]
+mod thread_io;
 
 pub use file::{File, OpenOptions};
 pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};

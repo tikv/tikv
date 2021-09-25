@@ -28,7 +28,9 @@ pub(crate) fn flush_io_latency_metrics() {}
 pub(crate) fn fetch_io_bytes(_io_type: IOType) -> IOBytes {
     let tid = nix::unistd::gettid();
 
-    let io_file_path = PathBuf::from("/proc/self/task").join(format!("{}", tid)).join("io");
+    let io_file_path = PathBuf::from("/proc/self/task")
+        .join(format!("{}", tid))
+        .join("io");
 
     if let Ok(io_file) = File::open(io_file_path.clone()) {
         return IOBytes::from_io_file(io_file);
@@ -48,7 +50,7 @@ impl IOBytes {
                     continue;
                 }
                 let mut s = line.split_whitespace();
-                
+
                 if let (Some(field), Some(value)) = (s.next(), s.next()) {
                     if let Ok(value) = u64::from_str(value) {
                         match &field[..field.len() - 1] {
@@ -65,7 +67,6 @@ impl IOBytes {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::io::Write;
@@ -77,7 +78,7 @@ mod tests {
     fn test_write_bytes() {
         let dir = TempDir::new().unwrap();
         let mut file = File::create(dir.path().join("test_write.txt")).unwrap();
-    
+
         let origin_io_bytes = fetch_io_bytes(IOType::Other);
         for i in 1..100 {
             file.write_all(format!(" ").as_bytes()).unwrap();
