@@ -20,8 +20,18 @@ use crate::storage::{
     lock_manager::LockManager,
     PointGetCommand, Storage, TxnStatus,
 };
+<<<<<<< HEAD
 use futures::future::Either;
 use futures::{future, Future, Sink, Stream};
+=======
+use crate::{coprocessor_v2, log_net_error};
+use crate::{forward_duplex, forward_unary};
+use fail::fail_point;
+use futures::compat::Future01CompatExt;
+use futures::future::{self, Future, FutureExt, TryFutureExt};
+use futures::sink::SinkExt;
+use futures::stream::{StreamExt, TryStreamExt};
+>>>>>>> d9f7368ae... server: tolerate large response (#10971)
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
     RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
@@ -116,6 +126,7 @@ macro_rules! handle_request {
             if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
                 return;
             }
+<<<<<<< HEAD
             let timer = GRPC_MSG_HISTOGRAM_VEC.$fn_name.start_coarse_timer();
             let future = $future_name(&self.storage, req)
                 .and_then(|res| sink.success(res).map_err(Error::from))
@@ -127,6 +138,15 @@ macro_rules! handle_request {
                     );
                     GRPC_MSG_FAIL_COUNTER.$fn_name.inc();
                 });
+=======
+            .map_err(|e| {
+                log_net_error!(e, "kv rpc failed";
+                    "request" => stringify!($fn_name)
+                );
+                GRPC_MSG_FAIL_COUNTER.$fn_name.inc();
+            })
+            .map(|_|());
+>>>>>>> d9f7368ae... server: tolerate large response (#10971)
 
             ctx.spawn(future);
         }
@@ -258,6 +278,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
         }
+<<<<<<< HEAD
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
         let future = future_gc(&self.gc_worker, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -269,6 +290,15 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 );
                 GRPC_MSG_FAIL_COUNTER.kv_gc.inc();
             });
+=======
+        .map_err(|e| {
+            log_net_error!(e, "kv rpc failed";
+                "request" => "coprocessor"
+            );
+            GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
+        })
+        .map(|_| ());
+>>>>>>> d9f7368ae... server: tolerate large response (#10971)
 
         ctx.spawn(future);
     }
@@ -277,6 +307,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
         }
+<<<<<<< HEAD
         let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
         let future = future_cop(&self.cop, Some(ctx.peer()), req)
             .and_then(|resp| sink.success(resp).map_err(Error::from))
@@ -288,6 +319,15 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 );
                 GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
             });
+=======
+        .map_err(|e| {
+            log_net_error!(e, "kv rpc failed";
+                "request" => "coprocessor_v2"
+            );
+            GRPC_MSG_FAIL_COUNTER.raw_coprocessor.inc();
+        })
+        .map(|_| ());
+>>>>>>> d9f7368ae... server: tolerate large response (#10971)
 
         ctx.spawn(future);
     }
@@ -308,6 +348,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         let (cb, f) = paired_future_callback();
         let res = self.gc_worker.start_collecting(req.get_max_ts().into(), cb);
 
+<<<<<<< HEAD
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
                 let mut resp = RegisterLockObserverResponse::default();
@@ -324,6 +365,32 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 );
                 GRPC_MSG_FAIL_COUNTER.register_lock_observer.inc();
             });
+=======
+        let task = async move {
+            // Here except for the receiving error of `futures::channel::oneshot`,
+            // other errors will be returned as the successful response of rpc.
+            let res = match res {
+                Err(e) => Err(e),
+                Ok(_) => f.await?,
+            };
+            let mut resp = RegisterLockObserverResponse::default();
+            if let Err(e) = res {
+                resp.set_error(format!("{}", e));
+            }
+            sink.success(resp).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .register_lock_observer
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            log_net_error!(e, "kv rpc failed";
+                "request" => "register_lock_observer"
+            );
+            GRPC_MSG_FAIL_COUNTER.register_lock_observer.inc();
+        })
+        .map(|_| ());
+>>>>>>> d9f7368ae... server: tolerate large response (#10971)
 
         ctx.spawn(future);
     }
@@ -356,6 +423,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     }
                     Err(e) => resp.set_error(format!("{}", e)),
                 }
+<<<<<<< HEAD
                 sink.success(resp).map_err(Error::from)
             })
             .map(|_| timer.observe_duration())
@@ -366,6 +434,23 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 );
                 GRPC_MSG_FAIL_COUNTER.check_lock_observer.inc();
             });
+=======
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
+            sink.success(resp).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .check_lock_observer
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            log_net_error!(e, "kv rpc failed";
+                "request" => "check_lock_observer"
+            );
+            GRPC_MSG_FAIL_COUNTER.check_lock_observer.inc();
+        })
+        .map(|_| ());
+>>>>>>> d9f7368ae... server: tolerate large response (#10971)
 
         ctx.spawn(future);
     }
@@ -386,6 +471,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         let (cb, f) = paired_future_callback();
         let res = self.gc_worker.stop_collecting(req.get_max_ts().into(), cb);
 
+<<<<<<< HEAD
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
                 let mut resp = RemoveLockObserverResponse::default();
@@ -402,6 +488,30 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 );
                 GRPC_MSG_FAIL_COUNTER.remove_lock_observer.inc();
             });
+=======
+        let task = async move {
+            let res = match res {
+                Err(e) => Err(e),
+                Ok(_) => f.await?,
+            };
+            let mut resp = RemoveLockObserverResponse::default();
+            if let Err(e) = res {
+                resp.set_error(format!("{}", e));
+            }
+            sink.success(resp).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .remove_lock_observer
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            log_net_error!(e, "kv rpc failed";
+                "request" => "remove_lock_observer"
+            );
+            GRPC_MSG_FAIL_COUNTER.remove_lock_observer.inc();
+        })
+        .map(|_| ());
+>>>>>>> d9f7368ae... server: tolerate large response (#10971)
 
         ctx.spawn(future);
     }
@@ -428,6 +538,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             cb,
         );
 
+<<<<<<< HEAD
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
                 let mut resp = PhysicalScanLockResponse::default();
@@ -445,6 +556,31 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 );
                 GRPC_MSG_FAIL_COUNTER.physical_scan_lock.inc();
             });
+=======
+        let task = async move {
+            let res = match res {
+                Err(e) => Err(e),
+                Ok(_) => f.await?,
+            };
+            let mut resp = PhysicalScanLockResponse::default();
+            match res {
+                Ok(locks) => resp.set_locks(locks.into()),
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
+            sink.success(resp).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .physical_scan_lock
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            log_net_error!(e, "kv rpc failed";
+                "request" => "physical_scan_lock"
+            );
+            GRPC_MSG_FAIL_COUNTER.physical_scan_lock.inc();
+        })
+        .map(|_| ());
+>>>>>>> d9f7368ae... server: tolerate large response (#10971)
 
         ctx.spawn(future);
     }
@@ -475,6 +611,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             cb,
         );
 
+<<<<<<< HEAD
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
                 let mut resp = UnsafeDestroyRangeResponse::default();
@@ -492,6 +629,31 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 );
                 GRPC_MSG_FAIL_COUNTER.unsafe_destroy_range.inc();
             });
+=======
+        let task = async move {
+            let res = match res {
+                Err(e) => Err(e),
+                Ok(_) => f.await?,
+            };
+            let mut resp = UnsafeDestroyRangeResponse::default();
+            // Region error is impossible here.
+            if let Err(e) = res {
+                resp.set_error(format!("{}", e));
+            }
+            sink.success(resp).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .unsafe_destroy_range
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            log_net_error!(e, "kv rpc failed";
+                "request" => "unsafe_destroy_range"
+            );
+            GRPC_MSG_FAIL_COUNTER.unsafe_destroy_range.inc();
+        })
+        .map(|_| ());
+>>>>>>> d9f7368ae... server: tolerate large response (#10971)
 
         ctx.spawn(future);
     }
@@ -529,6 +691,26 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 );
                 GRPC_MSG_FAIL_COUNTER.coprocessor_stream.inc();
             });
+<<<<<<< HEAD
+=======
+        let future = async move {
+            match sink.send_all(&mut stream).await.map_err(Error::from) {
+                Ok(_) => {
+                    GRPC_MSG_HISTOGRAM_STATIC
+                        .coprocessor_stream
+                        .observe(duration_to_sec(begin_instant.saturating_elapsed()));
+                    let _ = sink.close().await;
+                }
+                Err(e) => {
+                    info!("kv rpc failed";
+                        "request" => "coprocessor_stream",
+                        "err" => ?e
+                    );
+                    GRPC_MSG_FAIL_COUNTER.coprocessor_stream.inc();
+                }
+            }
+        };
+>>>>>>> d9f7368ae... server: tolerate large response (#10971)
 
         ctx.spawn(future);
     }
@@ -691,6 +873,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                         resp.set_regions(regions.into());
                     }
                 }
+<<<<<<< HEAD
                 resp
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -702,6 +885,22 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 );
                 GRPC_MSG_FAIL_COUNTER.split_region.inc();
             });
+=======
+            }
+            sink.success(resp).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .split_region
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            log_net_error!(e, "kv rpc failed";
+                "request" => "split_region"
+            );
+            GRPC_MSG_FAIL_COUNTER.split_region.inc();
+        })
+        .map(|_| ());
+>>>>>>> d9f7368ae... server: tolerate large response (#10971)
 
         ctx.spawn(future);
     }
@@ -768,6 +967,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                         resp.set_read_index(read_index);
                     }
                 }
+<<<<<<< HEAD
                 resp
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -779,6 +979,22 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 );
                 GRPC_MSG_FAIL_COUNTER.read_index.inc();
             });
+=======
+            }
+            sink.success(resp).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .read_index
+                .observe(begin_instant.saturating_elapsed_secs());
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            log_net_error!(e, "kv rpc failed";
+                "request" => "read_index"
+            );
+            GRPC_MSG_FAIL_COUNTER.read_index.inc();
+        })
+        .map(|_| ());
+>>>>>>> d9f7368ae... server: tolerate large response (#10971)
 
         ctx.spawn(future);
     }
@@ -898,6 +1114,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             BatchRespCollector,
         );
 
+<<<<<<< HEAD
         let response_retriever = response_retriever
             .inspect(|r| GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64))
             .map(move |mut r| {
@@ -915,6 +1132,153 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 "err" => ?e
             );
         }));
+=======
+        let mut response_retriever = response_retriever.map(move |item| {
+            for measure in item.measures {
+                let GrpcRequestDuration { label, begin } = measure;
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .get(label)
+                    .observe(begin.saturating_elapsed_secs());
+            }
+
+            let mut r = item.batch_resp;
+            GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64);
+            r.set_transport_layer_load(thread_load.load() as u64);
+            GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
+                r,
+                WriteFlags::default().buffer_hint(false),
+            ))
+        });
+
+        let send_task = async move {
+            sink.send_all(&mut response_retriever).await?;
+            sink.close().await?;
+            Ok(())
+        }
+        .map_err(|e: grpcio::Error| {
+            info!("kv rpc failed";
+                "request" => "batch_commands",
+                "err" => ?e
+            );
+        })
+        .map(|_| ());
+
+        ctx.spawn(send_task);
+    }
+
+    fn batch_coprocessor(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: BatchRequest,
+        _sink: ServerStreamingSink<BatchResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn dispatch_mpp_task(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: DispatchTaskRequest,
+        _sink: UnarySink<DispatchTaskResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn cancel_mpp_task(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: CancelTaskRequest,
+        _sink: UnarySink<CancelTaskResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn establish_mpp_connection(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: EstablishMppConnectionRequest,
+        _sink: ServerStreamingSink<MppDataPacket>,
+    ) {
+        unimplemented!()
+    }
+
+    fn check_leader(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut request: CheckLeaderRequest,
+        sink: UnarySink<CheckLeaderResponse>,
+    ) {
+        let ts = request.get_ts();
+        let leaders = request.take_regions().into();
+        let (cb, resp) = paired_future_callback();
+        let check_leader_scheduler = self.check_leader_scheduler.clone();
+        let task = async move {
+            check_leader_scheduler
+                .schedule(CheckLeaderTask::CheckLeader { leaders, cb })
+                .map_err(|e| Error::Other(format!("{}", e).into()))?;
+            let regions = resp.await?;
+            let mut resp = CheckLeaderResponse::default();
+            resp.set_ts(ts);
+            resp.set_regions(regions);
+            sink.success(resp).await?;
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            warn!("call CheckLeader failed"; "err" => ?e);
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
+    }
+
+    fn get_store_safe_ts(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut request: StoreSafeTsRequest,
+        sink: UnarySink<StoreSafeTsResponse>,
+    ) {
+        let key_range = request.take_key_range();
+        let (cb, resp) = paired_future_callback();
+        let check_leader_scheduler = self.check_leader_scheduler.clone();
+        let task = async move {
+            check_leader_scheduler
+                .schedule(CheckLeaderTask::GetStoreTs { key_range, cb })
+                .map_err(|e| Error::Other(format!("{}", e).into()))?;
+            let store_safe_ts = resp.await?;
+            let mut resp = StoreSafeTsResponse::default();
+            resp.set_safe_ts(store_safe_ts);
+            sink.success(resp).await?;
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            warn!("call GetStoreSafeTS failed"; "err" => ?e);
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
+    }
+
+    fn get_lock_wait_info(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _request: GetLockWaitInfoRequest,
+        sink: UnarySink<GetLockWaitInfoResponse>,
+    ) {
+        let (cb, f) = paired_future_callback();
+        self.storage.dump_wait_for_entries(cb);
+        let task = async move {
+            let res = f.await?;
+            let mut response = GetLockWaitInfoResponse::default();
+            response.set_entries(RepeatedField::from_vec(res));
+            sink.success(response).await?;
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            warn!("call dump_wait_for_entries failed"; "err" => ?e);
+        })
+        .map(|_| ());
+        ctx.spawn(task);
+>>>>>>> d9f7368ae... server: tolerate large response (#10971)
     }
 }
 

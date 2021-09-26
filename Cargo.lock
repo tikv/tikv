@@ -1616,9 +1616,15 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
+<<<<<<< HEAD
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a60cc544face71ebbc053d821fdf880b809340b67d19f5d07d6b829e9e36e63"
+=======
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24d99e00eed7e0a04ee2705112e7cfdbe1a3cc771147f22f016a8cd2d002187b"
+>>>>>>> d9f7368ae... server: tolerate large response (#10971)
 dependencies = [
  "bytes 0.5.3",
  "futures 0.1.29",
@@ -1645,9 +1651,15 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
+<<<<<<< HEAD
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ae317d29eb55297b760ca3641662f140e17b9dc36e3f23a3e7e7327e3c33c7e"
+=======
+version = "0.9.1+1.38.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9447d1a926beeef466606cc45717f80897998b548e7dc622873d453e1ecb4be4"
+>>>>>>> d9f7368ae... server: tolerate large response (#10971)
 dependencies = [
  "bindgen",
  "cc",
@@ -3039,7 +3051,11 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "2.8.0"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/rust-protobuf?rev=65e9df20fbcbcf2409d5ee86a2332ecd04c534f8#65e9df20fbcbcf2409d5ee86a2332ecd04c534f8"
+=======
+source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
+>>>>>>> d9f7368ae... server: tolerate large response (#10971)
 dependencies = [
  "heck",
  "hex 0.3.2",
@@ -3064,7 +3080,11 @@ dependencies = [
 [[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/rust-protobuf?rev=65e9df20fbcbcf2409d5ee86a2332ecd04c534f8#65e9df20fbcbcf2409d5ee86a2332ecd04c534f8"
+=======
+source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
+>>>>>>> d9f7368ae... server: tolerate large response (#10971)
 dependencies = [
  "heck",
  "protobuf",
