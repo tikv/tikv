@@ -418,6 +418,10 @@ impl<E: Engine> Endpoint<E> {
 
         tracker.on_begin_all_items();
 
+        info!(
+            "handle copr request";
+            "region_id" => tracker.req_ctx.context.region_id,
+        );
         let handle_request_future = track(
             handler
                 .handle_request()
@@ -434,7 +438,7 @@ impl<E: Engine> Endpoint<E> {
         // execution metrics.
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
-        tracker.collect_storage_statistics(storage_stats);
+        tracker.collect_storage_statistics(storage_stats.clone());
         let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
 
@@ -446,6 +450,12 @@ impl<E: Engine> Endpoint<E> {
             Err(e) => make_error_response(e),
         };
         resp.set_exec_details(exec_details);
+        info!(
+            "exec detail v2";
+            "region_id" => tracker.req_ctx.context.region_id,
+            "exec" => ?exec_details_v2,
+            "scan" => ?storage_stats,
+        );
         resp.set_exec_details_v2(exec_details_v2);
         Ok(resp)
     }
