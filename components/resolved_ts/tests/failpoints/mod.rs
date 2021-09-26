@@ -7,7 +7,6 @@ pub use testsuite::*;
 use futures::executor::block_on;
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
-use std::time::Duration;
 use test_raftstore::{new_peer, sleep_ms};
 
 #[test]
