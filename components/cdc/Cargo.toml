@@ -71,7 +71,11 @@ thiserror = "1.0"
 tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
 collections = { path = "../collections" }
+<<<<<<< HEAD
 tokio = { version = "0.2", features = ["rt-threaded"]}
+=======
+tokio = { version = "1.5", features = ["rt-multi-thread", "time"]}
+>>>>>>> ad2846652... resolved_ts: fix coroutine leaking (#10976)
 txn_types = { path = "../txn_types", default-features = false }
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
 fail = "0.4"
