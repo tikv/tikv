@@ -373,7 +373,7 @@ impl Drop for CallbackLeakDetector {
         if self.called {
             return;
         }
-        
+
         debug!("before capture");
         let bt = backtrace::Backtrace::new();
         warn!("callback is dropped"; "backtrace" => ?bt);

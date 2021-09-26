@@ -14,8 +14,8 @@ mod runner;
 mod security;
 
 use rand::Rng;
-use std::{env, thread};
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::{env, thread};
 
 pub use crate::encryption::*;
 pub use crate::kv_generator::*;
