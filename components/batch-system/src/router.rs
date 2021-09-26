@@ -2,6 +2,8 @@
 
 use crate::fsm::{Fsm, FsmScheduler};
 use crate::mailbox::{BasicMailbox, Mailbox};
+use crate::metrics::CHANNEL_FULL_COUNTER_VEC;
+
 use crossbeam::channel::{SendError, TrySendError};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -182,7 +184,9 @@ where
             match mailbox.try_send(m, &self.normal_scheduler) {
                 Ok(()) => Some(Ok(())),
                 r @ Err(TrySendError::Full(_)) => {
-                    // TODO: report channel full
+                    CHANNEL_FULL_COUNTER_VEC
+                        .with_label_values(&["normal"])
+                        .inc();
                     Some(r)
                 }
                 Err(TrySendError::Disconnected(m)) => {
@@ -230,7 +234,9 @@ where
         match self.control_box.try_send(msg, &self.control_scheduler) {
             Ok(()) => Ok(()),
             r @ Err(TrySendError::Full(_)) => {
-                // TODO: record metrics.
+                CHANNEL_FULL_COUNTER_VEC
+                    .with_label_values(&["control"])
+                    .inc();
                 r
             }
             r => r,
