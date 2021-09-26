@@ -24,7 +24,13 @@ use txn_types::TimeStamp;
 use crate::endpoint::Task;
 use crate::errors::Result;
 
+<<<<<<< HEAD
 pub struct AdvanceTsWorker<T, E: KvEngine> {
+=======
+const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
+
+pub struct AdvanceTsWorker<E: KvEngine> {
+>>>>>>> ad2846652... resolved_ts: fix coroutine leaking (#10976)
     store_meta: Arc<Mutex<StoreMeta>>,
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
@@ -57,7 +63,12 @@ impl<T, E: KvEngine> AdvanceTsWorker<T, E> {
         let worker = Builder::new()
             .threaded_scheduler()
             .thread_name("advance-ts")
+<<<<<<< HEAD
             .core_threads(1)
+=======
+            .worker_threads(1)
+            .enable_time()
+>>>>>>> ad2846652... resolved_ts: fix coroutine leaking (#10976)
             .build()
             .unwrap();
         Self {
@@ -308,7 +319,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
                 req.set_ts(min_ts.into_inner());
-                let res = box_try!(client.check_leader_async(&req)).await;
+                let res = box_try!(
+                    tokio::time::timeout(
+                        Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS),
+                        box_try!(client.check_leader_async(&req))
+                    )
+                    .await
+                );
                 let resp = box_try!(res);
                 Result::Ok((store_id, resp))
             }
