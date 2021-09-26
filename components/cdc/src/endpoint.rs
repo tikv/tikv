@@ -54,6 +54,7 @@ use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
 use crate::{CdcObserver, Error, Result};
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
+const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 
 pub enum Deregister {
     Downstream {
@@ -275,6 +276,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .threaded_scheduler()
             .thread_name("tso")
             .core_threads(1)
+            .enable_time()
             .build()
             .unwrap();
         CDC_SINK_CAP.set(sink_memory_quota.cap() as i64);
@@ -952,7 +954,13 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
                 req.set_ts(min_ts.into_inner());
-                let res = box_try!(client.check_leader_async(&req)).await;
+                let res = box_try!(
+                    tokio::time::timeout(
+                        Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS),
+                        box_try!(client.check_leader_async(&req))
+                    )
+                    .await
+                );
                 let resp = box_try!(res);
                 Result::Ok((store_id, resp))
             }
