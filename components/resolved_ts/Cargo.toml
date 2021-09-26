@@ -80,3 +80,7 @@ tikv_kv = { path = "../tikv_kv" }
 [[test]]
 name = "integrations"
 path = "tests/integrations/mod.rs"
+
+[[test]]
+name = "failpoints"
+path = "tests/failpoints/mod.rs"

@@ -25,7 +25,7 @@ use crate::endpoint::Task;
 use crate::errors::Result;
 use crate::metrics::{CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM, CHECK_LEADER_REQ_SIZE_HISTOGRAM};
 
-const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 10_000; // 10s
+const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 
 pub struct AdvanceTsWorker<E: KvEngine> {
     store_meta: Arc<Mutex<StoreMeta>>,
