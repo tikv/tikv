@@ -108,14 +108,13 @@ impl CGroupSys {
         let component = if self.is_v2 { "" } else { "cpu" };
         if let Some(group) = self.cgroups.get(component) {
             let (root, mount_point) = self.mount_points.get(component).unwrap();
+            let path = build_path(group, root, mount_point);
             if self.is_v2 {
-                let path = build_path(group, root, mount_point);
                 let path = format!("{}/cpu.max", path.to_str().unwrap());
                 if let Ok(buffer) = read_to_string(&path) {
                     return parse_cpu_quota_v2(buffer.trim());
                 }
             } else {
-                let path = build_path(group, root, mount_point);
                 let path1 = format!("{}/cpu.cfs_quota_us", path.to_str().unwrap());
                 let path2 = format!("{}/cpu.cfs_period_us", path.to_str().unwrap());
                 if let (Ok(buffer1), Ok(buffer2)) = (read_to_string(&path1), read_to_string(&path2))
