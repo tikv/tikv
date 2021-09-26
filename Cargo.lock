@@ -1872,9 +1872,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a1b8dd4e79b81ccfd5b9282dfc6d3d4e97568291c383c1bc98756a0f21e39d9"
+checksum = "24d99e00eed7e0a04ee2705112e7cfdbe1a3cc771147f22f016a8cd2d002187b"
 dependencies = [
  "bytes 1.0.1",
  "futures 0.3.8",
@@ -1915,9 +1915,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.9.0+1.38.0"
+version = "0.9.1+1.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cdbbb3010823156c3153b75db391c0f47beeec57353a33dfa38126b265cc1d5"
+checksum = "9447d1a926beeef466606cc45717f80897998b548e7dc622873d453e1ecb4be4"
 dependencies = [
  "bindgen",
  "boringssl-src",
@@ -3599,7 +3599,7 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?rev=82b49fea7e696fd647b5aca0a6c6ec944eab3189#82b49fea7e696fd647b5aca0a6c6ec944eab3189"
+source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
 dependencies = [
  "bytes 1.0.1",
  "heck",
@@ -3626,7 +3626,7 @@ dependencies = [
 [[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?rev=82b49fea7e696fd647b5aca0a6c6ec944eab3189#82b49fea7e696fd647b5aca0a6c6ec944eab3189"
+source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
 dependencies = [
  "heck",
  "protobuf",
