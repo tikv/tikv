@@ -374,7 +374,7 @@ fn test_atomic_basic() {
             ctx.clone(),
             "default".to_string(),
             vec![(b"k1".to_vec(), b"v1".to_vec())],
-            0,
+            vec![0],
         )
         .unwrap();
     let (prev_val, succeed) = storage
