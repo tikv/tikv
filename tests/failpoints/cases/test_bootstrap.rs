@@ -11,22 +11,14 @@ fn test_bootstrap_half_way_failure(fp: &str) {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
     let mut cluster = Cluster::new(0, 5, sim, pd_client);
+    unsafe {
+        test_raftstore::init_cluster_ptr(&cluster);
+    }
 
     // Try to start this node, return after persisted some keys.
     fail::cfg(fp, "return").unwrap();
     cluster.start().unwrap_err();
 
-    let mut engine_store_server = mock_engine_store::EngineStoreServer::new();
-    let engine_store_server_wrap =
-        mock_engine_store::EngineStoreServerWrap::new(&mut engine_store_server);
-    let helper = mock_engine_store::gen_engine_store_server_helper(std::pin::Pin::new(
-        &engine_store_server_wrap,
-    ));
-    unsafe {
-        raftstore::engine_store_ffi::init_engine_store_server_helper(
-            &helper as *const _ as *const u8,
-        );
-    }
     let engines = cluster.dbs[0].clone();
     let ident = engines
         .kv

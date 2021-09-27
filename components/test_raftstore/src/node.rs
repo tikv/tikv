@@ -201,6 +201,7 @@ impl Simulator for NodeCluster {
         let pd_worker = FutureWorker::new("test-pd-worker");
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
+
         let mut raft_store = cfg.raft_store.clone();
         raft_store.validate().unwrap();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
@@ -266,6 +267,7 @@ impl Simulator for NodeCluster {
 
         let mut raftstore_cfg = cfg.raft_store;
         raftstore_cfg.validate().unwrap();
+
         let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
         cfg_controller.register(
             Module::Raftstore,
@@ -285,6 +287,7 @@ impl Simulator for NodeCluster {
             AutoSplitController::default(),
             cm,
         )?;
+
         assert!(
             engines
                 .kv

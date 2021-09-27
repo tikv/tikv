@@ -127,7 +127,9 @@ fn test_ingest_reentrant() {
 
     let checksum2 = calc_crc32(save_path).unwrap();
     // Checksums are different because ingest changed global seqno in sst file.
-    assert_ne!(checksum1, checksum2);
+    if cfg!(not(feature = "test-raftstore-proxy")) {
+        assert_ne!(checksum1, checksum2);
+    }
     // Do ingest again and it can be reentrant
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error());

@@ -24,7 +24,7 @@ use crate::{RocksEngineIterator, RocksSnapshot};
 
 #[derive(Clone, Debug)]
 pub struct RocksEngine {
-    db: Arc<DB>,
+    pub db: Arc<DB>,
     shared_block_cache: bool,
 }
 

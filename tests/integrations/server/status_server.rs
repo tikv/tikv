@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use hyper::{body, Client, StatusCode, Uri};
+use raftstore::engine_store_ffi::EngineStoreServerHelper;
 use security::SecurityConfig;
 use std::error::Error;
 use std::net::SocketAddr;
@@ -42,14 +43,24 @@ fn test_region_meta_endpoint() {
     let store_id = peer.unwrap().get_store_id();
     let router = cluster.sim.rl().get_router(store_id);
     assert!(router.is_some());
-    let mut status_server = StatusServer::new(
-        1,
-        None,
-        ConfigController::default(),
-        Arc::new(SecurityConfig::default()),
-        router.unwrap(),
-    )
-    .unwrap();
+
+    let mut status_server = unsafe {
+        let helperset = &*cluster
+            .global_engine_helper_set
+            .as_ref()
+            .unwrap()
+            .engine_store_server_helper;
+        let helperptr = helperset as *const EngineStoreServerHelper;
+        StatusServer::new(
+            &*helperptr,
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            router.unwrap(),
+        )
+        .unwrap()
+    };
     let addr = format!("127.0.0.1:{}", test_util::alloc_port());
     assert!(status_server.start(addr.clone(), addr).is_ok());
     let check_task = check(status_server.listening_addr(), region_id);

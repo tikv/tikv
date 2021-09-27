@@ -1263,7 +1263,8 @@ impl PdClient for TestPdClient {
     }
 
     fn alloc_id(&self) -> Result<u64> {
-        self.cluster.rl().alloc_id()
+        let result = self.cluster.rl().alloc_id();
+        result
     }
 
     fn put_store(&self, store: metapb::Store) -> Result<Option<ReplicationStatus>> {
@@ -1467,11 +1468,13 @@ impl PdClient for TestPdClient {
         }
 
         let mut resp = pdpb::AskBatchSplitResponse::default();
-        for _ in 0..count {
+        for c in 0..count {
             let mut id = pdpb::SplitId::default();
             id.set_new_region_id(self.alloc_id().unwrap());
-            for _ in region.get_peers() {
-                id.mut_new_peer_ids().push(self.alloc_id().unwrap());
+
+            for peer in region.get_peers() {
+                let rid = self.alloc_id().unwrap();
+                id.mut_new_peer_ids().push(rid);
             }
             resp.mut_ids().push(id);
         }

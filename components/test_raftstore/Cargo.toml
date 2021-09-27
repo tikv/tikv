@@ -49,6 +49,7 @@ test-engines-rocksdb = [
 test-engines-panic = [
   "raftstore/test-engines-panic",
 ]
+test-raftstore-proxy = ["raftstore/test-raftstore-proxy"]
 
 [dependencies]
 backtrace = "0.3"
@@ -83,3 +84,4 @@ encryption_export = { path = "../encryption/export", default-features = false }
 tokio = { version = "1.5", features = ["rt-multi-thread"]}
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
 fail = "0.4"
+mock-engine-store = { path = "../../mock-engine-store", default-features = false }

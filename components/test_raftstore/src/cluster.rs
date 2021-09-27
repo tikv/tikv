@@ -33,11 +33,14 @@ use raftstore::store::transport::CasualRouter;
 use raftstore::store::*;
 use raftstore::{Error, Result};
 use tikv::config::TiKvConfig;
-use tikv::server::Result as ServerResult;
+use tikv::server::{Node, Result as ServerResult};
 use tikv_util::thread_group::GroupProperties;
 use tikv_util::HandyRwLock;
 
 use super::*;
+use mock_engine_store::EngineStoreServerWrap;
+use std::sync::atomic::{AtomicBool, AtomicU8};
+use tikv_util::sys::SysQuota;
 use tikv_util::time::ThreadReadId;
 
 // We simulate 3 or 5 nodes, each has a store.
@@ -125,6 +128,20 @@ pub trait Simulator {
     }
 }
 
+pub struct FFIHelperSet {
+    pub proxy: Box<raftstore::engine_store_ffi::RaftStoreProxy>,
+    pub proxy_helper: Box<raftstore::engine_store_ffi::RaftStoreProxyFFIHelper>,
+    pub engine_store_server: Box<mock_engine_store::EngineStoreServer>,
+    pub engine_store_server_wrap: Box<mock_engine_store::EngineStoreServerWrap>,
+    pub engine_store_server_helper: Box<raftstore::engine_store_ffi::EngineStoreServerHelper>,
+}
+
+pub struct EngineHelperSet {
+    pub engine_store_server: Box<mock_engine_store::EngineStoreServer>,
+    pub engine_store_server_wrap: Box<mock_engine_store::EngineStoreServerWrap>,
+    pub engine_store_server_helper: Box<raftstore::engine_store_ffi::EngineStoreServerHelper>,
+}
+
 pub struct Cluster<T: Simulator> {
     pub cfg: TiKvConfig,
     leaders: HashMap<u64, metapb::Peer>,
@@ -142,6 +159,8 @@ pub struct Cluster<T: Simulator> {
 
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
+    pub ffi_helper_set: HashMap<u64, FFIHelperSet>,
+    pub global_engine_helper_set: Option<EngineHelperSet>,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -168,6 +187,8 @@ impl<T: Simulator> Cluster<T> {
             group_props: HashMap::default(),
             sim,
             pd_client,
+            ffi_helper_set: HashMap::default(),
+            global_engine_helper_set: None,
         }
     }
 
@@ -205,6 +226,7 @@ impl<T: Simulator> Cluster<T> {
             create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg);
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
+        debug!("create_engine path is {}", dir.as_ref().to_str().unwrap());
         self.paths.push(dir);
     }
 
@@ -220,7 +242,81 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn make_global_ffi_helper_set(&mut self) {
+        let mut engine_store_server =
+            Box::new(mock_engine_store::EngineStoreServer::new(99999, None));
+        let engine_store_server_wrap = Box::new(mock_engine_store::EngineStoreServerWrap::new(
+            &mut *engine_store_server,
+            None,
+            self as *const Cluster<T> as isize,
+        ));
+        let engine_store_server_helper =
+            Box::new(mock_engine_store::gen_engine_store_server_helper(
+                std::pin::Pin::new(&*engine_store_server_wrap),
+            ));
+
+        unsafe {
+            raftstore::engine_store_ffi::init_engine_store_server_helper(
+                &*engine_store_server_helper
+                    as *const raftstore::engine_store_ffi::EngineStoreServerHelper
+                    as *mut u8,
+            );
+        }
+
+        self.global_engine_helper_set = Some(EngineHelperSet {
+            engine_store_server,
+            engine_store_server_wrap,
+            engine_store_server_helper,
+        });
+    }
+
+    pub fn make_ffi_helper_set(
+        &mut self,
+        id: u64,
+        engines: Engines<RocksEngine, RocksEngine>,
+        key_mgr: &Option<Arc<DataKeyManager>>,
+        router: &RaftRouter<RocksEngine, RocksEngine>,
+    ) -> (FFIHelperSet, TiKvConfig) {
+        let proxy = Box::new(raftstore::engine_store_ffi::RaftStoreProxy {
+            status: AtomicU8::new(raftstore::engine_store_ffi::RaftProxyStatus::Idle as u8),
+            key_manager: key_mgr.clone(),
+            read_index_client: Box::new(raftstore::engine_store_ffi::ReadIndexClient::new(
+                router.clone(),
+                SysQuota::cpu_cores_quota() as usize * 2,
+            )),
+        });
+
+        let mut proxy_helper = Box::new(raftstore::engine_store_ffi::RaftStoreProxyFFIHelper::new(
+            &proxy,
+        ));
+        let mut engine_store_server =
+            Box::new(mock_engine_store::EngineStoreServer::new(id, Some(engines)));
+        let engine_store_server_wrap = Box::new(mock_engine_store::EngineStoreServerWrap::new(
+            &mut *engine_store_server,
+            Some(&mut *proxy_helper),
+            self as *const Cluster<T> as isize,
+        ));
+        let engine_store_server_helper =
+            Box::new(mock_engine_store::gen_engine_store_server_helper(
+                std::pin::Pin::new(&*engine_store_server_wrap),
+            ));
+
+        let mut node_cfg = self.cfg.clone();
+        let helper_sz = &*engine_store_server_helper as *const _ as isize;
+        node_cfg.raft_store.engine_store_server_helper = helper_sz;
+        let ffi_helper_set = FFIHelperSet {
+            proxy,
+            proxy_helper,
+            engine_store_server,
+            engine_store_server_wrap,
+            engine_store_server_helper,
+        };
+        (ffi_helper_set, node_cfg)
+    }
+
     pub fn start(&mut self) -> ServerResult<()> {
+        self.make_global_ffi_helper_set();
+
         // Try recover from last shutdown.
         let node_ids: Vec<u64> = self.engines.iter().map(|(&id, _)| id).collect();
         for node_id in node_ids {
@@ -239,20 +335,26 @@ impl<T: Simulator> Cluster<T> {
             let props = GroupProperties::default();
             tikv_util::thread_group::set_properties(Some(props.clone()));
 
+            let (mut ffi_helper_set, mut node_cfg) =
+                self.make_ffi_helper_set(0, self.dbs.last().unwrap().clone(), &key_mgr, &router);
+
             let mut sim = self.sim.wl();
             let node_id = sim.run_node(
                 0,
-                self.cfg.clone(),
+                node_cfg,
                 engines.clone(),
                 store_meta.clone(),
                 key_mgr.clone(),
                 router,
                 system,
             )?;
+            debug!("start new node {}", node_id);
             self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
             self.store_metas.insert(node_id, store_meta);
             self.key_managers_map.insert(node_id, key_mgr);
+            ffi_helper_set.engine_store_server.id = node_id;
+            self.ffi_helper_set.insert(node_id, ffi_helper_set);
         }
         Ok(())
     }
@@ -297,10 +399,6 @@ impl<T: Simulator> Cluster<T> {
         let engines = self.engines[&node_id].clone();
         let key_mgr = self.key_managers_map[&node_id].clone();
         let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
-        let mut cfg = self.cfg.clone();
-        if let Some(labels) = self.labels.get(&node_id) {
-            cfg.server.labels = labels.to_owned();
-        }
         let store_meta = match self.store_metas.entry(node_id) {
             Entry::Occupied(o) => {
                 let mut meta = o.get().lock().unwrap();
@@ -315,10 +413,31 @@ impl<T: Simulator> Cluster<T> {
         self.group_props.insert(node_id, props.clone());
         tikv_util::thread_group::set_properties(Some(props));
         debug!("calling run node"; "node_id" => node_id);
+
+        let mut node_cfg = if self.ffi_helper_set.contains_key(&node_id) {
+            let mut node_cfg = self.cfg.clone();
+            node_cfg.raft_store.engine_store_server_helper =
+                &*self.ffi_helper_set[&node_id].engine_store_server_helper as *const _ as isize;
+            node_cfg
+        } else {
+            let (ffi_helper_set, node_cfg) = self.make_ffi_helper_set(
+                node_id,
+                self.engines[&node_id].clone(),
+                &key_mgr,
+                &router,
+            );
+            self.ffi_helper_set.insert(node_id, ffi_helper_set);
+            node_cfg
+        };
+
+        if let Some(labels) = self.labels.get(&node_id) {
+            node_cfg.server.labels = labels.to_owned();
+        }
+
         // FIXME: rocksdb event listeners may not work, because we change the router.
-        self.sim
-            .wl()
-            .run_node(node_id, cfg, engines, store_meta, key_mgr, router, system)?;
+        self.sim.wl().run_node(
+            node_id, node_cfg, engines, store_meta, key_mgr, router, system,
+        )?;
         debug!("node {} started", node_id);
         Ok(())
     }
@@ -950,8 +1069,10 @@ impl<T: Simulator> Cluster<T> {
     pub fn must_put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) {
         match self.batch_put(key, vec![new_put_cf_cmd(cf, key, value)]) {
             Ok(resp) => {
-                assert_eq!(resp.get_responses().len(), 1);
-                assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
+                if cfg!(feature = "test-raftstore-proxy") {
+                    assert_eq!(resp.get_responses().len(), 1);
+                    assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
+                }
             }
             Err(e) => {
                 panic!("has error: {:?}", e);
@@ -1273,6 +1394,7 @@ impl<T: Simulator> Cluster<T> {
             debug!("asking split"; "region" => ?region, "key" => ?split_key);
             // In case ask split message is ignored, we should retry.
             if try_cnt % 50 == 0 {
+                debug!("must_split try once, count {}", try_cnt);
                 self.reset_leader_of_region(region.get_id());
                 let key = split_key.to_vec();
                 let check = Box::new(move |write_resp: WriteResponse| {
@@ -1506,4 +1628,18 @@ impl<T: Simulator> Drop for Cluster<T> {
         test_util::clear_failpoints();
         self.shutdown();
     }
+}
+
+pub fn gen_cluster(cluster_ptr: isize) -> Option<&'static Cluster<NodeCluster>> {
+    unsafe {
+        if cluster_ptr == 0 {
+            None
+        } else {
+            Some(&(*(cluster_ptr as *const Cluster<NodeCluster>)))
+        }
+    }
+}
+
+pub unsafe fn init_cluster_ptr(cluster_ptr: &Cluster<NodeCluster>) -> isize {
+    cluster_ptr as *const Cluster<NodeCluster> as isize
 }

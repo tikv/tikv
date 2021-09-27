@@ -20,7 +20,12 @@ use super::snap::Task as SnapTask;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20106";
-pub const DEFAULT_ENGINE_ADDR: &str = "";
+pub const DEFAULT_ENGINE_ADDR: &str = if cfg!(feature = "failpoints") {
+    "127.0.0.1:20206"
+} else {
+    ""
+};
+
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20108";
 const DEFAULT_GRPC_CONCURRENCY: usize = 5;

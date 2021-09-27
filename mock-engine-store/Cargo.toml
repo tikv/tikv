@@ -24,3 +24,6 @@ kvproto = { rev = "706fcaf286c8dd07ef59349c089f53289a32ce4c", git = "https://git
 tikv_util = { path = "../components/tikv_util", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+engine_traits = { path = "../components/engine_traits", default-features = false }
+engine_rocks = { path = "../components/engine_rocks", default-features = false }
+keys = { path = "../components/keys", default-features = false }

@@ -1543,6 +1543,15 @@ where
 
         return if !ssts.is_empty() {
             assert_eq!(cmds.len(), 0);
+            #[cfg(feature = "failpoints")]
+            {
+                let mut dont_delete_ingested_sst_fp = || {
+                    fail_point!("dont_delete_ingested_sst", |_| {
+                        ssts.clear();
+                    });
+                };
+                dont_delete_ingested_sst_fp();
+            }
             match self.handle_ingest_sst_for_engine_store(&ctx, &ssts) {
                 EngineStoreApplyRes::None => {
                     self.pending_clean_ssts.append(&mut ssts);
@@ -3494,8 +3503,11 @@ where
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
             && self.delegate.last_flush_applied_index != applied_index;
-        #[cfg(feature = "failpoint")]
+        #[cfg(feature = "test-raftstore-proxy")]
         (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
+        if cfg!(feature = "test-raftstore-proxy") {
+            need_sync = true;
+        }
         if need_sync {
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(Instant::now_coarse());

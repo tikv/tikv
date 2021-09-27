@@ -2263,6 +2263,9 @@ dependencies = [
 name = "mock-engine-store"
 version = "0.0.1"
 dependencies = [
+ "engine_rocks",
+ "engine_traits",
+ "keys",
  "kvproto",
  "protobuf",
  "raftstore",
@@ -4412,6 +4415,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
+ "mock-engine-store",
  "pd_client",
  "protobuf",
  "raft",

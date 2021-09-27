@@ -19,9 +19,9 @@ pub use read_index_helper::ReadIndexClient;
 
 pub use crate::engine_store_ffi::interfaces::root::DB::{
     BaseBuffView, ColumnFamilyType, CppStrVecView, EngineStoreApplyRes, EngineStoreServerHelper,
-    EngineStoreServerStatus, FileEncryptionRes, HttpRequestRes, HttpRequestStatus, RaftCmdHeader,
-    RaftProxyStatus, RaftStoreProxyFFIHelper, RawCppPtr, RawVoidPtr, SSTReaderPtr, StoreStats,
-    WriteCmdType, WriteCmdsView,
+    EngineStoreServerStatus, FileEncryptionRes, FsStats, HttpRequestRes, HttpRequestStatus,
+    RaftCmdHeader, RaftProxyStatus, RaftStoreProxyFFIHelper, RawCppPtr, RawVoidPtr, SSTReaderPtr,
+    StoreStats, WriteCmdType, WriteCmdsView,
 };
 use crate::engine_store_ffi::interfaces::root::DB::{
     ConstRawVoidPtr, FileEncryptionInfoRaw, RaftStoreProxyPtr, RawCppPtrType, RawCppStringPtr,
@@ -42,7 +42,7 @@ impl From<&[u8]> for BaseBuffView {
     }
 }
 
-trait UnwrapExternCFunc<T> {
+pub trait UnwrapExternCFunc<T> {
     unsafe fn into_inner(&self) -> &T;
 }
 
@@ -531,7 +531,8 @@ impl RawCppPtr {
 impl Drop for RawCppPtr {
     fn drop(&mut self) {
         if !self.is_null() {
-            get_engine_store_server_helper().gc_raw_cpp_ptr(self.ptr, self.type_);
+            let helper = get_engine_store_server_helper();
+            helper.gc_raw_cpp_ptr(self.ptr, self.type_);
             self.ptr = std::ptr::null_mut();
         }
     }
@@ -640,6 +641,7 @@ impl EngineStoreServerHelper {
         header: RaftCmdHeader,
     ) -> EngineStoreApplyRes {
         debug_assert!(self.fn_handle_admin_raft_cmd.is_some());
+
         unsafe {
             let req = ProtoMsgBaseBuff::new(req);
             let resp = ProtoMsgBaseBuff::new(resp);
@@ -663,6 +665,7 @@ impl EngineStoreServerHelper {
         term: u64,
     ) -> RawCppPtr {
         debug_assert!(self.fn_pre_handle_snapshot.is_some());
+
         let snaps_view = into_sst_views(snaps);
         unsafe {
             let region = ProtoMsgBaseBuff::new(region);
@@ -679,6 +682,7 @@ impl EngineStoreServerHelper {
 
     pub fn apply_pre_handled_snapshot(&self, snap: RawCppPtr) {
         debug_assert!(self.fn_apply_pre_handled_snapshot.is_some());
+
         unsafe {
             (self.fn_apply_pre_handled_snapshot.into_inner())(self.inner, snap.ptr, snap.type_)
         }
@@ -690,6 +694,7 @@ impl EngineStoreServerHelper {
         header: RaftCmdHeader,
     ) -> EngineStoreApplyRes {
         debug_assert!(self.fn_handle_ingest_sst.is_some());
+
         let snaps_view = into_sst_views(snaps);
         unsafe {
             (self.fn_handle_ingest_sst.into_inner())(
@@ -702,6 +707,7 @@ impl EngineStoreServerHelper {
 
     pub fn handle_destroy(&self, region_id: u64) {
         debug_assert!(self.fn_handle_destroy.is_some());
+
         unsafe {
             (self.fn_handle_destroy.into_inner())(self.inner, region_id);
         }
@@ -709,6 +715,7 @@ impl EngineStoreServerHelper {
 
     pub fn handle_check_terminated(&self) -> bool {
         debug_assert!(self.fn_handle_check_terminated.is_some());
+
         unsafe { (self.fn_handle_check_terminated.into_inner())(self.inner) != 0 }
     }
 
@@ -736,16 +743,77 @@ impl EngineStoreServerHelper {
 
     pub fn handle_http_request(&self, path: &str) -> HttpRequestRes {
         debug_assert!(self.fn_handle_http_request.is_some());
+
         unsafe { (self.fn_handle_http_request.into_inner())(self.inner, path.as_bytes().into()) }
     }
 
     pub fn check_http_uri_available(&self, path: &str) -> bool {
         debug_assert!(self.fn_check_http_uri_available.is_some());
+
         unsafe { (self.fn_check_http_uri_available.into_inner())(path.as_bytes().into()) != 0 }
     }
 
     pub fn set_server_info_resp(&self, res: BaseBuffView, ptr: RawVoidPtr) {
         debug_assert!(self.fn_set_server_info_resp.is_some());
+
         unsafe { (self.fn_set_server_info_resp.into_inner())(res, ptr) }
+    }
+}
+
+impl Clone for SSTReaderPtr {
+    fn clone(&self) -> SSTReaderPtr {
+        return SSTReaderPtr {
+            inner: self.inner.clone(),
+        };
+    }
+}
+
+impl Clone for BaseBuffView {
+    fn clone(&self) -> BaseBuffView {
+        return BaseBuffView {
+            data: self.data.clone(),
+            len: self.len.clone(),
+        };
+    }
+}
+
+impl Clone for SSTView {
+    fn clone(&self) -> SSTView {
+        return SSTView {
+            type_: self.type_.clone(),
+            path: self.path.clone(),
+        };
+    }
+}
+
+impl Clone for SSTReaderInterfaces {
+    fn clone(&self) -> SSTReaderInterfaces {
+        return SSTReaderInterfaces {
+            fn_get_sst_reader: self.fn_get_sst_reader.clone(),
+            fn_remained: self.fn_remained.clone(),
+            fn_key: self.fn_key.clone(),
+            fn_value: self.fn_value.clone(),
+            fn_next: self.fn_next.clone(),
+            fn_gc: self.fn_gc.clone(),
+        };
+    }
+}
+
+impl Clone for RaftStoreProxyPtr {
+    fn clone(&self) -> RaftStoreProxyPtr {
+        return RaftStoreProxyPtr {
+            inner: self.inner.clone(),
+        };
+    }
+}
+
+impl From<usize> for ColumnFamilyType {
+    fn from(i: usize) -> Self {
+        match i {
+            0 => ColumnFamilyType::Lock,
+            1 => ColumnFamilyType::Write,
+            2 => ColumnFamilyType::Default,
+            _ => unreachable!(),
+        }
     }
 }
