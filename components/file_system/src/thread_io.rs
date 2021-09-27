@@ -85,4 +85,11 @@ mod tests {
             assert_eq!(i * 4096 + origin_io_bytes.write, io_bytes.write);
         }
     }
+
+    #[bench]
+    fn bench_fetch_io_bytes(b: &mut test::Bencher) {
+        b.iter(|| {
+            fetch_io_bytes(IOType::Other)
+        });
+    }
 }
