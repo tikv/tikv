@@ -691,13 +691,7 @@ impl Snapshot {
             let cf_stat = if plain_file_used(cf_file.cf) {
                 let key_mgr = self.mgr.encryption_key_manager.as_ref();
                 snap_io::build_plain_cf_file::<EK>(
-                    path,
-                    key_mgr,
-                    kv_snap,
-                    cf_file.cf,
-                    &begin_key,
-                    &end_key,
-                    &self.mgr.limiter,
+                    path, key_mgr, kv_snap, cf_file.cf, &begin_key, &end_key,
                 )?
             } else {
                 snap_io::build_sst_cf_file::<EK>(

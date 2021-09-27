@@ -45,6 +45,10 @@ const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
 
 const DEFAULT_MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
 
+// Default max snap_max_total_size.
+// It should be big enough to have multiple snapshot files generated in parallel
+const DEFAULT_SNAP_MAX_TOTAL_SIZE: u64 = 50 * GIB;
+
 /// A clone of `grpc::CompressionAlgorithms` with serde supports.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -232,7 +236,7 @@ impl Default for Config {
             ),
             end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
-            snap_max_total_size: ReadableSize(50 * GIB),
+            snap_max_total_size: ReadableSize(DEFAULT_SNAP_MAX_TOTAL_SIZE),
             stats_concurrency: 1,
             // 300 means gRPC threads are under heavy load if their total CPU usage
             // is greater than 300%.
