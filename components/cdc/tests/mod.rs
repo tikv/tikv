@@ -134,7 +134,6 @@ impl TestSuiteBuilder {
                 .or_default()
                 .push(Box::new(move || {
                     create_change_data(cdc::Service::new(
-                        DEFAULT_CLUSTER_ID,
                         scheduler.clone(),
                         MemoryQuota::new(memory_quota),
                     ))
@@ -163,6 +162,7 @@ impl TestSuiteBuilder {
             let env = Arc::new(Environment::new(1));
             let cfg = CdcConfig::default();
             let mut cdc_endpoint = cdc::Endpoint::new(
+                DEFAULT_CLUSTER_ID,
                 &cfg,
                 pd_cli.clone(),
                 worker.scheduler(),

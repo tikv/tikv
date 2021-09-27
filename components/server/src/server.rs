@@ -851,6 +851,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         // Start CDC.
         let cdc_memory_quota = MemoryQuota::new(self.config.cdc.sink_memory_quota.0 as _);
         let cdc_endpoint = cdc::Endpoint::new(
+            self.config.server.cluster_id,
             &self.config.cdc,
             self.pd_client.clone(),
             cdc_scheduler.clone(),
@@ -1015,7 +1016,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         backup_worker.start(backup_endpoint);
 
         let cdc_service = cdc::Service::new(
-            self.config.server.cluster_id,
             servers.cdc_scheduler.clone(),
             servers.cdc_memory_quota.clone(),
         );
