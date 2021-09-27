@@ -1,4 +1,4 @@
-// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::IOBytes;
 use crate::IOType;
@@ -22,8 +22,6 @@ pub fn set_io_type(new_io_type: IOType) {
 pub fn get_io_type() -> IOType {
     IO_TYPE.with(|io_type| io_type.get())
 }
-
-pub(crate) fn flush_io_latency_metrics() {}
 
 pub(crate) fn fetch_io_bytes(_io_type: IOType) -> IOBytes {
     let tid = nix::unistd::gettid();
