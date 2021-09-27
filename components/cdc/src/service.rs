@@ -199,6 +199,7 @@ impl FeatureGate {
         semver::Version::new(4, 0, 8)
     }
 
+    // Returns the first version (v4.0.8) that supports validate cluster id.
     pub(crate) fn validate_cluster_id() -> semver::Version {
         semver::Version::new(5, 3, 0)
     }
