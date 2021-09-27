@@ -8,13 +8,7 @@ mod kv;
 pub use self::debug::Service as DebugService;
 pub use self::diagnostics::Service as DiagnosticsService;
 pub use self::kv::Service as KvService;
-<<<<<<< HEAD
 pub use self::kv::{batch_commands_request, batch_commands_response};
-=======
-pub use self::kv::{
-    batch_commands_request, batch_commands_response, GrpcRequestDuration, MeasuredBatchResponse,
-    MeasuredSingleResponse,
-};
 
 #[macro_export]
 macro_rules! log_net_error {
@@ -27,4 +21,3 @@ macro_rules! log_net_error {
         }
     }}
 }
->>>>>>> d9f7368ae... server: tolerate large response (#10971)
