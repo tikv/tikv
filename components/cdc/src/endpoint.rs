@@ -506,7 +506,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         downstream.set_sink(conn.get_sink().clone());
 
         let request_cluster_id = request.get_header().get_cluster_id();
-        if self.cluster_id != request_cluster_id {
+        if version >= FeatureGate::validate_cluster_id() && self.cluster_id != request_cluster_id {
             let mut err_event = EventError::default();
             let mut err = ErrorClusterIdMismatch::default();
             err.set_current(self.cluster_id);

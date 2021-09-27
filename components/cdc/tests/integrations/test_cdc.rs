@@ -306,12 +306,11 @@ fn test_cdc_cluster_id_mismatch() {
 
     // Send request with mismatched cluster id.
     let mut req = suite.new_changedata_request(1);
-    let mut header = req.get_header().clone();
-    header.set_cluster_id(DEFAULT_CLUSTER_ID + 1);
-    req.set_header(header);
+    req.mut_header().set_ticdc_version("5.3.0".into());
+    req.mut_header().set_cluster_id(DEFAULT_CLUSTER_ID + 1);
     let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
 
     // Assert mismatch.
     let mut events = receive_event(false).events.to_vec();
@@ -319,6 +318,25 @@ fn test_cdc_cluster_id_mismatch() {
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_cluster_id_mismatch(), "{:?}", err);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    // Low version request.
+    req.mut_header().set_ticdc_version("4.0.8".into());
+    req.mut_header().set_cluster_id(DEFAULT_CLUSTER_ID + 1);
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let mut events = receive_event(false).events.to_vec();
+    assert_eq!(events.len(), 1);
+
+    // Should without error.
+    match events.pop().unwrap().event.unwrap() {
+        // Even if there is no write,
+        // it should always outputs an Initialized event.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
         other => panic!("unknown event {:?}", other),
     }
