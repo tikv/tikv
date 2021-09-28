@@ -7602,7 +7602,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The duration that recorded by inspecting messages.",
           "editable": true,
           "error": false,

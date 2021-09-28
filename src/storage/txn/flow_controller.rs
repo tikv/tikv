@@ -337,11 +337,7 @@ struct CFFlowChecker {
     memtable_init_speed: bool,
 
     // L0 files related
-    // last number of l0 files right after flush or L0 compaction
-    last_num_l0_files: u64,
-    // last number of l0 files right after flush
-    last_num_l0_files_from_flush: u64,
-    // a few records of number of l0 files right after L0 compaction
+    // a few records of number of L0 files right after flush or L0 compaction
     // As we know, after flush the number of L0 files must increase by 1,
     // whereas, after L0 compaction the number of L0 files must decrease a lot
     // considering L0 compactions nearly includes all L0 files in a round.
@@ -350,10 +346,9 @@ struct CFFlowChecker {
     long_term_num_l0_files: Smoother<u64, 20>,
 
     // L0 production flow related
-    last_flush_bytes_time: Instant,
     last_flush_bytes: u64,
+    last_flush_bytes_time: Instant,
     short_term_l0_production_flow: Smoother<u64, 10>,
-    long_term_l0_production_flow: Smoother<u64, 60>,
 
     // L0 consumption flow related
     last_l0_bytes: u64,
@@ -381,13 +376,10 @@ impl Default for CFFlowChecker {
             last_num_memtables: Smoother::default(),
             memtable_debt: 0.0,
             memtable_init_speed: false,
-            last_num_l0_files: 0,
-            last_num_l0_files_from_flush: 0,
             long_term_num_l0_files: Smoother::default(),
             last_flush_bytes: 0,
             last_flush_bytes_time: Instant::now_coarse(),
             short_term_l0_production_flow: Smoother::default(),
-            long_term_l0_production_flow: Smoother::default(),
             last_l0_bytes: 0,
             last_l0_bytes_time: Instant::now_coarse(),
             short_term_l0_consumption_flow: Smoother::default(),
@@ -588,13 +580,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
             SCHED_L0_GAUGE.with_label_values(&[cf]).set(0);
             SCHED_L0_AVG_GAUGE.with_label_values(&[cf]).set(0);
             SCHED_L0_FLOW_GAUGE.with_label_values(&[cf]).set(0);
-            SCHED_FLUSH_L0_GAUGE.with_label_values(&[cf]).set(0);
             SCHED_FLUSH_FLOW_GAUGE.with_label_values(&[cf]).set(0);
-            SCHED_LONG_TERM_FLUSH_FLOW_GAUGE
-                .with_label_values(&[cf])
-                .set(0);
-            SCHED_UP_FLOW_GAUGE.set(0);
-            SCHED_DOWN_FLOW_GAUGE.set(0);
         }
         SCHED_WRITE_FLOW_GAUGE.set(0);
         SCHED_THROTTLE_FLOW_GAUGE.set(0);
@@ -652,7 +638,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         checker.long_term_pending_bytes.observe(num);
         SCHED_PENDING_COMPACTION_BYTES_GAUGE
             .with_label_values(&[&cf])
-            .set(checker.long_term_pending_bytes.get_avg() as i64);
+            .set((checker.long_term_pending_bytes.get_avg() * RATIO_SCALE_FACTOR as f64) as i64);
 
         // do special check on start, see the comment of the variable definition for detail.
         if checker.on_start_pending_bytes {
@@ -791,7 +777,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         if self.limiter.speed_limit() != f64::INFINITY {
             let cf = self.throttle_cf.as_ref().unwrap();
             let checker = self.cf_checkers.get_mut(cf).unwrap();
-            if checker.last_num_l0_files <= self.l0_files_threshold {
+            if checker.long_term_num_l0_files.get_recent() <= self.l0_files_threshold {
                 SCHED_THROTTLE_ACTION_COUNTER
                     .with_label_values(&[cf, "tick_spare"])
                     .inc();
@@ -812,16 +798,12 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         let checker = self.cf_checkers.get_mut(cf).unwrap();
         checker.last_l0_bytes += l0_bytes;
         checker.long_term_num_l0_files.observe(num_l0_files);
-        checker.last_num_l0_files = num_l0_files;
         SCHED_L0_GAUGE
             .with_label_values(&[cf])
             .set(num_l0_files as i64);
         SCHED_L0_AVG_GAUGE
             .with_label_values(&[cf])
             .set(checker.long_term_num_l0_files.get_avg() as i64);
-        SCHED_THROTTLE_ACTION_COUNTER
-            .with_label_values(&[cf, "tick"])
-            .inc();
     }
 
     fn collect_l0_production_stats(&mut self, cf: &String, flush_bytes: u64) {
@@ -833,12 +815,13 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
 
         let checker = self.cf_checkers.get_mut(cf).unwrap();
         checker.last_flush_bytes += flush_bytes;
-        // no need to add it to long_term_num_l0_files which only records result right after L0 compaction.
-        checker.last_num_l0_files = num_l0_files;
-        checker.last_num_l0_files_from_flush = num_l0_files;
-        SCHED_FLUSH_L0_GAUGE
+        checker.long_term_num_l0_files.observe(num_l0_files);
+        SCHED_L0_GAUGE
             .with_label_values(&[cf])
             .set(num_l0_files as i64);
+        SCHED_L0_AVG_GAUGE
+            .with_label_values(&[cf])
+            .set(checker.long_term_num_l0_files.get_avg() as i64);
 
         if checker.last_flush_bytes_time.saturating_elapsed_secs() > 5.0 {
             // update flush flow
@@ -847,15 +830,9 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
             checker
                 .short_term_l0_production_flow
                 .observe(flush_flow as u64);
-            checker
-                .long_term_l0_production_flow
-                .observe(flush_flow as u64);
             SCHED_FLUSH_FLOW_GAUGE
                 .with_label_values(&[cf])
                 .set(checker.short_term_l0_production_flow.get_avg() as i64);
-            SCHED_LONG_TERM_FLUSH_FLOW_GAUGE
-                .with_label_values(&[cf])
-                .set(checker.long_term_l0_production_flow.get_avg() as i64);
 
             // update l0 flow
             if checker.last_l0_bytes != 0 {
@@ -920,7 +897,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         }
 
         let is_throttled = self.limiter.speed_limit() != f64::INFINITY;
-        let should_throttle = checker.last_num_l0_files > self.l0_files_threshold;
+        let should_throttle = checker.long_term_num_l0_files.get_recent() > self.l0_files_threshold;
 
         let throttle = if !is_throttled && should_throttle {
             SCHED_THROTTLE_ACTION_COUNTER
@@ -1040,8 +1017,10 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let flow_controller = FlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
 
+        assert_eq!(flow_controller.consume(2000), Duration::ZERO);
+
         // exceeds the threshold on start
-        stub.0.num_memtable_files.store(10, Ordering::Relaxed);
+        stub.0.num_memtable_files.store(8, Ordering::Relaxed);
         tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
         std::thread::sleep(Duration::from_millis(10));
         assert_eq!(flow_controller.should_drop(), false);
@@ -1052,21 +1031,22 @@ mod tests {
         tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
         std::thread::sleep(Duration::from_millis(10));
 
-        // exceeds the threshold
-        stub.0.num_memtable_files.store(10, Ordering::Relaxed);
+        // not throttle when the average of the sliding window doesn't exceeds the threshold
+        stub.0.num_memtable_files.store(6, Ordering::Relaxed);
+        tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
+        std::thread::sleep(Duration::from_millis(10));
+        assert_eq!(flow_controller.should_drop(), false);
+        assert_eq!(flow_controller.is_unlimited(), true);
+
+        // the average of sliding window exceeds the threshold
+        stub.0.num_memtable_files.store(6, Ordering::Relaxed);
         tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
         std::thread::sleep(Duration::from_millis(10));
         assert_eq!(flow_controller.should_drop(), false);
         assert_eq!(flow_controller.is_unlimited(), false);
         assert_ne!(flow_controller.consume(2000), Duration::ZERO);
 
-        // not throttle when the average of sliding window still exceeds the threshold
-        stub.0.num_memtable_files.store(4, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
-        std::thread::sleep(Duration::from_millis(10));
-        assert_eq!(flow_controller.should_drop(), false);
-        assert_eq!(flow_controller.is_unlimited(), false);
-
+        // not throttle once the number of memtables falls below the threshold
         stub.0.num_memtable_files.store(1, Ordering::Relaxed);
         tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
         std::thread::sleep(Duration::from_millis(10));
@@ -1080,6 +1060,8 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let flow_controller = FlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
 
+        assert_eq!(flow_controller.consume(2000), Duration::ZERO);
+
         // exceeds the threshold
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
         tx.send(FlowInfo::L0("default".to_string(), 0)).unwrap();
@@ -1088,10 +1070,11 @@ mod tests {
         // on start check forbids flow control
         assert_eq!(flow_controller.is_unlimited(), true);
         // once fall below the threshold, pass the on start check
-        stub.0.num_l0_files.store(1, Ordering::Relaxed);
+        stub.0.num_l0_files.store(10, Ordering::Relaxed);
         tx.send(FlowInfo::L0("default".to_string(), 0)).unwrap();
         std::thread::sleep(Duration::from_millis(10));
-        //
+
+        // exceeds the threshold, throttle now
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
         tx.send(FlowInfo::L0("default".to_string(), 0)).unwrap();
         std::thread::sleep(Duration::from_millis(10));
