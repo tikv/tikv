@@ -3480,7 +3480,6 @@ where
         }
     }
 
-    #[allow(unused_mut)]
     fn handle_snapshot<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
@@ -3643,7 +3642,17 @@ where
                 Some(Msg::Destroy(d)) => self.handle_destroy(apply_ctx, d),
                 Some(Msg::LogsUpToDate(cul)) => self.logs_up_to_date_for_merge(apply_ctx, cul),
                 Some(Msg::Noop) => {}
-                Some(Msg::Snapshot(_)) => unreachable!("should not request snapshot"),
+                #[allow(unused_variables)]
+                Some(Msg::Snapshot(snap_task)) => {
+                    #[cfg(feature = "test-raftstore-proxy")]
+                    {
+                        return self.handle_snapshot(apply_ctx, snap_task);
+                    }
+                    #[cfg(not(feature = "test-raftstore-proxy"))]
+                    {
+                        unreachable!("should not request snapshot")
+                    }
+                }
                 Some(Msg::Change {
                     cmd,
                     region_epoch,

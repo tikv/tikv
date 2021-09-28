@@ -2260,6 +2260,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mock-engine-store"
+version = "0.0.1"
+dependencies = [
+ "kvproto",
+ "protobuf",
+ "raftstore",
+ "server",
+ "slog",
+ "slog-global",
+ "tikv_util",
+]
+
+[[package]]
 name = "more-asserts"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3411,6 +3424,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "resolved_ts"
+version = "0.0.1"
+dependencies = [
+ "collections",
+ "concurrency_manager",
+ "crossbeam",
+ "engine_rocks",
+ "engine_traits",
+ "fail",
+ "futures 0.3.15",
+ "grpcio",
+ "hex 0.4.2",
+ "kvproto",
+ "lazy_static",
+ "log_wrappers",
+ "online_config",
+ "panic_hook",
+ "pd_client",
+ "prometheus",
+ "prost",
+ "protobuf",
+ "raft",
+ "raftstore",
+ "security",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "test_raftstore",
+ "test_util",
+ "thiserror",
+ "tikv",
+ "tikv_kv",
+ "tikv_util",
+ "tokio",
+ "txn_types",
+]
+
+[[package]]
 name = "resource_metering"
 version = "0.0.1"
 dependencies = [
@@ -4327,6 +4378,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_pd"
+version = "0.0.1"
+dependencies = [
+ "collections",
+ "fail",
+ "futures 0.3.15",
+ "grpcio",
+ "kvproto",
+ "pd_client",
+ "security",
+ "slog",
+ "slog-global",
+ "tikv_util",
+]
+
+[[package]]
+name = "test_raftstore"
+version = "0.0.1"
+dependencies = [
+ "backtrace",
+ "collections",
+ "concurrency_manager",
+ "crossbeam",
+ "encryption_export",
+ "engine_rocks",
+ "engine_traits",
+ "fail",
+ "file_system",
+ "futures 0.3.15",
+ "grpcio",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "log_wrappers",
+ "pd_client",
+ "protobuf",
+ "raft",
+ "raftstore",
+ "rand 0.8.3",
+ "resolved_ts",
+ "security",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "test_util",
+ "tikv",
+ "tikv_util",
+ "tokio",
+ "tokio-timer",
+ "txn_types",
+]
+
+[[package]]
 name = "test_sst_importer"
 version = "0.1.0"
 dependencies = [
@@ -4336,6 +4440,21 @@ dependencies = [
  "keys",
  "kvproto",
  "uuid",
+]
+
+[[package]]
+name = "test_storage"
+version = "0.0.1"
+dependencies = [
+ "collections",
+ "futures 0.3.15",
+ "kvproto",
+ "pd_client",
+ "raftstore",
+ "test_raftstore",
+ "tikv",
+ "tikv_util",
+ "txn_types",
 ]
 
 [[package]]
@@ -4355,6 +4474,59 @@ dependencies = [
  "tempfile",
  "tikv_util",
  "time",
+]
+
+[[package]]
+name = "tests"
+version = "0.0.1"
+dependencies = [
+ "batch-system",
+ "collections",
+ "concurrency_manager",
+ "crc64fast",
+ "crossbeam",
+ "encryption",
+ "engine_rocks",
+ "engine_traits",
+ "error_code",
+ "external_storage_export",
+ "fail",
+ "file_system",
+ "futures 0.3.15",
+ "grpcio",
+ "grpcio-health",
+ "hyper",
+ "keys",
+ "kvproto",
+ "log_wrappers",
+ "mock-engine-store",
+ "more-asserts",
+ "online_config",
+ "paste 1.0.4",
+ "pd_client",
+ "protobuf",
+ "raft",
+ "raftstore",
+ "rand 0.8.3",
+ "resource_metering",
+ "security",
+ "serde_json",
+ "slog",
+ "slog-global",
+ "sst_importer",
+ "tempfile",
+ "test_pd",
+ "test_raftstore",
+ "test_sst_importer",
+ "test_storage",
+ "test_util",
+ "tikv",
+ "tikv_util",
+ "time",
+ "tokio",
+ "toml",
+ "txn_types",
+ "uuid",
 ]
 
 [[package]]

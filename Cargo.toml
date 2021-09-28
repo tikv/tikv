@@ -293,6 +293,8 @@ members = [
   "components/coprocessor_plugin_api",
   "components/resource_metering",
 
+  "mock-engine-store",
+  "tests",
   "raftstore-proxy",
   "gen-proxy-ffi",
 ]

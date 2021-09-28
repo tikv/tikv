@@ -1123,6 +1123,7 @@ mod tests {
                 .schedule(Task::Apply {
                     region_id: id,
                     status,
+                    peer_id: id,
                 })
                 .unwrap();
         };

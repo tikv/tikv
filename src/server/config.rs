@@ -20,6 +20,7 @@ use super::snap::Task as SnapTask;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20106";
+pub const DEFAULT_ENGINE_ADDR: &str = "";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20108";
 const DEFAULT_GRPC_CONCURRENCY: usize = 5;
@@ -191,7 +192,7 @@ impl Default for Config {
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
             labels: HashMap::default(),
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
-            engine_addr: "".to_string(),
+            engine_addr: DEFAULT_ENGINE_ADDR.to_string(),
             engine_store_version: "".to_string(),
             engine_store_git_hash: "".to_string(),
             status_addr: DEFAULT_STATUS_ADDR.to_owned(),
