@@ -134,13 +134,7 @@ impl online_config::ConfigManager for ConfigManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RecorderHandle;
-    use std::collections::HashMap;
-    use std::sync::atomic::Ordering::{Relaxed, SeqCst};
-    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
-    use std::sync::Arc;
     use tikv_util::config::ReadableDuration;
-    use tikv_util::worker::{LazyWorker, Runnable};
 
     #[test]
     fn test_config_validate() {
@@ -178,39 +172,5 @@ mod tests {
             precision: ReadableDuration::days(999), // invalid
         };
         assert!(matches!(cfg.validate(), Err(_)));
-    }
-
-    static OP_COUNT: AtomicU32 = AtomicU32::new(0);
-
-    struct MockRunner;
-
-    impl Runnable for MockRunner {
-        type Task = Task;
-
-        fn run(&mut self, task: Self::Task) {
-            assert!(matches!(task, Task::ConfigChange(_)));
-            if let Task::ConfigChange(cfg) = task {
-                assert_eq!(cfg.precision.as_millis(), 2000);
-                OP_COUNT.fetch_add(1, Relaxed);
-            }
-        }
-    }
-
-    #[test]
-    fn test_config_manager_dispatch() {
-        let join_handle = std::thread::spawn(|| {});
-        let pause = Arc::new(AtomicBool::new(true));
-        let precision_ms = Arc::new(AtomicU64::new(0));
-        let handle = RecorderHandle::new(join_handle, pause, precision_ms.clone());
-        let mut worker = LazyWorker::new("test-worker");
-        worker.start(MockRunner);
-        let mut cm = ConfigManager::new(Config::default(), worker.scheduler(), handle);
-        let mut change = HashMap::new();
-        change.insert("precision".to_owned(), ReadableDuration::secs(2).into());
-        assert_eq!(precision_ms.load(SeqCst), 0);
-        online_config::ConfigManager::dispatch(&mut cm, change).expect("dispatch failed");
-        assert_eq!(precision_ms.load(SeqCst), 2000);
-        worker.stop();
-        assert_eq!(OP_COUNT.load(Relaxed), 1);
     }
 }

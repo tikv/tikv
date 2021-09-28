@@ -126,7 +126,7 @@ mod tests {
         for _ in 0..n {
             collector.collect(Arc::new(RawRecords::default()));
         }
-        worker.stop();
+        worker.stop_worker();
         assert_eq!(OP_COUNT.load(Relaxed), n);
     }
 }
