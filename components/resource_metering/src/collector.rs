@@ -96,37 +96,3 @@ impl Drop for DynCollectorHandle {
             .ok();
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::reporter::Task;
-    use std::sync::atomic::AtomicU32;
-    use tikv_util::worker::{LazyWorker, Runnable};
-
-    static OP_COUNT: AtomicU32 = AtomicU32::new(0);
-
-    struct MockRunner;
-
-    impl Runnable for MockRunner {
-        type Task = Task;
-
-        fn run(&mut self, task: Self::Task) {
-            assert!(matches!(task, Task::Records(_)));
-            OP_COUNT.fetch_add(1, Relaxed);
-        }
-    }
-
-    #[test]
-    fn test_collect() {
-        let mut worker = LazyWorker::new("test-worker");
-        worker.start(MockRunner);
-        let collector = RawRecordsCollector::new(worker.scheduler());
-        let n = 3;
-        for _ in 0..n {
-            collector.collect(Arc::new(RawRecords::default()));
-        }
-        worker.stop_worker();
-        assert_eq!(OP_COUNT.load(Relaxed), n);
-    }
-}
