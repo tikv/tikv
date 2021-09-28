@@ -112,7 +112,8 @@ pub mod root {
         pub enum EngineStoreServerStatus {
             Idle = 0,
             Running = 1,
-            Stopped = 2,
+            Stopping = 2,
+            Terminated = 3,
         }
         pub type RawCppPtrType = u32;
         #[repr(C)]
@@ -306,9 +307,6 @@ pub mod root {
                     arg3: root::DB::RaftCmdHeader,
                 ) -> root::DB::EngineStoreApplyRes,
             >,
-            pub fn_handle_check_terminated: ::std::option::Option<
-                unsafe extern "C" fn(arg1: *mut root::DB::EngineStoreServerWrap) -> u8,
-            >,
             pub fn_handle_compute_store_stats: ::std::option::Option<
                 unsafe extern "C" fn(
                     arg1: *mut root::DB::EngineStoreServerWrap,
@@ -358,7 +356,7 @@ pub mod root {
                 unsafe extern "C" fn(arg1: root::DB::BaseBuffView, arg2: root::DB::RawVoidPtr),
             >,
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 11799158326068500997;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 2118434012412631151;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }

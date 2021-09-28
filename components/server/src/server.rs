@@ -187,16 +187,25 @@ pub unsafe fn run_tikv(config: TiKvConfig, engine_store_server_helper: &EngineSt
             proxy.set_status(RaftProxyStatus::Running);
 
             {
+                debug_assert!(
+                    engine_store_server_helper.handle_get_engine_store_server_status()
+                        == EngineStoreServerStatus::Running
+                );
                 let _ = tikv.engines.take().unwrap().engines;
                 loop {
-                    if engine_store_server_helper.handle_check_terminated() {
+                    if engine_store_server_helper.handle_get_engine_store_server_status()
+                        != EngineStoreServerStatus::Running
+                    {
                         break;
                     }
                     thread::sleep(Duration::from_millis(200));
                 }
             }
 
-            info!("got terminal signal from engine-store server and stop all services");
+            info!(
+                "found engine-store server status is {:?}, start to stop all services",
+                engine_store_server_helper.handle_get_engine_store_server_status()
+            );
 
             tikv.stop();
 
@@ -206,7 +215,7 @@ pub unsafe fn run_tikv(config: TiKvConfig, engine_store_server_helper: &EngineSt
 
             info!("wait for engine-store server to stop");
             while engine_store_server_helper.handle_get_engine_store_server_status()
-                != EngineStoreServerStatus::Stopped
+                != EngineStoreServerStatus::Terminated
             {
                 thread::sleep(Duration::from_millis(200));
             }

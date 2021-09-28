@@ -157,7 +157,6 @@ pub fn gen_engine_store_server_helper(
         fn_atomic_update_proxy: Some(ffi_atomic_update_proxy),
         fn_handle_destroy: Some(ffi_handle_destroy),
         fn_handle_ingest_sst: Some(ffi_handle_ingest_sst),
-        fn_handle_check_terminated: None,
         fn_handle_compute_store_stats: Some(ffi_handle_compute_store_stats),
         fn_handle_get_engine_store_server_status: None,
         fn_pre_handle_snapshot: Some(ffi_pre_handle_snapshot),

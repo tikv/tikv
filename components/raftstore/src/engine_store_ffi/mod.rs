@@ -713,12 +713,6 @@ impl EngineStoreServerHelper {
         }
     }
 
-    pub fn handle_check_terminated(&self) -> bool {
-        debug_assert!(self.fn_handle_check_terminated.is_some());
-
-        unsafe { (self.fn_handle_check_terminated.into_inner())(self.inner) != 0 }
-    }
-
     fn gen_cpp_string(&self, buff: &[u8]) -> RawCppStringPtr {
         debug_assert!(self.fn_gen_cpp_string.is_some());
         unsafe { (self.fn_gen_cpp_string.into_inner())(buff.into()).into_raw() as RawCppStringPtr }

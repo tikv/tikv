@@ -41,9 +41,9 @@ jobs:
           path: |
             target/
             # ~/.cache/sccache/
-          key: ${{ runner.os }}-${{ env.cache-name }}-${{ hashFiles('**/rust-toolchain') }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ env.cache-name }}-v1-${{ hashFiles('**/rust-toolchain') }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ env.cache-name }}-${{ hashFiles('**/rust-toolchain') }}-
+            ${{ runner.os }}-${{ env.cache-name }}-v1-${{ hashFiles('**/rust-toolchain') }}-
       - name: format check
         run: |
           cd ${{github.workspace}}
