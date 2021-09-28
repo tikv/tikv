@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use encryption::{EncrypterReader, Iv};
+use encryption::EncrypterReader;
 use engine_rocks::raw::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
@@ -85,13 +85,9 @@ impl Writer {
             .with_label_values(&[cf])
             .observe(sst_info.file_size() as f64);
         let file_name = format!("{}_{}.sst", name, cf);
-        let (encrypter_reader, _) = EncrypterReader::new(
-            sst_reader,
-            cipher.cipher_type,
-            &cipher.cipher_key,
-            Iv::from_slice(&cipher.cipher_iv).ok(),
-        )
-        .map_err(|e| Error::Other(box_err!("new encrypterReader error: {:?}", e)))?;
+        let (encrypter_reader, iv) =
+            EncrypterReader::new(sst_reader, cipher.cipher_type, &cipher.cipher_key)
+                .map_err(|e| Error::Other(box_err!("new encrypterReader error: {:?}", e)))?;
 
         let (reader, hasher) = Sha256Reader::new(encrypter_reader)
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
@@ -116,6 +112,7 @@ impl Writer {
         file.set_total_bytes(self.total_bytes);
         file.set_cf(cf.to_owned());
         file.set_size(sst_info.file_size());
+        file.set_cipher_iv(iv.as_slice().to_vec());
         Ok(file)
     }
 
