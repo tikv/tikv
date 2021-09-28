@@ -928,7 +928,6 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         }
         if throttle > MAX_THROTTLE_SPEED {
             self.throttle_cf = None;
-            // self.num_l0_for_last_update_target_flow = None;
             throttle = f64::INFINITY;
         }
         SCHED_THROTTLE_FLOW_GAUGE.set(if throttle == f64::INFINITY {
@@ -1184,7 +1183,4 @@ mod tests {
         assert!((smoother.get_percentile_90() - 5.0).abs() < f64::EPSILON);
         assert_eq!(smoother.trend(), Trend::Increasing);
     }
-
-    #[test]
-    fn test_burst_pending_compaction_bytes() {}
 }
