@@ -7,8 +7,7 @@ use crate::server::ttl::TTLCheckerTask;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::txn::flow_controller::FlowController;
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
-use engine_rocks::RocksEngine;
-use engine_traits::{CFNamesExt, CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
+use engine_traits::{ColumnFamilyOptions, KvEngine, CF_DEFAULT};
 use file_system::{get_io_rate_limiter, IOPriority, IORateLimitMode, IORateLimiter, IOType};
 use libc::c_int;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
@@ -105,20 +104,20 @@ impl Config {
     }
 }
 
-pub struct StorageConfigManger {
-    kvdb: RocksEngine,
+pub struct StorageConfigManger<EK: KvEngine> {
+    kvdb: EK,
     shared_block_cache: bool,
     ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
     flow_controller: Arc<FlowController>,
 }
 
-impl StorageConfigManger {
+impl<EK: KvEngine> StorageConfigManger<EK> {
     pub fn new(
-        kvdb: RocksEngine,
+        kvdb: EK,
         shared_block_cache: bool,
         ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
         flow_controller: Arc<FlowController>,
-    ) -> StorageConfigManger {
+    ) -> Self {
         StorageConfigManger {
             kvdb,
             shared_block_cache,
@@ -128,7 +127,7 @@ impl StorageConfigManger {
     }
 }
 
-impl ConfigManager for StorageConfigManger {
+impl<EK: KvEngine> ConfigManager for StorageConfigManger<EK> {
     fn dispatch(&mut self, mut change: ConfigChange) -> CfgResult<()> {
         if let Some(ConfigValue::Module(mut block_cache)) = change.remove("block_cache") {
             if !self.shared_block_cache {

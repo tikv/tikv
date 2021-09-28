@@ -36,7 +36,7 @@ use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
 use resolved_ts::Resolver;
 use security::SecurityManager;
 use tikv::config::CdcConfig;
-use tikv::storage::kv::Snapshot;
+use tikv::storage::kv::{PerfStatisticsInstant, Snapshot};
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
@@ -56,6 +56,7 @@ use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
 use crate::{CdcObserver, Error, Result};
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
+const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 
 pub enum Deregister {
     Downstream {
@@ -279,6 +280,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let tso_worker = Builder::new_multi_thread()
             .thread_name("tso")
             .worker_threads(1)
+            .enable_time()
             .build()
             .unwrap();
 
@@ -1020,7 +1022,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
                 req.set_ts(min_ts.into_inner());
-                let res = box_try!(client.check_leader_async(&req)).await;
+                let res = box_try!(
+                    tokio::time::timeout(
+                        Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS),
+                        box_try!(client.check_leader_async(&req))
+                    )
+                    .await
+                );
                 let resp = box_try!(res);
                 Result::Ok((store_id, resp))
             }
@@ -1227,14 +1235,15 @@ impl Initializer {
         Ok(())
     }
 
-    async fn scan_batch<S: Snapshot>(
+    fn do_scan<S: Snapshot>(
         &self,
         scanner: &mut DeltaScanner<S>,
-        resolver: Option<&mut Resolver>,
-    ) -> Result<Vec<Option<TxnEntry>>> {
-        let mut entries = Vec::with_capacity(self.max_scan_batch_size);
+        entries: &mut Vec<Option<TxnEntry>>,
+    ) -> Result<usize> {
         let mut total_bytes = 0;
         let mut total_size = 0;
+
+        let perf_instant = PerfStatisticsInstant::new();
         while total_bytes <= self.max_scan_batch_bytes && total_size < self.max_scan_batch_size {
             total_size += 1;
             match scanner.next_entry()? {
@@ -1248,6 +1257,19 @@ impl Initializer {
                 }
             }
         }
+        TLS_CDC_PERF_STATS.with(|x| *x.borrow_mut() += perf_instant.delta());
+        Ok(total_bytes)
+    }
+
+    async fn scan_batch<S: Snapshot>(
+        &self,
+        scanner: &mut DeltaScanner<S>,
+        resolver: Option<&mut Resolver>,
+    ) -> Result<Vec<Option<TxnEntry>>> {
+        let mut entries = Vec::with_capacity(self.max_scan_batch_size);
+        let total_bytes = self.do_scan(scanner, &mut entries)?;
+        tls_flush_perf_stats();
+
         if total_bytes > 0 {
             self.speed_limiter.consume(total_bytes).await;
             CDC_SCAN_BYTES.inc_by(total_bytes as _);

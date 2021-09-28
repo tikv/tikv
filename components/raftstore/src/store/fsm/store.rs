@@ -378,6 +378,11 @@ where
     pub coprocessor_host: CoprocessorHost<EK>,
     pub timer: SteadyTimer,
     pub trans: T,
+    /// WARNING:
+    /// To avoid deadlock, if you want to use `store_meta` and `global_replication_state` together,
+    /// the lock sequence MUST BE:
+    /// 1. lock the store_meta.
+    /// 2. lock the global_replication_state.
     pub global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
@@ -1761,6 +1766,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         if meta.regions.contains_key(&region_id) {
             return Ok(true);
         }
+        fail_point!("after_acquire_store_meta_on_maybe_create_peer_internal");
 
         if is_local_first {
             let pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();

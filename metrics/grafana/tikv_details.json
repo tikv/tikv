@@ -3686,7 +3686,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "tikv_server_mem_trace_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"raftstore-.*\"}",
+              "expr": "tikv_server_mem_trace_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{instance}}-{{name}}",
