@@ -13,7 +13,7 @@ use tikv_util::warn;
 
 // The code here is migrated from zhongzc/topsql-vm in advance.
 //
-// TODO(mornyx): integration with zhongzc/topsql-vm.
+// TODO(mornyx): integrate with zhongzc/topsql-vm.
 //
 
 /// This trait abstracts the interface to communicate with the remote.
