@@ -2,9 +2,11 @@
 
 use crate::recorder::RecorderHandle;
 use crate::reporter::Task;
+
+use std::error::Error;
+
 use online_config::{ConfigChange, OnlineConfig};
 use serde_derive::{Deserialize, Serialize};
-use std::error::Error;
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::Scheduler;
 

@@ -1,8 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::{Client, Config, RawRecords, Records};
+
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
+
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
