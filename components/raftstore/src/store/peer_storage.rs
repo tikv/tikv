@@ -1448,11 +1448,9 @@ where
         }
     }
 
-    /// Save memory states to disk.
+    /// Handle raft ready then generate `HandleReadyResult` and `WriteTask`.
     ///
-    /// This function only write data to `ready_ctx`'s `WriteBatch`. It's caller's duty to write
-    /// it explicitly to disk. If it's flushed to disk successfully, `post_ready` should be called
-    /// to update the memory states properly.
+    /// It's caller's duty to write `WriteTask` explicitly to disk.
     pub fn handle_raft_ready(
         &mut self,
         ready: &mut Ready,
