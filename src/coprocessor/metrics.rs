@@ -17,8 +17,12 @@ make_auto_flush_static_metric! {
     pub label_enum ReqTag {
         select,
         index,
+        // For AnalyzeType::{TypeColumn,TypeMixed}.
         analyze_table,
+        // For AnalyzeType::{TypeIndex,TypeCommonHandle}.
         analyze_index,
+        // For AnalyzeType::TypeFullSampling.
+        analyze_full_sampling,
         checksum_table,
         checksum_index,
         test,
