@@ -54,32 +54,34 @@ pub fn thread_ids() -> Option<HashSet<usize>> {
 
 /// Get system clock tick.
 #[cfg(target_os = "linux")]
-pub fn clock_tick() -> u64 {
+pub fn clock_tick() -> i64 {
     lazy_static::lazy_static! {
         static ref CLK_TCK: libc::c_long = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
     }
-    *CLK_TCK as u64
+    *CLK_TCK as _
 }
 
 /// Get system clock tick.
 #[cfg(not(target_os = "linux"))]
-pub fn clock_tick() -> u64 {
+pub fn clock_tick() -> i64 {
     1
 }
 
 /// A cross-platform CPU statistics data structure.
 #[derive(Default)]
 pub struct Stat {
-    pub stime: libc::clock_t,
-    pub utime: libc::clock_t,
+    // libc::clock_t is not used here because the definition of
+    // clock_t is different on linux and bsd.
+    pub stime: i64,
+    pub utime: i64,
 }
 
 #[cfg(target_os = "linux")]
 impl From<procinfo::pid::Stat> for Stat {
     fn from(stat: procinfo::pid::Stat) -> Self {
         Self {
-            stime: stat.stime,
-            utime: stat.utime,
+            stime: stat.stime as _,
+            utime: stat.utime as _,
         }
     }
 }

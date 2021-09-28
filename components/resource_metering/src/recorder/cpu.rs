@@ -143,10 +143,10 @@ mod tests {
         recorder.thread_created(utils::thread_id(), shared_ptr);
         let thread_id = utils::thread_id();
         let prev_stat = &recorder.thread_stats.get(&thread_id).unwrap().stat;
-        let prev_cpu_ticks = (prev_stat.utime as u64).wrapping_add(prev_stat.stime as u64);
+        let prev_cpu_ticks = prev_stat.utime.wrapping_add(prev_stat.stime);
         loop {
             let stat = utils::stat_task(utils::process_id(), thread_id).unwrap();
-            let cpu_ticks = (stat.utime as u64).wrapping_add(stat.stime as u64);
+            let cpu_ticks = stat.utime.wrapping_add(stat.stime);
             let delta_ms = cpu_ticks.wrapping_sub(prev_cpu_ticks) * 1_000 / utils::clock_tick();
             if delta_ms != 0 {
                 break;
