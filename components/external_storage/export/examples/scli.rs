@@ -6,7 +6,10 @@ use std::{
     path::Path,
 };
 
-use external_storage_export::{ExternalStorage, create_storage, make_cloud_backend, make_gcs_backend, make_hdfs_backend, make_local_backend, make_noop_backend, make_s3_backend};
+use external_storage_export::{
+    create_storage, make_cloud_backend, make_gcs_backend, make_hdfs_backend, make_local_backend,
+    make_noop_backend, make_s3_backend, ExternalStorage,
+};
 use futures_util::io::{copy, AllowStdIo};
 use ini::ini::Ini;
 use kvproto::brpb::{Bucket, CloudDynamic, Gcs, StorageBackend, S3};

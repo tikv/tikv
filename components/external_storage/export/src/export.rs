@@ -30,10 +30,10 @@ use encryption::DataKeyManager;
 use external_storage::dylib_client;
 #[cfg(feature = "cloud-storage-grpc")]
 use external_storage::grpc_client;
-use external_storage::{HdfsStorage, record_storage_create};
 pub use external_storage::{
     read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage,
 };
+use external_storage::{record_storage_create, HdfsStorage};
 use futures_io::AsyncRead;
 use kvproto::brpb::{Noop, StorageBackend};
 use tikv_util::stream::block_on_external_io;
@@ -156,9 +156,7 @@ fn create_backend_inner(backend: &Backend) -> io::Result<Box<dyn ExternalStorage
             let p = Path::new(&local.path);
             Box::new(LocalStorage::new(p)?) as Box<dyn ExternalStorage>
         }
-        Backend::Hdfs(hdfs) => {
-            Box::new(HdfsStorage::new(&hdfs.remote)?)
-        }
+        Backend::Hdfs(hdfs) => Box::new(HdfsStorage::new(&hdfs.remote)?),
         Backend::Noop(_) => Box::new(NoopStorage::default()) as Box<dyn ExternalStorage>,
         #[cfg(feature = "cloud-aws")]
         Backend::S3(config) => blob_store(S3Storage::from_input(config.clone())?),
