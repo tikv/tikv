@@ -3,7 +3,7 @@
 use std::fs::File;
 use std::io::Read;
 use std::pin::Pin;
-use std::process::Command;
+use std::process::{self, Command};
 use std::sync::Mutex as StdMutex;
 
 use futures::channel::oneshot::{self, Sender};
@@ -13,9 +13,16 @@ use futures::{select, Future, FutureExt, Stream, StreamExt};
 use lazy_static::lazy_static;
 use pprof::protos::Message;
 use regex::Regex;
-use tempfile::NamedTempFile;
-use tikv_alloc::{activate_prof, deactivate_prof, dump_prof};
+use tempfile::{NamedTempFile, TempDir};
 use tokio::sync::{Mutex, MutexGuard};
+
+#[cfg(not(test))]
+use tikv_alloc::{activate_prof, deactivate_prof, dump_prof};
+#[cfg(test)]
+use self::test_utils::{activate_prof, deactivate_prof, dump_prof};
+#[cfg(test)]
+pub use self::test_utils::TEST_PROFILE_MUTEX;
+
 
 // File name suffix for periodically dumped heap profiles.
 const HEAP_PROFILE_SUFFIX: &str = ".heap";
@@ -24,7 +31,7 @@ lazy_static! {
     // If it's locked it means there are already a heap or CPU profiling.
     static ref PROFILE_MUTEX: Mutex<()> = Mutex::new(());
     // The channel is used to deactivate a profiling.
-    static ref PROFILE_ACTIVE: StdMutex<Option<Sender<()>>> = StdMutex::new(None);
+    static ref PROFILE_ACTIVE: StdMutex<Option<(Sender<()>, TempDir)>> = StdMutex::new(None);
 
     // To normalize thread names.
     static ref THREAD_NAME_RE: Regex =
@@ -104,18 +111,20 @@ where
     ProfileGuard::new(on_start, on_end, end.boxed())?.await
 }
 
-/// Activate heap profile.
+/// Activate heap profile. `callback` will be called if the profile guard is created successfully.
 pub async fn activate_heap_profile<S, F>(dump_period: S, callback: F) -> Result<(), String>
 where
     S: Stream<Item = Result<(), String>> + Send + Unpin + 'static,
     F: FnOnce() + Send + 'static,
 {
     let (tx, rx) = oneshot::channel();
+    let dir = TempDir::new().map_err(|e| format!("create temp directory: {}", e))?;
+    let dir_path = dir.path().to_str().unwrap().to_owned();
 
     let on_start = move || {
         let mut activate = PROFILE_ACTIVE.lock().unwrap();
         assert!(activate.is_none());
-        *activate = Some(tx);
+        *activate = Some((tx, dir));
         activate_prof().map_err(|e| format!("activate_prof: {}", e))?;
         callback();
         Ok(())
@@ -126,7 +135,7 @@ where
     let end = async move {
         select! {
             _ = rx.fuse() => {},
-            _ = dump_heap_profile_periodically(dump_period).fuse() => {
+            _ = dump_heap_profile_periodically(dump_period, dir_path).fuse() => {
                 warn!("the heap profiling dump loop shouldn't break");
             }
         }
@@ -205,7 +214,7 @@ pub fn jeprof_heap_profile(path: &str) -> Result<Vec<u8>, String> {
     Ok(output.stdout)
 }
 
-pub fn list_heap_profiles() -> Result<Vec<u8>, String> {
+pub fn list_heap_profiles() -> Result<Vec<(String, String)>, String> {
     let dir = std::fs::read_dir(".").map_err(|e| format!("read dir fail: {}", e))?;
     let mut profiles = Vec::new();
     for item in dir {
@@ -223,23 +232,18 @@ pub fn list_heap_profiles() -> Result<Vec<u8>, String> {
     }
 
     profiles.sort_by(|x, y| x.1.cmp(&y.1));
-    let text = profiles
-        .into_iter()
-        .map(|(f, ct)| format!("{}\t\t{}", f, ct))
-        .collect::<Vec<_>>()
-        .join("\n")
-        .into_bytes();
-    Ok(text)
+    Ok(profiles)
 }
 
-async fn dump_heap_profile_periodically<S>(mut period: S) -> Result<(), String>
+async fn dump_heap_profile_periodically<S>(mut period: S, dir: String) -> Result<(), String>
 where
     S: Stream<Item = Result<(), String>> + Send + Unpin + 'static,
 {
+    let pid = process::id();
     let mut id = 0;
     while let Some(Ok(_)) = period.next().await {
         id += 1;
-        let path = format!("{:0>6}{}", id, HEAP_PROFILE_SUFFIX);
+        let path = format!("{}/{}.{:0>6}{}", dir, pid, id, HEAP_PROFILE_SUFFIX);
         dump_prof(&path).map_err(|e| format!("dump_prof: {}", e))?;
     }
     Ok(())
@@ -256,6 +260,24 @@ fn extract_thread_name(thread_name: &str) -> String {
             })
         })
         .unwrap_or_else(|| thread_name.to_owned())
+}
+
+#[cfg(test)]
+mod test_utils {
+    use tikv_alloc::error::ProfResult;
+    use std::sync::Mutex;
+
+    lazy_static! {
+        pub static ref TEST_PROFILE_MUTEX: Mutex<()> = Mutex::new(());
+    }
+
+    pub fn activate_prof() -> ProfResult<()> { Ok(()) }
+    pub fn deactivate_prof() -> ProfResult<()> {
+        Ok(())
+    }
+    pub fn dump_prof(_: &str) -> ProfResult<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -278,17 +300,15 @@ mod tests {
         assert_eq!(&extract_thread_name("snap_sender1000"), "snap-sender");
     }
 
-    // Test behaviors of `super::ProfileGuard`. It's impossible to split it into multiple
-    // cases because `PROFILE_MUTEX` is a global lock, which can't be shared fairly in multiple
-    // functions.
+    // Test there is at most 1 concurrent profiling.
     #[test]
-    fn test_profile_guard() {
+    fn test_profile_guard_concurrency() {
+        let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let rt = runtime::Builder::new_multi_thread()
             .worker_threads(4)
             .build()
             .unwrap();
 
-        // Test there is at most 1 concurrent profiling.
         let expected = "Already in Profiling";
 
         let (tx1, rx1) = oneshot::channel();
@@ -312,7 +332,19 @@ mod tests {
 
         drop(tx1);
         assert!(block_on(res1).unwrap().is_err());
+    }
 
-        // TODO: Add test cases for toggling heap profile.
+    #[test]
+    fn test_profile_guard_toggle() {
+        let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
+        let rt = runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .build()
+            .unwrap();
+
+        let (tx, rx) = mpsc::channel(1);
+        let res = rt.spawn(activate_heap_profile(rx, || {}));
+        drop(tx);
+        println!("res: {:?}", block_on(res).unwrap());
     }
 }

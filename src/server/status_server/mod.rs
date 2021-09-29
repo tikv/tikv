@@ -121,20 +121,39 @@ where
     }
 
     fn list_heap_prof(_req: Request<Body>) -> hyper::Result<Response<Body>> {
-        let text = match list_heap_profiles() {
+        let profiles = match list_heap_profiles() {
             Ok(s) => s,
             Err(e) => return Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, e)),
         };
+
+        let text = profiles
+            .into_iter()
+            .map(|(f, ct)| format!("{}\t\t{}", f, ct))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .into_bytes();
+
         let response = Response::builder()
-            .header("Content-Type", mime::TEXT_STAR.to_string())
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
             .header("Content-Length", text.len())
             .body(text.into())
             .unwrap();
         Ok(response)
     }
 
-    fn activate_heap_prof(_req: Request<Body>, runtime: &Handle) -> hyper::Result<Response<Body>> {
-        let interval = Duration::from_secs(60);
+    fn activate_heap_prof(req: Request<Body>, runtime: &Handle) -> hyper::Result<Response<Body>> {
+        let query = req.uri().query().unwrap_or("");
+        let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
+
+        let interval: u64 = match query_pairs.get("interval") {
+            Some(val) => match val.parse() {
+                Ok(val) => val,
+                Err(err) => return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
+            },
+            None => 60,
+        };
+
+        let interval = Duration::from_secs(interval);
         let period = GLOBAL_TIMER_HANDLE
             .interval(Instant::now() + interval, interval)
             .compat()
@@ -163,20 +182,15 @@ where
         let body = if deactivate_heap_profile() {
             "deactivate heap profile success"
         } else {
-            "no heap profi is running"
+            "no heap profile is running"
         };
         Ok(make_response(StatusCode::OK, body))
     }
 
     async fn dump_heap_prof_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
-        let query = match req.uri().query() {
-            Some(query) => query,
-            None => {
-                let errmsg = "request should have the query part".to_owned();
-                return Ok(make_response(StatusCode::BAD_REQUEST, errmsg));
-            }
-        };
+        let query = req.uri().query().unwrap_or("");
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
+
         let use_jeprof = query_pairs.get("jeprof").map(|x| x.as_ref()) == Some("true");
 
         let result = if let Some(name) = query_pairs.get("name") {
@@ -235,9 +249,7 @@ where
             full = match query_pairs.get("full") {
                 Some(val) => match val.parse() {
                     Ok(val) => val,
-                    Err(err) => {
-                        return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string()));
-                    }
+                    Err(err) => return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
                 },
                 None => false,
             };
@@ -289,20 +301,13 @@ where
     }
 
     pub async fn dump_cpu_prof_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
-        let query = match req.uri().query() {
-            Some(query) => query,
-            None => {
-                return Ok(make_response(StatusCode::BAD_REQUEST, ""));
-            }
-        };
+        let query = req.uri().query().unwrap_or("");
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
 
         let seconds: u64 = match query_pairs.get("seconds") {
             Some(val) => match val.parse() {
                 Ok(val) => val,
-                Err(err) => {
-                    return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string()));
-                }
+                Err(err) => return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
             },
             None => 10,
         };
@@ -310,9 +315,7 @@ where
         let frequency: i32 = match query_pairs.get("frequency") {
             Some(val) => match val.parse() {
                 Ok(val) => val,
-                Err(err) => {
-                    return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string()));
-                }
+                Err(err) => return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
             },
             None => 99, // Default frequency of sampling. 99Hz to avoid coincide with special periods
         };
@@ -973,6 +976,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::config::{ConfigController, TiKvConfig};
+    use crate::server::status_server::profile::TEST_PROFILE_MUTEX;
     use crate::server::status_server::{LogLevelRequest, StatusServer};
     use collections::HashSet;
     use engine_test::kv::KvTestEngine;
@@ -1378,6 +1382,7 @@ mod tests {
 
     #[test]
     fn test_pprof_profile_service() {
+        let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let mut status_server = StatusServer::new(
             1,
             None,
@@ -1399,7 +1404,6 @@ mod tests {
             .thread_pool
             .spawn(async move { client.get(uri).await.unwrap() });
         let resp = block_on(handle).unwrap();
-
         assert_eq!(resp.status(), StatusCode::OK);
         status_server.stop();
     }
