@@ -20,6 +20,8 @@ use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
 use tikv_util::time::{Instant, Limiter};
 use tokio::time::timeout;
 
+mod hdfs;
+pub use hdfs::HdfsStorage;
 mod local;
 pub use local::LocalStorage;
 mod noop;

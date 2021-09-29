@@ -30,7 +30,7 @@ use encryption::DataKeyManager;
 use external_storage::dylib_client;
 #[cfg(feature = "cloud-storage-grpc")]
 use external_storage::grpc_client;
-use external_storage::record_storage_create;
+use external_storage::{HdfsStorage, record_storage_create};
 pub use external_storage::{
     read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage,
 };
@@ -156,6 +156,9 @@ fn create_backend_inner(backend: &Backend) -> io::Result<Box<dyn ExternalStorage
             let p = Path::new(&local.path);
             Box::new(LocalStorage::new(p)?) as Box<dyn ExternalStorage>
         }
+        Backend::Hdfs(hdfs) => {
+            Box::new(HdfsStorage::new(&hdfs.remote)?)
+        }
         Backend::Noop(_) => Box::new(NoopStorage::default()) as Box<dyn ExternalStorage>,
         #[cfg(feature = "cloud-aws")]
         Backend::S3(config) => blob_store(S3Storage::from_input(config.clone())?),
@@ -206,6 +209,16 @@ pub fn make_local_backend(path: &Path) -> StorageBackend {
     {
         let mut backend = StorageBackend::default();
         backend.mut_local().set_path(path);
+        backend
+    }
+}
+
+pub fn make_hdfs_backend(remote: String) -> StorageBackend {
+    // FIXME: implement prost-codec
+    #[cfg(feature = "protobuf-codec")]
+    {
+        let mut backend = StorageBackend::default();
+        backend.mut_hdfs().set_remote(remote);
         backend
     }
 }
