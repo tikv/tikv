@@ -47,3 +47,6 @@ impl Charset for CharsetUtf8mb4 {
         })
     }
 }
+
+// gbk character data actually stored with utf8mb4 character encoding.
+pub type CharsetGbk = CharsetUtf8mb4;
