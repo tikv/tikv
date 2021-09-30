@@ -24,6 +24,15 @@ fn get_hdfs_bin() -> Option<String> {
         .or_else(|| get_hadoop_home().map(|hadoop| format!("{}/bin/hdfs", hadoop)))
 }
 
+/// Convert `hdfs:///path` to `/path`
+fn try_convert_to_path(url: &Url) -> &str {
+    if url.host().is_none() {
+        url.path()
+    } else {
+        url.as_str()
+    }
+}
+
 /// A storage to upload file to HDFS
 pub struct HdfsStorage {
     remote: Url,
@@ -67,10 +76,11 @@ impl ExternalStorage for HdfsStorage {
             )
         })?;
 
-        let path = self.remote.clone().join(name).unwrap();
+        let remote_url = self.remote.clone().join(name).unwrap();
+        let path = try_convert_to_path(&remote_url);
         let mut hdfs_cmd = Command::new(cmd_path)
             .stdin(Stdio::piped())
-            .args(["dfs", "-put", "-", &path.to_string()])
+            .args(["dfs", "-put", "-", path])
             .spawn()?;
         let stdin = hdfs_cmd.stdin.as_mut().unwrap();
 
@@ -109,5 +119,13 @@ mod tests {
 
         std::env::set_var("HDFS_CMD", "/opt/hdfs.sh");
         assert_eq!(get_hdfs_bin().as_deref(), Some("/opt/hdfs.sh"));
+    }
+
+    #[test]
+    fn test_try_convert_to_path() {
+        let url = Url::from_str("hdfs:///some/path").unwrap();
+        assert_eq!(try_convert_to_path(&url), "/some/path");
+        let url = Url::from_str("hdfs://1.1.1.1/some/path").unwrap();
+        assert_eq!(try_convert_to_path(&url), "hdfs://1.1.1.1/some/path");
     }
 }
