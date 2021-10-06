@@ -377,6 +377,18 @@ pub fn add_time_datetime_null(_arg0: &DateTime, _arg1: &DateTime) -> Result<Opti
     Ok(None)
 }
 
+#[rpn_fn()]
+#[inline]
+pub fn add_time_duration_null(_arg0: &DateTime, _arg1: &DateTime) -> Result<Option<Duration>> {
+    Ok(None)
+}
+
+#[rpn_fn()]
+#[inline]
+pub fn add_time_string_null(_arg0: &DateTime, _arg1: &DateTime) -> Result<Option<Bytes>> {
+    Ok(None)
+}
+
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn sub_duration_and_duration(
@@ -1732,7 +1744,7 @@ mod tests {
     }
 
     #[test]
-    fn test_add_date_datetime_null() {
+    fn test_add_time_result_null() {
         let mut ctx = EvalContext::default();
         let cases = vec![
             (Some("2021-03-26"), Some("2021-03-26 00:00:00")),
@@ -1749,6 +1761,20 @@ mod tests {
                 .push_param(arg0)
                 .push_param(arg1)
                 .evaluate(ScalarFuncSig::AddTimeDateTimeNull);
+            let output = output.unwrap();
+            assert_eq!(output, None);
+
+            let output: Result<Option<Duration>> = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::AddTimeDurationNull);
+            let output = output.unwrap();
+            assert_eq!(output, None);
+
+            let output: Result<Option<Bytes>> = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::AddTimeStringNull);
             let output = output.unwrap();
             assert_eq!(output, None);
         }
