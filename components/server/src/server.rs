@@ -895,16 +895,16 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let reporter = resource_metering::Reporter::new(
             resource_metering_client,
             self.config.resource_metering.clone(),
+            reporter_scheduler.clone(),
         );
         reporter_worker.start_with_timer(reporter);
         self.to_stop.push(Box::new(reporter_worker));
         let cfg_manager = resource_metering::ConfigManager::new(
             self.config.resource_metering.clone(),
-            reporter_scheduler.clone(),
+            reporter_scheduler,
             resource_metering::init_recorder(
                 self.config.resource_metering.enabled,
                 self.config.resource_metering.precision.as_millis(),
-                reporter_scheduler,
             ),
         );
         cfg_controller.register(

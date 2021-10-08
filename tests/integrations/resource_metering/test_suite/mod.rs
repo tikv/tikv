@@ -64,7 +64,6 @@ impl TestSuite {
                 init_recorder(
                     resource_metering_cfg.enabled,
                     resource_metering_cfg.precision.as_millis(),
-                    scheduler.clone(),
                 ),
             )),
         );
@@ -74,6 +73,7 @@ impl TestSuite {
         reporter.start_with_timer(resource_metering::Reporter::new(
             reporter_client,
             resource_metering_cfg,
+            scheduler.clone(),
         ));
 
         let (tx, rx) = unbounded();

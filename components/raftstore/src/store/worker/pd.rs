@@ -46,7 +46,7 @@ use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
-use resource_metering::{register_dyn_collector, Collector, DynCollectorHandle, RawRecords};
+use resource_metering::{register_collector, Collector, CollectorHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -636,7 +636,7 @@ where
     }
 }
 
-impl<E> Collector<Arc<RawRecords>> for RegionCPUMeteringCollector<E>
+impl<E> Collector for RegionCPUMeteringCollector<E>
 where
     E: KvEngine,
 {
@@ -668,7 +668,7 @@ where
     scheduler: Scheduler<Task<EK>>,
     stats_monitor: StatsMonitor<EK>,
 
-    _region_cpu_records_collector: DynCollectorHandle,
+    _region_cpu_records_collector: CollectorHandle,
     // region_id -> total_cpu_time_ms (since last region heartbeat)
     region_cpu_records: HashMap<u64, u32>,
 
@@ -705,7 +705,7 @@ where
         }
 
         let _region_cpu_records_collector =
-            register_dyn_collector(Box::new(RegionCPUMeteringCollector::new(scheduler.clone())));
+            register_collector(Box::new(RegionCPUMeteringCollector::new(scheduler.clone())));
 
         Runner {
             store_id,

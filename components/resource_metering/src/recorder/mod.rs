@@ -1,9 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::collector::{DynCollectorReg, RawRecordsCollector, COLLECTOR_REG_CHAN};
+use crate::collector::{Collector, CollectorReg, COLLECTOR_REG_CHAN};
 use crate::localstorage::{register_storage_chan_tx, LocalStorage, LocalStorageRef};
-use crate::reporter::Task;
-use crate::{utils, Collector, RawRecords, SharedTagPtr};
+use crate::{utils, RawRecords, SharedTagPtr};
 
 use std::io;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
@@ -16,7 +15,6 @@ use std::time::Duration;
 use collections::HashMap;
 use crossbeam::channel::{unbounded, Receiver};
 use tikv_util::time::Instant;
-use tikv_util::worker::Scheduler;
 
 mod cpu;
 
@@ -88,29 +86,25 @@ pub trait SubRecorder {
 /// We cannot construct `Recorder` directly, but need to construct it through
 /// [RecorderBuilder]. We can pass the `SubRecorder` (and other parameters)
 /// that the `Recorder` needs to load through the `RecorderBuilder`.
-pub struct Recorder<C> {
+pub struct Recorder {
     pause: Arc<AtomicBool>,
     precision_ms: Arc<AtomicU64>,
     records: RawRecords,
-    collector: C,
     recorders: Vec<Box<dyn SubRecorder + Send>>,
+    collectors: HashMap<u64, Box<dyn Collector>>,
     thread_rx: Receiver<LocalStorageRef>,
     thread_stores: HashMap<usize, LocalStorage>,
-    dyn_collectors: HashMap<u64, Box<dyn Collector<Arc<RawRecords>>>>,
     last_collect: Instant,
     last_cleanup: Instant,
 }
 
-impl<C> Recorder<C>
-where
-    C: Collector<Arc<RawRecords>>,
-{
+impl Recorder {
     // The main loop of recorder thread.
     fn run(&mut self) {
         let duration = 1_000.0 / RECORD_FREQUENCY * 1_000.0;
         loop {
             self.handle_pause();
-            self.handle_dyn_collector_registration();
+            self.handle_collector_registration();
             self.handle_thread_registration();
             self.tick();
             self.cleanup();
@@ -131,8 +125,7 @@ where
             records.duration = duration;
             if !records.records.is_empty() {
                 let records = Arc::new(records);
-                self.collector.collect(records.clone());
-                for collector in self.dyn_collectors.values() {
+                for collector in self.collectors.values() {
                     collector.collect(records.clone());
                 }
             }
@@ -183,14 +176,14 @@ where
         }
     }
 
-    fn handle_dyn_collector_registration(&mut self) {
+    fn handle_collector_registration(&mut self) {
         while let Ok(msg) = COLLECTOR_REG_CHAN.1.try_recv() {
             match msg {
-                DynCollectorReg::Register { id, collector } => {
-                    self.dyn_collectors.insert(id.0, collector);
+                CollectorReg::Register { id, collector } => {
+                    self.collectors.insert(id.0, collector);
                 }
-                DynCollectorReg::Unregister { id } => {
-                    self.dyn_collectors.remove(&id.0);
+                CollectorReg::Unregister { id } => {
+                    self.collectors.remove(&id.0);
                 }
             }
         }
@@ -246,10 +239,7 @@ impl RecorderBuilder {
     ///
     /// This function does not return the `Recorder` instance directly, instead
     /// it returns a [RecorderHandle] that is used to control the execution.
-    pub fn spawn<C>(self, collector: C) -> io::Result<RecorderHandle>
-    where
-        C: Collector<Arc<RawRecords>> + Send + 'static,
-    {
+    pub fn spawn(self) -> io::Result<RecorderHandle> {
         let pause = Arc::new(AtomicBool::new(!self.enable));
         let precision_ms = self.precision_ms.clone();
         let (tx, rx) = unbounded();
@@ -259,11 +249,10 @@ impl RecorderBuilder {
             pause: pause.clone(),
             precision_ms: precision_ms.clone(),
             records: RawRecords::default(),
-            collector,
             recorders: self.recorders,
+            collectors: HashMap::default(),
             thread_rx: rx,
             thread_stores: HashMap::default(),
-            dyn_collectors: HashMap::default(),
             last_collect: now,
             last_cleanup: now,
         };
@@ -340,16 +329,12 @@ impl RecorderHandle {
 /// Constructs a default [Recorder], spawn it and return the corresponding [RecorderHandle].
 ///
 /// This function is intended to simplify external use.
-pub fn init_recorder(
-    enable: bool,
-    precision_ms: u64,
-    scheduler: Scheduler<Task>,
-) -> RecorderHandle {
+pub fn init_recorder(enable: bool, precision_ms: u64) -> RecorderHandle {
     RecorderBuilder::default()
         .enable(enable)
         .precision_ms(Arc::new(AtomicU64::new(precision_ms)))
         .add_sub_recorder(Box::new(CpuRecorder::default()))
-        .spawn(RawRecordsCollector::new(scheduler))
+        .spawn()
         .expect("failed to create resource metering thread")
 }
 
@@ -381,12 +366,6 @@ mod tests {
     }
 
     static OP_COUNT: AtomicUsize = AtomicUsize::new(0);
-
-    struct MockCollector;
-
-    impl Collector<Arc<RawRecords>> for MockCollector {
-        fn collect(&self, _records: Arc<RawRecords>) {}
-    }
 
     struct MockSubRecorder;
 
@@ -422,11 +401,10 @@ mod tests {
             pause: Arc::new(AtomicBool::new(false)),
             precision_ms: Arc::new(AtomicU64::new(1000)),
             records: RawRecords::default(),
-            collector: MockCollector,
             recorders: vec![Box::new(MockSubRecorder)],
+            collectors: HashMap::default(),
             thread_rx: rx,
             thread_stores: HashMap::default(),
-            dyn_collectors: HashMap::default(),
             last_collect: now,
             last_cleanup: now,
         };

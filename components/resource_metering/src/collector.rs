@@ -28,8 +28,8 @@ use tikv_util::worker::Scheduler;
 /// [Scheduler]: tikv_util::worker::Scheduler
 /// [Runnable]: tikv_util::worker::Runnable
 /// [RunnableWithTimer]: tikv_util::worker::RunnableWithTimer
-pub trait Collector<T>: Send {
-    fn collect(&self, records: T);
+pub trait Collector: Send {
+    fn collect(&self, records: Arc<RawRecords>);
 }
 
 /// A [Collector] implementation for scheduling [RawRecords].
@@ -37,62 +37,59 @@ pub trait Collector<T>: Send {
 /// See [Collector] for more relevant designs.
 ///
 /// [RawRecords]: crate::model::RawRecords
-pub struct RawRecordsCollector {
+pub struct CollectorImpl {
     scheduler: Scheduler<Task>,
 }
 
-impl Collector<Arc<RawRecords>> for RawRecordsCollector {
+impl Collector for CollectorImpl {
     fn collect(&self, records: Arc<RawRecords>) {
         self.scheduler.schedule(Task::Records(records)).ok();
     }
 }
 
-impl RawRecordsCollector {
+impl CollectorImpl {
     pub fn new(scheduler: Scheduler<Task>) -> Self {
         Self { scheduler }
     }
 }
 
 lazy_static! {
-    pub static ref COLLECTOR_REG_CHAN: (Sender<DynCollectorReg>, Receiver<DynCollectorReg>) =
-        unbounded();
-}
-
-/// We specially provide a method of dynamically registering/unloading the collectors.
-pub fn register_dyn_collector(
-    collector: Box<dyn Collector<Arc<RawRecords>>>,
-) -> DynCollectorHandle {
-    static NEXT_COLLECTOR_ID: AtomicU64 = AtomicU64::new(1);
-    let id = DynCollectorId(NEXT_COLLECTOR_ID.fetch_add(1, Relaxed));
-    COLLECTOR_REG_CHAN
-        .0
-        .send(DynCollectorReg::Register { collector, id })
-        .ok();
-    DynCollectorHandle { id }
+    pub static ref COLLECTOR_REG_CHAN: (Sender<CollectorReg>, Receiver<CollectorReg>) = unbounded();
 }
 
 #[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Hash)]
-pub struct DynCollectorId(pub u64);
+pub struct CollectorId(pub u64);
 
-pub enum DynCollectorReg {
+pub enum CollectorReg {
     Register {
-        id: DynCollectorId,
-        collector: Box<dyn Collector<Arc<RawRecords>>>,
+        id: CollectorId,
+        collector: Box<dyn Collector>,
     },
     Unregister {
-        id: DynCollectorId,
+        id: CollectorId,
     },
 }
 
-pub struct DynCollectorHandle {
-    id: DynCollectorId,
+pub struct CollectorHandle {
+    id: CollectorId,
 }
 
-impl Drop for DynCollectorHandle {
+impl Drop for CollectorHandle {
     fn drop(&mut self) {
         COLLECTOR_REG_CHAN
             .0
-            .send(DynCollectorReg::Unregister { id: self.id })
+            .send(CollectorReg::Unregister { id: self.id })
             .ok();
     }
+}
+
+/// Dynamically registering a collector.
+pub fn register_collector(collector: Box<dyn Collector>) -> CollectorHandle {
+    static NEXT_COLLECTOR_ID: AtomicU64 = AtomicU64::new(1);
+    let id = CollectorId(NEXT_COLLECTOR_ID.fetch_add(1, Relaxed));
+    COLLECTOR_REG_CHAN
+        .0
+        .send(CollectorReg::Register { collector, id })
+        .ok();
+    CollectorHandle { id }
 }

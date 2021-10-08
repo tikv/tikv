@@ -1,12 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::collector::{register_collector, CollectorHandle, CollectorImpl};
 use crate::{Client, Config, RawRecords, Records};
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
 use tikv_util::time::Duration;
-use tikv_util::worker::{Runnable, RunnableWithTimer};
+use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 
 /// A structure for reporting statistics through [Client].
 ///
@@ -22,6 +23,8 @@ use tikv_util::worker::{Runnable, RunnableWithTimer};
 pub struct Reporter<C> {
     client: C,
     config: Config,
+    scheduler: Scheduler<Task>,
+    collector: Option<CollectorHandle>,
     records: Records,
 }
 
@@ -34,7 +37,7 @@ where
     fn run(&mut self, task: Self::Task) {
         match task {
             Task::Records(records) => self.handle_records(records),
-            Task::ConfigChange(cfg) => self.handle_config_change(cfg),
+            Task::ConfigChange(config) => self.handle_config_change(config),
         }
     }
 
@@ -60,10 +63,15 @@ impl<C> Reporter<C>
 where
     C: Client + Send,
 {
-    pub fn new(client: C, config: Config) -> Self {
+    pub fn new(client: C, config: Config, scheduler: Scheduler<Task>) -> Self {
+        let collector = config
+            .should_report()
+            .then(|| register_collector(Box::new(CollectorImpl::new(scheduler.clone()))));
         Self {
             client,
             config,
+            scheduler,
+            collector,
             records: Records::default(),
         }
     }
@@ -73,10 +81,15 @@ where
         self.records.keep_top_k(self.config.max_resource_groups);
     }
 
-    fn handle_config_change(&mut self, cfg: Config) {
-        self.config = cfg;
+    fn handle_config_change(&mut self, config: Config) {
+        self.config = config;
         if !self.config.should_report() {
             self.reset();
+        }
+        if self.collector.is_none() {
+            self.collector = Some(register_collector(Box::new(CollectorImpl::new(
+                self.scheduler.clone(),
+            ))));
         }
     }
 
@@ -91,6 +104,7 @@ where
     }
 
     fn reset(&mut self) {
+        self.collector.take();
         self.records.clear();
     }
 }
@@ -130,7 +144,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::SeqCst;
     use tikv_util::config::ReadableDuration;
-    use tikv_util::worker::{Runnable, RunnableWithTimer};
+    use tikv_util::worker::{LazyWorker, Runnable, RunnableWithTimer};
 
     static OP_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -145,7 +159,8 @@ mod tests {
 
     #[test]
     fn test_reporter() {
-        let mut r = Reporter::new(MockClient, Config::default());
+        let scheduler = LazyWorker::new("test-worker").scheduler();
+        let mut r = Reporter::new(MockClient, Config::default(), scheduler);
         r.run(Task::ConfigChange(Config {
             enabled: false,
             agent_address: "abc".to_string(),

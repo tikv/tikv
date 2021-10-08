@@ -24,7 +24,7 @@ pub mod utils;
 
 pub use client::{Client, GrpcClient};
 pub use collector::Collector;
-pub use collector::{register_dyn_collector, DynCollectorHandle, DynCollectorId};
+pub use collector::{register_collector, CollectorHandle, CollectorId};
 pub use config::{Config, ConfigManager};
 pub use model::*;
 pub use recorder::{init_recorder, CpuRecorder, Recorder, RecorderBuilder, RecorderHandle};
