@@ -338,6 +338,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .unwrap_or_default()
             .value;
         let kv_data_encode = DataEncode::from_i32(kv_data_encode).expect("unknown data encode");
+        dbg!(kv_data_encode, config_data_encode);
         if kv_data_encode != config_data_encode {
             // Check if there are only TiDB data in the engine
             for cf in ALL_CFS {
@@ -2086,6 +2087,11 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
         self
     }
 
+    pub fn set_api_version(mut self, api_version: ApiVersion) -> Self {
+        self.config.api_version = api_version;
+        self
+    }
+
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E, L>> {
         let read_pool = build_read_pool_for_test(
@@ -2306,6 +2312,7 @@ mod tests {
     use super::{
         mvcc::tests::{must_unlocked, must_written},
         test_util::*,
+        txn::tests::*,
         *,
     };
 
@@ -7066,5 +7073,78 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+    }
+
+    #[test]
+    fn test_switch_api_version() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Write TiDB data.
+        let tidb_key = b"m_tidb_data";
+        must_prewrite_put(&engine, tidb_key, b"val", tidb_key, 10);
+        must_commit(&engine, tidb_key, 10, 11);
+
+        // Default API Version is V1, should be ablle to swith to V2.
+        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+            engine.clone(),
+            DummyLockManager {},
+        )
+        .set_api_version(ApiVersion::V2)
+        .build()
+        .unwrap();
+        drop(storage);
+
+        // Should be able to switch back to V1.
+        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+            engine.clone(),
+            DummyLockManager {},
+        )
+        .set_api_version(ApiVersion::V1)
+        .build()
+        .unwrap();
+        drop(storage);
+
+        // Write non-TiDB data.
+        let non_tidb_key = b"k1";
+        must_prewrite_put(&engine, non_tidb_key, b"val", non_tidb_key, 20);
+        must_commit(&engine, non_tidb_key, 20, 21);
+
+        // Should not able to switch from V1 to V2 now.
+        assert!(
+            TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+                engine.clone(),
+                DummyLockManager {},
+            )
+            .set_api_version(ApiVersion::V2)
+            .build()
+            .is_err()
+        );
+
+        // Prepare a new storage and switch it to V2.
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+            engine.clone(),
+            DummyLockManager {},
+        )
+        .set_api_version(ApiVersion::V2)
+        .build()
+        .unwrap();
+        drop(storage);
+
+        // Write non-TiDB data.
+        let non_tidb_key = b"k1";
+        must_prewrite_put(&engine, non_tidb_key, b"val", non_tidb_key, 20);
+        must_commit(&engine, non_tidb_key, 20, 21);
+
+        // Should not able to switch from V2 to V1 now.
+        assert!(
+            TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+                engine.clone(),
+                DummyLockManager {},
+            )
+            .set_api_version(ApiVersion::V1)
+            .build()
+            .is_err()
+        );
     }
 }
