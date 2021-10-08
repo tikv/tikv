@@ -33481,11 +33481,11 @@
         "name": "command",
         "options": [],
         "query": {
-          "query": "label_values(tikv_storage_command_total{tidb_cluster=\"$tidb_cluster\"}, type)",
+          "query": "query_result(tikv_storage_command_total{tidb_cluster=\"$tidb_cluster\"} != 0)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 1,
-        "regex": "",
+        "regex": "/type=\"([^\"]+)\"/",
         "skipUrlSync": false,
         "sort": 1,
         "tagValuesQuery": "",
