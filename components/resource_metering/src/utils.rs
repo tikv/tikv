@@ -118,7 +118,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn test_thread_ids() {
         let ids = thread_ids();
-        assert!(matches!(ids, Some(_)));
+        assert!(ids.is_some());
         assert!(!ids.unwrap().is_empty());
     }
 }

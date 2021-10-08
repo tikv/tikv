@@ -278,8 +278,8 @@ mod tests {
                 ptr: Arc::new(AtomicPtr::new(std::mem::transmute(&info))),
             }
         };
-        assert!(matches!(ptr.take_clone(), Some(_)));
-        assert!(matches!(ptr.take_clone(), Some(_)));
-        assert!(matches!(ptr.take_clone(), Some(_)));
+        assert!(ptr.take_clone().is_some());
+        assert!(ptr.take_clone().is_some());
+        assert!(ptr.take_clone().is_some());
     }
 }

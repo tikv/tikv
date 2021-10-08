@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn test_config_validate() {
         let cfg = Config::default();
-        assert!(matches!(cfg.validate(), Ok(_))); // Empty address is allowed.
+        assert!(cfg.validate().is_ok()); // Empty address is allowed.
         let cfg = Config {
             enabled: false,
             agent_address: "127.0.0.1:6666".to_string(),
@@ -149,7 +149,7 @@ mod tests {
             max_resource_groups: 2000,
             precision: ReadableDuration::secs(1),
         };
-        assert!(matches!(cfg.validate(), Ok(_)));
+        assert!(cfg.validate().is_ok());
         let cfg = Config {
             enabled: false,
             agent_address: "127.0.0.1:6666".to_string(),
@@ -165,7 +165,7 @@ mod tests {
             max_resource_groups: usize::MAX, // invalid
             precision: ReadableDuration::secs(1),
         };
-        assert!(matches!(cfg.validate(), Err(_)));
+        assert!(cfg.validate().is_err());
         let cfg = Config {
             enabled: false,
             agent_address: "127.0.0.1:6666".to_string(),
@@ -173,6 +173,6 @@ mod tests {
             max_resource_groups: 2000,
             precision: ReadableDuration::days(999), // invalid
         };
-        assert!(matches!(cfg.validate(), Err(_)));
+        assert!(cfg.validate().is_err());
     }
 }
