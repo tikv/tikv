@@ -488,13 +488,11 @@ impl IORateLimiter {
     /// request can not be satisfied, the call is blocked. Granted token can be
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
-        if let Some(stats) = &self.stats {
-            let bytes = fetch_io_bytes(io_type);
-            match io_op {
-                IOOp::Read => stats.record(io_type, io_op, bytes.read as usize),
-                IOOp::Write => stats.record(io_type, io_op, bytes.write as usize),
-            }
-        }
+        let original_io_bytes = if io_op == IOOp::Read && self.stats.is_some() {
+            Some(fetch_io_bytes(io_type))
+        } else {
+            None
+        };
         if self.mode.contains(io_op) {
             bytes = self.throughput_limiter.request(
                 IOPriority::unsafe_from_u32(
@@ -504,10 +502,12 @@ impl IORateLimiter {
             );
         }
         if let Some(stats) = &self.stats {
-            let bytes = fetch_io_bytes(io_type);
-            match io_op {
-                IOOp::Read => stats.record(io_type, io_op, bytes.read as usize),
-                IOOp::Write => stats.record(io_type, io_op, bytes.write as usize),
+            if let Some(original_io_bytes) = original_io_bytes {
+                let current_io_bytes = fetch_io_bytes(io_type);
+                let bytes = (current_io_bytes.read - original_io_bytes.read) as usize;
+                stats.record(io_type, io_op, bytes)
+            } else {
+                stats.record(io_type, io_op, bytes)
             }
         }
         bytes
@@ -518,13 +518,11 @@ impl IORateLimiter {
     /// Granted token can be less than the requested bytes, but must be greater
     /// than zero.
     pub async fn async_request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
-        if let Some(stats) = &self.stats {
-            let bytes = fetch_io_bytes(io_type);
-            match io_op {
-                IOOp::Read => stats.record(io_type, io_op, bytes.read as usize),
-                IOOp::Write => stats.record(io_type, io_op, bytes.write as usize),
-            }
-        }
+        let original_io_bytes = if io_op == IOOp::Read && self.stats.is_some() {
+            Some(fetch_io_bytes(io_type))
+        } else {
+            None
+        };
         if self.mode.contains(io_op) {
             bytes = self
                 .throughput_limiter
@@ -537,10 +535,12 @@ impl IORateLimiter {
                 .await;
         }
         if let Some(stats) = &self.stats {
-            let bytes = fetch_io_bytes(io_type);
-            match io_op {
-                IOOp::Read => stats.record(io_type, io_op, bytes.read as usize),
-                IOOp::Write => stats.record(io_type, io_op, bytes.write as usize),
+            if let Some(original_io_bytes) = original_io_bytes {
+                let current_io_bytes = fetch_io_bytes(io_type);
+                let bytes = (current_io_bytes.read - original_io_bytes.read) as usize;
+                stats.record(io_type, io_op, bytes)
+            } else {
+                stats.record(io_type, io_op, bytes)
             }
         }
         bytes
@@ -548,13 +548,11 @@ impl IORateLimiter {
 
     #[cfg(test)]
     fn request_with_skewed_clock(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
-        if let Some(stats) = &self.stats {
-            let bytes = fetch_io_bytes(io_type);
-            match io_op {
-                IOOp::Read => stats.record(io_type, io_op, bytes.read as usize),
-                IOOp::Write => stats.record(io_type, io_op, bytes.write as usize),
-            }
-        }
+        let original_io_bytes = if io_op == IOOp::Read && self.stats.is_some() {
+            Some(fetch_io_bytes(io_type))
+        } else {
+            None
+        };
         if self.mode.contains(io_op) {
             bytes = self.throughput_limiter.request_with_skewed_clock(
                 IOPriority::unsafe_from_u32(
@@ -564,10 +562,12 @@ impl IORateLimiter {
             );
         }
         if let Some(stats) = &self.stats {
-            let bytes = fetch_io_bytes(io_type);
-            match io_op {
-                IOOp::Read => stats.record(io_type, io_op, bytes.read as usize),
-                IOOp::Write => stats.record(io_type, io_op, bytes.write as usize),
+            if let Some(original_io_bytes) = original_io_bytes {
+                let current_io_bytes = fetch_io_bytes(io_type);
+                let bytes = (current_io_bytes.read - original_io_bytes.read) as usize;
+                stats.record(io_type, io_op, bytes)
+            } else {
+                stats.record(io_type, io_op, bytes)
             }
         }
         bytes
