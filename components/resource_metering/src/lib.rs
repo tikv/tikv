@@ -267,19 +267,25 @@ mod tests {
 
     #[test]
     fn test_shared_tag_ptr_take_clone() {
-        let info = TagInfos {
+        let info = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             extra_attachment: b"abc".to_vec(),
+        });
+        let ptr = SharedTagPtr {
+            ptr: Arc::new(AtomicPtr::new(Arc::into_raw(info) as _)),
         };
-        let ptr = unsafe {
-            SharedTagPtr {
-                ptr: Arc::new(AtomicPtr::new(std::mem::transmute(&info))),
-            }
-        };
+
         assert!(ptr.take_clone().is_some());
         assert!(ptr.take_clone().is_some());
         assert!(ptr.take_clone().is_some());
+
+        assert!(ptr.take().is_some());
+        assert!(ptr.take().is_none());
+
+        assert!(ptr.take_clone().is_none());
+        assert!(ptr.take_clone().is_none());
+        assert!(ptr.take_clone().is_none());
     }
 }

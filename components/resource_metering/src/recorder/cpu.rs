@@ -128,16 +128,14 @@ mod tests {
 
     #[test]
     fn test_record() {
-        let info = TagInfos {
+        let info = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             extra_attachment: b"abc".to_vec(),
-        };
-        let shared_ptr = unsafe {
-            SharedTagPtr {
-                ptr: Arc::new(AtomicPtr::new(std::mem::transmute(&info))),
-            }
+        });
+        let shared_ptr = SharedTagPtr {
+            ptr: Arc::new(AtomicPtr::new(Arc::into_raw(info) as _)),
         };
         let mut recorder = CpuRecorder::default();
         recorder.thread_created(utils::thread_id(), shared_ptr);
