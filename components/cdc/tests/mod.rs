@@ -15,6 +15,7 @@ use online_config::OnlineConfig;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
 use tikv::config::CdcConfig;
+use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::{LazyWorker, Runnable};
 use tikv_util::HandyRwLock;
@@ -161,6 +162,7 @@ impl TestSuiteBuilder {
             let env = Arc::new(Environment::new(1));
             let cfg = CdcConfig::default();
             let mut cdc_endpoint = cdc::Endpoint::new(
+                DEFAULT_CLUSTER_ID,
                 &cfg,
                 pd_cli.clone(),
                 worker.scheduler(),
