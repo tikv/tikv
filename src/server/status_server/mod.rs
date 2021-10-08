@@ -366,8 +366,6 @@ where
             None => 99, // Default frequency of sampling. 99Hz to avoid coincide with special periods
         };
 
-        let prototype_content_type: hyper::http::HeaderValue =
-            hyper::http::HeaderValue::from_str("application/protobuf").unwrap();
         let report = match Self::dump_rsprof(seconds, frequency).await {
             Ok(report) => report,
             Err(err) => {
@@ -378,8 +376,11 @@ where
             }
         };
 
+        let svg_content_type: hyper::http::HeaderValue =
+            hyper::http::HeaderValue::from_str("image/svg+xml").unwrap();
         let mut body: Vec<u8> = Vec::new();
-        if req.headers().get("Content-Type") == Some(&prototype_content_type) {
+        // return protobuf format by default, which is expected by go tool pprof
+        if req.headers().get("Content-Type") != Some(&svg_content_type) {
             match report.pprof() {
                 Ok(profile) => match profile.encode(&mut body) {
                     Ok(()) => {
