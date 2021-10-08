@@ -173,7 +173,7 @@ impl From<storage::errors::Error> for PluginErrorShim {
     fn from(error: storage::errors::Error) -> Self {
         let inner = match *error.0 {
             // Key not in region
-            storage::errors::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(
+            storage::errors::ErrorInner::Kv(EngineError(box EngineErrorInner::Request(
                 ref req_err,
             ))) if req_err.has_key_not_in_region() => {
                 let key_err = req_err.get_key_not_in_region();
@@ -185,7 +185,7 @@ impl From<storage::errors::Error> for PluginErrorShim {
                 }
             }
             // Timeout
-            storage::errors::ErrorInner::Engine(EngineError(box EngineErrorInner::Timeout(
+            storage::errors::ErrorInner::Kv(EngineError(box EngineErrorInner::Timeout(
                 duration,
             ))) => PluginError::Timeout(duration),
             // Other errors are passed as-is inside their `Result` so we get a `&Result` when using `Any::downcast_ref`.

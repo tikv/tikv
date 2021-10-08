@@ -78,13 +78,16 @@ use crate::storage::{
     types::StorageCallbackType,
 };
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, CF_DEFAULT, DATA_CFS};
+use engine_traits::{CfName, Iterable, Peekable, SyncMutable, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use futures::prelude::*;
+use kvproto::kvrpcpb::ApiVersion;
 use kvproto::kvrpcpb::{
     ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo,
     RawGetRequest,
 };
 use kvproto::pdpb::QueryKind;
+use kvproto::raft_serverpb::DataEncode;
+use protobuf::well_known_types::Int32Value;use protobuf::ProtobufEnum;
 use raftstore::store::util::build_key_range;
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
@@ -99,6 +102,9 @@ use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Val
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
+
+pub const API_V1: usize = 1;
+pub const API_V2: usize = 1;
 
 /// [`Storage`](Storage) implements transactional KV APIs and raw KV APIs on a given [`Engine`].
 /// An [`Engine`] provides low level KV functionality. [`Engine`] has multiple implementations.
@@ -208,6 +214,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         flow_controller: Arc<FlowController>,
         reporter: R,
     ) -> Result<Self> {
+        let config_data_encode = match config.api_version {
+            ApiVersion::V1 => DataEncode::V1,
+            ApiVersion::V2 => DataEncode::V2,
+        };
+        Self::ensure_to_use_data_encode(&engine, config_data_encode)?;
+
         let sched = TxnScheduler::new(
             engine.clone(),
             lock_mgr,
@@ -314,6 +326,59 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             }
         }
         true
+    }
+
+    /// Change the data encode flag in kvdb if the config file has a different value.
+    /// During the switch bewteen V1 and V2, only TiDB data are allowed to exist, otherwise return error.
+    fn ensure_to_use_data_encode(engine: &E, config_data_encode: DataEncode) -> Result<()> {
+        let kv = engine.kv_engine();
+        let kv_data_encode = kv
+            .get_msg::<Int32Value>(keys::DATA_ENCODE_KEY)?
+            .unwrap_or_default()
+            .value;
+        let kv_data_encode = DataEncode::from_i32(kv_data_encode).expect("unknown data encode");
+        if kv_data_encode != config_data_encode {
+            // Check if there are only TiDB data in the engine
+            for cf in ALL_CFS {
+                for (start, end) in keys::DATA_TIDB_RANGES_COMPLEMENT {
+                    let mut unexpected_data_key = None;
+                    kv.scan_cf(
+                        cf,
+                        &keys::data_key(start),
+                        &keys::data_key(end),
+                        false,
+                        |key, _| {
+                            unexpected_data_key = Some(key.to_vec());
+                            Ok(false)
+                        },
+                    )?;
+                    if let Some(unexpected_data_key) = unexpected_data_key {
+                        error!(
+                            "unable to switch data encode (triggered by switching storage.api_version)";
+                            "current" => ?kv_data_encode,
+                            "target" => ?config_data_encode,
+                            "found data key that is not written by TiDB" => log_wrappers::hex_encode_upper(unexpected_data_key.clone()),
+                        );
+                        return Err(box_err!(
+                            "unable to switch data encode (triggered by switching storage.api_version) from {:?} to {:?} \
+                            because found data key that is not written by TiDB: {:?}",
+                            kv_data_encode,
+                            config_data_encode,
+                            log_wrappers::hex_encode_upper(unexpected_data_key)
+                        ));
+                    }
+                }
+            }
+            // Check completed. Switch the encode flag.
+            kv.put_msg(
+                keys::DATA_ENCODE_KEY,
+                &Int32Value {
+                    value: config_data_encode.value(),
+                    ..Default::default()
+                },
+            )?;
+        }
+        Ok(())
     }
 
     /// Get value of the given key from a snapshot.
@@ -2262,7 +2327,7 @@ mod tests {
     use engine_traits::{ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
     use errors::extract_key_error;
     use futures::executor::block_on;
-    use kvproto::kvrpcpb::{CommandPri, Op};
+    use kvproto::kvrpcpb::{ApiVersion, CommandPri, Op};
     use std::{
         sync::{
             atomic::{AtomicBool, Ordering},
