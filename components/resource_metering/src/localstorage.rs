@@ -2,8 +2,8 @@
 
 use crate::{utils, SharedTagPtr};
 
-use std::sync::Mutex;
 use std::cell::Cell;
+use std::sync::Mutex;
 
 use crossbeam::channel::Sender;
 use lazy_static::lazy_static;
