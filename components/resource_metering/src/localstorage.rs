@@ -3,10 +3,10 @@
 use crate::{utils, SharedTagPtr};
 
 use std::sync::Mutex;
+use std::cell::Cell;
 
 use crossbeam::channel::Sender;
 use lazy_static::lazy_static;
-use std::cell::Cell;
 
 lazy_static! {
     /// `STORAGE_CHANS` is used to transfer the necessary thread registration events.
