@@ -27,9 +27,15 @@ pub const DATA_PREFIX: u8 = b'z';
 pub const DATA_PREFIX_KEY: &[u8] = &[DATA_PREFIX];
 pub const DATA_MIN_KEY: &[u8] = &[DATA_PREFIX];
 pub const DATA_MAX_KEY: &[u8] = &[DATA_PREFIX + 1];
-pub const DATA_TIDB_RANGES: &[(&[u8], &[u8])] = &[(b"m", b"o"), (b"t", b"u")];
-pub const DATA_TIDB_RANGES_COMPLEMENT: &[(&[u8], &[u8])] =
-    &[(b"", b"m"), (b"o", b"t"), (b"u", b"")];
+pub const DATA_TIDB_RANGES: &[(&[u8], &[u8])] = &[
+    (&[DATA_PREFIX, b'm'], &[DATA_PREFIX, b'm' + 1]),
+    (&[DATA_PREFIX, b't'], &[DATA_PREFIX, b't' + 1]),
+];
+pub const DATA_TIDB_RANGES_COMPLEMENT: &[(&[u8], &[u8])] = &[
+    (&[DATA_PREFIX], &[DATA_PREFIX, b'm']),
+    (&[DATA_PREFIX, b'm' + 1], &[DATA_PREFIX, b't']),
+    (&[DATA_PREFIX, b't' + 1], &[DATA_PREFIX]),
+];
 
 // Following keys are all local keys, so the first byte must be 0x01.
 pub const STORE_IDENT_KEY: &[u8] = &[LOCAL_PREFIX, 0x01];

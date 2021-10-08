@@ -87,7 +87,8 @@ use kvproto::kvrpcpb::{
 };
 use kvproto::pdpb::QueryKind;
 use kvproto::raft_serverpb::DataEncode;
-use protobuf::well_known_types::Int32Value;use protobuf::ProtobufEnum;
+use protobuf::well_known_types::Int32Value;
+use protobuf::ProtobufEnum;
 use raftstore::store::util::build_key_range;
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;

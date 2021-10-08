@@ -117,12 +117,9 @@ impl Config {
 
 mod api_version_serde {
     use kvproto::kvrpcpb::ApiVersion;
-    use serde::{Deserializer, Serializer, Deserialize};
+    use serde::{Deserialize, Deserializer, Serializer};
 
-    pub fn serialize<S>(
-        value: &ApiVersion,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(value: &ApiVersion, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
@@ -132,9 +129,7 @@ mod api_version_serde {
         })
     }
 
-    pub fn deserialize<'de, D>(
-        deserializer: D,
-    ) -> Result<ApiVersion, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<ApiVersion, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -142,7 +137,12 @@ mod api_version_serde {
         Ok(match value {
             1 => ApiVersion::V1,
             2 => ApiVersion::V2,
-            _ => return Err(serde::de::Error::custom(format!("unknown storage.api_version: {}", value))),
+            _ => {
+                return Err(serde::de::Error::custom(format!(
+                    "unknown storage.api_version: {}",
+                    value
+                )));
+            }
         })
     }
 }
