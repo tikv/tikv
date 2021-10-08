@@ -248,7 +248,7 @@ mod tests {
                 assert_eq!(guard._tag.infos, tag.infos);
                 STORAGE.with(|s| {
                     let local_tag = s.shared_ptr.take();
-                    assert!(matches!(local_tag, Some(_)));
+                    assert!(local_tag.is_some());
                     let local_tag = local_tag.unwrap();
                     assert_eq!(local_tag.infos, tag.infos);
                     assert_eq!(local_tag.infos, guard._tag.infos);
