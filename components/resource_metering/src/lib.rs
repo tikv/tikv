@@ -258,7 +258,7 @@ mod tests {
             }
             STORAGE.with(|s| {
                 let local_tag = s.shared_ptr.take();
-                assert!(matches!(local_tag, None));
+                assert!(local_tag.is_none());
             });
         })
         .join()
