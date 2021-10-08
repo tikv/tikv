@@ -901,6 +901,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.config.resource_metering.clone(),
             reporter_scheduler.clone(),
             resource_metering::init_recorder(
+                self.config.resource_metering.enabled,
                 self.config.resource_metering.precision.as_millis(),
                 reporter_scheduler,
             ),

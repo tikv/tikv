@@ -62,6 +62,7 @@ impl TestSuite {
                 resource_metering_cfg.clone(),
                 scheduler.clone(),
                 init_recorder(
+                    resource_metering_cfg.enabled,
                     resource_metering_cfg.precision.as_millis(),
                     scheduler.clone(),
                 ),

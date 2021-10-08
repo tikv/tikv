@@ -208,6 +208,7 @@ where
 
 /// Builder for [Recorder].
 pub struct RecorderBuilder {
+    enable: bool,
     precision_ms: Arc<AtomicU64>,
     recorders: Vec<Box<dyn SubRecorder + Send>>,
 }
@@ -215,6 +216,7 @@ pub struct RecorderBuilder {
 impl Default for RecorderBuilder {
     fn default() -> Self {
         Self {
+            enable: false,
             precision_ms: Arc::new(AtomicU64::new(1000)),
             recorders: Vec::new(),
         }
@@ -222,6 +224,12 @@ impl Default for RecorderBuilder {
 }
 
 impl RecorderBuilder {
+    /// Sets whether to start recorder.
+    pub fn enable(mut self, enable: bool) -> Self {
+        self.enable = enable;
+        self
+    }
+
     /// Sets the precision_ms parameter of [Recorder].
     pub fn precision_ms(mut self, precision_ms: Arc<AtomicU64>) -> Self {
         self.precision_ms = precision_ms;
@@ -242,7 +250,7 @@ impl RecorderBuilder {
     where
         C: Collector<Arc<RawRecords>> + Send + 'static,
     {
-        let pause = Arc::new(AtomicBool::new(true));
+        let pause = Arc::new(AtomicBool::new(!self.enable));
         let precision_ms = self.precision_ms.clone();
         let (tx, rx) = unbounded();
         register_storage_chan_tx(tx);
@@ -332,8 +340,13 @@ impl RecorderHandle {
 /// Constructs a default [Recorder], spawn it and return the corresponding [RecorderHandle].
 ///
 /// This function is intended to simplify external use.
-pub fn init_recorder(precision_ms: u64, scheduler: Scheduler<Task>) -> RecorderHandle {
+pub fn init_recorder(
+    enable: bool,
+    precision_ms: u64,
+    scheduler: Scheduler<Task>,
+) -> RecorderHandle {
     RecorderBuilder::default()
+        .enable(enable)
         .precision_ms(Arc::new(AtomicU64::new(precision_ms)))
         .add_sub_recorder(Box::new(CpuRecorder::default()))
         .spawn(RawRecordsCollector::new(scheduler))
