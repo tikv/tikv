@@ -157,7 +157,7 @@ mod tests {
             max_resource_groups: 2000,
             precision: ReadableDuration::secs(1),
         };
-        assert!(matches!(cfg.validate(), Err(_)));
+        assert!(cfg.validate().is_err());
         let cfg = Config {
             enabled: false,
             agent_address: "127.0.0.1:6666".to_string(),
