@@ -12,7 +12,6 @@ use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::str::{self, FromStr};
-use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::thread;
@@ -105,7 +104,7 @@ where
             .on_thread_stop(|| debug!("stopping status server"))
             .build()?;
 
-        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let (tx, rx) = oneshot::channel::<()>();
         Ok(StatusServer {
             thread_pool,
             tx,
@@ -141,7 +140,7 @@ where
         Ok(response)
     }
 
-    fn activate_heap_prof(req: Request<Body>, runtime: &Handle) -> hyper::Result<Response<Body>> {
+    async fn activate_heap_prof(req: Request<Body>) -> hyper::Result<Response<Body>> {
         let query = req.uri().query().unwrap_or("");
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
 
@@ -160,21 +159,15 @@ where
             .map_ok(|_| ())
             .map_err(|_| TIMER_CANCELED.to_owned())
             .into_stream();
-        let (tx, rx) = mpsc::sync_channel(1);
-        let callback = move || tx.send(()).unwrap();
-        let res = runtime.spawn(activate_heap_profile(period, callback));
-        match rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(_) => {
-                let msg = "activate heap profile success";
-                Ok(make_response(StatusCode::OK, msg))
-            }
-            Err(RecvTimeoutError::Disconnected) => {
-                let errmsg = format!("{:?}", block_on(res).unwrap());
-                Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, errmsg))
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                Ok(make_response(StatusCode::REQUEST_TIMEOUT, "timeout"))
-            }
+        let (tx, rx) = oneshot::channel();
+        let callback = move || tx.send(()).unwrap_or_default();
+        let res = Handle::current().spawn(activate_heap_profile(period, callback));
+        if rx.await.is_ok() {
+            let msg = "activate heap profile success";
+            Ok(make_response(StatusCode::OK, msg))
+        } else {
+            let errmsg = format!("{:?}", res.await);
+            Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, errmsg))
         }
     }
 
@@ -615,14 +608,12 @@ where
         let security_config = self.security_config.clone();
         let cfg_controller = self.cfg_controller.clone();
         let router = self.router.clone();
-        let thread_pool = self.thread_pool.handle().clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
             let security_config = security_config.clone();
             let cfg_controller = cfg_controller.clone();
             let router = router.clone();
-            let thread_pool = thread_pool.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -630,7 +621,6 @@ where
                     let security_config = security_config.clone();
                     let cfg_controller = cfg_controller.clone();
                     let router = router.clone();
-                    let thread_pool = thread_pool.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -665,7 +655,7 @@ where
                             (Method::GET, "/status") => Ok(Response::default()),
                             (Method::GET, "/debug/pprof/heap_list") => Self::list_heap_prof(req),
                             (Method::GET, "/debug/pprof/heap_activate") => {
-                                Self::activate_heap_prof(req, &thread_pool)
+                                Self::activate_heap_prof(req).await
                             }
                             (Method::GET, "/debug/pprof/heap_deactivate") => {
                                 Self::deactivate_heap_prof(req)

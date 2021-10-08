@@ -5365,7 +5365,6 @@ dependencies = [
  "fxhash",
  "lazy_static",
  "libc 0.2.100",
- "log",
  "mimalloc",
  "snmalloc-rs",
  "tcmalloc",
