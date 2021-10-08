@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::metrics::{tls_collect_rate_limiter_request_wait, RATE_LIMITER_MAX_BYTES_PER_SEC};
+use super::thread_io::fetch_io_bytes;
 use super::{IOOp, IOPriority, IOType};
 
 use std::str::FromStr;
@@ -487,6 +488,13 @@ impl IORateLimiter {
     /// request can not be satisfied, the call is blocked. Granted token can be
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
+        if let Some(stats) = &self.stats {
+            let bytes = fetch_io_bytes(io_type);
+            match io_op {
+                IOOp::Read => stats.record(io_type, io_op, bytes.read as usize),
+                IOOp::Write => stats.record(io_type, io_op, bytes.write as usize),
+            }
+        }
         if self.mode.contains(io_op) {
             bytes = self.throughput_limiter.request(
                 IOPriority::unsafe_from_u32(
@@ -496,7 +504,11 @@ impl IORateLimiter {
             );
         }
         if let Some(stats) = &self.stats {
-            stats.record(io_type, io_op, bytes);
+            let bytes = fetch_io_bytes(io_type);
+            match io_op {
+                IOOp::Read => stats.record(io_type, io_op, bytes.read as usize),
+                IOOp::Write => stats.record(io_type, io_op, bytes.write as usize),
+            }
         }
         bytes
     }
@@ -506,6 +518,13 @@ impl IORateLimiter {
     /// Granted token can be less than the requested bytes, but must be greater
     /// than zero.
     pub async fn async_request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
+        if let Some(stats) = &self.stats {
+            let bytes = fetch_io_bytes(io_type);
+            match io_op {
+                IOOp::Read => stats.record(io_type, io_op, bytes.read as usize),
+                IOOp::Write => stats.record(io_type, io_op, bytes.write as usize),
+            }
+        }
         if self.mode.contains(io_op) {
             bytes = self
                 .throughput_limiter
@@ -518,13 +537,24 @@ impl IORateLimiter {
                 .await;
         }
         if let Some(stats) = &self.stats {
-            stats.record(io_type, io_op, bytes);
+            let bytes = fetch_io_bytes(io_type);
+            match io_op {
+                IOOp::Read => stats.record(io_type, io_op, bytes.read as usize),
+                IOOp::Write => stats.record(io_type, io_op, bytes.write as usize),
+            }
         }
         bytes
     }
 
     #[cfg(test)]
     fn request_with_skewed_clock(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
+        if let Some(stats) = &self.stats {
+            let bytes = fetch_io_bytes(io_type);
+            match io_op {
+                IOOp::Read => stats.record(io_type, io_op, bytes.read as usize),
+                IOOp::Write => stats.record(io_type, io_op, bytes.write as usize),
+            }
+        }
         if self.mode.contains(io_op) {
             bytes = self.throughput_limiter.request_with_skewed_clock(
                 IOPriority::unsafe_from_u32(
@@ -534,7 +564,11 @@ impl IORateLimiter {
             );
         }
         if let Some(stats) = &self.stats {
-            stats.record(io_type, io_op, bytes);
+            let bytes = fetch_io_bytes(io_type);
+            match io_op {
+                IOOp::Read => stats.record(io_type, io_op, bytes.read as usize),
+                IOOp::Write => stats.record(io_type, io_op, bytes.write as usize),
+            }
         }
         bytes
     }
