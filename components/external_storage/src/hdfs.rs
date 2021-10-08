@@ -74,7 +74,7 @@ impl ExternalStorage for HdfsStorage {
         let cmd_path = get_hdfs_bin().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::Other,
-                "Cannot fount hdfs command, please specify HADOOP_HOME",
+                "Cannot found hdfs command, please specify HADOOP_HOME",
             )
         })?;
         let remote_url = self.remote.clone().join(name).unwrap();
