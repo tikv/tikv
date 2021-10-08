@@ -252,7 +252,7 @@ mod tests {
                     let local_tag = local_tag.unwrap();
                     assert_eq!(local_tag.infos, tag.infos);
                     assert_eq!(local_tag.infos, guard._tag.infos);
-                    assert!(matches!(s.shared_ptr.swap(local_tag), None));
+                    assert!(s.shared_ptr.swap(local_tag).is_none());
                 });
                 // drop here.
             }
