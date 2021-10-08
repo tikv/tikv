@@ -17,11 +17,13 @@ fn get_hadoop_home() -> Option<String> {
     std::env::var("HADOOP_HOME").ok()
 }
 
+fn get_linux_user() -> Option<String> {
+    std::env::var("HADOOP_LINUX_USER").ok()
+}
+
 /// Returns `$HDFS_CMD` if exists, otherwise return `$HADOOP_HOME/bin/hdfs`
 fn get_hdfs_bin() -> Option<String> {
-    std::env::var("HDFS_CMD")
-        .ok()
-        .or_else(|| get_hadoop_home().map(|hadoop| format!("{}/bin/hdfs", hadoop)))
+    get_hadoop_home().map(|hadoop| format!("{}/bin/hdfs", hadoop))
 }
 
 /// Convert `hdfs:///path` to `/path`
@@ -72,15 +74,22 @@ impl ExternalStorage for HdfsStorage {
         let cmd_path = get_hdfs_bin().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::Other,
-                "Cannot fount hdfs command, please specify HADOOP_HOME or HDFS_CMD",
+                "Cannot fount hdfs command, please specify HADOOP_HOME",
             )
         })?;
-
         let remote_url = self.remote.clone().join(name).unwrap();
         let path = try_convert_to_path(&remote_url);
-        let mut hdfs_cmd = Command::new(cmd_path)
+
+        let mut cmd_with_args = vec![];
+        let user = get_linux_user();
+
+        if let Some(user) = &user {
+            cmd_with_args.extend(["sudo", "-u", &user]);
+        }
+        cmd_with_args.extend([&cmd_path, "dfs", "-put", "-", path]);
+        let mut hdfs_cmd = Command::new(&cmd_with_args[0])
             .stdin(Stdio::piped())
-            .args(["dfs", "-put", "-", path])
+            .args(&cmd_with_args[1..])
             .spawn()?;
         let stdin = hdfs_cmd.stdin.as_mut().unwrap();
 
