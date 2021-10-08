@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod mock_agent_server;
+mod mock_receiver_server;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use futures::{select, FutureExt};
 use grpcio::{Environment, Server};
 use kvproto::kvrpcpb::Context;
 use kvproto::resource_usage_agent::CpuTimeRecord;
-use mock_agent_server::MockAgentServer;
+use mock_receiver_server::MockReceiverServer;
 use resource_metering::cpu::recorder::{init_recorder, TEST_TAG_PREFIX};
 use resource_metering::reporter::{ResourceMeteringReporter, Task};
 use resource_metering::{Config, ConfigManager};
@@ -25,7 +25,7 @@ use tokio::runtime::{self, Runtime};
 use txn_types::{Key, TimeStamp};
 
 pub struct TestSuite {
-    agent_server: Option<Server>,
+    receiver_server: Option<Server>,
 
     storage: Storage<RocksEngine, DummyLockManager>,
     reporter: Option<Box<LazyWorker<Task>>>,
@@ -54,7 +54,7 @@ impl TestSuite {
         let scheduler = reporter.scheduler();
 
         let (mut tikv_cfg, dir) = TiKvConfig::with_tmp().unwrap();
-        tikv_cfg.resource_metering.report_agent_interval = ReadableDuration::secs(5);
+        tikv_cfg.resource_metering.report_receiver_interval = ReadableDuration::secs(5);
 
         let resource_metering_cfg = tikv_cfg.resource_metering.clone();
         let cfg_controller = ConfigController::new(tikv_cfg);
@@ -81,7 +81,7 @@ impl TestSuite {
             .unwrap();
 
         Self {
-            agent_server: None,
+            receiver_server: None,
             storage,
             reporter: Some(reporter),
             cfg_controller,
@@ -101,10 +101,10 @@ impl TestSuite {
             .unwrap();
     }
 
-    pub fn cfg_agent_address(&self, addr: impl Into<String>) {
+    pub fn cfg_receiver_address(&self, addr: impl Into<String>) {
         let addr = addr.into();
         self.cfg_controller
-            .update_config("resource-metering.agent-address", &addr)
+            .update_config("resource-metering.receiver-address", &addr)
             .unwrap();
     }
 
@@ -115,10 +115,10 @@ impl TestSuite {
             .unwrap();
     }
 
-    pub fn cfg_report_agent_interval(&self, interval: impl Into<String>) {
+    pub fn cfg_report_receiver_interval(&self, interval: impl Into<String>) {
         let interval = interval.into();
         self.cfg_controller
-            .update_config("resource-metering.report-agent-interval", &interval)
+            .update_config("resource-metering.report-receiver-interval", &interval)
             .unwrap();
     }
 
@@ -135,18 +135,18 @@ impl TestSuite {
         self.cfg_controller.get_current().resource_metering.clone()
     }
 
-    pub fn start_agent_at(&mut self, port: u16) {
-        assert!(self.agent_server.is_none());
+    pub fn start_receiver_at(&mut self, port: u16) {
+        assert!(self.receiver_server.is_none());
 
-        let mut agent_server =
-            MockAgentServer::new(self.tx.clone()).build_server(port, self.env.clone());
-        agent_server.start();
-        self.agent_server = Some(agent_server);
+        let mut receiver_server =
+            MockReceiverServer::new(self.tx.clone()).build_server(port, self.env.clone());
+        receiver_server.start();
+        self.receiver_server = Some(receiver_server);
     }
 
-    pub fn shutdown_agent(&mut self) {
-        if let Some(mut agent) = self.agent_server.take() {
-            self.rt.block_on(agent.shutdown()).unwrap();
+    pub fn shutdown_receiver(&mut self) {
+        if let Some(mut receiver) = self.receiver_server.take() {
+            self.rt.block_on(receiver.shutdown()).unwrap();
         }
     }
 
@@ -211,21 +211,21 @@ impl TestSuite {
         res
     }
 
-    pub fn flush_agent(&self) {
+    pub fn flush_receiver(&self) {
         let _ = self
             .rx
-            .recv_timeout(self.get_current_cfg().report_agent_interval.0);
+            .recv_timeout(self.get_current_cfg().report_receiver_interval.0);
     }
 
     pub fn reset(&mut self) {
         self.cfg_enabled(false);
-        self.cfg_agent_address("");
+        self.cfg_receiver_address("");
         self.cancel_workload();
-        self.flush_agent();
+        self.flush_receiver();
         self.cfg_precision("1s");
-        self.cfg_report_agent_interval("5s");
+        self.cfg_report_receiver_interval("5s");
         self.cfg_max_resource_groups(5000);
-        self.shutdown_agent();
+        self.shutdown_receiver();
     }
 }
 

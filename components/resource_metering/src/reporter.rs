@@ -94,7 +94,7 @@ impl ResourceMeteringReporter {
             let cb = ChannelBuilder::new(self.env.clone())
                 .keepalive_time(Duration::from_secs(10))
                 .keepalive_timeout(Duration::from_secs(3));
-            cb.connect(&self.config.agent_address)
+            cb.connect(&self.config.receiver_address)
         };
         self.client = Some(ResourceUsageAgentClient::new(channel));
         if self.cpu_records_collector.is_none() {
@@ -112,12 +112,12 @@ impl Runnable for ResourceMeteringReporter {
         match task {
             Task::ConfigChange(new_config) => {
                 let old_config_enabled = self.config.enabled;
-                let old_config_agent_address = self.config.agent_address.clone();
+                let old_config_receiver_address = self.config.receiver_address.clone();
                 self.config = new_config;
                 if !self.config.should_report() {
                     self.client.take();
                     self.cpu_records_collector.take();
-                } else if self.config.agent_address != old_config_agent_address
+                } else if self.config.receiver_address != old_config_receiver_address
                     || self.config.enabled != old_config_enabled
                 {
                     self.init_client();
@@ -235,13 +235,13 @@ impl RunnableWithTimer for ResourceMeteringReporter {
                     });
                 }
                 Err(err) => {
-                    warn!("failed to connect resource usage agent"; "error" => ?err);
+                    warn!("failed to connect resource usage receiver"; "error" => ?err);
                 }
             }
         }
     }
 
     fn get_interval(&self) -> Duration {
-        self.config.report_agent_interval.0
+        self.config.report_receiver_interval.0
     }
 }
