@@ -78,7 +78,9 @@ use crate::storage::{
     types::StorageCallbackType,
 };
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, Iterable, Peekable, SyncMutable, ALL_CFS, CF_DEFAULT, DATA_CFS};
+use engine_traits::{
+    CfName, IterOptions, Iterable, Peekable, SyncMutable, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_LEN,
+};
 use futures::prelude::*;
 use kvproto::kvrpcpb::ApiVersion;
 use kvproto::kvrpcpb::{
@@ -98,7 +100,10 @@ use std::{
     iter,
     sync::{atomic, Arc},
 };
-use tikv_util::time::{Instant, ThreadReadId};
+use tikv_util::{
+    keybuilder::KeyBuilder,
+    time::{Instant, ThreadReadId},
+};
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -338,23 +343,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .unwrap_or_default()
             .value;
         let kv_data_encode = DataEncode::from_i32(kv_data_encode).expect("unknown data encode");
-        dbg!(kv_data_encode, config_data_encode);
         if kv_data_encode != config_data_encode {
             // Check if there are only TiDB data in the engine
-            for cf in ALL_CFS {
+            let snapshot = engine.snapshot(Default::default()).unwrap();
+            for cf in DATA_CFS {
                 for (start, end) in keys::DATA_TIDB_RANGES_COMPLEMENT {
-                    let mut unexpected_data_key = None;
-                    kv.scan_cf(
-                        cf,
-                        &keys::data_key(start),
-                        &keys::data_key(end),
-                        false,
-                        |key, _| {
-                            unexpected_data_key = Some(key.to_vec());
-                            Ok(false)
-                        },
-                    )?;
-                    if let Some(unexpected_data_key) = unexpected_data_key {
+                    let start = KeyBuilder::from_vec(keys::data_key(start), DATA_KEY_PREFIX_LEN, 0);
+                    let end = KeyBuilder::from_vec(keys::data_key(end), DATA_KEY_PREFIX_LEN, 0);
+                    let iter_opt = IterOptions::new(Some(start), Some(end), false);
+                    let mut iter = snapshot.iter_cf(cf, iter_opt)?;
+                    iter.seek_to_first()?;
+                    if iter.valid()? {
+                        let unexpected_data_key = iter.key();
                         error!(
                             "unable to switch data encode (triggered by switching storage.api_version)";
                             "current" => ?kv_data_encode,
@@ -7080,9 +7080,14 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         // Write TiDB data.
-        let tidb_key = b"m_tidb_data";
-        must_prewrite_put(&engine, tidb_key, b"val", tidb_key, 10);
-        must_commit(&engine, tidb_key, 10, 11);
+        let tidb_key = keys::data_key(b"m_tidb_data");
+        engine
+            .put(
+                &Context::default(),
+                Key::from_raw(&tidb_key),
+                b"val".to_vec(),
+            )
+            .unwrap();
 
         // Default API Version is V1, should be ablle to swith to V2.
         let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
@@ -7105,9 +7110,14 @@ mod tests {
         drop(storage);
 
         // Write non-TiDB data.
-        let non_tidb_key = b"k1";
-        must_prewrite_put(&engine, non_tidb_key, b"val", non_tidb_key, 20);
-        must_commit(&engine, non_tidb_key, 20, 21);
+        let non_tidb_key = keys::data_key(b"k1");
+        engine
+            .put(
+                &Context::default(),
+                Key::from_raw(&non_tidb_key),
+                b"val".to_vec(),
+            )
+            .unwrap();
 
         // Should not able to switch from V1 to V2 now.
         assert!(
@@ -7132,9 +7142,14 @@ mod tests {
         drop(storage);
 
         // Write non-TiDB data.
-        let non_tidb_key = b"k1";
-        must_prewrite_put(&engine, non_tidb_key, b"val", non_tidb_key, 20);
-        must_commit(&engine, non_tidb_key, 20, 21);
+        let non_tidb_key = keys::data_key(b"k1");
+        engine
+            .put(
+                &Context::default(),
+                Key::from_raw(&non_tidb_key),
+                b"val".to_vec(),
+            )
+            .unwrap();
 
         // Should not able to switch from V2 to V1 now.
         assert!(
