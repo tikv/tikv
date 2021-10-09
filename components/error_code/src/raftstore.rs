@@ -27,6 +27,7 @@ define_error_codes!(
     SERVER_IS_BUSY => ("ServerIsBusy", "", ""),
     DATA_IS_NOT_READY => ("DataIsNotReady", "", ""),
     DEADLINE_EXCEEDED => ("DeadlineExceeded", "", ""),
+    RECOVERY_IN_PROGRESS => ("RecoveryInProgress", "", ""),
 
     SNAP_ABORT => ("SnapAbort", "", ""),
     SNAP_TOO_MANY => ("SnapTooMany", "", ""),
@@ -59,6 +60,8 @@ impl ErrorCodeExt for errorpb::Error {
             PROPOSAL_IN_MERGING_MODE
         } else if self.has_data_is_not_ready() {
             DATA_IS_NOT_READY
+        } else if self.has_data_is_not_ready() {
+            RECOVERY_IN_PROGRESS
         } else {
             UNKNOWN
         }

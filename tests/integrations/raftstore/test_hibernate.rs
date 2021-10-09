@@ -12,6 +12,24 @@ use test_raftstore::*;
 use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
+fn test_force_leader() {
+    let mut cluster = new_node_cluster(0, 5);
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.stop_node(3);
+    cluster.stop_node(4);
+    cluster.stop_node(5);
+
+    assert!(cluster.put(b"k2", b"v2").is_err());
+    cluster.force_leader();
+
+    cluster.must_put(b"k3", b"v3");
+    cluster.stop_nod
+}
+
 #[test]
 fn test_proposal_prevent_sleep() {
     let mut cluster = new_node_cluster(0, 3);

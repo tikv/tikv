@@ -291,6 +291,8 @@ where
         callback: Callback<SK>,
     },
     LeaderCallback(Callback<SK>),
+    EnterForceLeaderState,
+    ExitForceLeaderState,
 }
 
 /// Message that will be sent to a peer.

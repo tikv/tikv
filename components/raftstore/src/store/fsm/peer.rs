@@ -590,6 +590,12 @@ where
                         continue;
                     }
 
+                    if self.fsm.peer.force_leader {
+                        // in force leader state, forbid requests to make the recovery progress less error-prone
+                        cmd.callback.invoke_with_response(new_error(Error::RecoveryInProgress(self.region_id())));
+                        continue;
+                    }
+
                     let req_size = cmd.request.compute_size();
                     if self.ctx.cfg.cmd_batch
                         && self.fsm.batch_req_builder.can_batch(&cmd.request, req_size)
@@ -978,8 +984,29 @@ where
             } => self.on_capture_change(cmd, region_epoch, callback),
             SignificantMsg::LeaderCallback(cb) => {
                 self.on_leader_callback(cb);
-            }
+            },
+            SignificantMsg::EnterForceLeaderState => self.on_enter_force_leader(),
+            SignificantMsg::ExitForceLeaderState => self.on_exit_force_leader(),
         }
+    }
+
+    fn on_enter_force_leader(&mut self) {
+        self.fsm.peer.force_leader = true;
+
+        // become candidate first to increase term
+        self.fsm.peer.raft_group.raft.become_candidate();
+        self.fsm.peer.raft_group.raft.become_leader();
+
+        // append an empty entry to truncate logs that are not committed
+        let mut entry = raft::eraftpb::Entry::default();
+        entry.term = self.fsm.peer.term();
+        entry.index = self.fsm.peer.raft_group.raft.raft_log.committed + 1;
+        self.fsm.peer.raft_group.raft.raft_log.append(&[entry]);
+    }
+
+    fn on_exit_force_leader(&mut self) {
+        self.fsm.peer.force_leader = false;
+        self.fsm.peer.raft_group.raft.become_follower(self.fsm.peer.term(), raft::INVALID_ID);
     }
 
     fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64, _send_time: TiInstant) {
@@ -1037,6 +1064,13 @@ where
                 self.register_split_region_check_tick();
                 self.fsm.peer.heartbeat_pd(self.ctx);
                 self.register_pd_heartbeat_tick();
+            }
+
+            if self.fsm.peer.force_leader {
+                if ss.raft_state == StateRole::Follower {
+                    // for some reason, it's not leader anymore
+                    self.on_enter_force_leader();
+                }
             }
         }
     }

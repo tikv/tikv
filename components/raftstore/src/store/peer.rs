@@ -427,6 +427,8 @@ where
     /// If a snapshot is being applied asynchronously, messages should not be sent.
     pending_messages: Vec<eraftpb::Message>,
 
+    pub force_leader: bool,
+
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
     pub peers_start_pending_time: Vec<(u64, Instant)>,
@@ -586,6 +588,7 @@ where
             leader_unreachable: false,
             pending_remove: false,
             should_wake_up: false,
+            force_leader: false,
             pending_merge_state: None,
             want_rollback_merge_peers: HashSet::default(),
             pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),

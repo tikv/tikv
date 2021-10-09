@@ -58,6 +58,9 @@ pub enum Error {
     #[error("store ids {0:?}, errmsg {1}")]
     DiskFull(Vec<u64>, String),
 
+    #[error("region {0} is the recovery progress")]
+    RecoveryInProgress(u64),
+
     #[error(
         "key {} is not in region key range [{}, {}) for region {}",
         log_wrappers::Value::key(.0),
@@ -273,6 +276,7 @@ impl ErrorCodeExt for Error {
             Error::RegionNotFound(_) => error_code::raftstore::REGION_NOT_FOUND,
             Error::NotLeader(..) => error_code::raftstore::NOT_LEADER,
             Error::DiskFull(..) => error_code::raftstore::DISK_FULL,
+            Error::RecoveryInProgress(..) => error_code::raftstore::RECOVERY_IN_PROGRESS,
             Error::StaleCommand => error_code::raftstore::STALE_COMMAND,
             Error::RegionNotInitialized(_) => error_code::raftstore::REGION_NOT_INITIALIZED,
             Error::KeyNotInRegion(..) => error_code::raftstore::KEY_NOT_IN_REGION,
