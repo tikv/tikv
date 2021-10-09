@@ -109,9 +109,6 @@ use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Val
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
-pub const API_V1: usize = 1;
-pub const API_V2: usize = 1;
-
 /// [`Storage`](Storage) implements transactional KV APIs and raw KV APIs on a given [`Engine`].
 /// An [`Engine`] provides low level KV functionality. [`Engine`] has multiple implementations.
 /// When a TiKV server is running, a [`RaftKv`](crate::server::raftkv::RaftKv) will be the
@@ -2323,7 +2320,7 @@ mod tests {
     use crate::storage::txn::tests::must_rollback;
     use crate::storage::{
         config::BlockCacheConfig,
-        kv::{Error as EngineError, ErrorInner as EngineErrorInner},
+        kv::{Error as KvError, ErrorInner as EngineErrorInner},
         lock_manager::{Lock, WaitTimeout},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         raw::ttl::current_ts,
@@ -2465,9 +2462,7 @@ mod tests {
                 ),
                 expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                        box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(
-                            ..,
-                        ))),
+                        box mvcc::ErrorInner::Kv(KvError(box EngineErrorInner::Request(..))),
                     ))))) => {}
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
@@ -2477,7 +2472,7 @@ mod tests {
         expect_error(
             |e| match e {
                 Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                    box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(..))),
+                    box mvcc::ErrorInner::Kv(KvError(box EngineErrorInner::Request(..))),
                 ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
@@ -2486,7 +2481,7 @@ mod tests {
         expect_error(
             |e| match e {
                 Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                    box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(..))),
+                    box mvcc::ErrorInner::Kv(KvError(box EngineErrorInner::Request(..))),
                 ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
@@ -2504,7 +2499,7 @@ mod tests {
         expect_error(
             |e| match e {
                 Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                    box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(..))),
+                    box mvcc::ErrorInner::Kv(KvError(box EngineErrorInner::Request(..))),
                 ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
@@ -2527,9 +2522,7 @@ mod tests {
             expect_error(
                 |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                        box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(
-                            ..,
-                        ))),
+                        box mvcc::ErrorInner::Kv(KvError(box EngineErrorInner::Request(..))),
                     ))))) => {}
                     e => panic!("unexpected error chain: {:?}", e),
                 },

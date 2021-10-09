@@ -274,7 +274,7 @@ impl<E: Engine> AssertionStorage<E> {
     fn expect_not_leader_or_stale_command(&self, err: storage::Error) {
         match err {
             StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
-                MvccError(box MvccErrorInner::Engine(KvError(box KvErrorInner::Request(ref e)))),
+                MvccError(box MvccErrorInner::Kv(KvError(box KvErrorInner::Request(ref e)))),
             ))))
             | StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Engine(
                 KvError(box KvErrorInner::Request(ref e)),

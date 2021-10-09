@@ -13,7 +13,7 @@ use tikv_util::deadline::DeadlineError;
 use txn_types::{KvPair, TimeStamp};
 
 use crate::storage::{
-    kv::{self, Error as EngineError, ErrorInner as EngineErrorInner},
+    kv::{self, Error as KvError, ErrorInner as KvErrorInner},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     Result,
@@ -185,12 +185,12 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
     match *res {
         // TODO: use `Error::cause` instead.
-        Err(Error(box ErrorInner::Kv(EngineError(box EngineErrorInner::Request(ref e)))))
-        | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
-            box EngineErrorInner::Request(ref e),
+        Err(Error(box ErrorInner::Kv(KvError(box KvErrorInner::Request(ref e)))))
+        | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
+            box KvErrorInner::Request(ref e),
         ))))))
         | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(ref e))),
+            box MvccErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))),
         )))))) => Some(e.to_owned()),
         Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::MaxTimestampNotSynced {
             ..
@@ -246,10 +246,10 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::KeyIsLocked(info),
         )))))
-        | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
-            box EngineErrorInner::KeyIsLocked(info),
+        | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
+            box KvErrorInner::KeyIsLocked(info),
         )))))
-        | Error(box ErrorInner::Kv(EngineError(box EngineErrorInner::KeyIsLocked(info)))) => {
+        | Error(box ErrorInner::Kv(KvError(box KvErrorInner::KeyIsLocked(info)))) => {
             key_error.set_locked(info.clone());
         }
         // failed in prewrite or pessimistic lock
