@@ -60,7 +60,7 @@ impl Client for GrpcClient {
         let call_opt = CallOption::default().timeout(Duration::from_secs(2));
         let call = client.report_opt(call_opt);
         if let Err(err) = &call {
-            warn!("failed to connect to agent"; "error" => ?err);
+            warn!("failed to connect to receiver"; "error" => ?err);
             return;
         }
         let (mut tx, rx) = call.unwrap();
