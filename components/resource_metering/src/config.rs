@@ -13,7 +13,7 @@ use tikv_util::worker::Scheduler;
 const MIN_PRECISION: ReadableDuration = ReadableDuration::secs(1);
 const MAX_PRECISION: ReadableDuration = ReadableDuration::hours(1);
 const MAX_MAX_RESOURCE_GROUPS: usize = 5_000;
-const MIN_REPORT_AGENT_INTERVAL: ReadableDuration = ReadableDuration::secs(5);
+const MIN_REPORT_RECEIVER_INTERVAL: ReadableDuration = ReadableDuration::secs(5);
 
 /// Public configuration of resource metering module.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
@@ -26,10 +26,10 @@ pub struct Config {
     pub enabled: bool,
 
     /// Data reporting destination address.
-    pub agent_address: String,
+    pub receiver_address: String,
 
     /// Data reporting interval.
-    pub report_agent_interval: ReadableDuration,
+    pub report_receiver_interval: ReadableDuration,
 
     /// The maximum number of groups by [ResourceMeteringTag].
     ///
@@ -44,8 +44,8 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             enabled: false,
-            agent_address: "".to_string(),
-            report_agent_interval: ReadableDuration::minutes(1),
+            receiver_address: "".to_string(),
+            report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
             precision: ReadableDuration::secs(1),
         }
@@ -55,8 +55,8 @@ impl Default for Config {
 impl Config {
     /// Check whether the configuration is legal.
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if !self.agent_address.is_empty() {
-            tikv_util::config::check_addr(&self.agent_address)?;
+        if !self.receiver_address.is_empty() {
+            tikv_util::config::check_addr(&self.receiver_address)?;
         }
         if self.precision < MIN_PRECISION || self.precision > MAX_PRECISION {
             return Err(format!(
@@ -72,12 +72,12 @@ impl Config {
             )
             .into());
         }
-        if self.report_agent_interval < MIN_REPORT_AGENT_INTERVAL
-            || self.report_agent_interval > self.precision * 500
+        if self.report_receiver_interval < MIN_REPORT_RECEIVER_INTERVAL
+            || self.report_receiver_interval > self.precision * 500
         {
             return Err(format!(
                 "report interval seconds must between {} and {}",
-                MIN_REPORT_AGENT_INTERVAL,
+                MIN_REPORT_RECEIVER_INTERVAL,
                 self.precision * 500
             )
             .into());
@@ -144,32 +144,32 @@ mod tests {
         assert!(cfg.validate().is_ok()); // Empty address is allowed.
         let cfg = Config {
             enabled: false,
-            agent_address: "127.0.0.1:6666".to_string(),
-            report_agent_interval: ReadableDuration::minutes(1),
+            receiver_address: "127.0.0.1:6666".to_string(),
+            report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
             precision: ReadableDuration::secs(1),
         };
         assert!(cfg.validate().is_ok());
         let cfg = Config {
             enabled: false,
-            agent_address: "127.0.0.1:6666".to_string(),
-            report_agent_interval: ReadableDuration::days(999), // invalid
+            receiver_address: "127.0.0.1:6666".to_string(),
+            report_receiver_interval: ReadableDuration::days(999), // invalid
             max_resource_groups: 2000,
             precision: ReadableDuration::secs(1),
         };
         assert!(cfg.validate().is_err());
         let cfg = Config {
             enabled: false,
-            agent_address: "127.0.0.1:6666".to_string(),
-            report_agent_interval: ReadableDuration::minutes(1),
+            receiver_address: "127.0.0.1:6666".to_string(),
+            report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: usize::MAX, // invalid
             precision: ReadableDuration::secs(1),
         };
         assert!(cfg.validate().is_err());
         let cfg = Config {
             enabled: false,
-            agent_address: "127.0.0.1:6666".to_string(),
-            report_agent_interval: ReadableDuration::minutes(1),
+            receiver_address: "127.0.0.1:6666".to_string(),
+            report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
             precision: ReadableDuration::days(999), // invalid
         };

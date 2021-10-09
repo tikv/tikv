@@ -55,7 +55,7 @@ where
     }
 
     fn get_interval(&self) -> Duration {
-        self.config.report_agent_interval.0
+        self.config.report_receiver_interval.0
     }
 }
 
@@ -100,7 +100,7 @@ where
         // Whether endpoint exists or not, records should be taken in order to reset.
         let records = std::mem::take(&mut self.records);
         self.client
-            .upload_records(&self.config.agent_address, records);
+            .upload_records(&self.config.receiver_address, records);
     }
 
     fn reset(&mut self) {
@@ -132,7 +132,7 @@ impl Display for Task {
 // Helper functions.
 impl Config {
     fn should_report(&self) -> bool {
-        self.enabled && !self.agent_address.is_empty() && self.max_resource_groups != 0
+        self.enabled && !self.receiver_address.is_empty() && self.max_resource_groups != 0
     }
 }
 
@@ -163,8 +163,8 @@ mod tests {
         let mut r = Reporter::new(MockClient, Config::default(), scheduler);
         r.run(Task::ConfigChange(Config {
             enabled: false,
-            agent_address: "abc".to_string(),
-            report_agent_interval: ReadableDuration::minutes(2),
+            receiver_address: "abc".to_string(),
+            report_receiver_interval: ReadableDuration::minutes(2),
             max_resource_groups: 3000,
             precision: ReadableDuration::secs(2),
         }));
