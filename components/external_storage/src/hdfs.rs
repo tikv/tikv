@@ -84,7 +84,7 @@ impl ExternalStorage for HdfsStorage {
         let user = get_linux_user();
 
         if let Some(user) = &user {
-            cmd_with_args.extend(["sudo", "-u", &user]);
+            cmd_with_args.extend(["sudo", "-u", user]);
         }
         cmd_with_args.extend([&cmd_path, "dfs", "-put", "-", path]);
         let mut hdfs_cmd = Command::new(&cmd_with_args[0])
