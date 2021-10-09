@@ -59,15 +59,15 @@ pub struct Config {
     pub enable_ttl: bool,
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
+    #[online_config(skip)]
+    #[serde(with = "api_version_serde")]
+    pub api_version: ApiVersion,
     #[online_config(submodule)]
     pub flow_control: FlowControlConfig,
     #[online_config(submodule)]
     pub block_cache: BlockCacheConfig,
     #[online_config(submodule)]
     pub io_rate_limit: IORateLimitConfig,
-    #[online_config(skip)]
-    #[serde(with = "api_version_serde")]
-    pub api_version: ApiVersion,
 }
 
 impl Default for Config {
