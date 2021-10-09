@@ -79,7 +79,7 @@ use crate::storage::{
 };
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{
-    CfName, IterOptions, Iterable, Peekable, SyncMutable, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_LEN,
+    CfName, IterOptions, Peekable, SyncMutable, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_LEN,
 };
 use futures::prelude::*;
 use kvproto::kvrpcpb::ApiVersion;
@@ -359,7 +359,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             "unable to switch data encode (triggered by switching storage.api_version)";
                             "current" => ?kv_data_encode,
                             "target" => ?config_data_encode,
-                            "found data key that is not written by TiDB" => log_wrappers::hex_encode_upper(unexpected_data_key.clone()),
+                            "found data key that is not written by TiDB" => log_wrappers::hex_encode_upper(unexpected_data_key),
                         );
                         return Err(box_err!(
                             "unable to switch data encode (triggered by switching storage.api_version) from {:?} to {:?} \
@@ -2312,7 +2312,6 @@ mod tests {
     use super::{
         mvcc::tests::{must_unlocked, must_written},
         test_util::*,
-        txn::tests::*,
         *,
     };
 
@@ -7122,7 +7121,7 @@ mod tests {
         // Should not able to switch from V1 to V2 now.
         assert!(
             TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-                engine.clone(),
+                engine,
                 DummyLockManager {},
             )
             .set_api_version(ApiVersion::V2)
@@ -7154,7 +7153,7 @@ mod tests {
         // Should not able to switch from V2 to V1 now.
         assert!(
             TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-                engine.clone(),
+                engine,
                 DummyLockManager {},
             )
             .set_api_version(ApiVersion::V1)
