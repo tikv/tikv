@@ -1,9 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    io, path,
+    io,
+    lazy::SyncLazy,
+    path,
     process::{Command, Stdio},
     str::FromStr,
+    sync::Mutex,
 };
 
 use futures::io::AllowStdIo;
@@ -13,12 +16,31 @@ use url::Url;
 
 use crate::ExternalStorage;
 
-fn get_hadoop_home() -> Option<String> {
-    std::env::var("HADOOP_HOME").ok()
+static HADOOP_HOME: SyncLazy<Mutex<Option<String>>> = SyncLazy::new(|| Mutex::new(None));
+static HADOOP_LINUX_USER: SyncLazy<Mutex<Option<String>>> = SyncLazy::new(|| Mutex::new(None));
+
+pub fn set_hadoop_home(path: String) {
+    *HADOOP_HOME.lock().unwrap() = Some(path);
 }
 
-fn get_linux_user() -> Option<String> {
-    std::env::var("HADOOP_LINUX_USER").ok()
+fn get_hadoop_home() -> Option<String> {
+    HADOOP_HOME
+        .lock()
+        .unwrap()
+        .clone()
+        .or_else(|| std::env::var("HADOOP_HOME").ok())
+}
+
+pub fn set_hadoop_linux_user(user: String) {
+    *HADOOP_LINUX_USER.lock().unwrap() = Some(user);
+}
+
+fn get_hadoop_linux_user() -> Option<String> {
+    HADOOP_LINUX_USER
+        .lock()
+        .unwrap()
+        .clone()
+        .or_else(|| std::env::var("HADOOP_LINUX_USER").ok())
 }
 
 /// Returns `$HDFS_CMD` if exists, otherwise return `$HADOOP_HOME/bin/hdfs`
@@ -81,7 +103,7 @@ impl ExternalStorage for HdfsStorage {
         let path = try_convert_to_path(&remote_url);
 
         let mut cmd_with_args = vec![];
-        let user = get_linux_user();
+        let user = get_hadoop_linux_user();
 
         if let Some(user) = &user {
             cmd_with_args.extend(["sudo", "-u", user]);

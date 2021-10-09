@@ -2,6 +2,7 @@
 
 //! External storage support.
 //! Cloud provider backends can be found under components/cloud
+#![feature(once_cell)]
 
 #[macro_use]
 extern crate slog_global;
@@ -22,6 +23,8 @@ use tokio::time::timeout;
 
 mod hdfs;
 pub use hdfs::HdfsStorage;
+pub use hdfs::set_hadoop_home;
+pub use hdfs::set_hadoop_linux_user;
 mod local;
 pub use local::LocalStorage;
 mod noop;
