@@ -2,15 +2,16 @@
 
 use super::*;
 
-/// Collator for `gbk_bin` collation with padding behavior (trims right spaces).
-#[derive(Debug)]
-pub struct CollatorGbkBin;
+pub trait GbkCollator: 'static + std::marker::Send + std::marker::Sync + std::fmt::Debug {
+    const IS_CASE_INSENSITIVE: bool;
+    const WEIGHT_TABLE: &'static [u8; (0xffff + 1) * 2];
+}
 
-impl Collator for CollatorGbkBin {
+impl<T: GbkCollator> Collator for T {
     type Charset = CharsetGbk;
     type Weight = u16;
 
-    const IS_CASE_INSENSITIVE: bool = false;
+    const IS_CASE_INSENSITIVE: bool = T::IS_CASE_INSENSITIVE;
 
     #[inline]
     fn char_weight(ch: char) -> Self::Weight {
@@ -21,7 +22,7 @@ impl Collator for CollatorGbkBin {
             return '?' as u16;
         }
 
-        (&GBK_BIN_TABLE[r * 2..r * 2 + 2]).read_u16().unwrap()
+        (&Self::WEIGHT_TABLE[r * 2..r * 2 + 2]).read_u16().unwrap()
     }
 
     #[inline]
@@ -61,6 +62,28 @@ impl Collator for CollatorGbkBin {
     }
 }
 
+/// Collator for `gbk_bin` collation with padding behavior (trims right spaces).
+#[derive(Debug)]
+pub struct CollatorGbkBin;
+
+impl GbkCollator for CollatorGbkBin {
+    const IS_CASE_INSENSITIVE: bool = false;
+    const WEIGHT_TABLE: &'static [u8; (0xffff + 1) * 2] = GBK_BIN_TABLE;
+}
+
+/// Collator for `gbk_chinese_ci` collation with padding behavior (trims right spaces).
+#[derive(Debug)]
+pub struct CollatorGbkChineseCi;
+
+impl GbkCollator for CollatorGbkChineseCi {
+    const IS_CASE_INSENSITIVE: bool = true;
+    const WEIGHT_TABLE: &'static [u8; (0xffff + 1) * 2] = GBK_CHINESE_CI_TABLE;
+}
+
 // GBK_BIN_TABLE are the encoding tables from Unicode to GBK code, it is totally the same with golang's GBK encoding.
 // If there is no mapping code in GBK, use 0x3F(?) instead. It should not happened.
-static GBK_BIN_TABLE: &[u8; (0xffff + 1) * 2] = include_bytes!("gbk_bin.data");
+const GBK_BIN_TABLE: &[u8; (0xffff + 1) * 2] = include_bytes!("gbk_bin.data");
+
+// GBK_CHINESE_CI_TABLE are the sort key tables for GBK codepoint.
+// If there is no mapping code in GBK, use 0x3F(?) instead. It should not happened.
+const GBK_CHINESE_CI_TABLE: &[u8; (0xffff + 1) * 2] = include_bytes!("gbk_chinese_ci.data");
