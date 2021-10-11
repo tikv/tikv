@@ -1419,7 +1419,7 @@ impl SnapManagerCore {
                 Err(e) => return Err(Error::from(e)),
             };
 
-            let path = dbg!(entry.path());
+            let path = entry.path();
             let path_s = path.to_str().unwrap();
             if !metadata.is_file()
                 // Ignore cloned files as they are hard links on posix systems.
@@ -1428,7 +1428,7 @@ impl SnapManagerCore {
             {
                 continue;
             }
-            total_size += dbg!(metadata.len());
+            total_size += metadata.len();
         }
         Ok(total_size)
     }
