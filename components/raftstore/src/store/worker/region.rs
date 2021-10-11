@@ -764,10 +764,10 @@ mod tests {
     use engine_test::ctor::CFOptions;
     use engine_test::ctor::ColumnFamilyOptions;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::KvEngine;
     use engine_traits::{
         CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt,
     };
+    use engine_traits::{KvEngine, DATA_CFS};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use raft::eraftpb::Entry;
@@ -930,6 +930,7 @@ mod tests {
             CFOptions::new("default", cf_opts.clone()),
             CFOptions::new("write", cf_opts.clone()),
             CFOptions::new("lock", cf_opts.clone()),
+            CFOptions::new("raw", cf_opts.clone()),
             CFOptions::new("raft", cf_opts.clone()),
         ];
         let raft_cfs_opt = CFOptions::new(CF_DEFAULT, cf_opts);
@@ -943,7 +944,7 @@ mod tests {
         )
         .unwrap();
 
-        for cf_name in &["default", "write", "lock"] {
+        for cf_name in DATA_CFS {
             for i in 0..7 {
                 engine
                     .kv

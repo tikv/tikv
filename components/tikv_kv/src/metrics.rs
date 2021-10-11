@@ -7,6 +7,7 @@ make_auto_flush_static_metric! {
         default,
         lock,
         write,
+        raw,
     }
 
     pub label_enum GcKeysDetail {

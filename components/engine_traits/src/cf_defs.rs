@@ -8,7 +8,7 @@ pub const CF_RAFT: CfName = "raft";
 pub const CF_RAW: CfName = "raw";
 // Cfs that should be very large generally.
 pub const LARGE_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAW];
-pub const ALL_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT, CF_RAW];
+pub const ALL_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAW, CF_RAFT];
 pub const DATA_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAW];
 
 pub fn name_to_cf(name: &str) -> Option<CfName> {

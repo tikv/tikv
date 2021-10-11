@@ -24,7 +24,7 @@ use collections::{HashMap, HashMapEntry as Entry};
 use encryption::{
     create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
 };
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAW, CF_WRITE, DATA_CFS};
 use engine_traits::{EncryptionKeyManager, KvEngine};
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use file_system::{
@@ -48,11 +48,12 @@ use crate::{Error as RaftStoreError, Result as RaftStoreResult};
 pub mod snap_io;
 
 // Data in CF_RAFT should be excluded for a snapshot.
-pub const SNAPSHOT_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+pub const SNAPSHOT_CFS: &[CfName] = DATA_CFS;
 pub const SNAPSHOT_CFS_ENUM_PAIR: &[(CfNames, CfName)] = &[
     (CfNames::default, CF_DEFAULT),
     (CfNames::lock, CF_LOCK),
     (CfNames::write, CF_WRITE),
+    (CfNames::raw, CF_RAW),
 ];
 pub const SNAPSHOT_VERSION: u64 = 2;
 pub const IO_LIMITER_CHUNK_SIZE: usize = 4 * 1024;
@@ -1418,7 +1419,7 @@ impl SnapManagerCore {
                 Err(e) => return Err(Error::from(e)),
             };
 
-            let path = entry.path();
+            let path = dbg!(entry.path());
             let path_s = path.to_str().unwrap();
             if !metadata.is_file()
                 // Ignore cloned files as they are hard links on posix systems.
@@ -1427,7 +1428,7 @@ impl SnapManagerCore {
             {
                 continue;
             }
-            total_size += metadata.len();
+            total_size += dbg!(metadata.len());
         }
         Ok(total_size)
     }
@@ -1543,7 +1544,7 @@ pub mod tests {
     use engine_traits::SyncMutable;
     use engine_traits::{ExternalSstFileInfo, SstExt, SstWriter, SstWriterBuilder};
     use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
-    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_RAW, CF_WRITE};
     use kvproto::encryptionpb::EncryptionMethod;
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
@@ -1882,7 +1883,7 @@ pub mod tests {
             .unwrap();
         let dst_db_path = dst_db_dir.path().to_str().unwrap();
         // Change arbitrarily the cf order of ALL_CFS at destination db.
-        let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
+        let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_RAW];
         let dst_db = engine_test::kv::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap();
         let options = ApplyOptions {
             db: dst_db.clone(),
@@ -2480,7 +2481,7 @@ pub mod tests {
                 .unwrap();
 
             // TODO: this size may change in different RocksDB version.
-            let snap_size = 1660;
+            let snap_size = 2484;
             let max_snap_count = (max_total_size + snap_size - 1) / snap_size;
             // The first snap_size is for region 100.
             // That snapshot won't be deleted because it's not for generating.

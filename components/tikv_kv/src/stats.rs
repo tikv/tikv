@@ -4,7 +4,7 @@ use std::cell::RefCell;
 
 use super::metrics::{GcKeysCF, GcKeysDetail};
 use engine_rocks::PerfContext;
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAW, CF_WRITE};
 use kvproto::kvrpcpb::{ScanDetail, ScanDetailV2, ScanInfo};
 pub use raftstore::store::{FlowStatistics, FlowStatsReporter};
 
@@ -176,6 +176,7 @@ pub struct Statistics {
     pub lock: CfStatistics,
     pub write: CfStatistics,
     pub data: CfStatistics,
+    pub raw: CfStatistics,
 
     // Number of bytes of user key-value pairs.
     //
@@ -188,19 +189,21 @@ pub struct Statistics {
 }
 
 impl Statistics {
-    pub fn details(&self) -> [(&'static str, [(&'static str, usize); STATS_COUNT]); 3] {
+    pub fn details(&self) -> [(&'static str, [(&'static str, usize); STATS_COUNT]); 4] {
         [
             (CF_DEFAULT, self.data.details()),
             (CF_LOCK, self.lock.details()),
             (CF_WRITE, self.write.details()),
+            (CF_RAW, self.raw.details()),
         ]
     }
 
-    pub fn details_enum(&self) -> [(GcKeysCF, [(GcKeysDetail, usize); STATS_COUNT]); 3] {
+    pub fn details_enum(&self) -> [(GcKeysCF, [(GcKeysDetail, usize); STATS_COUNT]); 4] {
         [
             (GcKeysCF::default, self.data.details_enum()),
             (GcKeysCF::lock, self.lock.details_enum()),
             (GcKeysCF::write, self.write.details_enum()),
+            (GcKeysCF::raw, self.raw.details_enum()),
         ]
     }
 
@@ -208,6 +211,7 @@ impl Statistics {
         self.lock.add(&other.lock);
         self.write.add(&other.write);
         self.data.add(&other.data);
+        self.raw.add(&other.raw);
         self.processed_size += other.processed_size;
     }
 
@@ -228,6 +232,7 @@ impl Statistics {
             CF_DEFAULT => &mut self.data,
             CF_LOCK => &mut self.lock,
             CF_WRITE => &mut self.write,
+            CF_RAW => &mut self.raw,
             _ => unreachable!(),
         }
     }

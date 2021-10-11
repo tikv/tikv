@@ -8,7 +8,7 @@ use std::ops::RangeBounds;
 use std::sync::{Arc, RwLock};
 
 use engine_panic::PanicEngine;
-use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_RAW, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
@@ -64,7 +64,7 @@ impl BTreeEngine {
 
 impl Default for BTreeEngine {
     fn default() -> Self {
-        let cfs = &[CF_WRITE, CF_DEFAULT, CF_LOCK];
+        let cfs = &[CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAW];
         Self::new(cfs)
     }
 }

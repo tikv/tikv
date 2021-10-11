@@ -23,7 +23,9 @@ use raft::eraftpb;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{raw::Writable, Compat};
-use engine_traits::{MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{
+    MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_RAW, CF_WRITE,
+};
 use pd_client::PdClient;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{fsm::store::StoreMeta, AutoSplitController, SnapManager};
@@ -827,7 +829,7 @@ fn test_debug_region_size() {
         .put_msg_cf(CF_RAFT, &region_state_key, &state)
         .unwrap();
 
-    let cfs = vec![CF_DEFAULT, CF_LOCK, CF_WRITE];
+    let cfs = vec![CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAW];
     // At lease 8 bytes for the WRITE cf.
     let (k, v) = (keys::data_key(b"kkkk_kkkk"), b"v");
     for cf in &cfs {

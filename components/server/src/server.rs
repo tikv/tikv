@@ -32,7 +32,7 @@ use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{from_rocks_compression_type, get_env, FlowInfo, RocksEngine};
 use engine_traits::{
     compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, KvEngine,
-    MiscExt, RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    MiscExt, RaftEngine, CF_DEFAULT, CF_LOCK, CF_RAW, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -461,13 +461,13 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn create_raftstore_compaction_listener(&self) -> engine_rocks::CompactionListener {
         fn size_change_filter(info: &engine_rocks::RocksCompactionJobInfo) -> bool {
-            // When calculating region size, we only consider write and default
+            // When calculating region size, we only consider raw, write and default
             // column families.
             let cf = info.cf_name();
-            if cf != CF_WRITE && cf != CF_DEFAULT {
+            if cf != CF_WRITE && cf != CF_DEFAULT && cf != CF_RAW {
                 return false;
             }
-            // Compactions in level 0 and level 1 are very frequently.
+            // Compactions in level 0 and level 1 occure very frequently.
             if info.output_level() < 2 {
                 return false;
             }

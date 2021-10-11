@@ -3,7 +3,7 @@
 use crate::engine::RocksEngine;
 use crate::properties::{get_range_entries_and_versions, RangeProperties};
 use engine_traits::{
-    MiscExt, Range, RangePropertiesExt, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS,
+    MiscExt, Range, RangePropertiesExt, Result, CF_DEFAULT, CF_LOCK, CF_RAW, CF_WRITE, LARGE_CFS,
 };
 use std::path::Path;
 use tikv_util::{box_err, box_try, debug, info};
@@ -148,6 +148,7 @@ impl RangePropertiesExt for RocksEngine {
             // CF_LOCK doesn't have RangeProperties until v4.0, so we swallow the error for
             // backward compatibility.
             (CF_LOCK, get_cf_size(CF_LOCK).unwrap_or(0)),
+            (CF_RAW, box_try!(get_cf_size(CF_RAW))),
         ];
 
         let total_size: u64 = cfs.iter().map(|(_, s)| s).sum();
