@@ -243,7 +243,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let engine = TestEngineBuilder::new()
             .path(dir.path())
-            .ttl(true)
+            .enable_ttl(true)
             .build()
             .unwrap();
         let kvdb = engine.get_rocksdb();
@@ -309,7 +309,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let engine = TestEngineBuilder::new()
             .path(dir.path())
-            .ttl(true)
+            .enable_ttl(true)
             .build()
             .unwrap();
         let kvdb = engine.get_rocksdb();

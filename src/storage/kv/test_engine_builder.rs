@@ -4,8 +4,9 @@ use crate::storage::config::BlockCacheConfig;
 use crate::storage::kv::{Result, RocksEngine};
 use engine_rocks::raw::ColumnFamilyOptions;
 use engine_rocks::raw_util::CFOptions;
-use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_RAW, CF_WRITE};
 use file_system::IORateLimiter;
+use kvproto::kvrpcpb::ApiVersion;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -20,6 +21,7 @@ pub struct TestEngineBuilder {
     path: Option<PathBuf>,
     cfs: Option<Vec<CfName>>,
     io_rate_limiter: Option<Arc<IORateLimiter>>,
+    api_version: ApiVersion,
     enable_ttl: bool,
 }
 
@@ -29,6 +31,7 @@ impl TestEngineBuilder {
             path: None,
             cfs: None,
             io_rate_limiter: None,
+            api_version: ApiVersion::V1,
             enable_ttl: false,
         }
     }
@@ -49,7 +52,12 @@ impl TestEngineBuilder {
         self
     }
 
-    pub fn ttl(mut self, b: bool) -> Self {
+    pub fn api_version(mut self, v: ApiVersion) -> Self {
+        self.api_version = v;
+        self
+    }
+
+    pub fn enable_ttl(mut self, b: bool) -> Self {
         self.enable_ttl = b;
         self
     }
@@ -66,22 +74,32 @@ impl TestEngineBuilder {
     }
 
     pub fn build_with_cfg(self, cfg_rocksdb: &crate::config::DbConfig) -> Result<RocksEngine> {
-        let path = match self.path {
+        let path = match &self.path {
             None => TEMP_DIR.to_owned(),
             Some(p) => p.to_str().unwrap().to_owned(),
         };
-        let enable_ttl = self.enable_ttl;
-        let cfs = self.cfs.unwrap_or_else(|| ALL_CFS.to_vec());
         let cache = BlockCacheConfig::default().build_shared_cache();
+        let cfs = self.cfs.clone().unwrap_or_else(|| ALL_CFS.to_vec());
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
                 CF_DEFAULT => CFOptions::new(
                     CF_DEFAULT,
-                    cfg_rocksdb.defaultcf.build_opt(&cache, None, enable_ttl),
+                    cfg_rocksdb.defaultcf.build_opt(
+                        &cache,
+                        None,
+                        self.api_version,
+                        self.enable_ttl,
+                    ),
                 ),
                 CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
                 CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                CF_RAW => CFOptions::new(
+                    CF_RAW,
+                    cfg_rocksdb
+                        .rawcf
+                        .build_opt(&cache, None, self.api_version, self.enable_ttl),
+                ),
                 CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })

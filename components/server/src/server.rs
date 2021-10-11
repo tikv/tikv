@@ -1248,6 +1248,7 @@ impl TiKVServer<RocksEngine> {
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
             &block_cache,
             Some(&self.region_info_accessor),
+            self.config.storage.api_version,
             self.config.storage.enable_ttl,
         );
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
@@ -1322,6 +1323,7 @@ impl TiKVServer<RaftLogEngine> {
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
             &block_cache,
             Some(&self.region_info_accessor),
+            self.config.storage.api_version,
             self.config.storage.enable_ttl,
         );
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));

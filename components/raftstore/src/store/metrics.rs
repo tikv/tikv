@@ -104,7 +104,7 @@ make_auto_flush_static_metric! {
         lock,
         write,
         raft,
-        ver_default,
+        raw,
     }
 
     pub label_enum RaftEntryType {

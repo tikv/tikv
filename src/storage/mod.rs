@@ -2044,7 +2044,10 @@ impl TestStorageBuilder<RocksEngine, DummyLockManager> {
             ..Default::default()
         };
         Self {
-            engine: TestEngineBuilder::new().ttl(enable_ttl).build().unwrap(),
+            engine: TestEngineBuilder::new()
+                .enable_ttl(enable_ttl)
+                .build()
+                .unwrap(),
             config,
             pipelined_pessimistic_lock: Arc::new(atomic::AtomicBool::new(false)),
             lock_mgr,

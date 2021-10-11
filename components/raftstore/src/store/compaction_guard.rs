@@ -5,7 +5,7 @@ use std::ffi::CString;
 use crate::{coprocessor::RegionInfoProvider, Error, Result};
 use engine_traits::{
     CfName, SstPartitioner, SstPartitionerContext, SstPartitionerFactory, SstPartitionerRequest,
-    SstPartitionerResult, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    SstPartitionerResult, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_RAW, CF_WRITE,
 };
 use keys::data_end_key;
 use lazy_static::lazy_static;
@@ -31,6 +31,7 @@ impl<P: RegionInfoProvider> CompactionGuardGeneratorFactory<P> {
             CF_DEFAULT => CfNames::default,
             CF_LOCK => CfNames::lock,
             CF_WRITE => CfNames::write,
+            CF_RAW => CfNames::raw,
             CF_RAFT => CfNames::raft,
             _ => {
                 return Err(Error::Other(From::from(format!(

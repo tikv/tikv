@@ -14,7 +14,7 @@ fn test_ttl_checker() {
     let mut cfg = DbConfig::default();
     cfg.defaultcf.disable_auto_compactions = true;
     let dir = tempfile::TempDir::new().unwrap();
-    let builder = TestEngineBuilder::new().path(dir.path()).ttl(true);
+    let builder = TestEngineBuilder::new().path(dir.path()).enable_ttl(true);
     let engine = builder.build_with_cfg(&cfg).unwrap();
 
     let kvdb = engine.get_rocksdb();
@@ -70,7 +70,7 @@ fn test_ttl_compaction_filter() {
     let mut cfg = DbConfig::default();
     cfg.writecf.disable_auto_compactions = true;
     let dir = tempfile::TempDir::new().unwrap();
-    let builder = TestEngineBuilder::new().path(dir.path()).ttl(true);
+    let builder = TestEngineBuilder::new().path(dir.path()).enable_ttl(true);
     let engine = builder.build_with_cfg(&cfg).unwrap();
     let kvdb = engine.get_rocksdb();
 

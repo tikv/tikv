@@ -23,7 +23,9 @@ use engine_traits::{
     Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, RaftEngine,
     RangePropertiesExt, SeekKey, SyncMutable, WriteBatch, WriteOptions,
 };
-use engine_traits::{MvccProperties, Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{
+    MvccProperties, Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_RAW, CF_WRITE,
+};
 use raftstore::coprocessor::get_region_approximate_middle;
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
@@ -1253,6 +1255,7 @@ fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
         (DBType::Kv, CF_DEFAULT)
         | (DBType::Kv, CF_WRITE)
         | (DBType::Kv, CF_LOCK)
+        | (DBType::Kv, CF_RAW)
         | (DBType::Kv, CF_RAFT)
         | (DBType::Raft, CF_DEFAULT) => Ok(()),
         _ => Err(Error::InvalidArgument(format!(
@@ -1335,7 +1338,7 @@ mod tests {
     use engine_rocks::raw_util::{new_engine_opt, CFOptions};
     use engine_rocks::RocksEngine;
     use engine_traits::{Mutable, SyncMutable};
-    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_RAW, CF_WRITE};
 
     fn init_region_state(
         engine: &Arc<DB>,
@@ -1442,6 +1445,7 @@ mod tests {
             (DBType::Kv, CF_DEFAULT),
             (DBType::Kv, CF_WRITE),
             (DBType::Kv, CF_LOCK),
+            (DBType::Kv, CF_RAW),
             (DBType::Kv, CF_RAFT),
             (DBType::Raft, CF_DEFAULT),
         ];
@@ -1452,6 +1456,7 @@ mod tests {
         let invalid_cases = vec![
             (DBType::Raft, CF_WRITE),
             (DBType::Raft, CF_LOCK),
+            (DBType::Raft, CF_RAW),
             (DBType::Raft, CF_RAFT),
             (DBType::Invalid, CF_DEFAULT),
             (DBType::Invalid, "BAD_CF"),
@@ -1472,6 +1477,7 @@ mod tests {
                     CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
                     CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
                     CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
+                    CFOptions::new(CF_RAW, ColumnFamilyOptions::new()),
                     CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
                 ],
             )
@@ -1625,16 +1631,15 @@ mod tests {
             .put_msg_cf(CF_RAFT, &region_state_key, &state)
             .unwrap();
 
-        let cfs = vec![CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE];
         let (k, v) = (keys::data_key(b"k"), b"v");
-        for cf in &cfs {
+        for cf in ALL_CFS {
             engine.put_cf(cf, k.as_slice(), v).unwrap();
         }
 
-        let sizes = debugger.region_size(region_id, cfs.clone()).unwrap();
+        let sizes = debugger.region_size(region_id, ALL_CFS).unwrap();
         assert_eq!(sizes.len(), 4);
         for (cf, size) in sizes {
-            cfs.iter().find(|&&c| c == cf).unwrap();
+            ALL_CFS.iter().find(|&&c| c == cf).unwrap();
             assert_eq!(size, k.len() + v.len());
         }
     }
