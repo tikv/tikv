@@ -699,7 +699,6 @@ where
                 self.on_schedule_half_split_region(&region_epoch, policy, source);
             }
             CasualMessage::GcSnap { snaps } => {
-                // [PerformanceCriticalPath]?? should it be done in background thread?
                 self.on_gc_snap(snaps);
             }
             CasualMessage::ClearRegionSize => {
@@ -1423,8 +1422,7 @@ where
 
         let is_snapshot = msg.get_message().has_snapshot();
 
-        // [PerformanceCriticalPath]??
-        // Can delete_snapshot be put in background thread?
+        // TODO: spin off the I/O code (delete_snapshot)
         let regions_to_destroy = match self.check_snapshot(&msg)? {
             Either::Left(key) => {
                 // If the snapshot file is not used again, then it's OK to
@@ -2343,7 +2341,6 @@ where
             self.register_raft_base_tick();
         }
         if need_ping {
-            // [PerformanceCriticalPath]?? should it be done async?
             // Speed up snapshot instead of waiting another heartbeat.
             self.fsm.peer.ping();
             self.fsm.has_ready = true;
