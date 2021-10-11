@@ -467,7 +467,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             if cf != CF_WRITE && cf != CF_DEFAULT && cf != CF_RAW {
                 return false;
             }
-            // Compactions in level 0 and level 1 occure very frequently.
+            // Compactions in level 0 and level 1 occur very frequently.
             if info.output_level() < 2 {
                 return false;
             }
