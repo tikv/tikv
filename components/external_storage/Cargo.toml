@@ -10,10 +10,12 @@ protobuf-codec = [
   "protobuf/bytes",
   "tikv_util/protobuf-codec",
   "grpcio/protobuf-codec",
+  "encryption/protobuf-codec",
 ]
 prost-codec = [
   "tikv_util/prost-codec",
   "grpcio/prost-codec",
+  "encryption/prost-codec",
 ]
 cloud-storage-dylib = [
   "ffi-support",

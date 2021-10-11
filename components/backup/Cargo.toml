@@ -28,6 +28,7 @@ protobuf-codec = [
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
   "file_system/protobuf-codec",
+  "encryption/protobuf-codec",
 ]
 prost-codec = [
   "concurrency_manager/prost-codec",
@@ -47,6 +48,7 @@ prost-codec = [
   "tikv_util/prost-codec",
   "txn_types/prost-codec",
   "file_system/prost-codec",
+  "encryption/prost-codec",
 ]
 test-engines-rocksdb = [
   "tikv/test-engines-rocksdb",
