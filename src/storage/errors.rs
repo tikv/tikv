@@ -335,16 +335,16 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
                 start_ts,
                 key,
                 assertion,
-                existed_start_ts,
-                existed_commit_ts,
+                existing_start_ts,
+                existing_commit_ts,
             },
         ))))) => {
             let mut assertion_failed = kvrpcpb::AssertionFailed::default();
             assertion_failed.set_start_ts(start_ts.into_inner());
             assertion_failed.set_key(key.to_owned());
             assertion_failed.set_assertion(*assertion);
-            assertion_failed.set_existed_start_ts(existed_start_ts.into_inner());
-            assertion_failed.set_existed_commit_ts(existed_commit_ts.into_inner());
+            assertion_failed.set_existing_start_ts(existing_start_ts.into_inner());
+            assertion_failed.set_existing_commit_ts(existing_commit_ts.into_inner());
             key_error.set_assertion_failed(assertion_failed);
         }
         _ => {

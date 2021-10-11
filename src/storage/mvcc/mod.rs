@@ -147,15 +147,15 @@ pub enum ErrorInner {
     },
 
     #[error(
-        "assertion on data failed, start_ts:{}, key:{}, assertion:{:?}, existed_start_ts:{}, existed_commit_ts:{}",
-        .start_ts, log_wrappers::Value::key(.key), .assertion, .existed_start_ts, .existed_commit_ts
+        "assertion on data failed, start_ts:{}, key:{}, assertion:{:?}, existing_start_ts:{}, existing_commit_ts:{}",
+        .start_ts, log_wrappers::Value::key(.key), .assertion, .existing_start_ts, .existing_commit_ts
     )]
     AssertionFailed {
         start_ts: TimeStamp,
         key: Vec<u8>,
         assertion: Assertion,
-        existed_start_ts: TimeStamp,
-        existed_commit_ts: TimeStamp,
+        existing_start_ts: TimeStamp,
+        existing_commit_ts: TimeStamp,
     },
 
     #[error("{0:?}")]
@@ -267,14 +267,14 @@ impl ErrorInner {
                 start_ts,
                 key,
                 assertion,
-                existed_start_ts,
-                existed_commit_ts,
+                existing_start_ts,
+                existing_commit_ts,
             } => Some(ErrorInner::AssertionFailed {
                 start_ts: *start_ts,
                 key: key.clone(),
                 assertion: *assertion,
-                existed_start_ts: *existed_start_ts,
-                existed_commit_ts: *existed_commit_ts,
+                existing_start_ts: *existing_start_ts,
+                existing_commit_ts: *existing_commit_ts,
             }),
             ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }

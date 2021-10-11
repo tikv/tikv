@@ -368,8 +368,8 @@ impl<'a> PrewriteMutation<'a> {
                         start_ts: self.txn_props.start_ts,
                         key: self.key.to_raw()?,
                         assertion: self.assertion,
-                        existed_start_ts: write.start_ts,
-                        existed_commit_ts: commit_ts,
+                        existing_start_ts: write.start_ts,
+                        existing_commit_ts: commit_ts,
                     }
                     .into());
                 }
@@ -382,8 +382,8 @@ impl<'a> PrewriteMutation<'a> {
                         start_ts: self.txn_props.start_ts,
                         key: self.key.to_raw()?,
                         assertion: self.assertion,
-                        existed_start_ts: TimeStamp::zero(),
-                        existed_commit_ts: TimeStamp::zero(),
+                        existing_start_ts: TimeStamp::zero(),
+                        existing_commit_ts: TimeStamp::zero(),
                     }
                     .into());
                 }

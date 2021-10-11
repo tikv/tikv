@@ -2126,7 +2126,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/MyonKeminta/kvproto?branch=m/add-assertion-fail#e706d94c441f83fe4f877c2f925e3b56485ddf34"
+source = "git+https://github.com/MyonKeminta/kvproto?branch=m/add-assertion-fail#a7fecfba1c7832717e06006848d644ddd9c88a5b"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
