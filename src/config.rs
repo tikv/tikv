@@ -593,6 +593,7 @@ impl DefaultCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+        cf_opts.set_titandb_options(&self.titan.build_opts());
         if api_version == ApiVersion::V1 && enable_ttl {
             cf_opts.add_table_properties_collector_factory(
                 "tikv.ttl-properties-collector",
@@ -605,7 +606,6 @@ impl DefaultCfConfig {
                 )
                 .unwrap();
         }
-        cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -921,30 +921,27 @@ impl RawCfConfig {
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
-        enable_ttl: bool,
     ) -> ColumnFamilyOptions {
-        // Raw CF is only enabled in API V2
-        assert_eq!(api_version, ApiVersion::V2);
-        // TTL is forced to turn on in API V2
-        assert!(enable_ttl);
-
         let mut cf_opts = build_cf_opt!(self, CF_RAW, cache, region_info_accessor);
         let f = Box::new(RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        cf_opts.add_table_properties_collector_factory(
-            "tikv.ttl-properties-collector",
-            Box::new(TtlPropertiesCollectorFactory {}),
-        );
-        cf_opts
-            .set_compaction_filter_factory(
-                "ttl_compaction_filter_factory",
-                Box::new(TTLCompactionFilterFactory {}) as Box<dyn CompactionFilterFactory>,
-            )
-            .unwrap();
         cf_opts.set_titandb_options(&self.titan.build_opts());
+        if api_version == ApiVersion::V2 {
+            // TTL must be enabled on in API V2
+            cf_opts.add_table_properties_collector_factory(
+                "tikv.ttl-properties-collector",
+                Box::new(TtlPropertiesCollectorFactory {}),
+            );
+            cf_opts
+                .set_compaction_filter_factory(
+                    "ttl_compaction_filter_factory",
+                    Box::new(TTLCompactionFilterFactory {}) as Box<dyn CompactionFilterFactory>,
+                )
+                .unwrap();
+        }
         cf_opts
     }
 }
@@ -1184,7 +1181,7 @@ impl DbConfig {
         api_version: ApiVersion,
         enable_ttl: bool,
     ) -> Vec<CFOptions<'_>> {
-        let mut opts = vec![
+        vec![
             CFOptions::new(
                 CF_DEFAULT,
                 self.defaultcf
@@ -1195,19 +1192,14 @@ impl DbConfig {
                 CF_WRITE,
                 self.writecf.build_opt(cache, region_info_accessor),
             ),
-            // TODO: remove CF_RAFT.
-            CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
-        ];
-
-        if api_version == ApiVersion::V2 {
-            opts.push(CFOptions::new(
+            CFOptions::new(
                 CF_RAW,
                 self.rawcf
-                    .build_opt(cache, region_info_accessor, api_version, enable_ttl),
-            ));
-        }
-
-        opts
+                    .build_opt(cache, region_info_accessor, api_version),
+            ),
+            // TODO: remove CF_RAFT.
+            CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
+        ]
     }
 
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {

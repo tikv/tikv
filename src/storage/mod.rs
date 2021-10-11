@@ -2868,9 +2868,7 @@ mod tests {
                 CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
                 CFOptions::new(
                     CF_RAW,
-                    cfg_rocksdb
-                        .rawcf
-                        .build_opt(&cache, None, ApiVersion::V1, false),
+                    cfg_rocksdb.rawcf.build_opt(&cache, None, ApiVersion::V1),
                 ),
                 CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
             ];
