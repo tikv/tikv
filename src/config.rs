@@ -2182,8 +2182,8 @@ mod readpool_tests {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct HadoopConfig {
-    home: String,
-    linux_user: String,
+    pub home: String,
+    pub linux_user: String,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]

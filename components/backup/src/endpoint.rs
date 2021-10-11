@@ -605,6 +605,12 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         config: BackupConfig,
         concurrency_manager: ConcurrencyManager,
     ) -> Endpoint<E, R> {
+        if !config.hadoop.home.is_empty() {
+            external_storage::set_hadoop_home(config.hadoop.home.clone());
+        }
+        if !config.hadoop.linux_user.is_empty() {
+            external_storage::set_hadoop_linux_user(config.hadoop.linux_user.clone());
+        }
         Endpoint {
             store_id,
             engine,
@@ -1006,6 +1012,7 @@ pub mod tests {
                     num_threads: 4,
                     batch_size: 8,
                     sst_max_size: ReadableSize::mb(144),
+                    hadoop: Default::default(),
                 },
                 concurrency_manager,
             ),
