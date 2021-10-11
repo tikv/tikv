@@ -79,8 +79,7 @@ use crate::storage::{
 };
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{
-    CfName, IterOptions, Iterable, KvEngine, Peekable, SyncMutable, CF_DEFAULT, DATA_CFS,
-    DATA_KEY_PREFIX_LEN,
+    CfName, Iterable, KvEngine, Peekable, SyncMutable, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_LEN,
 };
 use futures::prelude::*;
 use kvproto::kvrpcpb::ApiVersion;
@@ -101,10 +100,7 @@ use std::{
     iter,
     sync::{atomic, Arc},
 };
-use tikv_util::{
-    keybuilder::KeyBuilder,
-    time::{Instant, ThreadReadId},
-};
+use tikv_util::time::{Instant, ThreadReadId};
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
