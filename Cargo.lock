@@ -222,6 +222,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crc64fast",
+ "encryption",
  "engine_rocks",
  "engine_traits",
  "error_code",
@@ -1221,6 +1222,8 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "bytes 1.0.1",
+ "encryption",
+ "engine_traits",
  "fail",
  "ffi-support",
  "file_system",
@@ -1258,6 +1261,7 @@ dependencies = [
  "aws",
  "cloud",
  "encryption",
+ "engine_traits",
  "external_storage",
  "ffi-support",
  "file_system",
@@ -2128,7 +2132,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#df38c15b57b3049293c71ca828a42d83faffe221"
+source = "git+https://github.com/pingcap/kvproto.git#a4518fcacbc8b0d687e8f83db5b9ec9dfc8ad8d4"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

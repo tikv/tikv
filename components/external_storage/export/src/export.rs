@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 #[cfg(feature = "cloud-aws")]
 pub use aws::{Config as S3Config, S3Storage};
+use engine_traits::FileEncryptionInfo;
 #[cfg(feature = "cloud-gcp")]
 pub use gcp::{Config as GCSConfig, GCSStorage};
 
@@ -25,7 +26,9 @@ use crate::dylib;
 #[cfg(any(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
 use cloud::blob::BlobConfig;
 use cloud::blob::BlobStorage;
-use encryption::DataKeyManager;
+use encryption::{
+    encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader, Iv,
+};
 #[cfg(feature = "cloud-storage-dylib")]
 use external_storage::dylib_client;
 #[cfg(feature = "cloud-storage-grpc")]
@@ -330,11 +333,23 @@ impl ExternalStorage for EncryptedExternalStorage {
         restore_name: std::path::PathBuf,
         expected_length: u64,
         speed_limiter: &Limiter,
+        file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
-        let mut input = self.read(storage_name);
+        let reader = self.read(storage_name);
         let file_writer: &mut dyn Write =
             &mut self.key_manager.create_file_for_write(&restore_name)?;
         let min_read_speed: usize = 8192;
+
+        let mut input = match file_crypter {
+            Some(x) => Box::new(DecrypterReader::new(
+                reader,
+                encryption_method_from_db_encryption_method(x.method),
+                &x.key,
+                Iv::from_slice(&x.iv)?,
+            )?),
+            None => reader,
+        };
+
         block_on_external_io(read_external_storage_into_file(
             &mut input,
             file_writer,
