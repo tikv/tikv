@@ -5362,7 +5362,6 @@ dependencies = [
  "fxhash",
  "lazy_static",
  "libc 0.2.100",
- "log",
  "mimalloc",
  "snmalloc-rs",
  "tcmalloc",
@@ -5508,9 +5507,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.10.0"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01cf844b23c6131f624accf65ce0e4e9956a8bb329400ea5bcc26ae3a5c20b0b"
+checksum = "c2c2416fdedca8443ae44b4527de1ea633af61d8f7169ffa6e72c5b53d24efcc"
 dependencies = [
  "autocfg",
  "bytes 1.0.1",
