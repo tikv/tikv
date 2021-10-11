@@ -930,7 +930,7 @@ impl RawCfConfig {
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
         if api_version == ApiVersion::V2 {
-            // TTL must be enabled on in API V2
+            // TTL must be enabled in API V2
             cf_opts.add_table_properties_collector_factory(
                 "tikv.ttl-properties-collector",
                 Box::new(TtlPropertiesCollectorFactory {}),
