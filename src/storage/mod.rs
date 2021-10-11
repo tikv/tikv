@@ -2333,7 +2333,7 @@ mod tests {
     };
     use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
-    use engine_traits::{ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::{ALL_CFS, CF_LOCK, CF_RAFT, CF_RAW, CF_WRITE};
     use errors::extract_key_error;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::{ApiVersion, CommandPri, Op};
@@ -2860,10 +2860,18 @@ mod tests {
             let cfs_opts = vec![
                 CFOptions::new(
                     CF_DEFAULT,
-                    cfg_rocksdb.defaultcf.build_opt(&cache, None, false),
+                    cfg_rocksdb
+                        .defaultcf
+                        .build_opt(&cache, None, ApiVersion::V1, false),
                 ),
                 CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
                 CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                CFOptions::new(
+                    CF_RAW,
+                    cfg_rocksdb
+                        .rawcf
+                        .build_opt(&cache, None, ApiVersion::V1, false),
+                ),
                 CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
             ];
             RocksEngine::new(
