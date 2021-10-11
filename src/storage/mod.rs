@@ -79,7 +79,8 @@ use crate::storage::{
 };
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{
-    CfName, IterOptions, Peekable, SyncMutable, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_LEN,
+    CfName, IterOptions, Iterable, KvEngine, Peekable, SyncMutable, CF_DEFAULT, DATA_CFS,
+    DATA_KEY_PREFIX_LEN,
 };
 use futures::prelude::*;
 use kvproto::kvrpcpb::ApiVersion;
@@ -342,28 +343,33 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let kv_data_encode = DataEncode::from_i32(kv_data_encode).expect("unknown data encode");
         if kv_data_encode != config_data_encode {
             // Check if there are only TiDB data in the engine
-            let snapshot = engine.snapshot_on_kv_engine(&[], &[])?;
+            let snapshot = kv.snapshot();
             for cf in DATA_CFS {
                 for (start, end) in keys::DATA_TIDB_RANGES_COMPLEMENT {
-                    let start = KeyBuilder::from_slice(start, DATA_KEY_PREFIX_LEN, 0);
-                    let end = KeyBuilder::from_slice(end, DATA_KEY_PREFIX_LEN, 0);
-                    let iter_opt = IterOptions::new(Some(start), Some(end), false);
-                    let mut iter = snapshot.iter_cf(cf, iter_opt)?;
-                    iter.seek_to_first()?;
-                    if iter.valid()? {
-                        let unexpected_data_key = iter.key();
+                    let mut unexpected_data_key = None;
+                    snapshot.scan_cf(
+                        cf,
+                        &keys::data_key(start),
+                        &keys::data_key(end),
+                        false,
+                        |key, _| {
+                            unexpected_data_key = Some(key[DATA_KEY_PREFIX_LEN..].to_vec());
+                            Ok(false)
+                        },
+                    )?;
+                    if let Some(unexpected_data_key) = unexpected_data_key {
                         error!(
                             "unable to switch data encode (triggered by switching storage.api_version)";
                             "current" => ?kv_data_encode,
                             "target" => ?config_data_encode,
-                            "found data key that is not written by TiDB" => log_wrappers::hex_encode_upper(unexpected_data_key),
+                            "found data key that is not written by TiDB" => log_wrappers::hex_encode_upper(&unexpected_data_key),
                         );
                         return Err(box_err!(
                             "unable to switch data encode (triggered by switching storage.api_version) from {:?} to {:?} \
                             because found data key that is not written by TiDB: {:?}",
                             kv_data_encode,
                             config_data_encode,
-                            log_wrappers::hex_encode_upper(unexpected_data_key)
+                            log_wrappers::hex_encode_upper(&unexpected_data_key)
                         ));
                     }
                 }
