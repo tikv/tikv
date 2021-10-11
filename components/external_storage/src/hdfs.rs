@@ -142,14 +142,13 @@ mod tests {
     #[test]
     fn test_get_hdfs_bin() {
         std::env::remove_var("HADOOP_HOME");
-        std::env::remove_var("HDFS_CMD");
         assert!(get_hdfs_bin().is_none());
 
         std::env::set_var("HADOOP_HOME", "/opt/hadoop");
         assert_eq!(get_hdfs_bin().as_deref(), Some("/opt/hadoop/bin/hdfs"));
 
-        std::env::set_var("HDFS_CMD", "/opt/hdfs.sh");
-        assert_eq!(get_hdfs_bin().as_deref(), Some("/opt/hdfs.sh"));
+        set_hadoop_home("/etc/hdfs".to_string());
+        assert_eq!(get_hdfs_bin().as_deref(), Some("/etc/hdfs/bin/hdfs"));
     }
 
     #[test]

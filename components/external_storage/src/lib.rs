@@ -22,9 +22,9 @@ use tikv_util::time::{Instant, Limiter};
 use tokio::time::timeout;
 
 mod hdfs;
-pub use hdfs::HdfsStorage;
 pub use hdfs::set_hadoop_home;
 pub use hdfs::set_hadoop_linux_user;
+pub use hdfs::HdfsStorage;
 mod local;
 pub use local::LocalStorage;
 mod noop;
