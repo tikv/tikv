@@ -342,11 +342,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let kv_data_encode = DataEncode::from_i32(kv_data_encode).expect("unknown data encode");
         if kv_data_encode != config_data_encode {
             // Check if there are only TiDB data in the engine
-            let snapshot = engine.snapshot(Default::default()).unwrap();
+            let snapshot = engine.snapshot_on_kv_engine(&[], &[])?;
             for cf in DATA_CFS {
                 for (start, end) in keys::DATA_TIDB_RANGES_COMPLEMENT {
-                    let start = KeyBuilder::from_vec(keys::data_key(start), DATA_KEY_PREFIX_LEN, 0);
-                    let end = KeyBuilder::from_vec(keys::data_key(end), DATA_KEY_PREFIX_LEN, 0);
+                    let start = KeyBuilder::from_slice(start, DATA_KEY_PREFIX_LEN, 0);
+                    let end = KeyBuilder::from_slice(end, DATA_KEY_PREFIX_LEN, 0);
                     let iter_opt = IterOptions::new(Some(start), Some(end), false);
                     let mut iter = snapshot.iter_cf(cf, iter_opt)?;
                     iter.seek_to_first()?;
