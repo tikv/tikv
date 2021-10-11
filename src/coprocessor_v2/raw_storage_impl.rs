@@ -97,10 +97,10 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
     async fn batch_put(&self, kv_pairs: Vec<KvPair>) -> PluginResult<()> {
         let ctx = self.context.clone();
         let cf = engine_traits::CF_DEFAULT.to_string();
-        let ttl = 0; // unlimited
+        let ttls = vec![0; kv_pairs.len()]; // unlimited
         let (cb, f) = paired_future_callback();
 
-        let res = self.storage.raw_batch_put(ctx, cf, kv_pairs, ttl, cb);
+        let res = self.storage.raw_batch_put(ctx, cf, kv_pairs, ttls, cb);
 
         match res {
             Err(e) => Err(e),

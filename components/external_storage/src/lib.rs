@@ -13,6 +13,8 @@ use std::marker::Unpin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use encryption::{encryption_method_from_db_encryption_method, DecrypterReader, Iv};
+use engine_traits::FileEncryptionInfo;
 use file_system::File;
 use futures_io::AsyncRead;
 use futures_util::AsyncReadExt;
@@ -64,14 +66,29 @@ pub trait ExternalStorage: 'static + Send + Sync {
         restore_name: std::path::PathBuf,
         expected_length: u64,
         speed_limiter: &Limiter,
+        file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
-        let mut input = self.read(storage_name);
+        let reader = self.read(storage_name);
         let output: &mut dyn Write = &mut File::create(restore_name)?;
         // the minimum speed of reading data, in bytes/second.
         // if reading speed is slower than this rate, we will stop with
         // a "TimedOut" error.
         // (at 8 KB/s for a 2 MB buffer, this means we timeout after 4m16s.)
         let min_read_speed: usize = 8192;
+
+        let mut input = match file_crypter {
+            Some(x) => {
+                let iv = Iv::from_slice(&x.iv)?;
+                Box::new(DecrypterReader::new(
+                    reader,
+                    encryption_method_from_db_encryption_method(x.method),
+                    &x.key,
+                    iv,
+                )?)
+            }
+            None => reader,
+        };
+
         block_on_external_io(read_external_storage_into_file(
             &mut input,
             output,

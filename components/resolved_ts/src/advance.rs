@@ -25,6 +25,8 @@ use crate::endpoint::Task;
 use crate::errors::Result;
 use crate::metrics::{CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM, CHECK_LEADER_REQ_SIZE_HISTOGRAM};
 
+const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
+
 pub struct AdvanceTsWorker<E: KvEngine> {
     store_meta: Arc<Mutex<StoreMeta>>,
     region_read_progress: RegionReadProgressRegistry,
@@ -54,6 +56,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
         let worker = Builder::new_multi_thread()
             .thread_name("advance-ts")
             .worker_threads(1)
+            .enable_time()
             .build()
             .unwrap();
         Self {
@@ -208,7 +211,13 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
                 req.set_ts(min_ts.into_inner());
-                let res = box_try!(client.check_leader_async(&req)).await;
+                let res = box_try!(
+                    tokio::time::timeout(
+                        Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS),
+                        box_try!(client.check_leader_async(&req))
+                    )
+                    .await
+                );
                 let resp = box_try!(res);
                 Result::Ok((store_id, resp))
             }
