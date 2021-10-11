@@ -5,6 +5,7 @@ use std::sync::*;
 use std::thread;
 use std::time::Duration;
 
+use engine_traits::DATA_CFS;
 use futures::{executor::block_on, future, SinkExt, StreamExt, TryStreamExt};
 use grpcio::*;
 use grpcio_health::proto::HealthCheckRequest;
@@ -829,25 +830,24 @@ fn test_debug_region_size() {
         .put_msg_cf(CF_RAFT, &region_state_key, &state)
         .unwrap();
 
-    let cfs = vec![CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAW];
     // At lease 8 bytes for the WRITE cf.
     let (k, v) = (keys::data_key(b"kkkk_kkkk"), b"v");
-    for cf in &cfs {
+    for cf in DATA_CFS {
         let cf_handle = engine.cf_handle(cf).unwrap();
         engine.put_cf(cf_handle, k.as_slice(), v).unwrap();
     }
 
     let mut req = debugpb::RegionSizeRequest::default();
     req.set_region_id(region_id);
-    req.set_cfs(cfs.iter().map(|s| s.to_string()).collect());
+    req.set_cfs(DATA_CFS.iter().map(|s| s.to_string()).collect());
     let entries: Vec<_> = debug_client
         .region_size(&req)
         .unwrap()
         .take_entries()
         .into();
-    assert_eq!(entries.len(), 3);
+    assert_eq!(entries.len(), DATA_CFS.len());
     for e in entries {
-        cfs.iter().find(|&&c| c == e.cf).unwrap();
+        DATA_CFS.iter().find(|&&c| c == e.cf).unwrap();
         assert!(e.size > 0);
     }
 

@@ -523,12 +523,13 @@ pub mod tests {
     use crate::storage::{Engine, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
-    use engine_rocks::raw::DB;
-    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
+    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions, DB};
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{IterOptions, Mutable, WriteBatch, WriteBatchExt};
-    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::{
+        IterOptions, Mutable, WriteBatch, WriteBatchExt, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT,
+        CF_RAW, CF_WRITE,
+    };
     use kvproto::kvrpcpb::Context;
     use kvproto::metapb::{Peer, Region};
     use raftstore::store::RegionSnapshot;
@@ -784,9 +785,10 @@ pub mod tests {
         }
         let cfs_opts = vec![
             CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-            CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
             CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
+            CFOptions::new(CF_RAW, ColumnFamilyOptions::new()),
+            CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
         ];
         Arc::new(engine_rocks::raw_util::new_engine_opt(path, db_opts, cfs_opts).unwrap())
     }
