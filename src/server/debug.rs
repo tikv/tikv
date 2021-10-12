@@ -1637,7 +1637,7 @@ mod tests {
         }
 
         let sizes = debugger.region_size(region_id, ALL_CFS.to_vec()).unwrap();
-        assert_eq!(sizes.len(), 4);
+        assert_eq!(sizes.len(), ALL_CFS.len());
         for (cf, size) in sizes {
             ALL_CFS.iter().find(|&&c| c == cf).unwrap();
             assert_eq!(size, k.len() + v.len());
