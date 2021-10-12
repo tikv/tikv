@@ -5,6 +5,7 @@ use std::io::Read;
 use std::iter::FromIterator;
 use std::path::PathBuf;
 
+use kvproto::kvrpcpb::ApiVersion;
 use slog::Level;
 
 use batch_system::Config as BatchSystemConfig;
@@ -617,6 +618,7 @@ fn test_serde_custom_tikv_config() {
         enable_async_apply_prewrite: true,
         enable_ttl: true,
         ttl_check_poll_interval: ReadableDuration::hours(0),
+        api_version: ApiVersion::V1,
         flow_control: FlowControlConfig {
             enable: false,
             l0_files_threshold: 10,
