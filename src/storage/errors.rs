@@ -13,7 +13,7 @@ use tikv_util::deadline::DeadlineError;
 use txn_types::{KvPair, TimeStamp};
 
 use crate::storage::{
-    kv::{self, Error as EngineError, ErrorInner as EngineErrorInner},
+    kv::{self, Error as KvError, ErrorInner as KvErrorInner},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     Result,
@@ -24,10 +24,13 @@ use crate::storage::{
 /// handling functionality in a single place instead of being spread out.
 pub enum ErrorInner {
     #[error("{0}")]
-    Engine(#[from] kv::Error),
+    Kv(#[from] kv::Error),
 
     #[error("{0}")]
     Txn(#[from] txn::Error),
+
+    #[error("{0}")]
+    Engine(#[from] engine_traits::Error),
 
     #[error("storage is closed.")]
     Closed,
@@ -89,8 +92,9 @@ impl<T: Into<ErrorInner>> From<T> for Error {
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self.0.as_ref() {
-            ErrorInner::Engine(e) => e.error_code(),
+            ErrorInner::Kv(e) => e.error_code(),
             ErrorInner::Txn(e) => e.error_code(),
+            ErrorInner::Engine(e) => e.error_code(),
             ErrorInner::Closed => error_code::storage::CLOSED,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
             ErrorInner::Io(_) => error_code::storage::IO,
@@ -181,12 +185,12 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
     match *res {
         // TODO: use `Error::cause` instead.
-        Err(Error(box ErrorInner::Engine(EngineError(box EngineErrorInner::Request(ref e)))))
-        | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
-            box EngineErrorInner::Request(ref e),
+        Err(Error(box ErrorInner::Kv(KvError(box KvErrorInner::Request(ref e)))))
+        | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
+            box KvErrorInner::Request(ref e),
         ))))))
         | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(ref e))),
+            box MvccErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))),
         )))))) => Some(e.to_owned()),
         Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::MaxTimestampNotSynced {
             ..
@@ -242,10 +246,10 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::KeyIsLocked(info),
         )))))
-        | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
-            box EngineErrorInner::KeyIsLocked(info),
+        | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
+            box KvErrorInner::KeyIsLocked(info),
         )))))
-        | Error(box ErrorInner::Engine(EngineError(box EngineErrorInner::KeyIsLocked(info)))) => {
+        | Error(box ErrorInner::Kv(KvError(box KvErrorInner::KeyIsLocked(info)))) => {
             key_error.set_locked(info.clone());
         }
         // failed in prewrite or pessimistic lock
