@@ -181,7 +181,7 @@ fn parse_mountinfos_v1(infos: Vec<MountInfo>) -> HashMap<String, (String, PathBu
             if cg_info.super_options.contains_key(*controller) {
                 let key = controller.to_string();
                 let value = (cg_info.root.clone(), cg_info.mount_point.clone());
-                assert!(ret.insert(key, value).is_none());
+                ret.insert(key, value);
             }
         }
     }
