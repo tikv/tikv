@@ -53,6 +53,9 @@ pub enum ErrorInner {
     #[error("invalid cf name: {0}")]
     InvalidCf(String),
 
+    #[error("cf is deprecated in API V2, cf name: {0}")]
+    CfDeprecated(String),
+
     #[error("ttl is not enabled, but get put request with ttl")]
     TTLNotEnabled,
 
@@ -102,6 +105,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::GcWorkerTooBusy => error_code::storage::GC_WORKER_TOO_BUSY,
             ErrorInner::KeyTooLarge { .. } => error_code::storage::KEY_TOO_LARGE,
             ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
+            ErrorInner::CfDeprecated(_) => error_code::storage::CF_DEPRECATED,
             ErrorInner::TTLNotEnabled => error_code::storage::TTL_NOT_ENABLED,
             ErrorInner::DeadlineExceeded => error_code::storage::DEADLINE_EXCEEDED,
             ErrorInner::TTLsLenNotEqualsToPairs => {
