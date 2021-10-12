@@ -4,7 +4,7 @@ pub use self::test_utils::TEST_PROFILE_MUTEX;
 
 use std::fs::File;
 use std::io::Read;
-use std::os::linux::fs::MetadataExt;
+use std::os::unix::fs::MetadataExt;
 use std::pin::Pin;
 use std::process::Command;
 use std::sync::Mutex as StdMutex;
@@ -242,7 +242,7 @@ pub fn list_heap_profiles() -> Result<Vec<(String, String)>, String> {
         if !f.ends_with(HEAP_PROFILE_SUFFIX) {
             continue;
         }
-        let ct = item.metadata().map(|x| x.st_ctime() as u64).unwrap();
+        let ct = item.metadata().map(|x| x.ctime() as u64).unwrap();
         let dt = DateTime::<Local>::from(UNIX_EPOCH + Duration::from_secs(ct));
         profiles.push((f, dt.format("%Y-%m-%d %H:%M:%S").to_string()));
     }
