@@ -782,7 +782,7 @@ mod tests {
         assert_eq!(r.convert(key_ranges).len(), 3);
     }
 
-    fn build_key_ranges(start_key: &[u8], end_key: &[u8], num: u64) -> Vec<KeyRange> {
+    fn build_key_ranges(start_key: &[u8], end_key: &[u8], num: usize) -> Vec<KeyRange> {
         let mut key_ranges = vec![];
         for _ in 0..num {
             key_ranges.push(build_key_range(start_key, end_key, false));
@@ -794,9 +794,9 @@ mod tests {
     fn test_add_query() {
         let region_id = 1;
         let mut r = ReadStats::default();
-        let key_ranges = build_key_ranges(b"a", b"a", 20);
+        let key_ranges = build_key_ranges(b"a", b"a", r.sample_num);
         r.add_query_num_batch(region_id, &Peer::default(), key_ranges, QueryKind::Get);
-        let key_ranges = build_key_ranges(b"b", b"b", 300000);
+        let key_ranges = build_key_ranges(b"b", b"b", r.sample_num * 1000);
         r.add_query_num_batch(region_id, &Peer::default(), key_ranges, QueryKind::Get);
         let samples = &r.region_infos.get(&region_id).unwrap().key_ranges;
         let num = samples
