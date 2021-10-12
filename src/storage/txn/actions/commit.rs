@@ -277,6 +277,7 @@ pub mod tests {
             ts(60, 1),
             TimeStamp::zero(),
             false,
+            kvproto::kvrpcpb::Assertion::None,
         );
         // The min_commit_ts is ts(70, 0) other than ts(60, 1) in prewrite request.
         must_large_txn_locked(&engine, k, ts(60, 0), 100, ts(70, 1), false);

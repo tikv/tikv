@@ -1012,6 +1012,7 @@ pub(crate) mod tests {
                     TimeStamp::zero(),
                     TimeStamp::zero(),
                     false,
+                    kvproto::kvrpcpb::Assertion::None,
                 );
             } else {
                 expected_lock_info.set_lock_type(Op::PessimisticLock);

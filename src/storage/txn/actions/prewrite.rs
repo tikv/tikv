@@ -1271,6 +1271,7 @@ pub mod tests {
             15.into(),
             TimeStamp::default(),
             true,
+            kvproto::kvrpcpb::Assertion::None,
         );
         // Commit repeatedly, these operations should have no effect.
         must_commit(&engine, b"k1", 10, 25);
@@ -1551,5 +1552,74 @@ pub mod tests {
                 Ok(old_value)
             })],
         )
+    }
+
+    #[test]
+    fn test_prewrite_with_assertion() {
+        for pessimistic in [true, false] {
+            let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+
+            must_prewrite_put_impl(
+                &engine,
+                b"k1",
+                b"v1",
+                b"k1",
+                &None,
+                10.into(),
+                pessimistic,
+                100,
+                if pessimistic { 10.into() } else { 0.into() },
+                1,
+                11.into(),
+                0.into(),
+                false,
+                Assertion::NotExist,
+            );
+
+            must_commit(&engine, b"k1", 10, 15);
+
+            must_prewrite_put_impl(
+                &engine,
+                b"k1",
+                b"v1",
+                b"k1",
+                &None,
+                20.into(),
+                pessimistic,
+                100,
+                if pessimistic { 20.into() } else { 0.into() },
+                1,
+                21.into(),
+                0.into(),
+                false,
+                Assertion::Exist,
+            );
+
+            must_commit(&engine, b"k1", 20, 25);
+
+            let err = must_prewrite_put_err_impl(
+                &engine,
+                b"k1",
+                b"v1",
+                b"k1",
+                30,
+                if pessimistic { 30 } else { 0 },
+                pessimistic,
+                Assertion::NotExist,
+            );
+            assert!(matches!(err, Error(box ErrorInner::AssertionFailed { .. })));
+
+            let err = must_prewrite_put_err_impl(
+                &engine,
+                b"k2",
+                b"v2",
+                b"k2",
+                30,
+                if pessimistic { 30 } else { 0 },
+                pessimistic,
+                Assertion::Exist,
+            );
+            assert!(matches!(err, Error(box ErrorInner::AssertionFailed { .. })));
+        }
     }
 }

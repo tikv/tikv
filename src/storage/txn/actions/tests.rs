@@ -8,7 +8,7 @@ use crate::storage::mvcc::tests::write;
 use crate::storage::mvcc::{Error, Key, Mutation, MvccTxn, SnapshotReader, TimeStamp};
 use crate::storage::{txn, Engine};
 use concurrency_manager::ConcurrencyManager;
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{Assertion, Context};
 use prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties};
 
 pub fn must_prewrite_put_impl<E: Engine>(
@@ -25,6 +25,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
     min_commit_ts: TimeStamp,
     max_commit_ts: TimeStamp,
     is_retry_request: bool,
+    assertion: Assertion,
 ) {
     let ctx = Context::default();
     let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -32,7 +33,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
 
-    let mutation = Mutation::make_put(Key::from_raw(key), value.to_vec());
+    let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()), assertion);
     let txn_kind = if for_update_ts.is_zero() {
         TransactionKind::Optimistic(false)
     } else {
@@ -86,6 +87,7 @@ pub fn must_prewrite_put<E: Engine>(
         TimeStamp::default(),
         TimeStamp::default(),
         false,
+        Assertion::None,
     );
 }
 
@@ -112,6 +114,7 @@ pub fn must_pessimistic_prewrite_put<E: Engine>(
         TimeStamp::default(),
         TimeStamp::default(),
         false,
+        Assertion::None,
     );
 }
 
@@ -139,6 +142,7 @@ pub fn must_pessimistic_prewrite_put_with_ttl<E: Engine>(
         TimeStamp::default(),
         TimeStamp::default(),
         false,
+        Assertion::None,
     );
 }
 
@@ -169,6 +173,7 @@ pub fn must_prewrite_put_for_large_txn<E: Engine>(
         min_commit_ts,
         TimeStamp::default(),
         false,
+        Assertion::None,
     );
 }
 
@@ -196,6 +201,7 @@ pub fn must_prewrite_put_async_commit<E: Engine>(
         min_commit_ts.into(),
         TimeStamp::default(),
         false,
+        Assertion::None,
     );
 }
 
@@ -225,6 +231,7 @@ pub fn must_pessimistic_prewrite_put_async_commit<E: Engine>(
         min_commit_ts.into(),
         TimeStamp::default(),
         false,
+        Assertion::None,
     );
 }
 
@@ -251,7 +258,7 @@ fn default_txn_props(
         is_retry_request: false,
     }
 }
-fn must_prewrite_put_err_impl<E: Engine>(
+pub fn must_prewrite_put_err_impl<E: Engine>(
     engine: &E,
     key: &[u8],
     value: &[u8],
@@ -259,6 +266,7 @@ fn must_prewrite_put_err_impl<E: Engine>(
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
     is_pessimistic_lock: bool,
+    assertion: Assertion,
 ) -> Error {
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let for_update_ts = for_update_ts.into();
@@ -266,7 +274,7 @@ fn must_prewrite_put_err_impl<E: Engine>(
     let ts = ts.into();
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
-    let mutation = Mutation::make_put(Key::from_raw(key), value.to_vec());
+    let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()), assertion);
 
     prewrite(
         &mut txn,
@@ -286,7 +294,16 @@ pub fn must_prewrite_put_err<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
 ) -> Error {
-    must_prewrite_put_err_impl(engine, key, value, pk, ts, TimeStamp::zero(), false)
+    must_prewrite_put_err_impl(
+        engine,
+        key,
+        value,
+        pk,
+        ts,
+        TimeStamp::zero(),
+        false,
+        Assertion::None,
+    )
 }
 
 pub fn must_pessimistic_prewrite_put_err<E: Engine>(
@@ -306,6 +323,7 @@ pub fn must_pessimistic_prewrite_put_err<E: Engine>(
         ts,
         for_update_ts,
         is_pessimistic_lock,
+        Assertion::None,
     )
 }
 
