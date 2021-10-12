@@ -4,6 +4,9 @@ pub use self::test_utils::TEST_PROFILE_MUTEX;
 
 use std::fs::File;
 use std::io::Read;
+#[cfg(target_os = "macos")]
+use std::os::macos::fs::MetadataExt;
+#[cfg(target_os = "linux")]
 use std::os::linux::fs::MetadataExt;
 use std::pin::Pin;
 use std::process::Command;
