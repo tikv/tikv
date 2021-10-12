@@ -99,10 +99,12 @@ pub mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::commands::WriteCommand;
+    use crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT;
     use crate::storage::txn::tests::*;
     use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+    use tikv_util::deadline::Deadline;
 
     pub fn must_success<E: Engine>(
         engine: &E,
@@ -120,6 +122,7 @@ pub mod tests {
             primary_key: Key::from_raw(primary_key),
             start_ts,
             advise_ttl,
+            deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
         let result = command
             .process_write(
@@ -159,6 +162,7 @@ pub mod tests {
             primary_key: Key::from_raw(primary_key),
             start_ts,
             advise_ttl,
+            deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
         assert!(
             command

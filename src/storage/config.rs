@@ -7,9 +7,9 @@ use crate::server::ttl::TTLCheckerTask;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::txn::flow_controller::FlowController;
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
-use engine_rocks::RocksEngine;
-use engine_traits::{CFNamesExt, CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
+use engine_traits::{ColumnFamilyOptions, KvEngine, CF_DEFAULT};
 use file_system::{get_io_rate_limiter, IOPriority, IORateLimitMode, IORateLimiter, IOType};
+use kvproto::kvrpcpb::ApiVersion;
 use libc::c_int;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use std::error::Error;
@@ -59,6 +59,9 @@ pub struct Config {
     pub enable_ttl: bool,
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
+    #[online_config(skip)]
+    #[serde(with = "api_version_serde")]
+    pub api_version: ApiVersion,
     #[online_config(submodule)]
     pub flow_control: FlowControlConfig,
     #[online_config(submodule)]
@@ -84,6 +87,7 @@ impl Default for Config {
             flow_control: FlowControlConfig::default(),
             block_cache: BlockCacheConfig::default(),
             io_rate_limit: IORateLimitConfig::default(),
+            api_version: ApiVersion::V1,
         }
     }
 }
@@ -101,24 +105,62 @@ impl Config {
             );
             self.scheduler_concurrency = MAX_SCHED_CONCURRENCY;
         }
-        self.io_rate_limit.validate()
+        self.io_rate_limit.validate()?;
+        if self.api_version == ApiVersion::V2 && !self.enable_ttl {
+            warn!("storage.enable_ttl is deprecated in API V2 since API V2 forces to enable TTL.");
+            self.enable_ttl = true;
+        };
+
+        Ok(())
     }
 }
 
-pub struct StorageConfigManger {
-    kvdb: RocksEngine,
+mod api_version_serde {
+    use kvproto::kvrpcpb::ApiVersion;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &ApiVersion, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        Ok(match value {
+            ApiVersion::V1 => serializer.serialize_u32(1)?,
+            ApiVersion::V2 => serializer.serialize_u32(2)?,
+        })
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<ApiVersion, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = u32::deserialize(deserializer)?;
+        Ok(match value {
+            1 => ApiVersion::V1,
+            2 => ApiVersion::V2,
+            _ => {
+                return Err(serde::de::Error::custom(format!(
+                    "unknown storage.api_version: {}",
+                    value
+                )));
+            }
+        })
+    }
+}
+
+pub struct StorageConfigManger<EK: KvEngine> {
+    kvdb: EK,
     shared_block_cache: bool,
     ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
     flow_controller: Arc<FlowController>,
 }
 
-impl StorageConfigManger {
+impl<EK: KvEngine> StorageConfigManger<EK> {
     pub fn new(
-        kvdb: RocksEngine,
+        kvdb: EK,
         shared_block_cache: bool,
         ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
         flow_controller: Arc<FlowController>,
-    ) -> StorageConfigManger {
+    ) -> Self {
         StorageConfigManger {
             kvdb,
             shared_block_cache,
@@ -128,7 +170,7 @@ impl StorageConfigManger {
     }
 }
 
-impl ConfigManager for StorageConfigManger {
+impl<EK: KvEngine> ConfigManager for StorageConfigManger<EK> {
     fn dispatch(&mut self, mut change: ConfigChange) -> CfgResult<()> {
         if let Some(ConfigValue::Module(mut block_cache)) = change.remove("block_cache") {
             if !self.shared_block_cache {

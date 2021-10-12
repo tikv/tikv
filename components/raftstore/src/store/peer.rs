@@ -631,7 +631,7 @@ where
             dangerous_majority_set: false,
             has_region_merge_proposal: false,
             latest_majority_set_update_on_disk_full: Instant::now(),
-            region_merge_proposal_index: 0 as u64,
+            region_merge_proposal_index: 0_u64,
             read_progress: Arc::new(RegionReadProgress::new(
                 region,
                 applied_index,
@@ -3079,25 +3079,24 @@ where
         }
 
         // prepareMerge need to be broadcast to as many as followers when disk full.
-        if req.has_admin_request() {
-            if !matches!(poll_ctx.self_disk_usage, DiskUsage::Normal)
-                || !self.disk_full_peers.is_empty()
-            {
-                match req.get_admin_request().get_cmd_type() {
-                    AdminCmdType::PrepareMerge
-                    | AdminCmdType::CommitMerge
-                    | AdminCmdType::RollbackMerge => {
-                        self.has_region_merge_proposal = true;
-                        self.region_merge_proposal_index = propose_index;
-                        for (k, v) in &mut self.disk_full_peers.peers {
-                            if !matches!(v.0, DiskUsage::AlreadyFull) {
-                                v.1 = true;
-                                self.raft_group.raft.adjust_max_inflight_msgs(*k, 1);
-                            }
+        if req.has_admin_request()
+            && (!matches!(poll_ctx.self_disk_usage, DiskUsage::Normal)
+                || !self.disk_full_peers.is_empty())
+        {
+            match req.get_admin_request().get_cmd_type() {
+                AdminCmdType::PrepareMerge
+                | AdminCmdType::CommitMerge
+                | AdminCmdType::RollbackMerge => {
+                    self.has_region_merge_proposal = true;
+                    self.region_merge_proposal_index = propose_index;
+                    for (k, v) in &mut self.disk_full_peers.peers {
+                        if !matches!(v.0, DiskUsage::AlreadyFull) {
+                            v.1 = true;
+                            self.raft_group.raft.adjust_max_inflight_msgs(*k, 1);
                         }
                     }
-                    _ => {}
                 }
+                _ => {}
             }
         }
 
@@ -3423,10 +3422,8 @@ where
             }
         }
 
-        if self.has_region_merge_proposal {
-            if min_peer_index >= self.region_merge_proposal_index {
-                self.has_region_merge_proposal = false;
-            }
+        if self.has_region_merge_proposal && min_peer_index >= self.region_merge_proposal_index {
+            self.has_region_merge_proposal = false;
         }
 
         if normal_peers.len() == peers_len {
@@ -3437,9 +3434,9 @@ where
         // Reverse sort peers based on `next_idx`, `usage` and `store healthy status`, then try to get a potential quorum.
         next_idxs.sort_by(|x, y| {
             if x.3 == y.3 {
-                return y.1.cmp(&x.1);
+                y.1.cmp(&x.1)
             } else {
-                return y.3.cmp(&x.3);
+                y.3.cmp(&x.3)
             }
         });
 

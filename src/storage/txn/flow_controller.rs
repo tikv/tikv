@@ -459,11 +459,11 @@ impl<E: KvEngine> FlowChecker<E> {
         discard_ratio: Arc<AtomicU32>,
         limiter: Arc<Limiter>,
     ) -> Self {
-        let mut cf_checkers = map![];
-
-        for cf in engine.cf_names() {
-            cf_checkers.insert(cf.to_owned(), CFFlowChecker::default());
-        }
+        let cf_checkers = engine
+            .cf_names()
+            .into_iter()
+            .map(|cf| (cf.to_owned(), CFFlowChecker::default()))
+            .collect();
 
         Self {
             soft_pending_compaction_bytes_limit: config.soft_pending_compaction_bytes_limit.0,

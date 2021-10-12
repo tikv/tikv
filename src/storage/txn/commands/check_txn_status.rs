@@ -142,10 +142,12 @@ pub mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::commands::{pessimistic_rollback, WriteCommand, WriteContext};
+    use crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT;
     use crate::storage::txn::tests::*;
     use crate::storage::{types::TxnStatus, ProcessResult, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+    use tikv_util::deadline::Deadline;
     use txn_types::Key;
     use txn_types::WriteType;
 
@@ -174,6 +176,7 @@ pub mod tests {
             rollback_if_not_exist,
             force_sync_commit,
             resolving_pessimistic_lock,
+            deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
         let result = command
             .process_write(
@@ -219,6 +222,7 @@ pub mod tests {
             rollback_if_not_exist,
             force_sync_commit,
             resolving_pessimistic_lock,
+            deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
         assert!(
             command
