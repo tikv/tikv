@@ -112,6 +112,7 @@ pub enum Collation {
     Utf8Mb4UnicodeCi = -224,
     Latin1Bin = -47,
     GbkBin = -87,
+    GbkChineseCi = -28,
 }
 
 impl Collation {
