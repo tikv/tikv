@@ -198,6 +198,11 @@ impl FeatureGate {
     pub fn batch_resolved_ts() -> semver::Version {
         semver::Version::new(4, 0, 8)
     }
+
+    // Returns the first version (v5.3.0) that supports validate cluster id.
+    pub(crate) fn validate_cluster_id() -> semver::Version {
+        semver::Version::new(5, 3, 0)
+    }
 }
 
 pub struct Conn {

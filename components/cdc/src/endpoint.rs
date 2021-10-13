@@ -20,8 +20,9 @@ use kvproto::cdcpb::{
 };
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::{
-    ChangeDataRequest, DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event,
-    Event_oneof_event, ResolvedTs,
+    ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
+    DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event, Event_oneof_event,
+    ResolvedTs,
 };
 use kvproto::kvrpcpb::{CheckLeaderRequest, ExtraOp as TxnExtraOp, LeaderInfo};
 use kvproto::metapb::{PeerRole, Region, RegionEpoch};
@@ -220,6 +221,8 @@ impl fmt::Debug for Task {
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
 pub struct Endpoint<T, E> {
+    cluster_id: u64,
+
     capture_regions: HashMap<u64, Delegate>,
     connections: HashMap<ConnID, Conn>,
     scheduler: Scheduler<Task>,
@@ -261,6 +264,7 @@ pub struct Endpoint<T, E> {
 
 impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     pub fn new(
+        cluster_id: u64,
         config: &CdcConfig,
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
@@ -301,6 +305,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let max_scan_batch_size = 1024;
 
         let ep = Endpoint {
+            cluster_id,
             env,
             security_mgr,
             capture_regions: HashMap::default(),
@@ -499,6 +504,20 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             }
         };
         downstream.set_sink(conn.get_sink().clone());
+
+        // Check if the cluster id matches.
+        let request_cluster_id = request.get_header().get_cluster_id();
+        if version >= FeatureGate::validate_cluster_id() && self.cluster_id != request_cluster_id {
+            let mut err_event = EventError::default();
+            let mut err = ErrorClusterIdMismatch::default();
+
+            err.set_current(self.cluster_id);
+            err.set_request(request_cluster_id);
+            err_event.set_cluster_id_mismatch(err);
+
+            let _ = downstream.sink_error_event(region_id, err_event);
+            return;
+        }
 
         // TODO: Add a new task to close incompatible features.
         if let Some(e) = conn.check_version_and_set_feature(version) {
@@ -1497,6 +1516,7 @@ mod tests {
     use tempfile::TempDir;
     use test_raftstore::MockRaftStoreRouter;
     use test_raftstore::TestPdClient;
+    use tikv::server::DEFAULT_CLUSTER_ID;
     use tikv::storage::kv::Engine;
     use tikv::storage::txn::tests::{must_acquire_pessimistic_lock, must_prewrite_put};
     use tikv::storage::TestEngineBuilder;
@@ -1605,6 +1625,7 @@ mod tests {
         let env = Arc::new(Environment::new(1));
         let security_mgr = Arc::new(SecurityManager::default());
         let ep = Endpoint::new(
+            DEFAULT_CLUSTER_ID,
             cfg,
             pd_client,
             task_sched,
