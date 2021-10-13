@@ -44,26 +44,36 @@ impl SoftLimit {
         })
     }
 
-    /// shrink shrinks the tasks can be executed concurrently by n
-    /// would block until the quota applied.
-    pub fn shrink(&self, n: usize) -> Result<()> {
+    fn take_tokens(&self, n: usize) -> Result<()> {
         for _ in 0..n {
             self.rx.recv()?;
         }
+        Ok(())
+    }
+
+    fn grant_tokens(&self, n: usize) -> Result<()> {
+        for _ in 0..n {
+            self.sx.send(())?;
+        }
+        Ok(())
+    }
+
+    /// shrink shrinks the tasks can be executed concurrently by n
+    /// would block until the quota applied.
+    pub fn shrink(&self, n: usize) -> Result<()> {
+        self.take_tokens(n)?;
         self.cap.fetch_sub(n, Ordering::SeqCst);
         Ok(())
     }
 
     /// grow grows the tasks can be executed concurrently by n
     pub fn grow(&self, n: usize) -> Result<()> {
-        for _ in 0..n {
-            self.sx.send(())?;
-        }
+        self.grant_tokens(n)?;
         self.cap.fetch_add(n, Ordering::SeqCst);
         Ok(())
     }
 
-    /// resize the tasks avaliable.
+    /// resize the tasks available concurrently.
     pub fn resize(&self, target: usize) -> Result<()> {
         let current = loop {
             let current = self.cap.load(Ordering::SeqCst);
@@ -75,11 +85,11 @@ impl SoftLimit {
                 break current;
             }
         };
-        let diff = current as isize - target as isize;
+        let diff = dbg!(current) as isize - dbg!(target) as isize;
         if diff > 0 {
-            self.shrink(diff as usize)?;
+            self.take_tokens(diff as usize)?;
         } else if diff < 0 {
-            self.grow((-diff) as usize)?;
+            self.grant_tokens((-diff) as usize)?;
         }
         Ok(())
     }
@@ -100,7 +110,7 @@ impl SoftLimit {
 }
 
 pub struct SoftLimitByCPU {
-    metrics: RefCell<ThreadInfoStatistics>,
+    pub(crate) metrics: RefCell<ThreadInfoStatistics>,
     total_time: f64,
     keep_remain: usize,
 }
@@ -242,7 +252,12 @@ mod softlimit_test {
         let limit = SoftLimit::new(cpu_count);
         std::thread::sleep(Duration::from_millis(1000));
         cpu_limit.exec_over(&limit).unwrap();
-        assert_eq!(limit.current_cap(), cpu_count - 2);
+        assert_eq!(
+            limit.current_cap(),
+            cpu_count - 2,
+            "map = {:?}",
+            cpu_limit.metrics.borrow().get_cpu_usages()
+        );
         stop();
         std::thread::sleep(Duration::from_millis(1000));
         cpu_limit.exec_over(&limit).unwrap();
