@@ -11,6 +11,7 @@ define_error_codes!(
     GC_WORKER_TOO_BUSY => ("GcWorkerTooBusy", "", ""),
     KEY_TOO_LARGE => ("KeyTooLarge", "", ""),
     INVALID_CF => ("InvalidCF", "", ""),
+    CF_DEPRECATED => ("CFDeprecated", "", ""),
     TTL_NOT_ENABLED => ("TTLNotEnabled", "", ""),
     TTLS_LEN_NOT_EQUALS_TO_PAIRS => ("TTLsLenNotEqualsToPairs", "", ""),
     PROTOBUF => ("Protobuf", "", ""),

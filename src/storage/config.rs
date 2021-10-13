@@ -106,10 +106,6 @@ impl Config {
             self.scheduler_concurrency = MAX_SCHED_CONCURRENCY;
         }
         self.io_rate_limit.validate()?;
-        if self.api_version == ApiVersion::V2 && !self.enable_ttl {
-            warn!("storage.enable_ttl is deprecated in API V2 since API V2 forces to enable TTL.");
-            self.enable_ttl = true;
-        };
 
         Ok(())
     }
