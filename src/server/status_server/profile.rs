@@ -2,9 +2,8 @@
 #[cfg(test)]
 pub use self::test_utils::TEST_PROFILE_MUTEX;
 
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::io::Read;
-use std::os::linux::fs::MetadataExt;
 use std::pin::Pin;
 use std::process::Command;
 use std::sync::Mutex as StdMutex;
@@ -242,7 +241,7 @@ pub fn list_heap_profiles() -> Result<Vec<(String, String)>, String> {
         if !f.ends_with(HEAP_PROFILE_SUFFIX) {
             continue;
         }
-        let ct = item.metadata().map(|x| x.st_ctime() as u64).unwrap();
+        let ct = item.metadata().map(|x| last_change_epoch(&x)).unwrap();
         let dt = DateTime::<Local>::from(UNIX_EPOCH + Duration::from_secs(ct));
         profiles.push((f, dt.format("%Y-%m-%d %H:%M:%S").to_string()));
     }
@@ -302,6 +301,17 @@ mod test_utils {
     }
 }
 
+#[cfg(unix)]
+fn last_change_epoch(metadata: &Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    metadata.ctime() as u64
+}
+
+#[cfg(not(unix))]
+fn last_change_epoch(metadata: &Metadata) -> u64 {
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,6 +322,12 @@ mod tests {
     use std::thread;
     use std::time::Duration;
     use tokio::runtime;
+
+    #[test]
+    fn test_last_change_epoch() {
+        let f = tempfile::tempfile().unwrap();
+        assert!(last_change_epoch(&f.metadata().unwrap()) > 0);
+    }
 
     #[test]
     fn test_extract_thread_name() {
