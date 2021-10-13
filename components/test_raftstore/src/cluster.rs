@@ -31,6 +31,7 @@ use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
 use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
 use raftstore::store::*;
+use raftstore::router::RaftStoreRouter;
 use raftstore::{Error, Result};
 use tikv::config::TiKvConfig;
 use tikv::server::Result as ServerResult;
@@ -1282,6 +1283,24 @@ impl<T: Simulator> Cluster<T> {
                 callback: cb,
                 source: "test".into(),
             },
+        )
+        .unwrap();
+    }
+
+    pub fn enter_force_leader(&mut self, region_id: u64, store_id: u64) {
+        let router = self.sim.rl().get_router(store_id).unwrap();
+        router.significant_send(
+            region_id,
+            SignificantMsg::EnterForceLeaderState,
+        )
+        .unwrap();
+    }
+
+    pub fn exit_force_leader(&mut self, region_id: u64, store_id: u64) {
+        let router = self.sim.rl().get_router(store_id).unwrap();
+        router.significant_send(
+            region_id,
+            SignificantMsg::ExitForceLeaderState,
         )
         .unwrap();
     }

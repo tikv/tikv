@@ -590,12 +590,6 @@ where
                         continue;
                     }
 
-                    if self.fsm.peer.force_leader {
-                        // in force leader state, forbid requests to make the recovery progress less error-prone
-                        cmd.callback.invoke_with_response(new_error(Error::RecoveryInProgress(self.region_id())));
-                        continue;
-                    }
-
                     let req_size = cmd.request.compute_size();
                     if self.ctx.cfg.cmd_batch
                         && self.fsm.batch_req_builder.can_batch(&cmd.request, req_size)
@@ -994,8 +988,10 @@ where
         self.fsm.peer.force_leader = true;
 
         // become candidate first to increase term
-        self.fsm.peer.raft_group.raft.become_candidate();
-        self.fsm.peer.raft_group.raft.become_leader();
+        if !self.fsm.peer.is_leader() {
+            self.fsm.peer.raft_group.raft.become_candidate();
+            self.fsm.peer.raft_group.raft.become_leader();
+        }
 
         // append an empty entry to truncate logs that are not committed
         let mut entry = raft::eraftpb::Entry::default();
@@ -3446,6 +3442,13 @@ where
         let region_id = self.region_id();
         let leader_id = self.fsm.peer.leader_id();
         let request = msg.get_requests();
+
+        if self.fsm.peer.force_leader {
+            // in force leader state, forbid requests to make the recovery progress less error-prone
+            if !(msg.has_admin_request() && msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeer) {
+                return Err(Error::RecoveryInProgress(self.region_id()));
+            }
+        }
 
         // ReadIndex can be processed on the replicas.
         let is_read_index_request =

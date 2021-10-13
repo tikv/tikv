@@ -3071,6 +3071,9 @@ where
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
             return Err(Error::NotLeader(self.region_id, None));
+        } else if self.force_leader {
+            // forward the commit index
+            self.raft_group.raft.raft_log.committed = self.raft_group.raft.raft_log.last_index();
         }
 
         Ok(Either::Left(propose_index))
