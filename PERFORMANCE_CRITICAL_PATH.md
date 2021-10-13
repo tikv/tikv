@@ -7,4 +7,4 @@ Here're some typical mistakes that should be avoided in the #[PerformanceCritica
 * Global lock.
 * Long tasks that do not have to be synchronous (Could be done in background thread instead).
 
-Here's the [performance map](images/Tikv_Map.png) that would help you to understand how read/write requests are executed inside Tikv. 
+Here's the [performance map](images/tikv_Map.png) that would help you to understand how read/write requests are executed inside Tikv. 
