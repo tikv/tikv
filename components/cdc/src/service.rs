@@ -59,11 +59,11 @@ impl CdcEvent {
                 // See https://play.golang.org/p/GFA9S-z_kUt
                 let approximate_region_id_bytes = 4;
                 let approximate_tso_bytes = 9;
-                // Protobuf encoding adds a tag to every varints.
+                // Protobuf encoding adds a tag to every Uvarint.
                 // protobuf::rt::tag_size(1 /* or 2, field number*/) yields 1.
                 let tag_bytes = 1;
 
-                // Byets of an array of region id.
+                // Bytes of an array of region id.
                 r.regions.len() as u32 * (tag_bytes + approximate_region_id_bytes)
                 // Bytes of a TSO.
                 + (tag_bytes + approximate_tso_bytes)
