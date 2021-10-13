@@ -13,6 +13,7 @@
 # We require epel packages, so enable the fedora EPEL repo then install dependencies.
 # Install the system dependencies
 # Attempt to clean and rebuild the cache to avoid 404s
+# test dco
 
 # To avoid rebuilds we first install all Cargo dependencies
 
