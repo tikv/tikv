@@ -41,6 +41,7 @@ use tikv::storage::kv::{PerfStatisticsInstant, Snapshot};
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
+use tikv_util::sys::inspector::{self_thread_inspector, ThreadInspector};
 use tikv_util::time::{Instant, Limiter};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
@@ -1277,11 +1278,14 @@ impl Initializer {
         &self,
         scanner: &mut DeltaScanner<S>,
         entries: &mut Vec<Option<TxnEntry>>,
-    ) -> Result<usize> {
+    ) -> Result<(usize, usize)> {
         let mut total_bytes = 0;
         let mut total_size = 0;
 
         let perf_instant = PerfStatisticsInstant::new();
+        // FIXME: handles `Err` and `None` correctly.
+        let inspector = self_thread_inspector().unwrap();
+        let old_disk_read = inspector.io_stat().unwrap().unwrap().read;
         while total_bytes <= self.max_scan_batch_bytes && total_size < self.max_scan_batch_size {
             total_size += 1;
             match scanner.next_entry()? {
@@ -1295,8 +1299,13 @@ impl Initializer {
                 }
             }
         }
+        let new_disk_read = inspector.io_stat().unwrap().unwrap().read;
+        let disk_read = new_disk_read - old_disk_read;
+        CDC_SCAN_DISK_READ_BYTES.inc_by(disk_read as _);
         TLS_CDC_PERF_STATS.with(|x| *x.borrow_mut() += perf_instant.delta());
-        Ok(total_bytes)
+        tls_flush_perf_stats();
+
+        Ok((total_bytes, disk_read as usize))
     }
 
     async fn scan_batch<S: Snapshot>(
@@ -1305,12 +1314,10 @@ impl Initializer {
         resolver: Option<&mut Resolver>,
     ) -> Result<Vec<Option<TxnEntry>>> {
         let mut entries = Vec::with_capacity(self.max_scan_batch_size);
-        let total_bytes = self.do_scan(scanner, &mut entries)?;
-        tls_flush_perf_stats();
-
-        if total_bytes > 0 {
-            self.speed_limiter.consume(total_bytes).await;
-            CDC_SCAN_BYTES.inc_by(total_bytes as _);
+        let (total_bytes, disk_read) = self.do_scan(scanner, &mut entries)?;
+        CDC_SCAN_BYTES.inc_by(total_bytes as _);
+        if disk_read > 0 {
+            self.speed_limiter.consume(disk_read).await;
         }
 
         if let Some(resolver) = resolver {
