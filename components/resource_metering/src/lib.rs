@@ -77,15 +77,9 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-<<<<<<< HEAD
-            enabled: false,
-            agent_address: "".to_string(),
-            report_agent_interval: ReadableDuration::minutes(1),
-=======
             enabled: true,
             receiver_address: "".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
->>>>>>> 677ff9ada... resource_metering naming issue on agent_address (#10975)
             max_resource_groups: 2000,
             precision: ReadableDuration::secs(1),
         }
