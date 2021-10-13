@@ -1928,6 +1928,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority_tag = get_priority_tag(priority);
         let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let api_version = self.api_version;
+        let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -1951,7 +1952,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 let begin_instant = tikv_util::time::Instant::now_coarse();
-                let ret = raw::raw_checksum_ranges(TTLSnapshot::from(snapshot), ranges).await;
+                let ret = if enable_ttl {
+                    let snap = TTLSnapshot::from(snapshot);
+                    raw::raw_checksum_ranges(snap, ranges).await
+                } else {
+                    raw::raw_checksum_ranges(snapshot, ranges).await
+                };
                 SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                     .get(CMD)
                     .observe(begin_instant.saturating_elapsed().as_secs_f64());
