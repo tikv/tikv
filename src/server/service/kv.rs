@@ -660,12 +660,12 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             while let Some(msg) = stream.try_next().await? {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
                 let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
-                if let Err(e) = Self::handle_raft_message(store_id, &ch, msg, reject) {
+                if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
+                    Self::handle_raft_message(store_id, &ch, msg, reject)
+                {
                     // Return an error here will break the connection, only do that for `StoreNotMatch` to
                     // let tikv to resolve a correct address from PD
-                    if let err @ RaftStoreError::StoreNotMatch { .. } = e {
-                        return Err(Error::from(err));
-                    }
+                    return Err(Error::from(err));
                 }
             }
             Ok::<(), Error>(())
@@ -706,12 +706,12 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
                 let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
                 for msg in batch_msg.take_msgs().into_iter() {
-                    if let Err(e) = Self::handle_raft_message(store_id, &ch, msg, reject) {
+                    if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
+                        Self::handle_raft_message(store_id, &ch, msg, reject)
+                    {
                         // Return an error here will break the connection, only do that for `StoreNotMatch` to
                         // let tikv to resolve a correct address from PD
-                        if let err @ RaftStoreError::StoreNotMatch { .. } = e {
-                            return Err(Error::from(err));
-                        }
+                        return Err(Error::from(err));
                     }
                 }
             }
