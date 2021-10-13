@@ -65,10 +65,6 @@ impl SoftLimit {
 
     /// resize the tasks avaliable.
     pub fn resize(&self, target: usize) -> Result<()> {
-        if target < 0 {
-            warn!("trying to resize softlimit to negtive number!"; "target" => %target);
-            return Ok(());
-        }
         let current = loop {
             let current = self.cap.load(Ordering::SeqCst);
             if self
@@ -132,7 +128,7 @@ impl SoftLimitByCPU {
     pub fn exec_over(&self, limit: &SoftLimit) -> Result<()> {
         // TODO don't make it so MAGIC!
         let idle = self.current_idle_exclude(|s| s.contains("bkwkr")) as usize;
-        limit.resize(idle - self.keep_remain)?;
+        limit.resize(idle.checked_sub(self.keep_remain).unwrap_or(0))?;
         Ok(())
     }
 
