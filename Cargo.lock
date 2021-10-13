@@ -222,6 +222,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crc64fast",
+ "crossbeam",
  "engine_rocks",
  "engine_traits",
  "error_code",

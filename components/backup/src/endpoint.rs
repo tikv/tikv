@@ -38,6 +38,7 @@ use yatp::task::callback::{Handle, TaskCell};
 use yatp::ThreadPool;
 
 use crate::metrics::*;
+use crate::softlimit::{SoftLimit, SoftLimitByCPU};
 use crate::writer::BackupWriterBuilder;
 use crate::Error;
 use crate::*;
@@ -428,6 +429,50 @@ impl ConfigManager {
     }
 }
 
+struct SoftLimitKeeper {
+    limit: SoftLimit,
+}
+
+impl SoftLimitKeeper {
+    fn run(config: ConfigManager) -> Self {
+        let BackupConfig {
+            num_threads,
+            auto_tune_remain_threads,
+            ..
+        } = *config.0.read().unwrap();
+        let cpu_quota = SoftLimitByCPU::with_remain(auto_tune_remain_threads);
+        let limit = SoftLimit::new(num_threads);
+        let limit_cloned = limit.clone();
+        std::thread::Builder::new()
+            .name("backup.softlimit_keeper".to_owned())
+            .spawn(move || {
+                loop {
+                    let BackupConfig {
+                        enable_auto_tune,
+                        auto_tune_refresh_gap,
+                        ..
+                    } = *config.0.read().unwrap();
+                    if !enable_auto_tune {
+                        return;
+                    }
+                    if let Err(e) = cpu_quota.exec_over(&limit_cloned) {
+                        error!("error during appling the soft limit for backup."; "err" => %e);
+                    }
+                    std::thread::sleep(auto_tune_refresh_gap.0);
+                }
+            })
+            // should never fail.
+            .unwrap();
+        Self {
+            limit: limit.clone(),
+        }
+    }
+
+    fn limit(&self) -> SoftLimit {
+        self.limit.clone()
+    }
+}
+
 /// The endpoint of backup.
 ///
 /// It coordinates backup tasks and dispatches them to different workers.
@@ -437,6 +482,7 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     db: Arc<DB>,
     config_manager: ConfigManager,
     concurrency_manager: ConcurrencyManager,
+    softlimit: SoftLimitKeeper,
 
     pub(crate) engine: E,
     pub(crate) region_info: R,
@@ -605,13 +651,16 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         config: BackupConfig,
         concurrency_manager: ConcurrencyManager,
     ) -> Endpoint<E, R> {
+        let config_manager = ConfigManager(Arc::new(RwLock::new(config)));
+        let softlimit = SoftLimitKeeper::run(config_manager.clone());
         Endpoint {
             store_id,
             engine,
             region_info,
             pool: RefCell::new(ControlThreadPool::new()),
             db,
-            config_manager: ConfigManager(Arc::new(RwLock::new(config))),
+            softlimit,
+            config_manager,
             concurrency_manager,
         }
     }
@@ -637,6 +686,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
 
         // TODO: make it async.
+        let limit = self.softlimit.limit().clone();
         self.pool.borrow_mut().spawn(move || {
             tikv_alloc::add_thread_memory_accessor();
             let _with_io_type = WithIOType::new(IOType::Export);
@@ -677,6 +727,10 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 };
 
                 for brange in batch {
+                    let guard = limit.guard();
+                    if let Err(e) = guard {
+                        warn!("failed to reterive limit guard."; "err" => %e);
+                    }
                     if request.cancel.load(Ordering::SeqCst) {
                         warn!("backup task has canceled"; "range" => ?brange);
                         return;
@@ -1006,6 +1060,7 @@ pub mod tests {
                     num_threads: 4,
                     batch_size: 8,
                     sst_max_size: ReadableSize::mb(144),
+                    ..Default::default()
                 },
                 concurrency_manager,
             ),
