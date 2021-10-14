@@ -74,8 +74,12 @@ impl RaftLogBatchTrait for RaftLogBatch {
         Ok(())
     }
 
+    #[inline]
     fn persist_size(&self) -> usize {
-        panic!("persist_size is not implemented for raft engine");
+        // TODO: This is not data size, but sufficient for current usage.
+        // Data size is useful when controlling bytes per sync, so it's better
+        // to implement it correctly.
+        self.0.items.len()
     }
 
     fn is_empty(&self) -> bool {
