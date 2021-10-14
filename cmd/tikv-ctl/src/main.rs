@@ -1812,7 +1812,7 @@ fn main() {
 
     // Initialize configuration and security manager.
     let cfg_path = opt.config.as_ref();
-    let cfg = cfg_path.map_or_else(
+    let mut cfg = cfg_path.map_or_else(
         || {
             let mut cfg = TiKvConfig::default();
             cfg.log_level = tikv_util::logger::get_level_by_string("warn").unwrap();
@@ -1983,6 +1983,13 @@ fn main() {
     let data_dir = opt.data_dir.as_deref();
     let skip_paranoid_checks = opt.skip_paranoid_checks;
     let host = opt.host.as_deref();
+    if let Some(dir) = data_dir {
+        cfg.storage.data_dir = dir.to_owned();
+        if cfg.raft_store.raftdb_path.is_empty() {
+            let default_raftdb_path = canonicalize_sub_path(&cfg.storage.data_dir, "raft").unwrap();
+            cfg.raft_store.raftdb_path = default_raftdb_path;
+        }
+    }
 
     let debug_executor =
         new_debug_executor(&cfg, data_dir, skip_paranoid_checks, host, Arc::clone(&mgr));
