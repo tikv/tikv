@@ -1952,12 +1952,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 let begin_instant = tikv_util::time::Instant::now_coarse();
-                let ret = if enable_ttl {
-                    let snap = TTLSnapshot::from(snapshot);
-                    raw::raw_checksum_ranges(snap, ranges).await
-                } else {
-                    raw::raw_checksum_ranges(snapshot, ranges).await
-                };
+                // raw_checksum are only available in API V2, where TTL must be enabled.
+                raw::raw_checksum_ranges(TTLSnapshot::from(snapshot), ranges).await;
                 SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                     .get(CMD)
                     .observe(begin_instant.saturating_elapsed().as_secs_f64());
