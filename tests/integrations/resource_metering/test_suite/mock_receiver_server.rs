@@ -14,11 +14,11 @@ use kvproto::resource_usage_agent::{
 };
 
 #[derive(Clone)]
-pub struct MockAgentServer {
+pub struct MockReceiverServer {
     tx: Sender<Vec<CpuTimeRecord>>,
 }
 
-impl MockAgentServer {
+impl MockReceiverServer {
     pub fn new(tx: Sender<Vec<CpuTimeRecord>>) -> Self {
         Self { tx }
     }
@@ -39,14 +39,14 @@ impl MockAgentServer {
     }
 }
 
-impl ResourceUsageAgent for MockAgentServer {
+impl ResourceUsageAgent for MockReceiverServer {
     fn report_cpu_time(
         &mut self,
         ctx: RpcContext,
         mut stream: RequestStream<CpuTimeRecord>,
         sink: ClientStreamingSink<EmptyResponse>,
     ) {
-        fail_point!("mock-agent");
+        fail_point!("mock-receiver");
         let tx = self.tx.clone();
         let f = async move {
             let mut res = vec![];
