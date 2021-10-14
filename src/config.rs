@@ -66,6 +66,7 @@ const RAFT_MAX_MEM: usize = 2 * GB as usize;
 const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 const TMP_CONFIG_FILE: &str = "tmp_tikv.toml";
 const MAX_BLOCK_SIZE: usize = 32 * MB as usize;
+const RAFT_CLIENT_SEND_MSG_BUFFER: u64 = MB / 2;
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = SysQuota::new().memory_limit_in_bytes();
@@ -2295,6 +2296,19 @@ impl TiKvConfig {
         self.backup.validate()?;
         self.cdc.validate()?;
 
+        if (self.server.max_grpc_send_msg_len as u64) < self.raft_store.raft_entry_max_size.0 {
+            warn!(
+                "server.max-grpc-send-msg-len {} < raftstore.raft-entry-max-size {},
+                 reset server.max-grpc-send-msg-len to {} = raftstore.raft-entry-max-size + {}",
+                self.server.max_grpc_send_msg_len,
+                self.raft_store.raft_entry_max_size.0,
+                self.raft_store.raft_entry_max_size.0 + RAFT_CLIENT_SEND_MSG_BUFFER,
+                RAFT_CLIENT_SEND_MSG_BUFFER,
+            );
+            self.server.max_grpc_send_msg_len =
+                (self.raft_store.raft_entry_max_size.0 + RAFT_CLIENT_SEND_MSG_BUFFER) as i32;
+        }
+
         Ok(())
     }
 
@@ -3310,5 +3324,21 @@ mod tests {
         "#;
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap_err();
+    }
+
+    #[test]
+    fn test_msg_size_check() {
+        let max_grpc_send_msg_len = cfg.server.max_grpc_send_msg_len;
+        cfg.raft_store.raft_entry_max_size.0 = cfg.raft_store.raft_entry_max_size.0 / 2;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.server.max_grpc_send_msg_len, max_grpc_send_msg_len);
+
+        cfg.raft_store.raft_entry_max_size = ReadableSize::gb(1);
+        assert!(cfg.validate().is_ok());
+        // `server.max_grpc_send_msg_len` is adjusted according to `cfg.raft_store.raft_entry_max_size`
+        assert_eq!(
+            cfg.server.max_grpc_send_msg_len as u64,
+            cfg.raft_store.raft_entry_max_size.0 + RAFT_CLIENT_SEND_MSG_BUFFER
+        );
     }
 }
