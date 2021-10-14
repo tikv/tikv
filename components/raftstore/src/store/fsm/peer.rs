@@ -642,6 +642,7 @@ where
                         }
                     }
                 }
+                PeerMsg::UpdateRange(region) => self.on_update_range(region),
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -662,6 +663,38 @@ where
             self.reset_raft_tick(GroupState::Ordered);
             self.register_pd_heartbeat_tick();
         }
+    }
+
+    fn on_update_range(&mut self, region: &Region) {
+        let region_state_key = keys::region_state_key(region.get_id());
+        let original_region_state = self
+            .ctx
+            .engines
+            .kv
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+            .map_err(|e| box_err!(e))
+            .and_then(|s| {
+                s.ok_or_else(|| panic!("Can't find RegionLocalState while updating {:?}", region))
+            });
+
+        let mut kv_wb = self.ctx.engines.kv.write_batch();
+        write_peer_state(kb_wb, region, PeerState::Normal, None)
+            .unwrap_or_else(|e| panic!("fails to update RegionLocalState {:?}", region));
+        let mut write_opts = WriteOptions::new();
+        write.opts.set_sync(true);
+        box_try!(kv_wb.write_opt(&write_opts));
+
+        let mut meta = self.store_meta.lock().unwrap();
+        meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
+        self.fsm.peer.post_split();
+        if meta.region_rangs.remove(enc_end_key(region)).is_none() {
+            panic!(
+                "{} original region does not exist in store meta",
+                self.fsm.peer.tag
+            );
+        }
+        meta.region_ranges
+            .insert(enc_end_key(region), region.get_id());
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {

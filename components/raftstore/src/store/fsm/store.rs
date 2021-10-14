@@ -643,6 +643,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     inspector.record_store_wait(send_time.saturating_elapsed());
                     self.ctx.pending_latency_inspect.push(inspector);
                 }
+                StoreMsg::CreateRegion(region) => self.on_create_region(region),
             }
         }
     }
@@ -2089,7 +2090,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             capacity: self.ctx.cfg.capacity.0,
         };
 
-        let task = PdTask::StoreHeartbeat { stats, store_info, send_detailed_reports: false };
+        let task = PdTask::StoreHeartbeat {
+            stats,
+            store_info,
+            send_detailed_reports: false,
+        };
         if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
             error!("notify pd failed";
                 "store_id" => self.fsm.store.id,
@@ -2476,6 +2481,50 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         state.set_status(status);
         drop(state);
         self.ctx.router.report_status_update()
+    }
+
+    fn on_create_region(&self, region: &Region) {
+        let mut kv_wb = self.ctx.engines.kv.write_batch();
+        let region_state_key = keys::region_state_key(region.get_id());
+        if box_try!(kv.get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)).is_some() {
+            return;
+        }
+        box_try!(write_peer_state(
+            &mut kv_wb,
+            region,
+            PeerState::Normal,
+            None
+        ));
+        box_try!(write_initial_apply_state(&mut kv_wb, region.get_id()));
+        write_peer_state(kb_wb, region, PeerState::Normal, None)
+            .and_then(|_| write_initial_apply_state(kb_wb, region.get_id()))
+            .unwrap_or_else(|e| panic!("fails to create region"));
+        let mut write_opts = WriteOptions::new();
+        write.opts.set_sync(true);
+        box_try!(kv_wb.write_opt(&write_opts));
+        let (tx, mut peer) = box_try!(PeerFsm::create(
+            self.ctx.store.get_id();
+            &self.ctx.cfg.value(),
+            self.ctx.region_scheduler.clone(),
+            self.ctx.engines.clone(),
+            region
+        ));
+        let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
+        peer.peer.init_replication_mode(&mut *replication_state);
+        peer.peer.activate(self.ctx);
+        let mut meta = self.store_meta.lock().unwrap();
+        meta.regions.insert(region.get_id(), region.clone());
+        meta.region_ranges
+            .insert(enc_end_key(region), region.get_id());
+        meta.readers
+            .insert(region.get_id(), ReadDelegate::from_peer(peer.get_peer()));
+        meta.region_read_progress
+            .insert(region.get_id(), peer.peer.read_progress.clone());
+        let mailbox = BasicMailbox::new(tx, peer, self.ctx.router.state_cnt().clone());
+        self.ctx
+            .router
+            .force_send(region.get_id(), PeerMsg::Start)
+            .unwrap();
     }
 
     fn register_raft_engine_purge_tick(&self) {
