@@ -11,7 +11,9 @@ use std::{cmp, mem, u64};
 use batch_system::{BasicMailbox, Fsm};
 use collections::HashMap;
 use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatchExt};
+use engine_traits::{
+    Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatch, WriteBatchExt, WriteOptions,
+};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
@@ -56,7 +58,7 @@ use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
 use crate::store::peer::{ConsistencyState, Peer, StaleState};
-use crate::store::peer_storage::{ApplySnapResult, InvokeContext};
+use crate::store::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext};
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
@@ -665,36 +667,50 @@ where
         }
     }
 
-    fn on_update_range(&mut self, region: &Region) {
+    fn on_update_range(&mut self, region: Region) {
         let region_state_key = keys::region_state_key(region.get_id());
-        let original_region_state = self
+        let original_region_state = match self
             .ctx
             .engines
             .kv
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-            .map_err(|e| box_err!(e))
-            .and_then(|s| {
-                s.ok_or_else(|| panic!("Can't find RegionLocalState while updating {:?}", region))
-            });
+        {
+            Ok(Some(original_region_state)) => original_region_state,
+            Ok(None) => {
+                panic!("Can't find RegionLocalState while updating {:?}", region);
+            }
+            Err(e) => {
+                panic!(
+                    "Fail to look up RegionLocalState while updating {:?} err {:?}",
+                    region, e
+                );
+            }
+        };
 
         let mut kv_wb = self.ctx.engines.kv.write_batch();
-        write_peer_state(kb_wb, region, PeerState::Normal, None)
-            .unwrap_or_else(|e| panic!("fails to update RegionLocalState {:?}", region));
+        write_peer_state(&mut kv_wb, &region, PeerState::Normal, None).unwrap_or_else(|e| {
+            panic!(
+                "fails to write RegionLocalState {:?} into write brach, err {:?}",
+                region, e
+            )
+        });
         let mut write_opts = WriteOptions::new();
-        write.opts.set_sync(true);
-        box_try!(kv_wb.write_opt(&write_opts));
+        write_opts.set_sync(true);
+        if let Err(e) = kv_wb.write_opt(&write_opts) {
+            panic!("fail to update RegionLocalstate {:?} err {:?}", region, e);
+        }
 
-        let mut meta = self.store_meta.lock().unwrap();
-        meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
+        let mut meta = self.ctx.store_meta.lock().unwrap();
+        meta.set_region(&self.ctx.coprocessor_host, region.clone(), &mut self.fsm.peer);
         self.fsm.peer.post_split();
-        if meta.region_rangs.remove(enc_end_key(region)).is_none() {
+        if meta.region_ranges.remove(&enc_end_key(&original_region_state.get_region())).is_none() {
             panic!(
                 "{} original region does not exist in store meta",
                 self.fsm.peer.tag
             );
         }
         meta.region_ranges
-            .insert(enc_end_key(region), region.get_id());
+            .insert(enc_end_key(&region), region.get_id());
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
