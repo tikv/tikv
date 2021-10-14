@@ -4,6 +4,7 @@ mod batch;
 mod config;
 mod fsm;
 mod mailbox;
+mod metrics;
 mod router;
 
 #[cfg(feature = "test-runner")]

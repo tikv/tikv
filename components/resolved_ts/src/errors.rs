@@ -6,7 +6,7 @@ use engine_traits::Error as EngineTraitsError;
 use kvproto::errorpb::Error as ErrorHeader;
 use raftstore::Error as RaftstoreError;
 use thiserror::Error;
-use tikv::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
+use tikv::storage::kv::{Error as KvError, ErrorInner as EngineErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use txn_types::Error as TxnTypesError;
@@ -16,7 +16,7 @@ pub enum Error {
     #[error("IO error {0}")]
     Io(#[from] IoError),
     #[error("Engine error {0}")]
-    Engine(#[from] EngineError),
+    Kv(#[from] KvError),
     #[error("Transaction error {0}")]
     Txn(#[from] TxnError),
     #[error("Mvcc error {0}")]
@@ -40,13 +40,13 @@ impl Error {
 
     pub fn extract_error_header(self) -> ErrorHeader {
         match self {
-            Error::Engine(EngineError(box EngineErrorInner::Request(e)))
-            | Error::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
+            Error::Kv(KvError(box EngineErrorInner::Request(e)))
+            | Error::Txn(TxnError(box TxnErrorInner::Engine(KvError(
                 box EngineErrorInner::Request(e),
             ))))
-            | Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-                box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(e))),
-            ))))
+            | Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::Kv(
+                KvError(box EngineErrorInner::Request(e)),
+            )))))
             | Error::Request(box e) => e,
             other => {
                 let mut e = ErrorHeader::default();

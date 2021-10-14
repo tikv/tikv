@@ -27,6 +27,8 @@ macro_rules! match_template_collator {
                 Utf8Mb4GeneralCi => CollatorUtf8Mb4GeneralCi,
                 Utf8Mb4UnicodeCi => CollatorUtf8Mb4UnicodeCi,
                 Latin1Bin => CollatorLatin1Bin,
+                GbkBin => CollatorGbkBin,
+                GbkChineseCi => CollatorGbkChineseCi,
             ],
             $($tail)*
          }
