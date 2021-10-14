@@ -33,7 +33,7 @@ pub fn case_enable(test_suite: &mut TestSuite) {
     // | Address | Enabled |
     // |   o     |    o    |
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
-    test_suite.flush_agent();
+    test_suite.flush_receiver();
     sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
     assert!(test_suite.fetch_reported_cpu_time().is_empty());
 
