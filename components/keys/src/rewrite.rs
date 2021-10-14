@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath] Common key utitlies.
+
 //! Key rewriting
 
 use std::ops::Bound::{self, *};
