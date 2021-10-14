@@ -2502,18 +2502,18 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 panic!("cannot determine whether {:?} exists, err {:?}", region, e)
             }
         };
-        if let Err(e) = write_peer_state(&mut kv_wb, &region, PeerState::Normal, None) {
+        write_peer_state(&mut kv_wb, &region, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!(
                 "fail to add peer state into write batch while creating {:?} err {:?}",
                 region, e
-            );
-        }
-        if let Err(e) = write_initial_apply_state(&mut kv_wb, region.get_id()) {
+            )
+        });
+        write_initial_apply_state(&mut kv_wb, region.get_id()).unwrap_or_else(|e| {
             panic!(
                 "fail to add apply state into write batch while creating {:?} err {:?}",
                 region, e
-            );
-        }
+            )
+        });
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
         if let Err(e) = kv_wb.write_opt(&write_opts) {
@@ -2546,7 +2546,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         meta.region_read_progress
             .insert(region.get_id(), peer.peer.read_progress.clone());
         let mailbox = BasicMailbox::new(sender, peer, self.ctx.router.state_cnt().clone());
-	self.ctx.router.register(region.get_id(), mailbox);
+        self.ctx.router.register(region.get_id(), mailbox);
         self.ctx
             .router
             .force_send(region.get_id(), PeerMsg::Start)
