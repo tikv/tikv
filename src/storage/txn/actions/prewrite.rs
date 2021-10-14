@@ -58,11 +58,22 @@ pub fn prewrite<S: Snapshot>(
     }
 
     // Note that the `prev_write` may have invalid GC fence.
-    let prev_write = if !mutation.skip_constraint_check() {
-        mutation.check_for_newer_version(reader)?
+    let (mut prev_write, mut prev_write_loaded) = if !mutation.skip_constraint_check() {
+        (mutation.check_for_newer_version(reader)?, true)
     } else {
-        None
+        (None, false)
     };
+
+    if mutation.assertion != Assertion::None {
+        let (reloaded_prev_write, reloaded) =
+            mutation.check_assertion(reader, &prev_write, prev_write_loaded)?;
+        if reloaded {
+            prev_write = reloaded_prev_write;
+            prev_write_loaded = true;
+        }
+    }
+
+    let prev_write = prev_write.map(|(w, _)| w);
 
     if mutation.should_not_write {
         // `checkNotExists` is equivalent to a get operation, so it should update the max_ts.
@@ -133,8 +144,6 @@ pub fn prewrite<S: Snapshot>(
                 OldValue::None
             }
         } else {
-            // prev_write is loaded when skip_constraint_check is false.
-            let prev_write_loaded = true;
             // The mutation reads and get a previous write.
             let ts = match txn_props.kind {
                 TransactionKind::Optimistic(_) => txn_props.start_ts,
@@ -339,7 +348,7 @@ impl<'a> PrewriteMutation<'a> {
     fn check_for_newer_version<S: Snapshot>(
         &self,
         reader: &mut SnapshotReader<S>,
-    ) -> Result<Option<Write>> {
+    ) -> Result<Option<(Write, TimeStamp)>> {
         match reader.seek_write(&self.key, TimeStamp::max())? {
             Some((commit_ts, write)) => {
                 // Abort on writes after our start timestamp ...
@@ -363,32 +372,9 @@ impl<'a> PrewriteMutation<'a> {
                 // a lock belonging to a committed transaction which deletes the key.
                 check_data_constraint(reader, self.should_not_exist, &write, commit_ts, &self.key)?;
 
-                if self.assertion == Assertion::NotExist {
-                    return Err(ErrorInner::AssertionFailed {
-                        start_ts: self.txn_props.start_ts,
-                        key: self.key.to_raw()?,
-                        assertion: self.assertion,
-                        existing_start_ts: write.start_ts,
-                        existing_commit_ts: commit_ts,
-                    }
-                    .into());
-                }
-
-                Ok(Some(write))
+                Ok(Some((write, commit_ts)))
             }
-            None => {
-                if self.assertion == Assertion::Exist {
-                    return Err(ErrorInner::AssertionFailed {
-                        start_ts: self.txn_props.start_ts,
-                        key: self.key.to_raw()?,
-                        assertion: self.assertion,
-                        existing_start_ts: TimeStamp::zero(),
-                        existing_commit_ts: TimeStamp::zero(),
-                    }
-                    .into());
-                }
-                Ok(None)
-            }
+            None => Ok(None),
         }
     }
 
@@ -461,10 +447,77 @@ impl<'a> PrewriteMutation<'a> {
         .into())
     }
 
-    fn skip_constraint_check(&self) -> bool {
-        if self.assertion != Assertion::None {
-            return false;
+    fn check_assertion<S: Snapshot>(
+        &self,
+        reader: &mut SnapshotReader<S>,
+        write: &Option<(Write, TimeStamp)>,
+        write_loaded: bool,
+    ) -> Result<(Option<(Write, TimeStamp)>, bool)> {
+        if self.assertion == Assertion::None {
+            return Ok((None, false));
         }
+
+        let mut reloaded_write = None;
+        let mut reloaded = false;
+
+        // To pass the compiler's lifetime check.
+        let mut write = write;
+
+        if write_loaded
+            && write.as_ref().map_or(
+                false,
+                |(w, _)| matches!(w.gc_fence, Some(gc_fence_ts) if !gc_fence_ts.is_zero()),
+            )
+        {
+            // The previously-loaded write record has an invalid gc_fence. Regard it as none.
+            write = &None;
+        }
+
+        // Load the most recent version if prev write is not loaded yet, or the prev write is not
+        // a data version (`Put` or `Delete`)
+        let need_reload = !write_loaded
+            || write.as_ref().map_or(false, |(w, _)| {
+                w.write_type != WriteType::Put && w.write_type != WriteType::Delete
+            });
+        if need_reload {
+            let reload_ts = write.as_ref().map_or(TimeStamp::max(), |(_, ts)| *ts);
+            reloaded_write = reader.get_write_with_commit_ts(&self.key, reload_ts)?;
+            write = &reloaded_write;
+            reloaded = true;
+        };
+
+        match (self.assertion, write) {
+            (Assertion::Exist, None) => {
+                self.assertion_failed_error(TimeStamp::zero(), TimeStamp::zero())?
+            }
+            (Assertion::Exist, Some((w, commit_ts))) if w.write_type == WriteType::Delete => {
+                self.assertion_failed_error(w.start_ts, *commit_ts)?;
+            }
+            (Assertion::NotExist, Some((w, commit_ts))) if w.write_type == WriteType::Put => {
+                self.assertion_failed_error(w.start_ts, *commit_ts)?;
+            }
+            _ => (),
+        }
+
+        Ok((reloaded_write, reloaded))
+    }
+
+    fn assertion_failed_error(
+        &self,
+        existing_start_ts: TimeStamp,
+        existing_commit_ts: TimeStamp,
+    ) -> Result<()> {
+        Err(ErrorInner::AssertionFailed {
+            start_ts: self.txn_props.start_ts,
+            key: self.key.to_raw()?,
+            assertion: self.assertion,
+            existing_start_ts,
+            existing_commit_ts,
+        }
+        .into())
+    }
+
+    fn skip_constraint_check(&self) -> bool {
         match &self.txn_props.kind {
             TransactionKind::Optimistic(s) => *s,
             TransactionKind::Pessimistic(_) => true,
