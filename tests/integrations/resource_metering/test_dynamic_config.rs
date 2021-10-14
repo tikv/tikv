@@ -33,12 +33,9 @@ pub fn case_enable(test_suite: &mut TestSuite) {
     // | Address | Enabled |
     // |   o     |    o    |
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
+    test_suite.flush_agent();
     sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
-    //
-    // TODO(mornyx): Review this case.
-    //               (According to my personal observation, this should not be empty.)
-    //
-    // assert!(test_suite.fetch_reported_cpu_time().is_empty());
+    assert!(test_suite.fetch_reported_cpu_time().is_empty());
 
     // Workload
     // [req-1, req-2]
