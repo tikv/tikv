@@ -11,7 +11,9 @@ use std::{cmp, mem, u64};
 use batch_system::{BasicMailbox, Fsm};
 use collections::HashMap;
 use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatchExt};
+use engine_traits::{
+    Engines, KvEngine, RaftEngine, RaftLogBatch, SSTMetaInfo, WriteBatch, WriteBatchExt,
+};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
@@ -956,7 +958,7 @@ where
             SignificantMsg::CatchUpLogs(catch_up_logs) => {
                 self.on_catch_up_logs_for_merge(catch_up_logs);
             }
-            SignificantMsg::StoreResolved { store_id, group_id } => {
+            SignificantMsg::StoreResolved { group_id, .. } => {
                 let state = self.ctx.global_replication_state.lock().unwrap();
                 if state.status().get_mode() != ReplicationMode::DrAutoSync {
                     return;
@@ -969,7 +971,7 @@ where
                     .peer
                     .raft_group
                     .raft
-                    .assign_commit_groups(&[(store_id, group_id)]);
+                    .assign_commit_groups(&[(self.fsm.peer_id(), group_id)]);
             }
             SignificantMsg::CaptureChange {
                 cmd,
@@ -1041,26 +1043,36 @@ where
         }
     }
 
-    pub fn collect_ready(&mut self) {
+    /// Collect ready if any.
+    ///
+    /// Returns false is no readiness is generated.
+    pub fn collect_ready(&mut self, offset: usize) -> bool {
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
         if !has_ready || self.fsm.stopped {
-            return;
+            return false;
         }
         self.ctx.pending_count += 1;
         self.ctx.has_ready = true;
+        let written = self.ctx.kv_wb.data_size() + self.ctx.raft_wb.persist_size();
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
         if let Some(mut r) = res {
             // This bases on an assumption that fsm array passed in `end` method will have
             // the same order of processing.
-            r.batch_offset = self.ctx.processed_fsm_count;
+            r.batch_offset = offset;
             self.on_role_changed(&r.ready);
             if r.ctx.has_new_entries {
                 self.register_raft_gc_log_tick();
                 self.register_entry_cache_evict_tick();
             }
-            self.ctx.ready_res.push(r);
+            if self.ctx.kv_wb.data_size() + self.ctx.raft_wb.persist_size() != written {
+                self.ctx.ready_res.push(r);
+            } else {
+                self.ctx.readonly_ready_res.push(r);
+            }
+            return true;
         }
+        false
     }
 
     pub fn post_raft_ready_append(&mut self, ready: CollectedReady) {
@@ -1307,6 +1319,10 @@ where
     }
 
     fn handle_reported_disk_usage(&mut self, msg: &RaftMessage) {
+        // Mocked
+        if matches!(msg.disk_usage, DiskUsage::Normal) {
+            return;
+        }
         let store_id = msg.get_from_peer().get_store_id();
         let peer_id = msg.get_from_peer().get_id();
         let refill_disk_usages = if matches!(msg.disk_usage, DiskUsage::Normal) {
@@ -3159,13 +3175,14 @@ where
             "region" => ?region,
         );
 
-        if prev_region.get_peers() != region.get_peers() {
-            let mut state = self.ctx.global_replication_state.lock().unwrap();
-            let gb = state
-                .calculate_commit_group(self.fsm.peer.replication_mode_version, region.get_peers());
-            self.fsm.peer.raft_group.raft.clear_commit_group();
-            self.fsm.peer.raft_group.raft.assign_commit_groups(gb);
-        }
+        let mut state = self.ctx.global_replication_state.lock().unwrap();
+        let gb = state
+            .calculate_commit_group(self.fsm.peer.replication_mode_version, region.get_peers());
+        self.fsm.peer.raft_group.raft.clear_commit_group();
+        self.fsm.peer.raft_group.raft.assign_commit_groups(gb);
+        fail_point!("after_assign_commit_groups_on_apply_snapshot");
+        // drop it before access `store_meta`.
+        drop(state);
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
         debug!(
@@ -3312,10 +3329,6 @@ where
         self.ctx.store_stat.lock_cf_bytes_written += metrics.lock_cf_written_bytes;
         self.ctx.store_stat.engine_total_bytes_written += metrics.written_bytes;
         self.ctx.store_stat.engine_total_keys_written += metrics.written_keys;
-        self.ctx
-            .store_stat
-            .engine_total_query_stats
-            .add_query_stats(&metrics.written_query_stats.0);
     }
 
     /// Check if a request is valid if it has valid prepare_merge/commit_merge proposal.

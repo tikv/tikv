@@ -20,12 +20,13 @@ pub fn get_disk_reserved_space() -> u64 {
 }
 
 pub fn set_disk_status(status: DiskUsage) {
-    let s = match status {
+    let _ = match status {
         DiskUsage::Normal => 0,
         DiskUsage::AlmostFull => 1,
         DiskUsage::AlreadyFull => 2,
     };
-    DISK_STATUS.store(s, Ordering::Release);
+    // Mocked
+    DISK_STATUS.store(0, Ordering::Release);
 }
 
 pub fn get_disk_status(_store_id: u64) -> DiskUsage {
@@ -47,7 +48,8 @@ pub fn get_disk_status(_store_id: u64) -> DiskUsage {
     fail_point!("disk_already_full_peer_3", _store_id == 3, |_| {
         DiskUsage::AlreadyFull
     });
-    let s = DISK_STATUS.load(Ordering::Acquire);
+    // Mock this to close, next open. let s = DISK_STATUS.load(Ordering::Acquire);
+    let s = 0;
     match s {
         0 => DiskUsage::Normal,
         1 => DiskUsage::AlmostFull,
