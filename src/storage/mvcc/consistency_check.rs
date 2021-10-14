@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath] called by raftstore
 use std::cmp::Ordering;
 use std::convert::TryInto;
 use std::marker::PhantomData;
