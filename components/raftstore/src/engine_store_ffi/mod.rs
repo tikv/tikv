@@ -735,10 +735,30 @@ impl EngineStoreServerHelper {
         }
     }
 
-    pub fn handle_http_request(&self, path: &str) -> HttpRequestRes {
+    pub fn handle_http_request(
+        &self,
+        path: &str,
+        query: Option<&str>,
+        body: &[u8],
+    ) -> HttpRequestRes {
         debug_assert!(self.fn_handle_http_request.is_some());
 
-        unsafe { (self.fn_handle_http_request.into_inner())(self.inner, path.as_bytes().into()) }
+        let query = if let Some(s) = query {
+            s.as_bytes().into()
+        } else {
+            BaseBuffView {
+                data: std::ptr::null(),
+                len: 0,
+            }
+        };
+        unsafe {
+            (self.fn_handle_http_request.into_inner())(
+                self.inner,
+                path.as_bytes().into(),
+                query,
+                body.into(),
+            )
+        }
     }
 
     pub fn check_http_uri_available(&self, path: &str) -> bool {
@@ -751,6 +771,12 @@ impl EngineStoreServerHelper {
         debug_assert!(self.fn_set_server_info_resp.is_some());
 
         unsafe { (self.fn_set_server_info_resp.into_inner())(res, ptr) }
+    }
+
+    pub fn get_config(&self, full: bool) -> Vec<u8> {
+        debug_assert!(self.fn_get_config.is_some());
+        let config = unsafe { (self.fn_get_config.into_inner())(self.inner, full.into()) };
+        config.view.to_slice().to_vec()
     }
 }
 

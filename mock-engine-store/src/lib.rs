@@ -166,6 +166,7 @@ pub fn gen_engine_store_server_helper(
         fn_gc_raw_cpp_ptr: Some(ffi_gc_raw_cpp_ptr),
         fn_insert_batch_read_index_resp: None,
         fn_set_server_info_resp: None,
+        fn_get_config: None,
     }
 }
 

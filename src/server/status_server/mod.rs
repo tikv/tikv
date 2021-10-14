@@ -254,6 +254,7 @@ where
     async fn get_config(
         req: Request<Body>,
         cfg_controller: &ConfigController,
+        engine_store_server_helper: &'static raftstore::engine_store_ffi::EngineStoreServerHelper,
     ) -> hyper::Result<Response<Body>> {
         let mut full = false;
         if let Some(query) = req.uri().query() {
@@ -279,12 +280,30 @@ where
             // Filter hidden config
             serde_json::to_string(&cfg_controller.get_current().get_encoder())
         };
-        Ok(match encode_res {
-            Ok(json) => Response::builder()
+
+        let engine_store_config = engine_store_server_helper.get_config(full);
+        let engine_store_config =
+            unsafe { String::from_utf8_unchecked(engine_store_config) }.parse::<toml::Value>();
+
+        let engine_store_config = match engine_store_config {
+            Ok(c) => serde_json::to_string(&c),
+            Err(e) => {
+                return Ok(StatusServer::err_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal Server Error: fail to parse config from engine-store",
+                ));
+            }
+        };
+
+        Ok(match (encode_res, engine_store_config) {
+            (Ok(json), Ok(store_config)) => Response::builder()
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json))
+                .body(Body::from(format!(
+                    "{{\"raftstore-proxy\":{},\"engine-store\":{}}}",
+                    json, store_config,
+                )))
                 .unwrap(),
-            Err(_) => StatusServer::err_response(
+            _ => StatusServer::err_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal Server Error",
             ),
@@ -696,25 +715,33 @@ where
         req: Request<Body>,
         engine_store_server_helper: &'static raftstore::engine_store_ffi::EngineStoreServerHelper,
     ) -> hyper::Result<Response<Body>> {
-        fn err_resp(
-            status_code: StatusCode,
-            msg: impl Into<Body>,
-        ) -> hyper::Result<Response<Body>> {
-            Ok(StatusServer::err_response(status_code, msg))
-        }
+        let (head, body) = req.into_parts();
+        let body = hyper::body::to_bytes(body).await;
 
-        let res = engine_store_server_helper.handle_http_request(req.uri().path());
-        if res.status != raftstore::engine_store_ffi::HttpRequestStatus::Ok {
-            return err_resp(
-                StatusCode::BAD_REQUEST,
-                format!("error uri path: {}", req.uri().path()),
-            );
-        }
+        match body {
+            Ok(s) => {
+                let res = engine_store_server_helper.handle_http_request(
+                    head.uri.path(),
+                    head.uri.query(),
+                    &s,
+                );
+                if res.status != raftstore::engine_store_ffi::HttpRequestStatus::Ok {
+                    return Ok(StatusServer::err_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "engine-store fails to build response".to_string(),
+                    ));
+                }
 
-        let data = res.res.view.to_slice().to_vec();
+                let data = res.res.view.to_slice().to_vec();
 
-        match Response::builder().body(hyper::Body::from(data)) {
-            Ok(resp) => Ok(resp),
+                match Response::builder().body(hyper::Body::from(data)) {
+                    Ok(resp) => Ok(resp),
+                    Err(err) => Ok(StatusServer::err_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("fails to build response: {}", err),
+                    )),
+                }
+            }
             Err(err) => Ok(StatusServer::err_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("fails to build response: {}", err),
@@ -782,7 +809,8 @@ where
                                 Self::dump_prof_to_resp(req).await
                             }
                             (Method::GET, "/config") => {
-                                Self::get_config(req, &cfg_controller).await
+                                Self::get_config(req, &cfg_controller, engine_store_server_helper)
+                                    .await
                             }
                             (Method::POST, "/config") => {
                                 Self::update_config(cfg_controller.clone(), req).await

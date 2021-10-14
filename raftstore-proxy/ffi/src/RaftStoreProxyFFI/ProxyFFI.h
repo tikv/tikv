@@ -169,10 +169,13 @@ struct EngineStoreServerHelper {
   void (*fn_apply_pre_handled_snapshot)(EngineStoreServerWrap *, RawVoidPtr,
                                         RawCppPtrType);
   HttpRequestRes (*fn_handle_http_request)(EngineStoreServerWrap *,
-                                           BaseBuffView);
+                                           BaseBuffView path,
+                                           BaseBuffView query,
+                                           BaseBuffView body);
   uint8_t (*fn_check_http_uri_available)(BaseBuffView);
   void (*fn_gc_raw_cpp_ptr)(RawVoidPtr, RawCppPtrType);
   void (*fn_insert_batch_read_index_resp)(RawVoidPtr, BaseBuffView, uint64_t);
   void (*fn_set_server_info_resp)(BaseBuffView, RawVoidPtr);
+  CppStrWithView (*fn_get_config)(EngineStoreServerWrap *, uint8_t full);
 };
 }  // namespace DB

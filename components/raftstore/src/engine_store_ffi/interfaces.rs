@@ -337,7 +337,9 @@ pub mod root {
             pub fn_handle_http_request: ::std::option::Option<
                 unsafe extern "C" fn(
                     arg1: *mut root::DB::EngineStoreServerWrap,
-                    arg2: root::DB::BaseBuffView,
+                    path: root::DB::BaseBuffView,
+                    query: root::DB::BaseBuffView,
+                    body: root::DB::BaseBuffView,
                 ) -> root::DB::HttpRequestRes,
             >,
             pub fn_check_http_uri_available:
@@ -355,8 +357,14 @@ pub mod root {
             pub fn_set_server_info_resp: ::std::option::Option<
                 unsafe extern "C" fn(arg1: root::DB::BaseBuffView, arg2: root::DB::RawVoidPtr),
             >,
+            pub fn_get_config: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: *mut root::DB::EngineStoreServerWrap,
+                    full: u8,
+                ) -> root::DB::CppStrWithView,
+            >,
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 2118434012412631151;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 17680868848344786018;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }
