@@ -68,7 +68,9 @@ use crate::store::fsm::{
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::memory::*;
 use crate::store::metrics::*;
-use crate::store::peer_storage::{self, HandleRaftReadyContext};
+use crate::store::peer_storage::{
+    self, write_initial_apply_state, write_peer_state, HandleRaftReadyContext,
+};
 use crate::store::transport::Transport;
 use crate::store::util::{is_initial_msg, RegionReadProgressRegistry};
 use crate::store::worker::{
@@ -643,7 +645,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     inspector.record_store_wait(send_time.saturating_elapsed());
                     self.ctx.pending_latency_inspect.push(inspector);
                 }
-                StoreMsg::CreateRegion(region) => self.on_create_region(region),
+                StoreMsg::CreatePeer(region) => self.on_create_peer(region),
             }
         }
     }
@@ -2483,44 +2485,68 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         self.ctx.router.report_status_update()
     }
 
-    fn on_create_region(&self, region: &Region) {
+    fn on_create_peer(&self, region: Region) {
         let mut kv_wb = self.ctx.engines.kv.write_batch();
         let region_state_key = keys::region_state_key(region.get_id());
-        if box_try!(kv.get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)).is_some() {
-            return;
+        match self
+            .ctx
+            .engines
+            .kv
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        {
+            Ok(Some(_)) => {
+                return;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                panic!("cannot determine whether {:?} exists, err {:?}", region, e)
+            }
+        };
+        if let Err(e) = write_peer_state(&mut kv_wb, &region, PeerState::Normal, None) {
+            panic!(
+                "fail to add peer state into write batch while creating {:?} err {:?}",
+                region, e
+            );
         }
-        box_try!(write_peer_state(
-            &mut kv_wb,
-            region,
-            PeerState::Normal,
-            None
-        ));
-        box_try!(write_initial_apply_state(&mut kv_wb, region.get_id()));
-        write_peer_state(kb_wb, region, PeerState::Normal, None)
-            .and_then(|_| write_initial_apply_state(kb_wb, region.get_id()))
-            .unwrap_or_else(|e| panic!("fails to create region"));
+        if let Err(e) = write_initial_apply_state(&mut kv_wb, region.get_id()) {
+            panic!(
+                "fail to add apply state into write batch while creating {:?} err {:?}",
+                region, e
+            );
+        }
         let mut write_opts = WriteOptions::new();
-        write.opts.set_sync(true);
-        box_try!(kv_wb.write_opt(&write_opts));
-        let (tx, mut peer) = box_try!(PeerFsm::create(
-            self.ctx.store.get_id();
-            &self.ctx.cfg.value(),
+        write_opts.set_sync(true);
+        if let Err(e) = kv_wb.write_opt(&write_opts) {
+            panic!("fail to write while creating {:?} err {:?}", region, e);
+        }
+        let (sender, mut peer) = match PeerFsm::create(
+            self.ctx.store.get_id(),
+            &self.ctx.cfg,
             self.ctx.region_scheduler.clone(),
             self.ctx.engines.clone(),
-            region
-        ));
+            &region,
+        ) {
+            Ok((sender, peer)) => (sender, peer),
+            Err(e) => {
+                panic!(
+                    "fail to create peer fsm while creating {:?} err {:?}",
+                    region, e
+                );
+            }
+        };
         let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
         peer.peer.init_replication_mode(&mut *replication_state);
         peer.peer.activate(self.ctx);
-        let mut meta = self.store_meta.lock().unwrap();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.regions.insert(region.get_id(), region.clone());
         meta.region_ranges
-            .insert(enc_end_key(region), region.get_id());
+            .insert(enc_end_key(&region), region.get_id());
         meta.readers
             .insert(region.get_id(), ReadDelegate::from_peer(peer.get_peer()));
         meta.region_read_progress
             .insert(region.get_id(), peer.peer.read_progress.clone());
-        let mailbox = BasicMailbox::new(tx, peer, self.ctx.router.state_cnt().clone());
+        let mailbox = BasicMailbox::new(sender, peer, self.ctx.router.state_cnt().clone());
+	self.ctx.router.register(region.get_id(), mailbox);
         self.ctx
             .router
             .force_send(region.get_id(), PeerMsg::Start)

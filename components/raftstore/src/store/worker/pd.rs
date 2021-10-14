@@ -628,25 +628,28 @@ impl SlowScore {
 }
 
 // RegionCPUMeteringCollector is used to collect the region-related CPU info.
-struct RegionCPUMeteringCollector<E>
+struct RegionCPUMeteringCollector<EK, ER>
 where
-    E: KvEngine,
+    EK: KvEngine,
+    ER: RaftEngine,
 {
-    scheduler: Scheduler<Task<E>>,
+    scheduler: Scheduler<Task<EK, ER>>,
 }
 
-impl<E> RegionCPUMeteringCollector<E>
+impl<EK, ER> RegionCPUMeteringCollector<EK, ER>
 where
-    E: KvEngine,
+    EK: KvEngine,
+    ER: RaftEngine,
 {
-    fn new(scheduler: Scheduler<Task<E>>) -> RegionCPUMeteringCollector<E> {
+    fn new(scheduler: Scheduler<Task<EK, ER>>) -> RegionCPUMeteringCollector<EK, ER> {
         RegionCPUMeteringCollector { scheduler }
     }
 }
 
-impl<E> Collector for RegionCPUMeteringCollector<E>
+impl<EK, ER> Collector for RegionCPUMeteringCollector<EK, ER>
 where
-    E: KvEngine,
+    EK: KvEngine,
+    ER: RaftEngine,
 {
     fn collect(&self, records: Arc<CpuRecords>) {
         self.scheduler
@@ -918,8 +921,6 @@ where
         self.remote.spawn(f);
     }
 
-    fn execute_recovery_plan(recovery_plan: &pdpb::RecoveryPlan) -> Result<()> {}
-
     fn handle_store_heartbeat(
         &mut self,
         mut stats: pdpb::StoreStats,
@@ -1087,19 +1088,19 @@ where
                         if let Err(e) = scheduler.schedule(task) {
                             error!("notify pd failed"; "err" => ?e);
                         }
-                    } else if resp.has_recovery_plan() {
-                        for create in resp.get_recovery_plan().get_creates() {
-                            if let Err(e) = router.send_control(StoreMsg::CreatePeer(create)) {
+                    } else if resp.has_plan() {
+                        for create in resp.get_plan().get_creates() {
+                            if let Err(e) = router.send_control(StoreMsg::CreatePeer(create.clone())) {
                                 error!("fail to send creat peer message for recovery"; "err" => ?e);
                             }
                         }
-                        for delete in resp.get_recovery_plan().get_deletes() {
-                            if let Err(e) = router.force_send(delete, PeerMsg::Destroy(delete)) {
+                        for delete in resp.get_plan().get_deletes() {
+                            if let Err(e) = router.force_send(*delete, PeerMsg::Destroy(*delete)) {
                                 error!("fail to send delete peer message for recovery"; "err" => ?e);
                             }
                         }
-                        for update in resp.get_recovery_plan().get_updates() {
-                            if let Err(e) = router.force_send(update, PeerMsg::UpdateRange(update))
+                        for update in resp.get_plan().get_updates() {
+                            if let Err(e) = router.force_send(update.get_id().clone(), PeerMsg::UpdateRange(update.clone()))
                             {
                                 error!("fail to send update range message for recovery"; "err" => ?e);
                             }

@@ -582,7 +582,7 @@ where
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
 
-    CreateRegion(metapb::Region),
+    CreatePeer(metapb::Region),
 }
 
 impl<EK> fmt::Debug for StoreMsg<EK>
@@ -611,7 +611,7 @@ where
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
-            StoreMsg::CreateRegion(_) => write!(fmt, "CreateRegion"),
+            StoreMsg::CreatePeer(_) => write!(fmt, "CreatePeer"),
         }
     }
 }
