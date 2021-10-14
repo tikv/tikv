@@ -1213,7 +1213,7 @@ struct Opt {
     cmd: Option<Cmd>,
 }
 
-#[derive(StructOpt)]
+#[derive(Debug, StructOpt)]
 enum Cmd {
     /// Print a raft log entry
     Raft {
@@ -1660,7 +1660,7 @@ enum Cmd {
     External(Vec<String>),
 }
 
-#[derive(StructOpt)]
+#[derive(Debug, StructOpt)]
 enum RaftCmd {
     /// Print the raft log entry info
     Log {
@@ -1707,7 +1707,7 @@ enum RaftCmd {
     },
 }
 
-#[derive(StructOpt)]
+#[derive(Debug, StructOpt)]
 enum FailCmd {
     /// Inject failures
     Inject {
@@ -1731,7 +1731,7 @@ enum FailCmd {
     List {},
 }
 
-#[derive(StructOpt)]
+#[derive(Debug, StructOpt)]
 enum EncryptionMetaCmd {
     /// Dump data keys
     DumpKey {
@@ -1747,7 +1747,7 @@ enum EncryptionMetaCmd {
     },
 }
 
-#[derive(StructOpt)]
+#[derive(Debug, StructOpt)]
 enum UnsafeRecoverCmd {
     /// Remove the failed machines from the peer list for the regions
     RemoveFailStores {
@@ -1987,7 +1987,9 @@ fn main() {
     let debug_executor =
         new_debug_executor(&cfg, data_dir, skip_paranoid_checks, host, Arc::clone(&mgr));
 
+    println!("{:?}!!!", cmd);
     if let Cmd::Print { cf, key } = cmd {
+        println!("print!!!");
         let key = unescape(&key);
         debug_executor.dump_value(&cf, key);
     } else if let Cmd::Raft { cmd: subcmd } = cmd {
