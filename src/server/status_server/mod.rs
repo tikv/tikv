@@ -1,18 +1,26 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod profile;
+pub mod region_meta;
+use self::profile::{
+    activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile, list_heap_profiles,
+    read_file, start_one_cpu_profile, start_one_heap_profile,
+};
+
 use std::error::Error as StdError;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::str::FromStr;
+use std::str::{self, FromStr};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use async_stream::stream;
+use collections::HashMap;
 use engine_traits::KvEngine;
-use futures::compat::Compat01As03;
+use futures::compat::{Compat01As03, Stream01CompatExt};
 use futures::executor::block_on;
 use futures::future::{ok, poll_fn};
 use futures::prelude::*;
@@ -23,66 +31,31 @@ use hyper::server::Builder as HyperBuilder;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{self, header, Body, Client, Method, Request, Response, Server, StatusCode, Uri};
 use hyper_openssl::HttpsConnector;
+use online_config::OnlineConfig;
 use openssl::ssl::{
     Ssl, SslAcceptor, SslConnector, SslConnectorBuilder, SslFiletype, SslMethod, SslVerifyMode,
 };
 use openssl::x509::X509;
+use pd_client::{RpcClient, REQUEST_RECONNECT_INTERVAL};
 use pin_project::pin_project;
-use pprof::protos::Message;
 use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
-use serde_json::Value;
-use tempfile::TempDir;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
-use tokio::runtime::{Builder, Runtime};
-use tokio::sync::oneshot::{self, Receiver, Sender};
-use tokio_openssl::SslStream;
-
-use collections::HashMap;
-use online_config::OnlineConfig;
-use pd_client::{RpcClient, REQUEST_RECONNECT_INTERVAL};
 use security::{self, SecurityConfig};
-use tikv_alloc::error::ProfError;
+use serde_json::Value;
 use tikv_util::logger::set_log_level;
 use tikv_util::metrics::dump;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::runtime::{Builder, Handle, Runtime};
+use tokio::sync::oneshot::{self, Receiver, Sender};
+use tokio_openssl::SslStream;
 
-use super::Result;
 use crate::config::{log_level_serde, ConfigController};
-
-pub mod region_meta;
-
-mod profiler_guard {
-    use tikv_alloc::error::ProfResult;
-    use tikv_alloc::{activate_prof, deactivate_prof};
-
-    use tokio::sync::{Mutex, MutexGuard};
-
-    lazy_static! {
-        static ref PROFILER_MUTEX: Mutex<u32> = Mutex::new(0);
-    }
-
-    pub struct ProfGuard(MutexGuard<'static, u32>);
-
-    pub async fn new_prof() -> ProfResult<ProfGuard> {
-        let guard = PROFILER_MUTEX.lock().await;
-        match activate_prof() {
-            Ok(_) => Ok(ProfGuard(guard)),
-            Err(e) => Err(e),
-        }
-    }
-
-    impl Drop for ProfGuard {
-        fn drop(&mut self) {
-            // TODO: handle error here
-            let _ = deactivate_prof();
-        }
-    }
-}
+use crate::server::Result;
 
 const COMPONENT_REQUEST_RETRY: usize = 5;
-
 static COMPONENT: &str = "tikv";
+static TIMER_CANCELED: &str = "tokio timer canceled";
 
 #[cfg(feature = "failpoints")]
 static MISSING_NAME: &[u8] = b"Missing param name";
@@ -93,7 +66,7 @@ static FAIL_POINTS_REQUEST_PATH: &str = "/fail";
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub struct LogLevelRequest {
+struct LogLevelRequest {
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
 }
@@ -109,44 +82,6 @@ pub struct StatusServer<E, R> {
     router: R,
     security_config: Arc<SecurityConfig>,
     _snap: PhantomData<E>,
-}
-
-impl StatusServer<(), ()> {
-    fn extract_thread_name(thread_name: &str) -> String {
-        lazy_static! {
-            static ref THREAD_NAME_RE: Regex =
-                Regex::new(r"^(?P<thread_name>[a-z-_ :]+?)(-?\d)*$").unwrap();
-            static ref THREAD_NAME_REPLACE_SEPERATOR_RE: Regex = Regex::new(r"[_ ]").unwrap();
-        }
-
-        THREAD_NAME_RE
-            .captures(thread_name)
-            .and_then(|cap| {
-                cap.name("thread_name").map(|thread_name| {
-                    THREAD_NAME_REPLACE_SEPERATOR_RE
-                        .replace_all(thread_name.as_str(), "-")
-                        .into_owned()
-                })
-            })
-            .unwrap_or_else(|| thread_name.to_owned())
-    }
-
-    fn frames_post_processor() -> impl Fn(&mut pprof::Frames) {
-        move |frames| {
-            let name = Self::extract_thread_name(&frames.thread_name);
-            frames.thread_name = name;
-        }
-    }
-
-    fn err_response<T>(status_code: StatusCode, message: T) -> Response<Body>
-    where
-        T: Into<Body>,
-    {
-        Response::builder()
-            .status(status_code)
-            .body(message.into())
-            .unwrap()
-    }
 }
 
 impl<E, R> StatusServer<E, R>
@@ -165,14 +100,11 @@ where
             .enable_all()
             .worker_threads(status_thread_pool_size)
             .thread_name("status-server")
-            .on_thread_start(|| {
-                debug!("Status server started");
-            })
-            .on_thread_stop(|| {
-                debug!("stopping status server");
-            })
+            .on_thread_start(|| debug!("Status server started"))
+            .on_thread_stop(|| debug!("stopping status server"))
             .build()?;
-        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+
+        let (tx, rx) = oneshot::channel::<()>();
         Ok(StatusServer {
             thread_pool,
             tx,
@@ -187,64 +119,115 @@ where
         })
     }
 
-    pub async fn dump_prof(seconds: u64) -> std::result::Result<Vec<u8>, ProfError> {
-        let guard = profiler_guard::new_prof().await?;
-        info!("start memory profiling {} seconds", seconds);
+    fn list_heap_prof(_req: Request<Body>) -> hyper::Result<Response<Body>> {
+        let profiles = match list_heap_profiles() {
+            Ok(s) => s,
+            Err(e) => return Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, e)),
+        };
 
-        let timer = GLOBAL_TIMER_HANDLE.clone();
-        let _ = Compat01As03::new(timer.delay(Instant::now() + Duration::from_secs(seconds))).await;
-        let tmp_dir = TempDir::new()?;
-        let os_path = tmp_dir.path().join("tikv_dump_profile").into_os_string();
-        let path = os_path
-            .into_string()
-            .map_err(ProfError::PathEncodingError)?;
-        tikv_alloc::dump_prof(&path)?;
-        drop(guard);
-        let mut file = tokio::fs::File::open(path).await?;
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf).await?;
-        Ok(buf)
+        let text = profiles
+            .into_iter()
+            .map(|(f, ct)| format!("{}\t\t{}", f, ct))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .into_bytes();
+
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("Content-Length", text.len())
+            .body(text.into())
+            .unwrap();
+        Ok(response)
     }
 
-    pub async fn dump_prof_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
-        let query = match req.uri().query() {
-            Some(query) => query,
-            None => {
-                return Ok(StatusServer::err_response(
-                    StatusCode::BAD_REQUEST,
-                    "request should have the query part",
-                ));
-            }
-        };
+    async fn activate_heap_prof(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        let query = req.uri().query().unwrap_or("");
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
-        let seconds: u64 = match query_pairs.get("seconds") {
+
+        let interval: u64 = match query_pairs.get("interval") {
             Some(val) => match val.parse() {
                 Ok(val) => val,
-                Err(_) => {
-                    return Ok(StatusServer::err_response(
-                        StatusCode::BAD_REQUEST,
-                        "request should have seconds argument",
-                    ));
-                }
+                Err(err) => return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
             },
-            None => 10,
+            None => 60,
         };
 
-        match Self::dump_prof(seconds).await {
-            Ok(buf) => {
-                let response = Response::builder()
+        let interval = Duration::from_secs(interval);
+        let period = GLOBAL_TIMER_HANDLE
+            .interval(Instant::now() + interval, interval)
+            .compat()
+            .map_ok(|_| ())
+            .map_err(|_| TIMER_CANCELED.to_owned())
+            .into_stream();
+        let (tx, rx) = oneshot::channel();
+        let callback = move || tx.send(()).unwrap_or_default();
+        let res = Handle::current().spawn(activate_heap_profile(period, callback));
+        if rx.await.is_ok() {
+            let msg = "activate heap profile success";
+            Ok(make_response(StatusCode::OK, msg))
+        } else {
+            let errmsg = format!("{:?}", res.await);
+            Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, errmsg))
+        }
+    }
+
+    fn deactivate_heap_prof(_req: Request<Body>) -> hyper::Result<Response<Body>> {
+        let body = if deactivate_heap_profile() {
+            "deactivate heap profile success"
+        } else {
+            "no heap profile is running"
+        };
+        Ok(make_response(StatusCode::OK, body))
+    }
+
+    async fn dump_heap_prof_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        let query = req.uri().query().unwrap_or("");
+        let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
+
+        let use_jeprof = query_pairs.get("jeprof").map(|x| x.as_ref()) == Some("true");
+
+        let result = if let Some(name) = query_pairs.get("name") {
+            if use_jeprof {
+                jeprof_heap_profile(name)
+            } else {
+                read_file(name)
+            }
+        } else {
+            let mut seconds = 10;
+            if let Some(s) = query_pairs.get("seconds") {
+                match s.parse() {
+                    Ok(val) => seconds = val,
+                    Err(_) => {
+                        let errmsg = "request should have seconds argument".to_owned();
+                        return Ok(make_response(StatusCode::BAD_REQUEST, errmsg));
+                    }
+                }
+            }
+            let timer = GLOBAL_TIMER_HANDLE.delay(Instant::now() + Duration::from_secs(seconds));
+            let end = Compat01As03::new(timer)
+                .map_err(|_| TIMER_CANCELED.to_owned())
+                .into_future();
+            start_one_heap_profile(end, use_jeprof).await
+        };
+
+        match result {
+            Ok(body) => {
+                info!("dump or get heap profile successfully");
+                let mut response = Response::builder()
                     .header("X-Content-Type-Options", "nosniff")
                     .header("Content-Disposition", "attachment; filename=\"profile\"")
-                    .header("Content-Type", mime::APPLICATION_OCTET_STREAM.to_string())
-                    .header("Content-Length", buf.len())
-                    .body(buf.into())
-                    .unwrap();
-                Ok(response)
+                    .header("Content-Length", body.len());
+                response = if use_jeprof {
+                    response.header("Content-Type", mime::IMAGE_SVG.to_string())
+                } else {
+                    response.header("Content-Type", mime::APPLICATION_OCTET_STREAM.to_string())
+                };
+                Ok(response.body(body.into()).unwrap())
             }
-            Err(err) => Ok(StatusServer::err_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                err.to_string(),
-            )),
+            Err(e) => {
+                info!("dump or get heap profile fail: {}", e);
+                Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, e))
+            }
         }
     }
 
@@ -259,12 +242,7 @@ where
             full = match query_pairs.get("full") {
                 Some(val) => match val.parse() {
                     Ok(val) => val,
-                    Err(err) => {
-                        return Ok(StatusServer::err_response(
-                            StatusCode::BAD_REQUEST,
-                            err.to_string(),
-                        ));
-                    }
+                    Err(err) => return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
                 },
                 None => false,
             };
@@ -281,10 +259,7 @@ where
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(json))
                 .unwrap(),
-            Err(_) => StatusServer::err_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal Server Error",
-            ),
+            Err(_) => make_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
         })
     }
 
@@ -301,7 +276,7 @@ where
             .await?;
         Ok(match decode_json(&body) {
             Ok(change) => match cfg_controller.update(change) {
-                Err(e) => StatusServer::err_response(
+                Err(e) => make_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("failed to update, error: {:?}", e),
                 ),
@@ -311,44 +286,21 @@ where
                     resp
                 }
             },
-            Err(e) => StatusServer::err_response(
+            Err(e) => make_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("failed to decode, error: {:?}", e),
             ),
         })
     }
 
-    pub async fn dump_rsprof(seconds: u64, frequency: i32) -> pprof::Result<pprof::Report> {
-        let guard = pprof::ProfilerGuard::new(frequency)?;
-        info!(
-            "start profiling {} seconds with frequency {} /s",
-            seconds, frequency
-        );
-        let timer = GLOBAL_TIMER_HANDLE.clone();
-        let _ = Compat01As03::new(timer.delay(Instant::now() + Duration::from_secs(seconds))).await;
-        guard
-            .report()
-            .frames_post_processor(StatusServer::frames_post_processor())
-            .build()
-    }
-
-    pub async fn dump_rsperf_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
-        let query = match req.uri().query() {
-            Some(query) => query,
-            None => {
-                return Ok(StatusServer::err_response(StatusCode::BAD_REQUEST, ""));
-            }
-        };
+    pub async fn dump_cpu_prof_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        let query = req.uri().query().unwrap_or("");
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
+
         let seconds: u64 = match query_pairs.get("seconds") {
             Some(val) => match val.parse() {
                 Ok(val) => val,
-                Err(err) => {
-                    return Ok(StatusServer::err_response(
-                        StatusCode::BAD_REQUEST,
-                        err.to_string(),
-                    ));
-                }
+                Err(err) => return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
             },
             None => 10,
         };
@@ -356,56 +308,29 @@ where
         let frequency: i32 = match query_pairs.get("frequency") {
             Some(val) => match val.parse() {
                 Ok(val) => val,
-                Err(err) => {
-                    return Ok(StatusServer::err_response(
-                        StatusCode::BAD_REQUEST,
-                        err.to_string(),
-                    ));
-                }
+                Err(err) => return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
             },
             None => 99, // Default frequency of sampling. 99Hz to avoid coincide with special periods
         };
 
         let prototype_content_type: hyper::http::HeaderValue =
             hyper::http::HeaderValue::from_str("application/protobuf").unwrap();
-        let report = match Self::dump_rsprof(seconds, frequency).await {
-            Ok(report) => report,
-            Err(err) => {
-                return Ok(StatusServer::err_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    err.to_string(),
-                ));
-            }
-        };
+        let output_protobuf = req.headers().get("Content-Type") == Some(&prototype_content_type);
 
-        let mut body: Vec<u8> = Vec::new();
-        if req.headers().get("Content-Type") == Some(&prototype_content_type) {
-            match report.pprof() {
-                Ok(profile) => match profile.encode(&mut body) {
-                    Ok(()) => {
-                        info!("write report successfully");
-                        Ok(StatusServer::err_response(StatusCode::OK, body))
-                    }
-                    Err(err) => Ok(StatusServer::err_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        err.to_string(),
-                    )),
-                },
-                Err(err) => Ok(StatusServer::err_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    err.to_string(),
-                )),
+        let timer = GLOBAL_TIMER_HANDLE.delay(Instant::now() + Duration::from_secs(seconds));
+        let end = async move {
+            Compat01As03::new(timer)
+                .await
+                .map_err(|_| TIMER_CANCELED.to_owned())
+        };
+        match start_one_cpu_profile(end, frequency, output_protobuf).await {
+            Ok(body) => {
+                info!("dump cpu profile successfully");
+                Ok(make_response(StatusCode::OK, body))
             }
-        } else {
-            match report.flamegraph(&mut body) {
-                Ok(_) => {
-                    info!("write report successfully");
-                    Ok(StatusServer::err_response(StatusCode::OK, body))
-                }
-                Err(err) => Ok(StatusServer::err_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    err.to_string(),
-                )),
+            Err(e) => {
+                info!("dump cpu profile fail: {}", e);
+                Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, e))
             }
         }
     }
@@ -427,10 +352,7 @@ where
                 set_log_level(req.log_level);
                 Ok(Response::new(Body::empty()))
             }
-            Err(err) => Ok(StatusServer::err_response(
-                StatusCode::BAD_REQUEST,
-                err.to_string(),
-            )),
+            Err(err) => Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
         }
     }
 
@@ -438,7 +360,7 @@ where
         // unregister the status address to pd
         self.unregister_addr();
         let _ = self.tx.send(());
-        self.thread_pool.shutdown_timeout(Duration::from_secs(10));
+        self.thread_pool.shutdown_timeout(Duration::from_secs(3));
     }
 
     // Return listening address, this may only be used for outer test
@@ -606,15 +528,8 @@ where
             static ref REGION: Regex = Regex::new(r"/region/(?P<id>\d+)").unwrap();
         }
 
-        fn err_resp(
-            status_code: StatusCode,
-            msg: impl Into<Body>,
-        ) -> hyper::Result<Response<Body>> {
-            Ok(StatusServer::err_response(status_code, msg))
-        }
-
         fn not_found(msg: impl Into<Body>) -> hyper::Result<Response<Body>> {
-            err_resp(StatusCode::NOT_FOUND, msg)
+            Ok(make_response(StatusCode::NOT_FOUND, msg))
         }
 
         let cap = match REGION.captures(req.uri().path()) {
@@ -625,10 +540,10 @@ where
         let id: u64 = match cap["id"].parse() {
             Ok(id) => id,
             Err(err) => {
-                return err_resp(
+                return Ok(make_response(
                     StatusCode::BAD_REQUEST,
                     format!("invalid region id: {}", err),
-                );
+                ));
             }
         };
         let (tx, rx) = oneshot::channel();
@@ -645,17 +560,17 @@ where
                 return not_found(format!("region({}) not found", id));
             }
             Err(err) => {
-                return err_resp(
+                return Ok(make_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("channel pending or disconnect: {}", err),
-                );
+                ));
             }
         }
 
         let meta = match rx.await {
             Ok(meta) => meta,
             Err(_) => {
-                return Ok(StatusServer::err_response(
+                return Ok(make_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "query cancelled",
                 ));
@@ -665,7 +580,7 @@ where
         let body = match serde_json::to_vec(&meta) {
             Ok(body) => body,
             Err(err) => {
-                return Ok(StatusServer::err_response(
+                return Ok(make_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("fails to json: {}", err),
                 ));
@@ -676,7 +591,7 @@ where
             .body(hyper::Body::from(body))
         {
             Ok(resp) => Ok(resp),
-            Err(err) => Ok(StatusServer::err_response(
+            Err(err) => Ok(make_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("fails to build response: {}", err),
             )),
@@ -729,7 +644,7 @@ where
                         );
 
                         if should_check_cert && !check_cert(security_config, x509) {
-                            return Ok(StatusServer::err_response(
+                            return Ok(make_response(
                                 StatusCode::FORBIDDEN,
                                 "certificate role error",
                             ));
@@ -738,8 +653,15 @@ where
                         match (method, path.as_ref()) {
                             (Method::GET, "/metrics") => Ok(Response::new(dump().into())),
                             (Method::GET, "/status") => Ok(Response::default()),
+                            (Method::GET, "/debug/pprof/heap_list") => Self::list_heap_prof(req),
+                            (Method::GET, "/debug/pprof/heap_activate") => {
+                                Self::activate_heap_prof(req).await
+                            }
+                            (Method::GET, "/debug/pprof/heap_deactivate") => {
+                                Self::deactivate_heap_prof(req)
+                            }
                             (Method::GET, "/debug/pprof/heap") => {
-                                Self::dump_prof_to_resp(req).await
+                                Self::dump_heap_prof_to_resp(req).await
                             }
                             (Method::GET, "/config") => {
                                 Self::get_config(req, &cfg_controller).await
@@ -748,7 +670,7 @@ where
                                 Self::update_config(cfg_controller.clone(), req).await
                             }
                             (Method::GET, "/debug/pprof/profile") => {
-                                Self::dump_rsperf_to_resp(req).await
+                                Self::dump_cpu_prof_to_resp(req).await
                             }
                             (Method::GET, "/debug/fail_point") => {
                                 info!("debug fail point API start");
@@ -762,10 +684,7 @@ where
                             (Method::PUT, path) if path.starts_with("/log-level") => {
                                 Self::change_log_level(req).await
                             }
-                            _ => Ok(StatusServer::err_response(
-                                StatusCode::NOT_FOUND,
-                                "path not found",
-                            )),
+                            _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }
                     }
                 }))
@@ -1021,6 +940,16 @@ fn decode_json(
     }
 }
 
+fn make_response<T>(status_code: StatusCode, message: T) -> Response<Body>
+where
+    T: Into<Body>,
+{
+    Response::builder()
+        .status(status_code)
+        .body(message.into())
+        .unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use futures::executor::block_on;
@@ -1037,6 +966,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::config::{ConfigController, TiKvConfig};
+    use crate::server::status_server::profile::TEST_PROFILE_MUTEX;
     use crate::server::status_server::{LogLevelRequest, StatusServer};
     use collections::HashSet;
     use engine_test::kv::KvTestEngine;
@@ -1341,34 +1271,6 @@ mod tests {
         status_server.stop();
     }
 
-    #[test]
-    fn test_extract_thread_name() {
-        assert_eq!(
-            &StatusServer::extract_thread_name("test-name-1"),
-            "test-name"
-        );
-        assert_eq!(
-            &StatusServer::extract_thread_name("grpc-server-5"),
-            "grpc-server"
-        );
-        assert_eq!(
-            &StatusServer::extract_thread_name("rocksdb:bg1000"),
-            "rocksdb:bg"
-        );
-        assert_eq!(
-            &StatusServer::extract_thread_name("raftstore-1-100"),
-            "raftstore"
-        );
-        assert_eq!(
-            &StatusServer::extract_thread_name("snap sender1000"),
-            "snap-sender"
-        );
-        assert_eq!(
-            &StatusServer::extract_thread_name("snap_sender1000"),
-            "snap-sender"
-        );
-    }
-
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
         let mut status_server = StatusServer::new(
             1,
@@ -1470,6 +1372,7 @@ mod tests {
 
     #[test]
     fn test_pprof_profile_service() {
+        let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let mut status_server = StatusServer::new(
             1,
             None,
@@ -1491,7 +1394,6 @@ mod tests {
             .thread_pool
             .spawn(async move { client.get(uri).await.unwrap() });
         let resp = block_on(handle).unwrap();
-
         assert_eq!(resp.status(), StatusCode::OK);
         status_server.stop();
     }

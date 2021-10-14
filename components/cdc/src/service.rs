@@ -59,11 +59,11 @@ impl CdcEvent {
                 // See https://play.golang.org/p/GFA9S-z_kUt
                 let approximate_region_id_bytes = 4;
                 let approximate_tso_bytes = 9;
-                // Protobuf encoding adds a tag to every varints.
+                // Protobuf encoding adds a tag to every Uvarint.
                 // protobuf::rt::tag_size(1 /* or 2, field number*/) yields 1.
                 let tag_bytes = 1;
 
-                // Byets of an array of region id.
+                // Bytes of an array of region id.
                 r.regions.len() as u32 * (tag_bytes + approximate_region_id_bytes)
                 // Bytes of a TSO.
                 + (tag_bytes + approximate_tso_bytes)
@@ -197,6 +197,11 @@ impl FeatureGate {
     // Returns the first version (v4.0.8) that supports batch resolved ts.
     pub fn batch_resolved_ts() -> semver::Version {
         semver::Version::new(4, 0, 8)
+    }
+
+    // Returns the first version (v5.3.0) that supports validate cluster id.
+    pub(crate) fn validate_cluster_id() -> semver::Version {
+        semver::Version::new(5, 3, 0)
     }
 }
 
