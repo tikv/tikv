@@ -918,53 +918,7 @@ where
         self.remote.spawn(f);
     }
 
-    fn execute_recovery_plan(recovery_plan: pdpb::RecoveryPlan, kv_engine: EK) {
-	let mut wb = kv_engine.write_batch();
-	for create in recovery_plan.creates() {
-	    let mut region_state = RegionLocalState::default();
-	    region_state.set_state(PeerState::Normal);
-	    region_state.set_region(region);
-	    let key = keys::region_state_key(create.Id());
-	    if box_try!(kv.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)).is_some() {
-                return Err(Error::Other(
-                    "Store already has the RegionLocalState".into(),
-                ));
-            }
-            box_try!(wb.put_msg_cf(CF_RAFT, &key, &region_state));
-	}
-        let failed_stores = HashSet::<u64>::from_iter(recovery_plan.failed_stores());
-        {
-            let remove_stores = |key: &[u8], value: &[u8], kv_wb: &mut RocksWriteBatch| {
-                let (_, suffix_type) = box_try!(keys::decode_region_meta_key(key));
-                if suffix_type != keys::REGION_STATE_SUFFIX {
-                    return Ok(());
-                }
-
-                let mut region_state = RegionLocalState::default();
-                box_try!(region_state.merge_from_bytes(value));
-                if region_state.get_state() == PeerState::Tombstone {
-                    return Ok(());
-                }
-
-                let mut new_peers = region_state.get_region().get_peers().to_owned();
-                new_peers.retain(|peer| !store_ids.contains(&peer.get_store_id()));
-                region_state.mut_region().set_peers(new_peers.into());
-                box_try!(wb.put_msg_cf(CF_RAFT, key, &region_state));
-                Ok(())
-            };
-
-            box_try!(kv_engine.scan_cf(
-                CF_RAFT,
-                keys::REGION_META_MIN_KEY,
-                keys::REGION_META_MAX_KEY,
-                false,
-                |key, value| remove_stores(key, value, &mut wb).map(|_| true)));
-        }
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
-        box_try!(wb.write_opt(&write_opts));
-    }
-
+    fn execute_recovery_plan(recovery_plan: &pdpb::RecoveryPlan) -> Result<()> {}
 
     fn handle_store_heartbeat(
         &mut self,
@@ -1124,7 +1078,7 @@ where
                     if let Some(status) = resp.replication_status.take() {
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }
-                    if resp.send_detailed_report_in_next_heartbeat {
+                    if resp.get_send_detailed_report_in_next_heartbeat() {
                         let task = Task::StoreHeartbeat {
                             stats: pdpb::StoreStats::new(),
                             store_info,
@@ -1132,6 +1086,23 @@ where
                         };
                         if let Err(e) = scheduler.schedule(task) {
                             error!("notify pd failed"; "err" => ?e);
+                        }
+                    } else if resp.has_recovery_plan() {
+                        for create in resp.get_recovery_plan().get_creates() {
+                            if let Err(e) = router.send_control(StoreMsg::CreatePeer(create)) {
+                                error!("fail to send creat peer message for recovery"; "err" => ?e);
+                            }
+                        }
+                        for delete in resp.get_recovery_plan().get_deletes() {
+                            if let Err(e) = router.force_send(delete, PeerMsg::Destroy(delete)) {
+                                error!("fail to send delete peer message for recovery"; "err" => ?e);
+                            }
+                        }
+                        for update in resp.get_recovery_plan().get_updates() {
+                            if let Err(e) = router.force_send(update, PeerMsg::UpdateRange(update))
+                            {
+                                error!("fail to send update range message for recovery"; "err" => ?e);
+                            }
                         }
                     }
                 }
