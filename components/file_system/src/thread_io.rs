@@ -50,44 +50,75 @@ impl IOBytes {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use libc::O_DIRECT;
+    use maligned::{AsBytes, AsBytesMut, A512};
+    use std::{
+        fs::OpenOptions,
+        io::{Read, Write},
+        os::unix::prelude::OpenOptionsExt,
+    };
     use tempfile::{tempdir, tempdir_in};
 
     use super::*;
 
     #[test]
-    fn test_write_bytes() {
-        let dir = tempdir_in("/var/tmp").unwrap_or_else(|_| tempdir().unwrap());
-
-        let block_size = {
-            let mut file = File::create(dir.path().join("test_block_size.txt")).unwrap();
-
-            let origin_io_bytes = fetch_thread_io_bytes(IOType::Other);
-            file.write_all(" ".as_bytes()).unwrap();
-            file.sync_all().unwrap();
-            let synced_io_bytes = fetch_thread_io_bytes(IOType::Other);
-
-            synced_io_bytes.write - origin_io_bytes.write
-        };
-
-        let mut file = File::create(dir.path().join("test_write_bytes.txt")).unwrap();
-
-        let mut buffer = Vec::new();
-        buffer.resize(block_size as usize, 0);
-
+    fn test_read_bytes() {
+        let tmp = tempdir_in("/var/tmp").unwrap_or_else(|_| tempdir().unwrap());
+        let file_path = tmp.path().join("test_read_bytes.txt");
+        {
+            let mut f = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .custom_flags(O_DIRECT)
+                .open(&file_path)
+                .unwrap();
+            let w = vec![A512::default(); 10];
+            f.write_all(w.as_bytes()).unwrap();
+            f.sync_all().unwrap();
+        }
+        let mut f = OpenOptions::new()
+            .read(true)
+            .custom_flags(O_DIRECT)
+            .open(&file_path)
+            .unwrap();
+        let mut w = vec![A512::default(); 1];
         let origin_io_bytes = fetch_thread_io_bytes(IOType::Other);
+
         for i in 1..=10 {
-            file.write_all(&buffer).unwrap();
-            file.sync_all().unwrap();
+            f.read_exact(w.as_bytes_mut()).unwrap();
 
             let io_bytes = fetch_thread_io_bytes(IOType::Other);
 
-            assert_eq!(i * block_size + origin_io_bytes.write, io_bytes.write);
+            assert_eq!(i * 512 + origin_io_bytes.read, io_bytes.read);
+        }
+    }
+
+    #[test]
+    fn test_write_bytes() {
+        let tmp = tempdir_in("/var/tmp").unwrap_or_else(|_| tempdir().unwrap());
+        let file_path = tmp.path().join("test_write_bytes.txt");
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .custom_flags(O_DIRECT)
+            .open(&file_path)
+            .unwrap();
+
+        let w = vec![A512::default(); 1];
+
+        let origin_io_bytes = fetch_thread_io_bytes(IOType::Other);
+        for i in 1..=10 {
+            f.write_all(w.as_bytes()).unwrap();
+            f.sync_all().unwrap();
+
+            let io_bytes = fetch_thread_io_bytes(IOType::Other);
+
+            assert_eq!(i * 512 + origin_io_bytes.write, io_bytes.write);
         }
     }
 
     #[bench]
-    fn bench_fetch_io_bytes(b: &mut test::Bencher) {
+    fn bench_fetch_thread_io_bytes(b: &mut test::Bencher) {
         b.iter(|| fetch_thread_io_bytes(IOType::Other));
     }
 }
