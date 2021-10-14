@@ -282,6 +282,33 @@ impl Recorder {
 }
 
 #[derive(Clone, Debug)]
+pub struct WriteStats {
+    pub region_infos: HashMap<u64, QueryStats>,
+}
+
+impl WriteStats {
+    pub fn add_query_num(&mut self, region_id: u64, kind: QueryKind) {
+        let query_stats = self
+            .region_infos
+            .entry(region_id)
+            .or_insert_with(|| QueryStats::default());
+        query_stats.add_query_num(kind, 1);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.region_infos.is_empty()
+    }
+}
+
+impl Default for WriteStats {
+    fn default() -> WriteStats {
+        WriteStats {
+            region_infos: HashMap::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct ReadStats {
     pub region_infos: HashMap<u64, RegionInfo>,
     pub sample_num: usize,
