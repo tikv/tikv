@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -436,4 +437,46 @@ fn test_loading_label_after_rolling_start() {
     let state = cluster.pd_client.region_replication_status(r);
     assert_eq!(state.state_id, 1);
     assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
+}
+
+#[test]
+fn test_assign_commit_groups_with_migrate_region() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.store_batch_system.pool_size = 2;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.run_conf_change();
+
+    // Split 1 region into 2 regions.
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, &b"k".to_vec());
+    // Put a key value pair.
+    cluster.must_put(b"a1", b"v0");
+    cluster.must_put(b"k1", b"v0");
+    let r1 = cluster.get_region(b"k1");
+    let r2 = cluster.get_region(b"");
+
+    // Add a peer of region 1 to store 2.
+    let fp1 = "after_assign_commit_groups_on_apply_snapshot";
+    fail::cfg(fp1, "pause").unwrap();
+    pd_client.add_peer(r1.get_id(), new_peer(2, 2));
+    sleep_ms(100);
+
+    // Add a peer of region 1000 to store 2.
+    let fp2 = "after_acquire_store_meta_on_maybe_create_peer_internal";
+    fail::cfg(fp2, "pause").unwrap();
+    pd_client.add_peer(r2.get_id(), new_peer(2, 1002));
+    sleep_ms(100);
+
+    // Remove failpoints.
+    fail::remove(fp1);
+    fail::remove(fp2);
+
+    // Deadlock should not happen.
+    sleep_ms(100);
+    cluster.must_region_exist(r2.get_id(), 2);
+    cluster.must_region_exist(r1.get_id(), 2);
+    // Must get the key value pair in node 2.
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v0");
+    must_get_equal(&cluster.get_engine(2), b"a1", b"v0");
 }
