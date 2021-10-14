@@ -66,23 +66,38 @@ impl IOBytes {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
-    use tempfile::TempDir;
+    use tempfile::{tempdir, tempdir_in};
 
     use super::*;
 
     #[test]
     fn test_write_bytes() {
-        let dir = TempDir::new().unwrap();
-        let mut file = File::create(dir.path().join("test_write.txt")).unwrap();
+        let dir = tempdir_in("/var/tmp").unwrap_or_else(|_| tempdir().unwrap());
+
+        let block_size = {
+            let mut file = File::create(dir.path().join("test_block_size.txt")).unwrap();
+
+            let origin_io_bytes = fetch_io_bytes(IOType::Other);
+            file.write_all(" ".as_bytes()).unwrap();
+            file.sync_all().unwrap();
+            let synced_io_bytes = fetch_io_bytes(IOType::Other);
+
+            synced_io_bytes.write - origin_io_bytes.write
+        };
+
+        let mut file = File::create(dir.path().join("test_write_bytes.txt")).unwrap();
+
+        let mut buffer = Vec::new();
+        buffer.resize(block_size as usize, 0);
 
         let origin_io_bytes = fetch_io_bytes(IOType::Other);
-        for i in 1..100 {
-            file.write_all(" ".to_string().as_bytes()).unwrap();
+        for i in 1..=10 {
+            file.write_all(&buffer).unwrap();
             file.sync_all().unwrap();
 
             let io_bytes = fetch_io_bytes(IOType::Other);
 
-            assert_eq!(i * 4096 + origin_io_bytes.write, io_bytes.write);
+            assert_eq!(i * block_size + origin_io_bytes.write, io_bytes.write);
         }
     }
 
