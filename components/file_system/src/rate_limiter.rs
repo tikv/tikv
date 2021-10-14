@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::metrics::{tls_collect_rate_limiter_request_wait, RATE_LIMITER_MAX_BYTES_PER_SEC};
-use super::thread_io::fetch_io_bytes;
+use super::thread_io::fetch_thread_io_bytes;
 use super::{IOOp, IOPriority, IOType};
 
 use std::str::FromStr;
@@ -489,7 +489,7 @@ impl IORateLimiter {
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
         let original_io_bytes = if io_op == IOOp::Read && self.stats.is_some() {
-            Some(fetch_io_bytes(io_type))
+            Some(fetch_thread_io_bytes(io_type))
         } else {
             None
         };
@@ -503,7 +503,7 @@ impl IORateLimiter {
         }
         if let Some(stats) = &self.stats {
             if let Some(original_io_bytes) = original_io_bytes {
-                let current_io_bytes = fetch_io_bytes(io_type);
+                let current_io_bytes = fetch_thread_io_bytes(io_type);
                 let bytes = (current_io_bytes.read - original_io_bytes.read) as usize;
                 stats.record(io_type, io_op, bytes)
             } else {
@@ -519,7 +519,7 @@ impl IORateLimiter {
     /// than zero.
     pub async fn async_request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
         let original_io_bytes = if io_op == IOOp::Read && self.stats.is_some() {
-            Some(fetch_io_bytes(io_type))
+            Some(fetch_thread_io_bytes(io_type))
         } else {
             None
         };
@@ -536,7 +536,7 @@ impl IORateLimiter {
         }
         if let Some(stats) = &self.stats {
             if let Some(original_io_bytes) = original_io_bytes {
-                let current_io_bytes = fetch_io_bytes(io_type);
+                let current_io_bytes = fetch_thread_io_bytes(io_type);
                 let bytes = (current_io_bytes.read - original_io_bytes.read) as usize;
                 stats.record(io_type, io_op, bytes)
             } else {
@@ -549,7 +549,7 @@ impl IORateLimiter {
     #[cfg(test)]
     fn request_with_skewed_clock(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
         let original_io_bytes = if io_op == IOOp::Read && self.stats.is_some() {
-            Some(fetch_io_bytes(io_type))
+            Some(fetch_thread_io_bytes(io_type))
         } else {
             None
         };
@@ -563,7 +563,7 @@ impl IORateLimiter {
         }
         if let Some(stats) = &self.stats {
             if let Some(original_io_bytes) = original_io_bytes {
-                let current_io_bytes = fetch_io_bytes(io_type);
+                let current_io_bytes = fetch_thread_io_bytes(io_type);
                 let bytes = (current_io_bytes.read - original_io_bytes.read) as usize;
                 stats.record(io_type, io_op, bytes)
             } else {

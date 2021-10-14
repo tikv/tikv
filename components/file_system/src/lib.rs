@@ -14,7 +14,6 @@ mod iosnoop;
 mod metrics;
 mod metrics_manager;
 mod rate_limiter;
-#[allow(dead_code)]
 mod thread_io;
 
 pub use file::{File, OpenOptions};
