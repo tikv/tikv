@@ -951,6 +951,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                 if now >= deadline.inner() {
                                     scheduler
                                         .finish_with_err(cid, StorageErrorInner::DeadlineExceeded);
+                                    self.inner.flow_controller.unconsume(write_size);
                                     SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
                                     return;
                                 }

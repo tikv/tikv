@@ -26,8 +26,9 @@ const SPARE_TICK_DURATION: Duration = Duration::from_millis(1000);
 const SPARE_TICK_DURATION: Duration = Duration::from_millis(1);
 
 const SPARE_TICKS_THRESHOLD: u64 = 10;
-const RATIO_SCALE_FACTOR: u32 = 10000000;
-const LIMIT_UP_PERCENT: f64 = 0.04; // 4%
+const RATIO_SCALE_FACTOR: u32 = 10_000_000;
+const K_INC_SLOWDOWN_RATIO: f64 = 0.8;
+const K_DEC_SLOWDOWN_RATIO: f64 = 1.0 / K_INC_SLOWDOWN_RATIO;
 const MIN_THROTTLE_SPEED: f64 = 16.0 * 1024.0; // 16KB
 const MAX_THROTTLE_SPEED: f64 = 200.0 * 1024.0 * 1024.0; // 200MB
 
@@ -415,6 +416,7 @@ struct FlowChecker<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> {
 
     last_record_time: Instant,
     last_speed: f64,
+    wait_for_destroy_range_finish: bool,
 }
 
 impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
@@ -443,6 +445,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
             throttle_cf: None,
             last_record_time: Instant::now_coarse(),
             last_speed: 0.0,
+            wait_for_destroy_range_finish: false,
         }
     }
 
@@ -520,15 +523,20 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
                             if !enabled {
                                 continue;
                             }
+                            checker.wait_for_destroy_range_finish = true;
+                            let soft = (checker.soft_pending_compaction_bytes_limit as f64).log2();
                             for (_, cf_checker) in &mut checker.cf_checkers {
-                                cf_checker.pending_bytes_before_unsafe_destroy_range =
-                                    Some(cf_checker.long_term_pending_bytes.get_avg());
+                                let v = cf_checker.long_term_pending_bytes.get_avg();
+                                if v <= soft {
+                                    cf_checker.pending_bytes_before_unsafe_destroy_range = Some(v);
+                                }
                             }
                         }
                         Ok(FlowInfo::AfterUnsafeDestroyRange) => {
                             if !enabled {
                                 continue;
                             }
+                            checker.wait_for_destroy_range_finish = false;
                             for (cf, cf_checker) in &mut checker.cf_checkers {
                                 if let Some(before) =
                                     cf_checker.pending_bytes_before_unsafe_destroy_range
@@ -543,7 +551,13 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
                                         as f64)
                                         .log2();
 
-                                    if !(before < soft && after >= soft) {
+                                    assert!(before < soft);
+                                    if after >= soft {
+                                        // there is a pending bytes jump
+                                        SCHED_THROTTLE_ACTION_COUNTER
+                                            .with_label_values(&[&cf, "pending_bytes_jump"])
+                                            .inc();
+                                    } else {
                                         cf_checker.pending_bytes_before_unsafe_destroy_range = None;
                                     }
                                 }
@@ -653,7 +667,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
 
         let pending_compaction_bytes = checker.long_term_pending_bytes.get_avg();
         let ignore = if let Some(before) = checker.pending_bytes_before_unsafe_destroy_range {
-            if pending_compaction_bytes <= before {
+            if pending_compaction_bytes <= before && !self.wait_for_destroy_range_finish {
                 checker.pending_bytes_before_unsafe_destroy_range = None;
             }
             true
@@ -782,7 +796,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
                     .with_label_values(&[cf, "tick_spare"])
                     .inc();
 
-                let throttle = self.limiter.speed_limit() * (1.0 + 5.0 * LIMIT_UP_PERCENT);
+                let throttle = self.limiter.speed_limit() * K_DEC_SLOWDOWN_RATIO;
 
                 self.update_speed_limit(throttle)
             }
@@ -911,9 +925,9 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
             };
             if x < f64::EPSILON { f64::INFINITY } else { x }
         } else if is_throttled && should_throttle {
-            self.limiter.speed_limit() * 0.6
+            self.limiter.speed_limit() * K_INC_SLOWDOWN_RATIO
         } else if is_throttled && !should_throttle {
-            self.last_speed = self.limiter.speed_limit() * 1.4;
+            self.last_speed = self.limiter.speed_limit() * K_DEC_SLOWDOWN_RATIO;
             f64::INFINITY
         } else {
             f64::INFINITY
