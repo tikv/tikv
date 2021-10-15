@@ -1928,7 +1928,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority_tag = get_priority_tag(priority);
         let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let api_version = self.api_version;
-        let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
             async move {
