@@ -11,7 +11,6 @@ use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
 use kvproto::resource_usage_agent::{ResourceUsageAgentClient, ResourceUsageRecord};
 use tikv_util::warn;
 
-
 /// This trait abstracts the interface to communicate with the remote.
 /// We can simply mock this interface to test without RPC.
 pub trait Client {
