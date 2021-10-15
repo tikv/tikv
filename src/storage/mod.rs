@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
+
 //! This module contains TiKV's transaction layer. It lowers high-level, transactional
 //! commands to low-level (raw key-value) interactions with persistent storage.
 //!

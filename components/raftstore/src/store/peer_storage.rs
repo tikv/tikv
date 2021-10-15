@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use fail::fail_point;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
