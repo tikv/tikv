@@ -34,10 +34,19 @@ use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use prometheus::HistogramTimer;
 use raftstore::router::RaftStoreRouter;
+<<<<<<< HEAD
 use raftstore::store::{Callback, CasualMessage};
 use raftstore::{DiscardReason, Error as RaftStoreError};
 use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, poll_future_notify, AndThenWith};
+=======
+use raftstore::store::memory::{MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
+use raftstore::store::CheckLeaderTask;
+use raftstore::store::{Callback, CasualMessage, RaftCmdExtraOpts};
+use raftstore::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
+use tikv_alloc::trace::MemoryTraceGuard;
+use tikv_util::future::{paired_future_callback, poll_future_notify};
+>>>>>>> 8045e1b18... server: fix channel full could break the raft connection (#11048)
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
@@ -101,12 +110,44 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
             ch,
             snap_scheduler,
             grpc_thread_load,
+<<<<<<< HEAD
             readpool_normal_thread_load,
             timer_pool,
             enable_req_batch,
             req_batch_wait_duration,
             security_mgr,
         }
+=======
+            proxy,
+            reject_messages_on_memory_ratio,
+        }
+    }
+
+    fn handle_raft_message(
+        store_id: u64,
+        ch: &T,
+        msg: RaftMessage,
+        reject: bool,
+    ) -> RaftStoreResult<()> {
+        let to_store_id = msg.get_to_peer().get_store_id();
+        if to_store_id != store_id {
+            return Err(RaftStoreError::StoreNotMatch {
+                to_store_id,
+                my_store_id: store_id,
+            });
+        }
+        if reject && msg.get_message().get_msg_type() == MessageType::MsgAppend {
+            RAFT_APPEND_REJECTS.inc();
+            let id = msg.get_region_id();
+            let peer_id = msg.get_message().get_from();
+            let m = CasualMessage::RejectRaftAppend { peer_id };
+            let _ = ch.send_casual_msg(id, m);
+            return Ok(());
+        }
+        // `send_raft_msg` may return `RaftStoreError::RegionNotFound` or
+        // `RaftStoreError::Transport(DiscardReason::Full)`
+        ch.send_raft_msg(msg)
+>>>>>>> 8045e1b18... server: fix channel full could break the raft connection (#11048)
     }
 }
 
@@ -543,6 +584,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             return;
         }
         let ch = self.ch.clone();
+<<<<<<< HEAD
         ctx.spawn(
             stream
                 .map_err(Error::from)
@@ -563,6 +605,40 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                         .map_err(|e| error!("KvService::raft send response fail"; "err" => ?e))
                 }),
         );
+=======
+        let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
+
+        let res = async move {
+            let mut stream = stream.map_err(Error::from);
+            while let Some(msg) = stream.try_next().await? {
+                RAFT_MESSAGE_RECV_COUNTER.inc();
+                let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
+                if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
+                    Self::handle_raft_message(store_id, &ch, msg, reject)
+                {
+                    // Return an error here will break the connection, only do that for `StoreNotMatch` to
+                    // let tikv to resolve a correct address from PD
+                    return Err(Error::from(err));
+                }
+            }
+            Ok::<(), Error>(())
+        };
+
+        ctx.spawn(async move {
+            let status = match res.await {
+                Err(e) => {
+                    let msg = format!("{:?}", e);
+                    error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
+                    RpcStatus::with_message(RpcStatusCode::UNKNOWN, msg)
+                }
+                Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN),
+            };
+            let _ = sink
+                .fail(status)
+                .map_err(|e| error!("KvService::raft send response fail"; "err" => ?e))
+                .await;
+        });
+>>>>>>> 8045e1b18... server: fix channel full could break the raft connection (#11048)
     }
 
     fn batch_raft(
@@ -576,6 +652,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         }
         info!("batch_raft RPC is called, new gRPC stream established");
         let ch = self.ch.clone();
+<<<<<<< HEAD
         ctx.spawn(
             stream
                 .map_err(Error::from)
@@ -604,6 +681,45 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     )
                 }),
         )
+=======
+        let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
+
+        let res = async move {
+            let mut stream = stream.map_err(Error::from);
+            while let Some(mut batch_msg) = stream.try_next().await? {
+                let len = batch_msg.get_msgs().len();
+                RAFT_MESSAGE_RECV_COUNTER.inc_by(len as u64);
+                RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
+                let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
+                for msg in batch_msg.take_msgs().into_iter() {
+                    if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
+                        Self::handle_raft_message(store_id, &ch, msg, reject)
+                    {
+                        // Return an error here will break the connection, only do that for `StoreNotMatch` to
+                        // let tikv to resolve a correct address from PD
+                        return Err(Error::from(err));
+                    }
+                }
+            }
+            Ok::<(), Error>(())
+        };
+
+        ctx.spawn(async move {
+            let status = match res.await {
+                Err(e) => {
+                    fail_point!("on_batch_raft_stream_drop_by_err");
+                    let msg = format!("{:?}", e);
+                    error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
+                    RpcStatus::with_message(RpcStatusCode::UNKNOWN, msg)
+                }
+                Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN),
+            };
+            let _ = sink
+                .fail(status)
+                .map_err(|e| error!("KvService::batch_raft send response fail"; "err" => ?e))
+                .await;
+        });
+>>>>>>> 8045e1b18... server: fix channel full could break the raft connection (#11048)
     }
 
     fn snapshot(
