@@ -98,7 +98,7 @@ use protobuf::ProtobufEnum;
 use raftstore::store::util::build_key_range;
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
-use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
+use resource_metering::{FutureExt, ResourceMeteringTag};
 use std::{
     borrow::Cow,
     iter,

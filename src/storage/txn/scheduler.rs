@@ -34,7 +34,7 @@ use futures::compat::Future01CompatExt;
 use futures::{select, FutureExt as _};
 use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
-use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
+use resource_metering::{FutureExt, ResourceMeteringTag};
 use tikv_util::{callback::must_call, time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::TimeStamp;
 
