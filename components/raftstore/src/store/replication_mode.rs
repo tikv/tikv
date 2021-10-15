@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use collections::{HashMap, HashMapEntry};
 use kvproto::metapb;
 use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
