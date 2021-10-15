@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use super::ttl::TTLSnapshot;
 
 use crate::storage::kv::{Cursor, Iterator, ScanMode, Snapshot};
