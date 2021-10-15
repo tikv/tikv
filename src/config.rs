@@ -4283,4 +4283,38 @@ mod tests {
             assert_eq!(Module::from(name), module);
         }
     }
+
+    #[test]
+    fn test_normal_compaction_style() {
+        let normal_string_config= r#"
+            compaction-style = "universal"
+        "#;
+
+        let config: DefaultCfConfig = toml::from_str(normal_string_config).unwrap();
+        assert_eq!(config.compaction_style, DBCompactionStyle::Universal);
+
+        let normal_string_config= r#"
+            compaction-style = 1
+        "#;
+        let config: DefaultCfConfig = toml::from_str(normal_string_config).unwrap();
+        assert_eq!(config.compaction_style, DBCompactionStyle::Universal);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_bad_compaction_style1() {
+        let bad_string_config = r#"
+            compaction-style = "level1"
+        "#;
+        let _: DefaultCfConfig = toml::from_str(bad_string_config).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_bad_compaction_style2() {
+        let bad_string_config = r#"
+            compaction-style = 4
+        "#;
+        let _: DefaultCfConfig = toml::from_str(bad_string_config).unwrap();
+    }
 }

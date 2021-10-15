@@ -2,7 +2,7 @@
 
 use online_config::ConfigValue;
 pub use rocksdb::PerfLevel;
-use rocksdb::{DBCompressionType, DBInfoLogLevel, DBTitanDBBlobRunMode};
+use rocksdb::{CompactionPriority, DBCompactionStyle, DBCompressionType, DBInfoLogLevel, DBRateLimiterMode, DBRecoveryMode, DBTitanDBBlobRunMode};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -271,6 +271,7 @@ macro_rules! numeric_enum_mod {
             use serde::{Serializer, Deserializer};
             use serde::de::{self, Unexpected, Visitor};
             use rocksdb::$enum;
+            use super::FromString;
 
             pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
                 where S: Serializer
@@ -298,9 +299,15 @@ macro_rules! numeric_enum_mod {
                             _ => Err(E::invalid_value(Unexpected::Signed(value), &self))
                         }
                     }
+
+                    fn visit_str<E>(self, value: &str) -> Result<$enum, E>
+                        where E: de::Error
+                    {
+                        Ok($enum::from_string(value))
+                    }
                 }
 
-                deserializer.deserialize_i64(EnumVisitor)
+                deserializer.deserialize_any(EnumVisitor)
             }
 
             #[cfg(test)]
@@ -341,16 +348,69 @@ numeric_enum_mod! {compaction_pri_serde CompactionPriority {
     MinOverlappingRatio = 3,
 }}
 
+
+impl FromString for CompactionPriority {
+    fn from_string(name: &str) -> Self {
+        match name {
+            "ByCompensatedSize" => CompactionPriority::ByCompensatedSize,
+            "OldestLargestSeqFirst" => CompactionPriority::OldestLargestSeqFirst,
+            "OldestSmallestSeqFirst" => CompactionPriority::OldestSmallestSeqFirst,
+            "MinOverlappingRatio" => CompactionPriority::MinOverlappingRatio,
+            _ =>  panic!("expect: ByCompensatedSize, OldestLargestSeqFirst, OldestSmallestSeqFirst, \
+            MinOverlappingRatio got: {:?}", name)
+        }
+    }
+}
+
 numeric_enum_mod! {rate_limiter_mode_serde DBRateLimiterMode {
     ReadOnly = 1,
     WriteOnly = 2,
     AllIo = 3,
 }}
 
+impl FromString for DBRateLimiterMode {
+    fn from_string(name: &str) -> Self {
+        match name {
+            "ReadOnly" => DBRateLimiterMode::ReadOnly,
+            "WriteOnly" => DBRateLimiterMode::WriteOnly,
+            "AllIo" => DBRateLimiterMode::AllIo,
+            _ => panic!("expect: ReadOnly, WriteOnly, AllIo got: {:?}", name)
+        }
+    }
+}
+
+pub trait FromString {
+    fn from_string(name: &str) -> Self;
+}
+
+
+impl FromString for DBCompactionStyle {
+    fn from_string(name: &str) -> Self {
+        match name {
+            "level" => return DBCompactionStyle::Level,
+            "universal" => return DBCompactionStyle::Universal,
+            _ => panic!("expect: level, universal got: {:?}", name),
+        }
+    }
+}
+
 numeric_enum_mod! {compaction_style_serde DBCompactionStyle {
     Level = 0,
     Universal = 1,
 }}
+
+impl FromString for DBRecoveryMode {
+    fn from_string(name: &str) -> Self {
+        match name {
+            "TolerateCorruptedTailRecords" => return DBRecoveryMode::TolerateCorruptedTailRecords,
+            "AbsoluteConsistency" => return DBRecoveryMode::AbsoluteConsistency,
+            "PointInTime" => return DBRecoveryMode::PointInTime,
+            "SkipAnyCorruptedRecords" => return DBRecoveryMode::SkipAnyCorruptedRecords,
+            _ => panic!("expect: TolerateCorruptedTailRecords, AbsoluteConsistency, PointInTime, \
+            SkipAnyCorruptedRecords got: {:?}", name),
+        }
+    }
+}
 
 numeric_enum_mod! {recovery_mode_serde DBRecoveryMode {
     TolerateCorruptedTailRecords = 0,
@@ -358,6 +418,14 @@ numeric_enum_mod! {recovery_mode_serde DBRecoveryMode {
     PointInTime = 2,
     SkipAnyCorruptedRecords = 3,
 }}
+
+impl FromString for PerfLevel {
+    fn from_string(name: &str) -> Self {
+        match name {
+            _ => panic!("Do not support name: '{:?}', use index instead(0, 1, 2)...", name)
+        }
+    }
+}
 
 numeric_enum_mod! {perf_level_serde PerfLevel {
     Uninitialized = 0,
