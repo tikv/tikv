@@ -38,6 +38,7 @@
 
 pub mod config;
 pub mod errors;
+pub mod key_prefix;
 pub mod kv;
 pub mod lock_manager;
 pub(crate) mod metrics;
@@ -63,6 +64,7 @@ pub use self::{
 };
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
+use crate::storage::key_prefix::TIDB_RANGES_COMPLEMENT;
 use crate::storage::metrics::CommandKind;
 use crate::storage::mvcc::MvccReader;
 use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSwap};
@@ -343,7 +345,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             // Check if there are only TiDB data in the engine
             let snapshot = kv.snapshot();
             for cf in DATA_CFS {
-                for (start, end) in keys::DATA_TIDB_RANGES_COMPLEMENT {
+                for (start, end) in TIDB_RANGES_COMPLEMENT {
                     let mut unexpected_data_key = None;
                     snapshot.scan_cf(
                         cf,
