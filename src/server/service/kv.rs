@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]: Tikv gRPC APIs implementation
 use std::sync::Arc;
 use tikv_util::time::{duration_to_ms, duration_to_sec, Instant};
 

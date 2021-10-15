@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::cmp::PartialOrd;
 use std::collections::VecDeque;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
