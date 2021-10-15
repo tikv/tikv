@@ -1,5 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Key prefix definistions and utils for API V2.
+
 pub const TIDB_RANGES: &[(&[u8], &[u8])] = &[(&[b'm'], &[b'm' + 1]), (&[b't'], &[b't' + 1])];
 pub const TIDB_RANGES_COMPLEMENT: &[(&[u8], &[u8])] =
     &[(&[], &[b'm']), (&[b'm' + 1], &[b't']), (&[b't' + 1], &[])];
