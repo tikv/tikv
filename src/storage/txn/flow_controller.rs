@@ -505,7 +505,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
                             }
                             checker.wait_for_destroy_range_finish = true;
                             let soft = (checker.soft_pending_compaction_bytes_limit as f64).log2();
-                            for (_, cf_checker) in &mut checker.cf_checkers {
+                            for cf_checker in checker.cf_checkers.values_mut() {
                                 let v = cf_checker.long_term_pending_bytes.get_avg();
                                 if v <= soft {
                                     cf_checker.pending_bytes_before_unsafe_destroy_range = Some(v);
@@ -525,7 +525,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
                                         (checker.soft_pending_compaction_bytes_limit as f64).log2();
                                     let after = (checker
                                         .engine
-                                        .get_cf_pending_compaction_bytes(&cf)
+                                        .get_cf_pending_compaction_bytes(cf)
                                         .unwrap_or(None)
                                         .unwrap_or(0)
                                         as f64)
@@ -535,7 +535,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
                                     if after >= soft {
                                         // there is a pending bytes jump
                                         SCHED_THROTTLE_ACTION_COUNTER
-                                            .with_label_values(&[&cf, "pending_bytes_jump"])
+                                            .with_label_values(&[cf, "pending_bytes_jump"])
                                             .inc();
                                     } else {
                                         cf_checker.pending_bytes_before_unsafe_destroy_range = None;
@@ -761,7 +761,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         self.update_speed_limit(throttle);
     }
 
-    fn collect_l0_consumption_stats(&mut self, cf: &String, l0_bytes: u64) {
+    fn collect_l0_consumption_stats(&mut self, cf: &str, l0_bytes: u64) {
         let num_l0_files = self
             .engine
             .get_cf_num_files_at_level(cf, 0)
@@ -778,7 +778,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
             .set(checker.long_term_num_l0_files.get_avg() as i64);
     }
 
-    fn collect_l0_production_stats(&mut self, cf: &String, flush_bytes: u64) {
+    fn collect_l0_production_stats(&mut self, cf: &str, flush_bytes: u64) {
         let num_l0_files = self
             .engine
             .get_cf_num_files_at_level(cf, 0)
@@ -962,7 +962,7 @@ mod tests {
     fn test_flow_controller_basic() {
         let stub = EngineStub::new();
         let (_tx, rx) = mpsc::channel();
-        let flow_controller = FlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
+        let flow_controller = FlowController::new(&FlowControlConfig::default(), stub, rx);
 
         // enable flow controller
         assert_eq!(flow_controller.enabled(), true);
@@ -1096,7 +1096,7 @@ mod tests {
 
         stub.0
             .pending_compaction_bytes
-            .store(1 * 1024 * 1024 * 1024, Ordering::Relaxed);
+            .store(1024 * 1024 * 1024, Ordering::Relaxed);
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
         tx.send(FlowInfo::L0Intra("default".to_string(), 0))
@@ -1112,7 +1112,7 @@ mod tests {
         // during unsafe destroy range, pending compaction bytes may change
         stub.0
             .pending_compaction_bytes
-            .store(1 * 1024 * 1024 * 1024, Ordering::Relaxed);
+            .store(1024 * 1024 * 1024, Ordering::Relaxed);
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
         tx.send(FlowInfo::L0Intra("default".to_string(), 0))
@@ -1132,7 +1132,7 @@ mod tests {
         // unfreeze the control
         stub.0
             .pending_compaction_bytes
-            .store(1 * 1024 * 1024, Ordering::Relaxed);
+            .store(1024 * 1024, Ordering::Relaxed);
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
         tx.send(FlowInfo::L0Intra("default".to_string(), 0))
