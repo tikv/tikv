@@ -29,9 +29,11 @@ fn setup_cfg_controller(
     ConfigController,
 ) {
     let engine = TestEngineBuilder::new().build().unwrap();
+    let (tx, _rx) = std::sync::mpsc::channel();
     let mut gc_worker = GcWorker::new(
         engine,
         RaftStoreBlackHole,
+        tx,
         cfg.gc.clone(),
         Default::default(),
     );
