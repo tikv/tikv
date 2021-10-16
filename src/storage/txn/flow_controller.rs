@@ -159,6 +159,11 @@ impl FlowController {
         self.limiter.unconsume(bytes);
     }
 
+    #[cfg(test)]
+    pub fn total_bytes_consumed(&self) -> usize {
+        self.limiter.total_bytes_consumed()
+    }
+
     pub fn enable(&self, enable: bool) {
         self.enabled.store(enable, Ordering::Relaxed);
         if enable {
@@ -980,7 +985,7 @@ mod tests {
     #[test]
     fn test_flow_controller_memtable() {
         let stub = EngineStub::new();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(0);
         let flow_controller = FlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
 
         assert_eq!(flow_controller.consume(2000), Duration::ZERO);
@@ -988,26 +993,29 @@ mod tests {
         // exceeds the threshold on start
         stub.0.num_memtable_files.store(8, Ordering::Relaxed);
         tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
-        std::thread::sleep(Duration::from_millis(10));
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
         assert_eq!(flow_controller.should_drop(), false);
         // on start check forbids flow control
         assert_eq!(flow_controller.is_unlimited(), true);
         // once falls below the threshold, pass the on start check
         stub.0.num_memtable_files.store(1, Ordering::Relaxed);
         tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
-        std::thread::sleep(Duration::from_millis(10));
-
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
         // not throttle when the average of the sliding window doesn't exceeds the threshold
         stub.0.num_memtable_files.store(6, Ordering::Relaxed);
         tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
-        std::thread::sleep(Duration::from_millis(10));
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
         assert_eq!(flow_controller.should_drop(), false);
         assert_eq!(flow_controller.is_unlimited(), true);
 
         // the average of sliding window exceeds the threshold
         stub.0.num_memtable_files.store(6, Ordering::Relaxed);
         tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
-        std::thread::sleep(Duration::from_millis(10));
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
         assert_eq!(flow_controller.should_drop(), false);
         assert_eq!(flow_controller.is_unlimited(), false);
         assert_ne!(flow_controller.consume(2000), Duration::ZERO);

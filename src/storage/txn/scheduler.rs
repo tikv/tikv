@@ -1284,8 +1284,7 @@ mod tests {
 
         // Lock the control_mutex to simulate flow control.
         scheduler.inner.flow_controller.enable(true);
-        scheduler.inner.flow_controller.set_speed_limit(1e9);
-        let guard = block_on(scheduler.control_mutex.lock());
+        scheduler.inner.flow_controller.set_speed_limit(1.0);
         scheduler.run_cmd(cmd.cmd, StorageCallback::TxnStatus(cb));
         // The task waits for 200ms until it locks the control_mutex, but the execution
         // time limit is 100ms. Before the mutex is locked, it should return
@@ -1295,8 +1294,9 @@ mod tests {
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
+        // should unconsume if the request fails
+        assert_eq!(scheduler.inner.flow_controller.total_bytes_consumed(), 0);
 
-        drop(guard);
         // A new request should not be blocked after releasing the lock.
         let mut req = CheckTxnStatusRequest::default();
         req.mut_context().max_execution_duration_ms = 100;

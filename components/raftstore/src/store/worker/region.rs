@@ -765,7 +765,8 @@ mod tests {
     use engine_test::ctor::ColumnFamilyOptions;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
     use engine_traits::{
-        CompactExt, KvEngine, FlowControlFactorsExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt,
+        CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable, Peekable, SyncMutable,
+        WriteBatch, WriteBatchExt,
     };
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
