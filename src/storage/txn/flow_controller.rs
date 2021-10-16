@@ -20,9 +20,8 @@ use tikv_util::time::{Instant, Limiter};
 use crate::storage::config::FlowControlConfig;
 use crate::storage::metrics::*;
 
-const SPARE_TICK_DURATION: Duration = Duration::from_millis(1000);
+const TICK_DURATION: Duration = Duration::from_millis(1000);
 
-const SPARE_TICKS_THRESHOLD: u64 = 10;
 const RATIO_SCALE_FACTOR: u32 = 10_000_000;
 const K_INC_SLOWDOWN_RATIO: f64 = 0.8;
 const K_DEC_SLOWDOWN_RATIO: f64 = 1.0 / K_INC_SLOWDOWN_RATIO;
@@ -453,7 +452,6 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
                 tikv_alloc::add_thread_memory_accessor();
                 let mut checker = self;
                 let mut deadline = std::time::Instant::now();
-                let mut spare_ticks = 0;
                 let mut enabled = true;
                 loop {
                     match rx.try_recv() {
@@ -470,22 +468,12 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
 
                     match flow_info_receiver.recv_deadline(deadline) {
                         Ok(FlowInfo::L0(cf, l0_bytes)) => {
-                            if let Some(throttle_cf) = checker.throttle_cf.as_ref() {
-                                if throttle_cf == &cf {
-                                    spare_ticks = 0;
-                                }
-                            }
                             checker.collect_l0_consumption_stats(&cf, l0_bytes);
                             if enabled {
                                 checker.on_l0_change(cf)
                             }
                         }
                         Ok(FlowInfo::L0Intra(cf, diff_bytes)) => {
-                            if let Some(throttle_cf) = checker.throttle_cf.as_ref() {
-                                if throttle_cf == &cf {
-                                    spare_ticks = 0;
-                                }
-                            }
                             if diff_bytes > 0 {
                                 // Intra L0 merges some deletion records, so regard it as a L0 compaction.
                                 checker.collect_l0_consumption_stats(&cf, diff_bytes);
@@ -495,11 +483,6 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
                             }
                         }
                         Ok(FlowInfo::Flush(cf, flush_bytes)) => {
-                            if let Some(throttle_cf) = checker.throttle_cf.as_ref() {
-                                if throttle_cf == &cf {
-                                    spare_ticks = 0;
-                                }
-                            }
                             checker.collect_l0_production_stats(&cf, flush_bytes);
                             if enabled {
                                 checker.on_memtable_change(&cf);
@@ -507,11 +490,6 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
                             }
                         }
                         Ok(FlowInfo::Compaction(cf)) => {
-                            if let Some(throttle_cf) = checker.throttle_cf.as_ref() {
-                                if throttle_cf == &cf {
-                                    spare_ticks = 0;
-                                }
-                            }
                             if enabled {
                                 checker.on_pending_compaction_bytes_change(cf);
                             }
@@ -561,14 +539,8 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
                             }
                         }
                         Err(RecvTimeoutError::Timeout) => {
-                            spare_ticks += 1;
-                            if spare_ticks == SPARE_TICKS_THRESHOLD {
-                                // there is no flush/compaction happens, we should speed up if throttled
-                                checker.tick_l0();
-                                spare_ticks = 0;
-                            }
                             checker.update_statistics();
-                            deadline = std::time::Instant::now() + SPARE_TICK_DURATION;
+                            deadline = std::time::Instant::now() + TICK_DURATION;
                         }
                         Err(e) => {
                             error!("failed to receive compaction info {:?}", e);
@@ -782,22 +754,6 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         };
 
         self.update_speed_limit(throttle);
-    }
-
-    fn tick_l0(&mut self) {
-        if self.limiter.speed_limit() != f64::INFINITY {
-            let cf = self.throttle_cf.as_ref().unwrap();
-            let checker = self.cf_checkers.get_mut(cf).unwrap();
-            if checker.long_term_num_l0_files.get_recent() <= self.l0_files_threshold {
-                SCHED_THROTTLE_ACTION_COUNTER
-                    .with_label_values(&[cf, "tick_spare"])
-                    .inc();
-
-                let throttle = self.limiter.speed_limit() * K_DEC_SLOWDOWN_RATIO;
-
-                self.update_speed_limit(throttle)
-            }
-        }
     }
 
     fn collect_l0_consumption_stats(&mut self, cf: &String, l0_bytes: u64) {
@@ -1075,19 +1031,22 @@ mod tests {
         // exceeds the threshold
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
         tx.send(FlowInfo::L0("default".to_string(), 0)).unwrap();
-        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
         assert_eq!(flow_controller.should_drop(), false);
         // on start check forbids flow control
         assert_eq!(flow_controller.is_unlimited(), true);
         // once fall below the threshold, pass the on start check
         stub.0.num_l0_files.store(10, Ordering::Relaxed);
         tx.send(FlowInfo::L0("default".to_string(), 0)).unwrap();
-        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
 
         // exceeds the threshold, throttle now
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
         tx.send(FlowInfo::L0("default".to_string(), 0)).unwrap();
-        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
         assert_eq!(flow_controller.should_drop(), false);
         assert_eq!(flow_controller.is_unlimited(), false);
         assert_ne!(flow_controller.consume(2000), Duration::ZERO);
@@ -1105,7 +1064,8 @@ mod tests {
             .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
-        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
         // on start check forbids flow control
         assert!(flow_controller.discard_ratio() < f64::EPSILON);
         // once fall below the threshold, pass the on start check
@@ -1114,14 +1074,16 @@ mod tests {
             .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
-        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
 
         stub.0
             .pending_compaction_bytes
             .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
-        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
         assert!(flow_controller.discard_ratio() > f64::EPSILON);
 
         stub.0
@@ -1129,20 +1091,24 @@ mod tests {
             .store(1 * 1024 * 1024 * 1024, Ordering::Relaxed);
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
-        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
         assert!(flow_controller.discard_ratio() < f64::EPSILON);
 
         // pending compaction bytes jump after unsafe destroy range
         tx.send(FlowInfo::BeforeUnsafeDestroyRange).unwrap();
-        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
         assert!(flow_controller.discard_ratio() < f64::EPSILON);
 
         // during unsafe destroy range, pending compaction bytes may change
-        stub.0.pending_compaction_bytes
+        stub.0
+            .pending_compaction_bytes
             .store(1 * 1024 * 1024 * 1024, Ordering::Relaxed);
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
         assert!(flow_controller.discard_ratio() < f64::EPSILON);
 
         stub.0
@@ -1151,7 +1117,8 @@ mod tests {
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
         tx.send(FlowInfo::AfterUnsafeDestroyRange).unwrap();
-        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
         assert!(flow_controller.discard_ratio() < f64::EPSILON);
 
         // unfreeze the control
@@ -1160,7 +1127,8 @@ mod tests {
             .store(1 * 1024 * 1024, Ordering::Relaxed);
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
-        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
         assert!(flow_controller.discard_ratio() < f64::EPSILON);
 
         stub.0
@@ -1168,7 +1136,8 @@ mod tests {
             .store(1000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
-        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
         assert!(flow_controller.discard_ratio() > f64::EPSILON);
     }
 
