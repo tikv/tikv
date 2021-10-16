@@ -1283,7 +1283,6 @@ mod tests {
         let cmd: TypedCommand<TxnStatus> = req.into();
         let (cb, f) = paired_future_callback();
 
-        // Lock the control_mutex to simulate flow control.
         scheduler.inner.flow_controller.enable(true);
         scheduler.inner.flow_controller.set_speed_limit(1.0);
         scheduler.run_cmd(cmd.cmd, StorageCallback::TxnStatus(cb));
@@ -1298,7 +1297,11 @@ mod tests {
         // should unconsume if the request fails
         assert_eq!(scheduler.inner.flow_controller.total_bytes_consumed(), 0);
 
-        // A new request should not be blocked after releasing the lock.
+        // A new request should not be blocked without flow control.
+        scheduler
+            .inner
+            .flow_controller
+            .set_speed_limit(std::f64::INFINITY);
         let mut req = CheckTxnStatusRequest::default();
         req.mut_context().max_execution_duration_ms = 100;
         req.set_primary_key(b"a".to_vec());
