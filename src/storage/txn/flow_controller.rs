@@ -1070,7 +1070,7 @@ mod tests {
     #[test]
     fn test_flow_controller_l0() {
         let stub = EngineStub::new();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(0);
         let flow_controller = FlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
 
         assert_eq!(flow_controller.consume(2000), Duration::ZERO);
@@ -1078,19 +1078,19 @@ mod tests {
         // exceeds the threshold
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
         tx.send(FlowInfo::L0("default".to_string(), 0)).unwrap();
-        std::thread::sleep(Duration::from_millis(10));
+        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
         assert_eq!(flow_controller.should_drop(), false);
         // on start check forbids flow control
         assert_eq!(flow_controller.is_unlimited(), true);
         // once fall below the threshold, pass the on start check
         stub.0.num_l0_files.store(10, Ordering::Relaxed);
         tx.send(FlowInfo::L0("default".to_string(), 0)).unwrap();
-        std::thread::sleep(Duration::from_millis(10));
+        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
 
         // exceeds the threshold, throttle now
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
         tx.send(FlowInfo::L0("default".to_string(), 0)).unwrap();
-        std::thread::sleep(Duration::from_millis(10));
+        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
         assert_eq!(flow_controller.should_drop(), false);
         assert_eq!(flow_controller.is_unlimited(), false);
         assert_ne!(flow_controller.consume(2000), Duration::ZERO);
@@ -1099,7 +1099,7 @@ mod tests {
     #[test]
     fn test_flow_controller_pending_compaction_bytes() {
         let stub = EngineStub::new();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(0);
         let flow_controller = FlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
 
         // exceeds the threshold
@@ -1108,7 +1108,7 @@ mod tests {
             .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
-        std::thread::sleep(Duration::from_millis(10));
+        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
         // on start check forbids flow control
         assert!(flow_controller.discard_ratio() < f64::EPSILON);
         // once fall below the threshold, pass the on start check
@@ -1117,14 +1117,14 @@ mod tests {
             .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
-        std::thread::sleep(Duration::from_millis(10));
+        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
 
         stub.0
             .pending_compaction_bytes
             .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
-        std::thread::sleep(Duration::from_millis(10));
+        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
         assert!(flow_controller.discard_ratio() > f64::EPSILON);
 
         stub.0
@@ -1132,11 +1132,11 @@ mod tests {
             .store(1 * 1024 * 1024 * 1024, Ordering::Relaxed);
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
-        std::thread::sleep(Duration::from_millis(10));
+        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
         assert!(flow_controller.discard_ratio() < f64::EPSILON);
 
         tx.send(FlowInfo::BeforeUnsafeDestroyRange).unwrap();
-        std::thread::sleep(Duration::from_millis(10));
+        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
         assert!(flow_controller.discard_ratio() < f64::EPSILON);
 
         stub.0
@@ -1145,7 +1145,7 @@ mod tests {
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
         tx.send(FlowInfo::AfterUnsafeDestroyRange).unwrap();
-        std::thread::sleep(Duration::from_millis(10));
+        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
         assert!(flow_controller.discard_ratio() < f64::EPSILON);
 
         // unfreeze the control
@@ -1154,7 +1154,7 @@ mod tests {
             .store(1 * 1024 * 1024, Ordering::Relaxed);
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
-        std::thread::sleep(Duration::from_millis(10));
+        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
         assert!(flow_controller.discard_ratio() < f64::EPSILON);
 
         stub.0
@@ -1162,7 +1162,7 @@ mod tests {
             .store(1000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
         tx.send(FlowInfo::Compaction("default".to_string()))
             .unwrap();
-        std::thread::sleep(Duration::from_millis(10));
+        tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
         assert!(flow_controller.discard_ratio() > f64::EPSILON);
     }
 
