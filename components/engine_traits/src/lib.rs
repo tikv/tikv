@@ -304,6 +304,8 @@ mod ttl_properties;
 pub use crate::ttl_properties::*;
 mod perf_context;
 pub use crate::perf_context::*;
+mod flow_control_factors;
+pub use crate::flow_control_factors::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.

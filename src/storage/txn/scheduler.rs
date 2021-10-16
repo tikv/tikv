@@ -29,6 +29,10 @@ use std::u64;
 
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
+<<<<<<< HEAD
+=======
+use futures::compat::Future01CompatExt;
+>>>>>>> 14895dc46... storage: Improve flow controller (#10978)
 use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
 use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
@@ -868,29 +872,18 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                     .get(tag)
                                     .observe(rows as f64);
 
-                                if ok {
-                                    // consume the quota only when write succeeds, otherwise failed write requests may exhaust
+                                if !ok {
+                                    // Only consume the quota when write succeeds, otherwise failed write requests may exhaust
                                     // the quota and other write requests would be in long delay.
                                     if sched.inner.flow_controller.enabled() {
-                                        if sched.inner.flow_controller.is_unlimited() {
-                                            // no need to delay if unthrottled, just call consume to record write flow
-                                            let _ = sched.inner.flow_controller.consume(write_size);
-                                        } else {
-                                            // Control mutex is used to ensure there is only one request consuming the quota.
-                                            // The delay may exceed 1s, and the speed limit is changed every second.
-                                            // If the speed of next second is larger than the one of first second,
-                                            // without the mutex, the write flow can't throttled strictly.
-                                            let _guard = sched.control_mutex.lock().await;
-                                            let delay =
-                                                sched.inner.flow_controller.consume(write_size);
-                                            delay.await;
-                                        }
+                                        sched.inner.flow_controller.unconsume(write_size);
                                     }
                                 }
                             })
                             .unwrap()
                     });
 
+<<<<<<< HEAD
                     if self.inner.flow_controller.enabled()
                         && !self.inner.flow_controller.is_unlimited()
                     {
@@ -898,6 +891,37 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         // Wait for the delay
                         let _guard = self.control_mutex.lock().await;
                         SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
+=======
+                    if self.inner.flow_controller.enabled() {
+                        if self.inner.flow_controller.is_unlimited() {
+                            // no need to delay if unthrottled, just call consume to record write flow
+                            let _ = self.inner.flow_controller.consume(write_size);
+                        } else {
+                            let start = Instant::now_coarse();
+                            // Control mutex is used to ensure there is only one request consuming the quota.
+                            // The delay may exceed 1s, and the speed limit is changed every second.
+                            // If the speed of next second is larger than the one of first second,
+                            // without the mutex, the write flow can't throttled strictly.
+                            let _guard = self.control_mutex.lock().await;
+                            let delay = self.inner.flow_controller.consume(write_size);
+                            let delay_end = Instant::now_coarse() + delay;
+                            while !self.inner.flow_controller.is_unlimited() {
+                                let now = Instant::now_coarse();
+                                if now >= delay_end {
+                                    break;
+                                }
+                                if now >= deadline.inner() {
+                                    scheduler
+                                        .finish_with_err(cid, StorageErrorInner::DeadlineExceeded);
+                                    self.inner.flow_controller.unconsume(write_size);
+                                    SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
+                                    return;
+                                }
+                                async_std::task::sleep(Duration::from_millis(1)).await;
+                            }
+                            SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
+                        }
+>>>>>>> 14895dc46... storage: Improve flow controller (#10978)
                     }
 
                     to_be_write.deadline = Some(deadline);
@@ -1185,7 +1209,71 @@ mod tests {
         let cmd: TypedCommand<()> = req.into();
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
+<<<<<<< HEAD
         assert!(block_on(f).is_ok());
+=======
+        assert!(block_on(f).unwrap().is_ok());
+    }
+
+    #[test]
+    fn test_flow_control_trottle_deadline() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let config = Config {
+            scheduler_concurrency: 1024,
+            scheduler_worker_pool_size: 1,
+            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
+            enable_async_apply_prewrite: false,
+            ..Default::default()
+        };
+        let scheduler = Scheduler::new(
+            engine,
+            DummyLockManager,
+            ConcurrencyManager::new(1.into()),
+            &config,
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(FlowController::empty()),
+            DummyReporter,
+        );
+
+        let mut req = CheckTxnStatusRequest::default();
+        req.mut_context().max_execution_duration_ms = 100;
+        req.set_primary_key(b"a".to_vec());
+        req.set_lock_ts(10);
+        req.set_rollback_if_not_exist(true);
+
+        let cmd: TypedCommand<TxnStatus> = req.into();
+        let (cb, f) = paired_future_callback();
+
+        scheduler.inner.flow_controller.enable(true);
+        scheduler.inner.flow_controller.set_speed_limit(1.0);
+        scheduler.run_cmd(cmd.cmd, StorageCallback::TxnStatus(cb));
+        // The task waits for 200ms until it locks the control_mutex, but the execution
+        // time limit is 100ms. Before the mutex is locked, it should return
+        // DeadlineExceeded error.
+        thread::sleep(Duration::from_millis(200));
+        assert!(matches!(
+            block_on(f).unwrap(),
+            Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+        ));
+        // should unconsume if the request fails
+        assert_eq!(scheduler.inner.flow_controller.total_bytes_consumed(), 0);
+
+        // A new request should not be blocked without flow control.
+        scheduler
+            .inner
+            .flow_controller
+            .set_speed_limit(std::f64::INFINITY);
+        let mut req = CheckTxnStatusRequest::default();
+        req.mut_context().max_execution_duration_ms = 100;
+        req.set_primary_key(b"a".to_vec());
+        req.set_lock_ts(10);
+        req.set_rollback_if_not_exist(true);
+
+        let cmd: TypedCommand<TxnStatus> = req.into();
+        let (cb, f) = paired_future_callback();
+        scheduler.run_cmd(cmd.cmd, StorageCallback::TxnStatus(cb));
+        assert!(block_on(f).unwrap().is_ok());
+>>>>>>> 14895dc46... storage: Improve flow controller (#10978)
     }
 
     #[test]
