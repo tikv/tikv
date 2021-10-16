@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
+
 //! This module contains TiKV's transaction layer. It lowers high-level, transactional
 //! commands to low-level (raw key-value) interactions with persistent storage.
 //!
@@ -36,6 +38,7 @@
 
 pub mod config;
 pub mod errors;
+pub mod key_prefix;
 pub mod kv;
 pub mod lock_manager;
 pub(crate) mod metrics;
@@ -61,6 +64,7 @@ pub use self::{
 };
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
+use crate::storage::key_prefix::TIDB_RANGES_COMPLEMENT;
 use crate::storage::metrics::CommandKind;
 use crate::storage::mvcc::MvccReader;
 use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSwap};
@@ -78,17 +82,23 @@ use crate::storage::{
     types::StorageCallbackType,
 };
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, CF_DEFAULT, DATA_CFS};
+use engine_traits::{
+    CfName, Iterable, KvEngine, Peekable, SyncMutable, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_LEN,
+};
 use futures::prelude::*;
+use kvproto::kvrpcpb::ApiVersion;
 use kvproto::kvrpcpb::{
     ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo,
     RawGetRequest,
 };
 use kvproto::pdpb::QueryKind;
+use kvproto::raft_serverpb::DataEncode;
+use protobuf::well_known_types::Int32Value;
+use protobuf::ProtobufEnum;
 use raftstore::store::util::build_key_range;
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
-use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
+use resource_metering::{FutureExt, ResourceMeteringTag};
 use std::{
     borrow::Cow,
     iter,
@@ -208,6 +218,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         flow_controller: Arc<FlowController>,
         reporter: R,
     ) -> Result<Self> {
+        let config_data_encode = match config.api_version {
+            ApiVersion::V1 => DataEncode::V1,
+            ApiVersion::V2 => DataEncode::V2,
+        };
+        Self::ensure_to_use_data_encode(&engine, config_data_encode)?;
+
         let sched = TxnScheduler::new(
             engine.clone(),
             lock_mgr,
@@ -314,6 +330,60 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             }
         }
         true
+    }
+
+    /// Change the data encode flag in kvdb if the config file has a different value.
+    /// During the switch bewteen V1 and V2, only TiDB data are allowed to exist, otherwise return error.
+    fn ensure_to_use_data_encode(engine: &E, config_data_encode: DataEncode) -> Result<()> {
+        let kv = engine.kv_engine();
+        let kv_data_encode = kv
+            .get_msg::<Int32Value>(keys::DATA_ENCODE_KEY)?
+            .unwrap_or_default()
+            .value;
+        let kv_data_encode = DataEncode::from_i32(kv_data_encode).expect("unknown data encode");
+        if kv_data_encode != config_data_encode {
+            // Check if there are only TiDB data in the engine
+            let snapshot = kv.snapshot();
+            for cf in DATA_CFS {
+                for (start, end) in TIDB_RANGES_COMPLEMENT {
+                    let mut unexpected_data_key = None;
+                    snapshot.scan_cf(
+                        cf,
+                        &keys::data_key(start),
+                        &keys::data_key(end),
+                        false,
+                        |key, _| {
+                            unexpected_data_key = Some(key[DATA_KEY_PREFIX_LEN..].to_vec());
+                            Ok(false)
+                        },
+                    )?;
+                    if let Some(unexpected_data_key) = unexpected_data_key {
+                        error!(
+                            "unable to switch data encode (triggered by switching storage.api_version)";
+                            "current" => ?kv_data_encode,
+                            "target" => ?config_data_encode,
+                            "found data key that is not written by TiDB" => log_wrappers::hex_encode_upper(&unexpected_data_key),
+                        );
+                        return Err(box_err!(
+                            "unable to switch data encode (triggered by switching storage.api_version) from {:?} to {:?} \
+                            because found data key that is not written by TiDB: {:?}",
+                            kv_data_encode,
+                            config_data_encode,
+                            log_wrappers::hex_encode_upper(&unexpected_data_key)
+                        ));
+                    }
+                }
+            }
+            // Check completed. Switch the encode flag.
+            kv.put_msg(
+                keys::DATA_ENCODE_KEY,
+                &Int32Value {
+                    value: config_data_encode.value(),
+                    ..Default::default()
+                },
+            )?;
+        }
+        Ok(())
     }
 
     /// Get value of the given key from a snapshot.
@@ -2020,6 +2090,11 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
         self
     }
 
+    pub fn set_api_version(mut self, api_version: ApiVersion) -> Self {
+        self.config.api_version = api_version;
+        self
+    }
+
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E, L>> {
         let read_pool = build_read_pool_for_test(
@@ -2251,7 +2326,7 @@ mod tests {
     use crate::storage::txn::tests::must_rollback;
     use crate::storage::{
         config::BlockCacheConfig,
-        kv::{Error as EngineError, ErrorInner as EngineErrorInner},
+        kv::{Error as KvError, ErrorInner as EngineErrorInner},
         lock_manager::{Lock, WaitTimeout},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         raw::ttl::current_ts,
@@ -2262,7 +2337,7 @@ mod tests {
     use engine_traits::{ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
     use errors::extract_key_error;
     use futures::executor::block_on;
-    use kvproto::kvrpcpb::{CommandPri, Op};
+    use kvproto::kvrpcpb::{ApiVersion, CommandPri, Op};
     use std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -2393,9 +2468,7 @@ mod tests {
                 ),
                 expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                        box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(
-                            ..,
-                        ))),
+                        box mvcc::ErrorInner::Kv(KvError(box EngineErrorInner::Request(..))),
                     ))))) => {}
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
@@ -2405,7 +2478,7 @@ mod tests {
         expect_error(
             |e| match e {
                 Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                    box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(..))),
+                    box mvcc::ErrorInner::Kv(KvError(box EngineErrorInner::Request(..))),
                 ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
@@ -2414,7 +2487,7 @@ mod tests {
         expect_error(
             |e| match e {
                 Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                    box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(..))),
+                    box mvcc::ErrorInner::Kv(KvError(box EngineErrorInner::Request(..))),
                 ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
@@ -2432,7 +2505,7 @@ mod tests {
         expect_error(
             |e| match e {
                 Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                    box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(..))),
+                    box mvcc::ErrorInner::Kv(KvError(box EngineErrorInner::Request(..))),
                 ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
@@ -2455,9 +2528,7 @@ mod tests {
             expect_error(
                 |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                        box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(
-                            ..,
-                        ))),
+                        box mvcc::ErrorInner::Kv(KvError(box EngineErrorInner::Request(..))),
                     ))))) => {}
                     e => panic!("unexpected error chain: {:?}", e),
                 },
@@ -7000,5 +7071,93 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+    }
+
+    #[test]
+    fn test_switch_api_version() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Write TiDB data.
+        let tidb_key = keys::data_key(b"m_tidb_data");
+        engine
+            .put(
+                &Context::default(),
+                Key::from_raw(&tidb_key),
+                b"val".to_vec(),
+            )
+            .unwrap();
+
+        // Default API Version is V1, should be ablle to swith to V2.
+        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+            engine.clone(),
+            DummyLockManager {},
+        )
+        .set_api_version(ApiVersion::V2)
+        .build()
+        .unwrap();
+        drop(storage);
+
+        // Should be able to switch back to V1.
+        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+            engine.clone(),
+            DummyLockManager {},
+        )
+        .set_api_version(ApiVersion::V1)
+        .build()
+        .unwrap();
+        drop(storage);
+
+        // Write non-TiDB data.
+        let non_tidb_key = keys::data_key(b"k1");
+        engine
+            .put(
+                &Context::default(),
+                Key::from_raw(&non_tidb_key),
+                b"val".to_vec(),
+            )
+            .unwrap();
+
+        // Should not able to switch from V1 to V2 now.
+        assert!(
+            TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+                engine,
+                DummyLockManager {},
+            )
+            .set_api_version(ApiVersion::V2)
+            .build()
+            .is_err()
+        );
+
+        // Prepare a new storage and switch it to V2.
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+            engine.clone(),
+            DummyLockManager {},
+        )
+        .set_api_version(ApiVersion::V2)
+        .build()
+        .unwrap();
+        drop(storage);
+
+        // Write non-TiDB data.
+        let non_tidb_key = keys::data_key(b"k1");
+        engine
+            .put(
+                &Context::default(),
+                Key::from_raw(&non_tidb_key),
+                b"val".to_vec(),
+            )
+            .unwrap();
+
+        // Should not able to switch from V2 to V1 now.
+        assert!(
+            TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+                engine,
+                DummyLockManager {},
+            )
+            .set_api_version(ApiVersion::V1)
+            .build()
+            .is_err()
+        );
     }
 }

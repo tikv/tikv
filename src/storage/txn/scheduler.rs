@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath
 //! Scheduler which schedules the execution of `storage::Command`s.
 //!
 //! There is one scheduler for each store. It receives commands from clients, executes them against
@@ -32,7 +33,7 @@ use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use futures::compat::Future01CompatExt;
 use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
-use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
+use resource_metering::{FutureExt, ResourceMeteringTag};
 use tikv_util::{callback::must_call, time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::TimeStamp;
 

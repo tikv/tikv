@@ -2336,7 +2336,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#df38c15b57b3049293c71ca828a42d83faffe221"
+source = "git+https://github.com/pingcap/kvproto.git#d6dd964d6b8cfcb28d1ffa07d9002ba32f0b0418"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4068,6 +4068,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
+ "thread-id",
  "tikv_util",
 ]
 
@@ -5220,6 +5221,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "thread-id"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fdfe0627923f7411a43ec9ec9c39c3a9b4151be313e0922042581fb6c9b717f"
+dependencies = [
+ "libc 0.2.100",
+ "redox_syscall 0.2.6",
+ "winapi 0.3.9",
+]
+
+[[package]]
 name = "thread_local"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5484,6 +5496,7 @@ dependencies = [
  "tokio-timer",
  "toml",
  "txn_types",
+ "unsigned-varint",
  "url",
  "uuid",
  "walkdir",
@@ -5594,7 +5607,6 @@ dependencies = [
  "fxhash",
  "lazy_static",
  "libc 0.2.100",
- "log",
  "mimalloc",
  "snmalloc-rs",
  "tcmalloc",
@@ -5740,9 +5752,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.10.0"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01cf844b23c6131f624accf65ce0e4e9956a8bb329400ea5bcc26ae3a5c20b0b"
+checksum = "c2c2416fdedca8443ae44b4527de1ea633af61d8f7169ffa6e72c5b53d24efcc"
 dependencies = [
  "autocfg",
  "bytes 1.0.1",
@@ -5964,6 +5976,12 @@ name = "unicode-xid"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "826e7639553986605ec5979c7dd957c7895e93eabed50ab2ffa7f6128a75097c"
+
+[[package]]
+name = "unsigned-varint"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f8d425fafb8cd76bc3f22aace4af471d3156301d7508f2107e98fbeae10bc7f"
 
 [[package]]
 name = "untrusted"
