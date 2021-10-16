@@ -20,10 +20,7 @@ use tikv_util::time::{Instant, Limiter};
 use crate::storage::config::FlowControlConfig;
 use crate::storage::metrics::*;
 
-#[cfg(not(test))]
 const SPARE_TICK_DURATION: Duration = Duration::from_millis(1000);
-#[cfg(test)]
-const SPARE_TICK_DURATION: Duration = Duration::from_millis(1);
 
 const SPARE_TICKS_THRESHOLD: u64 = 10;
 const RATIO_SCALE_FACTOR: u32 = 10_000_000;
