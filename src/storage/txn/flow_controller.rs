@@ -1135,8 +1135,17 @@ mod tests {
         tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
         assert!(flow_controller.discard_ratio() < f64::EPSILON);
 
+        // pending compaction bytes jump after unsafe destroy range
         tx.send(FlowInfo::BeforeUnsafeDestroyRange).unwrap();
         tx.send(FlowInfo::L0Intra("defautlt".to_string(), 0)).unwrap();
+        assert!(flow_controller.discard_ratio() < f64::EPSILON);
+
+        // during unsafe destroy range, pending compaction bytes may change
+        stub.0.pending_compaction_bytes
+            .store(1 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction("default".to_string()))
+            .unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0)).unwrap();
         assert!(flow_controller.discard_ratio() < f64::EPSILON);
 
         stub.0
