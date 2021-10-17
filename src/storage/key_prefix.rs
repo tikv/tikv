@@ -63,6 +63,23 @@ impl KeyPrefix {
             _ => (KeyPrefix::Unknown, key),
         }
     }
+
+    /// Parse a batch of keys
+    pub fn batch_parse<'a, I>(keys: I) -> (Vec<KeyPrefix>, Vec<&'a [u8]>)
+    where
+        I: std::iter::Iterator<Item = &'a [u8]>,
+    {
+        let mut prefixes: Vec<KeyPrefix> = Vec::with_capacity(keys.size_hint().0);
+        let mut user_keys: Vec<&[u8]> = Vec::with_capacity(keys.size_hint().0);
+
+        for key in keys {
+            let (prefix, user_key) = Self::parse(key);
+            prefixes.push(prefix);
+            user_keys.push(user_key);
+        }
+
+        (prefixes, user_keys)
+    }
 }
 
 #[cfg(test)]
@@ -95,5 +112,37 @@ mod tests {
             KeyPrefix::parse(&[RAW_KEY_PREFIX, 244]),
             (KeyPrefix::Unknown, &[RAW_KEY_PREFIX, 244][..])
         );
+    }
+
+    #[test]
+    fn test_batch_parse() {
+        let test_data: Vec<(&[u8], KeyPrefix, &[u8])> = vec![
+            (
+                &[RAW_KEY_PREFIX, 244, 3, b'a', b'b'],
+                KeyPrefix::Raw { keyspace_id: 500 },
+                &b"ab"[..],
+            ),
+            (
+                &[TXN_KEY_PREFIX, 244, 3],
+                KeyPrefix::Txn { keyspace_id: 500 },
+                &b""[..],
+            ),
+            (b"t_a", KeyPrefix::TiDB, &b"t_a"[..]),
+            (b"m", KeyPrefix::TiDB, &b"m"[..]),
+            (b"ot", KeyPrefix::Unknown, &b"ot"[..]),
+            (
+                &[RAW_KEY_PREFIX, 244],
+                KeyPrefix::Unknown,
+                &[RAW_KEY_PREFIX, 244][..],
+            ),
+        ];
+
+        let keys = test_data.iter().map(|x| x.0);
+        let expected_key_prefixes: Vec<KeyPrefix> = test_data.iter().map(|x| x.1).collect();
+        let expected_user_keys: Vec<&[u8]> = test_data.iter().map(|x| x.2).collect();
+
+        let (key_prefixes, user_keys) = KeyPrefix::batch_parse(keys);
+        assert_eq!(key_prefixes, &expected_key_prefixes[..]);
+        assert_eq!(user_keys, &expected_user_keys[..]);
     }
 }

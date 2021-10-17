@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::{Context, LockInfo};
+use kvproto::kvrpcpb::{ApiVersion, Context, LockInfo};
 
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
 use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner, RocksEngine};
@@ -25,6 +25,18 @@ impl Default for AssertionStorage<RocksEngine> {
         AssertionStorage {
             ctx: Context::default(),
             store: SyncTestStorageBuilder::new().build().unwrap(),
+        }
+    }
+}
+
+impl AssertionStorage<RocksEngine> {
+    pub fn new_opt(api_version: ApiVersion) -> Self {
+        AssertionStorage {
+            ctx: Context::default(),
+            store: SyncTestStorageBuilder::new()
+                .set_api_version(api_version)
+                .build()
+                .unwrap(),
         }
     }
 }
@@ -257,6 +269,15 @@ impl<E: Engine> AssertionStorage<E> {
         assert_eq!(result, expect);
     }
 
+    pub fn batch_get_err(&self, keys: &[&[u8]], ts: impl Into<TimeStamp>) {
+        let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
+        assert!(
+            self.store
+                .batch_get(self.ctx.clone(), &keys, ts.into())
+                .is_err()
+        );
+    }
+
     pub fn batch_get_command_ok(&self, keys: &[&[u8]], ts: u64, expect: Vec<&[u8]>) {
         let result: Vec<Option<Vec<u8>>> = self
             .store
@@ -269,6 +290,14 @@ impl<E: Engine> AssertionStorage<E> {
             .map(|x| if x.is_empty() { None } else { Some(x.to_vec()) })
             .collect();
         assert_eq!(result, expect);
+    }
+
+    pub fn batch_get_command_err(&self, keys: &[&[u8]], ts: u64) {
+        assert!(
+            self.store
+                .batch_get_command(self.ctx.clone(), keys, ts)
+                .is_err()
+        );
     }
 
     fn expect_not_leader_or_stale_command(&self, err: storage::Error) {
@@ -345,6 +374,26 @@ impl<E: Engine> AssertionStorage<E> {
                 commit_ts.into(),
             )
             .unwrap();
+    }
+
+    pub fn put_err(
+        &self,
+        key: &[u8],
+        value: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        _commit_ts: impl Into<TimeStamp>,
+    ) {
+        let start_ts = start_ts.into();
+        assert!(
+            self.store
+                .prewrite(
+                    self.ctx.clone(),
+                    vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
+                    key.to_vec(),
+                    start_ts,
+                )
+                .is_err()
+        );
     }
 
     pub fn delete_ok(
@@ -698,6 +747,31 @@ impl<E: Engine> AssertionStorage<E> {
             self.store.raw_get(self.ctx.clone(), cf, key).unwrap(),
             value
         );
+    }
+
+    pub fn raw_get_err(&self, cf: String, key: Vec<u8>) {
+        self.store.raw_get(self.ctx.clone(), cf, key).unwrap_err();
+    }
+
+    pub fn raw_batch_get_ok(&self, cf: String, keys: Vec<Vec<u8>>, expect: Vec<(&[u8], &[u8])>) {
+        let result: Vec<KvPair> = self
+            .store
+            .raw_batch_get(self.ctx.clone(), cf, keys)
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap())
+            .collect();
+        let expect: Vec<KvPair> = expect
+            .into_iter()
+            .map(|(k, v)| (k.to_vec(), v.to_vec()))
+            .collect();
+        assert_eq!(result, expect);
+    }
+
+    pub fn raw_batch_get_err(&self, cf: String, keys: Vec<Vec<u8>>) {
+        self.store
+            .raw_batch_get(self.ctx.clone(), cf, keys)
+            .unwrap_err();
     }
 
     pub fn raw_put_ok(&self, cf: String, key: Vec<u8>, value: Vec<u8>) {

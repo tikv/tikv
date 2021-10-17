@@ -64,6 +64,9 @@ pub enum ErrorInner {
 
     #[error("The length of ttls does not equal to the length of pairs")]
     TTLsLenNotEqualsToPairs,
+
+    #[error("Api version in request does not match with config")]
+    ApiVersionNotMatch,
 }
 
 impl From<DeadlineError> for ErrorInner {
@@ -111,6 +114,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::TTLsLenNotEqualsToPairs => {
                 error_code::storage::TTLS_LEN_NOT_EQUALS_TO_PAIRS
             }
+            ErrorInner::ApiVersionNotMatch => error_code::storage::API_VERSION_NOT_MATCH,
         }
     }
 }

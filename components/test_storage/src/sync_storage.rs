@@ -2,7 +2,7 @@
 
 use collections::HashMap;
 use futures::executor::block_on;
-use kvproto::kvrpcpb::{Context, GetRequest, LockInfo};
+use kvproto::kvrpcpb::{ApiVersion, Context, GetRequest, LockInfo};
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::router::RaftStoreBlackHole;
 use std::sync::{atomic::AtomicU64, Arc};
@@ -24,6 +24,7 @@ pub struct SyncTestStorageBuilder<E: Engine> {
     engine: E,
     config: Option<Config>,
     gc_config: Option<GcConfig>,
+    api_version: Option<ApiVersion>,
 }
 
 impl SyncTestStorageBuilder<RocksEngine> {
@@ -32,6 +33,7 @@ impl SyncTestStorageBuilder<RocksEngine> {
             engine: TestEngineBuilder::new().build().unwrap(),
             config: None,
             gc_config: None,
+            api_version: None,
         }
     }
 }
@@ -48,6 +50,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
             engine,
             config: None,
             gc_config: None,
+            api_version: None,
         }
     }
 
@@ -61,11 +64,19 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         self
     }
 
+    pub fn set_api_version(mut self, api_version: ApiVersion) -> Self {
+        self.api_version = Some(api_version);
+        self
+    }
+
     pub fn build(mut self) -> Result<SyncTestStorage<E>> {
         let mut builder =
             TestStorageBuilder::from_engine_and_lock_mgr(self.engine.clone(), DummyLockManager {});
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
+        }
+        if let Some(api_version) = self.api_version.take() {
+            builder = builder.set_api_version(api_version);
         }
         let (tx, _rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
@@ -309,6 +320,15 @@ impl<E: Engine> SyncTestStorage<E> {
 
     pub fn raw_get(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         block_on(self.store.raw_get(ctx, cf, key))
+    }
+
+    pub fn raw_batch_get(
+        &self,
+        ctx: Context,
+        cf: String,
+        keys: Vec<Vec<u8>>,
+    ) -> Result<Vec<Result<KvPair>>> {
+        block_on(self.store.raw_batch_get(ctx, cf, keys))
     }
 
     pub fn raw_put(&self, ctx: Context, cf: String, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
