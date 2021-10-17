@@ -137,7 +137,7 @@ checksum = "a811e6a479f2439f0c04038796b5cfb3d2ad56c230e0f2d3f7b04d68cfee607b"
 dependencies = [
  "concurrent-queue",
  "futures-lite",
- "libc 0.2.100",
+ "libc 0.2.86",
  "log",
  "once_cell",
  "parking",
@@ -3301,7 +3301,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92341d779fa34ea8437ef4d82d440d5e1ce3f3ff7f824aa64424cd481f9a1f25"
 dependencies = [
  "cfg-if 1.0.0",
- "libc 0.2.100",
+ "libc 0.2.86",
  "log",
  "wepoll-ffi",
  "winapi 0.3.9",

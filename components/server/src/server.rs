@@ -31,13 +31,8 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{from_rocks_compression_type, get_env, FlowInfo, RocksEngine};
 use engine_traits::{
-<<<<<<< HEAD
-    compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, MiscExt,
-    RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
-=======
     compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines,
-    FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
+    FlowControlFactorsExt, MiscExt, RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{

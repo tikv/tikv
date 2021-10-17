@@ -64,11 +64,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-<<<<<<< HEAD
-  "iteration": 1609133726628,
-=======
   "iteration": 1632801611318,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
   "links": [],
   "panels": [
     {
@@ -6632,7 +6628,6 @@
           ],
           "thresholds": [
             {
-              "$$hashKey": "object:251",
               "colorMode": "warning",
               "fill": true,
               "line": true,
@@ -6641,7 +6636,6 @@
               "yaxis": "left"
             },
             {
-              "$$hashKey": "object:252",
               "colorMode": "critical",
               "fill": true,
               "line": true,
@@ -6670,7 +6664,6 @@
           },
           "yaxes": [
             {
-              "$$hashKey": "object:233",
               "format": "percentunit",
               "label": null,
               "logBase": 1,
@@ -6679,7 +6672,6 @@
               "show": true
             },
             {
-              "$$hashKey": "object:234",
               "format": "short",
               "label": null,
               "logBase": 1,
@@ -7394,11 +7386,11 @@
               "step": 4
             },
             {
-              "refId": "B",
               "expr": "tikv_pd_pending_heartbeat_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}",
-              "intervalFactor": 1,
               "format": "time_series",
-              "legendFormat": "pending"
+              "intervalFactor": 1,
+              "legendFormat": "pending",
+              "refId": "B"
             }
           ],
           "thresholds": [],
@@ -7675,6 +7667,7 @@
             "alignAsTable": true,
             "avg": false,
             "current": true,
+            "hideZero": true,
             "max": true,
             "min": false,
             "rightSide": true,
@@ -7683,8 +7676,7 @@
             "sort": "current",
             "sortDesc": true,
             "total": false,
-            "values": true,
-            "hideZero": true
+            "values": true
           },
           "lines": true,
           "linewidth": 1,
@@ -7842,7 +7834,6 @@
           },
           "yaxes": [
             {
-              "$$hashKey": "object:509",
               "format": "none",
               "label": null,
               "logBase": 1,
@@ -7851,7 +7842,6 @@
               "show": true
             },
             {
-              "$$hashKey": "object:510",
               "format": "short",
               "label": null,
               "logBase": 1,
@@ -8090,7 +8080,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 6
+        "y": 7
       },
       "id": 5265,
       "panels": [
@@ -9178,7 +9168,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 7
+        "y": 8
       },
       "id": 2748,
       "panels": [
@@ -9713,7 +9703,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 8
+        "y": 9
       },
       "id": 2749,
       "panels": [
@@ -10178,7 +10168,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 10
       },
       "id": 2750,
       "panels": [
@@ -10773,7 +10763,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 10
+        "y": 11
       },
       "id": 2751,
       "panels": [
@@ -11766,7 +11756,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 11
+        "y": 12
       },
       "id": 2752,
       "panels": [
@@ -12395,7 +12385,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 12
+        "y": 13
       },
       "id": 2753,
       "panels": [
@@ -12513,7 +12503,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 13
+        "y": 14
       },
       "id": 4200,
       "panels": [
@@ -12794,7 +12784,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 15
       },
       "id": 2754,
       "panels": [
@@ -14067,7 +14057,7 @@
         "x": 0,
         "y": 17
       },
-      "id": 2755,
+      "id": 2756,
       "panels": [
         {
           "aliasColors": {},
@@ -14076,576 +14066,22 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-<<<<<<< HEAD
-          "description": "The total number of commands on each stage",
-=======
           "description": "The total number of commands on each stage in commit command",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "fill": 1,
           "fillGradient": 0,
           "gridPos": {
             "h": 10,
-            "w": 12,
+            "w": 24,
             "x": 0,
-<<<<<<< HEAD
-            "y": 15
-          },
-          "height": "400",
-          "id": 167,
-=======
             "y": 18
           },
           "height": "400",
           "hiddenSeries": false,
           "id": 168,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxPerRow": 1,
-          "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
-          "percentage": false,
-          "pluginVersion": "7.5.7",
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(rate(tikv_scheduler_too_busy_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (stage)",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "busy",
-              "refId": "A",
-              "step": 20
-            },
-            {
-              "expr": "sum(rate(tikv_scheduler_stage_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (stage)",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "{{stage}}",
-              "refId": "B",
-              "step": 20
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Scheduler stage total",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "ops",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-<<<<<<< HEAD
-          "description": "The total writing bytes of commands on each stage",
-          "fill": 1,
-=======
-          "description": "The time consumed when executing commit command",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "fill": 1,
-          "fillGradient": 0,
-          "grid": {},
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
-          "gridPos": {
-            "h": 10,
-            "w": 12,
-<<<<<<< HEAD
-            "x": 12,
-            "y": 15
-          },
-          "height": "400",
-          "id": 3834,
-=======
-            "x": 0,
-            "y": 28
-          },
-          "hiddenSeries": false,
-          "id": 3,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxPerRow": 1,
-          "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
-          "percentage": false,
-          "pluginVersion": "7.5.7",
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(tikv_scheduler_writing_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "{{instance}}",
-              "refId": "A",
-              "step": 20
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Scheduler writing bytes",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "bytes",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "bytes",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "description": "The count of different priority commands",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "fill": 1,
-          "fillGradient": 0,
-          "grid": {},
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-<<<<<<< HEAD
-            "x": 0,
-            "y": 25
-          },
-          "height": "",
-          "id": 1,
-=======
-            "x": 12,
-            "y": 28
-          },
-          "hiddenSeries": false,
-          "id": 194,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 2,
-          "links": [],
-          "maxPerRow": 2,
-          "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
-          "percentage": false,
-          "pluginVersion": "7.5.7",
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(rate(tikv_scheduler_commands_pri_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (priority)",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "{{priority}}",
-              "metric": "",
-              "refId": "A",
-              "step": 40
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Scheduler priority commands",
-          "tooltip": {
-            "msResolution": false,
-            "shared": true,
-            "sort": 0,
-            "value_type": "cumulative"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "ops",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "alert": {
-            "conditions": [
-              {
-                "evaluator": {
-                  "params": [
-                    300
-                  ],
-                  "type": "gt"
-                },
-                "operator": {
-                  "type": "and"
-                },
-                "query": {
-                  "params": [
-                    "A",
-                    "5m",
-                    "now"
-                  ]
-                },
-                "reducer": {
-                  "params": [],
-                  "type": "avg"
-                },
-                "type": "query"
-              }
-            ],
-            "executionErrorState": "alerting",
-            "frequency": "120s",
-            "handler": 1,
-            "message": "TiKV scheduler context total",
-            "name": "scheduler pending commands alert",
-            "noDataState": "ok",
-            "notifications": []
-          },
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "description": "The count of pending commands per TiKV instance",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "fill": 1,
-          "fillGradient": 0,
-          "grid": {},
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-<<<<<<< HEAD
-            "x": 12,
-            "y": 25
-          },
-          "height": "",
-          "id": 193,
-=======
-            "x": 0,
-            "y": 36
-          },
-          "hiddenSeries": false,
-          "id": 195,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 2,
-          "links": [],
-          "maxPerRow": 2,
-          "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
-          "percentage": false,
-          "pluginVersion": "7.5.7",
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(tikv_scheduler_contex_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "refId": "A",
-              "step": 40
-            }
-          ],
-          "thresholds": [
-            {
-              "colorMode": "critical",
-              "fill": true,
-              "line": true,
-              "op": "gt",
-              "value": 300
-            }
-          ],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Scheduler pending commands",
-          "tooltip": {
-            "msResolution": false,
-            "shared": true,
-            "sort": 0,
-            "value_type": "cumulative"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "ops",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-<<<<<<< HEAD
-        }
-      ],
-      "repeat": null,
-      "title": "Scheduler",
-      "type": "row"
-    },
-    {
-      "collapsed": true,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 16
-      },
-      "id": 2756,
-      "panels": [
-=======
-        },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-<<<<<<< HEAD
-          "description": "The total number of commands on each stage in commit command",
-          "fill": 1,
-          "gridPos": {
-            "h": 10,
-            "w": 24,
-            "x": 0,
-            "y": 16
-          },
-          "height": "400",
-          "id": 168,
-=======
-          "description": "The count of keys written by a commit command",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "fill": 1,
-          "fillGradient": 0,
-          "grid": {},
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 36
-          },
-          "hiddenSeries": false,
-          "id": 373,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -14758,17 +14194,15 @@
             "overrides": []
           },
           "fill": 1,
+          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-<<<<<<< HEAD
-            "y": 26
-=======
-            "y": 44
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
+            "y": 28
           },
+          "hiddenSeries": false,
           "id": 3,
           "legend": {
             "alignAsTable": true,
@@ -14790,6 +14224,9 @@
           "linewidth": 2,
           "links": [],
           "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
           "percentage": false,
           "pluginVersion": "7.5.7",
           "pointradius": 5,
@@ -14892,17 +14329,15 @@
             "overrides": []
           },
           "fill": 1,
+          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 12,
-<<<<<<< HEAD
-            "y": 26
-=======
-            "y": 44
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
+            "y": 28
           },
+          "hiddenSeries": false,
           "id": 194,
           "legend": {
             "alignAsTable": true,
@@ -14924,6 +14359,9 @@
           "linewidth": 2,
           "links": [],
           "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
           "percentage": false,
           "pluginVersion": "7.5.7",
           "pointradius": 5,
@@ -15026,17 +14464,15 @@
             "overrides": []
           },
           "fill": 1,
+          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-<<<<<<< HEAD
-            "y": 34
-=======
-            "y": 52
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
+            "y": 36
           },
+          "hiddenSeries": false,
           "id": 195,
           "legend": {
             "alignAsTable": true,
@@ -15058,6 +14494,9 @@
           "linewidth": 2,
           "links": [],
           "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
           "percentage": false,
           "pluginVersion": "7.5.7",
           "pointradius": 5,
@@ -15160,17 +14599,15 @@
             "overrides": []
           },
           "fill": 1,
+          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 12,
-<<<<<<< HEAD
-            "y": 34
-=======
-            "y": 52
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
+            "y": 36
           },
+          "hiddenSeries": false,
           "id": 373,
           "legend": {
             "alignAsTable": true,
@@ -15192,6 +14629,9 @@
           "linewidth": 2,
           "links": [],
           "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
           "percentage": false,
           "pluginVersion": "7.5.7",
           "pointradius": 5,
@@ -15285,29 +14725,21 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-<<<<<<< HEAD
           "decimals": 1,
           "description": "The keys scan details of each CF when executing commit command",
           "editable": true,
           "error": false,
-          "fill": 1,
-          "grid": {},
-=======
-          "description": "The time consumed on checking memory locks",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
+          "fill": 1,
+          "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-<<<<<<< HEAD
-            "y": 42
-=======
-            "y": 60
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
+            "y": 44
           },
           "id": 560,
           "legend": {
@@ -15331,6 +14763,7 @@
           "links": [],
           "nullPointMode": "null",
           "percentage": false,
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -15341,8 +14774,443 @@
               "value": "acquire_pessimistic_lock"
             }
           },
-<<<<<<< HEAD
-=======
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_scheduler_kv_scan_details{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", req=\"$command\"}[1m])) by (tag)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{tag}}",
+              "metric": "",
+              "refId": "A",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Scheduler scan details",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "description": "The keys scan details of lock CF when executing commit command",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 44
+          },
+          "id": 675,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": false,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 2,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pluginVersion": "7.5.7",
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "command": {
+              "selected": false,
+              "text": "acquire_pessimistic_lock",
+              "value": "acquire_pessimistic_lock"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_scheduler_kv_scan_details{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", req=\"$command\", cf=\"lock\"}[1m])) by (tag)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{tag}}",
+              "metric": "",
+              "refId": "A",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Scheduler scan details [lock]",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "description": "The keys scan details of write CF when executing commit command",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 52
+          },
+          "id": 829,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": false,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 2,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pluginVersion": "7.5.7",
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "command": {
+              "selected": false,
+              "text": "acquire_pessimistic_lock",
+              "value": "acquire_pessimistic_lock"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_scheduler_kv_scan_details{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", req=\"$command\", cf=\"write\"}[1m])) by (tag)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{tag}}",
+              "metric": "",
+              "refId": "A",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Scheduler scan details [write]",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "description": "The keys scan details of default CF when executing commit command",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 52
+          },
+          "id": 830,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": false,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 2,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pluginVersion": "7.5.7",
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "command": {
+              "selected": false,
+              "text": "acquire_pessimistic_lock",
+              "value": "acquire_pessimistic_lock"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_scheduler_kv_scan_details{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", req=\"$command\", cf=\"default\"}[1m])) by (tag)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{tag}}",
+              "metric": "",
+              "refId": "A",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Scheduler scan details [default]",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "cards": {
+            "cardPadding": null,
+            "cardRound": null
+          },
+          "color": {
+            "cardColor": "#b4ff00",
+            "colorScale": "sqrt",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The time consumed on checking memory locks",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 60
+          },
+          "heatmap": {},
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 7236,
+          "legend": {
+            "show": false
+          },
+          "links": [],
+          "repeat": null,
+          "repeatDirection": null,
+          "repeatedByRow": true,
+          "reverseYBuckets": false,
+          "scopedVars": {
+            "command": {
+              "selected": false,
+              "text": "acquire_pessimistic_lock",
+              "value": "acquire_pessimistic_lock"
+            }
+          },
           "targets": [
             {
               "expr": "sum(delta(tikv_storage_check_mem_lock_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"$command\"}[1m])) by (le)",
@@ -15436,32 +15304,37 @@
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_scheduler_kv_scan_details{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", req=\"$command\"}[1m])) by (tag)",
+              "expr": "sum(rate(tikv_scheduler_too_busy_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (stage)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "{{tag}}",
-              "metric": "",
+              "legendFormat": "busy",
               "refId": "A",
-              "step": 10
+              "step": 20
+            },
+            {
+              "expr": "sum(rate(tikv_scheduler_stage_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (stage)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{stage}}",
+              "refId": "B",
+              "step": 20
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Scheduler scan details",
+          "title": "Scheduler stage total",
           "tooltip": {
-            "msResolution": false,
             "shared": true,
             "sort": 0,
-            "value_type": "cumulative"
+            "value_type": "individual"
           },
           "type": "graph",
           "xaxis": {
@@ -15473,7 +15346,7 @@
           },
           "yaxes": [
             {
-              "format": "short",
+              "format": "ops",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -15501,24 +15374,20 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The keys scan details of lock CF when executing commit command",
-          "editable": true,
-          "error": false,
+          "description": "The total writing bytes of commands on each stage",
           "fill": 1,
-          "grid": {},
           "gridPos": {
-            "h": 8,
+            "h": 10,
             "w": 12,
             "x": 12,
-            "y": 42
+            "y": 15
           },
-          "id": 675,
+          "height": "400",
+          "id": 3834,
           "legend": {
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "hideEmpty": true,
-            "hideZero": false,
             "max": true,
             "min": false,
             "rightSide": true,
@@ -15530,45 +15399,37 @@
             "values": true
           },
           "lines": true,
-          "linewidth": 2,
+          "linewidth": 1,
           "links": [],
+          "maxPerRow": 1,
           "nullPointMode": "null",
           "percentage": false,
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
-          "scopedVars": {
-            "command": {
-              "selected": false,
-              "text": "acquire_pessimistic_lock",
-              "value": "acquire_pessimistic_lock"
-            }
-          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_scheduler_kv_scan_details{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", req=\"$command\", cf=\"lock\"}[1m])) by (tag)",
+              "expr": "sum(tikv_scheduler_writing_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "{{tag}}",
-              "metric": "",
+              "legendFormat": "{{instance}}",
               "refId": "A",
-              "step": 10
+              "step": 20
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Scheduler scan details [lock]",
+          "title": "Scheduler writing bytes",
           "tooltip": {
-            "msResolution": false,
             "shared": true,
             "sort": 0,
-            "value_type": "cumulative"
+            "value_type": "individual"
           },
           "type": "graph",
           "xaxis": {
@@ -15580,7 +15441,7 @@
           },
           "yaxes": [
             {
-              "format": "short",
+              "format": "bytes",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -15588,7 +15449,7 @@
               "show": true
             },
             {
-              "format": "short",
+              "format": "bytes",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -15608,7 +15469,7 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The keys scan details of write CF when executing commit command",
+          "description": "The count of different priority commands",
           "editable": true,
           "error": false,
           "fill": 1,
@@ -15617,15 +15478,14 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 50
+            "y": 25
           },
-          "id": 829,
+          "height": "",
+          "id": 1,
           "legend": {
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "hideEmpty": true,
-            "hideZero": false,
             "max": true,
             "min": false,
             "rightSide": true,
@@ -15639,38 +15499,32 @@
           "lines": true,
           "linewidth": 2,
           "links": [],
+          "maxPerRow": 2,
           "nullPointMode": "null",
           "percentage": false,
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
-          "scopedVars": {
-            "command": {
-              "selected": false,
-              "text": "acquire_pessimistic_lock",
-              "value": "acquire_pessimistic_lock"
-            }
-          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_scheduler_kv_scan_details{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", req=\"$command\", cf=\"write\"}[1m])) by (tag)",
+              "expr": "sum(rate(tikv_scheduler_commands_pri_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (priority)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "{{tag}}",
+              "legendFormat": "{{priority}}",
               "metric": "",
               "refId": "A",
-              "step": 10
+              "step": 40
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Scheduler scan details [write]",
+          "title": "Scheduler priority commands",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -15687,7 +15541,7 @@
           },
           "yaxes": [
             {
-              "format": "short",
+              "format": "ops",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -15709,13 +15563,47 @@
           }
         },
         {
+          "alert": {
+            "conditions": [
+              {
+                "evaluator": {
+                  "params": [
+                    300
+                  ],
+                  "type": "gt"
+                },
+                "operator": {
+                  "type": "and"
+                },
+                "query": {
+                  "params": [
+                    "A",
+                    "5m",
+                    "now"
+                  ]
+                },
+                "reducer": {
+                  "params": [],
+                  "type": "avg"
+                },
+                "type": "query"
+              }
+            ],
+            "executionErrorState": "alerting",
+            "frequency": "120s",
+            "handler": 1,
+            "message": "TiKV scheduler context total",
+            "name": "scheduler pending commands alert",
+            "noDataState": "ok",
+            "notifications": []
+          },
           "aliasColors": {},
           "bars": false,
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The keys scan details of default CF when executing commit command",
+          "description": "The count of pending commands per TiKV instance",
           "editable": true,
           "error": false,
           "fill": 1,
@@ -15724,15 +15612,14 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 50
+            "y": 25
           },
-          "id": 830,
+          "height": "",
+          "id": 193,
           "legend": {
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "hideEmpty": true,
-            "hideZero": false,
             "max": true,
             "min": false,
             "rightSide": true,
@@ -15746,38 +15633,40 @@
           "lines": true,
           "linewidth": 2,
           "links": [],
+          "maxPerRow": 2,
           "nullPointMode": "null",
           "percentage": false,
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
-          "scopedVars": {
-            "command": {
-              "selected": false,
-              "text": "acquire_pessimistic_lock",
-              "value": "acquire_pessimistic_lock"
-            }
-          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_scheduler_kv_scan_details{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", req=\"$command\", cf=\"default\"}[1m])) by (tag)",
+              "expr": "sum(tikv_scheduler_contex_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "{{tag}}",
+              "legendFormat": "{{instance}}",
               "metric": "",
               "refId": "A",
-              "step": 10
+              "step": 40
             }
           ],
-          "thresholds": [],
+          "thresholds": [
+            {
+              "colorMode": "critical",
+              "fill": true,
+              "line": true,
+              "op": "gt",
+              "value": 300
+            }
+          ],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Scheduler scan details [default]",
+          "title": "Scheduler pending commands",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -15794,7 +15683,7 @@
           },
           "yaxes": [
             {
-              "format": "short",
+              "format": "ops",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -15814,80 +15703,10 @@
             "align": false,
             "alignLevel": null
           }
-        },
-        {
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time consumed on checking memory locks",
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 109
-          },
-          "id": 7236,
-          "links": [],
-          "targets": [
-            {
-              "expr": "sum(delta(tikv_storage_check_mem_lock_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"$command\"}[1m])) by (le)",
-              "format": "heatmap",
-              "intervalFactor": 2,
-              "legendFormat": "{{le}}",
-              "metric": "",
-              "refId": "A",
-              "step": 10
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Check memory locks duration",
-          "type": "heatmap",
-          "repeatedByRow": true,
-          "heatmap": {},
-          "cards": {
-            "cardPadding": null,
-            "cardRound": null
-          },
-          "color": {
-            "mode": "spectrum",
-            "cardColor": "#b4ff00",
-            "colorScale": "sqrt",
-            "exponent": 0.5,
-            "colorScheme": "interpolateSpectral"
-          },
-          "legend": {
-            "show": false
-          },
-          "dataFormat": "tsbuckets",
-          "yBucketBound": "upper",
-          "reverseYBuckets": false,
-          "xAxis": {
-            "show": true
-          },
-          "yAxis": {
-            "show": true,
-            "format": "s",
-            "decimals": 0,
-            "logBase": 1,
-            "splitFactor": null,
-            "min": null,
-            "max": null
-          },
-          "xBucketSize": null,
-          "xBucketNumber": null,
-          "yBucketSize": null,
-          "yBucketNumber": null,
-          "tooltip": {
-            "show": true,
-            "showHistogram": false
-          },
-          "highlightCards": true,
-          "hideZeroBuckets": true,
-          "repeat": null,
-          "repeatDirection": null
         }
       ],
-      "repeat": "command",
-      "title": "Scheduler - $command",
+      "repeat": null,
+      "title": "Scheduler",
       "type": "row"
     },
     {
@@ -15897,11 +15716,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-<<<<<<< HEAD
-        "y": 17
-=======
         "y": 52
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
       },
       "id": 2758,
       "panels": [
@@ -17227,11 +17042,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-<<<<<<< HEAD
-        "y": 18
-=======
         "y": 53
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
       },
       "id": 2759,
       "panels": [
@@ -17848,11 +17659,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-<<<<<<< HEAD
-        "y": 19
-=======
         "y": 54
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
       },
       "id": 2760,
       "panels": [
@@ -18264,11 +18071,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-<<<<<<< HEAD
-        "y": 20
-=======
         "y": 55
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
       },
       "id": 2757,
       "panels": [
@@ -19068,11 +18871,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-<<<<<<< HEAD
-        "y": 21
-=======
         "y": 56
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
       },
       "id": 3197,
       "panels": [
@@ -20166,11 +19965,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-<<<<<<< HEAD
-        "y": 22
-=======
         "y": 57
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
       },
       "id": 2761,
       "panels": [
@@ -20567,11 +20362,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-<<<<<<< HEAD
-        "y": 23
-=======
         "y": 58
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
       },
       "id": 2762,
       "panels": [
@@ -25304,11 +25095,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-<<<<<<< HEAD
-        "y": 24
-=======
         "y": 60
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
       },
       "id": 3301,
       "panels": [
@@ -28317,11 +28104,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-<<<<<<< HEAD
-        "y": 25
-=======
         "y": 61
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
       },
       "id": 2820,
       "panels": [
@@ -29045,19 +28828,12 @@
     },
     {
       "collapsed": true,
-<<<<<<< HEAD
-=======
       "datasource": null,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-<<<<<<< HEAD
-        "y": 26
-=======
         "y": 62
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
       },
       "id": 8389,
       "panels": [
@@ -29071,29 +28847,20 @@
           "description": " \tThe CPU utilization of resolved ts worker",
           "editable": true,
           "error": false,
-<<<<<<< HEAD
-          "fill": 0,
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
           "fill": 0,
           "fillGradient": 0,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 8,
             "x": 0,
-<<<<<<< HEAD
-            "y": 28
-          },
-=======
             "y": 63
           },
           "hiddenSeries": false,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "id": 8385,
           "legend": {
             "alignAsTable": true,
@@ -29177,7 +28944,6 @@
             "align": false,
             "alignLevel": null
           }
-<<<<<<< HEAD
         },
         {
           "aliasColors": {},
@@ -29186,112 +28952,6 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": " \tThe CPU utilization of advance ts worker",
-          "editable": true,
-          "error": false,
-          "fill": 0,
-          "grid": {},
-          "gridPos": {
-            "h": 8,
-            "w": 8,
-            "x": 8,
-            "y": 28
-          },
-          "id": 9162,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(rate(tikv_thread_cpu_seconds_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"advance_ts.*\"}[1m])) by (instance)",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "{{instance}}-tso",
-              "metric": "tikv_thread_cpu_seconds_total",
-              "refId": "A",
-              "step": 4
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Advance ts Worker CPU",
-          "tooltip": {
-            "msResolution": false,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "percentunit",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-=======
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-<<<<<<< HEAD
-          "description": " \tThe CPU utilization of scan lock worker",
-          "editable": true,
-          "error": false,
-          "fill": 0,
-=======
           "description": " \tThe CPU utilization of advance ts worker",
           "editable": true,
           "error": false,
@@ -29409,20 +29069,14 @@
           },
           "fill": 0,
           "fillGradient": 0,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 8,
             "x": 16,
-<<<<<<< HEAD
-            "y": 28
-          },
-=======
             "y": 63
           },
           "hiddenSeries": false,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "id": 9164,
           "legend": {
             "alignAsTable": true,
@@ -29442,15 +29096,11 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
-<<<<<<< HEAD
-          "percentage": false,
-=======
           "options": {
             "alertThreshold": true
           },
           "percentage": false,
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -29520,29 +29170,20 @@
           "description": "The gap between resolved tso and current time",
           "editable": true,
           "error": false,
-<<<<<<< HEAD
-          "fill": 1,
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
           "fill": 1,
           "fillGradient": 0,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-<<<<<<< HEAD
-            "y": 36
-          },
-=======
             "y": 71
           },
           "hiddenSeries": false,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "id": 8387,
           "legend": {
             "alignAsTable": true,
@@ -29562,15 +29203,11 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null as zero",
-<<<<<<< HEAD
-          "percentage": false,
-=======
           "options": {
             "alertThreshold": true
           },
           "percentage": false,
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -29580,11 +29217,7 @@
           "steppedLine": false,
           "targets": [
             {
-<<<<<<< HEAD
-              "expr": "sum(tikv_resolved_ts_min_resolved_ts_gap_seconds{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
-=======
               "expr": "sum(tikv_resolved_ts_min_resolved_ts_gap_millis{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
@@ -29613,11 +29246,7 @@
           },
           "yaxes": [
             {
-<<<<<<< HEAD
-              "format": "s",
-=======
               "format": "ms",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
               "label": null,
               "logBase": 1,
               "max": null,
@@ -29648,29 +29277,20 @@
           "description": "The status of resolved-ts observe regions",
           "editable": true,
           "error": false,
-<<<<<<< HEAD
-          "fill": 0,
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
           "fill": 0,
           "fillGradient": 0,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 12,
-<<<<<<< HEAD
-            "y": 36
-          },
-=======
             "y": 71
           },
           "hiddenSeries": false,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "id": 8377,
           "legend": {
             "alignAsTable": true,
@@ -29690,15 +29310,11 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
-<<<<<<< HEAD
-          "percentage": false,
-=======
           "options": {
             "alertThreshold": true
           },
           "percentage": false,
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -29779,22 +29395,15 @@
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "description": "The time consumed when handle a check leader request",
-<<<<<<< HEAD
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-<<<<<<< HEAD
-            "y": 44
-=======
             "y": 79
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -29852,31 +29461,21 @@
           "description": "The count of fail to advance resolved-ts",
           "editable": true,
           "error": false,
-<<<<<<< HEAD
-          "fill": 0,
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
           "fill": 0,
           "fillGradient": 0,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 12,
-<<<<<<< HEAD
-            "y": 44
-          },
-          "id": 9160,
-=======
             "y": 79
           },
           "hiddenSeries": false,
           "id": 9166,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -29896,15 +29495,11 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
-<<<<<<< HEAD
-          "percentage": false,
-=======
           "options": {
             "alertThreshold": true
           },
           "percentage": false,
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -29976,12 +29571,6 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-<<<<<<< HEAD
-          "description": "Bucketed histogram of the check leader request size",
-          "editable": true,
-          "error": false,
-          "fill": 1,
-=======
           "description": "Bucketed histogram of region count in a check leader request",
           "editable": true,
           "error": false,
@@ -29991,22 +29580,15 @@
           },
           "fill": 1,
           "fillGradient": 0,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-<<<<<<< HEAD
-            "y": 52
-          },
-          "id": 8383,
-=======
             "y": 87
           },
           "hiddenSeries": false,
           "id": 12308,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -30025,15 +29607,11 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null as zero",
-<<<<<<< HEAD
-          "percentage": false,
-=======
           "options": {
             "alertThreshold": true
           },
           "percentage": false,
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -30043,11 +29621,7 @@
           "steppedLine": false,
           "targets": [
             {
-<<<<<<< HEAD
-              "expr": "histogram_quantile(0.99, sum(rate(tikv_check_leader_request_size_bytes_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, instance))",
-=======
               "expr": "histogram_quantile(0.99, sum(rate(tikv_check_leader_request_item_count_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, instance))",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
               "format": "time_series",
               "hide": false,
               "intervalFactor": 2,
@@ -30055,28 +29629,13 @@
               "metric": "tikv_snapshot_size_bucket",
               "refId": "A",
               "step": 40
-<<<<<<< HEAD
-            },
-            {
-              "expr": "histogram_quantile(0.99, sum(rate(tikv_check_leader_request_item_count_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, instance))",
-              "format": "time_series",
-              "hide": true,
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}-check-num",
-              "refId": "B"
-=======
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-<<<<<<< HEAD
-          "title": "99% CheckLeader request size",
-=======
           "title": "99% CheckLeader request region count",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -30093,11 +29652,7 @@
           },
           "yaxes": [
             {
-<<<<<<< HEAD
-              "format": "bytes",
-=======
               "format": "short",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
               "label": null,
               "logBase": 1,
               "max": null,
@@ -30124,12 +29679,6 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-<<<<<<< HEAD
-          "description": "Bucketed histogram of region count in a check leader request",
-          "editable": true,
-          "error": false,
-          "fill": 1,
-=======
           "description": "Bucketed histogram of the check leader request size",
           "editable": true,
           "error": false,
@@ -30139,22 +29688,15 @@
           },
           "fill": 1,
           "fillGradient": 0,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 12,
-<<<<<<< HEAD
-            "y": 52
-          },
-          "id": 9166,
-=======
             "y": 87
           },
           "hiddenSeries": false,
           "id": 8383,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -30173,15 +29715,11 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null as zero",
-<<<<<<< HEAD
-          "percentage": false,
-=======
           "options": {
             "alertThreshold": true
           },
           "percentage": false,
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -30191,11 +29729,7 @@
           "steppedLine": false,
           "targets": [
             {
-<<<<<<< HEAD
-              "expr": "histogram_quantile(0.99, sum(rate(tikv_check_leader_request_item_count_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, instance))",
-=======
               "expr": "histogram_quantile(0.99, sum(rate(tikv_check_leader_request_size_bytes_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, instance))",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
               "format": "time_series",
               "hide": false,
               "intervalFactor": 2,
@@ -30203,8 +29737,6 @@
               "metric": "tikv_snapshot_size_bucket",
               "refId": "A",
               "step": 40
-<<<<<<< HEAD
-=======
             },
             {
               "expr": "histogram_quantile(0.99, sum(rate(tikv_check_leader_request_item_count_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, instance))",
@@ -30213,18 +29745,13 @@
               "intervalFactor": 1,
               "legendFormat": "{{instance}}-check-num",
               "refId": "B"
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-<<<<<<< HEAD
-          "title": "99% CheckLeader request region count",
-=======
           "title": "99% CheckLeader request size",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -30241,11 +29768,7 @@
           },
           "yaxes": [
             {
-<<<<<<< HEAD
-              "format": "short",
-=======
               "format": "bytes",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
               "label": null,
               "logBase": 1,
               "max": null,
@@ -30276,29 +29799,20 @@
           "description": "Total bytes in memory of resolved-ts observe regions's lock heap",
           "editable": true,
           "error": false,
-<<<<<<< HEAD
-          "fill": 0,
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
           "fill": 0,
           "fillGradient": 0,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-<<<<<<< HEAD
-            "y": 60
-          },
-=======
             "y": 95
           },
           "hiddenSeries": false,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "id": 8379,
           "legend": {
             "alignAsTable": true,
@@ -30318,15 +29832,11 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
-<<<<<<< HEAD
-          "percentage": false,
-=======
           "options": {
             "alertThreshold": true
           },
           "percentage": false,
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -30396,29 +29906,20 @@
           "description": "Total bytes of pending commands in the channel",
           "editable": true,
           "error": false,
-<<<<<<< HEAD
-          "fill": 0,
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
           "fill": 0,
           "fillGradient": 0,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 12,
-<<<<<<< HEAD
-            "y": 60
-          },
-=======
             "y": 95
           },
           "hiddenSeries": false,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "id": 8381,
           "legend": {
             "alignAsTable": true,
@@ -30438,15 +29939,11 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
-<<<<<<< HEAD
-          "percentage": false,
-=======
           "options": {
             "alertThreshold": true
           },
           "percentage": false,
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -30512,19 +30009,12 @@
     },
     {
       "collapsed": true,
-<<<<<<< HEAD
-=======
       "datasource": null,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-<<<<<<< HEAD
-        "y": 27
-=======
         "y": 63
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
       },
       "id": 2763,
       "panels": [
@@ -30624,19 +30114,12 @@
     },
     {
       "collapsed": true,
-<<<<<<< HEAD
-=======
       "datasource": null,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-<<<<<<< HEAD
-        "y": 28
-=======
         "y": 64
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
       },
       "id": 3922,
       "panels": [
@@ -30649,29 +30132,20 @@
           "decimals": 1,
           "editable": true,
           "error": false,
-<<<<<<< HEAD
-          "fill": 0,
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
           "fill": 0,
           "fillGradient": 0,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "grid": {},
           "gridPos": {
             "h": 7,
             "w": 12,
             "x": 0,
-<<<<<<< HEAD
-            "y": 56
-          },
-=======
             "y": 65
           },
           "hiddenSeries": false,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "id": 3924,
           "legend": {
             "alignAsTable": true,
@@ -30692,15 +30166,11 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
-<<<<<<< HEAD
-          "percentage": false,
-=======
           "options": {
             "alertThreshold": true
           },
           "percentage": false,
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -30779,23 +30249,16 @@
             }
           ],
           "datasource": "${DS_TEST-CLUSTER}",
-<<<<<<< HEAD
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "fontSize": "100%",
           "gridPos": {
             "h": 7,
             "w": 4,
             "x": 12,
-<<<<<<< HEAD
-            "y": 56
-=======
             "y": 65
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "id": 3926,
           "links": [],
@@ -30809,20 +30272,14 @@
           "styles": [
             {
               "alias": "Time",
-<<<<<<< HEAD
-=======
               "align": "auto",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
               "dateFormat": "YYYY-MM-DD HH:mm:ss",
               "pattern": "Time",
               "type": "date"
             },
             {
               "alias": "",
-<<<<<<< HEAD
-=======
               "align": "auto",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
               "colorMode": null,
               "colors": [
                 "rgba(245, 54, 54, 0.9)",
@@ -30850,11 +30307,7 @@
           "timeShift": null,
           "title": "Backup Thread Count",
           "transform": "timeseries_aggregations",
-<<<<<<< HEAD
-          "type": "table"
-=======
           "type": "table-old"
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
         },
         {
           "aliasColors": {},
@@ -30864,28 +30317,19 @@
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 2,
           "description": "",
-<<<<<<< HEAD
-          "fill": 1,
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
           "fill": 1,
           "fillGradient": 0,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "gridPos": {
             "h": 7,
             "w": 8,
             "x": 16,
-<<<<<<< HEAD
-            "y": 56
-          },
-=======
             "y": 65
           },
           "hiddenSeries": false,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "id": 5264,
           "legend": {
             "alignAsTable": true,
@@ -30902,15 +30346,11 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null as zero",
-<<<<<<< HEAD
-          "percentage": false,
-=======
           "options": {
             "alertThreshold": true
           },
           "percentage": false,
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 2,
           "points": false,
           "renderer": "flot",
@@ -30986,22 +30426,15 @@
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
-<<<<<<< HEAD
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "gridPos": {
             "h": 7,
             "w": 8,
             "x": 0,
-<<<<<<< HEAD
-            "y": 63
-=======
             "y": 72
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -31074,22 +30507,15 @@
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
-<<<<<<< HEAD
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "gridPos": {
             "h": 7,
             "w": 8,
             "x": 8,
-<<<<<<< HEAD
-            "y": 63
-=======
             "y": 72
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -31153,29 +30579,20 @@
           "datasource": "${DS_TEST-CLUSTER}",
           "editable": true,
           "error": false,
-<<<<<<< HEAD
-          "fill": 1,
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
           "fill": 1,
           "fillGradient": 0,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "grid": {},
           "gridPos": {
             "h": 7,
             "w": 8,
             "x": 16,
-<<<<<<< HEAD
-            "y": 63
-          },
-=======
             "y": 72
           },
           "hiddenSeries": false,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "id": 3929,
           "legend": {
             "alignAsTable": true,
@@ -31194,15 +30611,11 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
-<<<<<<< HEAD
-          "percentage": false,
-=======
           "options": {
             "alertThreshold": true
           },
           "percentage": false,
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -31296,22 +30709,15 @@
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
-<<<<<<< HEAD
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "gridPos": {
             "h": 7,
             "w": 4,
             "x": 0,
-<<<<<<< HEAD
-            "y": 70
-=======
             "y": 79
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -31384,22 +30790,15 @@
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
-<<<<<<< HEAD
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "gridPos": {
             "h": 7,
             "w": 6,
             "x": 4,
-<<<<<<< HEAD
-            "y": 70
-=======
             "y": 79
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -31472,22 +30871,15 @@
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
-<<<<<<< HEAD
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "gridPos": {
             "h": 7,
             "w": 6,
             "x": 10,
-<<<<<<< HEAD
-            "y": 70
-=======
             "y": 79
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -31551,29 +30943,20 @@
           "datasource": "${DS_TEST-CLUSTER}",
           "editable": true,
           "error": false,
-<<<<<<< HEAD
-          "fill": 1,
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
           "fill": 1,
           "fillGradient": 0,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "grid": {},
           "gridPos": {
             "h": 7,
             "w": 8,
             "x": 16,
-<<<<<<< HEAD
-            "y": 70
-          },
-=======
             "y": 79
           },
           "hiddenSeries": false,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "id": 3928,
           "legend": {
             "alignAsTable": true,
@@ -31592,15 +30975,11 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
-<<<<<<< HEAD
-          "percentage": false,
-=======
           "options": {
             "alertThreshold": true
           },
           "percentage": false,
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -31694,22 +31073,15 @@
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
-<<<<<<< HEAD
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "gridPos": {
             "h": 7,
             "w": 12,
             "x": 0,
-<<<<<<< HEAD
-            "y": 77
-=======
             "y": 86
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -31775,24 +31147,17 @@
           "description": "",
           "editable": true,
           "error": false,
-<<<<<<< HEAD
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "fill": 1,
           "grid": {},
           "gridPos": {
             "h": 7,
             "w": 12,
             "x": 12,
-<<<<<<< HEAD
-            "y": 77
-=======
             "y": 86
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "id": 4936,
           "legend": {
@@ -31815,10 +31180,7 @@
           "links": [],
           "nullPointMode": "null as zero",
           "percentage": false,
-<<<<<<< HEAD
-=======
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -31896,24 +31258,17 @@
           "description": "",
           "editable": true,
           "error": false,
-<<<<<<< HEAD
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "fill": 1,
           "grid": {},
           "gridPos": {
             "h": 7,
             "w": 12,
             "x": 0,
-<<<<<<< HEAD
-            "y": 84
-=======
             "y": 93
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "id": 5267,
           "legend": {
@@ -31936,10 +31291,7 @@
           "links": [],
           "nullPointMode": "null as zero",
           "percentage": false,
-<<<<<<< HEAD
-=======
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -32016,24 +31368,17 @@
           "decimals": 1,
           "editable": true,
           "error": false,
-<<<<<<< HEAD
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "fill": 0,
           "grid": {},
           "gridPos": {
             "h": 7,
             "w": 12,
             "x": 12,
-<<<<<<< HEAD
-            "y": 84
-=======
             "y": 93
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "id": 5269,
           "legend": {
@@ -32056,10 +31401,7 @@
           "links": [],
           "nullPointMode": "null",
           "percentage": false,
-<<<<<<< HEAD
-=======
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 2,
           "points": true,
           "renderer": "flot",
@@ -32129,24 +31471,17 @@
           "decimals": 1,
           "editable": true,
           "error": false,
-<<<<<<< HEAD
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "fill": 0,
           "grid": {},
           "gridPos": {
             "h": 7,
             "w": 12,
             "x": 0,
-<<<<<<< HEAD
-            "y": 91
-=======
             "y": 100
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "id": 5925,
           "legend": {
@@ -32169,10 +31504,7 @@
           "links": [],
           "nullPointMode": "null",
           "percentage": false,
-<<<<<<< HEAD
-=======
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -32267,23 +31599,16 @@
             }
           ],
           "datasource": "${DS_TEST-CLUSTER}",
-<<<<<<< HEAD
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "fontSize": "100%",
           "gridPos": {
             "h": 7,
             "w": 4,
             "x": 12,
-<<<<<<< HEAD
-            "y": 91
-=======
             "y": 100
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "id": 5926,
           "links": [],
@@ -32297,20 +31622,14 @@
           "styles": [
             {
               "alias": "Time",
-<<<<<<< HEAD
-=======
               "align": "auto",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
               "dateFormat": "YYYY-MM-DD HH:mm:ss",
               "pattern": "Time",
               "type": "date"
             },
             {
               "alias": "",
-<<<<<<< HEAD
-=======
               "align": "auto",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
               "colorMode": null,
               "colors": [
                 "rgba(245, 54, 54, 0.9)",
@@ -32338,11 +31657,7 @@
           "timeShift": null,
           "title": "Import Thread Count",
           "transform": "timeseries_aggregations",
-<<<<<<< HEAD
-          "type": "table"
-=======
           "type": "table-old"
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
         },
         {
           "aliasColors": {},
@@ -32352,23 +31667,16 @@
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 2,
           "description": "",
-<<<<<<< HEAD
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "fill": 1,
           "gridPos": {
             "h": 7,
             "w": 8,
             "x": 16,
-<<<<<<< HEAD
-            "y": 91
-=======
             "y": 100
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "id": 5932,
           "legend": {
@@ -32388,10 +31696,7 @@
           "links": [],
           "nullPointMode": "null as zero",
           "percentage": false,
-<<<<<<< HEAD
-=======
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 2,
           "points": false,
           "renderer": "flot",
@@ -32456,23 +31761,16 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-<<<<<<< HEAD
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "fill": 1,
           "gridPos": {
             "h": 7,
             "w": 12,
             "x": 0,
-<<<<<<< HEAD
-            "y": 98
-=======
             "y": 107
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "id": 5931,
           "legend": {
@@ -32491,10 +31789,7 @@
           "links": [],
           "nullPointMode": "null",
           "percentage": false,
-<<<<<<< HEAD
-=======
           "pluginVersion": "7.5.7",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "pointradius": 2,
           "points": false,
           "renderer": "flot",
@@ -32561,24 +31856,6 @@
             "alignLevel": null
           }
         },
-<<<<<<< HEAD
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "description": "",
-          "fill": 1,
-          "gridPos": {
-            "h": 7,
-            "w": 12,
-            "x": 12,
-            "y": 98
-          },
-          "id": 6267,
-=======
         {
           "aliasColors": {},
           "bars": false,
@@ -32801,7 +32078,6 @@
           "hideZeroBuckets": true,
           "highlightCards": true,
           "id": 5929,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -32810,91 +32086,11 @@
             "min": false,
             "rightSide": true,
             "show": true,
-<<<<<<< HEAD
-            "sideWidth": null,
-=======
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
             "sort": "current",
             "sortDesc": true,
             "total": false,
             "values": true
           },
-<<<<<<< HEAD
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(rate(tikv_import_rpc_duration_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", request!=\"switch_mode\"}[30s])) by (instance, request)",
-              "format": "time_series",
-              "hide": false,
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}} - {{request}}",
-              "metric": "tikv_grpc_msg_duration_seconds_bucket",
-              "refId": "A",
-              "step": 10
-            },
-            {
-              "expr": "sum(rate(tikv_import_rpc_duration_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", request!=\"switch_mode\"}[30s])) by (request)",
-              "format": "time_series",
-              "hide": true,
-              "intervalFactor": 1,
-              "legendFormat": "total - {{request}}",
-              "metric": "tikv_grpc_msg_duration_seconds_bucket",
-              "refId": "B",
-              "step": 10
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Import RPC Ops",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "ops",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-=======
           "links": [],
           "reverseYBuckets": false,
           "targets": [
@@ -33012,7 +32208,6 @@
           "yBucketBound": "upper",
           "yBucketNumber": null,
           "yBucketSize": null
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
         },
         {
           "cards": {
@@ -33031,13 +32226,6 @@
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
-<<<<<<< HEAD
-          "gridPos": {
-            "h": 7,
-            "w": 6,
-            "x": 0,
-            "y": 105
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -33047,16 +32235,11 @@
             "w": 6,
             "x": 18,
             "y": 114
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 5930,
-=======
           "id": 5928,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -33074,11 +32257,7 @@
           "reverseYBuckets": false,
           "targets": [
             {
-<<<<<<< HEAD
-              "expr": "max(rate(tikv_import_rpc_duration_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", request=~\"download|write\"}[1m])) by (le)",
-=======
               "expr": "max(rate(tikv_import_download_duration_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"rewrite\"}[1m])) by (le)",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
               "format": "heatmap",
               "instant": false,
               "intervalFactor": 2,
@@ -33086,11 +32265,7 @@
               "refId": "A"
             }
           ],
-<<<<<<< HEAD
-          "title": "Import Write/Download RPC Duration",
-=======
           "title": "Import Rewrite SST Duration",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -33132,13 +32307,6 @@
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
-<<<<<<< HEAD
-          "gridPos": {
-            "h": 7,
-            "w": 6,
-            "x": 6,
-            "y": 105
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -33148,16 +32316,11 @@
             "w": 6,
             "x": 0,
             "y": 121
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 5929,
-=======
           "id": 5939,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -33175,11 +32338,7 @@
           "reverseYBuckets": false,
           "targets": [
             {
-<<<<<<< HEAD
-              "expr": "max(rate(tikv_import_download_duration_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"queue\"}[1m])) by (le)",
-=======
               "expr": "max(rate(tikv_import_rpc_duration_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", request=~\"ingest\"}[1m])) by (le)",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
               "format": "heatmap",
               "instant": false,
               "intervalFactor": 2,
@@ -33187,11 +32346,7 @@
               "refId": "A"
             }
           ],
-<<<<<<< HEAD
-          "title": "Import Wait Duration",
-=======
           "title": "Import Ingest RPC Duration",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -33233,13 +32388,6 @@
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
-<<<<<<< HEAD
-          "gridPos": {
-            "h": 7,
-            "w": 6,
-            "x": 12,
-            "y": 105
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -33249,16 +32397,11 @@
             "w": 6,
             "x": 6,
             "y": 121
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 6906,
-=======
           "id": 5938,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -33276,11 +32419,7 @@
           "reverseYBuckets": false,
           "targets": [
             {
-<<<<<<< HEAD
-              "expr": "max(rate(tikv_import_download_duration_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"read\"}[1m])) by (le)",
-=======
               "expr": "max(rate(tikv_import_ingest_duration_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=~\"ingest\"}[1m])) by (le)",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
               "format": "heatmap",
               "instant": false,
               "intervalFactor": 2,
@@ -33288,11 +32427,7 @@
               "refId": "A"
             }
           ],
-<<<<<<< HEAD
-          "title": "Import Read SST Duration",
-=======
           "title": "Import Ingest SST Duration",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -33334,13 +32469,6 @@
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
-<<<<<<< HEAD
-          "gridPos": {
-            "h": 7,
-            "w": 6,
-            "x": 18,
-            "y": 105
-=======
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -33350,16 +32478,11 @@
             "w": 6,
             "x": 12,
             "y": 121
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           },
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 5928,
-=======
           "id": 5937,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -33377,11 +32500,7 @@
           "reverseYBuckets": false,
           "targets": [
             {
-<<<<<<< HEAD
-              "expr": "max(rate(tikv_import_download_duration_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"rewrite\"}[1m])) by (le)",
-=======
               "expr": "max(rate(tikv_import_ingest_byte{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le)",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
               "format": "heatmap",
               "instant": false,
               "intervalFactor": 2,
@@ -33389,11 +32508,7 @@
               "refId": "A"
             }
           ],
-<<<<<<< HEAD
-          "title": "Import Rewrite SST Duration",
-=======
           "title": "Import Ingest SST Bytes",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -33419,34 +32534,6 @@
           "yBucketSize": null
         },
         {
-<<<<<<< HEAD
-          "cards": {
-            "cardPadding": 0,
-            "cardRound": 0
-          },
-          "color": {
-            "cardColor": "#FF9830",
-            "colorScale": "linear",
-            "colorScheme": "interpolateSpectral",
-            "exponent": 0.5,
-            "max": null,
-            "min": 0,
-            "mode": "spectrum"
-          },
-          "dataFormat": "tsbuckets",
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "",
-          "gridPos": {
-            "h": 7,
-            "w": 6,
-            "x": 0,
-            "y": 112
-          },
-          "heatmap": {},
-          "hideZeroBuckets": true,
-          "highlightCards": true,
-          "id": 5939,
-=======
           "aliasColors": {},
           "bars": false,
           "dashLength": 10,
@@ -33464,163 +32551,12 @@
             "y": 121
           },
           "id": 5927,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "legend": {
             "alignAsTable": true,
             "avg": false,
             "current": true,
             "max": true,
             "min": false,
-<<<<<<< HEAD
-            "rightSide": true,
-            "show": true,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "links": [],
-          "reverseYBuckets": false,
-          "targets": [
-            {
-              "expr": "max(rate(tikv_import_rpc_duration_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", request=~\"ingest\"}[1m])) by (le)",
-              "format": "heatmap",
-              "instant": false,
-              "intervalFactor": 2,
-              "legendFormat": "{{le}}",
-              "refId": "A"
-            }
-          ],
-          "title": "Import Ingest RPC Duration",
-          "tooltip": {
-            "show": true,
-            "showHistogram": true
-          },
-          "tooltipDecimals": 1,
-          "type": "heatmap",
-          "xAxis": {
-            "show": true
-          },
-          "xBucketNumber": null,
-          "xBucketSize": null,
-          "yAxis": {
-            "decimals": 1,
-            "format": "s",
-            "logBase": 1,
-            "max": null,
-            "min": null,
-            "show": true,
-            "splitFactor": null
-          },
-          "yBucketBound": "upper",
-          "yBucketNumber": null,
-          "yBucketSize": null
-        },
-        {
-          "cards": {
-            "cardPadding": 0,
-            "cardRound": 0
-          },
-          "color": {
-            "cardColor": "#FF9830",
-            "colorScale": "linear",
-            "colorScheme": "interpolateSpectral",
-            "exponent": 0.5,
-            "max": null,
-            "min": 0,
-            "mode": "spectrum"
-          },
-          "dataFormat": "tsbuckets",
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "",
-          "gridPos": {
-            "h": 7,
-            "w": 6,
-            "x": 6,
-            "y": 112
-          },
-          "heatmap": {},
-          "hideZeroBuckets": true,
-          "highlightCards": true,
-          "id": 5938,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "links": [],
-          "reverseYBuckets": false,
-          "targets": [
-            {
-              "expr": "max(rate(tikv_import_ingest_duration_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=~\"ingest\"}[1m])) by (le)",
-              "format": "heatmap",
-              "instant": false,
-              "intervalFactor": 2,
-              "legendFormat": "{{le}}",
-              "refId": "A"
-            }
-          ],
-          "title": "Import Ingest SST Duration",
-          "tooltip": {
-            "show": true,
-            "showHistogram": true
-          },
-          "tooltipDecimals": 1,
-          "type": "heatmap",
-          "xAxis": {
-            "show": true
-          },
-          "xBucketNumber": null,
-          "xBucketSize": null,
-          "yAxis": {
-            "decimals": 1,
-            "format": "s",
-            "logBase": 1,
-            "max": null,
-            "min": null,
-            "show": true,
-            "splitFactor": null
-          },
-          "yBucketBound": "upper",
-          "yBucketNumber": null,
-          "yBucketSize": null
-        },
-        {
-          "cards": {
-            "cardPadding": 0,
-            "cardRound": 0
-          },
-          "color": {
-            "cardColor": "#FF9830",
-            "colorScale": "linear",
-            "colorScheme": "interpolateSpectral",
-            "exponent": 0.5,
-            "max": null,
-            "min": 0,
-            "mode": "spectrum"
-          },
-          "dataFormat": "tsbuckets",
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "",
-          "gridPos": {
-            "h": 7,
-            "w": 6,
-            "x": 12,
-            "y": 112
-          },
-          "heatmap": {},
-          "hideZeroBuckets": true,
-          "highlightCards": true,
-          "id": 5937,
-=======
             "rightSide": false,
             "show": true,
             "total": false,
@@ -33721,7 +32657,6 @@
             "y": 128
           },
           "id": 12309,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -33730,49 +32665,6 @@
             "min": false,
             "rightSide": true,
             "show": true,
-<<<<<<< HEAD
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "links": [],
-          "reverseYBuckets": false,
-          "targets": [
-            {
-              "expr": "max(rate(tikv_import_ingest_byte{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le)",
-              "format": "heatmap",
-              "instant": false,
-              "intervalFactor": 2,
-              "legendFormat": "{{le}}",
-              "refId": "A"
-            }
-          ],
-          "title": "Import Ingest SST Bytes",
-          "tooltip": {
-            "show": true,
-            "showHistogram": true
-          },
-          "tooltipDecimals": 1,
-          "type": "heatmap",
-          "xAxis": {
-            "show": true
-          },
-          "xBucketNumber": null,
-          "xBucketSize": null,
-          "yAxis": {
-            "decimals": 1,
-            "format": "s",
-            "logBase": 1,
-            "max": null,
-            "min": null,
-            "show": true,
-            "splitFactor": null
-          },
-          "yBucketBound": "upper",
-          "yBucketNumber": null,
-          "yBucketSize": null
-=======
             "sideWidth": null,
             "total": false,
             "values": true
@@ -33840,7 +32732,6 @@
             "align": false,
             "alignLevel": null
           }
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
         },
         {
           "aliasColors": {},
@@ -33848,16 +32739,6 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-<<<<<<< HEAD
-          "fill": 1,
-          "gridPos": {
-            "h": 7,
-            "w": 6,
-            "x": 18,
-            "y": 112
-          },
-          "id": 5927,
-=======
           "decimals": 2,
           "description": "",
           "fieldConfig": {
@@ -33872,40 +32753,21 @@
             "y": 128
           },
           "id": 12310,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "legend": {
             "alignAsTable": true,
             "avg": false,
             "current": true,
             "max": true,
             "min": false,
-<<<<<<< HEAD
-            "rightSide": false,
-            "show": true,
-=======
             "rightSide": true,
             "show": true,
             "sideWidth": null,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
             "total": false,
             "values": true
           },
           "lines": true,
           "linewidth": 1,
           "links": [],
-<<<<<<< HEAD
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 2,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [
-            {
-              "alias": "total",
-              "yaxis": 2
-            }
-          ],
-=======
           "nullPointMode": "null as zero",
           "percentage": false,
           "pluginVersion": "7.5.7",
@@ -33913,44 +32775,24 @@
           "points": false,
           "renderer": "flot",
           "seriesOverrides": [],
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "spaceLength": 10,
           "stack": false,
           "steppedLine": false,
           "targets": [
             {
-<<<<<<< HEAD
-              "expr": "sum(rate(tikv_import_download_bytes_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (instance)",
-              "format": "time_series",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "refId": "A"
-            },
-            {
-              "expr": "sum(rate(tikv_import_download_bytes_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
-              "format": "time_series",
-              "intervalFactor": 1,
-              "legendFormat": "total",
-              "refId": "B"
-=======
               "expr": "delta(tikv_import_local_write_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 1,
               "legendFormat": "{{type}} {{instance}}",
               "refId": "D"
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-<<<<<<< HEAD
-          "title": "Import Download SST Throughput",
-=======
           "title": "Import Local Write bytes",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -33966,21 +32808,6 @@
           },
           "yaxes": [
             {
-<<<<<<< HEAD
-              "format": "Bps",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "Bps",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-=======
               "format": "decbytes",
               "label": null,
               "logBase": 1,
@@ -33994,7 +32821,6 @@
               "logBase": 1,
               "max": null,
               "min": "0",
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
               "show": true
             }
           ],
@@ -34014,11 +32840,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-<<<<<<< HEAD
-        "y": 29
-=======
         "y": 65
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
       },
       "id": 4466,
       "panels": [
@@ -34595,12 +33417,9 @@
         "allValue": null,
         "current": {},
         "datasource": "${DS_TEST-CLUSTER}",
-<<<<<<< HEAD
-=======
         "definition": "",
         "description": null,
         "error": null,
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
         "hide": 2,
         "includeAll": false,
         "label": "tidb_cluster",
@@ -34613,6 +33432,7 @@
         },
         "refresh": 2,
         "regex": "",
+        "skipUrlSync": false,
         "sort": 1,
         "tagValuesQuery": "",
         "tags": [],
@@ -34762,10 +33582,5 @@
   "timezone": "browser",
   "title": "Test-Cluster-TiKV-Details",
   "uid": "RDVQiEzZz",
-<<<<<<< HEAD
-  "version": 4
-}
-=======
   "version": 1
 }
->>>>>>> 8432241b0... grafana: add instance to flow control metrics legend (#10749)

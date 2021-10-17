@@ -29,10 +29,6 @@ use std::u64;
 
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
-<<<<<<< HEAD
-=======
-use futures::compat::Future01CompatExt;
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
 use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
 use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
@@ -883,15 +879,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             .unwrap()
                     });
 
-<<<<<<< HEAD
-                    if self.inner.flow_controller.enabled()
-                        && !self.inner.flow_controller.is_unlimited()
-                    {
-                        let start = Instant::now_coarse();
-                        // Wait for the delay
-                        let _guard = self.control_mutex.lock().await;
-                        SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
-=======
                     if self.inner.flow_controller.enabled() {
                         if self.inner.flow_controller.is_unlimited() {
                             // no need to delay if unthrottled, just call consume to record write flow
@@ -921,7 +908,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             }
                             SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
                         }
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
                     }
 
                     to_be_write.deadline = Some(deadline);
@@ -1209,10 +1195,7 @@ mod tests {
         let cmd: TypedCommand<()> = req.into();
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
-<<<<<<< HEAD
         assert!(block_on(f).is_ok());
-=======
-        assert!(block_on(f).unwrap().is_ok());
     }
 
     #[test]
@@ -1273,7 +1256,6 @@ mod tests {
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::TxnStatus(cb));
         assert!(block_on(f).unwrap().is_ok());
->>>>>>> 14895dc46... storage: Improve flow controller (#10978)
     }
 
     #[test]
