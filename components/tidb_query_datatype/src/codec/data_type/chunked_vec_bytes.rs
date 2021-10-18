@@ -170,13 +170,7 @@ impl BytesWriter {
     }
 
     pub fn write_from_byte_iter(mut self, iter: impl Iterator<Item = u8>) -> BytesGuard {
-        if let (_, Some(size_upper)) = iter.size_hint() {
-            let prev_len = self.chunked_vec.data.len();
-            self.chunked_vec.data.reserve(prev_len + size_upper);
-        }
-        for v in iter {
-            self.chunked_vec.data.push(v);
-        }
+        self.chunked_vec.data.extend(iter);
         self.chunked_vec.bitmap.push(true);
         self.chunked_vec.finish_append();
         BytesGuard {
