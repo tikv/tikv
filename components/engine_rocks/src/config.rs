@@ -435,7 +435,7 @@ impl From<&str> for DBRateLimiterMode {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
-//#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
 pub enum DBCompactionStyle {
     Level = 0,
     Universal = 1,
