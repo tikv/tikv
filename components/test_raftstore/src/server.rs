@@ -257,7 +257,7 @@ impl Simulator for ServerCluster {
         let pd_sender = pd_worker.scheduler();
         let storage_read_pool = ReadPool::from(storage::build_read_pool(
             &tikv::config::StorageReadPoolConfig::default_for_test(),
-            pd_sender,
+            pd_sender.clone(),
             raft_engine.clone(),
         ));
 
@@ -317,6 +317,7 @@ impl Simulator for ServerCluster {
             concurrency_manager.clone(),
             lock_mgr.get_pipelined(),
             Arc::new(FlowController::empty()),
+            pd_sender,
         )?;
         self.storages.insert(node_id, raft_engine);
 
