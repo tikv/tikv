@@ -459,12 +459,6 @@ where
 
 #[cfg(test)]
 mod tests {
-<<<<<<< HEAD
-    use super::*;
-
-=======
-    use std::assert_matches::assert_matches;
->>>>>>> 72b242d04... cdc: reduce events batch to solve congest error (#11086)
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -533,19 +527,13 @@ mod tests {
     fn test_nonblocking_batch() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let force_send = false;
-<<<<<<< HEAD
         let (mut send, mut drain) =
-            new_test_cancal(CDC_MSG_MAX_BATCH_SIZE * 2, usize::MAX, force_send);
+            new_test_channel(CDC_EVENT_MAX_COUNT * 2, usize::MAX, force_send);
         let (mut tx, mut rx) = unbounded();
         runtime.spawn(async move {
             drain.forward(&mut tx).await.unwrap();
         });
-        for count in 1..CDC_EVENT_MAX_BATCH_SIZE + CDC_EVENT_MAX_BATCH_SIZE / 2 {
-=======
         for count in 1..CDC_RESP_MAX_BATCH_COUNT + CDC_RESP_MAX_BATCH_COUNT / 2 {
-            let (mut send, mut drain) =
-                new_test_channel(CDC_EVENT_MAX_COUNT * 2, usize::MAX, force_send);
->>>>>>> 72b242d04... cdc: reduce events batch to solve congest error (#11086)
             for _ in 0..count {
                 send(CdcEvent::Event(Default::default())).unwrap();
             }
