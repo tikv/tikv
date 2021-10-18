@@ -290,7 +290,7 @@ mod tests {
     use super::*;
     use crate::storage::TestEngineBuilder;
     use futures::channel::oneshot;
-    use raftstore::store::ReadStats;
+    use raftstore::store::{ReadStats, WriteStats};
     use std::thread;
     use std::time::Duration;
 
@@ -299,6 +299,7 @@ mod tests {
 
     impl FlowStatsReporter for DummyReporter {
         fn report_read_stats(&self, _read_stats: ReadStats) {}
+        fn report_write_stats(&self, _write_stats: WriteStats) {}
     }
 
     #[test]

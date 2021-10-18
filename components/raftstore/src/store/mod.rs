@@ -59,7 +59,7 @@ pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
 pub use self::util::{RegionReadProgress, RegionReadProgressRegistry};
 pub use self::worker::{
     AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, QueryStats, ReadDelegate,
-    ReadStats, SplitConfig, SplitConfigManager, TrackVer,
+    ReadStats, SplitConfig, SplitConfigManager, TrackVer, WriteStats,
 };
 pub use self::worker::{CheckLeaderRunner, CheckLeaderTask};
 pub use self::worker::{KeyEntry, LocalReader, RegionTask};
