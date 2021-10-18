@@ -5,7 +5,6 @@ use std::{
     lazy::SyncLazy,
     path,
     process::{Command, Stdio},
-    str::FromStr,
     sync::Mutex,
 };
 
@@ -64,7 +63,12 @@ pub struct HdfsStorage {
 
 impl HdfsStorage {
     pub fn new(remote: &str) -> io::Result<HdfsStorage> {
-        let remote = Url::from_str(remote).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let mut remote = Url::parse(remote).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        if !remote.path().ends_with("/") {
+            let mut new_path = remote.path().to_owned();
+            new_path.push('/');
+            remote.set_path(&new_path);
+        }
         Ok(HdfsStorage { remote })
     }
 }
@@ -112,21 +116,30 @@ impl ExternalStorage for HdfsStorage {
         info!("calling hdfs"; "cmd" => ?cmd_with_args);
         let mut hdfs_cmd = Command::new(&cmd_with_args[0])
             .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .args(&cmd_with_args[1..])
             .spawn()?;
-        let stdin = hdfs_cmd.stdin.as_mut().unwrap();
+        let stdin = hdfs_cmd.stdin.take().unwrap();
 
         block_on(copy(reader, &mut AllowStdIo::new(stdin)))?;
 
-        let status = hdfs_cmd.wait()?;
-        if status.success() {
+        let output = hdfs_cmd.wait_with_output()?;
+        if output.status.success() {
             debug!("save file to hdfs"; "path" => ?path);
             Ok(())
         } else {
-            error!("hdfs returned non-zero status"; "code" => status.code());
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            error!(
+                "hdfs returned non-zero status";
+                "code" => output.status.code(),
+                "stdout" => stdout.as_ref(),
+                "stderr" => stderr.as_ref(),
+            );
             Err(io::Error::new(
                 io::ErrorKind::Other,
-                format!("hdfs returned non-zero status: {:?}", status.code()),
+                format!("hdfs returned non-zero status: {:?}", output.status.code()),
             ))
         }
     }
