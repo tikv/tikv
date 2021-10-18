@@ -4286,14 +4286,14 @@ mod tests {
 
     #[test]
     fn test_normal_compaction_style() {
-        let normal_string_config= r#"
+        let normal_string_config = r#"
             compaction-style = "universal"
         "#;
 
         let config: DefaultCfConfig = toml::from_str(normal_string_config).unwrap();
         assert_eq!(config.compaction_style, DBCompactionStyle::Universal);
 
-        let normal_string_config= r#"
+        let normal_string_config = r#"
             compaction-style = 1
         "#;
         let config: DefaultCfConfig = toml::from_str(normal_string_config).unwrap();

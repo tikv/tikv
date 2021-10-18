@@ -1,8 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use online_config::ConfigValue;
-pub use rocksdb::PerfLevel;
-use rocksdb::{CompactionPriority, DBCompactionStyle, DBCompressionType, DBInfoLogLevel, DBRateLimiterMode, DBRecoveryMode, DBTitanDBBlobRunMode};
+use rocksdb::{DBCompressionType, DBInfoLogLevel, DBTitanDBBlobRunMode};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -271,7 +270,6 @@ macro_rules! numeric_enum_mod {
             use serde::{Serializer, Deserializer};
             use serde::de::{self, Unexpected, Visitor};
             use rocksdb::$enum;
-            use super::FromString;
 
             pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
                 where S: Serializer
@@ -303,7 +301,7 @@ macro_rules! numeric_enum_mod {
                     fn visit_str<E>(self, value: &str) -> Result<$enum, E>
                         where E: de::Error
                     {
-                        Ok($enum::from_string(value))
+                        Ok($enum::from(super::$enum::from(value)))
                     }
                 }
 
@@ -341,6 +339,43 @@ macro_rules! numeric_enum_mod {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CompactionPriority {
+    // In Level-based compaction, it Determines which file from a level to be
+    // picked to merge to the next level. We suggest people try
+    // kMinOverlappingRatio first when you tune your database.
+    ByCompensatedSize = 0,
+    // First compact files whose data's latest update time is oldest.
+    // Try this if you only update some hot keys in small ranges.
+    OldestLargestSeqFirst = 1,
+    // First compact files whose range hasn't been compacted to the next level
+    // for the longest. If your updates are random across the key space,
+    // write amplification is slightly better with this option.
+    OldestSmallestSeqFirst = 2,
+    // First compact files whose ratio between overlapping size in next level
+    // and its size is the smallest. It in many cases can optimize write
+    // amplification.
+    MinOverlappingRatio = 3,
+}
+
+impl From<CompactionPriority> for rocksdb::CompactionPriority {
+    fn from(m: CompactionPriority) -> Self {
+        match m {
+            CompactionPriority::ByCompensatedSize => rocksdb::CompactionPriority::ByCompensatedSize,
+            CompactionPriority::OldestLargestSeqFirst => {
+                rocksdb::CompactionPriority::OldestLargestSeqFirst
+            }
+            CompactionPriority::OldestSmallestSeqFirst => {
+                rocksdb::CompactionPriority::OldestSmallestSeqFirst
+            }
+            CompactionPriority::MinOverlappingRatio => {
+                rocksdb::CompactionPriority::MinOverlappingRatio
+            }
+        }
+    }
+}
+
 numeric_enum_mod! {compaction_pri_serde CompactionPriority {
     ByCompensatedSize = 0,
     OldestLargestSeqFirst = 1,
@@ -348,18 +383,28 @@ numeric_enum_mod! {compaction_pri_serde CompactionPriority {
     MinOverlappingRatio = 3,
 }}
 
-
-impl FromString for CompactionPriority {
-    fn from_string(name: &str) -> Self {
+impl From<&str> for CompactionPriority {
+    fn from(name: &str) -> Self {
         match name {
-            "ByCompensatedSize" => CompactionPriority::ByCompensatedSize,
-            "OldestLargestSeqFirst" => CompactionPriority::OldestLargestSeqFirst,
-            "OldestSmallestSeqFirst" => CompactionPriority::OldestSmallestSeqFirst,
-            "MinOverlappingRatio" => CompactionPriority::MinOverlappingRatio,
-            _ =>  panic!("expect: ByCompensatedSize, OldestLargestSeqFirst, OldestSmallestSeqFirst, \
-            MinOverlappingRatio got: {:?}", name)
+            "by_compensated_size" => CompactionPriority::ByCompensatedSize,
+            "oldest_largest_seq_first" => CompactionPriority::OldestLargestSeqFirst,
+            "oldest_smallest_seq_first" => CompactionPriority::OldestSmallestSeqFirst,
+            "min_overlapping_ratio" => CompactionPriority::MinOverlappingRatio,
+            _ => panic!(
+                "expect: by_compensated_size, oldest_largest_seq_first, oldest_smallest_seq_first, \
+            min_overlapping_ratio got: {:?}",
+                name
+            ),
         }
     }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DBRateLimiterMode {
+    ReadOnly = 1,
+    WriteOnly = 2,
+    AllIo = 3,
 }
 
 numeric_enum_mod! {rate_limiter_mode_serde DBRateLimiterMode {
@@ -368,28 +413,55 @@ numeric_enum_mod! {rate_limiter_mode_serde DBRateLimiterMode {
     AllIo = 3,
 }}
 
-impl FromString for DBRateLimiterMode {
-    fn from_string(name: &str) -> Self {
-        match name {
-            "ReadOnly" => DBRateLimiterMode::ReadOnly,
-            "WriteOnly" => DBRateLimiterMode::WriteOnly,
-            "AllIo" => DBRateLimiterMode::AllIo,
-            _ => panic!("expect: ReadOnly, WriteOnly, AllIo got: {:?}", name)
+impl From<DBRateLimiterMode> for rocksdb::DBRateLimiterMode {
+    fn from(m: DBRateLimiterMode) -> Self {
+        match m {
+            DBRateLimiterMode::ReadOnly => rocksdb::DBRateLimiterMode::ReadOnly,
+            DBRateLimiterMode::WriteOnly => rocksdb::DBRateLimiterMode::WriteOnly,
+            DBRateLimiterMode::AllIo => rocksdb::DBRateLimiterMode::AllIo,
         }
     }
 }
 
-pub trait FromString {
-    fn from_string(name: &str) -> Self;
+impl From<&str> for DBRateLimiterMode {
+    fn from(name: &str) -> Self {
+        match name {
+            "read_only" => DBRateLimiterMode::ReadOnly,
+            "write_only" => DBRateLimiterMode::WriteOnly,
+            "all_io" => DBRateLimiterMode::AllIo,
+            _ => panic!("expect: read_only, write_only, all_io got: {:?}", name),
+        }
+    }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+//#[serde(rename_all = "kebab-case")]
+pub enum DBCompactionStyle {
+    Level = 0,
+    Universal = 1,
+    Fifo = 2,
+    None = 3,
+}
 
-impl FromString for DBCompactionStyle {
-    fn from_string(name: &str) -> Self {
+impl From<&str> for DBCompactionStyle {
+    fn from(name: &str) -> Self {
         match name {
-            "level" => return DBCompactionStyle::Level,
-            "universal" => return DBCompactionStyle::Universal,
-            _ => panic!("expect: level, universal got: {:?}", name),
+            "level" => DBCompactionStyle::Level,
+            "universal" => DBCompactionStyle::Universal,
+            "fifo" => DBCompactionStyle::Fifo,
+            "none" => DBCompactionStyle::None,
+            _ => panic!("expect: level, universal, fifo, none got: {:?}", name),
+        }
+    }
+}
+
+impl From<DBCompactionStyle> for rocksdb::DBCompactionStyle {
+    fn from(m: DBCompactionStyle) -> Self {
+        match m {
+            DBCompactionStyle::Level => rocksdb::DBCompactionStyle::Level,
+            DBCompactionStyle::Universal => rocksdb::DBCompactionStyle::Universal,
+            DBCompactionStyle::Fifo => rocksdb::DBCompactionStyle::Fifo,
+            DBCompactionStyle::None => rocksdb::DBCompactionStyle::None,
         }
     }
 }
@@ -399,15 +471,42 @@ numeric_enum_mod! {compaction_style_serde DBCompactionStyle {
     Universal = 1,
 }}
 
-impl FromString for DBRecoveryMode {
-    fn from_string(name: &str) -> Self {
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DBRecoveryMode {
+    TolerateCorruptedTailRecords = 0,
+    AbsoluteConsistency = 1,
+    PointInTime = 2,
+    SkipAnyCorruptedRecords = 3,
+}
+
+impl From<&str> for DBRecoveryMode {
+    fn from(name: &str) -> Self {
         match name {
-            "TolerateCorruptedTailRecords" => return DBRecoveryMode::TolerateCorruptedTailRecords,
-            "AbsoluteConsistency" => return DBRecoveryMode::AbsoluteConsistency,
-            "PointInTime" => return DBRecoveryMode::PointInTime,
-            "SkipAnyCorruptedRecords" => return DBRecoveryMode::SkipAnyCorruptedRecords,
-            _ => panic!("expect: TolerateCorruptedTailRecords, AbsoluteConsistency, PointInTime, \
-            SkipAnyCorruptedRecords got: {:?}", name),
+            "tolerate_corrupted_tail_records" => DBRecoveryMode::TolerateCorruptedTailRecords,
+            "absolute_consistency" => DBRecoveryMode::AbsoluteConsistency,
+            "point_in_time" => DBRecoveryMode::PointInTime,
+            "skip_any_corrupted_records" => DBRecoveryMode::SkipAnyCorruptedRecords,
+            _ => panic!(
+                "expect: tolerate_corrupted_tail_records, absolute_consistency, point_in_time, \
+            skip_any_corrupted_records got: {:?}",
+                name
+            ),
+        }
+    }
+}
+
+impl From<DBRecoveryMode> for rocksdb::DBRecoveryMode {
+    fn from(m: DBRecoveryMode) -> Self {
+        match m {
+            DBRecoveryMode::TolerateCorruptedTailRecords => {
+                rocksdb::DBRecoveryMode::TolerateCorruptedTailRecords
+            }
+            DBRecoveryMode::AbsoluteConsistency => rocksdb::DBRecoveryMode::AbsoluteConsistency,
+            DBRecoveryMode::PointInTime => rocksdb::DBRecoveryMode::PointInTime,
+            DBRecoveryMode::SkipAnyCorruptedRecords => {
+                rocksdb::DBRecoveryMode::SkipAnyCorruptedRecords
+            }
         }
     }
 }
@@ -419,11 +518,30 @@ numeric_enum_mod! {recovery_mode_serde DBRecoveryMode {
     SkipAnyCorruptedRecords = 3,
 }}
 
-impl FromString for PerfLevel {
-    fn from_string(name: &str) -> Self {
-        match name {
-            _ => panic!("Do not support name: '{:?}', use index instead(0, 1, 2)...", name)
-        }
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PerfLevel {
+    Uninitialized,
+    Disable,
+    EnableCount,
+    EnableTimeExceptForMutex,
+    EnableTimeAndCPUTimeExceptForMutex,
+    EnableTime,
+    OutOfBounds,
+}
+
+impl From<&str> for PerfLevel {
+    fn from(name: &str) -> Self {
+        panic!(
+            "Do not support name: '{:?}', use index instead(0, 1, 2)...",
+            name
+        )
+    }
+}
+
+impl From<PerfLevel> for rocksdb::PerfLevel {
+    fn from(_: PerfLevel) -> Self {
+        panic!("Do not support this func...")
     }
 }
 

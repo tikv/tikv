@@ -31,7 +31,7 @@ use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::PerfLevel;
+use engine_rocks::RPerfLevel;
 use resource_metering::{FutureExt, ResourceMeteringTag, StreamExt};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::time::Instant;
@@ -53,7 +53,7 @@ pub struct Endpoint<E: Engine> {
     concurrency_manager: ConcurrencyManager,
 
     // Perf stats level
-    perf_level: PerfLevel,
+    perf_level: RPerfLevel,
 
     /// The recursion limit when parsing Coprocessor Protobuf requests.
     ///
@@ -79,7 +79,7 @@ impl<E: Engine> Endpoint<E> {
         cfg: &Config,
         read_pool: ReadPoolHandle,
         concurrency_manager: ConcurrencyManager,
-        perf_level: PerfLevel,
+        perf_level: RPerfLevel,
     ) -> Self {
         // FIXME: When yatp is used, we need to limit coprocessor requests in progress to avoid
         // using too much memory. However, if there are a number of large requests, small requests
@@ -690,7 +690,7 @@ mod tests {
     use crate::read_pool::ReadPool;
     use crate::storage::kv::RocksEngine;
     use crate::storage::TestEngineBuilder;
-    use engine_rocks::PerfLevel;
+    use engine_rocks::RPerfLevel;
     use protobuf::Message;
     use txn_types::{Key, LockType};
 
@@ -849,7 +849,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
+            RPerfLevel::EnableCount,
         );
 
         // a normal request
@@ -872,7 +872,7 @@ mod tests {
             None,
             TimeStamp::max(),
             None,
-            PerfLevel::EnableCount,
+            RPerfLevel::EnableCount,
         );
         assert!(block_on(copr.handle_unary_request(outdated_req_ctx, handler_builder)).is_err());
     }
@@ -889,7 +889,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
+            RPerfLevel::EnableCount,
         );
         copr.recursion_limit = 100;
 
@@ -928,7 +928,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
+            RPerfLevel::EnableCount,
         );
 
         let mut req = coppb::Request::default();
@@ -950,7 +950,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
+            RPerfLevel::EnableCount,
         );
 
         let mut req = coppb::Request::default();
@@ -995,7 +995,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
+            RPerfLevel::EnableCount,
         );
 
         let (tx, rx) = mpsc::channel();
@@ -1042,7 +1042,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
+            RPerfLevel::EnableCount,
         );
 
         let handler_builder =
@@ -1066,7 +1066,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
+            RPerfLevel::EnableCount,
         );
 
         // Fail immediately
@@ -1118,7 +1118,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
+            RPerfLevel::EnableCount,
         );
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
@@ -1145,7 +1145,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
+            RPerfLevel::EnableCount,
         );
 
         // handler returns `finished == true` should not be called again.
@@ -1243,7 +1243,7 @@ mod tests {
             },
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
+            RPerfLevel::EnableCount,
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1307,7 +1307,7 @@ mod tests {
 
         let cm = ConcurrencyManager::new(1.into());
         let copr =
-            Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm, PerfLevel::EnableCount);
+            Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm, RPerfLevel::EnableCount);
 
         let (tx, rx) = std::sync::mpsc::channel();
 
@@ -1633,7 +1633,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
+            RPerfLevel::EnableCount,
         );
 
         {
@@ -1692,7 +1692,7 @@ mod tests {
 
         let config = Config::default();
         let copr =
-            Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm, PerfLevel::EnableCount);
+            Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm, RPerfLevel::EnableCount);
 
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);
