@@ -83,7 +83,8 @@ use crate::storage::{
 };
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{
-    CfName, Iterable, KvEngine, Peekable, SyncMutable, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_LEN,
+    CfName, Iterable, KvEngine, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    DATA_KEY_PREFIX_LEN,
 };
 use futures::prelude::*;
 use kvproto::kvrpcpb::ApiVersion;
@@ -150,6 +151,7 @@ pub struct Storage<E: Engine, L: LockManager> {
     // Fields below are storage configurations.
     max_key_size: usize,
 
+    api_version: ApiVersion,
     enable_ttl: bool,
 }
 
@@ -169,6 +171,7 @@ impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
             concurrency_manager: self.concurrency_manager.clone(),
+            api_version: self.api_version,
             enable_ttl: self.enable_ttl,
         }
     }
@@ -243,6 +246,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             concurrency_manager,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
+            api_version: config.api_version,
             enable_ttl: config.enable_ttl,
         })
     }
@@ -299,16 +303,27 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Check the given raw kv CF name. Return the CF name, or `Err` if given CF name is invalid.
     /// The CF name can be one of `"default"`, `"write"` and `"lock"`. If given `cf` is empty,
     /// `CF_DEFAULT` (`"default"`) will be returned.
-    fn rawkv_cf(cf: &str) -> Result<CfName> {
-        if cf.is_empty() {
-            return Ok(CF_DEFAULT);
-        }
-        for c in DATA_CFS {
-            if cf == *c {
-                return Ok(c);
+    fn rawkv_cf(api_version: ApiVersion, cf: &str) -> Result<CfName> {
+        match api_version {
+            ApiVersion::V1 => {
+                if cf.is_empty() {
+                    return Ok(CF_DEFAULT);
+                }
+                for c in [CF_DEFAULT, CF_LOCK, CF_WRITE] {
+                    if cf == c {
+                        return Ok(c);
+                    }
+                }
+                Err(Error::from(ErrorInner::InvalidCf(cf.to_owned())))
+            }
+            ApiVersion::V2 => {
+                // API V2 doesn't allow raw requests from explicitly specifying a `cf`.
+                if cf.is_empty() {
+                    return Ok(CF_DEFAULT);
+                }
+                Err(Error::from(ErrorInner::CfDeprecated(cf.to_owned())))
             }
         }
-        Err(Error::from(ErrorInner::InvalidCf(cf.to_owned())))
     }
 
     /// Check if key range is valid
@@ -1118,6 +1133,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let api_version = self.api_version;
         let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
@@ -1144,7 +1160,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 let store = RawStore::new(snapshot, enable_ttl);
-                let cf = Self::rawkv_cf(&cf)?;
+                let cf = Self::rawkv_cf(api_version, &cf)?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
@@ -1182,6 +1198,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = gets[0].get_context().get_priority();
         let priority_tag = get_priority_tag(priority);
+        let api_version = self.api_version;
         let enable_ttl = self.enable_ttl;
 
         // The resource tags of these batched requests are not the same, and it is quite expensive
@@ -1226,7 +1243,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         Ok(snapshot) => {
                             let mut stats = Statistics::default();
                             let store = RawStore::new(snapshot, enable_ttl);
-                            match Self::rawkv_cf(&cf) {
+                            match Self::rawkv_cf(api_version, &cf) {
                                 Ok(cf) => {
                                     consumer.consume(
                                         id,
@@ -1279,6 +1296,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let api_version = self.api_version;
         let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
@@ -1310,7 +1328,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
 
-                    let cf = Self::rawkv_cf(&cf)?;
+                    let cf = Self::rawkv_cf(api_version, &cf)?;
                     // no scan_count for this kind of op.
                     let mut stats = Statistics::default();
                     let result: Vec<Result<KvPair>> = keys
@@ -1362,7 +1380,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<()>,
     ) -> Result<()> {
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
-        let mut m = Modify::Put(Self::rawkv_cf(&cf)?, Key::from_encoded(key), value);
+        let mut m = Modify::Put(
+            Self::rawkv_cf(self.api_version, &cf)?,
+            Key::from_encoded(key),
+            value,
+        );
         if self.enable_ttl {
             let expire_ts = convert_to_expire_ts(ttl);
             m.with_ttl(expire_ts);
@@ -1391,7 +1413,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cf = Self::rawkv_cf(&cf)?;
+        let cf = Self::rawkv_cf(self.api_version, &cf)?;
 
         check_key_size!(
             pairs.iter().map(|(ref k, _)| k),
@@ -1447,7 +1469,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
 
         let mut batch = WriteData::from_modifies(vec![Modify::Delete(
-            Self::rawkv_cf(&cf)?,
+            Self::rawkv_cf(self.api_version, &cf)?,
             Key::from_encoded(key),
         )]);
         batch.set_allowed_on_disk_almost_full();
@@ -1478,7 +1500,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             callback
         );
 
-        let cf = Self::rawkv_cf(&cf)?;
+        let cf = Self::rawkv_cf(self.api_version, &cf)?;
         let start_key = Key::from_encoded(start_key);
         let end_key = Key::from_encoded(end_key);
 
@@ -1503,7 +1525,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cf = Self::rawkv_cf(&cf)?;
+        let cf = Self::rawkv_cf(self.api_version, &cf)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
 
         let modifies = keys
@@ -1547,6 +1569,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let api_version = self.api_version;
         let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
@@ -1574,7 +1597,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
-                let cf = Self::rawkv_cf(&cf)?;
+                let cf = Self::rawkv_cf(api_version, &cf)?;
                 {
                     let store = RawStore::new(snapshot, enable_ttl);
                     let begin_instant = Instant::now_coarse();
@@ -1648,6 +1671,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let api_version = self.api_version;
         let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
@@ -1663,7 +1687,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
-                let cf = Self::rawkv_cf(&cf)?;
+                let cf = Self::rawkv_cf(api_version, &cf)?;
                 {
                     let store = RawStore::new(snapshot, enable_ttl);
                     let begin_instant = Instant::now();
@@ -1760,6 +1784,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let api_version = self.api_version;
         let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
@@ -1786,7 +1811,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 let store = RawStore::new(snapshot, enable_ttl);
-                let cf = Self::rawkv_cf(&cf)?;
+                let cf = Self::rawkv_cf(api_version, &cf)?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
@@ -1823,7 +1848,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttl: u64,
         cb: Callback<(Option<Value>, bool)>,
     ) -> Result<()> {
-        let cf = Self::rawkv_cf(&cf)?;
+        let cf = Self::rawkv_cf(self.api_version, &cf)?;
         let ttl = if self.enable_ttl {
             Some(ttl)
         } else {
@@ -1852,7 +1877,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         } else if ttls.iter().any(|&x| x != 0) {
             return Err(Error::from(ErrorInner::TTLNotEnabled));
         }
-        let cf = Self::rawkv_cf(&cf)?;
+        let cf = Self::rawkv_cf(self.api_version, &cf)?;
         let muations = if !self.enable_ttl {
             pairs
                 .into_iter()
@@ -1885,7 +1910,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cf = Self::rawkv_cf(&cf)?;
+        let cf = Self::rawkv_cf(self.api_version, &cf)?;
         let muations = keys
             .into_iter()
             .map(|k| RawMutation::Delete {
@@ -1906,7 +1931,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
-        let enable_ttl = self.enable_ttl;
+        let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -1915,6 +1940,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
+                if api_version != ApiVersion::V2 {
+                    return Err(box_err!("raw_checksum is only available in API V2"));
+                }
                 if algorithm != ChecksumAlgorithm::Crc64Xor {
                     return Err(box_err!("unknown checksum algorithm {:?}", algorithm));
                 }
@@ -1927,12 +1955,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 let begin_instant = tikv_util::time::Instant::now_coarse();
-                let ret = if enable_ttl {
-                    let snap = TTLSnapshot::from(snapshot);
-                    raw::raw_checksum_ranges(snap, ranges).await
-                } else {
-                    raw::raw_checksum_ranges(snapshot, ranges).await
-                };
+                // raw_checksum are only available in API V2, where TTL must be enabled.
+                let ret = raw::raw_checksum_ranges(TTLSnapshot::from(snapshot), ranges).await;
                 SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                     .get(CMD)
                     .observe(begin_instant.saturating_elapsed().as_secs_f64());
