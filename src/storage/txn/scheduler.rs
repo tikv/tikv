@@ -962,13 +962,14 @@ mod tests {
         lock_manager::DummyLockManager,
         mvcc::{self, Mutation},
         txn::commands::TypedCommand,
+        TxnStatus,
     };
     use crate::storage::{
         txn::{commands, latch::*},
         TestEngineBuilder,
     };
     use futures_executor::block_on;
-    use kvproto::kvrpcpb::{BatchRollbackRequest, Context};
+    use kvproto::kvrpcpb::{BatchRollbackRequest, CheckTxnStatusRequest, Context};
     use raftstore::store::{ReadStats, WriteStats};
     use tikv_util::config::ReadableSize;
     use tikv_util::future::paired_future_callback;
