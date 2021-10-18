@@ -10,11 +10,9 @@ use futures::channel::oneshot;
 use futures::{select, FutureExt};
 use grpcio::{Environment, Server};
 use kvproto::kvrpcpb::Context;
-use kvproto::resource_usage_agent::CpuTimeRecord;
+use kvproto::resource_usage_agent::ResourceUsageRecord;
 use mock_receiver_server::MockReceiverServer;
-use resource_metering::cpu::recorder::{init_recorder, TEST_TAG_PREFIX};
-use resource_metering::reporter::{ResourceMeteringReporter, Task};
-use resource_metering::{Config, ConfigManager};
+use resource_metering::{init_recorder, Config, ConfigManager, Task, TEST_TAG_PREFIX};
 use tempfile::TempDir;
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::storage::lock_manager::DummyLockManager;
@@ -31,8 +29,8 @@ pub struct TestSuite {
     reporter: Option<Box<LazyWorker<Task>>>,
     cfg_controller: ConfigController,
 
-    tx: Sender<Vec<CpuTimeRecord>>,
-    rx: Receiver<Vec<CpuTimeRecord>>,
+    tx: Sender<Vec<ResourceUsageRecord>>,
+    rx: Receiver<Vec<ResourceUsageRecord>>,
 
     env: Arc<Environment>,
     rt: Runtime,
@@ -63,14 +61,19 @@ impl TestSuite {
             Box::new(ConfigManager::new(
                 resource_metering_cfg.clone(),
                 scheduler.clone(),
-                init_recorder(),
+                init_recorder(
+                    resource_metering_cfg.enabled,
+                    resource_metering_cfg.precision.as_millis(),
+                ),
             )),
         );
         let env = Arc::new(Environment::new(2));
-        reporter.start_with_timer(ResourceMeteringReporter::new(
+        let mut reporter_client = resource_metering::GrpcClient::default();
+        reporter_client.set_env(env.clone());
+        reporter.start_with_timer(resource_metering::Reporter::new(
+            reporter_client,
             resource_metering_cfg,
             scheduler.clone(),
-            env.clone(),
         ));
 
         let (tx, rx) = unbounded();
