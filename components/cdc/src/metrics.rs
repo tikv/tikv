@@ -117,12 +117,6 @@ lazy_static! {
         "Capacity of old value cache"
     )
     .unwrap();
-    pub static ref CDC_SINK_ENTRY_BYTES: Histogram = register_histogram!(
-        "tikv_cdc_sink_in_memory_entry_bytes",
-        "Bucketed histogram of cdc sink in memory entry size in bytes",
-        exponential_buckets(1.0, 2.0, 20).unwrap()
-    )
-    .unwrap();
     pub static ref CDC_SINK_BYTES: IntGauge = register_int_gauge!(
         "tikv_cdc_sink_memory_bytes",
         "Total bytes of memory used in CDC sink"

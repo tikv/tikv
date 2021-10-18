@@ -333,7 +333,6 @@ impl Sink {
         let mut total_bytes = 0;
         for event in &events {
             let bytes = event.size();
-            CDC_SINK_ENTRY_BYTES.observe(bytes as _);
             total_bytes += bytes;
         }
         if !self.memory_quota.alloc(total_bytes as _) {
