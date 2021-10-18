@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::hash_map::Entry;
-use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use collections::HashMap;
@@ -9,21 +8,16 @@ use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
 use grpcio::{DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
-use kvproto::cdcpb::{
-    ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility, Event, ResolvedTs,
-};
+use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use protobuf::Message;
 use tikv_util::worker::*;
 use tikv_util::{error, info, warn};
 
-use crate::channel::{channel, MemoryQuota, Sink};
+use crate::channel::{channel, MemoryQuota, Sink, CDC_CHANNLE_CAPACITY};
 use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
-
-const CDC_MAX_RESP_SIZE: u32 = 6 * 1024 * 1024; // 6MB
 
 /// A unique identifier of a Connection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -35,6 +29,7 @@ impl ConnID {
     }
 }
 
+<<<<<<< HEAD
 pub enum CdcEvent {
     ResolvedTs(ResolvedTs),
     Event(Event),
@@ -176,6 +171,11 @@ impl EventBatcher {
     // Return the total bytes of event and resolved ts.
     pub fn statistics(&self) -> (usize, usize) {
         (self.total_event_bytes, self.total_resolved_ts_bytes)
+=======
+impl Default for ConnID {
+    fn default() -> Self {
+        Self::new()
+>>>>>>> 72b242d04... cdc: reduce events batch to solve congest error (#11086)
     }
 }
 
@@ -316,9 +316,8 @@ impl ChangeData for Service {
         stream: RequestStream<ChangeDataRequest>,
         mut sink: DuplexSink<ChangeDataEvent>,
     ) {
-        // TODO explain buffer.
-        let buffer = 1024;
-        let (event_sink, mut event_drain) = channel(buffer, self.memory_quota.clone());
+        let (event_sink, mut event_drain) =
+            channel(CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
         let peer = ctx.peer();
         let conn = Conn::new(event_sink, peer);
         let conn_id = conn.get_id();
@@ -425,153 +424,11 @@ mod tests {
 
     use futures::executor::block_on;
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
-    #[cfg(feature = "prost-codec")]
-    use kvproto::cdcpb::event::{
-        Entries as EventEntries, Event as Event_oneof_event, Row as EventRow,
-    };
-    use kvproto::cdcpb::{
-        create_change_data, ChangeDataClient, ChangeDataEvent, Event, ResolvedTs,
-    };
-    #[cfg(not(feature = "prost-codec"))]
-    use kvproto::cdcpb::{EventEntries, EventRow, Event_oneof_event};
+    use kvproto::cdcpb::{create_change_data, ChangeDataClient, ResolvedTs};
 
-    use crate::channel::{poll_timeout, recv_timeout, CDC_EVENT_MAX_BATCH_SIZE};
-    use crate::service::{CdcEvent, EventBatcher, CDC_MAX_RESP_SIZE};
+    use crate::channel::{poll_timeout, recv_timeout, CdcEvent};
 
     use super::*;
-
-    #[test]
-    fn test_event_batcher() {
-        let check_events = |result: Vec<ChangeDataEvent>, expected: Vec<Vec<CdcEvent>>| {
-            assert_eq!(result.len(), expected.len());
-
-            for i in 0..expected.len() {
-                if !result[i].has_resolved_ts() {
-                    assert_eq!(result[i].events.len(), expected[i].len());
-                    for j in 0..expected[i].len() {
-                        assert_eq!(&result[i].events[j], expected[i][j].event());
-                    }
-                } else {
-                    assert_eq!(expected[i].len(), 1);
-                    assert_eq!(result[i].get_resolved_ts(), expected[i][0].resolved_ts());
-                }
-            }
-        };
-
-        let row_small = EventRow::default();
-        let event_entries = EventEntries {
-            entries: vec![row_small].into(),
-            ..Default::default()
-        };
-        let event_small = Event {
-            event: Some(Event_oneof_event::Entries(event_entries)),
-            ..Default::default()
-        };
-
-        let mut row_big = EventRow::default();
-        row_big.set_key(vec![0_u8; CDC_MAX_RESP_SIZE as usize]);
-        let event_entries = EventEntries {
-            entries: vec![row_big].into(),
-            ..Default::default()
-        };
-        let event_big = Event {
-            event: Some(Event_oneof_event::Entries(event_entries)),
-            ..Default::default()
-        };
-
-        let mut resolved_ts = ResolvedTs::default();
-        resolved_ts.set_ts(1);
-
-        // None empty event should not return a zero size.
-        assert_ne!(CdcEvent::ResolvedTs(resolved_ts.clone()).size(), 0);
-        assert_ne!(CdcEvent::Event(event_big.clone()).size(), 0);
-        assert_ne!(CdcEvent::Event(event_small.clone()).size(), 0);
-
-        // An ReslovedTs event follows a small event, they should not be batched
-        // in one message.
-        let mut batcher = EventBatcher::with_capacity(CDC_EVENT_MAX_BATCH_SIZE);
-        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
-        batcher.push(CdcEvent::Event(event_small.clone()));
-
-        check_events(
-            batcher.build(),
-            vec![
-                vec![CdcEvent::ResolvedTs(resolved_ts.clone())],
-                vec![CdcEvent::Event(event_small.clone())],
-            ],
-        );
-
-        // A more complex case.
-        let mut batcher = EventBatcher::with_capacity(1024);
-        batcher.push(CdcEvent::Event(event_small.clone()));
-        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
-        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
-        batcher.push(CdcEvent::Event(event_big.clone()));
-        batcher.push(CdcEvent::Event(event_small.clone()));
-        batcher.push(CdcEvent::Event(event_small.clone()));
-        batcher.push(CdcEvent::Event(event_big.clone()));
-
-        check_events(
-            batcher.build(),
-            vec![
-                vec![CdcEvent::Event(event_small.clone())],
-                vec![CdcEvent::ResolvedTs(resolved_ts.clone())],
-                vec![CdcEvent::ResolvedTs(resolved_ts)],
-                vec![CdcEvent::Event(event_big.clone())],
-                vec![
-                    CdcEvent::Event(event_small.clone()),
-                    CdcEvent::Event(event_small),
-                ],
-                vec![CdcEvent::Event(event_big)],
-            ],
-        );
-    }
-
-    #[test]
-    fn test_event_batcher_statistics() {
-        let mut event_small = Event::default();
-        let row_small = EventRow::default();
-        let mut event_entries = EventEntries::default();
-        event_entries.entries = vec![row_small].into();
-        event_small.event = Some(Event_oneof_event::Entries(event_entries));
-
-        let mut resolved_ts = ResolvedTs::default();
-        resolved_ts.set_ts(1);
-
-        let mut batcher = EventBatcher::with_capacity(1024);
-        batcher.push(CdcEvent::Event(event_small.clone()));
-        assert_eq!(
-            batcher.statistics(),
-            (CdcEvent::Event(event_small.clone()).size() as usize, 0)
-        );
-
-        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
-        assert_eq!(
-            batcher.statistics(),
-            (
-                CdcEvent::Event(event_small.clone()).size() as usize,
-                CdcEvent::ResolvedTs(resolved_ts.clone()).size() as usize
-            )
-        );
-
-        batcher.push(CdcEvent::Event(event_small.clone()));
-        assert_eq!(
-            batcher.statistics(),
-            (
-                CdcEvent::Event(event_small.clone()).size() as usize * 2,
-                CdcEvent::ResolvedTs(resolved_ts.clone()).size() as usize
-            )
-        );
-
-        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
-        assert_eq!(
-            batcher.statistics(),
-            (
-                CdcEvent::Event(event_small).size() as usize * 2,
-                CdcEvent::ResolvedTs(resolved_ts).size() as usize * 2
-            )
-        );
-    }
 
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = MemoryQuota::new(capacity);
@@ -650,22 +507,5 @@ mod tests {
         // though server should not be able to send messages infinitely.
         let window_size = must_fill_window();
         assert_ne!(window_size, 0);
-    }
-
-    #[test]
-    fn test_cdc_event_resolved_ts_size() {
-        // A typical region id.
-        let region_id = 4194304;
-        // A typical ts.
-        let ts = 426624231625982140;
-        for i in 0..17 {
-            let mut resolved_ts = ResolvedTs::default();
-            resolved_ts.ts = ts;
-            resolved_ts.regions = vec![region_id; 2usize.pow(i)];
-            assert_eq!(
-                resolved_ts.compute_size(),
-                CdcEvent::ResolvedTs(resolved_ts).size()
-            );
-        }
     }
 }
