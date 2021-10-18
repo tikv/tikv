@@ -14,7 +14,7 @@ thread_local! {
 }
 
 /// Raw resource statistics record.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct RawRecord {
     pub cpu_time: u32, // ms
 }
@@ -56,7 +56,7 @@ impl Default for RawRecords {
 }
 
 /// Resource statistics.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Record {
     pub timestamps: Vec<u64>,
     pub cpu_time_list: Vec<u32>,
@@ -70,7 +70,7 @@ pub struct Record {
 ///
 /// [Reporter]: crate::reporter::CpuReporter
 /// [Client]: crate::client::Client
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Records {
     pub records: HashMap<Vec<u8>, Record>,
     pub others: HashMap<u64, RawRecord>,

@@ -3,7 +3,7 @@
 mod mock_receiver_server;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::channel::oneshot;
@@ -55,11 +55,13 @@ impl TestSuite {
         tikv_cfg.resource_metering.report_receiver_interval = ReadableDuration::secs(5);
 
         let resource_metering_cfg = tikv_cfg.resource_metering.clone();
+        let receiver_address = Arc::new(Mutex::new(resource_metering_cfg.receiver_address.clone()));
         let cfg_controller = ConfigController::new(tikv_cfg);
         cfg_controller.register(
             Module::ResourceMetering,
             Box::new(ConfigManager::new(
                 resource_metering_cfg.clone(),
+                receiver_address.clone(),
                 scheduler.clone(),
                 init_recorder(
                     resource_metering_cfg.enabled,
@@ -68,10 +70,9 @@ impl TestSuite {
             )),
         );
         let env = Arc::new(Environment::new(2));
-        let mut reporter_client = resource_metering::GrpcClient::default();
-        reporter_client.set_env(env.clone());
+        let reporter_client = resource_metering::GrpcClient::new(env.clone(), receiver_address);
         reporter.start_with_timer(resource_metering::Reporter::new(
-            reporter_client,
+            vec![Box::new(reporter_client)],
             resource_metering_cfg,
             scheduler.clone(),
         ));

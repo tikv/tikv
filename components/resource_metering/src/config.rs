@@ -4,6 +4,7 @@ use crate::recorder::RecorderHandle;
 use crate::reporter::Task;
 
 use std::error::Error;
+use std::sync::{Arc, Mutex};
 
 use online_config::{ConfigChange, OnlineConfig};
 use serde_derive::{Deserialize, Serialize};
@@ -90,6 +91,7 @@ impl Config {
 /// to control the dynamic update of the configuration.
 pub struct ConfigManager {
     current_config: Config,
+    receiver_address: Arc<Mutex<String>>,
     scheduler: Scheduler<Task>,
     recorder: RecorderHandle,
 }
@@ -97,11 +99,13 @@ pub struct ConfigManager {
 impl ConfigManager {
     pub fn new(
         current_config: Config,
+        receiver_address: Arc<Mutex<String>>,
         scheduler: Scheduler<Task>,
         recorder: RecorderHandle,
     ) -> Self {
         ConfigManager {
             current_config,
+            receiver_address,
             scheduler,
             recorder,
         }
@@ -128,6 +132,10 @@ impl online_config::ConfigManager for ConfigManager {
         self.scheduler
             .schedule(Task::ConfigChange(new_config.clone()))
             .ok();
+        if self.current_config.receiver_address != new_config.receiver_address {
+            let mut address = self.receiver_address.lock().unwrap();
+            *address = new_config.receiver_address.clone();
+        }
         self.current_config = new_config;
         Ok(())
     }

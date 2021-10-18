@@ -4,6 +4,7 @@
 
 #![feature(shrink_to)]
 #![feature(hash_drain_filter)]
+#![feature(drain_filter)]
 
 use crate::localstorage::STORAGE;
 
@@ -18,6 +19,7 @@ mod collector;
 mod config;
 mod localstorage;
 mod model;
+mod publisher;
 mod recorder;
 mod reporter;
 pub mod utils;
@@ -27,6 +29,7 @@ pub use collector::Collector;
 pub use collector::{register_collector, CollectorHandle, CollectorId};
 pub use config::{Config, ConfigManager};
 pub use model::*;
+pub use publisher::ResourceMeteringPublisher;
 pub use recorder::{init_recorder, CpuRecorder, Recorder, RecorderBuilder, RecorderHandle};
 pub use reporter::{Reporter, Task};
 

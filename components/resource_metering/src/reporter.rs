@@ -6,6 +6,7 @@ use crate::{Client, Config, RawRecords, Records};
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
+use crossbeam::channel::{bounded, Receiver, Sender};
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 
@@ -20,18 +21,18 @@ use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 /// [Scheduler]: tikv_util::worker::Scheduler
 /// [RawRecords]: crate::model::RawRecords
 /// [Records]: crate::model::Records
-pub struct Reporter<C> {
-    client: C,
+pub struct Reporter {
+    client_registry: ClientRegistry,
+    client_receiver: Receiver<Box<dyn Client>>,
+    clients: Vec<Box<dyn Client>>,
+
     config: Config,
     scheduler: Scheduler<Task>,
     collector: Option<CollectorHandle>,
     records: Records,
 }
 
-impl<C> Runnable for Reporter<C>
-where
-    C: Client + Send,
-{
+impl Runnable for Reporter {
     type Task = Task;
 
     fn run(&mut self, task: Self::Task) {
@@ -46,11 +47,9 @@ where
     }
 }
 
-impl<C> RunnableWithTimer for Reporter<C>
-where
-    C: Client + Send,
-{
+impl RunnableWithTimer for Reporter {
     fn on_timeout(&mut self) {
+        self.handle_client_register();
         self.upload();
     }
 
@@ -59,21 +58,35 @@ where
     }
 }
 
-impl<C> Reporter<C>
-where
-    C: Client + Send,
-{
-    pub fn new(client: C, config: Config, scheduler: Scheduler<Task>) -> Self {
-        let collector = config
-            .should_report()
-            .then(|| register_collector(Box::new(CollectorImpl::new(scheduler.clone()))));
+impl Reporter {
+    pub fn new(
+        mut clients: Vec<Box<dyn Client>>,
+        config: Config,
+        scheduler: Scheduler<Task>,
+    ) -> Self {
+        let (tx, rx) = bounded(1024);
+
+        let pending_cnt = clients.iter_mut().map(|c| c.is_pending()).count();
+        let running_cnt = clients.len() - pending_cnt;
+        let collector = (running_cnt > 0).then(|| {
+            let clt = CollectorImpl::new(scheduler.clone());
+            register_collector(Box::new(clt))
+        });
+
         Self {
-            client,
+            client_registry: ClientRegistry { tx },
+            client_receiver: rx,
+            clients,
+
             config,
             scheduler,
             collector,
             records: Records::default(),
         }
+    }
+
+    pub(crate) fn client_registry(&self) -> ClientRegistry {
+        self.client_registry.clone()
     }
 
     fn handle_records(&mut self, records: Arc<RawRecords>) {
@@ -83,13 +96,24 @@ where
 
     fn handle_config_change(&mut self, config: Config) {
         self.config = config;
-        if !self.config.should_report() {
-            self.reset();
+    }
+
+    fn handle_client_register(&mut self) {
+        for c in self.client_receiver.try_iter() {
+            self.clients.push(c);
         }
+
+        // remove closed clients
+        self.clients.drain_filter(|c| c.is_closed()).count();
+
         if self.collector.is_none() {
-            self.collector = Some(register_collector(Box::new(CollectorImpl::new(
-                self.scheduler.clone(),
-            ))));
+            let pending_cnt = self.clients.iter_mut().map(|c| c.is_pending()).count();
+            let running_cnt = self.clients.len() - pending_cnt;
+            if running_cnt > 0 {
+                let clt = CollectorImpl::new(self.scheduler.clone());
+                let clt_hdl = register_collector(Box::new(clt));
+                self.collector = Some(clt_hdl);
+            }
         }
     }
 
@@ -97,15 +121,32 @@ where
         if self.records.is_empty() {
             return;
         }
-        // Whether endpoint exists or not, records should be taken in order to reset.
-        let records = std::mem::take(&mut self.records);
-        self.client
-            .upload_records(&self.config.receiver_address, records);
+
+        // Whether clients exist or not, records should be taken in order to reset.
+        let records = Arc::new(std::mem::take(&mut self.records));
+        for c in &mut self.clients {
+            if c.as_mut().is_pending() {
+                continue;
+            }
+            c.as_mut().upload_records(records.clone());
+        }
     }
 
     fn reset(&mut self) {
         self.collector.take();
         self.records.clear();
+        self.clients.clear();
+    }
+}
+
+#[derive(Clone)]
+pub struct ClientRegistry {
+    tx: Sender<Box<dyn Client>>,
+}
+
+impl ClientRegistry {
+    pub fn register(&self, client: Box<dyn Client>) {
+        self.tx.send(client).ok();
     }
 }
 
@@ -129,20 +170,15 @@ impl Display for Task {
     }
 }
 
-// Helper functions.
-impl Config {
-    fn should_report(&self) -> bool {
-        self.enabled && !self.receiver_address.is_empty() && self.max_resource_groups != 0
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{RawRecord, ResourceMeteringTag, TagInfos};
-    use collections::HashMap;
+
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::SeqCst;
+
+    use collections::HashMap;
     use tikv_util::config::ReadableDuration;
     use tikv_util::worker::{LazyWorker, Runnable, RunnableWithTimer};
 
@@ -151,16 +187,23 @@ mod tests {
     struct MockClient;
 
     impl Client for MockClient {
-        fn upload_records(&mut self, address: &str, _records: Records) {
-            assert_eq!(address, "abc");
+        fn upload_records(&mut self, _records: Arc<Records>) {
             OP_COUNT.fetch_add(1, SeqCst);
+        }
+
+        fn is_pending(&mut self) -> bool {
+            false
+        }
+
+        fn is_closed(&mut self) -> bool {
+            false
         }
     }
 
     #[test]
     fn test_reporter() {
         let scheduler = LazyWorker::new("test-worker").scheduler();
-        let mut r = Reporter::new(MockClient, Config::default(), scheduler);
+        let mut r = Reporter::new(vec![Box::new(MockClient)], Config::default(), scheduler);
         r.run(Task::ConfigChange(Config {
             enabled: false,
             receiver_address: "abc".to_string(),

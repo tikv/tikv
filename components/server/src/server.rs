@@ -45,6 +45,7 @@ use grpcio::{EnvBuilder, Environment};
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
+    resource_usage_agent::create_resource_metering_pub_sub,
 };
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
@@ -205,6 +206,7 @@ struct Servers<EK: KvEngine, ER: RaftEngine> {
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
     cdc_memory_quota: MemoryQuota,
+    resource_metering_publisher: resource_metering::ResourceMeteringPublisher,
 }
 
 type LocalServer<EK, ER> =
@@ -894,17 +896,23 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .create()
             .lazy_build("resource-metering-reporter");
         let reporter_scheduler = reporter_worker.scheduler();
-        let mut resource_metering_client = resource_metering::GrpcClient::default();
-        resource_metering_client.set_env(self.env.clone());
+        let receiver_address = Arc::new(Mutex::new(
+            self.config.resource_metering.receiver_address.clone(),
+        ));
+        let resource_metering_client =
+            resource_metering::GrpcClient::new(self.env.clone(), receiver_address.clone());
         let reporter = resource_metering::Reporter::new(
-            resource_metering_client,
+            vec![Box::new(resource_metering_client)],
             self.config.resource_metering.clone(),
             reporter_scheduler.clone(),
         );
+        let resource_metering_publisher =
+            resource_metering::ResourceMeteringPublisher::new(&reporter);
         reporter_worker.start_with_timer(reporter);
         self.to_stop.push(Box::new(reporter_worker));
         let cfg_manager = resource_metering::ConfigManager::new(
             self.config.resource_metering.clone(),
+            receiver_address,
             reporter_scheduler,
             resource_metering::init_recorder(
                 self.config.resource_metering.enabled,
@@ -923,6 +931,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             importer,
             cdc_scheduler,
             cdc_memory_quota,
+            resource_metering_publisher,
         });
 
         server_config
@@ -1032,6 +1041,16 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .is_some()
         {
             fatal!("failed to register cdc service");
+        }
+
+        if servers
+            .server
+            .register_service(create_resource_metering_pub_sub(
+                servers.resource_metering_publisher.clone(),
+            ))
+            .is_some()
+        {
+            fatal!("failed to register resource metering publisher service");
         }
     }
 

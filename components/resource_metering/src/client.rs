@@ -3,7 +3,7 @@
 use crate::model::Records;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::SinkExt;
@@ -13,8 +13,10 @@ use tikv_util::warn;
 
 /// This trait abstracts the interface to communicate with the remote.
 /// We can simply mock this interface to test without RPC.
-pub trait Client {
-    fn upload_records(&mut self, address: &str, records: Records);
+pub trait Client: Send {
+    fn upload_records(&mut self, records: Arc<Records>);
+    fn is_pending(&mut self) -> bool;
+    fn is_closed(&mut self) -> bool;
 }
 
 /// `GrpcClient` is the default implementation of [Client], which uses gRPC
@@ -22,34 +24,29 @@ pub trait Client {
 #[derive(Clone)]
 pub struct GrpcClient {
     env: Arc<Environment>,
-    address: String,
     client: Option<ResourceUsageAgentClient>,
     limiter: Limiter,
-}
 
-impl Default for GrpcClient {
-    fn default() -> Self {
-        Self {
-            env: Arc::new(Environment::new(2)),
-            address: "".to_owned(),
-            client: None,
-            limiter: Limiter::default(),
-        }
-    }
+    address: Arc<Mutex<String>>,
+    prev_address: String,
 }
 
 impl Client for GrpcClient {
-    fn upload_records(&mut self, address: &str, records: Records) {
+    fn upload_records(&mut self, records: Arc<Records>) {
+        let address = { self.address.lock().unwrap().clone() };
         if address.is_empty() {
+            self.client.take();
             return;
         }
+
         let handle = self.limiter.try_acquire();
         if handle.is_none() {
             return;
         }
-        if self.address != address || self.client.is_none() {
-            self.address = address.to_owned();
-            self.init_client();
+        // address isn't empty here
+        if self.client.is_none() || self.prev_address != address {
+            self.init_client(&address);
+            self.prev_address = address.clone();
         }
         let client = self.client.as_ref().unwrap();
         let call_opt = CallOption::default().timeout(Duration::from_secs(2));
@@ -61,17 +58,17 @@ impl Client for GrpcClient {
         let (mut tx, rx) = call.unwrap();
         client.spawn(async move {
             let _hd = handle;
-            let others = records.others;
-            for (tag, record) in records.records {
+            for (tag, record) in &records.records {
                 let mut req = ResourceUsageRecord::default();
-                req.set_resource_group_tag(tag);
-                req.set_record_list_timestamp_sec(record.timestamps);
-                req.set_record_list_cpu_time_ms(record.cpu_time_list);
+                req.set_resource_group_tag(tag.clone());
+                req.set_record_list_timestamp_sec(record.timestamps.clone());
+                req.set_record_list_cpu_time_ms(record.cpu_time_list.clone());
                 if let Err(err) = tx.send((req, WriteFlags::default())).await {
                     warn!("failed to send records"; "error" => ?err);
                     return;
                 }
             }
+            let others = &records.others;
             if !others.is_empty() {
                 let mut req = ResourceUsageRecord::default();
                 req.set_record_list_timestamp_sec(others.keys().copied().collect());
@@ -90,19 +87,34 @@ impl Client for GrpcClient {
             }
         });
     }
+
+    fn is_pending(&mut self) -> bool {
+        self.address.lock().unwrap().is_empty()
+    }
+
+    fn is_closed(&mut self) -> bool {
+        false
+    }
 }
 
 impl GrpcClient {
-    pub fn set_env(&mut self, env: Arc<Environment>) {
-        self.env = env;
+    pub fn new(env: Arc<Environment>, address: Arc<Mutex<String>>) -> Self {
+        Self {
+            env,
+            client: None,
+            limiter: Limiter::default(),
+            address,
+            prev_address: "".to_owned(),
+        }
     }
 
-    fn init_client(&mut self) {
+    fn init_client(&mut self, address: &str) {
+        assert!(!address.is_empty());
         let channel = {
             let cb = ChannelBuilder::new(self.env.clone())
                 .keepalive_time(Duration::from_secs(10))
                 .keepalive_timeout(Duration::from_secs(3));
-            cb.connect(&self.address)
+            cb.connect(address)
         };
         self.client = Some(ResourceUsageAgentClient::new(channel));
     }
