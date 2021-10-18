@@ -5,7 +5,6 @@ use tikv_util::time::{duration_to_ms, duration_to_sec, Instant};
 
 use super::batch::{BatcherBuilder, ReqBatcher};
 use crate::coprocessor::Endpoint;
-use crate::coprocessor_v2;
 use crate::server::gc_worker::GcWorker;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
@@ -22,6 +21,7 @@ use crate::storage::{
     lock_manager::LockManager,
     SecondaryLocksStatus, Storage, TxnStatus,
 };
+use crate::{coprocessor_v2, log_net_error};
 use crate::{forward_duplex, forward_unary};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
@@ -180,9 +180,8 @@ macro_rules! handle_request {
                 ServerResult::Ok(())
             }
             .map_err(|e| {
-                debug!("kv rpc failed";
-                    "request" => stringify!($fn_name),
-                    "err" => ?e
+                log_net_error!(e, "kv rpc failed";
+                    "request" => stringify!($fn_name)
                 );
                 GRPC_MSG_FAIL_COUNTER.$fn_name.inc();
             })
@@ -361,9 +360,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "coprocessor",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "coprocessor"
             );
             GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
         })
@@ -389,9 +387,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "coprocessor_v2",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "coprocessor_v2"
             );
             GRPC_MSG_FAIL_COUNTER.raw_coprocessor.inc();
         })
@@ -429,9 +426,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "register_lock_observer",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "register_lock_observer"
             );
             GRPC_MSG_FAIL_COUNTER.register_lock_observer.inc();
         })
@@ -473,9 +469,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "check_lock_observer",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "check_lock_observer"
             );
             GRPC_MSG_FAIL_COUNTER.check_lock_observer.inc();
         })
@@ -511,9 +506,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "remove_lock_observer",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "remove_lock_observer"
             );
             GRPC_MSG_FAIL_COUNTER.remove_lock_observer.inc();
         })
@@ -556,9 +550,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "physical_scan_lock",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "physical_scan_lock"
             );
             GRPC_MSG_FAIL_COUNTER.physical_scan_lock.inc();
         })
@@ -605,9 +598,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "unsafe_destroy_range",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "unsafe_destroy_range"
             );
             GRPC_MSG_FAIL_COUNTER.unsafe_destroy_range.inc();
         })
@@ -642,7 +634,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
                     let _ = sink.close().await;
                 }
                 Err(e) => {
-                    debug!("kv rpc failed";
+                    info!("kv rpc failed";
                         "request" => "coprocessor_stream",
                         "err" => ?e
                     );
@@ -833,9 +825,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "split_region",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "split_region"
             );
             GRPC_MSG_FAIL_COUNTER.split_region.inc();
         })
@@ -931,9 +922,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "read_index",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "read_index"
             );
             GRPC_MSG_FAIL_COUNTER.read_index.inc();
         })
@@ -1010,7 +1000,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             Ok(())
         }
         .map_err(|e: grpcio::Error| {
-            debug!("kv rpc failed";
+            info!("kv rpc failed";
                 "request" => "batch_commands",
                 "err" => ?e
             );
