@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::option::Option;
