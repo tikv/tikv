@@ -594,8 +594,11 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         }
 
         // calculate foreground write flow
-        let rate = self.limiter.total_bytes_consumed() as f64
-            / self.last_record_time.saturating_elapsed_secs();
+        let dur = self.last_record_time.saturating_elapsed_secs();
+        if dur < f64::EPSILON {
+            return;
+        }
+        let rate = self.limiter.total_bytes_consumed() as f64 / dur;
         // don't record those write rate of 0.
         // For closed loop system, if all the requests are delayed(assume > 1s),
         // then in the next second, the write rate would be 0. But it doesn't
@@ -1023,7 +1026,8 @@ mod tests {
         // not throttle once the number of memtables falls below the threshold
         stub.0.num_memtable_files.store(1, Ordering::Relaxed);
         tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
-        std::thread::sleep(Duration::from_millis(10));
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
         assert_eq!(flow_controller.should_drop(), false);
         assert_eq!(flow_controller.is_unlimited(), true);
     }
