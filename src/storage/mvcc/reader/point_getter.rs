@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath
 use kvproto::kvrpcpb::IsolationLevel;
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};

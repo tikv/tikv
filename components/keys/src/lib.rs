@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath] Common key utitlies.
+
 //! TiKV key building
 
 #[allow(unused_extern_crates)]
@@ -27,9 +29,6 @@ pub const DATA_PREFIX: u8 = b'z';
 pub const DATA_PREFIX_KEY: &[u8] = &[DATA_PREFIX];
 pub const DATA_MIN_KEY: &[u8] = &[DATA_PREFIX];
 pub const DATA_MAX_KEY: &[u8] = &[DATA_PREFIX + 1];
-pub const DATA_TIDB_RANGES: &[(&[u8], &[u8])] = &[(&[b'm'], &[b'm' + 1]), (&[b't'], &[b't' + 1])];
-pub const DATA_TIDB_RANGES_COMPLEMENT: &[(&[u8], &[u8])] =
-    &[(&[], &[b'm']), (&[b'm' + 1], &[b't']), (&[b't' + 1], &[])];
 
 // Following keys are all local keys, so the first byte must be 0x01.
 pub const STORE_IDENT_KEY: &[u8] = &[LOCAL_PREFIX, 0x01];
