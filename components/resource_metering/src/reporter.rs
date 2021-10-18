@@ -60,13 +60,13 @@ impl RunnableWithTimer for Reporter {
 
 impl Reporter {
     pub fn new(
-        mut clients: Vec<Box<dyn Client>>,
+        clients: Vec<Box<dyn Client>>,
         config: Config,
         scheduler: Scheduler<Task>,
     ) -> Self {
         let (tx, rx) = bounded(1024);
 
-        let pending_cnt = clients.iter_mut().map(|c| c.is_pending()).count();
+        let pending_cnt = clients.iter().filter(|c| c.is_pending()).count();
         let running_cnt = clients.len() - pending_cnt;
         let collector = (running_cnt > 0).then(|| {
             let clt = CollectorImpl::new(scheduler.clone());
@@ -107,7 +107,7 @@ impl Reporter {
         self.clients.drain_filter(|c| c.is_closed()).count();
 
         if self.collector.is_none() {
-            let pending_cnt = self.clients.iter_mut().map(|c| c.is_pending()).count();
+            let pending_cnt = self.clients.iter().filter(|c| c.is_pending()).count();
             let running_cnt = self.clients.len() - pending_cnt;
             if running_cnt > 0 {
                 let clt = CollectorImpl::new(self.scheduler.clone());
@@ -191,11 +191,11 @@ mod tests {
             OP_COUNT.fetch_add(1, SeqCst);
         }
 
-        fn is_pending(&mut self) -> bool {
+        fn is_pending(&self) -> bool {
             false
         }
 
-        fn is_closed(&mut self) -> bool {
+        fn is_closed(&self) -> bool {
             false
         }
     }

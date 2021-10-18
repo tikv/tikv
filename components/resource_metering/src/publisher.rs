@@ -80,7 +80,7 @@ impl ResourceMeteringPubSub for ResourceMeteringPublisher {
     }
 }
 
-pub struct PubClient {
+struct PubClient {
     tx: Sender<Arc<Records>>,
     is_closed: Arc<AtomicBool>,
 }
@@ -90,11 +90,11 @@ impl Client for PubClient {
         self.tx.send(records).ok();
     }
 
-    fn is_pending(&mut self) -> bool {
+    fn is_pending(&self) -> bool {
         false
     }
 
-    fn is_closed(&mut self) -> bool {
+    fn is_closed(&self) -> bool {
         self.is_closed.load(Ordering::SeqCst)
     }
 }

@@ -15,8 +15,8 @@ use tikv_util::warn;
 /// We can simply mock this interface to test without RPC.
 pub trait Client: Send {
     fn upload_records(&mut self, records: Arc<Records>);
-    fn is_pending(&mut self) -> bool;
-    fn is_closed(&mut self) -> bool;
+    fn is_pending(&self) -> bool;
+    fn is_closed(&self) -> bool;
 }
 
 /// `GrpcClient` is the default implementation of [Client], which uses gRPC
@@ -88,11 +88,11 @@ impl Client for GrpcClient {
         });
     }
 
-    fn is_pending(&mut self) -> bool {
+    fn is_pending(&self) -> bool {
         self.address.lock().unwrap().is_empty()
     }
 
-    fn is_closed(&mut self) -> bool {
+    fn is_closed(&self) -> bool {
         false
     }
 }
