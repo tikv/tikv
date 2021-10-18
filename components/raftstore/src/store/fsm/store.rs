@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::cell::Cell;
 use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
@@ -232,6 +233,10 @@ where
         &self,
         msg: RaftMessage,
     ) -> std::result::Result<(), TrySendError<RaftMessage>> {
+        fail_point!("send_raft_message_full", |_| Err(TrySendError::Full(
+            RaftMessage::default()
+        )));
+
         let id = msg.get_region_id();
 
         let mut heap_size = 0;
