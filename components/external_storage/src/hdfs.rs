@@ -167,9 +167,9 @@ mod tests {
 
     #[test]
     fn test_try_convert_to_path() {
-        let url = Url::from_str("hdfs:///some/path").unwrap();
+        let url = Url::parse("hdfs:///some/path").unwrap();
         assert_eq!(try_convert_to_path(&url), "/some/path");
-        let url = Url::from_str("hdfs://1.1.1.1/some/path").unwrap();
+        let url = Url::parse("hdfs://1.1.1.1/some/path").unwrap();
         assert_eq!(try_convert_to_path(&url), "hdfs://1.1.1.1/some/path");
     }
 }
