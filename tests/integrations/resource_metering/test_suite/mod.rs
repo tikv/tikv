@@ -1,19 +1,26 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod mock_publisher;
 mod mock_receiver_server;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use crate::resource_metering::test_suite::mock_publisher::MockPublisherServer;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::channel::oneshot;
 use futures::{select, FutureExt};
-use grpcio::{Environment, Server};
+use grpcio::{ChannelBuilder, Environment, Server, ServerBuilder};
 use kvproto::kvrpcpb::Context;
-use kvproto::resource_usage_agent::ResourceUsageRecord;
+use kvproto::resource_usage_agent::{
+    create_resource_metering_pub_sub, ResourceMeteringPubSubClient, ResourceUsageRecord,
+};
 use mock_receiver_server::MockReceiverServer;
-use resource_metering::{init_recorder, Config, ConfigManager, Task, TEST_TAG_PREFIX};
+use resource_metering::{
+    init_recorder, Config, ConfigManager, ResourceMeteringPublisher, Task, TEST_TAG_PREFIX,
+};
 use tempfile::TempDir;
+use test_util::alloc_port;
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{RocksEngine, Storage, TestEngineBuilder, TestStorageBuilder};
@@ -23,6 +30,9 @@ use tokio::runtime::{self, Runtime};
 use txn_types::{Key, TimeStamp};
 
 pub struct TestSuite {
+    publisher_server_port: u16,
+    publisher_server: Server,
+
     receiver_server: Option<Server>,
 
     storage: Storage<RocksEngine, DummyLockManager>,
@@ -33,7 +43,7 @@ pub struct TestSuite {
     rx: Receiver<Vec<ResourceUsageRecord>>,
 
     env: Arc<Environment>,
-    rt: Runtime,
+    pub rt: Runtime,
     cancel_workload: Option<oneshot::Sender<()>>,
     wait_for_cancel: Option<oneshot::Receiver<()>>,
 
@@ -71,11 +81,16 @@ impl TestSuite {
         );
         let env = Arc::new(Environment::new(2));
         let reporter_client = resource_metering::GrpcClient::new(env.clone(), receiver_address);
-        reporter.start_with_timer(resource_metering::Reporter::new(
+        let rpt = resource_metering::Reporter::new(
             vec![Box::new(reporter_client)],
             resource_metering_cfg,
             scheduler.clone(),
-        ));
+        );
+
+        let publisher_server_port = alloc_port();
+        let publisher_server = MockPublisherServer::build(publisher_server_port, env.clone(), &rpt);
+
+        reporter.start_with_timer(rpt);
 
         let (tx, rx) = unbounded();
 
@@ -85,6 +100,8 @@ impl TestSuite {
             .unwrap();
 
         Self {
+            publisher_server_port,
+            publisher_server,
             receiver_server: None,
             storage,
             reporter: Some(reporter),
@@ -221,6 +238,14 @@ impl TestSuite {
             .recv_timeout(self.get_current_cfg().report_receiver_interval.0);
     }
 
+    pub fn subscriber_client(&self) -> ResourceMeteringPubSubClient {
+        let channel = {
+            let cb = ChannelBuilder::new(self.env.clone());
+            cb.connect(fmt!("127.0.0.1:{}", self.publisher_server_port))
+        };
+        ResourceMeteringPubSubClient::new(channel)
+    }
+
     pub fn reset(&mut self) {
         self.cfg_enabled(false);
         self.cfg_receiver_address("");
@@ -238,5 +263,6 @@ impl Drop for TestSuite {
         self.reset();
         self.reporter.take().unwrap().stop_worker();
         fail::remove("cpu-record-test-filter");
+        self.rt.block_on(self.publisher_server.shutdown());
     }
 }

@@ -59,11 +59,7 @@ impl RunnableWithTimer for Reporter {
 }
 
 impl Reporter {
-    pub fn new(
-        clients: Vec<Box<dyn Client>>,
-        config: Config,
-        scheduler: Scheduler<Task>,
-    ) -> Self {
+    pub fn new(clients: Vec<Box<dyn Client>>, config: Config, scheduler: Scheduler<Task>) -> Self {
         let (tx, rx) = bounded(1024);
 
         let pending_cnt = clients.iter().filter(|c| c.is_pending()).count();

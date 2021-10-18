@@ -4,6 +4,7 @@ pub mod test_suite;
 
 pub mod test_dynamic_config;
 pub mod test_receiver;
+pub mod test_subscriber;
 
 #[cfg(target_os = "linux")]
 mod linux {
@@ -23,5 +24,8 @@ mod linux {
         test_receiver::case_alter_receiver_addr(&mut ts);
         test_receiver::case_receiver_blocking(&mut ts);
         test_receiver::case_receiver_shutdown(&mut ts);
+
+        // Pub/Sub
+        test_subscriber::case_normal(&mut ts);
     }
 }
