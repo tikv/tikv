@@ -26,6 +26,6 @@ mod linux {
         test_receiver::case_receiver_shutdown(&mut ts);
 
         // Pub/Sub
-        test_subscriber::case_normal(&mut ts);
+        test_subscriber::case_basic(&mut ts);
     }
 }

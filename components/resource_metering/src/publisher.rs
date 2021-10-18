@@ -57,12 +57,9 @@ impl ResourceMeteringPubSub for ResourceMeteringPublisher {
                     req.set_resource_group_tag(tag.clone());
                     req.set_record_list_timestamp_sec(record.timestamps.clone());
                     req.set_record_list_cpu_time_ms(record.cpu_time_list.clone());
-                    if let Err(err) = sink
-                        .send((CpuTimeRecord::default(), WriteFlags::default()))
-                        .await
-                    {
+                    if let Err(err) = sink.send((req, WriteFlags::default())).await {
                         warn!("failed to send records"; "error" => ?err);
-                        break;
+                        return;
                     };
                 }
                 let others = &records.others;

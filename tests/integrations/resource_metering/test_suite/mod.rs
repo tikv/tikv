@@ -10,15 +10,11 @@ use crate::resource_metering::test_suite::mock_publisher::MockPublisherServer;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::channel::oneshot;
 use futures::{select, FutureExt};
-use grpcio::{ChannelBuilder, Environment, Server, ServerBuilder};
+use grpcio::{ChannelBuilder, Environment, Server};
 use kvproto::kvrpcpb::Context;
-use kvproto::resource_usage_agent::{
-    create_resource_metering_pub_sub, ResourceMeteringPubSubClient, ResourceUsageRecord,
-};
+use kvproto::resource_usage_agent::{ResourceMeteringPubSubClient, ResourceUsageRecord};
 use mock_receiver_server::MockReceiverServer;
-use resource_metering::{
-    init_recorder, Config, ConfigManager, ResourceMeteringPublisher, Task, TEST_TAG_PREFIX,
-};
+use resource_metering::{init_recorder, Config, ConfigManager, Task, TEST_TAG_PREFIX};
 use tempfile::TempDir;
 use test_util::alloc_port;
 use tikv::config::{ConfigController, Module, TiKvConfig};
@@ -88,7 +84,9 @@ impl TestSuite {
         );
 
         let publisher_server_port = alloc_port();
-        let publisher_server = MockPublisherServer::build(publisher_server_port, env.clone(), &rpt);
+        let mut publisher_server =
+            MockPublisherServer::build(publisher_server_port, env.clone(), &rpt);
+        publisher_server.start();
 
         reporter.start_with_timer(rpt);
 
@@ -241,7 +239,7 @@ impl TestSuite {
     pub fn subscriber_client(&self) -> ResourceMeteringPubSubClient {
         let channel = {
             let cb = ChannelBuilder::new(self.env.clone());
-            cb.connect(fmt!("127.0.0.1:{}", self.publisher_server_port))
+            cb.connect(&format!("127.0.0.1:{}", self.publisher_server_port))
         };
         ResourceMeteringPubSubClient::new(channel)
     }
@@ -263,6 +261,6 @@ impl Drop for TestSuite {
         self.reset();
         self.reporter.take().unwrap().stop_worker();
         fail::remove("cpu-record-test-filter");
-        self.rt.block_on(self.publisher_server.shutdown());
+        self.rt.block_on(self.publisher_server.shutdown()).ok();
     }
 }
