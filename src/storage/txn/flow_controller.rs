@@ -992,6 +992,12 @@ mod tests {
         let flow_controller = FlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
 
         assert_eq!(flow_controller.consume(2000), Duration::ZERO);
+        loop {
+            if flow_controller.total_bytes_consumed() == 0 {
+                break;
+            }
+            std::thread::sleep(TICK_DURATION);
+        }
 
         // exceeds the threshold on start
         stub.0.num_memtable_files.store(8, Ordering::Relaxed);
@@ -1039,6 +1045,12 @@ mod tests {
         let flow_controller = FlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
 
         assert_eq!(flow_controller.consume(2000), Duration::ZERO);
+        loop {
+            if flow_controller.total_bytes_consumed() == 0 {
+                break;
+            }
+            std::thread::sleep(TICK_DURATION);
+        }
 
         // exceeds the threshold
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
