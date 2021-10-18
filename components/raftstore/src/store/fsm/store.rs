@@ -23,6 +23,7 @@ use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use kvproto::import_sstpb::SstMeta;
+use kvproto::import_sstpb::SwitchMode;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::QueryStats;
 use kvproto::pdpb::StoreStats;
@@ -2157,6 +2158,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "store_id" => self.fsm.store.id,
                 "region_id" => region_id,
             );
+
             let gc_snap = PeerMsg::CasualMessage(CasualMessage::GcSnap { snaps });
             match self.ctx.router.send(region_id, gc_snap) {
                 Ok(()) => Ok(()),
@@ -2173,7 +2175,16 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                         "snaps" => ?snaps,
                     );
                     for (key, is_sending) in snaps {
-                        let snap = self.ctx.snap_mgr.get_snapshot_for_gc(&key, is_sending)?;
+                        let snap = match self.ctx.snap_mgr.get_snapshot_for_gc(&key, is_sending) {
+                            Ok(snap) => snap,
+                            Err(e) => {
+                                error!(%e;
+                                    "failed to load snapshot";
+                                    "snapshot" => ?key,
+                                );
+                                continue;
+                            }
+                        };
                         self.ctx
                             .snap_mgr
                             .delete_snapshot(&key, snap.as_ref(), false);
@@ -2272,7 +2283,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER, T> {
     fn on_validate_sst_result(&mut self, ssts: Vec<SstMeta>) {
-        if ssts.is_empty() {
+        if ssts.is_empty() || self.ctx.importer.get_mode() == SwitchMode::Import {
             return;
         }
         // A stale peer can still ingest a stale SST before it is
@@ -2343,7 +2354,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             }
         }
 
-        if !validate_ssts.is_empty() {
+        // When there is an import job running, the region which this sst belongs may has not been
+        //  split from the origin region because the apply thread is so busy that it can not apply
+        //  SplitRequest as soon as possible. So we can not delete this sst file.
+        if !validate_ssts.is_empty() && self.ctx.importer.get_mode() != SwitchMode::Import {
             let task = CleanupSSTTask::ValidateSST {
                 ssts: validate_ssts,
             };
