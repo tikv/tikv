@@ -5490,8 +5490,10 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#dc47a87b52aaa5ff150d179f47ba6c25dc441227"
+source = "git+https://github.com/winoros/tipb.git?branch=sample-rate#faa265605b59c32d2c4eba63952f25ee873e3358"
 dependencies = [
+ "futures 0.3.15",
+ "grpcio",
  "lazy_static",
  "prost",
  "prost-derive",
