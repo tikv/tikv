@@ -32139,10 +32139,5 @@
   "timezone": "browser",
   "title": "Test-Cluster-TiKV-Details",
   "uid": "RDVQiEzZz",
-<<<<<<< HEAD
-  "version": 4
-}
-=======
   "version": 1
 }
->>>>>>> 8432241b0... grafana: add instance to flow control metrics legend (#10749)

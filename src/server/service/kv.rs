@@ -44,12 +44,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::memory::{MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
 use raftstore::store::CheckLeaderTask;
 use raftstore::store::{Callback, CasualMessage, RaftCmdExtraOpts};
-<<<<<<< HEAD
-use raftstore::{DiscardReason, Error as RaftStoreError};
-=======
 use raftstore::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
-use tikv_alloc::trace::MemoryTraceGuard;
->>>>>>> 8045e1b18... server: fix channel full could break the raft connection (#11048)
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::sys::memory_usage_reaches_high_water;
