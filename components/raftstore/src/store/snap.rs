@@ -1247,6 +1247,11 @@ impl SnapManager {
         let _lock = self.core.registry.rl();
         let base = &self.core.base;
         let s = Snapshot::new(base, key, is_sending, CheckPolicy::None, &self.core)?;
+        fail_point!(
+            "get_snapshot_for_gc",
+            key.region_id == 2 && key.idx == 1,
+            |_| { Err(box_err!("invalid cf number of snapshot meta")) }
+        );
         Ok(Box::new(s))
     }
 
