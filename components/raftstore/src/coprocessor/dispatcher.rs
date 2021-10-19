@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath] called by Fsm on_ready_compute_hash
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;

@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use lazy_static::lazy_static;
 use prometheus::{exponential_buckets, register_histogram, Histogram};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
