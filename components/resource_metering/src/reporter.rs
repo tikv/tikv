@@ -121,7 +121,7 @@ impl Reporter {
         // Whether clients exist or not, records should be taken in order to reset.
         let records = Arc::new(std::mem::take(&mut self.records));
         for c in &mut self.clients {
-            if c.as_mut().is_pending() {
+            if c.is_pending() {
                 continue;
             }
             c.as_mut().upload_records(records.clone());
