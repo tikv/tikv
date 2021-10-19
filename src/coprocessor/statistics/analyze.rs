@@ -438,6 +438,12 @@ trait RowSampleCollector: Send {
     );
     fn sampling(&mut self, data: Vec<Vec<u8>>);
     fn to_proto(&mut self) -> tipb::RowSampleCollector;
+    fn get_reported_memory_usage(&mut self) -> usize {
+        self.mut_base().reported_memory_usage
+    }
+    fn get_memory_usage(&mut self) -> usize {
+        self.mut_base().memory_usage
+    }
 }
 
 #[derive(Clone)]
@@ -454,7 +460,7 @@ struct BaseRowSampleCollector {
 
 impl Default for BaseRowSampleCollector {
     fn default() -> Self {
-        BaseRowSampleCollector{
+        BaseRowSampleCollector {
             null_count: vec![],
             count: 0,
             fm_sketches: vec![],
@@ -468,10 +474,7 @@ impl Default for BaseRowSampleCollector {
 }
 
 impl BaseRowSampleCollector {
-    fn new(
-        max_fm_sketch_size: usize,
-        col_and_group_len: usize,
-    ) -> BaseRowSampleCollector {
+    fn new(max_fm_sketch_size: usize, col_and_group_len: usize) -> BaseRowSampleCollector {
         BaseRowSampleCollector {
             null_count: vec![0; col_and_group_len],
             count: 0,
@@ -588,7 +591,7 @@ impl BernoulliRowSampleCollector {
 
 impl Default for BernoulliRowSampleCollector {
     fn default() -> Self {
-        BernoulliRowSampleCollector{
+        BernoulliRowSampleCollector {
             base: Default::default(),
             samples: Vec::new(),
             sample_rate: 0.0,
@@ -607,7 +610,12 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
         columns_info: &[tipb::ColumnInfo],
         column_groups: &[tipb::AnalyzeColumnGroup],
     ) {
-        return self.base.collect_column_group(columns_val, collation_keys_val, columns_info, column_groups)
+        self.base.collect_column_group(
+            columns_val,
+            collation_keys_val,
+            columns_info,
+            column_groups,
+        );
     }
     fn collect_column(
         &mut self,
@@ -615,7 +623,8 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
         collation_keys_val: Vec<Vec<u8>>,
         columns_info: &[tipb::ColumnInfo],
     ) {
-        self.base.collect_column(&columns_val, collation_keys_val, columns_info);
+        self.base
+            .collect_column(&columns_val, collation_keys_val, columns_info);
         self.sampling(columns_val);
     }
     fn sampling(&mut self, data: Vec<Vec<u8>>) {
@@ -687,7 +696,12 @@ impl RowSampleCollector for ReservoirRowSampleCollector {
         columns_info: &[tipb::ColumnInfo],
         column_groups: &[tipb::AnalyzeColumnGroup],
     ) {
-        self.base.collect_column_group(columns_val, collation_keys_val, columns_info, column_groups);
+        self.base.collect_column_group(
+            columns_val,
+            collation_keys_val,
+            columns_info,
+            column_groups,
+        );
     }
 
     fn collect_column(
@@ -696,7 +710,8 @@ impl RowSampleCollector for ReservoirRowSampleCollector {
         collation_keys_val: Vec<Vec<u8>>,
         columns_info: &[tipb::ColumnInfo],
     ) {
-        self.base.collect_column(&columns_val, collation_keys_val, columns_info);
+        self.base
+            .collect_column(&columns_val, collation_keys_val, columns_info);
         self.sampling(columns_val);
     }
 
@@ -1191,7 +1206,7 @@ mod tests {
     }
 
     #[test]
-    fn test_row_sample_collector() {
+    fn test_row_reservoir_sample_collector() {
         let sample_num = 20;
         let row_num = 100;
         let loop_cnt = 1000;
@@ -1202,8 +1217,8 @@ mod tests {
                 datum::encode_value(&mut EvalContext::default(), &[Datum::I64(i as i64)]).unwrap(),
             );
         }
-        for _loop_i in 0..loop_cnt {
-            let mut collector = ReservoirRowSampleCollector::new(sample_num, 0, 1000, 1);
+        for loop_i in 0..loop_cnt {
+            let mut collector = ReservoirRowSampleCollector::new(sample_num, 1000, 1);
             for row in &nums {
                 collector.sampling([row.clone()].to_vec());
             }
@@ -1213,11 +1228,62 @@ mod tests {
             }
 
             // Test memory usage tracing is correct.
-            collector.report_memory_usage(true);
-            assert_eq!(collector.reported_memory_usage, collector.memory_usage);
+            collector.mut_base().report_memory_usage(true);
+            assert_eq!(
+                collector.get_reported_memory_usage(),
+                collector.get_memory_usage()
+            );
             if loop_i % 2 == 0 {
                 collector.to_proto();
-                assert_eq!(collector.memory_usage, 0);
+                assert_eq!(collector.get_memory_usage(), 0);
+                assert_eq!(MEMTRACE_ANALYZE.sum(), 0);
+            }
+            drop(collector);
+            assert_eq!(MEMTRACE_ANALYZE.sum(), 0);
+        }
+
+        let exp_freq = sample_num as f64 * loop_cnt as f64 / row_num as f64;
+        let delta = 0.5;
+        for (_, v) in item_cnt.into_iter() {
+            assert!(
+                v as f64 >= exp_freq / (1.0 + delta) && v as f64 <= exp_freq * (1.0 + delta),
+                "v: {}",
+                v
+            );
+        }
+    }
+
+    #[test]
+    fn test_row_bernoulli_sample_collector() {
+        let sample_num = 20;
+        let row_num = 100;
+        let loop_cnt = 1000;
+        let mut item_cnt: HashMap<Vec<u8>, usize> = HashMap::new();
+        let mut nums: Vec<Vec<u8>> = Vec::with_capacity(row_num);
+        for i in 0..row_num {
+            nums.push(
+                datum::encode_value(&mut EvalContext::default(), &[Datum::I64(i as i64)]).unwrap(),
+            );
+        }
+        for loop_i in 0..loop_cnt {
+            let mut collector =
+                BernoulliRowSampleCollector::new(sample_num as f64 / row_num as f64, 1000, 1);
+            for row in &nums {
+                collector.sampling([row.clone()].to_vec());
+            }
+            for sample in &collector.samples {
+                *item_cnt.entry(sample[0].clone()).or_insert(0) += 1;
+            }
+
+            // Test memory usage tracing is correct.
+            collector.mut_base().report_memory_usage(true);
+            assert_eq!(
+                collector.get_reported_memory_usage(),
+                collector.get_memory_usage()
+            );
+            if loop_i % 2 == 0 {
+                collector.to_proto();
+                assert_eq!(collector.get_memory_usage(), 0);
                 assert_eq!(MEMTRACE_ANALYZE.sum(), 0);
             }
             drop(collector);
