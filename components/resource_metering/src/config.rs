@@ -44,7 +44,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            enabled: false,
+            enabled: true,
             receiver_address: "".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
