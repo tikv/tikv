@@ -22,7 +22,7 @@ use super::*;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
-use engine_rocks::{PerfLevel, RocksEngine, RocksSnapshot};
+use engine_rocks::{RPerfLevel, RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
 use raftstore::errors::Error as RaftError;
@@ -359,7 +359,7 @@ impl Simulator for ServerCluster {
             &server_cfg.value().clone(),
             cop_read_pool.handle(),
             concurrency_manager.clone(),
-            PerfLevel::EnableCount,
+            RPerfLevel::EnableCount,
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;
