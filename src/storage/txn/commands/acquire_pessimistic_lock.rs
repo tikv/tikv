@@ -43,6 +43,7 @@ command! {
             return_values: bool,
             min_commit_ts: TimeStamp,
             old_values: OldValues,
+            check_existence: bool,
         }
 }
 
@@ -87,6 +88,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         let rows = keys.len();
         let mut res = if self.return_values {
             Ok(PessimisticLockRes::Values(vec![]))
+        } else if self.check_existence {
+            Ok(PessimisticLockRes::Existence(vec![]))
         } else {
             Ok(PessimisticLockRes::Empty)
         };
@@ -100,12 +103,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 should_not_exist,
                 self.lock_ttl,
                 self.for_update_ts,
-                self.return_values,
+                self.return_values || self.check_existence,
                 self.min_commit_ts,
                 need_old_value,
             ) {
                 Ok((val, old_value)) => {
-                    if self.return_values {
+                    if self.return_values || self.check_existence {
                         res.as_mut().unwrap().push(val);
                     }
                     if old_value.valid() {
