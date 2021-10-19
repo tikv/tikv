@@ -60,9 +60,11 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
         }
+        let (tx, _rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
             self.engine,
             RaftStoreBlackHole,
+            tx,
             self.gc_config.unwrap_or_default(),
             Default::default(),
         );
