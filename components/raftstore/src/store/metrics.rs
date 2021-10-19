@@ -310,7 +310,7 @@ lazy_static! {
         ).unwrap();
     pub static ref STORE_WF_PERSIST_LOG_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
-            "tikv_raftstore_store_persist_duration_seconds",
+            "tikv_raftstore_store_wf_persist_duration_seconds",
             "Bucketed histogram of proposals' persist duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();

@@ -2004,6 +2004,25 @@ where
 
         let state_role = ready.ss().map(|ss| ss.raft_state);
         let has_new_entries = !ready.entries().is_empty();
+        let mut request_times = vec![];
+        if ctx.raft_metrics.waterfall_metrics {
+            let mut now = None;
+            for entry in ready.entries() {
+                if let Some((term, times)) = self.proposals.find_request_times(entry.get_index()) {
+                    if entry.term == term {
+                        request_times.extend_from_slice(times);
+                        if now.is_none() {
+                            now = Some(TiInstant::now());
+                        }
+                        for t in times {
+                            ctx.raft_metrics.wf_send_to_queue.observe(duration_to_sec(
+                                now.unwrap().saturating_duration_since(*t),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         let (res, mut task) = match self
             .mut_store()
             .handle_raft_ready(&mut ready, destroy_regions)
@@ -2025,25 +2044,8 @@ where
                     task.messages = self.build_raft_messages(ctx, persisted_msgs);
                 }
 
-                if ctx.raft_metrics.waterfall_metrics {
-                    let mut now = None;
-                    for entry in ready.entries() {
-                        if let Some((term, times)) =
-                            self.proposals.find_request_times(entry.get_index())
-                        {
-                            if entry.term == term {
-                                task.request_times.extend_from_slice(times);
-                                if now.is_none() {
-                                    now = Some(TiInstant::now());
-                                }
-                                for t in times {
-                                    ctx.raft_metrics.wf_send_to_queue.observe(duration_to_sec(
-                                        now.unwrap().saturating_duration_since(*t),
-                                    ));
-                                }
-                            }
-                        }
-                    }
+                if !request_times.is_empty() {
+                    task.request_times = request_times;
                 }
 
                 self.write_router.send_write_msg(
