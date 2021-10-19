@@ -5,24 +5,6 @@ edition = "2018"
 publish = false
 description = "Vector expressions of query engine to run TiDB pushed down executors"
 
-[features]
-default = ["protobuf-codec"]
-protobuf-codec = [
-  "protobuf/bytes",
-  "codec/protobuf-codec",
-  "tidb_query_common/protobuf-codec",
-  "tidb_query_datatype/protobuf-codec",
-  "tikv_util/protobuf-codec",
-  "file_system/protobuf-codec",
-]
-prost-codec = [
-  "codec/prost-codec",
-  "tidb_query_common/prost-codec",
-  "tidb_query_datatype/prost-codec",
-  "tikv_util/prost-codec",
-  "file_system/prost-codec",
-]
-
 [dependencies]
 rand = "0.8.3"
 safemem = { version = "0.3", default-features = false }

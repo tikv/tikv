@@ -5,21 +5,6 @@ edition = "2018"
 publish = false
 description = "Vector aggr functions of query engine to run TiDB pushed down executors"
 
-[features]
-default = ["protobuf-codec"]
-protobuf-codec = [
-  "tidb_query_common/protobuf-codec",
-  "tidb_query_datatype/protobuf-codec",
-  "tidb_query_expr/protobuf-codec",
-  "tikv_util/protobuf-codec",
-]
-prost-codec = [
-  "tidb_query_common/prost-codec",
-  "tidb_query_datatype/prost-codec",
-  "tidb_query_expr/prost-codec",
-  "tikv_util/prost-codec",
-]
-
 [dependencies]
 match_template = { path = "../match_template" }
 tidb_query_codegen = { path = "../tidb_query_codegen" }

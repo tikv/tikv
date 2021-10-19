@@ -84,6 +84,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dabe5a181f83789739c194cbe5a897dde195078fac08568d09221fd6137a7ba8"
 
 [[package]]
+name = "arc-swap"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6df5aef5c5830360ce5218cecb8f018af3438af5686ae945094affc86fdec63"
+
+[[package]]
 name = "arrayvec"
 version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -623,7 +629,6 @@ dependencies = [
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
- "prost",
  "protobuf",
  "raft",
  "raftstore",
@@ -1103,17 +1108,6 @@ name = "derivative"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fcc3dd5e9e9c0b295d6e1e4d811fb6f157d5ffd784b8d202fc62eac8035a770b"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "derive-new"
-version = "0.5.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71f31892cd5c62e414316f2963c5689242c43d8e7bbcaaeca97e5e28c95d91d9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1925,13 +1919,11 @@ version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "24d99e00eed7e0a04ee2705112e7cfdbe1a3cc771147f22f016a8cd2d002187b"
 dependencies = [
- "bytes 1.0.1",
  "futures 0.3.15",
  "grpcio-sys",
  "libc 0.2.100",
  "log",
  "parking_lot",
- "prost",
  "protobuf",
 ]
 
@@ -1941,12 +1933,7 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4caa0700833147dcfbe4f0758bd92545cc0f4506ee7fa154e499745a8b24e86c"
 dependencies = [
- "derive-new",
- "prost",
- "prost-build",
- "prost-types",
  "protobuf",
- "tempfile",
 ]
 
 [[package]]
@@ -1958,7 +1945,6 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "log",
- "prost",
  "protobuf",
 ]
 
@@ -2340,9 +2326,6 @@ source = "git+https://github.com/pingcap/kvproto.git#d6dd964d6b8cfcb28d1ffa07d90
 dependencies = [
  "futures 0.3.15",
  "grpcio",
- "lazy_static",
- "prost",
- "prost-derive",
  "protobuf",
  "protobuf-build",
  "raft-proto",
@@ -3559,13 +3542,9 @@ checksum = "6a7266835d38c38c73b091a24412de1f4b4382a5195fab1ec038161582b03b78"
 dependencies = [
  "bitflags",
  "grpcio-compiler",
- "proc-macro2",
- "prost-build",
  "protobuf",
  "protobuf-codegen",
- "quote",
  "regex",
- "syn",
 ]
 
 [[package]]
@@ -3607,6 +3586,9 @@ dependencies = [
  "raft-proto",
  "rand 0.8.3",
  "slog",
+ "slog-envlogger",
+ "slog-stdlog",
+ "slog-term",
  "thiserror",
 ]
 
@@ -3639,8 +3621,6 @@ version = "0.6.0"
 source = "git+https://github.com/tikv/raft-rs?branch=master#e6d28ef0f509c072e13288409835d5764a3b175e"
 dependencies = [
  "bytes 1.0.1",
- "lazy_static",
- "prost",
  "protobuf",
  "protobuf-build",
 ]
@@ -3705,7 +3685,6 @@ dependencies = [
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
- "prost",
  "protobuf",
  "raft",
  "raft-proto",
@@ -4026,7 +4005,6 @@ dependencies = [
  "panic_hook",
  "pd_client",
  "prometheus",
- "prost",
  "protobuf",
  "raft",
  "raftstore",
@@ -4622,11 +4600,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "slog-envlogger"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "906a1a0bc43fed692df4b82a5e2fbfc3733db8dad8bb514ab27a4f23ad04f5c0"
+dependencies = [
+ "log",
+ "regex",
+ "slog",
+ "slog-async",
+ "slog-scope",
+ "slog-stdlog",
+ "slog-term",
+]
+
+[[package]]
 name = "slog-global"
 version = "0.1.0"
 source = "git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9#d592f88e4dbba5eb439998463054f1a44fbf17b9"
 dependencies = [
- "arc-swap",
+ "arc-swap 0.4.8",
  "lazy_static",
  "log",
  "slog",
@@ -4642,6 +4635,28 @@ dependencies = [
  "serde",
  "serde_json",
  "slog",
+]
+
+[[package]]
+name = "slog-scope"
+version = "4.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f95a4b4c3274cd2869549da82b57ccc930859bdbf5bcea0424bc5f140b3c786"
+dependencies = [
+ "arc-swap 1.4.0",
+ "lazy_static",
+ "slog",
+]
+
+[[package]]
+name = "slog-stdlog"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8228ab7302adbf4fcb37e66f3cda78003feb521e7fd9e3847ec117a7784d0f5a"
+dependencies = [
+ "log",
+ "slog",
+ "slog-scope",
 ]
 
 [[package]]
@@ -5456,7 +5471,6 @@ dependencies = [
  "procinfo",
  "prometheus",
  "prometheus-static-metric",
- "prost",
  "protobuf",
  "raft",
  "raft_log_engine",
@@ -5734,9 +5748,6 @@ name = "tipb"
 version = "0.0.1"
 source = "git+https://github.com/pingcap/tipb.git#dc47a87b52aaa5ff150d179f47ba6c25dc441227"
 dependencies = [
- "lazy_static",
- "prost",
- "prost-derive",
  "protobuf",
  "protobuf-build",
 ]

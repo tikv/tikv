@@ -13,7 +13,6 @@ use tokio::sync::Semaphore;
 
 use kvproto::kvrpcpb::{self, IsolationLevel};
 use kvproto::{coprocessor as coppb, errorpb};
-#[cfg(feature = "protobuf-codec")]
 use protobuf::CodedInputStream;
 use protobuf::Message;
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
@@ -151,12 +150,10 @@ impl<E: Engine> Endpoint<E> {
         // This `Parser` is here because rust-proto supports customising its
         // recursion limit and Prost does not. Therefore we end up doing things
         // a bit differently for the two codecs.
-        #[cfg(feature = "protobuf-codec")]
         struct Parser<'a> {
             input: CodedInputStream<'a>,
         }
 
-        #[cfg(feature = "protobuf-codec")]
         impl<'a> Parser<'a> {
             fn new(data: &'a [u8], recursion_limit: u32) -> Parser<'a> {
                 let mut input = CodedInputStream::from_bytes(data);
@@ -166,23 +163,6 @@ impl<E: Engine> Endpoint<E> {
 
             fn merge_to(&mut self, target: &mut impl Message) -> Result<()> {
                 box_try!(target.merge_from(&mut self.input));
-                Ok(())
-            }
-        }
-
-        #[cfg(feature = "prost-codec")]
-        struct Parser<'a> {
-            input: &'a [u8],
-        }
-
-        #[cfg(feature = "prost-codec")]
-        impl<'a> Parser<'a> {
-            fn new(input: &'a [u8], _: u32) -> Parser<'a> {
-                Parser { input }
-            }
-
-            fn merge_to(&self, target: &mut impl Message) -> Result<()> {
-                box_try!(target.merge_from_bytes(&self.input));
                 Ok(())
             }
         }
