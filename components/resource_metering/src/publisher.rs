@@ -6,8 +6,8 @@ use crate::{Client, Records, Reporter};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crossbeam::channel::{bounded, Sender};
-use futures::SinkExt;
+use futures::channel::mpsc::{channel, Sender};
+use futures::{SinkExt, StreamExt};
 use grpcio::{RpcContext, ServerStreamingSink, WriteFlags};
 use kvproto::resource_usage_agent::{CpuTimeRecord, Request};
 use kvproto::resource_usage_agent_grpc::ResourceMeteringPubSub;
@@ -34,7 +34,7 @@ impl ResourceMeteringPubSub for ResourceMeteringPublisher {
         mut sink: ServerStreamingSink<CpuTimeRecord>,
     ) {
         let is_closed = Arc::new(AtomicBool::new(false));
-        let (tx, rx) = bounded(1);
+        let (tx, mut rx) = channel(1);
 
         self.client_registry.register(Box::new(PubClient {
             tx,
@@ -46,8 +46,8 @@ impl ResourceMeteringPubSub for ResourceMeteringPublisher {
                 is_closed.store(true, Ordering::SeqCst);
             }}
             loop {
-                let records = rx.recv();
-                if records.is_err() {
+                let records = rx.next().await;
+                if records.is_none() {
                     break;
                 }
 
@@ -84,7 +84,7 @@ struct PubClient {
 
 impl Client for PubClient {
     fn upload_records(&mut self, records: Arc<Records>) {
-        self.tx.send(records).ok();
+        self.tx.try_send(records).ok();
     }
 
     fn is_pending(&self) -> bool {

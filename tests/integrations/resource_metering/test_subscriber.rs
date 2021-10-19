@@ -26,9 +26,10 @@ pub fn case_basic(test_suite: &mut TestSuite) {
     wl.shuffle(&mut rand::thread_rng());
     test_suite.setup_workload(wl);
 
+    let client = test_suite.subscriber_client();
+
     // one subscriber
     {
-        let client = test_suite.subscriber_client();
         let stream = client.sub_cpu_time_record(&Request::default()).unwrap();
         let res = test_suite.rt.block_on(async move {
             let mut res: HashMap<String, (Vec<u64>, Vec<u32>)> = HashMap::new();
@@ -60,9 +61,7 @@ pub fn case_basic(test_suite: &mut TestSuite) {
 
     // two subscribers
     {
-        let client = test_suite.subscriber_client();
         let stream1 = client.sub_cpu_time_record(&Request::default()).unwrap();
-        let client = test_suite.subscriber_client();
         let stream2 = client.sub_cpu_time_record(&Request::default()).unwrap();
         let (res1, res2) = test_suite.rt.block_on(async move {
             let mut res1: HashMap<String, (Vec<u64>, Vec<u32>)> = HashMap::new();
