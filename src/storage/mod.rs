@@ -404,23 +404,23 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Check whether a raw kv command or not.
     #[inline]
     fn is_raw_command(cmd: CommandKind) -> bool {
-        match cmd {
+        matches!(
+            cmd,
             CommandKind::raw_batch_get_command
-            | CommandKind::raw_get
-            | CommandKind::raw_batch_get
-            | CommandKind::raw_scan
-            | CommandKind::raw_batch_scan
-            | CommandKind::raw_put
-            | CommandKind::raw_batch_put
-            | CommandKind::raw_delete
-            | CommandKind::raw_delete_range
-            | CommandKind::raw_batch_delete
-            | CommandKind::raw_get_key_ttl
-            | CommandKind::raw_compare_and_swap
-            | CommandKind::raw_atomic_store
-            | CommandKind::raw_checksum => true,
-            _ => false,
-        }
+                | CommandKind::raw_get
+                | CommandKind::raw_batch_get
+                | CommandKind::raw_scan
+                | CommandKind::raw_batch_scan
+                | CommandKind::raw_put
+                | CommandKind::raw_batch_put
+                | CommandKind::raw_delete
+                | CommandKind::raw_delete_range
+                | CommandKind::raw_batch_delete
+                | CommandKind::raw_get_key_ttl
+                | CommandKind::raw_compare_and_swap
+                | CommandKind::raw_atomic_store
+                | CommandKind::raw_checksum
+        )
     }
 
     /// Check whether a trancsation kv command or not.
