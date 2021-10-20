@@ -31,13 +31,12 @@ use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
 use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
-use tikv_util::{callback::must_call, deadline::Deadline, time::Instant};
+use tikv_util::{deadline::Deadline, time::Instant};
 use txn_types::TimeStamp;
 
 use crate::server::lock_manager::waiter_manager;
 use crate::storage::kv::{
-    drop_snapshot_callback, with_tls_engine, Engine, ExtCallback, Result as EngineResult,
-    SnapContext, Statistics,
+    self, with_tls_engine, Engine, ExtCallback, Result as EngineResult, SnapContext, Statistics,
 };
 use crate::storage::lock_manager::{self, DiagnosticContext, LockManager, WaitTimeout};
 use crate::storage::metrics::{
@@ -411,76 +410,68 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    /// Initiates an async operation to get a snapshot from the storage engine, then execute the
-    /// task in the sched pool.
+    /// Executes the task in the sched pool.
     fn execute(&self, mut task: Task) {
-        let cid = task.cid;
-        let tag = task.cmd.tag();
-        let ctx = task.cmd.ctx().clone();
         let sched = self.clone();
+        self.get_sched_pool(task.cmd.priority())
+            .pool
+            .spawn(async move {
+                if sched.check_task_deadline_exceeded(&task) {
+                    return;
+                }
 
-        let cb = must_call(
-            move |(cb_ctx, snapshot)| {
-                debug!(
-                    "receive snapshot finish msg";
-                    "cid" => task.cid, "cb_ctx" => ?cb_ctx
-                );
+                let tag = task.cmd.tag();
+                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
 
-                match snapshot {
-                    Ok(snapshot) => {
-                        SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
-
-                        if let Some(term) = cb_ctx.term {
-                            task.cmd.ctx_mut().set_term(term);
-                        }
-                        task.extra_op = cb_ctx.txn_extra_op;
-
+                let snap_ctx = SnapContext {
+                    pb_ctx: task.cmd.ctx(),
+                    ..Default::default()
+                };
+                // The program is currently in scheduler worker threads.
+                // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
+                match unsafe {
+                    with_tls_engine(|engine: &E| kv::snapshot_for_write(engine, snap_ctx))
+                }
+                .await
+                {
+                    Ok((cb_ctx, snapshot)) => {
                         debug!(
-                            "process cmd with snapshot";
+                            "receive snapshot finish msg";
                             "cid" => task.cid, "cb_ctx" => ?cb_ctx
                         );
-                        sched.process_by_worker(snapshot, task);
-                    }
-                    Err(err) => {
-                        SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
 
-                        info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
-                        sched
-                            .get_sched_pool(task.cmd.priority())
-                            .clone()
-                            .pool
-                            .spawn(async move {
+                        match snapshot {
+                            Ok(snapshot) => {
+                                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
+
+                                if let Some(term) = cb_ctx.term {
+                                    task.cmd.ctx_mut().set_term(term);
+                                }
+                                task.extra_op = cb_ctx.txn_extra_op;
+
+                                debug!(
+                                    "process cmd with snapshot";
+                                    "cid" => task.cid, "cb_ctx" => ?cb_ctx
+                                );
+                                sched.process(snapshot, task).await;
+                            }
+                            Err(err) => {
+                                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
+
+                                info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
                                 sched.finish_with_err(task.cid, Error::from(err));
-                            })
-                            .unwrap();
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
+
+                        info!("engine async_snapshot failed"; "err" => ?e);
+                        sched.finish_with_err(task.cid, e);
                     }
                 }
-            },
-            drop_snapshot_callback::<E>,
-        );
-
-        let f = |engine: &E| {
-            let snap_ctx = SnapContext {
-                pb_ctx: &ctx,
-                ..Default::default()
-            };
-            if let Err(e) = engine.async_snapshot(snap_ctx, cb) {
-                SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
-
-                info!("engine async_snapshot failed"; "err" => ?e);
-                self.finish_with_err(cid, e);
-            } else {
-                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
-            }
-        };
-
-        if let Some(engine) = self.engine.as_ref() {
-            f(engine)
-        } else {
-            // The program is currently in scheduler worker threads.
-            // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
-            unsafe { with_tls_engine(f) }
-        }
+            })
+            .unwrap();
     }
 
     /// Calls the callback with an error.
@@ -613,57 +604,48 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         // It won't release locks here until write finished.
     }
 
-    /// Delivers a command to a worker thread for processing.
-    fn process_by_worker(self, snapshot: E::Snap, task: Task) {
+    /// Process the task in the current thread.
+    async fn process(self, snapshot: E::Snap, task: Task) {
         if self.check_task_deadline_exceeded(&task) {
             return;
         }
 
-        let tag = task.cmd.tag();
         let resource_tag = ResourceMeteringTag::from_rpc_context(task.cmd.ctx());
-        self.get_sched_pool(task.cmd.priority())
-            .clone()
-            .pool
-            .spawn(
-                async move {
-                    fail_point!("scheduler_async_snapshot_finish");
-                    SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
+        async {
+            let tag = task.cmd.tag();
+            fail_point!("scheduler_async_snapshot_finish");
+            SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
-                    if self.check_task_deadline_exceeded(&task) {
-                        return;
-                    }
+            let timer = Instant::now_coarse();
 
-                    let timer = Instant::now_coarse();
+            let region_id = task.cmd.ctx().get_region_id();
+            let ts = task.cmd.ts();
+            let mut statistics = Statistics::default();
 
-                    let region_id = task.cmd.ctx().get_region_id();
-                    let ts = task.cmd.ts();
-                    let mut statistics = Statistics::default();
-
-                    if task.cmd.readonly() {
-                        self.process_read(snapshot, task, &mut statistics);
-                    } else {
-                        // Safety: `self.sched_pool` ensures a TLS engine exists.
-                        unsafe {
-                            with_tls_engine(|engine| {
-                                self.process_write(engine, snapshot, task, &mut statistics)
-                            });
-                        }
-                    };
-                    tls_collect_scan_details(tag.get_str(), &statistics);
-                    let elapsed = timer.saturating_elapsed();
-                    slow_log!(
-                        elapsed,
-                        "[region {}] scheduler handle command: {}, ts: {}",
-                        region_id,
-                        tag,
-                        ts
-                    );
-
-                    tls_collect_read_duration(tag.get_str(), elapsed);
+            if task.cmd.readonly() {
+                self.process_read(snapshot, task, &mut statistics);
+            } else {
+                // Safety: `self.sched_pool` ensures a TLS engine exists.
+                unsafe {
+                    with_tls_engine(|engine| {
+                        self.process_write(engine, snapshot, task, &mut statistics)
+                    });
                 }
-                .in_resource_metering_tag(resource_tag),
-            )
-            .unwrap();
+            };
+            tls_collect_scan_details(tag.get_str(), &statistics);
+            let elapsed = timer.saturating_elapsed();
+            slow_log!(
+                elapsed,
+                "[region {}] scheduler handle command: {}, ts: {}",
+                region_id,
+                tag,
+                ts
+            );
+
+            tls_collect_read_duration(tag.get_str(), elapsed);
+        }
+        .in_resource_metering_tag(resource_tag)
+        .await;
     }
 
     /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
