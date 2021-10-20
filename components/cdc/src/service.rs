@@ -2,8 +2,10 @@
 
 use std::collections::hash_map::Entry;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use collections::HashMap;
+use crossbeam::atomic::AtomicCell;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
@@ -14,7 +16,7 @@ use tikv_util::worker::*;
 use tikv_util::{error, info, warn};
 
 use crate::channel::{channel, MemoryQuota, Sink, CDC_CHANNLE_CAPACITY};
-use crate::delegate::{Downstream, DownstreamID};
+use crate::delegate::{Downstream, DownstreamID, DownstreamState};
 use crate::endpoint::{Deregister, Task};
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
@@ -59,7 +61,7 @@ pub struct Conn {
     id: ConnID,
     sink: Sink,
     // region id -> DownstreamID
-    downstreams: HashMap<u64, DownstreamID>,
+    downstreams: HashMap<u64, (DownstreamID, Arc<AtomicCell<DownstreamState>>)>,
     peer: String,
     version: Option<(semver::Version, FeatureGate)>,
 }
@@ -118,11 +120,15 @@ impl Conn {
         self.id
     }
 
-    pub fn get_downstreams(&self) -> &HashMap<u64, DownstreamID> {
+    pub fn get_downstreams(
+        &self,
+    ) -> &HashMap<u64, (DownstreamID, Arc<AtomicCell<DownstreamState>>)> {
         &self.downstreams
     }
 
-    pub fn take_downstreams(self) -> HashMap<u64, DownstreamID> {
+    pub fn take_downstreams(
+        self,
+    ) -> HashMap<u64, (DownstreamID, Arc<AtomicCell<DownstreamState>>)> {
         self.downstreams
     }
 
@@ -130,11 +136,16 @@ impl Conn {
         &self.sink
     }
 
-    pub fn subscribe(&mut self, region_id: u64, downstream_id: DownstreamID) -> bool {
+    pub fn subscribe(
+        &mut self,
+        region_id: u64,
+        downstream_id: DownstreamID,
+        downstream_state: Arc<AtomicCell<DownstreamState>>,
+    ) -> bool {
         match self.downstreams.entry(region_id) {
             Entry::Occupied(_) => false,
             Entry::Vacant(v) => {
-                v.insert(downstream_id);
+                v.insert((downstream_id, downstream_state));
                 true
             }
         }
@@ -145,7 +156,7 @@ impl Conn {
     }
 
     pub fn downstream_id(&self, region_id: u64) -> Option<DownstreamID> {
-        self.downstreams.get(&region_id).copied()
+        self.downstreams.get(&region_id).map(|x| x.0)
     }
 }
 
@@ -259,6 +270,9 @@ impl ChangeData for Service {
         let scheduler = self.scheduler.clone();
 
         ctx.spawn(async move {
+            #[cfg(feature = "failpoints")]
+            sleep_before_drain_change_event().await;
+
             let res = event_drain.forward(&mut sink).await;
             // Unregister this downstream only.
             let deregister = Deregister::Conn(conn_id);
@@ -275,6 +289,21 @@ impl ChangeData for Service {
                 }
             }
         });
+    }
+}
+
+#[cfg(feature = "failpoints")]
+async fn sleep_before_drain_change_event() {
+    use std::time::{Duration, Instant};
+    use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+    let should_sleep = || {
+        fail::fail_point!("cdc_sleep_before_drain_change_event", |_| true);
+        false
+    };
+    if should_sleep() {
+        let dur = Duration::from_secs(5);
+        let timer = GLOBAL_TIMER_HANDLE.delay(Instant::now() + dur);
+        let _ = futures::compat::Compat01As03::new(timer).await;
     }
 }
 
