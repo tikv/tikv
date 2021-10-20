@@ -864,7 +864,7 @@ fn test_txn_store_txnkv_api_version() {
         // config api_version = V1, for backward compatible.
         (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, true),
         (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, true),
-        // reject V2 request.
+        // config api_version = V1, reject V2 request.
         (ApiVersion::V1, ApiVersion::V2, TIDB_KEY_CASE, false),
         // config api_version = V2.
         // backward compatible for TiDB request, and TiDB request only.
@@ -902,7 +902,7 @@ fn test_txn_store_rawkv_api_version() {
     let test_data = vec![
         // config api_version = V1, for backward compatible.
         (ApiVersion::V1, ApiVersion::V1, RAW_KEY_CASE, true),
-        // reject V2 request.
+        // config api_version = V1, reject V2 request.
         (ApiVersion::V1, ApiVersion::V2, RAW_KEY_CASE, false),
         // config api_version = V2.
         // backward compatible for TiDB request, and TiDB request only.

@@ -7350,7 +7350,7 @@ mod tests {
                 KeyPrefix::Raw { keyspace_id: 0 },
                 true,
             ),
-            // reject V2 request.
+            // config api_version = V1, reject V2 request.
             (
                 ApiVersion::V1,
                 ApiVersion::V2,
@@ -7453,7 +7453,7 @@ mod tests {
                 vec![KeyPrefix::TiDB, KeyPrefix::Raw { keyspace_id: 0 }],
                 true, // is_legal
             ),
-            // reject V2 request.
+            // config api_version = V1, reject V2 request.
             (
                 ApiVersion::V1,
                 ApiVersion::V2,
