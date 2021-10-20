@@ -3,10 +3,10 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::f64::INFINITY;
-use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{fmt, thread};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::DB;
@@ -288,6 +288,7 @@ impl BackupRange {
             .with_label_values(&["scan"])
             .observe(start_scan.saturating_elapsed().as_secs_f64());
 
+        drop(snap_store);
         if writer.need_flush_keys() {
             match writer.save(&storage.storage) {
                 Ok(mut split_files) => {
@@ -440,27 +441,34 @@ impl SoftLimitKeeper {
             auto_tune_remain_threads,
             ..
         } = *config.0.read().unwrap();
-        let cpu_quota = SoftLimitByCPU::with_remain(auto_tune_remain_threads);
+        let mut cpu_quota = SoftLimitByCPU::with_remain(auto_tune_remain_threads);
         let limit = SoftLimit::new(num_threads);
         BACKUP_SOFTLIMIT_GAGUE.set(limit.current_cap() as _);
         let limit_cloned = limit.clone();
-        std::thread::Builder::new()
+        thread::Builder::new()
             .name("backup.softlimit_keeper".to_owned())
             .spawn(move || {
                 loop {
                     let BackupConfig {
                         enable_auto_tune,
                         auto_tune_refresh_gap,
+                        num_threads,
+                        auto_tune_remain_threads,
                         ..
                     } = *config.0.read().unwrap();
+                    cpu_quota.set_remain(auto_tune_remain_threads);
                     if !enable_auto_tune {
-                        return;
-                    }
-                    if let Err(e) = cpu_quota.exec_over(&limit_cloned) {
+                        if let Err(e) = limit_cloned.resize(num_threads) {
+                            error!("failed to resize the soft limit to num-threads, backup may be restricted unexpectly.";
+                                "current_limit" => %limit_cloned.current_cap(),
+                                "error" => %e
+                            );
+                        }
+                    } else if let Err(e) = cpu_quota.exec_over_with_exclude(&limit_cloned, |s| s.contains("bkwkr")) {
                         error!("error during appling the soft limit for backup."; "err" => %e);
                     }
                     BACKUP_SOFTLIMIT_GAGUE.set(limit_cloned.current_cap() as _);
-                    std::thread::sleep(auto_tune_refresh_gap.0);
+                    thread::sleep(auto_tune_refresh_gap.0);
                 }
             })
             // should never fail.
