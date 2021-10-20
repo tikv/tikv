@@ -13,7 +13,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use collections::HashMap;
-use crossbeam::channel::{unbounded, Receiver};
+use crossbeam::channel::{bounded, Receiver};
 use tikv_util::time::Instant;
 
 mod cpu;
@@ -242,7 +242,7 @@ impl RecorderBuilder {
     pub fn spawn(self) -> io::Result<RecorderController> {
         let pause = Arc::new(AtomicBool::new(!self.enable));
         let precision_ms = self.precision_ms.clone();
-        let (tx, rx) = unbounded();
+        let (tx, rx) = bounded(1024);
         register_storage_chan_tx(tx);
         let now = Instant::now();
         let mut recorder = Recorder {
@@ -344,7 +344,10 @@ pub fn init_recorder(enable: bool, precision_ms: u64) -> RecorderController {
 mod tests {
     use super::*;
     use crate::localstorage::STORAGE;
+
     use std::sync::atomic::AtomicUsize;
+
+    use crossbeam::channel::unbounded;
 
     #[test]
     fn test_recorder_handle() {

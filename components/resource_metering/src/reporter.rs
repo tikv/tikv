@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crossbeam::channel::{bounded, Receiver, Sender};
 use tikv_util::time::Duration;
+use tikv_util::warn;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 
 /// A structure for reporting statistics through [Client].
@@ -66,7 +67,7 @@ impl Reporter {
         scheduler: Scheduler<Task>,
         recorder_ctl: RecorderController,
     ) -> Self {
-        let (tx, rx) = bounded(1024);
+        let (tx, rx) = bounded(64);
 
         let clt = CollectorImpl::new(scheduler);
         let collector = register_collector(Box::new(clt));
@@ -105,6 +106,10 @@ impl Reporter {
         // remove closed clients
         self.clients.drain_filter(|c| c.is_closed()).count();
 
+        if self.clients.len() > 256 {
+            warn!("too much clients"; "len" => self.clients.len());
+        }
+
         let pending_cnt = self.clients.iter().filter(|c| c.is_pending()).count();
         let running_cnt = self.clients.len() - pending_cnt;
         if running_cnt > 0 {
@@ -122,9 +127,6 @@ impl Reporter {
         // Whether clients exist or not, records should be taken in order to reset.
         let records = Arc::new(std::mem::take(&mut self.records));
         for c in &mut self.clients {
-            if c.is_pending() {
-                continue;
-            }
             c.as_mut().upload_records(records.clone());
         }
     }

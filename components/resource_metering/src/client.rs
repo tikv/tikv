@@ -43,7 +43,7 @@ impl Client for GrpcClient {
         if handle.is_none() {
             return;
         }
-        // address isn't empty here
+        // address won't be empty here
         if self.client.is_none() || self.prev_address != address {
             self.init_client(&address);
             self.prev_address = address.clone();

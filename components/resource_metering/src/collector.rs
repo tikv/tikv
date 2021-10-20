@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 
-use crossbeam::channel::{unbounded, Receiver, Sender};
+use crossbeam::channel::{bounded, Receiver, Sender};
 use lazy_static::lazy_static;
 use tikv_util::worker::Scheduler;
 
@@ -54,7 +54,7 @@ impl CollectorImpl {
 }
 
 lazy_static! {
-    pub static ref COLLECTOR_REG_CHAN: (Sender<CollectorReg>, Receiver<CollectorReg>) = unbounded();
+    pub static ref COLLECTOR_REG_CHAN: (Sender<CollectorReg>, Receiver<CollectorReg>) = bounded(16);
 }
 
 #[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Hash)]
