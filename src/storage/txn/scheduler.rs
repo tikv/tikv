@@ -491,17 +491,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                     .unwrap()
                                     .try_own()
                                 {
-                                    sched
-                                        .get_sched_pool(task.cmd.priority())
-                                        .clone()
-                                        .pool
-                                        .spawn(async move {
-                                            sched.finish_with_err(
-                                                task.cid,
-                                                StorageErrorInner::DeadlineExceeded,
-                                            );
-                                        })
-                                        .unwrap();
+                                    sched.finish_with_err(
+                                        task.cid,
+                                        StorageErrorInner::DeadlineExceeded,
+                                    );
                                     return;
                                 }
 
