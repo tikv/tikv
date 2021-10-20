@@ -239,7 +239,7 @@ impl RecorderBuilder {
     ///
     /// This function does not return the `Recorder` instance directly, instead
     /// it returns a [RecorderHandle] that is used to control the execution.
-    pub fn spawn(self) -> io::Result<RecorderHandle> {
+    pub fn spawn(self) -> io::Result<RecorderController> {
         let pause = Arc::new(AtomicBool::new(!self.enable));
         let precision_ms = self.precision_ms.clone();
         let (tx, rx) = unbounded();
@@ -259,29 +259,29 @@ impl RecorderBuilder {
         thread::Builder::new()
             .name("resource-metering-recorder".to_owned())
             .spawn(move || recorder.run())
-            .map(move |h| RecorderHandle::new(h, pause, precision_ms))
+            .map(move |h| RecorderController::new(h, pause, precision_ms))
     }
 }
 
 /// This structure is returned by [RecorderBuilder::spawn] and can be used to
 /// control the execution of [Recorder].
 ///
-/// In addition, because the caller can only get an instance of `RecorderHandle`
+/// In addition, because the caller can only get an instance of `RecorderController`
 /// and cannot directly manipulate `Recorder`, some parameters that need to be
 /// controlled externally must also be stored in a thread-safe reference
-/// in `RecorderHandle`.
+/// in `RecorderController`.
 #[derive(Clone, Default)]
-pub struct RecorderHandle {
-    inner: Option<Arc<RecorderHandleInner>>,
+pub struct RecorderController {
+    inner: Option<Arc<RecorderControllerInner>>,
 }
 
-struct RecorderHandleInner {
+struct RecorderControllerInner {
     h: JoinHandle<()>,
     pause: Arc<AtomicBool>,
     precision_ms: Arc<AtomicU64>,
 }
 
-impl RecorderHandle {
+impl RecorderController {
     /// Create a new `RecorderHandle`.
     ///
     /// The key pointer here is to pass a [JoinHandle], which means that `RecorderHandle`
@@ -291,7 +291,7 @@ impl RecorderHandle {
     /// [JoinHandle]: std::thread::JoinHandle
     pub fn new(h: JoinHandle<()>, pause: Arc<AtomicBool>, precision_ms: Arc<AtomicU64>) -> Self {
         Self {
-            inner: Some(Arc::new(RecorderHandleInner {
+            inner: Some(Arc::new(RecorderControllerInner {
                 h,
                 pause,
                 precision_ms,
@@ -309,8 +309,10 @@ impl RecorderHandle {
     /// Resume the execution of [Recorder].
     pub fn resume(&self) {
         if let Some(inner) = self.inner.as_ref() {
-            inner.pause.store(false, SeqCst);
-            inner.h.thread().unpark();
+            let paused = inner.pause.swap(false, SeqCst);
+            if paused {
+                inner.h.thread().unpark();
+            }
         }
     }
 
@@ -329,7 +331,7 @@ impl RecorderHandle {
 /// Constructs a default [Recorder], spawn it and return the corresponding [RecorderHandle].
 ///
 /// This function is intended to simplify external use.
-pub fn init_recorder(enable: bool, precision_ms: u64) -> RecorderHandle {
+pub fn init_recorder(enable: bool, precision_ms: u64) -> RecorderController {
     RecorderBuilder::default()
         .enable(enable)
         .precision_ms(Arc::new(AtomicU64::new(precision_ms)))
@@ -353,7 +355,7 @@ mod tests {
         });
         let pause = Arc::new(AtomicBool::new(true));
         let precision_ms = Arc::new(AtomicU64::new(0));
-        let handle = RecorderHandle::new(join_handle, pause.clone(), precision_ms.clone());
+        let handle = RecorderController::new(join_handle, pause.clone(), precision_ms.clone());
         let new_precision = Duration::from_secs(1);
         handle.precision(new_precision);
         assert_eq!(precision_ms.load(SeqCst), new_precision.as_millis() as u64);

@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::recorder::RecorderHandle;
+use crate::recorder::RecorderController;
 use crate::reporter::Task;
 
 use std::error::Error;
@@ -44,7 +44,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            enabled: true,
+            enabled: false,
             receiver_address: "".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
@@ -93,7 +93,7 @@ pub struct ConfigManager {
     current_config: Config,
     receiver_address: Arc<Mutex<String>>,
     scheduler: Scheduler<Task>,
-    recorder: RecorderHandle,
+    recorder_ctl: RecorderController,
 }
 
 impl ConfigManager {
@@ -101,13 +101,13 @@ impl ConfigManager {
         current_config: Config,
         receiver_address: Arc<Mutex<String>>,
         scheduler: Scheduler<Task>,
-        recorder: RecorderHandle,
+        recorder_ctl: RecorderController,
     ) -> Self {
         ConfigManager {
             current_config,
             receiver_address,
             scheduler,
-            recorder,
+            recorder_ctl,
         }
     }
 }
@@ -120,13 +120,13 @@ impl online_config::ConfigManager for ConfigManager {
         // Pause or resume the recorder thread.
         if self.current_config.enabled != new_config.enabled {
             if new_config.enabled {
-                self.recorder.resume();
+                self.recorder_ctl.resume();
             } else {
-                self.recorder.pause();
+                self.recorder_ctl.pause();
             }
         }
         if self.current_config.precision != new_config.precision {
-            self.recorder.precision(new_config.precision.0);
+            self.recorder_ctl.precision(new_config.precision.0);
         }
         // Notify reporter that the configuration has changed.
         self.scheduler

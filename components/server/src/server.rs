@@ -891,6 +891,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Start resource metering.
+        let recorder_ctl = resource_metering::init_recorder(
+            self.config.resource_metering.enabled,
+            self.config.resource_metering.precision.as_millis(),
+        );
         let mut reporter_worker = WorkerBuilder::new("resource-metering-reporter")
             .pending_capacity(30)
             .create()
@@ -905,6 +909,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             vec![Box::new(resource_metering_client)],
             self.config.resource_metering.clone(),
             reporter_scheduler.clone(),
+            recorder_ctl.clone(),
         );
         let resource_metering_publisher =
             resource_metering::ResourceMeteringPublisher::new(&reporter);
@@ -914,10 +919,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.config.resource_metering.clone(),
             receiver_address,
             reporter_scheduler,
-            resource_metering::init_recorder(
-                self.config.resource_metering.enabled,
-                self.config.resource_metering.precision.as_millis(),
-            ),
+            recorder_ctl,
         );
         cfg_controller.register(
             tikv::config::Module::ResourceMetering,

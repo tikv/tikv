@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::collector::{register_collector, CollectorHandle, CollectorImpl};
-use crate::{Client, Config, RawRecords, Records};
+use crate::{Client, Config, RawRecords, RecorderController, Records};
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
@@ -27,9 +27,10 @@ pub struct Reporter {
     clients: Vec<Box<dyn Client>>,
 
     config: Config,
-    scheduler: Scheduler<Task>,
-    collector: Option<CollectorHandle>,
+    _collector: CollectorHandle,
     records: Records,
+
+    recorder_ctl: RecorderController,
 }
 
 impl Runnable for Reporter {
@@ -59,15 +60,16 @@ impl RunnableWithTimer for Reporter {
 }
 
 impl Reporter {
-    pub fn new(clients: Vec<Box<dyn Client>>, config: Config, scheduler: Scheduler<Task>) -> Self {
+    pub fn new(
+        clients: Vec<Box<dyn Client>>,
+        config: Config,
+        scheduler: Scheduler<Task>,
+        recorder_ctl: RecorderController,
+    ) -> Self {
         let (tx, rx) = bounded(1024);
 
-        let pending_cnt = clients.iter().filter(|c| c.is_pending()).count();
-        let running_cnt = clients.len() - pending_cnt;
-        let collector = (running_cnt > 0).then(|| {
-            let clt = CollectorImpl::new(scheduler.clone());
-            register_collector(Box::new(clt))
-        });
+        let clt = CollectorImpl::new(scheduler);
+        let collector = register_collector(Box::new(clt));
 
         Self {
             client_registry: ClientRegistry { tx },
@@ -75,9 +77,10 @@ impl Reporter {
             clients,
 
             config,
-            scheduler,
-            collector,
+            _collector: collector,
             records: Records::default(),
+
+            recorder_ctl,
         }
     }
 
@@ -102,14 +105,12 @@ impl Reporter {
         // remove closed clients
         self.clients.drain_filter(|c| c.is_closed()).count();
 
-        if self.collector.is_none() {
-            let pending_cnt = self.clients.iter().filter(|c| c.is_pending()).count();
-            let running_cnt = self.clients.len() - pending_cnt;
-            if running_cnt > 0 {
-                let clt = CollectorImpl::new(self.scheduler.clone());
-                let clt_hdl = register_collector(Box::new(clt));
-                self.collector = Some(clt_hdl);
-            }
+        let pending_cnt = self.clients.iter().filter(|c| c.is_pending()).count();
+        let running_cnt = self.clients.len() - pending_cnt;
+        if running_cnt > 0 {
+            self.recorder_ctl.resume();
+        } else {
+            self.recorder_ctl.pause();
         }
     }
 
@@ -129,7 +130,6 @@ impl Reporter {
     }
 
     fn reset(&mut self) {
-        self.collector.take();
         self.records.clear();
         self.clients.clear();
     }
@@ -199,7 +199,12 @@ mod tests {
     #[test]
     fn test_reporter() {
         let scheduler = LazyWorker::new("test-worker").scheduler();
-        let mut r = Reporter::new(vec![Box::new(MockClient)], Config::default(), scheduler);
+        let mut r = Reporter::new(
+            vec![Box::new(MockClient)],
+            Config::default(),
+            scheduler,
+            RecorderController::default(),
+        );
         r.run(Task::ConfigChange(Config {
             enabled: false,
             receiver_address: "abc".to_string(),

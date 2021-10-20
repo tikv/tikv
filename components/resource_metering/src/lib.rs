@@ -30,7 +30,7 @@ pub use collector::{register_collector, CollectorHandle, CollectorId};
 pub use config::{Config, ConfigManager};
 pub use model::*;
 pub use publisher::ResourceMeteringPublisher;
-pub use recorder::{init_recorder, CpuRecorder, Recorder, RecorderBuilder, RecorderHandle};
+pub use recorder::{init_recorder, CpuRecorder, Recorder, RecorderBuilder, RecorderController};
 pub use reporter::{Reporter, Task};
 
 pub const TEST_TAG_PREFIX: &[u8] = b"__resource_metering::tests::";
