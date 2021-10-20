@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::u64;
 
+<<<<<<< HEAD
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
@@ -37,6 +38,21 @@ use crate::storage::metrics::{
     self, SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC, SCHED_CONTEX_GAUGE, SCHED_HISTOGRAM_VEC_STATIC,
     SCHED_LATCH_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC,
     SCHED_WRITING_BYTES_GAUGE,
+=======
+use collections::HashMap;
+use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
+use futures::compat::Future01CompatExt;
+use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
+use kvproto::pdpb::QueryKind;
+use resource_metering::{FutureExt, ResourceMeteringTag};
+use tikv_util::{time::Instant, timer::GLOBAL_TIMER_HANDLE};
+use txn_types::TimeStamp;
+
+use crate::server::lock_manager::waiter_manager;
+use crate::storage::config::Config;
+use crate::storage::kv::{
+    self, with_tls_engine, Engine, ExtCallback, Result as EngineResult, SnapContext, Statistics,
+>>>>>>> 2222d9cd1... scheduler: get snapshot in scheduler worker pool (#11096)
 };
 use crate::storage::txn::{
     commands::Command,
@@ -371,6 +387,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.schedule_command(cmd, callback);
     }
 
+<<<<<<< HEAD
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
     /// `SnapshotFinished` message back to the event loop when it finishes.
     fn get_snapshot(&self, cid: u64) {
@@ -404,6 +421,84 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
             unsafe { with_tls_engine(f) }
         }
+=======
+    /// Executes the task in the sched pool.
+    fn execute(&self, mut task: Task) {
+        let sched = self.clone();
+        self.get_sched_pool(task.cmd.priority())
+            .pool
+            .spawn(async move {
+                if sched.check_task_deadline_exceeded(&task) {
+                    return;
+                }
+
+                let tag = task.cmd.tag();
+                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
+
+                let snap_ctx = SnapContext {
+                    pb_ctx: task.cmd.ctx(),
+                    ..Default::default()
+                };
+                // The program is currently in scheduler worker threads.
+                // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
+                match unsafe {
+                    with_tls_engine(|engine: &E| kv::snapshot_for_write(engine, snap_ctx))
+                }
+                .await
+                {
+                    Ok((cb_ctx, snapshot)) => {
+                        debug!(
+                            "receive snapshot finish msg";
+                            "cid" => task.cid, "cb_ctx" => ?cb_ctx
+                        );
+
+                        match snapshot {
+                            Ok(snapshot) => {
+                                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
+
+                                if !sched
+                                    .inner
+                                    .get_task_slot(task.cid)
+                                    .get(&task.cid)
+                                    .unwrap()
+                                    .try_own()
+                                {
+                                    sched.finish_with_err(
+                                        task.cid,
+                                        StorageErrorInner::DeadlineExceeded,
+                                    );
+                                    return;
+                                }
+
+                                if let Some(term) = cb_ctx.term {
+                                    task.cmd.ctx_mut().set_term(term);
+                                }
+                                task.extra_op = cb_ctx.txn_extra_op;
+
+                                debug!(
+                                    "process cmd with snapshot";
+                                    "cid" => task.cid, "cb_ctx" => ?cb_ctx
+                                );
+                                sched.process(snapshot, task).await;
+                            }
+                            Err(err) => {
+                                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
+
+                                info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
+                                sched.finish_with_err(task.cid, Error::from(err));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
+
+                        info!("engine async_snapshot failed"; "err" => ?e);
+                        sched.finish_with_err(task.cid, e);
+                    }
+                }
+            })
+            .unwrap();
+>>>>>>> 2222d9cd1... scheduler: get snapshot in scheduler worker pool (#11096)
     }
 
     /// Calls the callback with an error.
@@ -506,6 +601,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.release_lock(&tctx.lock, cid);
     }
 
+<<<<<<< HEAD
     fn on_pipelined_write(&self, cid: u64, pr: ProcessResult, tag: metrics::CommandKind) {
         debug!("pipelined write"; "cid" => cid);
         SCHED_STAGE_COUNTER_VEC.get(tag).pipelined_write.inc();
@@ -515,6 +611,88 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             cb.execute(pr);
         }
         // It won't release locks here until write finished.
+=======
+    fn early_response(
+        cid: u64,
+        cb: StorageCallback,
+        pr: ProcessResult,
+        tag: metrics::CommandKind,
+        stage: metrics::CommandStageKind,
+    ) {
+        debug!("early return response"; "cid" => cid);
+        SCHED_STAGE_COUNTER_VEC.get(tag).get(stage).inc();
+        cb.execute(pr);
+        // It won't release locks here until write finished.
+    }
+
+    /// Process the task in the current thread.
+    async fn process(self, snapshot: E::Snap, task: Task) {
+        if self.check_task_deadline_exceeded(&task) {
+            return;
+        }
+
+        let resource_tag = ResourceMeteringTag::from_rpc_context(task.cmd.ctx());
+        async {
+            let tag = task.cmd.tag();
+            fail_point!("scheduler_async_snapshot_finish");
+            SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
+
+            let timer = Instant::now_coarse();
+
+            let region_id = task.cmd.ctx().get_region_id();
+            let ts = task.cmd.ts();
+            let mut statistics = Statistics::default();
+            match &task.cmd {
+                Command::Prewrite(_) | Command::PrewritePessimistic(_) => {
+                    tls_collect_query(region_id, QueryKind::Prewrite);
+                }
+                Command::AcquirePessimisticLock(_) => {
+                    tls_collect_query(region_id, QueryKind::AcquirePessimisticLock);
+                }
+                Command::Commit(_) => {
+                    tls_collect_query(region_id, QueryKind::Commit);
+                }
+                Command::Rollback(_) | Command::PessimisticRollback(_) => {
+                    tls_collect_query(region_id, QueryKind::Rollback);
+                }
+                _ => {}
+            }
+
+            if task.cmd.readonly() {
+                self.process_read(snapshot, task, &mut statistics);
+            } else {
+                self.process_write(snapshot, task, &mut statistics).await;
+            };
+            tls_collect_scan_details(tag.get_str(), &statistics);
+            let elapsed = timer.saturating_elapsed();
+            slow_log!(
+                elapsed,
+                "[region {}] scheduler handle command: {}, ts: {}",
+                region_id,
+                tag,
+                ts
+            );
+
+            tls_collect_read_duration(tag.get_str(), elapsed);
+        }
+        .in_resource_metering_tag(resource_tag)
+        .await;
+    }
+
+    /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
+    /// `Scheduler`.
+    fn process_read(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
+        fail_point!("txn_before_process_read");
+        debug!("process read cmd in worker pool"; "cid" => task.cid);
+
+        let tag = task.cmd.tag();
+
+        let pr = task
+            .cmd
+            .process_read(snapshot, statistics)
+            .unwrap_or_else(|e| ProcessResult::Failed { err: e.into() });
+        self.on_read_finished(task.cid, pr, tag);
+>>>>>>> 2222d9cd1... scheduler: get snapshot in scheduler worker pool (#11096)
     }
 }
 
