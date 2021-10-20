@@ -517,14 +517,6 @@ where
         fail_point!("raft_before_follower_send");
 
         let now = Instant::now();
-        for (region_id, (peer_id, ready_number)) in &self.batch.readies {
-            self.notifier
-                .notify_persisted(*region_id, *peer_id, *ready_number);
-        }
-        let now2 = Instant::now();
-        STORE_WRITE_CALLBACK_DURATION_HISTOGRAM
-            .observe(duration_to_sec(now2.saturating_duration_since(now)));
-
         for task in &mut self.batch.tasks {
             for msg in task.messages.drain(..) {
                 let msg_type = msg.get_message().get_msg_type();
@@ -568,8 +560,15 @@ where
             self.trans.flush();
             self.message_metrics.flush();
         }
+        let now2 = Instant::now();
+        STORE_WRITE_SEND_DURATION_HISTOGRAM
+            .observe(duration_to_sec(now2.saturating_duration_since(now)));
 
-        STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(duration_to_sec(now2.saturating_elapsed()));
+        for (region_id, (peer_id, ready_number)) in &self.batch.readies {
+            self.notifier
+                .notify_persisted(*region_id, *peer_id, *ready_number);
+        }
+        STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(duration_to_sec(now2.saturating_elapsed()));
 
         self.batch.clear();
     }
