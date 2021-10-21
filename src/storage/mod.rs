@@ -64,7 +64,7 @@ pub use self::{
 };
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
-use crate::storage::key_prefix::{KeyPrefix, TIDB_RANGES_COMPLEMENT};
+use crate::storage::key_prefix::TIDB_RANGES_COMPLEMENT;
 use crate::storage::metrics::CommandKind;
 use crate::storage::mvcc::MvccReader;
 use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSwap};
@@ -436,28 +436,38 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ///   * Request of V1 from TiDB, for compatiblity.
     ///   * Request of V2 with legal prefix.
     /// See rfc https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md for detail.
-    fn check_api_version(
+    fn check_api_version<'a>(
         storage_api_version: &ApiVersion,
         req_api_version: &ApiVersion,
         cmd: CommandKind,
-        keys: impl IntoIterator<Item = &[u8]>,
+        keys: impl IntoIterator<Item = &'a [u8]>,
     ) -> Result<()> {
         match (storage_api_version, req_api_version) {
-            (ApiVersion::V1, ApiVersion::V1) => Ok(()),
-            (ApiVersion::V2, ApiVersion::V1) // For compatibility, accept TiDB request only.
-                if Self::is_txn_command(cmd) && keys
-                    .into_iter()
-                    .all(is_tidb_key)  => Ok(()),
-            (ApiVersion::V2, ApiVersion::V2)
-                if Self::is_raw_command(cmd) && keys
-                    .into_iter()
-                    .all(is_raw_key)  => Ok(()),
-            (ApiVersion::V2, ApiVersion::V2)
-                if Self::is_txn_command(cmd) && keys
-                    .into_iter()
-                    .all(is_txn_key)  => Ok(()),
-            _ => Err(Error::from(ErrorInner::ApiVersionNotMatch))
+            (ApiVersion::V1, ApiVersion::V1) => {
+                return Ok(());
+            }
+            (ApiVersion::V2, ApiVersion::V1) if Self::is_txn_command(cmd) => {
+                // For compatibility, accept TiDB request only.
+                if keys.into_iter().all(key_prefix::is_tidb_key) {
+                    return Ok(());
+                }
+            }
+            (ApiVersion::V2, ApiVersion::V2) if Self::is_raw_command(cmd) => {
+                if keys.into_iter().all(key_prefix::is_raw_key) {
+                    return Ok(());
+                }
+            }
+            (ApiVersion::V2, ApiVersion::V2) if Self::is_txn_command(cmd) => {
+                if keys.into_iter().all(key_prefix::is_txn_key) {
+                    return Ok(());
+                }
+            }
+            _ => {}
         }
+        Err(Error::from(ErrorInner::ApiVersionNotMatch {
+            storage_api_version: storage_api_version.clone(),
+            req_api_version: req_api_version.clone(),
+        }))
     }
 
     /// Get value of the given key from a snapshot.
@@ -492,8 +502,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                let (key_prefix, _user_key) = KeyPrefix::parse(key.as_encoded());
-                Self::check_api_version(&api_version, &ctx.api_version, CMD, &key_prefix)?;
+                Self::check_api_version(
+                    &api_version,
+                    &ctx.api_version,
+                    CMD,
+                    iter::once(&key.as_encoded()[..]),
+                )?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
@@ -605,8 +619,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         QueryKind::Get,
                     );
 
-                    let (key_prefix, _user_key) = KeyPrefix::parse(key.as_encoded());
-                    Self::check_api_version(&api_version, &ctx.api_version, CMD, iter::once(key_prefix))?;
+                    Self::check_api_version(
+                        &api_version,
+                        &ctx.api_version,
+                        CMD,
+                        iter::once(&key.as_encoded()[..]),
+                    )?;
 
                     let start_ts = req.get_version().into();
                     let isolation_level = ctx.get_isolation_level();
@@ -749,13 +767,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                let encoded_keys = keys.iter().map(|x| &x.as_encoded()[..]);
-                let (key_prefixes, _user_keys) = KeyPrefix::batch_parse(encoded_keys);
-                Self::batch_check_api_version(
+                Self::check_api_version(
                     &api_version,
                     &ctx.api_version,
                     CMD,
-                    &key_prefixes[..],
+                    keys.iter().map(|x| &x.as_encoded()[..]),
                 )?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
@@ -1236,8 +1252,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                let (key_prefix, _user_key) = KeyPrefix::parse(&key);
-                Self::check_api_version(&api_version, &ctx.api_version, CMD, &key_prefix)?;
+                Self::check_api_version(&api_version, &ctx.api_version, CMD, iter::once(&key[..]))?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1407,13 +1422,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                let (key_prefixes, _user_keys) =
-                    KeyPrefix::batch_parse(keys.iter().map(|x| &x[..]));
-                Self::batch_check_api_version(
+                Self::check_api_version(
                     &api_version,
                     &ctx.api_version,
                     CMD,
-                    &key_prefixes[..],
+                    keys.iter().map(|x| &x[..]),
                 )?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
@@ -1481,8 +1494,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_put;
         let api_version = self.api_version;
 
-        let (key_prefix, _user_key) = KeyPrefix::parse(&key);
-        Self::check_api_version(&api_version, &ctx.api_version, CMD, &key_prefix)?;
+        Self::check_api_version(&api_version, &ctx.api_version, CMD, iter::once(&key[..]))?;
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
         let mut m = Modify::Put(
@@ -7315,51 +7327,55 @@ mod tests {
 
     #[test]
     fn test_check_api_version() {
+        const TIDB_KEY_CASE: &[u8] = b"t_a";
+        const TXN_KEY_CASE: &[u8] = &[key_prefix::TXN_KEY_PREFIX, 0, b'a'];
+        const RAW_KEY_CASE: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'a'];
+
         let test_data = vec![
-            // config api_version = V1, for backward compatible.
+            // storage api_version = V1, for backward compatible.
             (
-                ApiVersion::V1, // config api_version
-                ApiVersion::V1, // request api_version
-                CommandKind::get,
-                KeyPrefix::TiDB,
-                true, // is_legal
+                ApiVersion::V1,                    // storage api_version
+                ApiVersion::V1,                    // request api_version
+                CommandKind::get,                  // command kind
+                vec![TIDB_KEY_CASE, RAW_KEY_CASE], // keys
+                true,                              // is_legal
             ),
             (
                 ApiVersion::V1,
                 ApiVersion::V1,
-                CommandKind::get,
-                KeyPrefix::Raw { keyspace_id: 0 },
+                CommandKind::raw_get,
+                vec![RAW_KEY_CASE],
                 true,
             ),
-            // config api_version = V1, reject V2 request.
+            // storage api_version = V1, reject V2 request.
             (
                 ApiVersion::V1,
                 ApiVersion::V2,
                 CommandKind::get,
-                KeyPrefix::TiDB,
+                vec![TIDB_KEY_CASE],
                 false,
             ),
-            // config api_version = V2.
+            // storage api_version = V2.
             // backward compatible for TiDB request, and TiDB request only.
             (
                 ApiVersion::V2,
                 ApiVersion::V1,
                 CommandKind::get,
-                KeyPrefix::TiDB,
+                vec![TIDB_KEY_CASE, TIDB_KEY_CASE],
                 true,
             ),
             (
                 ApiVersion::V2,
                 ApiVersion::V1,
                 CommandKind::raw_get,
-                KeyPrefix::TiDB,
+                vec![TIDB_KEY_CASE, TIDB_KEY_CASE],
                 false,
             ),
             (
                 ApiVersion::V2,
                 ApiVersion::V1,
                 CommandKind::get,
-                KeyPrefix::Txn { keyspace_id: 0 },
+                vec![TIDB_KEY_CASE, TXN_KEY_CASE],
                 false,
             ),
             // V2 api validation.
@@ -7367,47 +7383,47 @@ mod tests {
                 ApiVersion::V2,
                 ApiVersion::V2,
                 CommandKind::get,
-                KeyPrefix::Txn { keyspace_id: 0 },
+                vec![TXN_KEY_CASE],
                 true,
             ),
             (
                 ApiVersion::V2,
                 ApiVersion::V2,
                 CommandKind::raw_get,
-                KeyPrefix::Txn { keyspace_id: 0 },
-                false,
-            ),
-            (
-                ApiVersion::V2,
-                ApiVersion::V2,
-                CommandKind::raw_get,
-                KeyPrefix::Raw { keyspace_id: 0 },
+                vec![RAW_KEY_CASE, RAW_KEY_CASE],
                 true,
             ),
             (
                 ApiVersion::V2,
                 ApiVersion::V2,
                 CommandKind::get,
-                KeyPrefix::Raw { keyspace_id: 0 },
+                vec![RAW_KEY_CASE, TXN_KEY_CASE],
+                false,
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V2,
+                CommandKind::raw_get,
+                vec![RAW_KEY_CASE, TXN_KEY_CASE],
                 false,
             ),
             (
                 ApiVersion::V2,
                 ApiVersion::V2,
                 CommandKind::get,
-                KeyPrefix::TiDB,
+                vec![TIDB_KEY_CASE],
                 false,
             ),
         ];
 
-        for (i, &(ref config_api_version, ref req_api_version, cmd, ref key_prefix, is_legal)) in
+        for (i, &(ref storage_api_version, ref req_api_version, cmd, ref keys, is_legal)) in
             test_data.iter().enumerate()
         {
             let res = Storage::<RocksEngine, DummyLockManager>::check_api_version(
-                config_api_version,
+                storage_api_version,
                 req_api_version,
                 cmd,
-                key_prefix,
+                keys,
             );
             if is_legal {
                 assert!(res.is_ok(), "case {}", i);
@@ -7415,122 +7431,7 @@ mod tests {
                 assert!(res.is_err(), "case {}", i);
                 assert_eq!(
                     res.unwrap_err().error_code(),
-                    error_code::storage::API_VERSION_NOT_MATCH,
-                    "case {}",
-                    i
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn test_batch_check_api_version() {
-        let test_data = vec![
-            // config api_version = V1, for backward compatible.
-            (
-                ApiVersion::V1, // config api_version
-                ApiVersion::V1, // request api_version
-                CommandKind::get,
-                vec![KeyPrefix::TiDB, KeyPrefix::Raw { keyspace_id: 0 }],
-                true, // is_legal
-            ),
-            // config api_version = V1, reject V2 request.
-            (
-                ApiVersion::V1,
-                ApiVersion::V2,
-                CommandKind::get,
-                vec![KeyPrefix::TiDB],
-                false,
-            ),
-            // config api_version = V2.
-            // backward compatible for TiDB request, and TiDB request only.
-            (
-                ApiVersion::V2,
-                ApiVersion::V1,
-                CommandKind::get,
-                vec![KeyPrefix::TiDB, KeyPrefix::TiDB],
-                true,
-            ),
-            (
-                ApiVersion::V2,
-                ApiVersion::V1,
-                CommandKind::raw_get,
-                vec![KeyPrefix::TiDB, KeyPrefix::TiDB],
-                false,
-            ),
-            (
-                ApiVersion::V2,
-                ApiVersion::V1,
-                CommandKind::get,
-                vec![KeyPrefix::TiDB, KeyPrefix::Txn { keyspace_id: 0 }],
-                false,
-            ),
-            // V2 api validation.
-            (
-                ApiVersion::V2,
-                ApiVersion::V2,
-                CommandKind::get,
-                vec![
-                    KeyPrefix::Txn { keyspace_id: 0 },
-                    KeyPrefix::Txn { keyspace_id: 0 },
-                ],
-                true,
-            ),
-            (
-                ApiVersion::V2,
-                ApiVersion::V2,
-                CommandKind::raw_get,
-                vec![
-                    KeyPrefix::Raw { keyspace_id: 0 },
-                    KeyPrefix::Raw { keyspace_id: 0 },
-                ],
-                true,
-            ),
-            (
-                ApiVersion::V2,
-                ApiVersion::V2,
-                CommandKind::get,
-                vec![
-                    KeyPrefix::Raw { keyspace_id: 0 },
-                    KeyPrefix::Txn { keyspace_id: 0 },
-                ],
-                false,
-            ),
-            (
-                ApiVersion::V2,
-                ApiVersion::V2,
-                CommandKind::raw_get,
-                vec![
-                    KeyPrefix::Raw { keyspace_id: 0 },
-                    KeyPrefix::Txn { keyspace_id: 0 },
-                ],
-                false,
-            ),
-            (
-                ApiVersion::V2,
-                ApiVersion::V2,
-                CommandKind::get,
-                vec![KeyPrefix::TiDB],
-                false,
-            ),
-        ];
-
-        for (i, &(ref config_api_version, ref req_api_version, cmd, ref key_prefixes, is_legal)) in
-            test_data.iter().enumerate()
-        {
-            let res = Storage::<RocksEngine, DummyLockManager>::batch_check_api_version(
-                config_api_version,
-                req_api_version,
-                cmd,
-                key_prefixes,
-            );
-            if is_legal {
-                assert!(res.is_ok(), "case {}", i);
-            } else {
-                assert!(res.is_err(), "case {}", i);
-                assert_eq!(
-                    res.unwrap_err().error_code(),
-                    error_code::storage::API_VERSION_NOT_MATCH,
+                    error_code::storage::API_VERSION_NOT_MATCHED,
                     "case {}",
                     i
                 );
