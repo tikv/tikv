@@ -64,7 +64,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         self
     }
 
-    pub fn set_api_version(mut self, api_version: ApiVersion) -> Self {
+    pub fn api_version(mut self, api_version: ApiVersion) -> Self {
         self.api_version = Some(api_version);
         self
     }

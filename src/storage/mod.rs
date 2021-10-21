@@ -437,44 +437,25 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ///   * Request of V2 with legal prefix.
     /// See rfc https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md for detail.
     fn check_api_version(
-        config_api_version: &ApiVersion,
+        storage_api_version: &ApiVersion,
         req_api_version: &ApiVersion,
         cmd: CommandKind,
-        key_prefix: &KeyPrefix,
+        keys: impl IntoIterator<Item = &[u8]>,
     ) -> Result<()> {
-        match (config_api_version, req_api_version) {
+        match (storage_api_version, req_api_version) {
             (ApiVersion::V1, ApiVersion::V1) => Ok(()),
             (ApiVersion::V2, ApiVersion::V1) // For compatibility, accept TiDB request only.
-                if Self::is_txn_command(cmd) && matches!(key_prefix, KeyPrefix::TiDB) => Ok(()),
+                if Self::is_txn_command(cmd) && keys
+                    .into_iter()
+                    .all(is_tidb_key)  => Ok(()),
             (ApiVersion::V2, ApiVersion::V2)
-                if Self::is_raw_command(cmd) && matches!(key_prefix, KeyPrefix::Raw { .. }) => Ok(()),
+                if Self::is_raw_command(cmd) && keys
+                    .into_iter()
+                    .all(is_raw_key)  => Ok(()),
             (ApiVersion::V2, ApiVersion::V2)
-                if Self::is_txn_command(cmd) && matches!(key_prefix, KeyPrefix::Txn { .. }) => Ok(()),
-            _ => Err(Error::from(ErrorInner::ApiVersionNotMatch))
-        }
-    }
-
-    /// Check api version for batch request.
-    fn batch_check_api_version(
-        config_api_version: &ApiVersion,
-        req_api_version: &ApiVersion,
-        cmd: CommandKind,
-        key_prefixes: &[KeyPrefix],
-    ) -> Result<()> {
-        match (config_api_version, req_api_version) {
-            (ApiVersion::V1, ApiVersion::V1) => Ok(()),
-            (ApiVersion::V2, ApiVersion::V1) // For compatibility, accept TiDB request only.
-                if Self::is_txn_command(cmd) && key_prefixes
-                    .iter()
-                    .all(|p| matches!(p, KeyPrefix::TiDB))  => Ok(()),
-            (ApiVersion::V2, ApiVersion::V2)
-                if Self::is_raw_command(cmd) && key_prefixes
-                    .iter()
-                    .all(|p| matches!(p, KeyPrefix::Raw { .. })) => Ok(()),
-            (ApiVersion::V2, ApiVersion::V2)
-                if Self::is_txn_command(cmd) && key_prefixes
-                    .iter()
-                    .all(|p| matches!(p, KeyPrefix::Txn { .. })) => Ok(()),
+                if Self::is_txn_command(cmd) && keys
+                    .into_iter()
+                    .all(is_txn_key)  => Ok(()),
             _ => Err(Error::from(ErrorInner::ApiVersionNotMatch))
         }
     }
@@ -625,7 +606,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     );
 
                     let (key_prefix, _user_key) = KeyPrefix::parse(key.as_encoded());
-                    Self::check_api_version(&api_version, &ctx.api_version, CMD, &key_prefix)?;
+                    Self::check_api_version(&api_version, &ctx.api_version, CMD, iter::once(key_prefix))?;
 
                     let start_ts = req.get_version().into();
                     let isolation_level = ctx.get_isolation_level();
