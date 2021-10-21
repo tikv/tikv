@@ -625,6 +625,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         prs: Arc<Mutex<Progress<R>>>,
         request: Request,
         tx: UnboundedSender<BackupResponse>,
+        backend: Arc<Box<dyn ExternalStorage>>,
     ) {
         let start_ts = request.start_ts;
         let end_ts = request.end_ts;
@@ -644,23 +645,9 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 tikv_alloc::remove_thread_memory_accessor();
             });
 
-            // Check if we can open external storage.
-            let backend = match create_storage(&request.backend) {
-                Ok(backend) => backend,
-                Err(err) => {
-                    error_unknown!(?err; "backup create storage failed");
-                    let mut response = BackupResponse::default();
-                    response.set_error(crate::Error::Io(err).into());
-                    if let Err(err) = tx.unbounded_send(response) {
-                        error_unknown!(?err; "backup failed to send response");
-                    }
-                    return;
-                }
-            };
-
             let storage = LimitedStorage {
                 limiter: request.limiter,
-                storage: Arc::new(backend),
+                storage: backend,
             };
 
             loop {
@@ -805,10 +792,23 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             is_raw_kv,
             request.cf,
         )));
+        let backend = match create_storage(&request.backend) {
+            Ok(backend) => backend,
+            Err(err) => {
+                error_unknown!(?err; "backup create storage failed");
+                let mut response = BackupResponse::default();
+                response.set_error(crate::Error::Io(err).into());
+                if let Err(err) = resp.unbounded_send(response) {
+                    error_unknown!(?err; "backup failed to send response");
+                }
+                return;
+            }
+        };
+        let backend = Arc::new(backend);
         let concurrency = self.config_manager.0.read().unwrap().num_threads;
         self.pool.borrow_mut().adjust_with(concurrency);
         for _ in 0..concurrency {
-            self.spawn_backup_worker(prs.clone(), request.clone(), resp.clone());
+            self.spawn_backup_worker(prs.clone(), request.clone(), resp.clone(), backend.clone());
         }
     }
 }
