@@ -206,3 +206,67 @@ fn test_region_heartbeat_term() {
     }
     panic!("reported term should be updated");
 }
+
+// A region shouldn't report the default size which value is 0 to pd.
+#[test]
+fn test_region_report_approximate_size_after_restarting() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = ReadableSize::mb(2);
+    cluster.run();
+    for i in 0..100 {
+        let (k, v) = (format!("k{}", i), format!("v{}", i));
+        cluster.must_put_cf("write", k.as_bytes(), v.as_bytes());
+    }
+    cluster.must_flush_cf("write", true);
+
+    let region_id = cluster.get_region_id(b"");
+    let mut approximate_size = 0;
+    let mut approximate_keys = 0;
+    for _ in 0..10 {
+        approximate_size = cluster
+            .pd_client
+            .get_region_approximate_size(region_id)
+            .unwrap_or_default();
+        approximate_keys = cluster
+            .pd_client
+            .get_region_approximate_keys(region_id)
+            .unwrap_or_default();
+        if approximate_size > 0 && approximate_keys > 0 {
+            break;
+        }
+        sleep_ms(100);
+    }
+    assert!(approximate_size > 0 && approximate_keys > 0);
+
+    // Now try to restart all nodes, and the PD shouldn't receive any report from a empty region.
+    let ids = cluster.get_node_ids();
+    for id in ids {
+        cluster.stop_node(id);
+        cluster.run_node(id).unwrap();
+    }
+
+    // Check size and keys.
+    for _ in 0..10 {
+        approximate_size = cluster
+            .pd_client
+            .get_region_approximate_size(region_id)
+            .unwrap_or_default();
+        approximate_keys = cluster
+            .pd_client
+            .get_region_approximate_keys(region_id)
+            .unwrap_or_default();
+        assert!(
+            approximate_size > 0,
+            "region size of {} should large than 0",
+            region_id
+        );
+        assert!(
+            approximate_keys > 0,
+            "region size of {} should large than 0",
+            region_id
+        );
+        sleep_ms(50);
+    }
+}

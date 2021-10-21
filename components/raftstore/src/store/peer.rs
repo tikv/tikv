@@ -594,6 +594,7 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
+        approximate_size_and_keys: Option<(u64, u64)>,
     ) -> Result<Peer<EK, ER>> {
         if peer.get_id() == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
@@ -686,6 +687,11 @@ where
             persisted_number: 0,
             apply_snap_ctx: None,
         };
+
+        if let Some((size, keys)) = approximate_size_and_keys {
+            peer.approximate_size = size;
+            peer.approximate_keys = keys;
+        }
 
         // If this region has only one peer and I am the one, campaign directly.
         if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {

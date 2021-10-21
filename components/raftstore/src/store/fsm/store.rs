@@ -52,7 +52,10 @@ use tikv_util::{
 
 use crate::bytes_capacity;
 use crate::coprocessor::split_observer::SplitObserver;
-use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
+use crate::coprocessor::{
+    get_region_approximate_keys, get_region_approximate_size, BoxAdminObserver, CoprocessorHost,
+    RegionChangeEvent,
+};
 use crate::store::async_io::write::{StoreWriters, WriteMsg};
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
@@ -922,12 +925,18 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 return Ok(true);
             }
 
+            let approximate_size =
+                get_region_approximate_size(&self.engines.kv, region, 0).unwrap_or_default();
+            let approximate_keys =
+                get_region_approximate_keys(&self.engines.kv, region, 0).unwrap_or_default();
+
             let (tx, mut peer) = box_try!(PeerFsm::create(
                 store_id,
                 &self.cfg.value(),
                 self.region_scheduler.clone(),
                 self.engines.clone(),
                 region,
+                Some((approximate_size, approximate_keys)),
             ));
             peer.peer.init_replication_mode(&mut *replication_state);
             if local_state.get_state() == PeerState::Merging {
@@ -961,12 +970,17 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         // schedule applying snapshot after raft writebatch were written.
         for region in applying_regions {
             info!("region is applying snapshot"; "region" => ?region, "store_id" => store_id);
+            let approximate_size =
+                get_region_approximate_size(&self.engines.kv, &region, 0).unwrap_or_default();
+            let approximate_keys =
+                get_region_approximate_keys(&self.engines.kv, &region, 0).unwrap_or_default();
             let (tx, mut peer) = PeerFsm::create(
                 store_id,
                 &self.cfg.value(),
                 self.region_scheduler.clone(),
                 self.engines.clone(),
                 &region,
+                Some((approximate_size, approximate_keys)),
             )?;
             peer.peer.init_replication_mode(&mut *replication_state);
             peer.schedule_applying_snapshot();

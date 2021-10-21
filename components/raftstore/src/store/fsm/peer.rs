@@ -190,6 +190,7 @@ where
         sched: Scheduler<RegionTask<EK::Snapshot>>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
+        approximate_size_and_keys: Option<(u64, u64)>,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
@@ -212,7 +213,15 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
-                peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer)?,
+                peer: Peer::new(
+                    store_id,
+                    cfg,
+                    sched,
+                    engines,
+                    region,
+                    meta_peer,
+                    approximate_size_and_keys,
+                )?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
@@ -255,7 +264,7 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
-                peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
+                peer: Peer::new(store_id, cfg, sched, engines, &region, peer, None)?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
@@ -2506,6 +2515,7 @@ where
                 self.ctx.region_scheduler.clone(),
                 self.ctx.engines.clone(),
                 &new_region,
+                Some((estimated_size, estimated_keys)),
             ) {
                 Ok((sender, new_peer)) => (sender, new_peer),
                 Err(e) => {
