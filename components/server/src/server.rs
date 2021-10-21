@@ -31,8 +31,8 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{from_rocks_compression_type, get_env, FlowInfo, RocksEngine};
 use engine_traits::{
-    compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, KvEngine,
-    MiscExt, RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines,
+    FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -173,6 +173,7 @@ struct TiKVServer<ER: RaftEngine> {
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
     router: RaftRouter<RocksEngine, ER>,
+    flow_info_sender: Option<mpsc::Sender<FlowInfo>>,
     flow_info_receiver: Option<mpsc::Receiver<FlowInfo>>,
     system: Option<RaftBatchSystem<RocksEngine, ER>>,
     resolver: resolve::PdStoreAddrResolver,
@@ -276,6 +277,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             concurrency_manager,
             env,
             background_worker,
+            flow_info_sender: None,
             flow_info_receiver: None,
         }
     }
@@ -489,6 +491,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn init_flow_receiver(&mut self) -> engine_rocks::FlowListener {
         let (tx, rx) = mpsc::channel();
+        self.flow_info_sender = Some(tx.clone());
         self.flow_info_receiver = Some(rx);
         engine_rocks::FlowListener::new(tx)
     }
@@ -520,6 +523,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
             self.router.clone(),
+            self.flow_info_sender.take().unwrap(),
             self.config.gc.clone(),
             self.pd_client.feature_gate().clone(),
         );
@@ -543,14 +547,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_servers(&mut self) -> Arc<VersionTrack<ServerConfig>> {
-        let gc_worker = self.init_gc_worker();
-        let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
-        let ttl_scheduler = ttl_checker.scheduler();
         let flow_controller = Arc::new(FlowController::new(
             &self.config.storage.flow_control,
             self.engines.as_ref().unwrap().engine.kv_engine(),
             self.flow_info_receiver.take().unwrap(),
         ));
+        let gc_worker = self.init_gc_worker();
+        let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
+        let ttl_scheduler = ttl_checker.scheduler();
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
@@ -885,29 +889,32 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Start resource metering.
-        let resource_metering_cpu_recorder = resource_metering::cpu::recorder::init_recorder();
-        let mut resource_metering_reporter_worker = Box::new(
-            WorkerBuilder::new("resource-metering-reporter")
-                .pending_capacity(30)
-                .create()
-                .lazy_build("resource-metering-reporter"),
+        let mut reporter_worker = WorkerBuilder::new("resource-metering-reporter")
+            .pending_capacity(30)
+            .create()
+            .lazy_build("resource-metering-reporter");
+        let reporter_scheduler = reporter_worker.scheduler();
+        let mut resource_metering_client = resource_metering::GrpcClient::default();
+        resource_metering_client.set_env(self.env.clone());
+        let reporter = resource_metering::Reporter::new(
+            resource_metering_client,
+            self.config.resource_metering.clone(),
+            reporter_scheduler.clone(),
         );
-        let resource_metering_reporter_scheduler = resource_metering_reporter_worker.scheduler();
+        reporter_worker.start_with_timer(reporter);
+        self.to_stop.push(Box::new(reporter_worker));
+        let cfg_manager = resource_metering::ConfigManager::new(
+            self.config.resource_metering.clone(),
+            reporter_scheduler,
+            resource_metering::init_recorder(
+                self.config.resource_metering.enabled,
+                self.config.resource_metering.precision.as_millis(),
+            ),
+        );
         cfg_controller.register(
             tikv::config::Module::ResourceMetering,
-            Box::new(resource_metering::ConfigManager::new(
-                self.config.resource_metering.clone(),
-                resource_metering_reporter_scheduler.clone(),
-                resource_metering_cpu_recorder,
-            )),
+            Box::new(cfg_manager),
         );
-        let resource_metering_reporter = resource_metering::reporter::ResourceMeteringReporter::new(
-            self.config.resource_metering.clone(),
-            resource_metering_reporter_scheduler,
-            self.env.clone(),
-        );
-        resource_metering_reporter_worker.start_with_timer(resource_metering_reporter);
-        self.to_stop.push(resource_metering_reporter_worker);
 
         self.servers = Some(Servers {
             lock_mgr,

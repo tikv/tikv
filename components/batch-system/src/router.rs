@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::fsm::{Fsm, FsmScheduler, FsmState};
 use crate::mailbox::{BasicMailbox, Mailbox};
 use crate::metrics::CHANNEL_FULL_COUNTER_VEC;
