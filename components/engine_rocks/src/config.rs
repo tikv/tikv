@@ -263,7 +263,7 @@ impl From<BlobRunMode> for DBTitanDBBlobRunMode {
 }
 
 macro_rules! numeric_enum_mod {
-    ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
+    ($name:ident $enum:ident { $($variant:ident($str:expr) = $value:expr, )* }) => {
         pub mod $name {
             use std::fmt;
 
@@ -274,7 +274,9 @@ macro_rules! numeric_enum_mod {
             pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
                 where S: Serializer
             {
-                serializer.serialize_i64(*mode as i64)
+                serializer.serialize_str(match *mode {
+                   $( $enum::$variant => $str, )*
+                })
             }
 
             pub fn deserialize<'de, D>(deserializer: D) -> Result<$enum, D::Error>
@@ -301,7 +303,10 @@ macro_rules! numeric_enum_mod {
                     fn visit_str<E>(self, value: &str) -> Result<$enum, E>
                         where E: de::Error
                     {
-                        Ok($enum::from(super::$enum::from(value)))
+                        match value {
+                            $( $str => Ok($enum::from($enum::$variant)), )*
+                            _ => Err(E::invalid_value(Unexpected::Str(value), &self))
+                        }
                     }
                 }
 
@@ -323,12 +328,12 @@ macro_rules! numeric_enum_mod {
                     }
 
                     let cases = vec![
-                        $(($enum::$variant, $value), )*
+                        $(($enum::$variant, $str), )*
                     ];
                     for (e, v) in cases {
                         let holder = EnumHolder { e };
                         let res = toml::to_string(&holder).unwrap();
-                        let exp = format!("e = {}\n", v);
+                        let exp = format!("e = \"{}\"\n", v);
                         assert_eq!(res, exp);
                         let h: EnumHolder = toml::from_str(&exp).unwrap();
                         assert!(h == holder);
@@ -377,27 +382,11 @@ impl From<CompactionPriority> for rocksdb::CompactionPriority {
 }
 
 numeric_enum_mod! {compaction_pri_serde CompactionPriority {
-    ByCompensatedSize = 0,
-    OldestLargestSeqFirst = 1,
-    OldestSmallestSeqFirst = 2,
-    MinOverlappingRatio = 3,
+    ByCompensatedSize("by-compensated-siz") = 0,
+    OldestLargestSeqFirst("oldest-largest-seq-first") = 1,
+    OldestSmallestSeqFirst("oldest-smallest-seq-first") = 2,
+    MinOverlappingRatio("min-overlapping-ratio") = 3,
 }}
-
-impl From<&str> for CompactionPriority {
-    fn from(name: &str) -> Self {
-        match name {
-            "by_compensated_size" => CompactionPriority::ByCompensatedSize,
-            "oldest_largest_seq_first" => CompactionPriority::OldestLargestSeqFirst,
-            "oldest_smallest_seq_first" => CompactionPriority::OldestSmallestSeqFirst,
-            "min_overlapping_ratio" => CompactionPriority::MinOverlappingRatio,
-            _ => panic!(
-                "expect: by_compensated_size, oldest_largest_seq_first, oldest_smallest_seq_first, \
-            min_overlapping_ratio got: {:?}",
-                name
-            ),
-        }
-    }
-}
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -408,9 +397,9 @@ pub enum DBRateLimiterMode {
 }
 
 numeric_enum_mod! {rate_limiter_mode_serde DBRateLimiterMode {
-    ReadOnly = 1,
-    WriteOnly = 2,
-    AllIo = 3,
+    ReadOnly("read-only") = 1,
+    WriteOnly("write-only") = 2,
+    AllIo("all-io") = 3,
 }}
 
 impl From<DBRateLimiterMode> for rocksdb::DBRateLimiterMode {
@@ -423,17 +412,6 @@ impl From<DBRateLimiterMode> for rocksdb::DBRateLimiterMode {
     }
 }
 
-impl From<&str> for DBRateLimiterMode {
-    fn from(name: &str) -> Self {
-        match name {
-            "read_only" => DBRateLimiterMode::ReadOnly,
-            "write_only" => DBRateLimiterMode::WriteOnly,
-            "all_io" => DBRateLimiterMode::AllIo,
-            _ => panic!("expect: read_only, write_only, all_io got: {:?}", name),
-        }
-    }
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DBCompactionStyle {
@@ -441,18 +419,6 @@ pub enum DBCompactionStyle {
     Universal = 1,
     Fifo = 2,
     None = 3,
-}
-
-impl From<&str> for DBCompactionStyle {
-    fn from(name: &str) -> Self {
-        match name {
-            "level" => DBCompactionStyle::Level,
-            "universal" => DBCompactionStyle::Universal,
-            "fifo" => DBCompactionStyle::Fifo,
-            "none" => DBCompactionStyle::None,
-            _ => panic!("expect: level, universal, fifo, none got: {:?}", name),
-        }
-    }
 }
 
 impl From<DBCompactionStyle> for rocksdb::DBCompactionStyle {
@@ -467,8 +433,10 @@ impl From<DBCompactionStyle> for rocksdb::DBCompactionStyle {
 }
 
 numeric_enum_mod! {compaction_style_serde DBCompactionStyle {
-    Level = 0,
-    Universal = 1,
+    Level("level") = 0,
+    Universal("universal") = 1,
+    Fifo("fifo") = 2,
+    None("none") = 3,
 }}
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -478,22 +446,6 @@ pub enum DBRecoveryMode {
     AbsoluteConsistency = 1,
     PointInTime = 2,
     SkipAnyCorruptedRecords = 3,
-}
-
-impl From<&str> for DBRecoveryMode {
-    fn from(name: &str) -> Self {
-        match name {
-            "tolerate_corrupted_tail_records" => DBRecoveryMode::TolerateCorruptedTailRecords,
-            "absolute_consistency" => DBRecoveryMode::AbsoluteConsistency,
-            "point_in_time" => DBRecoveryMode::PointInTime,
-            "skip_any_corrupted_records" => DBRecoveryMode::SkipAnyCorruptedRecords,
-            _ => panic!(
-                "expect: tolerate_corrupted_tail_records, absolute_consistency, point_in_time, \
-            skip_any_corrupted_records got: {:?}",
-                name
-            ),
-        }
-    }
 }
 
 impl From<DBRecoveryMode> for rocksdb::DBRecoveryMode {
@@ -512,10 +464,10 @@ impl From<DBRecoveryMode> for rocksdb::DBRecoveryMode {
 }
 
 numeric_enum_mod! {recovery_mode_serde DBRecoveryMode {
-    TolerateCorruptedTailRecords = 0,
-    AbsoluteConsistency = 1,
-    PointInTime = 2,
-    SkipAnyCorruptedRecords = 3,
+    TolerateCorruptedTailRecords("tolerate-corrupted-tail_records") = 0,
+    AbsoluteConsistency("absolute-consistency") = 1,
+    PointInTime("point-in-time") = 2,
+    SkipAnyCorruptedRecords("skip-any-corrupted_records") = 3,
 }}
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -530,29 +482,30 @@ pub enum PerfLevel {
     OutOfBounds,
 }
 
-impl From<&str> for PerfLevel {
-    fn from(name: &str) -> Self {
-        panic!(
-            "Do not support name: '{:?}', use index instead(0, 1, 2)...",
-            name
-        )
-    }
-}
-
 impl From<PerfLevel> for rocksdb::PerfLevel {
-    fn from(_: PerfLevel) -> Self {
-        panic!("Do not support this func...")
+    fn from(perf_level: PerfLevel) -> Self {
+        match perf_level {
+            PerfLevel::Uninitialized => rocksdb::PerfLevel::Uninitialized,
+            PerfLevel::Disable => rocksdb::PerfLevel::Disable,
+            PerfLevel::EnableCount => rocksdb::PerfLevel::EnableCount,
+            PerfLevel::EnableTimeExceptForMutex => rocksdb::PerfLevel::EnableTimeExceptForMutex,
+            PerfLevel::EnableTimeAndCPUTimeExceptForMutex => {
+                rocksdb::PerfLevel::EnableTimeAndCPUTimeExceptForMutex
+            }
+            PerfLevel::EnableTime => rocksdb::PerfLevel::EnableTime,
+            PerfLevel::OutOfBounds => rocksdb::PerfLevel::OutOfBounds,
+        }
     }
 }
 
 numeric_enum_mod! {perf_level_serde PerfLevel {
-    Uninitialized = 0,
-    Disable = 1,
-    EnableCount = 2,
-    EnableTimeExceptForMutex = 3,
-    EnableTimeAndCPUTimeExceptForMutex = 4,
-    EnableTime = 5,
-    OutOfBounds = 6,
+    Uninitialized("uninitialized") = 0,
+    Disable("disable") = 1,
+    EnableCount("enable-count") = 2,
+    EnableTimeExceptForMutex("enable-time-except-for-mutex") = 3,
+    EnableTimeAndCPUTimeExceptForMutex("enable-time-and-cputime-except-for-mutex") = 4,
+    EnableTime("enable-time") = 5,
+    OutOfBounds("out-of-bounds") = 6,
 }}
 
 #[cfg(test)]

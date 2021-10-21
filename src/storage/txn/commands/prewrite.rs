@@ -902,7 +902,7 @@ mod tests {
     fn test_prewrite_skip_too_many_tombstone() {
         use crate::server::gc_worker::gc_by_compact;
         use crate::storage::kv::PerfStatisticsInstant;
-        use engine_rocks::{set_perf_level, RPerfLevel};
+        use engine_rocks::{set_perf_level, PerfLevel};
         let mut mutations = Vec::default();
         let pri_key_number = 0;
         let pri_key = &[pri_key_number];
@@ -929,7 +929,7 @@ mod tests {
         // Gc rollback flags store in write-cf to make sure the next prewrite operation will skip
         // seek write cf.
         gc_by_compact(&engine, pri_key, 101);
-        set_perf_level(RPerfLevel::EnableTimeExceptForMutex);
+        set_perf_level(PerfLevel::EnableTimeExceptForMutex.into());
         let perf = PerfStatisticsInstant::new();
         let mut statistic = Statistics::default();
         while mutations.len() > FORWARD_MIN_MUTATIONS_NUM + 1 {
