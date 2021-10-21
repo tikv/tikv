@@ -271,8 +271,7 @@ impl Engine {
             let cnt = results.len().min(self.opts.num_compactors);
             for i in 0..cnt {
                 let pri = results[i].clone();
-                let g = &epoch::pin();
-                if let Ok(shard) = self.get_shard_with_ver(g, pri.shard_id, pri.shard_ver) {
+                if let Ok(shard) = self.get_shard_with_ver(pri.shard_id, pri.shard_ver) {
                     store_bool(&shard.compacting, true);
                 }
                 let res = self.compact(&pri);
@@ -288,11 +287,10 @@ impl Engine {
 
     fn get_compaction_priorities(&self, results: &mut Vec<CompactionPriority>) {
         results.truncate(0);
-        let g = &epoch::pin();
         for entry in self.shards.iter() {
-            let shard = load_resource(entry.value(), g);
+            let shard = entry.value().clone();
             if shard.is_active() && !load_bool(&shard.compacting) {
-                let pri = self.get_compaction_priority(shard, g);
+                let pri = self.get_compaction_priority(&shard);
                 if pri.score > 1.0 {
                     results.push(pri);
                 }
@@ -301,10 +299,11 @@ impl Engine {
         results.sort_by(|i, j| i.score.partial_cmp(&j.score).unwrap().reverse());
     }
 
-    fn get_compaction_priority(&self, shard: &Shard, g: &epoch::Guard) -> CompactionPriority {
+    fn get_compaction_priority(&self, shard: &Shard) -> CompactionPriority {
         let mut max_pri = CompactionPriority::default();
         max_pri.shard_id = shard.id;
         max_pri.shard_ver = shard.ver;
+        let g = &epoch::pin();
         let l0s = shard.get_l0_tbls(g);
         let size_score = l0s.total_size() as f64 / self.opts.base_size as f64;
         let num_tbl_score = l0s.tbls.len() as f64 / 5.0;
@@ -327,8 +326,7 @@ impl Engine {
     }
 
     pub(crate) fn compact(&self, pri: &CompactionPriority) -> Result<()> {
-        let g = &epoch::pin();
-        let shard = self.get_shard_with_ver(g, pri.shard_id, pri.shard_ver)?;
+        let shard = self.get_shard_with_ver(pri.shard_id, pri.shard_ver)?;
         if shard.is_splitting() {
             info!("avoid compaction for splitting shard");
             return Ok(());
@@ -342,19 +340,20 @@ impl Engine {
                 "compaction shard multi-cf shard {}:{} score:{}",
                 shard.id, shard.ver, pri.score
             );
-            let req = self.build_compact_l0_request(shard, g)?;
+            let req = self.build_compact_l0_request(&shard)?;
             let comp = self.comp_client.compact(req)?;
             info!(
                 "compact shard {}:{} level {}, cf {} done",
                 shard.id, shard.ver, 0, -1
             );
-            self.handle_compact_response(comp, shard);
+            self.handle_compact_response(comp, &shard);
             return Ok(());
         }
         info!(
             "start compaction shard {}:{} leve:{} cf:{}, score:{}",
             shard.id, shard.ver, pri.level, pri.cf, pri.score
         );
+        let g = &epoch::pin();
         let scf = shard.get_cf(pri.cf as usize, g);
         let this_level = &scf.levels[pri.level - 1];
         let next_level = &scf.levels[pri.level];
@@ -362,7 +361,7 @@ impl Engine {
         let ok = cd.fill_table(this_level, next_level);
         assert!(ok);
         scf.set_has_overlapping(&mut cd);
-        let req = self.build_compact_ln_request(shard, &cd)?;
+        let req = self.build_compact_ln_request(&shard, &cd)?;
         if req.bottoms.len() == 0 && req.cf as usize == WRITE_CF {
             // Move down. only write CF benefits from this optimization.
             let mut comp = pb::Compaction::new();
@@ -380,19 +379,16 @@ impl Engine {
                 tbl_creates.push(tbl_create);
             }
             comp.set_table_creates(RepeatedField::from_vec(tbl_creates));
-            self.handle_compact_response(comp, shard);
+            self.handle_compact_response(comp, &shard);
             return Ok(());
         }
         let comp = self.comp_client.compact(req)?;
-        self.handle_compact_response(comp, shard);
+        self.handle_compact_response(comp, &shard);
         Ok(())
     }
 
-    pub(crate) fn build_compact_l0_request(
-        &self,
-        shard: &Shard,
-        g: &epoch::Guard,
-    ) -> Result<CompactionRequest> {
+    pub(crate) fn build_compact_l0_request(&self, shard: &Shard) -> Result<CompactionRequest> {
+        let g = &epoch::pin();
         let l0s = shard.get_l0_tbls(g);
         let mut req = self.new_compact_request(shard, -1, 0);
         let mut total_size = 0;
@@ -403,7 +399,7 @@ impl Engine {
         for cf in 0..NUM_CFS {
             let lh = &shard.get_cf(cf, g).levels[0];
             let mut bottoms = vec![];
-            for tbl in &lh.tables {
+            for tbl in lh.tables.iter() {
                 bottoms.push(tbl.id());
                 total_size += tbl.size();
             }
@@ -534,14 +530,14 @@ pub(crate) fn compact_l0(
         let bot_ids = &req.multi_cf_bottoms[cf];
         let bot_files = load_table_files(&bot_ids, fs.clone(), opts)?;
         let bot_tbls = in_mem_files_to_tables(&bot_files, cache.clone());
-        mult_cf_bot_tbls.push(bot_tbls);
+        mult_cf_bot_tbls.push(Arc::new(bot_tbls));
     }
 
     let channel_cap = req.end_id - req.start_id;
     let (tx, rx) = mpsc::sync_channel(channel_cap as usize);
     let mut id = req.start_id;
     for cf in 0..NUM_CFS {
-        let mut iter = build_compact_l0_iterator(cf, &l0_tbls, &mult_cf_bot_tbls[cf]);
+        let mut iter = build_compact_l0_iterator(cf, l0_tbls.clone(), mult_cf_bot_tbls[cf].clone());
         let mut helper = CompactL0Helper::new(cf, req);
         loop {
             let (tbl_create, data) = helper.build_one(&mut iter, id)?;
@@ -620,12 +616,12 @@ fn in_mem_files_to_tables(
     tables
 }
 
-fn build_compact_l0_iterator<'a>(
+fn build_compact_l0_iterator(
     cf: usize,
-    top_tbls: &'a Vec<sstable::L0Table>,
-    bot_tbls: &'a Vec<sstable::SSTable>,
-) -> Box<dyn table::Iterator + 'a> {
-    let mut iters: Vec<Box<dyn table::Iterator + 'a>> = vec![];
+    top_tbls: Vec<sstable::L0Table>,
+    bot_tbls: Arc<Vec<sstable::SSTable>>,
+) -> Box<dyn table::Iterator> {
+    let mut iters: Vec<Box<dyn table::Iterator>> = vec![];
     for top_tbl in top_tbls {
         if let Some(tbl) = top_tbl.get_cf(cf) {
             let iter = tbl.new_iterator(false);
@@ -742,11 +738,11 @@ pub(crate) fn compact_tables(
     let cache = SegmentedCache::new(256, 1);
     let opts = dfs::Options::new(req.shard_id, req.shard_ver);
     let top_files = load_table_files(&req.tops, fs.clone(), opts)?;
-    let top_tables = in_mem_files_to_tables(&top_files, cache.clone());
+    let top_tables = Arc::new(in_mem_files_to_tables(&top_files, cache.clone()));
     let bot_files = load_table_files(&req.bottoms, fs.clone(), opts)?;
-    let bot_tables = in_mem_files_to_tables(&bot_files, cache.clone());
-    let top_iter = Box::new(sstable::ConcatIterator::new(&top_tables, false));
-    let bot_iter = Box::new(sstable::ConcatIterator::new(&bot_tables, false));
+    let bot_tables = Arc::new(in_mem_files_to_tables(&bot_files, cache.clone()));
+    let top_iter = Box::new(sstable::ConcatIterator::new(top_tables, false));
+    let bot_iter = Box::new(sstable::ConcatIterator::new(bot_tables, false));
     let mut iter = table::new_merge_iterator(vec![top_iter, bot_iter], false);
     iter.rewind();
 

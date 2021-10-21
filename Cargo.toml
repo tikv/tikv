@@ -257,7 +257,7 @@ members = [
   "components/kvenginepb",
   "components/rfengine",
   "components/rfstore",
-  "components/rfserver",
+  "components/cloud_server",
 ]
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 

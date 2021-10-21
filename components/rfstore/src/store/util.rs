@@ -1,10 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::{Error, Result};
+use kvproto::metapb::{self};
+use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use raft_proto::eraftpb::{self, MessageType};
 use std::fmt;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::Arc;
+use tikv_util::box_err;
+use tikv_util::debug;
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::Either;
 use time::{Duration, Timespec};
@@ -25,6 +30,229 @@ pub fn is_initial_msg(msg: &eraftpb::Message) -> bool {
         || msg_type == MessageType::MsgRequestPreVote
         // the peer has not been known to this leader, it may exist or not.
         || (msg_type == MessageType::MsgHeartbeat && msg.get_commit() == raft::INVALID_INDEX)
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct AdminCmdEpochState {
+    pub check_ver: bool,
+    pub check_conf_ver: bool,
+    pub change_ver: bool,
+    pub change_conf_ver: bool,
+}
+
+impl AdminCmdEpochState {
+    fn new(
+        check_ver: bool,
+        check_conf_ver: bool,
+        change_ver: bool,
+        change_conf_ver: bool,
+    ) -> AdminCmdEpochState {
+        AdminCmdEpochState {
+            check_ver,
+            check_conf_ver,
+            change_ver,
+            change_conf_ver,
+        }
+    }
+}
+
+/// WARNING: the existing settings below **MUST NOT** be changed!!!
+/// Changing any admin cmd's `AdminCmdEpochState` or the epoch-change behavior during applying
+/// will break upgrade compatibility and correctness dependency of `CmdEpochChecker`.
+/// Please remember it is very difficult to fix the issues arising from not following this rule.
+///
+/// If you really want to change an admin cmd behavior, please add a new admin cmd and **DO NOT**
+/// delete the old one.
+pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochState {
+    match admin_cmp_type {
+        AdminCmdType::InvalidAdmin => AdminCmdEpochState::new(false, false, false, false),
+        AdminCmdType::CompactLog => AdminCmdEpochState::new(false, false, false, false),
+        AdminCmdType::ComputeHash => AdminCmdEpochState::new(false, false, false, false),
+        AdminCmdType::VerifyHash => AdminCmdEpochState::new(false, false, false, false),
+        // Change peer
+        AdminCmdType::ChangePeer => AdminCmdEpochState::new(false, true, false, true),
+        AdminCmdType::ChangePeerV2 => AdminCmdEpochState::new(false, true, false, true),
+        // Split
+        AdminCmdType::Split => AdminCmdEpochState::new(true, true, true, false),
+        AdminCmdType::BatchSplit => AdminCmdEpochState::new(true, true, true, false),
+        // Merge
+        AdminCmdType::PrepareMerge => AdminCmdEpochState::new(true, true, true, true),
+        AdminCmdType::CommitMerge => AdminCmdEpochState::new(true, true, true, false),
+        AdminCmdType::RollbackMerge => AdminCmdEpochState::new(true, true, true, false),
+        // Transfer leader
+        AdminCmdType::TransferLeader => AdminCmdEpochState::new(true, true, false, false),
+    }
+}
+
+/// WARNING: `NORMAL_REQ_CHECK_VER` and `NORMAL_REQ_CHECK_CONF_VER` **MUST NOT** be changed.
+/// The reason is the same as `admin_cmd_epoch_lookup`.
+pub static NORMAL_REQ_CHECK_VER: bool = true;
+pub static NORMAL_REQ_CHECK_CONF_VER: bool = false;
+
+pub fn check_region_epoch(
+    req: &RaftCmdRequest,
+    region: &metapb::Region,
+    include_region: bool,
+) -> Result<()> {
+    let (check_ver, check_conf_ver) = if !req.has_admin_request() {
+        // for get/set/delete, we don't care conf_version.
+        (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
+    } else {
+        let epoch_state = admin_cmd_epoch_lookup(req.get_admin_request().get_cmd_type());
+        (epoch_state.check_ver, epoch_state.check_conf_ver)
+    };
+
+    if !check_ver && !check_conf_ver {
+        return Ok(());
+    }
+
+    if !req.get_header().has_region_epoch() {
+        return Err(box_err!("missing epoch!"));
+    }
+
+    let from_epoch = req.get_header().get_region_epoch();
+    compare_region_epoch(
+        from_epoch,
+        region,
+        check_conf_ver,
+        check_ver,
+        include_region,
+    )
+}
+
+pub fn compare_region_epoch(
+    from_epoch: &metapb::RegionEpoch,
+    region: &metapb::Region,
+    check_conf_ver: bool,
+    check_ver: bool,
+    include_region: bool,
+) -> Result<()> {
+    // We must check epochs strictly to avoid key not in region error.
+    //
+    // A 3 nodes TiKV cluster with merge enabled, after commit merge, TiKV A
+    // tells TiDB with a epoch not match error contains the latest target Region
+    // info, TiDB updates its region cache and sends requests to TiKV B,
+    // and TiKV B has not applied commit merge yet, since the region epoch in
+    // request is higher than TiKV B, the request must be denied due to epoch
+    // not match, so it does not read on a stale snapshot, thus avoid the
+    // KeyNotInRegion error.
+    let current_epoch = region.get_region_epoch();
+    if (check_conf_ver && from_epoch.get_conf_ver() != current_epoch.get_conf_ver())
+        || (check_ver && from_epoch.get_version() != current_epoch.get_version())
+    {
+        debug!(
+            "epoch not match";
+            "region_id" => region.get_id(),
+            "from_epoch" => ?from_epoch,
+            "current_epoch" => ?current_epoch,
+        );
+        let regions = if include_region {
+            vec![region.to_owned()]
+        } else {
+            vec![]
+        };
+        return Err(Error::EpochNotMatch(
+            format!(
+                "current epoch of region {} is {:?}, but you \
+                 sent {:?}",
+                region.get_id(),
+                current_epoch,
+                from_epoch
+            ),
+            regions,
+        ));
+    }
+
+    Ok(())
+}
+
+pub fn is_region_epoch_equal(
+    from_epoch: &metapb::RegionEpoch,
+    current_epoch: &metapb::RegionEpoch,
+) -> bool {
+    from_epoch.get_conf_ver() == current_epoch.get_conf_ver()
+        && from_epoch.get_version() == current_epoch.get_version()
+}
+
+#[inline]
+pub fn check_store_id(req: &RaftCmdRequest, store_id: u64) -> Result<()> {
+    let peer = req.get_header().get_peer();
+    if peer.get_store_id() == store_id {
+        Ok(())
+    } else {
+        Err(Error::StoreNotMatch {
+            to_store_id: peer.get_store_id(),
+            my_store_id: store_id,
+        })
+    }
+}
+
+#[inline]
+pub fn check_term(req: &RaftCmdRequest, term: u64) -> Result<()> {
+    let header = req.get_header();
+    if header.get_term() == 0 || term <= header.get_term() + 1 {
+        Ok(())
+    } else {
+        // If header's term is 2 verions behind current term,
+        // leadership may have been changed away.
+        Err(Error::StaleCommand)
+    }
+}
+
+#[inline]
+pub fn check_peer_id(req: &RaftCmdRequest, peer_id: u64) -> Result<()> {
+    let header = req.get_header();
+    if header.get_peer().get_id() == peer_id {
+        Ok(())
+    } else {
+        Err(box_err!(
+            "mismatch peer id {} != {}",
+            header.get_peer().get_id(),
+            peer_id
+        ))
+    }
+}
+
+/// Check if key in region range (`start_key`, `end_key`).
+pub fn check_key_in_region_exclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
+    let end_key = region.get_end_key();
+    let start_key = region.get_start_key();
+    if start_key < key && (key < end_key || end_key.is_empty()) {
+        Ok(())
+    } else {
+        Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
+    }
+}
+
+/// Check if key in region range [`start_key`, `end_key`].
+pub fn check_key_in_region_inclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
+    let end_key = region.get_end_key();
+    let start_key = region.get_start_key();
+    if key >= start_key && (end_key.is_empty() || key <= end_key) {
+        Ok(())
+    } else {
+        Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
+    }
+}
+
+/// Check if key in region range [`start_key`, `end_key`).
+pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
+    let end_key = region.get_end_key();
+    let start_key = region.get_start_key();
+    if key >= start_key && (end_key.is_empty() || key < end_key) {
+        Ok(())
+    } else {
+        Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
+    }
+}
+
+pub fn cf_name_to_num(cf_name: &str) -> usize {
+    match cf_name {
+        "write" => 0,
+        "lock" => 1,
+        "extra" => 2,
+        _ => 0,
+    }
 }
 
 /// Lease records an expired time, for examining the current moment is in lease or not.

@@ -20,6 +20,8 @@ pub(crate) struct ApplyMsgs {
     pub(crate) msgs: Vec<PeerMsg>,
 }
 
+pub(crate) struct ApplyBatch {}
+
 pub(crate) struct Applier {}
 
 impl Applier {

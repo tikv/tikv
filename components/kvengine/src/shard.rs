@@ -109,14 +109,14 @@ pub struct Shard {
     pub ver: u64,
     pub start: Bytes,
     pub end: Bytes,
-    pub(crate) cfs: [Atomic<ShardCF>; NUM_CFS],
-    opt: Arc<Options>,
+    pub(crate) cfs: [Atomic<Arc<ShardCF>>; NUM_CFS],
+    pub(crate) opt: Arc<Options>,
 
-    mem_tbls: Atomic<MemTables>,
-    pub(crate) l0_tbls: Atomic<L0Tables>,
+    mem_tbls: Atomic<Arc<MemTables>>,
+    pub(crate) l0_tbls: Atomic<Arc<L0Tables>>,
 
     split_stage: AtomicI32,
-    pub(crate) split_ctx: Atomic<SplitContext>,
+    pub(crate) split_ctx: Atomic<Arc<SplitContext>>,
 
     // If the shard is not active, flush mem table and do compaction will ignore this shard.
     pub(crate) active: AtomicBool,
@@ -131,6 +131,7 @@ pub struct Shard {
 
     pub(crate) estimated_size: AtomicU64,
     pub(crate) meta_seq: AtomicU64,
+    pub(crate) write_sequence: AtomicU64,
 
     pub(crate) ingest_pre_split_seq: u64,
 
@@ -159,10 +160,10 @@ impl Shard {
             end: Bytes::copy_from_slice(end),
             cfs: Default::default(),
             opt: opt.clone(),
-            mem_tbls: Atomic::new(MemTables::new(vec![CFTable::new()])),
-            l0_tbls: Atomic::new(L0Tables::new(Vec::new())),
+            mem_tbls: Atomic::new(Arc::new(MemTables::new(vec![CFTable::new()]))),
+            l0_tbls: Atomic::new(Arc::new(L0Tables::new(Vec::new()))),
             split_stage: AtomicI32::new(kvenginepb::SplitStage::Initial.value()),
-            split_ctx: Atomic::new(SplitContext::new(&[])),
+            split_ctx: Atomic::new(Arc::new(SplitContext::new(&[]))),
             active: Default::default(),
             properties: Properties::new().apply_pb(props),
             compacting: Default::default(),
@@ -172,6 +173,7 @@ impl Shard {
             base_ts: 1,
             estimated_size: Default::default(),
             meta_seq: Default::default(),
+            write_sequence: Default::default(),
             ingest_pre_split_seq: Default::default(),
             size_stats: Default::default(),
             remove_file: AtomicBool::new(false),
@@ -181,7 +183,7 @@ impl Shard {
             shard.set_max_mem_table_size(LittleEndian::read_u64(val.as_slice()))
         }
         for cf in 0..NUM_CFS {
-            let scf = ShardCF::new(opt.cfs[cf].max_levels);
+            let scf = Arc::new(ShardCF::new(opt.cfs[cf].max_levels));
             shard.cfs[cf].store(Owned::new(scf), Relaxed);
         }
         shard
@@ -205,7 +207,8 @@ impl Shard {
         shard.set_split_stage(meta.split_stage);
         store_bool(&shard.initial_flushed, true);
         shard.base_ts = meta.base_ts;
-        shard.meta_seq.store(meta.seq, Relaxed);
+        shard.meta_seq.store(meta.seq, Release);
+        shard.write_sequence.store(meta.seq, Release);
         shard
     }
 
@@ -236,7 +239,8 @@ impl Shard {
         shard.set_split_stage(cs.get_stage());
         store_bool(&shard.initial_flushed, true);
         shard.base_ts = snap.base_ts;
-        shard.meta_seq.store(cs.sequence, Relaxed);
+        shard.meta_seq.store(cs.sequence, Release);
+        shard.write_sequence.store(cs.sequence, Release);
         info!(
             "ingest shard {}:{} max_table_size {}, mem_table_ts {}",
             cs.shard_id,
@@ -257,7 +261,7 @@ impl Shard {
         }
         let ids_ref = &mut ids;
         self.for_each_level(|cf, l| {
-            for tbl in &l.tables {
+            for tbl in l.tables.iter() {
                 ids_ref.push(tbl.id());
             }
             false
@@ -304,7 +308,7 @@ impl Shard {
     pub(crate) fn set_split_keys(&self, keys: &[Vec<u8>]) -> bool {
         if self.get_split_stage() == pb::SplitStage::Initial {
             self.split_ctx
-                .store(Owned::new(SplitContext::new(keys)), Release);
+                .store(Owned::new(Arc::new(SplitContext::new(keys))), Release);
             self.set_split_stage(pb::SplitStage::PreSplit);
             return true;
         }
@@ -390,7 +394,7 @@ impl Shard {
         self.split_stage.store(stage.value(), Release);
     }
 
-    pub(crate) fn get_split_ctx<'a>(&self, g: &'a epoch::Guard) -> &'a SplitContext {
+    pub(crate) fn get_split_ctx<'a>(&self, g: &'a epoch::Guard) -> &'a Arc<SplitContext> {
         load_resource(&self.split_ctx, g)
     }
 
@@ -399,20 +403,20 @@ impl Shard {
         &ctx.split_keys
     }
 
-    pub(crate) fn get_mem_tbls<'a>(&self, g: &'a epoch::Guard) -> &'a MemTables {
+    pub(crate) fn get_mem_tbls<'a>(&self, g: &'a epoch::Guard) -> &'a Arc<MemTables> {
         load_resource(&self.mem_tbls, g)
     }
 
-    pub(crate) fn get_l0_tbls<'a>(&self, g: &'a epoch::Guard) -> &'a L0Tables {
+    pub(crate) fn get_l0_tbls<'a>(&self, g: &'a epoch::Guard) -> &'a Arc<L0Tables> {
         load_resource(&self.l0_tbls, g)
     }
 
-    pub(crate) fn get_cf<'a>(&self, cf: usize, g: &'a epoch::Guard) -> &'a ShardCF {
+    pub(crate) fn get_cf<'a>(&self, cf: usize, g: &'a epoch::Guard) -> &'a Arc<ShardCF> {
         load_resource(&self.cfs[cf], g)
     }
 
     pub(crate) fn set_cf(&self, cf: usize, scf: ShardCF) {
-        self.cfs[cf].store(epoch::Owned::new(scf), Release);
+        self.cfs[cf].store(epoch::Owned::new(Arc::new(scf)), Release);
     }
 
     pub fn get_property(&self, key: &str) -> Option<Bytes> {
@@ -456,28 +460,13 @@ impl Shard {
             files.push(l0.id());
         }
         self.for_each_level(|cf, lh| {
-            for tbl in &lh.tables {
+            for tbl in lh.tables.iter() {
                 files.push(tbl.id())
             }
             false
         });
         files.sort();
         files
-    }
-
-    pub fn new_snap_access<'a>(&self, cfs: [CFConfig; NUM_CFS], g: &'a Guard) -> SnapAccess<'a> {
-        let mut splitting = None;
-        if self.is_splitting() {
-            splitting = Some(self.get_split_ctx(g));
-        }
-        let mem_tbls = self.get_mem_tbls(g);
-        let l0_tbls = self.get_l0_tbls(g);
-        let mut scfs = Vec::with_capacity(NUM_CFS);
-        for cf in 0..NUM_CFS {
-            let scf = self.get_cf(cf, g);
-            scfs.push(scf);
-        }
-        SnapAccess::new(cfs, splitting, mem_tbls, l0_tbls, scfs)
     }
 
     pub fn get_writable_mem_table<'a>(&self, g: &'a Guard) -> &'a memtable::CFTable {
@@ -497,7 +486,7 @@ impl Shard {
                 tbl_vec.push(tbl.clone());
             }
             let new_mem_tbls = MemTables { tbls: tbl_vec };
-            if cas_resource(&self.mem_tbls, g, shared, new_mem_tbls) {
+            if cas_resource(&self.mem_tbls, g, shared, Arc::new(new_mem_tbls)) {
                 break;
             }
         }
@@ -519,7 +508,7 @@ impl Shard {
                 tbl_vec.push(old_mem_tbls[i].clone());
             }
             let new_mem_tbls = MemTables { tbls: tbl_vec };
-            if cas_resource(&self.mem_tbls, g, shared, new_mem_tbls) {
+            if cas_resource(&self.mem_tbls, g, shared, Arc::new(new_mem_tbls)) {
                 break;
             }
         }
@@ -542,7 +531,7 @@ impl Shard {
                 tbl_vec.push(tbl.clone());
             }
             let new_l0_tabls = L0Tables { tbls: tbl_vec };
-            if cas_resource(&self.l0_tbls, g, shared, new_l0_tabls) {
+            if cas_resource(&self.l0_tbls, g, shared, Arc::new(new_l0_tabls)) {
                 break;
             }
         }
@@ -561,10 +550,14 @@ impl Shard {
             let new_l0_tbls = L0Tables {
                 tbls: old_l0_tbls[..new_len].to_vec(),
             };
-            if cas_resource(&self.l0_tbls, g, shared, new_l0_tbls) {
+            if cas_resource(&self.l0_tbls, g, shared, Arc::new(new_l0_tbls)) {
                 break;
             }
         }
+    }
+
+    pub fn get_write_sequence(&self) -> u64 {
+        self.write_sequence.load(Ordering::Acquire)
     }
 }
 
@@ -615,6 +608,64 @@ impl ShardSizeStats {
     }
 }
 
+pub(crate) struct ShardCFBuilder {
+    levels: Vec<LevelHandlerBuilder>,
+}
+
+impl ShardCFBuilder {
+    pub(crate) fn new(max_level: usize) -> Self {
+        Self {
+            levels: vec![LevelHandlerBuilder::new(); max_level],
+        }
+    }
+
+    pub(crate) fn build(&mut self) -> ShardCF {
+        let mut levels = Vec::with_capacity(self.levels.len());
+        for i in 0..self.levels.len() {
+            levels.push(self.levels[i].build(i + 1))
+        }
+        ShardCF { levels }
+    }
+
+    pub(crate) fn add_table(&mut self, tbl: SSTable, level: usize) {
+        self.levels[level - 1].add_table(tbl)
+    }
+}
+
+#[derive(Clone)]
+struct LevelHandlerBuilder {
+    tables: Option<Vec<SSTable>>,
+}
+
+impl LevelHandlerBuilder {
+    fn new() -> Self {
+        Self {
+            tables: Some(vec![]),
+        }
+    }
+
+    fn build(&mut self, level: usize) -> LevelHandler {
+        let mut tables = self.tables.take().unwrap();
+        tables.sort_by(|a, b| a.smallest().cmp(b.smallest()));
+        let mut total_size = 0;
+        for tbl in tables.iter() {
+            total_size += tbl.size()
+        }
+        LevelHandler {
+            tables: Arc::new(tables),
+            level,
+            total_size,
+        }
+    }
+
+    fn add_table(&mut self, tbl: SSTable) {
+        if self.tables.is_none() {
+            self.tables = Some(vec![])
+        }
+        self.tables.as_mut().unwrap().push(tbl)
+    }
+}
+
 #[derive(Default, Clone)]
 pub(crate) struct ShardCF {
     pub(crate) levels: Vec<LevelHandler>,
@@ -647,7 +698,7 @@ impl ShardCF {
 
 #[derive(Default, Clone)]
 pub struct LevelHandler {
-    pub(crate) tables: Vec<SSTable>,
+    pub(crate) tables: Arc<Vec<SSTable>>,
     pub(crate) level: usize,
     pub(crate) total_size: u64,
 }
@@ -655,7 +706,7 @@ pub struct LevelHandler {
 impl LevelHandler {
     pub fn new(level: usize) -> Self {
         Self {
-            tables: Vec::new(),
+            tables: Arc::new(Vec::new()),
             level,
             total_size: 0,
         }

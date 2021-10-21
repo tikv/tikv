@@ -42,8 +42,7 @@ fn test_engine() {
     )
     .unwrap();
     {
-        let g = &epoch::pin();
-        let shard = engine.get_shard(1, g).unwrap();
+        let shard = engine.get_shard(1).unwrap();
         store_bool(&shard.active, true);
     }
     let (applier_tx, applier_rx) = channel::bounded(256);
@@ -216,9 +215,8 @@ impl Applier {
                         ids.push(new_shard.shard_id);
                     }
                     unwrap_or_return!(self.engine.finish_split(cs), "apply split");
-                    let g = &epoch::pin();
                     for id in ids {
-                        let shard = self.engine.get_shard(id, g).unwrap();
+                        let shard = self.engine.get_shard(id).unwrap();
                         shard.set_active(true);
                     }
                     info!("applier executed split");
@@ -351,8 +349,7 @@ impl Splitter {
 
     fn wait_for_split_file_done(&mut self) {
         loop {
-            let g = &epoch::pin();
-            let shard = self.engine.get_shard(1, g).unwrap();
+            let shard = self.engine.get_shard(1).unwrap();
             if shard.get_split_stage() == pb::SplitStage::SplitFileDone {
                 return;
             }
@@ -458,8 +455,8 @@ fn check_get(
     for i in begin..end {
         let key = format!("key{:06}", i);
         let g = &epoch::pin();
-        let shard = get_shard_for_key(key.as_bytes(), g, en);
-        let snap = shard.new_snap_access(en.opts.cfs, g);
+        let shard = get_shard_for_key(key.as_bytes(), en);
+        let snap = SnapAccess::new(&shard);
         if let Some(item) = snap.get(cf, key.as_bytes(), 2) {
             assert_eq!(item.get_value(), key.repeat(val_repeat).as_bytes());
         } else {
@@ -477,12 +474,11 @@ fn check_get(
 
 fn check_iterater(begin: usize, end: usize, cf: usize, val_repeat: usize, en: &Engine) {
     thread::sleep(Duration::from_secs(1));
-    let g = &epoch::pin();
     let ids = vec![2, 3, 4, 5, 1];
     let mut i = begin;
     for id in ids {
-        let shard = en.get_shard(id, g).unwrap();
-        let snap = shard.new_snap_access(en.opts.cfs.clone(), g);
+        let shard = en.get_shard(id).unwrap();
+        let snap = SnapAccess::new(&shard);
         let mut iter = snap.new_iterator(cf, false, false);
         iter.rewind();
         while iter.valid() {
@@ -501,15 +497,15 @@ fn bytes_to_str(bin: &Bytes) -> String {
     String::from_utf8_lossy(bin.chunk()).to_string()
 }
 
-fn get_shard_for_key<'a>(key: &[u8], g: &'a epoch::Guard, en: &Engine) -> &'a Shard {
+fn get_shard_for_key(key: &[u8], en: &Engine) -> Arc<Shard> {
     for id in 1_u64..=5 {
-        if let Some(shard) = en.get_shard(id, g) {
+        if let Some(shard) = en.get_shard(id) {
             if shard.overlap_key(key) {
                 return shard;
             }
         }
     }
-    return en.get_shard(1, g).unwrap();
+    return en.get_shard(1).unwrap();
 }
 
 fn init_logger() {

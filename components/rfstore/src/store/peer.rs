@@ -2,9 +2,8 @@
 
 use super::peer_storage::InvokeContext;
 use super::*;
-use crate::coprocessor;
 use crate::errors::*;
-use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
+use crate::store::{Progress as ReadProgress, ReadDelegate, RegionTask};
 use bitflags::bitflags;
 use byteorder::BigEndian;
 use bytes::{BufMut, Bytes, BytesMut};
@@ -20,6 +19,7 @@ use raft;
 use raft::eraftpb::MessageType;
 use raft::{RawNode, SnapshotStatus, Storage};
 use raft_proto::*;
+use raftstore::coprocessor;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::AtomicU64;
@@ -261,7 +261,7 @@ pub(crate) struct DestroyPeerJob {
 
 pub(crate) struct Peer {
     /// The ID of the Region which this Peer belongs to.
-    region_id: u64,
+    pub(crate) region_id: u64,
     /// The Peer meta information.
     pub(crate) peer: metapb::Peer,
     /// The Raft state machine of this Peer.
@@ -502,7 +502,7 @@ impl Peer {
     /// has been preserved in a durable device.
     pub fn set_region(
         &mut self,
-        host: &coprocessor::CoprocessorHost,
+        host: &coprocessor::CoprocessorHost<kvengine::Engine>,
         reader: &mut ReadDelegate,
         region: metapb::Region,
     ) {
@@ -974,7 +974,6 @@ impl Peer {
 pub enum RequestPolicy {
     // Handle the read request directly without dispatch.
     ReadLocal,
-    StaleRead,
     // Handle the read request via raft's SafeReadIndex mechanism.
     ReadIndex,
     ProposeNormal,

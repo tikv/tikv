@@ -113,12 +113,8 @@ impl WriteBatch {
 }
 
 impl Engine {
-    pub(crate) fn switch_mem_table<'a>(
-        &self,
-        g: &'a epoch::Guard,
-        shard: &'a Shard,
-        commit_ts: u64,
-    ) -> memtable::CFTable {
+    pub(crate) fn switch_mem_table(&self, shard: &Shard, commit_ts: u64) -> memtable::CFTable {
+        let g = &epoch::pin();
         let mut writable = shard.get_writable_mem_table(g).clone();
         if writable.is_empty() {
             writable = memtable::CFTable::new();
@@ -140,27 +136,22 @@ impl Engine {
 
     pub fn write(&self, wb: &mut WriteBatch) {
         let g = &epoch::pin();
-        let shard = unsafe {
-            self.shards
-                .get(&wb.shard_id)
-                .unwrap()
-                .load(Ordering::Acquire, g)
-                .deref()
-        };
+        let shard = self.get_shard(wb.shard_id).unwrap();
         let commit_ts = shard.base_ts + wb.sequence;
         self.update_write_batch_version(wb, commit_ts);
         if shard.is_splitting() {
             if shard.ingest_pre_split_seq == 0 || wb.sequence > shard.ingest_pre_split_seq {
                 let split_ctx = shard.get_split_ctx(g);
-                self.write_splitting(wb, shard, split_ctx);
+                self.write_splitting(wb, &shard, split_ctx);
+                store_u64(&shard.write_sequence, wb.sequence);
                 return;
             }
             // Recover the shard to the pre-split stage when this shard is ingested.
         }
         let mut mem_tbl = shard.get_writable_mem_table(g);
         if mem_tbl.size() + wb.estimated_size() > shard.get_max_mem_table_size() as usize {
-            let old_mem_tbl = self.switch_mem_table(g, shard, commit_ts);
-            self.schedule_flush_task(shard, old_mem_tbl);
+            let old_mem_tbl = self.switch_mem_table(&shard, commit_ts);
+            self.schedule_flush_task(&shard, old_mem_tbl);
             mem_tbl = shard.get_writable_mem_table(g);
         }
 
@@ -178,6 +169,7 @@ impl Engine {
                 );
             }
         }
+        store_u64(&shard.write_sequence, wb.sequence);
     }
 
     fn update_write_batch_version(&self, wb: &mut WriteBatch, commit_ts: u64) {

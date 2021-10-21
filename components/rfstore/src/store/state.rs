@@ -5,7 +5,7 @@ use super::*;
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{BufMut, Bytes, BytesMut};
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct RaftApplyState {
     pub(crate) applied_index: u64,
     pub(crate) applied_index_term: u64,
@@ -42,7 +42,7 @@ impl RaftApplyState {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct RaftState {
     pub(crate) term: u64,
     pub(crate) vote: u64,

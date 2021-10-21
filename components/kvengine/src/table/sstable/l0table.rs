@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::Deref;
 use std::sync::Arc;
 
 use byteorder::{ByteOrder, LittleEndian};
@@ -38,6 +39,30 @@ impl L0Footer {
 
 #[derive(Clone)]
 pub struct L0Table {
+    core: Arc<L0TableCore>,
+}
+
+impl Deref for L0Table {
+    type Target = L0TableCore;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
+}
+
+impl L0Table {
+    pub fn new(
+        file: Arc<dyn dfs::File>,
+        cache: SegmentedCache<BlockCacheKey, Bytes>,
+    ) -> Result<Self> {
+        let core = L0TableCore::new(file, cache)?;
+        Ok(Self {
+            core: Arc::new(core),
+        })
+    }
+}
+
+pub struct L0TableCore {
     footer: L0Footer,
     file: Arc<dyn dfs::File>,
     cfs: [Option<sstable::SSTable>; NUM_CFS],
@@ -46,7 +71,7 @@ pub struct L0Table {
     biggest: Bytes,
 }
 
-impl L0Table {
+impl L0TableCore {
     pub fn new(
         file: Arc<dyn dfs::File>,
         cache: SegmentedCache<BlockCacheKey, Bytes>,

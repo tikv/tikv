@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::coprocessor::Error as CopError;
+use crate::store::{PeerMsg, PeerMsgPayload};
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, metapb};
 use protobuf::ProtobufError;
@@ -111,6 +112,9 @@ pub enum Error {
 
     #[error("Deadline is exceeded")]
     DeadlineExceeded,
+
+    #[error("send msg error")]
+    SendPeerMsgError(PeerMsg),
 }
 
 impl From<rfengine::Error> for Error {
@@ -259,6 +263,7 @@ impl ErrorCodeExt for Error {
             Error::DeadlineExceeded => error_code::raftstore::DEADLINE_EXCEEDED,
 
             Error::Other(_) => error_code::raftstore::UNKNOWN,
+            Error::SendPeerMsgError(_) => error_code::raftstore::UNKNOWN,
         }
     }
 }

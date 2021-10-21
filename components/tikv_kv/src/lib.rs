@@ -25,6 +25,7 @@ mod perf_context;
 mod raftstore_impls;
 mod rocksdb_engine;
 mod stats;
+mod rfstore_impls;
 
 use std::cell::UnsafeCell;
 use std::num::NonZeroU64;

@@ -32,6 +32,7 @@ log_wrappers = { path = "../log_wrappers" }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 raftstore = { path = "../raftstore", default-features = false }
+rfstore = { path = "../rfstore", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog_derive = "0.2"
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }

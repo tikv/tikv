@@ -3,10 +3,7 @@
 use crate::*;
 use crate::{
     meta::is_move_down,
-    table::{
-        search,
-        sstable::{self, SSTable},
-    },
+    table::sstable::{self, SSTable},
 };
 use crossbeam_epoch as epoch;
 use kvenginepb as pb;
@@ -19,8 +16,7 @@ use std::sync::{mpsc, Arc};
 impl Engine {
     pub fn apply_change_set(&self, cs: pb::ChangeSet) -> Result<()> {
         self.pre_load_files(&cs)?;
-        let g = &crossbeam_epoch::pin();
-        let shard = self.get_shard(cs.shard_id, g);
+        let shard = self.get_shard(cs.shard_id);
         if shard.is_none() {
             return Err(Error::ShardNotFound);
         }
@@ -39,31 +35,27 @@ impl Engine {
             store_u64(&shard.meta_seq, cs.sequence);
         }
         if cs.has_flush() {
-            self.apply_flush(shard, g, cs)?
+            self.apply_flush(&shard, cs)?
         } else if cs.has_compaction() {
-            let resut = self.apply_compaction(shard, g, cs);
+            let resut = self.apply_compaction(&shard, cs);
             store_bool(&shard.compacting, false);
             if resut.is_err() {
                 return resut;
             }
         } else if cs.has_split_files() {
-            self.apply_split_files(shard, g, cs)?
+            self.apply_split_files(&shard, cs)?
         }
         shard.refresh_estimated_size();
         Ok(())
     }
 
-    pub fn apply_flush<'a>(
-        &self,
-        shard: &'a Shard,
-        g: &'a epoch::Guard,
-        cs: pb::ChangeSet,
-    ) -> Result<()> {
+    pub fn apply_flush(&self, shard: &Shard, cs: pb::ChangeSet) -> Result<()> {
         let flush = cs.get_flush();
         if flush.has_l0_create() {
             let opts = dfs::Options::new(shard.id, shard.ver);
             let file = self.fs.open(flush.get_l0_create().id, opts)?;
             let l0_tbl = sstable::L0Table::new(file, self.cache.clone())?;
+            let g = &epoch::pin();
             shard.atomic_add_l0_table(g, l0_tbl);
             shard.atomic_remove_mem_table(g);
         }
@@ -72,12 +64,8 @@ impl Engine {
         Ok(())
     }
 
-    fn apply_compaction<'a>(
-        &self,
-        shard: &'a Shard,
-        g: &'a epoch::Guard,
-        mut cs: pb::ChangeSet,
-    ) -> Result<()> {
+    fn apply_compaction(&self, shard: &Shard, mut cs: pb::ChangeSet) -> Result<()> {
+        let g = &epoch::pin();
         let comp = cs.take_compaction();
         let mut del_files = HashSet::new();
         if comp.conflicted {
@@ -139,7 +127,7 @@ impl Engine {
         Ok(())
     }
 
-    fn remove_dfs_files<'a>(&self, shard: &'a Shard, g: &'a epoch::Guard, del_files: HashSet<u64>) {
+    fn remove_dfs_files<'a>(&self, shard: &Shard, g: &'a epoch::Guard, del_files: HashSet<u64>) {
         let fs = self.fs.clone();
         let opts = dfs::Options::new(shard.id, shard.ver);
         g.defer(move || {
@@ -162,11 +150,13 @@ impl Engine {
         let opts = dfs::Options::new(shard.id, shard.ver);
         let shared = shard.cfs[cf].load(std::sync::atomic::Ordering::Acquire, g);
         let old_scf = shard.get_cf(cf, g);
-        let mut new_scf = old_scf.clone();
+        let mut new_scf = ShardCF {
+            levels: old_scf.levels.clone(),
+        };
         let level_idx = level as usize - 1;
         let mut new_level = &mut new_scf.levels[level_idx];
         let old_level = &old_scf.levels[level_idx];
-        new_level.tables.truncate(0);
+        let mut new_level_tables = vec![];
         new_level.total_size = 0;
         let mut need_update = false;
         for create in creates {
@@ -176,40 +166,34 @@ impl Engine {
             let file = self.fs.open(create.id, opts)?;
             let tbl = sstable::SSTable::new(file, self.cache.clone())?;
             new_level.total_size += tbl.size();
-            new_level.tables.push(tbl);
+            new_level_tables.push(tbl);
             need_update = true;
         }
 
-        for old_tbl in &old_level.tables {
+        for old_tbl in old_level.tables.iter() {
             let id = old_tbl.id();
             if del_ids.contains(&id) {
                 del_files.insert(id);
                 need_update = true;
             } else {
                 new_level.total_size += old_tbl.size();
-                new_level.tables.push(old_tbl.clone());
+                new_level_tables.push(old_tbl.clone());
             }
         }
         if !need_update {
             return Ok(());
         }
-        new_level
-            .tables
-            .sort_by(|a, b| a.smallest().cmp(b.smallest()));
-        assert_tables_order(&new_level.tables);
-        if !cas_resource(&shard.cfs[cf], g, shared, new_scf) {
+        new_level_tables.sort_by(|a, b| a.smallest().cmp(b.smallest()));
+        assert_tables_order(&new_level_tables);
+        new_level.tables = Arc::new(new_level_tables);
+        if !cas_resource(&shard.cfs[cf], g, shared, Arc::new(new_scf)) {
             error!("there maybe concurrent apply compaction.");
             panic!("failed to update level_handler")
         }
         Ok(())
     }
 
-    fn apply_split_files<'a>(
-        &self,
-        shard: &'a Shard,
-        g: &'a epoch::Guard,
-        cs: pb::ChangeSet,
-    ) -> Result<()> {
+    fn apply_split_files(&self, shard: &Shard, cs: pb::ChangeSet) -> Result<()> {
         if shard.get_split_stage() != pb::SplitStage::PreSplitFlushDone {
             error!(
                 "wrong split stage for apply split files {:?}",
@@ -217,6 +201,7 @@ impl Engine {
             );
             return Err(Error::WrongSplitStage);
         }
+        let g = &epoch::pin();
         let split_files = cs.get_split_files();
         let (old_l0s_shared, old_l0s) = load_resource_with_shared(&shard.l0_tbls, g);
         let mut new_l0s = L0Tables::new(vec![]);
@@ -236,46 +221,38 @@ impl Engine {
         new_l0s
             .tbls
             .sort_by(|a, b| b.commit_ts().cmp(&a.commit_ts()));
-        let ok = cas_resource(&shard.l0_tbls, g, old_l0s_shared, new_l0s);
+        let ok = cas_resource(&shard.l0_tbls, g, old_l0s_shared, Arc::new(new_l0s));
         assert!(ok);
-        let mut new_cfs: Vec<ShardCF> = Vec::new();
+        let mut scf_builders: Vec<ShardCFBuilder> = Vec::new();
         for cf in 0..NUM_CFS {
             let max_level = self.opts.cfs[cf].max_levels;
-            let shard_cf = ShardCF::new(max_level);
-            new_cfs.push(shard_cf);
+            let scf_builder = ShardCFBuilder::new(max_level);
+            scf_builders.push(scf_builder);
         }
         for tbl in split_files.get_table_creates() {
             let cf = tbl.cf as usize;
-            let scf = &mut new_cfs[cf];
+            let scf_builder = &mut scf_builders[cf];
             let level = tbl.level as usize;
-            let mut new_handler = &mut scf.levels[level - 1];
             let file = self.fs.open(tbl.id, fs_opts)?;
-            new_handler.total_size += file.size();
             let table = sstable::SSTable::new(file, self.cache.clone())?;
-            new_handler.tables.push(table);
+            scf_builder.add_table(table, level);
         }
-        new_cfs.reverse();
         for cf in 0..NUM_CFS {
-            let mut new_cf = new_cfs.pop().unwrap();
+            let mut scf_builder = &mut scf_builders[cf];
             let max_level = self.opts.cfs[cf].max_levels;
             let (old_shared, old_cf) = load_resource_with_shared(&shard.cfs[cf], g);
             let old_cf = unsafe { old_shared.deref() };
             for level in 1..=max_level {
                 let old_handler = &old_cf.levels[level - 1];
-                let new_handler = &mut new_cf.levels[level - 1];
-                for old_tbl in &old_handler.tables {
+                for old_tbl in old_handler.tables.iter() {
                     if split_files.table_deletes.contains(&old_tbl.id()) {
                         self.fs.remove(old_tbl.id(), fs_opts);
                     } else {
-                        new_handler.total_size += old_tbl.size();
-                        new_handler.tables.push(old_tbl.clone());
+                        scf_builder.add_table(old_tbl.clone(), level);
                     }
                 }
-                new_handler
-                    .tables
-                    .sort_by(|i, j| i.smallest().cmp(j.smallest()));
             }
-            cas_resource(&shard.cfs[cf], g, old_shared, new_cf);
+            cas_resource(&shard.cfs[cf], g, old_shared, Arc::new(scf_builder.build()));
         }
         shard.set_split_stage(cs.get_stage());
         Ok(())

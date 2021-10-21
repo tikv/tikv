@@ -5,12 +5,13 @@ use std::cell::RefCell;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use slog_global::info;
 
 use crate::shard::{L0Tables, MemTables};
-use crate::table::{memtable, sstable, table};
+use crate::table::{memtable, sstable, table, EmptyIterator};
 use crate::*;
 use crossbeam_epoch as epoch;
 
@@ -36,44 +37,71 @@ impl Item<'_> {
     }
 }
 
-pub struct SnapAccess<'a> {
-    cfs: [CFConfig; NUM_CFS],
+pub struct SnapAccess {
+    shard: Arc<Shard>,
     managed_ts: u64,
+    write_sequence: u64,
     hints: [RefCell<memtable::Hint>; NUM_CFS],
-    splitting: Option<&'a SplitContext>,
-    mem_tbls: &'a MemTables,
-    l0_tbls: &'a L0Tables,
+    splitting: Option<Arc<SplitContext>>,
+    mem_tbls: Arc<MemTables>,
+    l0_tbls: Arc<L0Tables>,
 
-    scfs: Vec<&'a ShardCF>,
+    scfs: Vec<Arc<ShardCF>>,
 }
 
-impl Debug for SnapAccess<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl Debug for SnapAccess {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         todo!()
     }
 }
 
-impl<'a> SnapAccess<'a> {
-    pub(crate) fn new(
-        cfs: [CFConfig; NUM_CFS],
-        splitting: Option<&'a SplitContext>,
-        mem_tbls: &'a MemTables,
-        l0_tbls: &'a L0Tables,
-        scfs: Vec<&'a ShardCF>,
-    ) -> Self {
+impl SnapAccess {
+    pub fn new(shard: &Arc<Shard>) -> Self {
+        let shard = shard.clone();
         let hints = [
             RefCell::new(memtable::Hint::new()),
             RefCell::new(memtable::Hint::new()),
             RefCell::new(memtable::Hint::new()),
         ];
+        let mut splitting = None;
+        let g = &epoch::pin();
+        if shard.is_splitting() {
+            splitting = Some(shard.get_split_ctx(g).clone());
+        }
+        let mem_tbls = shard.get_mem_tbls(g).clone();
+        let l0_tbls = shard.get_l0_tbls(g).clone();
+        let mut scfs = Vec::with_capacity(NUM_CFS);
+        for cf in 0..NUM_CFS {
+            let scf = shard.get_cf(cf, g).clone();
+            scfs.push(scf);
+        }
+        let write_sequence = shard.get_write_sequence();
         Self {
-            cfs,
+            shard,
+            write_sequence,
             managed_ts: 0,
             hints,
             mem_tbls,
             l0_tbls,
             splitting,
             scfs,
+        }
+    }
+
+    pub fn new_iterator(&self, cf: usize, reversed: bool, all_versions: bool) -> Iterator {
+        let read_ts: u64;
+        if self.shard.opt.cfs[cf].managed && self.managed_ts != 0 {
+            read_ts = self.managed_ts;
+        } else {
+            read_ts = u64::MAX;
+        }
+        Iterator {
+            all_versions,
+            reversed,
+            read_ts,
+            key: BytesMut::new(),
+            val: table::Value::new(),
+            inner: self.new_table_iterator(cf, reversed),
         }
     }
 
@@ -95,7 +123,7 @@ impl<'a> SnapAccess<'a> {
 
     fn get_value(&self, cf: usize, key: &[u8], version: u64) -> table::Value {
         let key_hash = farmhash::fingerprint64(key);
-        if let Some(split_ctx) = self.splitting {
+        if let Some(split_ctx) = self.splitting.clone() {
             let tbl = split_ctx.get_spliting_table(key);
             let v = tbl.get_cf(cf).get(key, version);
             if v.is_valid() {
@@ -122,7 +150,7 @@ impl<'a> SnapAccess<'a> {
                 }
             }
         }
-        let scf = self.scfs[cf];
+        let scf = &self.scfs[cf];
         for lh in &scf.levels {
             let v = lh.get(key, version, key_hash);
             if v.is_valid() {
@@ -145,26 +173,9 @@ impl<'a> SnapAccess<'a> {
         self.managed_ts = managed_ts;
     }
 
-    pub fn new_iterator(&self, cf: usize, reversed: bool, all_versions: bool) -> Iterator<'a> {
-        let read_ts: u64;
-        if self.cfs[cf].managed && self.managed_ts != 0 {
-            read_ts = self.managed_ts;
-        } else {
-            read_ts = u64::MAX;
-        }
-        Iterator {
-            all_versions,
-            reversed,
-            read_ts,
-            key: BytesMut::new(),
-            val: table::Value::new(),
-            inner: self.new_table_iterator(cf, reversed),
-        }
-    }
-
-    fn new_table_iterator(&self, cf: usize, reversed: bool) -> Box<dyn table::Iterator + 'a> {
-        let mut iters: Vec<Box<dyn table::Iterator + 'a>> = Vec::new();
-        if let Some(split_ctx) = self.splitting {
+    fn new_table_iterator(&self, cf: usize, reversed: bool) -> Box<dyn table::Iterator> {
+        let mut iters: Vec<Box<dyn table::Iterator>> = Vec::new();
+        if let Some(split_ctx) = &self.splitting {
             for tbl in &split_ctx.mem_tbls {
                 iters.push(Box::new(tbl.get_cf(cf).new_iterator(reversed)));
             }
@@ -177,27 +188,51 @@ impl<'a> SnapAccess<'a> {
                 iters.push(tbl.new_iterator(reversed));
             }
         }
-        let scf = self.scfs[cf];
+        let scf = &self.scfs[cf];
         for lh in &scf.levels {
             if lh.tables.len() == 0 {
                 continue;
             }
-            iters.push(Box::new(sstable::ConcatIterator::new(&lh.tables, reversed)));
+            iters.push(Box::new(sstable::ConcatIterator::new(
+                lh.tables.clone(),
+                reversed,
+            )));
         }
         table::new_merge_iterator(iters, reversed)
     }
+
+    pub fn get_write_sequence(&self) -> u64 {
+        self.write_sequence
+    }
+
+    pub fn get_start_key(&self) -> &[u8] {
+        self.shard.start.chunk()
+    }
+
+    pub fn get_end_key(&self) -> &[u8] {
+        self.shard.end.chunk()
+    }
+
+    pub fn get_id(&self) -> u64 {
+        self.shard.id
+    }
+
+    pub fn get_version(&self) -> u64 {
+        self.shard.ver
+    }
 }
 
-pub struct Iterator<'a> {
+pub struct Iterator {
     all_versions: bool,
     reversed: bool,
     read_ts: u64,
     pub key: BytesMut,
     val: table::Value,
-    pub inner: Box<dyn table::Iterator + 'a>,
+    pub inner: Box<dyn table::Iterator>,
 }
 
-impl<'a> Iterator<'a> {
+impl Iterator {
+
     pub fn valid(&self) -> bool {
         self.val.is_valid()
     }

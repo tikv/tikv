@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
 use std::{collections::HashSet, thread, time};
 
 use crate::{
@@ -17,13 +18,8 @@ use kvenginepb as pb;
 use slog_global::{info, warn};
 
 impl Engine {
-    pub fn get_shard_with_ver<'a>(
-        &self,
-        g: &'a epoch::Guard,
-        shard_id: u64,
-        shard_ver: u64,
-    ) -> Result<&'a Shard> {
-        let shard = self.get_shard(shard_id, g).ok_or(Error::ShardNotFound)?;
+    pub fn get_shard_with_ver(&self, shard_id: u64, shard_ver: u64) -> Result<Arc<Shard>> {
+        let shard = self.get_shard(shard_id).ok_or(Error::ShardNotFound)?;
         if shard.ver != shard_ver {
             warn!(
                 "shard {} version not match, current {}, request {}",
@@ -36,27 +32,26 @@ impl Engine {
 
     // Sets the split keys, then all new entries are written to separated mem-tables.
     pub fn pre_split(&self, cs: pb::ChangeSet) -> Result<()> {
-        let g = &epoch::pin();
-        let shard = self.get_shard_with_ver(g, cs.shard_id, cs.shard_ver)?;
+        let shard = self.get_shard_with_ver(cs.shard_id, cs.shard_ver)?;
         if !shard.set_split_keys(cs.get_pre_split().get_keys()) {
             return Err(Error::WrongSplitStage);
         }
-        let mem_tbl = self.switch_mem_table(g, shard, shard.load_mem_table_ts());
-        self.schedule_flush_task(shard, mem_tbl);
+        let mem_tbl = self.switch_mem_table(&shard, shard.load_mem_table_ts());
+        self.schedule_flush_task(&shard, mem_tbl);
         Ok(())
     }
 
     pub async fn split_shard_files(&self, shard_id: u64, shard_ver: u64) -> Result<pb::ChangeSet> {
         let g = &epoch::pin();
-        let shard = self.get_shard_with_ver(g, shard_id, shard_ver)?;
+        let shard = self.get_shard_with_ver(shard_id, shard_ver)?;
         if !shard.is_splitting() {
             return Err(Error::WrongSplitStage);
         }
         let mut cs = new_change_set(shard_id, shard_ver, pb::SplitStage::SplitFileDone);
 
         let _ = shard.compact_lock.lock().await;
-        self.wait_for_pre_split_flush_state(shard).await;
-        self.split_shard_l0_files(shard, g, cs.mut_split_files())
+        self.wait_for_pre_split_flush_state(&shard).await;
+        self.split_shard_l0_files(&shard, cs.mut_split_files())
             .await?;
 
         let dfs_opts = dfs::Options::new(shard_id, shard_ver);
@@ -94,12 +89,12 @@ impl Engine {
         }
     }
 
-    async fn split_shard_l0_files<'a>(
+    async fn split_shard_l0_files(
         &self,
-        shard: &'a Shard,
-        g: &'a epoch::Guard,
+        shard: &Shard,
         split_files: &mut pb::SplitFiles,
     ) -> Result<()> {
+        let g = &epoch::pin();
         let l0s = load_resource(&shard.l0_tbls, g);
         let split_keys = shard.get_split_keys(g);
         for l0 in &l0s.tbls {
@@ -207,7 +202,7 @@ impl Engine {
         let mut to_del_ids = HashSet::new();
         let mut related_keys = vec![];
         let mut futures = vec![];
-        for tbl in &lh.tables {
+        for tbl in lh.tables.iter() {
             related_keys.truncate(0);
             for key in keys {
                 if tbl.smallest() < key && key <= tbl.biggest() {
@@ -283,24 +278,24 @@ impl Engine {
     }
 
     pub fn finish_split(&self, cs: pb::ChangeSet) -> Result<()> {
-        let g = &epoch::pin();
-        let shard = self.get_shard_with_ver(g, cs.shard_id, cs.shard_ver)?;
+        let shard = self.get_shard_with_ver(cs.shard_id, cs.shard_ver)?;
         if shard.get_split_stage() != pb::SplitStage::SplitFileDone {
             return Err(Error::WrongSplitStage);
         }
         let split = cs.get_split();
+        let g = &epoch::pin();
         let split_ctx = shard.get_split_ctx(g);
         assert_eq!(split.get_new_shards().len(), split_ctx.mem_tbls.len());
-        self.build_split_shards(shard, g, split, cs.get_sequence())
+        self.build_split_shards(&shard, split, cs.get_sequence())
     }
 
     fn build_split_shards(
         &self,
         old_shard: &Shard,
-        g: &epoch::Guard,
         split: &pb::Split,
         sequence: u64,
     ) -> Result<()> {
+        let g = &epoch::pin();
         let split_ctx = old_shard.get_split_ctx(g);
         let mut new_shards = vec![];
         let new_shard_props = split.get_new_shards();
@@ -323,6 +318,7 @@ impl Engine {
                 new_shard.set_active(old_shard.is_active());
                 new_shard.base_ts = old_shard.base_ts;
                 store_u64(&new_shard.meta_seq, sequence);
+                store_u64(&new_shard.write_sequence, sequence);
                 // derived shard need larger mem-table size.
                 let mem_size = Shard::bounded_mem_size(self.opts.base_size / 2);
                 let size_bin = &mut [0u8; 8][..];
@@ -332,10 +328,11 @@ impl Engine {
             } else {
                 new_shard.base_ts = old_shard.base_ts + sequence;
                 store_u64(&new_shard.meta_seq, 1);
+                store_u64(&new_shard.write_sequence, 1);
             }
             new_shard.atomic_add_mem_table(g, mem_tbl.clone());
             new_shard.atomic_remove_mem_table(g);
-            new_shards.push(new_shard);
+            new_shards.push(Arc::new(new_shard));
         }
         let l0s = old_shard.get_l0_tbls(g);
         for l0 in &l0s.tbls {
@@ -347,10 +344,10 @@ impl Engine {
             let old_scf = old_shard.get_cf(cf, g);
             let mut new_scfs = Vec::new();
             new_scfs.resize_with(new_shards.len(), || {
-                ShardCF::new(self.opts.cfs[cf].max_levels)
+                ShardCFBuilder::new(self.opts.cfs[cf].max_levels)
             });
             for lh in &old_scf.levels {
-                for tbl in &lh.tables {
+                for tbl in lh.tables.iter() {
                     self.insert_table_to_shard(
                         tbl,
                         cf,
@@ -361,19 +358,17 @@ impl Engine {
                     );
                 }
             }
-            new_scfs.reverse();
-            for new_shard in &new_shards {
-                new_shard.set_cf(cf, new_scfs.pop().unwrap());
+            for i in 0..new_shards.len() {
+                new_shards[i].set_cf(cf, new_scfs[i].build());
             }
         }
         for shard in new_shards.drain(..) {
             shard.refresh_estimated_size();
             let id = shard.id;
-            self.shards.insert(id, epoch::Atomic::new(shard));
-            let shard = self.get_shard(id, g).unwrap();
+            self.shards.insert(id, shard.clone());
             let mem_ts = shard.load_mem_table_ts();
-            let mem_tbl = self.switch_mem_table(g, shard, mem_ts);
-            self.schedule_flush_task(shard, mem_tbl);
+            let mem_tbl = self.switch_mem_table(&shard, mem_ts);
+            self.schedule_flush_task(&shard, mem_tbl);
             let all_files = shard.get_all_files();
             info!(
                 "new shard {}:{}, start {:x}, end {:x} mem-ts {}， all files {:?}",
@@ -388,8 +383,8 @@ impl Engine {
         tbl: &sstable::SSTable,
         cf: usize,
         level: usize,
-        new_scfs: &mut Vec<ShardCF>,
-        new_shards: &Vec<Shard>,
+        scf_builders: &mut Vec<ShardCFBuilder>,
+        new_shards: &Vec<Arc<Shard>>,
         keys: &[Vec<u8>],
     ) {
         let idx = get_split_shard_index(keys, tbl.smallest());
@@ -405,10 +400,8 @@ impl Engine {
                 tbl.biggest()
             );
         }
-        let scf = &mut new_scfs[idx];
-        let lh = &mut scf.levels[level - 1];
-        lh.tables.push(tbl.clone());
-        lh.add_total_size(tbl.size());
+        let scf = &mut scf_builders[idx];
+        scf.add_table(tbl.clone(), level);
     }
 }
 

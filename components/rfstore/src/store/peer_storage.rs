@@ -6,7 +6,6 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
-use std::time::Instant;
 
 use super::keys::raft_state_key;
 use super::*;
@@ -94,7 +93,7 @@ pub(crate) struct InvokeContext {
 }
 
 pub(crate) struct PeerStorage {
-    engines: Engines,
+    pub(crate) engines: Engines,
 
     pub(crate) peer: metapb::Peer,
     region: metapb::Region,

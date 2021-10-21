@@ -179,8 +179,8 @@ enum IterState {
     OldVersioDone,
 }
 
-pub struct TableIterator<'a> {
-    t: &'a SSTable,
+pub struct TableIterator {
+    t: SSTable,
     b_pos: i32,
     bi: BlockIterator,
     old_b_pos: i32,
@@ -191,8 +191,8 @@ pub struct TableIterator<'a> {
     iter_state: IterState,
 }
 
-impl<'a> TableIterator<'a> {
-    pub fn new(t: &'a SSTable, reversed: bool) -> Self {
+impl TableIterator {
+    pub fn new(t: SSTable, reversed: bool) -> Self {
         Self {
             t,
             b_pos: 0,
@@ -428,7 +428,7 @@ impl<'a> TableIterator<'a> {
     }
 }
 
-impl table::Iterator for TableIterator<'_> {
+impl table::Iterator for TableIterator {
     fn next(&mut self) {
         if !self.reversed {
             self.next_inner();
@@ -507,16 +507,16 @@ impl table::Iterator for TableIterator<'_> {
 
 // ConcatIterator concatenates the sequences defined by several iterators.  (It only works with
 // TableIterators, probably just because it's faster to not be so generic.)
-pub struct ConcatIterator<'a> {
+pub struct ConcatIterator {
     idx: i32,
-    iter: Option<Box<TableIterator<'a>>>,
-    tables: &'a Vec<SSTable>,
+    iter: Option<Box<TableIterator>>,
+    tables: Arc<Vec<SSTable>>,
     reversed: bool,
 }
 
 #[allow(dead_code)]
-impl<'a> ConcatIterator<'a> {
-    pub fn new(tables: &'a Vec<SSTable>, reversed: bool) -> Self {
+impl ConcatIterator {
+    pub fn new(tables: Arc<Vec<SSTable>>, reversed: bool) -> Self {
         ConcatIterator {
             idx: -1,
             iter: None,
@@ -540,7 +540,7 @@ impl<'a> ConcatIterator<'a> {
     }
 }
 
-impl Iterator for ConcatIterator<'_> {
+impl Iterator for ConcatIterator {
     fn next(&mut self) {
         if self.iter.is_none() {
             return;

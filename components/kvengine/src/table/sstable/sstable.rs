@@ -13,12 +13,80 @@ use bytes::{Buf, Bytes};
 use moka::sync::SegmentedCache;
 use slog_global::info;
 use std::cmp::Ordering;
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::slice;
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct SSTable {
+    core: Arc<SSTableCore>,
+}
+
+impl Deref for SSTable {
+    type Target = SSTableCore;
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
+}
+
+impl SSTable {
+    pub fn new(
+        file: Arc<dyn dfs::File>,
+        cache: SegmentedCache<BlockCacheKey, Bytes>,
+    ) -> Result<Self> {
+        let core = SSTableCore::new(file, cache)?;
+        Ok(Self {
+            core: Arc::new(core),
+        })
+    }
+
+    pub fn new_iterator(&self, reversed: bool) -> Box<TableIterator> {
+        let it = TableIterator::new(self.clone(), reversed);
+        Box::new(it)
+    }
+
+    pub fn get(&self, key: &[u8], version: u64, _key_hash: u64) -> table::Value {
+        let mut it = self.new_iterator(false);
+        it.seek(key);
+        if !it.valid() || key != it.key() {
+            return table::Value::new();
+        }
+        while it.value().version > version {
+            if !it.next_version() {
+                return table::Value::new();
+            }
+        }
+        it.value()
+    }
+
+    pub fn has_overlap(&self, start: &[u8], end: &[u8], include_end: bool) -> bool {
+        if start > self.biggest() {
+            return false;
+        }
+        match end.cmp(self.smallest()) {
+            Ordering::Less => {
+                return false;
+            }
+            Ordering::Equal => {
+                return include_end;
+            }
+            _ => {}
+        }
+        let mut it = self.new_iterator(false);
+        it.seek(start);
+        if !it.valid() {
+            return it.error().is_some();
+        }
+        match it.key().cmp(end) {
+            Ordering::Greater => false,
+            Ordering::Equal => include_end,
+            _ => true,
+        }
+    }
+}
+
+pub struct SSTableCore {
     file: Arc<dyn dfs::File>,
     cache: SegmentedCache<BlockCacheKey, Bytes>,
     footer: Footer,
@@ -28,7 +96,7 @@ pub struct SSTable {
     pub old_idx: Index,
 }
 
-impl SSTable {
+impl SSTableCore {
     pub fn new(
         file: Arc<dyn dfs::File>,
         cache: SegmentedCache<BlockCacheKey, Bytes>,
@@ -108,9 +176,7 @@ impl SSTable {
         }
         self.load_block_by_addr_len(addr, length)
     }
-}
 
-impl SSTable {
     pub fn id(&self) -> u64 {
         return self.file.id();
     }
@@ -125,50 +191,6 @@ impl SSTable {
 
     pub fn biggest(&self) -> &[u8] {
         return self.biggest_buf.chunk();
-    }
-
-    pub fn new_iterator(&self, reversed: bool) -> Box<TableIterator> {
-        let it = TableIterator::new(&self, reversed);
-        Box::new(it)
-    }
-
-    pub fn get(&self, key: &[u8], version: u64, _key_hash: u64) -> table::Value {
-        let mut it = self.new_iterator(false);
-        it.seek(key);
-        if !it.valid() || key != it.key() {
-            return table::Value::new();
-        }
-        while it.value().version > version {
-            if !it.next_version() {
-                return table::Value::new();
-            }
-        }
-        it.value()
-    }
-
-    pub fn has_overlap(&self, start: &[u8], end: &[u8], include_end: bool) -> bool {
-        if start > self.biggest() {
-            return false;
-        }
-        match end.cmp(self.smallest()) {
-            Ordering::Less => {
-                return false;
-            }
-            Ordering::Equal => {
-                return include_end;
-            }
-            _ => {}
-        }
-        let mut it = self.new_iterator(false);
-        it.seek(start);
-        if !it.valid() {
-            return it.error().is_some();
-        }
-        match it.key().cmp(end) {
-            Ordering::Greater => false,
-            Ordering::Equal => include_end,
-            _ => true,
-        }
     }
 
     pub fn get_suggest_split_key(&self) -> Option<Bytes> {
@@ -764,7 +786,7 @@ mod tests {
         ]);
         let t = SSTable::new(tf, new_cache()).unwrap();
         let tbls = vec![t];
-        let mut it = ConcatIterator::new(&tbls, false);
+        let mut it = ConcatIterator::new(Arc::new(tbls), false);
         it.rewind();
         assert_eq!(it.valid(), true);
         assert_eq!(it.key(), "k1".as_bytes());
@@ -781,9 +803,9 @@ mod tests {
         let t1 = SSTable::new(tf1, new_cache()).unwrap();
         let t2 = SSTable::new(tf2, new_cache()).unwrap();
         let t3 = SSTable::new(tf3, new_cache()).unwrap();
-        let tbls = vec![t1, t2, t3];
+        let tbls = Arc::new(vec![t1, t2, t3]);
         {
-            let mut it = ConcatIterator::new(&tbls, false);
+            let mut it = ConcatIterator::new(tbls.clone(), false);
             it.rewind();
             assert_eq!(it.valid(), true);
             let mut cnt = 0;
@@ -811,7 +833,7 @@ mod tests {
             assert_eq!(it.valid(), false);
         }
         {
-            let mut it = ConcatIterator::new(&tbls, true);
+            let mut it = ConcatIterator::new(tbls.clone(), true);
             it.rewind();
             assert_eq!(it.valid(), true);
             let mut cnt = 0;

@@ -6,7 +6,7 @@ use libc::NOTE_EXITSTATUS;
 use protobuf::ProtobufEnum;
 use raft_proto::eraftpb;
 use slog_global::info;
-use std::sync::{Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     fs, mem,
@@ -21,15 +21,16 @@ use thiserror::Error as ThisError;
 
 use crate::*;
 
+#[derive(Clone)]
 pub struct RFEngine {
     pub(crate) dir: PathBuf,
-    pub(crate) writer: Mutex<WALWriter>,
+    pub(crate) writer: Arc<Mutex<WALWriter>>,
 
-    pub(crate) entries_map: RwLock<HashMap<u64, RegionRaftLogs>>,
-    pub(crate) states: RwLock<BTreeMap<StateKey, Bytes>>,
+    pub(crate) entries_map: Arc<RwLock<HashMap<u64, RegionRaftLogs>>>,
+    pub(crate) states: Arc<RwLock<BTreeMap<StateKey, Bytes>>>,
 
     pub(crate) task_sender: SyncSender<Task>,
-    pub(crate) worker_handle: Option<JoinHandle<()>>,
+    pub(crate) worker_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 pub struct WriteBatch {
@@ -146,11 +147,11 @@ impl RFEngine {
         let writer = WALWriter::new(dir.clone(), epoch_id, wal_size)?;
         let mut en = Self {
             dir: dir.to_owned(),
-            entries_map: RwLock::new(HashMap::new()),
-            states: RwLock::new(BTreeMap::new()),
-            writer: Mutex::new(writer),
+            entries_map: Arc::new(RwLock::new(HashMap::new())),
+            states: Arc::new(RwLock::new(BTreeMap::new())),
+            writer: Arc::new(Mutex::new(writer)),
             task_sender: tx,
-            worker_handle: None,
+            worker_handle: Arc::new(Mutex::new(None)),
         };
         let mut offset = 0;
         for ep in &epoches {
@@ -160,9 +161,12 @@ impl RFEngine {
         if epoches.len() > 0 {
             epoches.pop();
         }
-        let mut worker = Worker::new(dir.to_owned(), epoches, rx);
-        let join_handle = thread::spawn(move || worker.run());
-        en.worker_handle = Some(join_handle);
+        {
+            let mut worker = Worker::new(dir.to_owned(), epoches, rx);
+            let join_handle = thread::spawn(move || worker.run());
+            let mut handle_ref = en.worker_handle.lock().unwrap();
+            *handle_ref = Some(join_handle);
+        }
         Ok(en)
     }
 
@@ -275,8 +279,8 @@ impl RFEngine {
 
     pub fn stop_worker(&mut self) {
         self.task_sender.send(Task::Close);
-        let handle = mem::replace(&mut self.worker_handle, None);
-        if let Some(h) = handle {
+        let mut handle_ref = self.worker_handle.lock().unwrap();
+        if let Some(h) = handle_ref.take() {
             h.join();
         }
     }
@@ -419,19 +423,21 @@ mod tests {
         }
         let old_states = engine.states.clone();
         let old_entries_map = engine.entries_map.clone();
-        assert!(old_states.len() > 0);
-        assert_eq!(old_entries_map.len(), 10);
+        assert!(old_states.read().unwrap().len() > 0);
+        assert_eq!(old_entries_map.read().unwrap().len(), 10);
         engine.stop_worker();
         for _ in 0..1 {
             let engine = RFEngine::open(tmp_dir.path(), wal_size).unwrap();
-            assert_eq!(old_states.len(), engine.states.len());
+            assert_eq!(old_states.read().unwrap().len(), engine.states.read().unwrap().len());
             engine.iterate_all_states(false, |region_id, key, _| {
                 let state_key = StateKey::new(region_id, key);
-                assert!(old_states.contains_key(&state_key));
+                assert!(old_states.read().unwrap().contains_key(&state_key));
             });
-            assert_eq!(engine.entries_map.len(), 10);
-            for (k, entries) in &engine.entries_map {
-                let old = old_entries_map.get(k).unwrap();
+            let entries_map = engine.entries_map.read().unwrap();
+            assert_eq!(entries_map.len(), 10);
+            for (k, entries) in entries_map.iter() {
+                let old_map = old_entries_map.read().unwrap();
+                let old = old_map.get(k).unwrap();
                 assert_eq!(old.raft_logs.len(), entries.raft_logs.len());
                 assert_eq!(old.range, entries.range);
                 for op in &old.raft_logs {

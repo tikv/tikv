@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::RaftRouter;
 use futures::channel::mpsc;
 use grpcio;
 use kvproto::raft_serverpb as rspb;
@@ -12,7 +13,7 @@ use super::*;
 pub struct InnerServer {
     pub(crate) engines: Engines,
     pub(crate) config: Config,
-    pub(crate) router: Router,
+    pub(crate) router: RaftRouter,
     pub(crate) batch_system: RaftBatchSystem,
 }
 

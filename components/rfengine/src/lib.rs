@@ -5,9 +5,11 @@ pub mod iterator;
 pub mod load;
 pub mod worker;
 pub mod writer;
+pub mod traits;
 
 pub use engine::*;
 pub use iterator::*;
 pub use load::*;
 pub use worker::*;
 pub use writer::*;
+pub use traits::*;

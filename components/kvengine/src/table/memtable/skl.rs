@@ -156,7 +156,40 @@ pub fn get_node_offset(node: *mut Node) -> ArenaAddr {
     deref(node).addr
 }
 
+#[derive(Clone)]
 pub struct SkipList {
+    core: Arc<SkipListCore>,
+}
+
+impl Deref for SkipList {
+    type Target = SkipListCore;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
+}
+
+impl SkipList {
+    pub fn new(arena: Option<Arc<Arena>>) -> Self {
+        Self {
+            core: Arc::new(SkipListCore::new(arena)),
+        }
+    }
+
+    pub fn new_iterator(&self, reversed: bool) -> SKIterator {
+        SKIterator {
+            list: self.clone(),
+            n: ArenaAddr::null(),
+            uk: BytesMut::new(),
+            v: Value::new(),
+            val_list: Vec::new(),
+            val_list_idx: 0,
+            reversed,
+        }
+    }
+}
+
+pub struct SkipListCore {
     height: AtomicU32,
     head: ArenaAddr,
     arena: Arc<Arena>,
@@ -164,20 +197,8 @@ pub struct SkipList {
     hint: Mutex<Hint>,
 }
 
-impl Clone for SkipList {
-    fn clone(&self) -> Self {
-        Self {
-            height: AtomicU32::new(self.height.load(Acquire)),
-            head: self.head,
-            arena: self.arena.clone(),
-            rnd_x: AtomicU32::new(self.rnd_x.load(Acquire)),
-            hint: Mutex::new(Hint::new()),
-        }
-    }
-}
-
 #[allow(dead_code)]
-impl SkipList {
+impl SkipListCore {
     pub fn new(arena: Option<Arc<Arena>>) -> Self {
         let a = arena.unwrap_or(Arc::new(Arena::new()));
         let head_node = a.put_node(MAX_HEIGHT, &[], &WriteBatchEntry::default());
@@ -192,19 +213,6 @@ impl SkipList {
 
     fn get_head(&self) -> *mut Node {
         self.arena.get_node(self.head)
-    }
-
-    pub fn new_iterator(&self, reversed: bool) -> SKIterator {
-        let it = SKIterator {
-            list: &self,
-            n: ArenaAddr::null(),
-            uk: BytesMut::new(),
-            v: Value::new(),
-            val_list: Vec::new(),
-            val_list_idx: 0,
-            reversed,
-        };
-        it
     }
 
     fn random_height(&self) -> usize {
@@ -635,8 +643,8 @@ impl Hint {
     }
 }
 
-pub struct SKIterator<'a> {
-    list: &'a SkipList,
+pub struct SKIterator {
+    list: SkipList,
     n: ArenaAddr,
 
     uk: BytesMut,
@@ -647,7 +655,7 @@ pub struct SKIterator<'a> {
 }
 
 #[allow(dead_code)]
-impl SKIterator<'_> {
+impl SKIterator {
     fn load_node(&mut self) {
         if self.n.is_null() {
             return;
@@ -716,7 +724,7 @@ impl SKIterator<'_> {
     }
 }
 
-impl Iterator for SKIterator<'_> {
+impl Iterator for SKIterator {
     fn next(&mut self) {
         if self.reversed {
             self.next_backward()

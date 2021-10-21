@@ -4,6 +4,8 @@
 
 pub mod coprocessor;
 pub mod errors;
+pub mod router;
 pub mod store;
 
 pub use self::errors::*;
+pub use router::*;

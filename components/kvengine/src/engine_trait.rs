@@ -530,7 +530,7 @@ impl RangePropertiesExt for Engine {
 }
 
 #[derive(Clone, Debug)]
-pub struct EngineSnapshot;
+pub struct EngineSnapshot {}
 
 impl Snapshot for EngineSnapshot {
     fn cf_names(&self) -> Vec<&str> {

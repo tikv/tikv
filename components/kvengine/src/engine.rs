@@ -4,7 +4,6 @@ use bytes::Bytes;
 use crossbeam::channel;
 use crossbeam_epoch as epoch;
 use dashmap::DashMap;
-use epoch::Atomic;
 use fslock;
 use moka::sync::SegmentedCache;
 use slog_global::info;
@@ -103,25 +102,24 @@ impl Engine {
         recoverer: impl RecoverHandler,
     ) -> Result<()> {
         let mut parents = HashSet::new();
-        let g = &epoch::pin();
         for (id, meta) in &metas {
             if let Some(parent) = &meta.parent {
                 if !parents.contains(&parent.id) {
                     parents.insert(parent.id);
-                    let parent_shard = self.load_shard(parent, g)?;
-                    recoverer.recover(&self, parent_shard, parent)?;
+                    let parent_shard = self.load_shard(parent)?;
+                    recoverer.recover(&self, &parent_shard, parent)?;
                 }
             }
-            let shard = self.load_shard(meta, g)?;
-            recoverer.recover(&self, shard, meta)?;
+            let shard = self.load_shard(meta)?;
+            recoverer.recover(&self, &shard, meta)?;
         }
         Ok(())
     }
 }
 
 pub struct EngineCore {
-    pub(crate) shards: DashMap<u64, epoch::Atomic<Shard>>,
-    pub(crate) opts: Arc<Options>,
+    pub(crate) shards: DashMap<u64, Arc<Shard>>,
+    pub opts: Arc<Options>,
     pub(crate) flush_tx: channel::Sender<FlushTask>,
     pub(crate) fs: Arc<dyn dfs::DFS>,
     pub(crate) cache: SegmentedCache<BlockCacheKey, Bytes>,
@@ -140,8 +138,8 @@ impl EngineCore {
         Ok(metas)
     }
 
-    fn load_shard<'a>(&self, meta: &ShardMeta, g: &'a epoch::Guard) -> Result<&'a Shard> {
-        if let Some(shard) = self.get_shard(meta.id, g) {
+    fn load_shard(&self, meta: &ShardMeta) -> Result<Arc<Shard>> {
+        if let Some(shard) = self.get_shard(meta.id) {
             if shard.ver == meta.ver {
                 return Ok(shard);
             }
@@ -149,13 +147,10 @@ impl EngineCore {
         let shard = Shard::new_for_loading(meta, self.opts.clone());
         let dfs_opts = dfs::Options::new(shard.id, shard.ver);
         let mut l0_tbls = Vec::new();
-        let mut scfs = Vec::new();
+        let mut scf_builders = Vec::new();
         for cf in 0..NUM_CFS {
-            let mut scf = ShardCF::default();
-            for i in 0..self.opts.cfs[cf].max_levels {
-                scf.levels.push(LevelHandler::new(i + 1));
-            }
-            scfs.push(scf);
+            let mut scf_builder = ShardCFBuilder::new(self.opts.cfs[cf].max_levels);
+            scf_builders.push(scf_builder);
         }
         for (fid, fm) in &meta.files {
             let file = self.fs.open(*fid, dfs_opts)?;
@@ -164,38 +159,36 @@ impl EngineCore {
                 l0_tbls.push(l0_tbl);
                 continue;
             }
-            let level = fm.level as usize;
-            let scf = &mut scfs[fm.cf as usize];
-            let handler = &mut scf.levels[level - 1];
             let tbl = SSTable::new(file, self.cache.clone())?;
-            handler.total_size += tbl.size();
-            handler.tables.push(tbl);
+            scf_builders[fm.cf as usize].add_table(tbl, fm.level as usize);
         }
         l0_tbls.sort_by(|a, b| b.commit_ts().cmp(&a.commit_ts()));
-        for cf in 0..NUM_CFS {
-            let scf = &mut scfs[cf];
-            for level in &mut scf.levels {
-                level.tables.sort_by(|a, b| a.smallest().cmp(b.smallest()))
-            }
-        }
-        shard
-            .l0_tbls
-            .store(epoch::Owned::new(L0Tables::new(l0_tbls)), Ordering::Release);
+        shard.l0_tbls.store(
+            epoch::Owned::new(Arc::new(L0Tables::new(l0_tbls))),
+            Ordering::Release,
+        );
         for cf in (0..NUM_CFS).rev() {
-            let scf = scfs.pop().unwrap();
-            shard.cfs[cf].store(epoch::Owned::new(scf), Ordering::Release);
+            shard.cfs[cf].store(
+                epoch::Owned::new(Arc::new(scf_builders[cf].build())),
+                Ordering::Release,
+            );
         }
         info!("load shard {}:{}", shard.id, shard.ver);
-        self.shards.insert(shard.id, Atomic::new(shard));
-        let shard = self.get_shard(meta.id, g);
+        self.shards.insert(shard.id, Arc::new(shard));
+        let shard = self.get_shard(meta.id);
         Ok(shard.unwrap())
     }
 
-    pub fn get_shard<'a>(&self, id: u64, g: &'a epoch::Guard) -> Option<&'a Shard> {
+    pub fn get_snap_access(&self, id: u64) -> Option<Arc<SnapAccess>> {
         if let Some(ptr) = self.shards.get(&id) {
-            let shared = ptr.load(Ordering::Acquire, g);
-            let shd = unsafe { shared.deref() };
-            return Some(shd);
+            return Some(Arc::new(SnapAccess::new(&ptr)));
+        }
+        None
+    }
+
+    pub fn get_shard(&self, id: u64) -> Option<Arc<Shard>> {
+        if let Some(ptr) = self.shards.get(&id) {
+            return Some(ptr.value().clone());
         }
         None
     }
@@ -205,8 +198,7 @@ impl EngineCore {
         let x = self.shards.remove(&shard_id);
         if let Some((_, ptr)) = x {
             if remove_file {
-                let shd = unsafe { ptr.load(Ordering::Acquire, &g).deref() };
-                shd.remove_file.store(true, Ordering::Relaxed);
+                ptr.remove_file.store(true, Ordering::Relaxed);
             }
             return true;
         }
