@@ -14,6 +14,7 @@ mod iosnoop;
 mod metrics;
 mod metrics_manager;
 mod rate_limiter;
+#[allow(unused)]
 mod thread_io;
 
 pub use file::{File, OpenOptions};
@@ -123,6 +124,15 @@ impl std::ops::Sub for IOBytes {
         Self {
             read: self.read.saturating_sub(other.read),
             write: self.write.saturating_sub(other.write),
+        }
+    }
+}
+
+impl std::ops::AddAssign for IOBytes {
+    fn add_assign(&mut self, other: Self) {
+        *self = Self {
+            read: self.read.saturating_add(other.read),
+            write: self.write.saturating_add(other.write),
         }
     }
 }

@@ -7,12 +7,95 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::Duration;
+
+use dashmap::DashMap;
+use nix::unistd::getpid;
+use nix::unistd::gettid;
+use nix::unistd::Pid;
+use strum::EnumCount;
+
+lazy_static! {
+    static ref THREAD_IO_BYTES_VEC: DashMap<ThreadID, BytesBuffer> = DashMap::new();
+}
+
+#[derive(PartialEq, Eq, Hash, Clone)]
+struct ThreadID {
+    pid: Pid,
+    tid: Pid,
+}
+
+struct BytesBuffer {
+    current_io_type: IOType,
+    total_io_bytes: [IOBytes; IOType::COUNT],
+    last_io_bytes: [IOBytes; IOType::COUNT],
+}
+
+pub fn init_thread_io() {
+    std::thread::spawn(|| {
+        loop {
+            THREAD_IO_BYTES_VEC.alter_all(|k, mut v| {
+                let io_bytes = fetch_exact_thread_io_bytes(k);
+                v.total_io_bytes[v.current_io_type as usize] +=
+                    io_bytes - v.last_io_bytes[v.current_io_type as usize];
+                v.last_io_bytes[v.current_io_type as usize] = io_bytes;
+                v
+            });
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+}
+
+pub fn set_io_type(new_io_type: IOType) {
+    let id = ThreadID::current();
+
+    if !THREAD_IO_BYTES_VEC.contains_key(&id) {
+        THREAD_IO_BYTES_VEC.insert(
+            id.clone(),
+            BytesBuffer {
+                current_io_type: IOType::Other,
+                total_io_bytes: [IOBytes::default(); IOType::COUNT],
+                last_io_bytes: [IOBytes::default(); IOType::COUNT],
+            },
+        );
+    }
+
+    if let Some(mut buffer) = THREAD_IO_BYTES_VEC.get_mut(&id) {
+        let io_bytes = fetch_exact_thread_io_bytes(&id);
+        let old_io_type = buffer.current_io_type;
+        let last_io_bytes = buffer.last_io_bytes[old_io_type as usize];
+        buffer.total_io_bytes[old_io_type as usize] += io_bytes - last_io_bytes;
+
+        buffer.current_io_type = new_io_type;
+        buffer.last_io_bytes[new_io_type as usize] = io_bytes;
+    }
+}
+
+pub fn get_io_type() -> IOType {
+    if let Some(buffer) = THREAD_IO_BYTES_VEC.get(&ThreadID::current()) {
+        buffer.current_io_type
+    } else {
+        IOType::Other
+    }
+}
+
+pub(crate) fn fetch_buffered_thread_io_bytes(io_type: IOType) -> IOBytes {
+    if let Some(buffer) = THREAD_IO_BYTES_VEC.get(&ThreadID::current()) {
+        buffer.total_io_bytes[io_type as usize]
+    } else {
+        IOBytes::default()
+    }
+}
 
 pub(crate) fn fetch_thread_io_bytes(_io_type: IOType) -> IOBytes {
-    let tid = nix::unistd::gettid();
+    fetch_exact_thread_io_bytes(&ThreadID::current())
+}
 
-    let io_file_path = PathBuf::from("/proc/self/task")
-        .join(format!("{}", tid))
+fn fetch_exact_thread_io_bytes(id: &ThreadID) -> IOBytes {
+    let io_file_path = PathBuf::from("/proc")
+        .join(format!("{}", id.pid))
+        .join("task")
+        .join(format!("{}", id.tid))
         .join("io");
 
     if let Ok(io_file) = File::open(io_file_path) {
@@ -20,6 +103,15 @@ pub(crate) fn fetch_thread_io_bytes(_io_type: IOType) -> IOBytes {
     }
 
     IOBytes::default()
+}
+
+impl ThreadID {
+    fn current() -> ThreadID {
+        ThreadID {
+            pid: getpid(),
+            tid: gettid(),
+        }
+    }
 }
 
 impl IOBytes {

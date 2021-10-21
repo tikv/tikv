@@ -1326,6 +1326,7 @@ dependencies = [
  "collections",
  "crc32fast",
  "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dashmap",
  "fs2",
  "lazy_static",
  "libc 0.2.106",
