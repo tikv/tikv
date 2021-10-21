@@ -929,7 +929,7 @@ mod tests {
         // Gc rollback flags store in write-cf to make sure the next prewrite operation will skip
         // seek write cf.
         gc_by_compact(&engine, pri_key, 101);
-        set_perf_level(PerfLevel::EnableTimeExceptForMutex.into());
+        set_perf_level(PerfLevel::EnableTimeExceptForMutex);
         let perf = PerfStatisticsInstant::new();
         let mut statistic = Statistics::default();
         while mutations.len() > FORWARD_MIN_MUTATIONS_NUM + 1 {

@@ -181,7 +181,7 @@ impl ReqContext {
             None,
             TimeStamp::max(),
             None,
-            PerfLevel::EnableCount.into(),
+            PerfLevel::EnableCount,
         )
     }
 

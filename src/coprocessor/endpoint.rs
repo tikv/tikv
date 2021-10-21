@@ -849,7 +849,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount.into(),
+            PerfLevel::EnableCount,
         );
 
         // a normal request
@@ -872,7 +872,7 @@ mod tests {
             None,
             TimeStamp::max(),
             None,
-            PerfLevel::EnableCount.into(),
+            PerfLevel::EnableCount,
         );
         assert!(block_on(copr.handle_unary_request(outdated_req_ctx, handler_builder)).is_err());
     }
@@ -889,7 +889,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount.into(),
+            PerfLevel::EnableCount,
         );
         copr.recursion_limit = 100;
 
@@ -928,7 +928,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount.into(),
+            PerfLevel::EnableCount,
         );
 
         let mut req = coppb::Request::default();
@@ -950,7 +950,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount.into(),
+            PerfLevel::EnableCount,
         );
 
         let mut req = coppb::Request::default();
@@ -995,7 +995,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount.into(),
+            PerfLevel::EnableCount,
         );
 
         let (tx, rx) = mpsc::channel();
@@ -1042,7 +1042,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount.into(),
+            PerfLevel::EnableCount,
         );
 
         let handler_builder =
@@ -1066,7 +1066,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount.into(),
+            PerfLevel::EnableCount,
         );
 
         // Fail immediately
@@ -1118,7 +1118,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount.into(),
+            PerfLevel::EnableCount,
         );
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
@@ -1145,7 +1145,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount.into(),
+            PerfLevel::EnableCount,
         );
 
         // handler returns `finished == true` should not be called again.
@@ -1243,7 +1243,7 @@ mod tests {
             },
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount.into(),
+            PerfLevel::EnableCount,
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1310,7 +1310,7 @@ mod tests {
             &config,
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount.into(),
+            PerfLevel::EnableCount,
         );
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1637,7 +1637,7 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount.into(),
+            PerfLevel::EnableCount,
         );
 
         {
@@ -1699,7 +1699,7 @@ mod tests {
             &config,
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount.into(),
+            PerfLevel::EnableCount,
         );
 
         let mut req = coppb::Request::default();

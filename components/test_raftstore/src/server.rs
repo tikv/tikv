@@ -359,7 +359,7 @@ impl Simulator for ServerCluster {
             &server_cfg.value().clone(),
             cop_read_pool.handle(),
             concurrency_manager.clone(),
-            PerfLevel::EnableCount.into(),
+            PerfLevel::EnableCount,
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;
