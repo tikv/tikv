@@ -1,7 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::util::{append_expire_ts, ttl_to_expire_ts};
+use engine_traits::raw_value::{ttl_to_expire_ts, RawValue};
 use kvproto::import_sstpb::*;
+use kvproto::kvrpcpb::ApiVersion;
 use std::sync::Arc;
 
 use encryption::DataKeyManager;
@@ -138,6 +139,7 @@ pub struct RawSSTWriter<E: KvEngine> {
     default_path: ImportPath,
     default_meta: SstMeta,
     key_manager: Option<Arc<DataKeyManager>>,
+    api_version: ApiVersion,
     enable_ttl: bool,
 }
 
@@ -147,6 +149,7 @@ impl<E: KvEngine> RawSSTWriter<E> {
         default_path: ImportPath,
         default_meta: SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
+        api_version: ApiVersion,
         enable_ttl: bool,
     ) -> Self {
         RawSSTWriter {
@@ -157,6 +160,7 @@ impl<E: KvEngine> RawSSTWriter<E> {
             default_deletes: 0,
             default_meta,
             key_manager,
+            api_version,
             enable_ttl,
         }
     }
@@ -181,22 +185,33 @@ impl<E: KvEngine> RawSSTWriter<E> {
     pub fn write(&mut self, mut batch: RawWriteBatch) -> Result<()> {
         let start = Instant::now_coarse();
 
-        if self.enable_ttl {
-            let ttl = batch.get_ttl();
-            let expire_ts = ttl_to_expire_ts(ttl);
-            for mut m in batch.take_pairs().into_iter() {
-                if m.get_op() == PairOp::Put {
-                    append_expire_ts(m.mut_value(), expire_ts);
-                }
-                self.put(m.get_key(), m.get_value(), m.get_op())?;
-            }
+        let expire_ts = if batch.get_ttl() == 0 {
+            None
         } else {
-            if batch.get_ttl() != 0 {
+            if self.enable_ttl {
+                ttl_to_expire_ts(batch.get_ttl())
+            } else {
                 return Err(crate::Error::TTLNotEnabled);
             }
-            for m in batch.take_pairs().into_iter() {
-                self.put(m.get_key(), m.get_value(), m.get_op())?;
-            }
+        };
+
+        for m in batch.take_pairs().into_iter() {
+            let value = RawValue {
+                user_value: m.get_value(),
+                expire_ts,
+            };
+            match m.get_op() {
+                PairOp::Put => {
+                    self.put(
+                        m.get_key(),
+                        &value.to_bytes(self.api_version, self.enable_ttl),
+                        PairOp::Put,
+                    )?;
+                }
+                PairOp::Delete => {
+                    self.put(m.get_key(), &[], PairOp::Delete)?;
+                }
+            };
         }
 
         IMPORT_LOCAL_WRITE_CHUNK_DURATION_VEC

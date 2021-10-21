@@ -4,50 +4,41 @@
 use crate::storage::kv::{Iterator, Result, Snapshot, TTL_TOMBSTONE};
 use crate::storage::Statistics;
 
-use engine_traits::util::{get_expire_ts, strip_expire_ts, truncate_expire_ts};
+use engine_traits::raw_value::{RawValue, ttl_current_ts};
 use engine_traits::CfName;
 use engine_traits::{IterOptions, ReadOptions};
+use kvproto::kvrpcpb::ApiVersion;
 use txn_types::{Key, Value};
 
-#[cfg(test)]
-pub const TEST_CURRENT_TS: u64 = 100;
-
-pub fn convert_to_expire_ts(ttl: u64) -> u64 {
-    if ttl == 0 {
-        return 0;
-    }
-    ttl.saturating_add(current_ts())
-}
-
-#[cfg(not(test))]
-use tikv_util::time::UnixSecs;
-
-#[cfg(not(test))]
-pub fn current_ts() -> u64 {
-    UnixSecs::now().into_inner()
-}
-
-#[cfg(test)]
-pub fn current_ts() -> u64 {
-    TEST_CURRENT_TS
-}
-
+// TODO: remove this
 #[derive(Clone)]
 pub struct TTLSnapshot<S: Snapshot> {
     s: S,
     current_ts: u64,
+    api_version: ApiVersion,
 }
 
 impl<S: Snapshot> TTLSnapshot<S> {
-    fn map_value(&self, value_with_ttl: Result<Option<Value>>) -> Result<Option<Value>> {
-        match value_with_ttl? {
-            Some(mut v) => {
-                let expire_ts = get_expire_ts(&v)?;
-                if expire_ts != 0 && expire_ts <= self.current_ts {
+    pub fn from_snapshot(s: S, api_version: ApiVersion) -> Self {
+        TTLSnapshot {
+            s,
+            current_ts: ttl_current_ts(),
+            api_version,
+        }
+    }
+
+    fn map_value(&self, value: Result<Option<Value>>) -> Result<Option<Value>> {
+        match value? {
+            Some(v) => {
+                let raw_value = RawValue::from_owned_bytes(v, self.api_version, true)?;
+                if raw_value
+                    .expire_ts
+                    .map(|expire_ts| expire_ts <= self.current_ts)
+                    .unwrap_or(false)
+                {
                     return Ok(None);
                 }
-                truncate_expire_ts(&mut v).unwrap();
-                Ok(Some(v))
+                Ok(Some(raw_value.user_value))
             }
             None => Ok(None),
         }
@@ -59,32 +50,18 @@ impl<S: Snapshot> TTLSnapshot<S> {
         key: &Key,
         stats: &mut Statistics,
     ) -> Result<Option<u64>> {
-        let value_with_ttl = self.s.get_cf(cf, key)?;
-
         stats.data.flow_stats.read_keys = 1;
         stats.data.flow_stats.read_bytes = key.as_encoded().len();
-        if let Some(v) = value_with_ttl {
+        if let Some(v) = self.s.get_cf(cf, key)? {
             stats.data.flow_stats.read_bytes += v.len();
-            let expire_ts = get_expire_ts(&v)?;
-            if expire_ts == 0 {
-                return Ok(Some(0));
-            }
-            return if expire_ts <= self.current_ts {
-                Ok(None)
-            } else {
-                Ok(Some(expire_ts - self.current_ts))
+            let raw_value = RawValue::from_bytes(&v, self.api_version, true)?;
+            return match raw_value.expire_ts {
+                Some(expire_ts) if expire_ts <= self.current_ts => Ok(None),
+                Some(expire_ts) => Ok(Some(expire_ts - self.current_ts)),
+                None => Ok(Some(0)),
             };
         }
         Ok(None)
-    }
-}
-
-impl<S: Snapshot> From<S> for TTLSnapshot<S> {
-    fn from(s: S) -> Self {
-        TTLSnapshot {
-            s,
-            current_ts: current_ts(),
-        }
     }
 }
 
@@ -104,13 +81,18 @@ impl<S: Snapshot> Snapshot for TTLSnapshot<S> {
     }
 
     fn iter(&self, iter_opt: IterOptions) -> Result<Self::Iter> {
-        Ok(TTLIterator::new(self.s.iter(iter_opt)?, self.current_ts))
+        Ok(TTLIterator::new(
+            self.s.iter(iter_opt)?,
+            self.current_ts,
+            self.api_version,
+        ))
     }
 
     fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
         Ok(TTLIterator::new(
             self.s.iter_cf(cf, iter_opt)?,
             self.current_ts,
+            self.api_version,
         ))
     }
 
@@ -137,16 +119,17 @@ impl<S: Snapshot> Snapshot for TTLSnapshot<S> {
 pub struct TTLIterator<I: Iterator> {
     i: I,
     current_ts: u64,
-
     skip_ttl: usize,
+    api_version: ApiVersion,
 }
 
 impl<I: Iterator> TTLIterator<I> {
-    fn new(i: I, current_ts: u64) -> Self {
+    fn new(i: I, current_ts: u64, api_version: ApiVersion) -> Self {
         TTLIterator {
             i,
             current_ts,
             skip_ttl: 0,
+            api_version,
         }
     }
 
@@ -157,8 +140,12 @@ impl<I: Iterator> TTLIterator<I> {
             }
 
             if *res.as_ref().unwrap() {
-                let expire_ts = get_expire_ts(self.i.value())?;
-                if expire_ts != 0 && expire_ts <= self.current_ts {
+                let raw_value = RawValue::from_bytes(self.i.value(), self.api_version, true)?;
+                if raw_value
+                    .expire_ts
+                    .map(|expire_ts| expire_ts <= self.current_ts)
+                    .unwrap_or(false)
+                {
                     self.skip_ttl += 1;
                     res = if forward {
                         self.i.next()
@@ -226,7 +213,9 @@ impl<I: Iterator> Iterator for TTLIterator<I> {
     }
 
     fn value(&self) -> &[u8] {
-        strip_expire_ts(self.i.value())
+        RawValue::from_bytes(self.i.value(), self.api_version, true)
+            .unwrap()
+            .user_value
     }
 }
 

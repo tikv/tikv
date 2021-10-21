@@ -3,13 +3,14 @@
 // #[PerformanceCriticalPath]
 use crate::storage::kv::{Modify, WriteData};
 use crate::storage::lock_manager::LockManager;
-use crate::storage::raw::ttl::convert_to_expire_ts;
 use crate::storage::txn::commands::{
     Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
+use engine_traits::raw_value::{RawValue, ttl_to_expire_ts};
 use engine_traits::CfName;
+use kvproto::kvrpcpb::ApiVersion;
 use txn_types::RawMutation;
 
 command! {
@@ -21,6 +22,7 @@ command! {
             /// The set of mutations to apply.
             cf: CfName,
             mutations: Vec<RawMutation>,
+            api_version: ApiVersion,
             enable_ttl: bool,
         }
 }
@@ -59,11 +61,15 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
         for m in mutations {
             match m {
                 RawMutation::Put { key, value, ttl } => {
-                    let mut m = Modify::Put(cf, key, value);
-                    if self.enable_ttl {
-                        let expire_ts = convert_to_expire_ts(ttl);
-                        m.with_ttl(expire_ts);
-                    }
+                    let raw_value = RawValue {
+                        user_value: value,
+                        expire_ts: ttl_to_expire_ts(ttl),
+                    };
+                    let m = Modify::Put(
+                        cf,
+                        key,
+                        raw_value.to_bytes(self.api_version, self.enable_ttl),
+                    );
                     data.push(m);
                 }
                 RawMutation::Delete { key } => {

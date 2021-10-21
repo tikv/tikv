@@ -8,9 +8,13 @@ use engine_rocks::raw::{
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
 };
 use engine_rocks::RocksTtlProperties;
-use engine_traits::util::{get_expire_ts, ttl_current_ts};
+use engine_traits::key_prefix::is_raw_key;
+use engine_traits::raw_value::{ttl_current_ts, RawValue};
+use kvproto::kvrpcpb::ApiVersion;
 
-pub struct TTLCompactionFilterFactory;
+pub struct TTLCompactionFilterFactory {
+    pub api_version: ApiVersion,
+}
 
 impl CompactionFilterFactory for TTLCompactionFilterFactory {
     fn create_compaction_filter(
@@ -34,13 +38,17 @@ impl CompactionFilterFactory for TTLCompactionFilterFactory {
         }
 
         let name = CString::new("ttl_compaction_filter").unwrap();
-        let filter = Box::new(TTLCompactionFilter { ts: current });
+        let filter = Box::new(TTLCompactionFilter {
+            ts: current,
+            api_version: self.api_version,
+        });
         unsafe { new_compaction_filter_raw(name, filter) }
     }
 }
 
 struct TTLCompactionFilter {
     ts: u64,
+    api_version: ApiVersion,
 }
 
 impl CompactionFilter for TTLCompactionFilter {
@@ -55,25 +63,36 @@ impl CompactionFilter for TTLCompactionFilter {
         if value_type != CompactionFilterValueType::Value {
             return CompactionFilterDecision::Keep;
         }
-        // only consider data keys
+        // Only consider data keys.
         if !key.starts_with(keys::DATA_PREFIX_KEY) {
             return CompactionFilterDecision::Keep;
         }
-
-        let expire_ts = get_expire_ts(value).unwrap_or_else(|_| {
-            TTL_CHECKER_ACTIONS_COUNTER_VEC
-                .with_label_values(&["ts_error"])
-                .inc();
-            error!("unexpected ttl key:{:?}, value:{:?}", key, value);
-            0
-        });
-        if expire_ts == 0 {
+        // Only consider raw keys.
+        // In API V1, `TTLCompactionFilter` will only be enabled if `enable_ttl=true`,
+        // in which case all data keys are raw keys because txnkv is disabled.
+        let origin_key = &key[keys::DATA_PREFIX_KEY.len()..];
+        if self.api_version == ApiVersion::V2 && !is_raw_key(origin_key) {
             return CompactionFilterDecision::Keep;
         }
-        if expire_ts <= self.ts {
-            CompactionFilterDecision::Remove
-        } else {
-            CompactionFilterDecision::Keep
+
+        match RawValue::from_bytes(value, self.api_version, true) {
+            Ok(RawValue {
+                expire_ts: Some(expire_ts),
+                ..
+            }) if expire_ts <= self.ts => CompactionFilterDecision::Remove,
+            Err(err) => {
+                TTL_CHECKER_ACTIONS_COUNTER_VEC
+                    .with_label_values(&["ts_error"])
+                    .inc();
+                error!(
+                    "unexpected ttl key";
+                    "key" => log_wrappers::Value::key(key),
+                    "value" => log_wrappers::Value::value(value),
+                    "err" => %err,
+                );
+                CompactionFilterDecision::Keep
+            }
+            _ => CompactionFilterDecision::Keep,
         }
     }
 }

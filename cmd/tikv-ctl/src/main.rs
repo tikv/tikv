@@ -117,9 +117,12 @@ fn new_debug_executor(
     let mut kv_db_opts = cfg.rocksdb.build_opt();
     kv_db_opts.set_env(env.clone());
     kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
-    let kv_cfs_opts = cfg
-        .rocksdb
-        .build_cf_opts(&cache, None, cfg.storage.enable_ttl);
+    let kv_cfs_opts = cfg.rocksdb.build_cf_opts(
+        &cache,
+        None,
+        cfg.storage.api_version,
+        cfg.storage.enable_ttl,
+    );
     let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
     let kv_path = kv_path.to_str().unwrap();
     let kv_db = match new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts) {

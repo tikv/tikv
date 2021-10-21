@@ -36,6 +36,7 @@ use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrai
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use file_system::IOPriority;
 use keys::region_raft_prefix_len;
+use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use pd_client::Config as PdConfig;
 use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
@@ -582,6 +583,7 @@ impl DefaultCfConfig {
         &self,
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
+        api_version: ApiVersion,
         enable_ttl: bool,
     ) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, region_info_accessor);
@@ -593,12 +595,13 @@ impl DefaultCfConfig {
         if enable_ttl {
             cf_opts.add_table_properties_collector_factory(
                 "tikv.ttl-properties-collector",
-                Box::new(TtlPropertiesCollectorFactory {}),
+                Box::new(TtlPropertiesCollectorFactory { api_version }),
             );
             cf_opts
                 .set_compaction_filter_factory(
                     "ttl_compaction_filter_factory",
-                    Box::new(TTLCompactionFilterFactory {}) as Box<dyn CompactionFilterFactory>,
+                    Box::new(TTLCompactionFilterFactory { api_version })
+                        as Box<dyn CompactionFilterFactory>,
                 )
                 .unwrap();
         }
@@ -1081,13 +1084,14 @@ impl DbConfig {
         &self,
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
+        api_version: ApiVersion,
         enable_ttl: bool,
     ) -> Vec<CFOptions<'_>> {
         vec![
             CFOptions::new(
                 CF_DEFAULT,
                 self.defaultcf
-                    .build_opt(cache, region_info_accessor, enable_ttl),
+                    .build_opt(cache, region_info_accessor, api_version, enable_ttl),
             ),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(

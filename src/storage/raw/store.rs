@@ -8,7 +8,7 @@ use crate::storage::Statistics;
 use crate::storage::{Error, Result};
 
 use engine_traits::{CfName, IterOptions, CF_DEFAULT, DATA_KEY_PREFIX_LEN};
-use kvproto::kvrpcpb::KeyRange;
+use kvproto::kvrpcpb::{ApiVersion, KeyRange};
 use std::time::Duration;
 use tikv_util::time::Instant;
 use txn_types::{Key, KvPair};
@@ -23,9 +23,12 @@ pub enum RawStore<S: Snapshot> {
 }
 
 impl<'a, S: Snapshot> RawStore<S> {
-    pub fn new(snapshot: S, enable_ttl: bool) -> Self {
+    pub fn new(snapshot: S, api_version: ApiVersion, enable_ttl: bool) -> Self {
         if enable_ttl {
-            RawStore::TTL(RawStoreInner::new(TTLSnapshot::from(snapshot)))
+            RawStore::TTL(RawStoreInner::new(TTLSnapshot::from_snapshot(
+                snapshot,
+                api_version,
+            )))
         } else {
             RawStore::Vanilla(RawStoreInner::new(snapshot))
         }

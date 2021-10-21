@@ -38,7 +38,6 @@
 
 pub mod config;
 pub mod errors;
-pub mod key_prefix;
 pub mod kv;
 pub mod lock_manager;
 pub(crate) mod metrics;
@@ -64,7 +63,6 @@ pub use self::{
 };
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
-use crate::storage::key_prefix::TIDB_RANGES_COMPLEMENT;
 use crate::storage::metrics::CommandKind;
 use crate::storage::mvcc::MvccReader;
 use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSwap};
@@ -77,15 +75,11 @@ use crate::storage::{
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
     mvcc::PointGetterBuilder,
-    raw::ttl::convert_to_expire_ts,
     txn::{commands::TypedCommand, scheduler::Scheduler as TxnScheduler, Command},
     types::StorageCallbackType,
 };
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{
-    CfName, Iterable, KvEngine, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
-    DATA_KEY_PREFIX_LEN,
-};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CfName, DATA_CFS, DATA_KEY_PREFIX_LEN, Iterable, KvEngine, Peekable, SyncMutable, key_prefix::TIDB_RANGES_COMPLEMENT, raw_value::{RawValue, ttl_to_expire_ts}};
 use futures::prelude::*;
 use kvproto::kvrpcpb::ApiVersion;
 use kvproto::kvrpcpb::{
@@ -1159,7 +1153,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
-                let store = RawStore::new(snapshot, enable_ttl);
+                let store = RawStore::new(snapshot, api_version, enable_ttl);
                 let cf = Self::rawkv_cf(api_version, &cf)?;
                 {
                     let begin_instant = Instant::now_coarse();
@@ -1242,7 +1236,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     match snap.await {
                         Ok(snapshot) => {
                             let mut stats = Statistics::default();
-                            let store = RawStore::new(snapshot, enable_ttl);
+                            let store = RawStore::new(snapshot, api_version, enable_ttl);
                             match Self::rawkv_cf(api_version, &cf) {
                                 Ok(cf) => {
                                     consumer.consume(
@@ -1324,7 +1318,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
-                let store = RawStore::new(snapshot, enable_ttl);
+                let store = RawStore::new(snapshot, api_version, enable_ttl);
                 {
                     let begin_instant = Instant::now_coarse();
 
@@ -1380,17 +1374,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<()>,
     ) -> Result<()> {
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
-        let mut m = Modify::Put(
-            Self::rawkv_cf(self.api_version, &cf)?,
-            Key::from_encoded(key),
-            value,
-        );
-        if self.enable_ttl {
-            let expire_ts = convert_to_expire_ts(ttl);
-            m.with_ttl(expire_ts);
-        } else if ttl != 0 {
+        if !self.enable_ttl && ttl != 0 {
             return Err(Error::from(ErrorInner::TTLNotEnabled));
         }
+        let raw_value = RawValue {
+            user_value: value,
+            expire_ts: ttl_to_expire_ts(ttl),
+        };
+        let m = Modify::Put(
+            Self::rawkv_cf(self.api_version, &cf)?,
+            Key::from_encoded(key),
+            raw_value.to_bytes(self.api_version, self.enable_ttl),
+        );
 
         let mut batch = WriteData::from_modifies(vec![m]);
         batch.set_allowed_on_disk_almost_full();
@@ -1428,23 +1423,22 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         } else if ttls.iter().any(|&x| x != 0) {
             return Err(Error::from(ErrorInner::TTLNotEnabled));
         }
-        let modifies = if !self.enable_ttl {
-            pairs
-                .into_iter()
-                .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v))
-                .collect()
-        } else {
-            pairs
-                .iter()
-                .zip(ttls)
-                .into_iter()
-                .map(|((k, v), ttl)| {
-                    let mut m = Modify::Put(cf, Key::from_encoded(k.to_vec()), v.to_vec());
-                    m.with_ttl(convert_to_expire_ts(ttl));
-                    m
-                })
-                .collect()
-        };
+
+        let modifies = pairs
+            .into_iter()
+            .zip(ttls)
+            .map(|((k, v), ttl)| {
+                let raw_value = RawValue {
+                    user_value: v,
+                    expire_ts: ttl_to_expire_ts(ttl),
+                };
+                Modify::Put(
+                    cf,
+                    Key::from_encoded(k),
+                    raw_value.to_bytes(self.api_version, self.enable_ttl),
+                )
+            })
+            .collect();
 
         let mut batch = WriteData::from_modifies(modifies);
         batch.set_allowed_on_disk_almost_full();
@@ -1599,7 +1593,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 let cf = Self::rawkv_cf(api_version, &cf)?;
                 {
-                    let store = RawStore::new(snapshot, enable_ttl);
+                    let store = RawStore::new(snapshot, api_version, enable_ttl);
                     let begin_instant = Instant::now_coarse();
 
                     let start_key = Key::from_encoded(start_key);
@@ -1689,7 +1683,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 let cf = Self::rawkv_cf(api_version, &cf)?;
                 {
-                    let store = RawStore::new(snapshot, enable_ttl);
+                    let store = RawStore::new(snapshot, api_version, enable_ttl);
                     let begin_instant = Instant::now();
                     let mut statistics = Statistics::default();
                     if !Self::check_key_ranges(&ranges, reverse_scan) {
@@ -1810,7 +1804,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
-                let store = RawStore::new(snapshot, enable_ttl);
+                let store = RawStore::new(snapshot, api_version, enable_ttl);
                 let cf = Self::rawkv_cf(api_version, &cf)?;
                 {
                     let begin_instant = Instant::now_coarse();
@@ -1849,16 +1843,20 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cb: Callback<(Option<Value>, bool)>,
     ) -> Result<()> {
         let cf = Self::rawkv_cf(self.api_version, &cf)?;
-        let ttl = if self.enable_ttl {
-            Some(ttl)
-        } else {
-            if ttl != 0 {
-                return Err(Error::from(ErrorInner::TTLNotEnabled));
-            }
-            None
-        };
-        let cmd =
-            RawCompareAndSwap::new(cf, Key::from_encoded(key), previous_value, value, ttl, ctx);
+
+        if !self.enable_ttl && ttl != 0 {
+            return Err(Error::from(ErrorInner::TTLNotEnabled));
+        }
+        let cmd = RawCompareAndSwap::new(
+            cf,
+            Key::from_encoded(key),
+            previous_value,
+            value,
+            ttl,
+            self.api_version,
+            self.enable_ttl,
+            ctx,
+        );
         self.sched_command(cmd, cb)
     }
 
@@ -1899,7 +1897,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 })
                 .collect()
         };
-        let cmd = RawAtomicStore::new(cf, muations, self.enable_ttl, ctx);
+        let cmd = RawAtomicStore::new(cf, muations, self.api_version, self.enable_ttl, ctx);
         self.sched_command(cmd, callback)
     }
 
@@ -1917,7 +1915,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 key: Key::from_encoded(k),
             })
             .collect();
-        let cmd = RawAtomicStore::new(cf, muations, false, ctx);
+        let cmd = RawAtomicStore::new(cf, muations, self.api_version, self.enable_ttl, ctx);
         self.sched_command(cmd, callback)
     }
 
@@ -1956,7 +1954,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 let begin_instant = tikv_util::time::Instant::now_coarse();
                 // raw_checksum are only available in API V2, where TTL must be enabled.
-                let ret = raw::raw_checksum_ranges(TTLSnapshot::from(snapshot), ranges).await;
+                let ret = raw::raw_checksum_ranges(
+                    TTLSnapshot::from_snapshot(snapshot, api_version),
+                    ranges,
+                )
+                .await;
                 SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                     .get(CMD)
                     .observe(begin_instant.saturating_elapsed().as_secs_f64());
@@ -2068,7 +2070,10 @@ impl TestStorageBuilder<RocksEngine, DummyLockManager> {
             ..Default::default()
         };
         Self {
-            engine: TestEngineBuilder::new().ttl(enable_ttl).build().unwrap(),
+            engine: TestEngineBuilder::new()
+                .enable_ttl(enable_ttl)
+                .build()
+                .unwrap(),
             config,
             pipelined_pessimistic_lock: Arc::new(atomic::AtomicBool::new(false)),
             lock_mgr,

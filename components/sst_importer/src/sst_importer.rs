@@ -20,6 +20,7 @@ use engine_traits::{
     SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use file_system::{get_io_rate_limiter, OpenOptions};
+use kvproto::kvrpcpb::ApiVersion;
 use tikv_util::time::{Instant, Limiter};
 use txn_types::{Key, TimeStamp, WriteRef};
 
@@ -35,6 +36,7 @@ pub struct SSTImporter {
     dir: ImportDir,
     key_manager: Option<Arc<DataKeyManager>>,
     switcher: ImportModeSwitcher,
+    api_version: ApiVersion,
     enable_ttl: bool,
     compression_types: HashMap<CfName, SstCompressionType>,
 }
@@ -44,6 +46,7 @@ impl SSTImporter {
         cfg: &Config,
         root: P,
         key_manager: Option<Arc<DataKeyManager>>,
+        api_version: ApiVersion,
         enable_ttl: bool,
     ) -> Result<SSTImporter> {
         let switcher = ImportModeSwitcher::new(cfg);
@@ -51,6 +54,7 @@ impl SSTImporter {
             dir: ImportDir::new(root)?,
             key_manager,
             switcher,
+            api_version,
             enable_ttl,
             compression_types: HashMap::with_capacity(2),
         })
@@ -473,6 +477,7 @@ impl SSTImporter {
             default_path,
             meta,
             self.key_manager.clone(),
+            self.api_version,
             self.enable_ttl,
         ))
     }
