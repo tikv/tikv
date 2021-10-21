@@ -34,7 +34,7 @@ impl AssertionStorage<RocksEngine> {
         AssertionStorage {
             ctx: Context::default(),
             store: SyncTestStorageBuilder::new()
-                .set_api_version(api_version)
+                .api_version(api_version)
                 .build()
                 .unwrap(),
         }

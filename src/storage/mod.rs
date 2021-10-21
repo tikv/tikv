@@ -7423,7 +7423,7 @@ mod tests {
                 storage_api_version,
                 req_api_version,
                 cmd,
-                keys,
+                keys.clone(),
             );
             if is_legal {
                 assert!(res.is_ok(), "case {}", i);
