@@ -105,11 +105,11 @@ impl Config {
             );
             self.scheduler_concurrency = MAX_SCHED_CONCURRENCY;
         }
-        self.io_rate_limit.validate()?;
         if self.api_version == ApiVersion::V2 && !self.enable_ttl {
             warn!("storage.enable_ttl is deprecated in API V2 since API V2 forces to enable TTL.");
             self.enable_ttl = true;
         };
+        self.io_rate_limit.validate()?;
 
         Ok(())
     }
@@ -260,7 +260,7 @@ impl Default for FlowControlConfig {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(1024),
             memtables_threshold: 5,
-            l0_files_threshold: 9,
+            l0_files_threshold: 20,
         }
     }
 }

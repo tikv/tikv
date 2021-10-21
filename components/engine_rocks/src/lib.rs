@@ -104,6 +104,9 @@ mod raft_engine;
 pub use rocksdb::set_perf_level;
 pub use rocksdb::PerfContext;
 
+pub mod flow_control_factors;
+pub use flow_control_factors::*;
+
 pub mod raw;
 
 pub fn get_env(

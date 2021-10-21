@@ -34,6 +34,7 @@ pub fn case_enable(test_suite: &mut TestSuite) {
     // |   o     |    o    |
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
     sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
+    test_suite.flush_receiver();
     assert!(test_suite.fetch_reported_cpu_time().is_empty());
 
     // Workload

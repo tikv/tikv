@@ -128,6 +128,7 @@ name = "tikv"
 anyhow = "1.0"
 async-stream = "0.2"
 async-trait = "0.1"
+async-std = "1.10"
 backtrace = "0.3"
 batch-system = { path = "components/batch-system", default-features = false }
 byteorder = "1.2"
@@ -225,6 +226,7 @@ toml = "0.5"
 txn_types = { path = "components/txn_types", default-features = false }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
+unsigned-varint = "0.7"
 walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 resource_metering = { path = "components/resource_metering" }

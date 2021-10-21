@@ -34,13 +34,12 @@ use tikv_util::time::Instant;
 use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
-use crate::channel::{SendError, Sink};
+use crate::channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES};
 use crate::metrics::*;
 use crate::old_value::{OldValueCache, OldValueCallback};
-use crate::service::{CdcEvent, ConnID};
+use crate::service::ConnID;
 use crate::{Error, Result};
 
-const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024; // 6MB
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier of a Downstream.
@@ -59,7 +58,7 @@ impl Default for DownstreamID {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DownstreamState {
     Uninitialized,
     Normal,
@@ -469,7 +468,7 @@ impl Delegate {
                     }
                     decode_default(default.1, &mut row);
                     let row_size = row.key.len() + row.value.len();
-                    if current_rows_size + row_size >= EVENT_MAX_SIZE {
+                    if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
                         rows.push(Vec::with_capacity(entries_len));
                         current_rows_size = 0;
                     }
@@ -503,7 +502,7 @@ impl Delegate {
                     set_event_row_type(&mut row, EventLogType::Committed);
                     row.old_value = old_value.unwrap_or_default();
                     let row_size = row.key.len() + row.value.len();
-                    if current_rows_size + row_size >= EVENT_MAX_SIZE {
+                    if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
                         rows.push(Vec::with_capacity(entries_len));
                         current_rows_size = 0;
                     }

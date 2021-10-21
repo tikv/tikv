@@ -46,8 +46,7 @@ use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
-use resource_metering::cpu::collector::{register_collector, Collector, CollectorHandle};
-use resource_metering::cpu::recorder::CpuRecords;
+use resource_metering::{register_collector, Collector, CollectorHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -170,7 +169,7 @@ where
         id: u64,
         duration: RaftstoreDuration,
     },
-    RegionCPURecords(Arc<CpuRecords>),
+    RegionCPURecords(Arc<RawRecords>),
 }
 
 pub struct StoreStat {
@@ -641,7 +640,7 @@ impl<E> Collector for RegionCPUMeteringCollector<E>
 where
     E: KvEngine,
 {
-    fn collect(&self, records: Arc<CpuRecords>) {
+    fn collect(&self, records: Arc<RawRecords>) {
         self.scheduler
             .schedule(Task::RegionCPURecords(records))
             .ok();
@@ -1366,23 +1365,23 @@ where
     // CPU time for the write path only takes into account the lock checking,
     // which is the read load portion of the write path.
     // TODO: more accurate CPU consumption of a specified region.
-    fn handle_region_cpu_records(&mut self, records: Arc<CpuRecords>) {
+    fn handle_region_cpu_records(&mut self, records: Arc<RawRecords>) {
         calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records);
     }
 }
 
 fn calculate_region_cpu_records(
     store_id: u64,
-    records: Arc<CpuRecords>,
+    records: Arc<RawRecords>,
     region_cpu_records: &mut HashMap<u64, u32>,
 ) {
-    for (tag, ms) in &records.records {
+    for (tag, record) in &records.records {
         let record_store_id = tag.infos.store_id;
         if record_store_id != store_id {
             continue;
         }
         // Reporting a region heartbeat later will clear the corresponding record.
-        *region_cpu_records.entry(tag.infos.region_id).or_insert(0) += *ms as u32;
+        *region_cpu_records.entry(tag.infos.region_id).or_insert(0) += record.cpu_time;
     }
 }
 
@@ -1989,7 +1988,7 @@ mod tests {
     }
 
     use metapb::Peer;
-    use resource_metering::ResourceMeteringTag;
+    use resource_metering::{RawRecord, ResourceMeteringTag};
 
     #[test]
     fn test_calculate_region_cpu_records() {
@@ -1998,7 +1997,7 @@ mod tests {
 
         let region_num = 3;
         for i in 0..region_num * 10 {
-            let cpu_records = Arc::new(CpuRecords {
+            let cpu_records = Arc::new(RawRecords {
                 begin_unix_time_secs: UnixSecs::now().into_inner(),
                 duration: Duration::default(),
                 records: {
@@ -2015,7 +2014,7 @@ mod tests {
                     let resource_tag = ResourceMeteringTag::from_rpc_context(&context);
 
                     let mut records = HashMap::default();
-                    records.insert(resource_tag, 10);
+                    records.insert(resource_tag, RawRecord { cpu_time: 10 });
                     records
                 },
             });
