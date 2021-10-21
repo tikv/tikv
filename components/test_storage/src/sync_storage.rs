@@ -67,9 +67,11 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
         }
+        let (tx, _rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
             self.engine,
             RaftStoreBlackHole,
+            tx,
             self.gc_config.unwrap_or_default(),
             Default::default(),
         );
@@ -371,9 +373,9 @@ impl<E: Engine> SyncTestStorage<E> {
         ctx: Context,
         cf: String,
         pairs: Vec<KvPair>,
-        ttl: u64,
+        ttls: Vec<u64>,
     ) -> Result<()> {
-        wait_op!(|cb| self.store.raw_batch_put_atomic(ctx, cf, pairs, ttl, cb)).unwrap()
+        wait_op!(|cb| self.store.raw_batch_put_atomic(ctx, cf, pairs, ttls, cb)).unwrap()
     }
 
     pub fn raw_batch_delete_atomic(

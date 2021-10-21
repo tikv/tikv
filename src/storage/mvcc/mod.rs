@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 //! Multi-version concurrency control functionality.
 
 mod consistency_check;
@@ -28,7 +29,7 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 #[derive(Debug, Error)]
 pub enum ErrorInner {
     #[error("{0}")]
-    Engine(#[from] crate::storage::kv::Error),
+    Kv(#[from] crate::storage::kv::Error),
 
     #[error("{0}")]
     Io(#[from] io::Error),
@@ -152,7 +153,7 @@ pub enum ErrorInner {
 impl ErrorInner {
     pub fn maybe_clone(&self) -> Option<ErrorInner> {
         match self {
-            ErrorInner::Engine(e) => e.maybe_clone().map(ErrorInner::Engine),
+            ErrorInner::Kv(e) => e.maybe_clone().map(ErrorInner::Kv),
             ErrorInner::Codec(e) => e.maybe_clone().map(ErrorInner::Codec),
             ErrorInner::KeyIsLocked(info) => Some(ErrorInner::KeyIsLocked(info.clone())),
             ErrorInner::BadFormat(e) => e.maybe_clone().map(ErrorInner::BadFormat),
@@ -313,7 +314,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self.0.as_ref() {
-            ErrorInner::Engine(e) => e.error_code(),
+            ErrorInner::Kv(e) => e.error_code(),
             ErrorInner::Io(_) => error_code::storage::IO,
             ErrorInner::Codec(e) => e.error_code(),
             ErrorInner::KeyIsLocked(_) => error_code::storage::KEY_IS_LOCKED,

@@ -20,8 +20,9 @@ use kvproto::cdcpb::{
 };
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::{
-    ChangeDataRequest, DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event,
-    Event_oneof_event, ResolvedTs,
+    ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
+    DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event, Event_oneof_event,
+    ResolvedTs,
 };
 use kvproto::kvrpcpb::{CheckLeaderRequest, ExtraOp as TxnExtraOp, LeaderInfo};
 use kvproto::metapb::{PeerRole, Region, RegionEpoch};
@@ -48,14 +49,15 @@ use tokio::runtime::{Builder, Runtime};
 use tokio::sync::Semaphore;
 use txn_types::{Key, Lock, LockType, TimeStamp, TxnExtra, TxnExtraScheduler};
 
-use crate::channel::{MemoryQuota, SendError};
+use crate::channel::{CdcEvent, MemoryQuota, SendError};
 use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
 use crate::old_value::{OldValueCache, OldValueCallback};
-use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
+use crate::service::{Conn, ConnID, FeatureGate};
 use crate::{CdcObserver, Error, Result};
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
+const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 
 pub enum Deregister {
     Downstream {
@@ -145,6 +147,10 @@ pub enum Task {
     InitDownstream {
         downstream_id: DownstreamID,
         downstream_state: Arc<AtomicCell<DownstreamState>>,
+        // `incremental_scan_barrier` will be sent into `sink` to ensure all delta changes
+        // are delivered to the downstream. And then incremental scan can start.
+        sink: crate::channel::Sink,
+        incremental_scan_barrier: CdcEvent,
         cb: InitCallback,
     },
     TxnExtra(TxnExtra),
@@ -219,6 +225,8 @@ impl fmt::Debug for Task {
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
 pub struct Endpoint<T, E> {
+    cluster_id: u64,
+
     capture_regions: HashMap<u64, Delegate>,
     connections: HashMap<ConnID, Conn>,
     scheduler: Scheduler<Task>,
@@ -260,6 +268,7 @@ pub struct Endpoint<T, E> {
 
 impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     pub fn new(
+        cluster_id: u64,
         config: &CdcConfig,
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
@@ -279,6 +288,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let tso_worker = Builder::new_multi_thread()
             .thread_name("tso")
             .worker_threads(1)
+            .enable_time()
             .build()
             .unwrap();
 
@@ -299,6 +309,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let max_scan_batch_size = 1024;
 
         let ep = Endpoint {
+            cluster_id,
             env,
             security_mgr,
             capture_regions: HashMap::default(),
@@ -456,9 +467,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             Deregister::Conn(conn_id) => {
                 // The connection is closed, deregister all downstreams of the connection.
                 if let Some(conn) = self.connections.remove(&conn_id) {
-                    conn.take_downstreams()
-                        .into_iter()
-                        .for_each(|(region_id, downstream_id)| {
+                    conn.take_downstreams().into_iter().for_each(
+                        |(region_id, (downstream_id, _))| {
                             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                                 if delegate.unsubscribe(downstream_id, None) {
                                     let delegate = self.capture_regions.remove(&region_id).unwrap();
@@ -473,7 +483,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                                     );
                                 }
                             }
-                        });
+                        },
+                    );
                 }
             }
         }
@@ -488,6 +499,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     ) {
         let region_id = request.region_id;
         let downstream_id = downstream.get_id();
+        let downstream_state = downstream.get_state();
         let conn = match self.connections.get_mut(&conn_id) {
             Some(conn) => conn,
             None => {
@@ -498,6 +510,20 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         };
         downstream.set_sink(conn.get_sink().clone());
 
+        // Check if the cluster id matches.
+        let request_cluster_id = request.get_header().get_cluster_id();
+        if version >= FeatureGate::validate_cluster_id() && self.cluster_id != request_cluster_id {
+            let mut err_event = EventError::default();
+            let mut err = ErrorClusterIdMismatch::default();
+
+            err.set_current(self.cluster_id);
+            err.set_request(request_cluster_id);
+            err_event.set_cluster_id_mismatch(err);
+
+            let _ = downstream.sink_error_event(region_id, err_event);
+            return;
+        }
+
         // TODO: Add a new task to close incompatible features.
         if let Some(e) = conn.check_version_and_set_feature(version) {
             // The downstream has not registered yet, send error right away.
@@ -506,7 +532,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             let _ = downstream.sink_error_event(region_id, err_event);
             return;
         }
-        if !conn.subscribe(region_id, downstream_id) {
+        if !conn.subscribe(region_id, downstream_id, downstream_state) {
             let mut err_event = EventError::default();
             let mut err = ErrorDuplicateRequest::default();
             err.set_region_id(region_id);
@@ -683,8 +709,10 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             resolved_ts.ts = min_resolved_ts;
             resolved_ts.regions = Vec::with_capacity(downstream_regions.len());
             // Only send region ids that are captured by the connection.
-            for region_id in conn.get_downstreams().keys() {
-                if regions.contains(region_id) {
+            for (region_id, (_, downstream_state)) in conn.get_downstreams() {
+                if regions.contains(region_id)
+                    && matches!(downstream_state.load(), DownstreamState::Normal)
+                {
                     resolved_ts.regions.push(*region_id);
                 }
             }
@@ -1020,7 +1048,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
                 req.set_ts(min_ts.into_inner());
-                let res = box_try!(client.check_leader_async(&req)).await;
+                let res = box_try!(
+                    tokio::time::timeout(
+                        Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS),
+                        box_try!(client.check_leader_async(&req))
+                    )
+                    .await
+                );
                 let resp = box_try!(res);
                 Result::Ok((store_id, resp))
             }
@@ -1091,6 +1125,7 @@ impl Initializer {
         raft_router: T,
         concurrency_semaphore: Arc<Semaphore>,
     ) -> Result<()> {
+        fail_point!("cdc_before_initialize");
         let _permit = concurrency_semaphore.acquire().await;
 
         // When downstream_state is Stopped, it means the corresponding delegate
@@ -1119,6 +1154,10 @@ impl Initializer {
         let downstream_id = self.downstream_id;
         let downstream_state = self.downstream_state.clone();
         let (cb, fut) = tikv_util::future::paired_future_callback();
+        let sink = self.sink.clone();
+        let (incremental_scan_barrier_cb, incremental_scan_barrier_fut) =
+            tikv_util::future::paired_future_callback();
+        let barrier = CdcEvent::Barrier(Some(incremental_scan_barrier_cb));
         if let Err(e) = raft_router.significant_send(
             self.region_id,
             SignificantMsg::CaptureChange {
@@ -1128,9 +1167,9 @@ impl Initializer {
                     if let Err(e) = sched.schedule(Task::InitDownstream {
                         downstream_id,
                         downstream_state,
-                        cb: Box::new(move || {
-                            cb(resp);
-                        }),
+                        sink,
+                        incremental_scan_barrier: barrier,
+                        cb: Box::new(move || cb(resp)),
                     }) {
                         error!("cdc schedule cdc task failed"; "error" => ?e);
                     }
@@ -1140,6 +1179,13 @@ impl Initializer {
             warn!("cdc send capture change cmd failed";
             "region_id" => self.region_id, "error" => ?e);
             return Err(Error::request(e.into()));
+        }
+
+        // Wait all delta changes earlier than the incremental scan snapshot be
+        // sent to the downstream, so that they must be consumed before the
+        // incremental scan result.
+        if let Err(e) = incremental_scan_barrier_fut.await {
+            return Err(Error::Other(box_err!(e)));
         }
 
         match fut.await {
@@ -1389,11 +1435,20 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
             Task::InitDownstream {
                 downstream_id,
                 downstream_state,
+                sink,
+                incremental_scan_barrier,
                 cb,
             } => {
-                info!("cdc downstream is initialized"; "downstream_id" => ?downstream_id);
+                if let Err(e) = sink.unbounded_send(incremental_scan_barrier, true) {
+                    error!(
+                        "cdc failed to schedule barrier for delta before delta scan";
+                        "error" => ?e
+                    );
+                    return;
+                }
                 let _ = downstream_state
                     .compare_exchange(DownstreamState::Uninitialized, DownstreamState::Normal);
+                info!("cdc downstream is initialized"; "downstream_id" => ?downstream_id);
                 cb();
             }
             Task::TxnExtra(txn_extra) => {
@@ -1489,6 +1544,7 @@ mod tests {
     use tempfile::TempDir;
     use test_raftstore::MockRaftStoreRouter;
     use test_raftstore::TestPdClient;
+    use tikv::server::DEFAULT_CLUSTER_ID;
     use tikv::storage::kv::Engine;
     use tikv::storage::txn::tests::{must_acquire_pessimistic_lock, must_prewrite_put};
     use tikv::storage::TestEngineBuilder;
@@ -1597,6 +1653,7 @@ mod tests {
         let env = Arc::new(Environment::new(1));
         let security_mgr = Arc::new(SecurityManager::default());
         let ep = Endpoint::new(
+            DEFAULT_CLUSTER_ID,
             cfg,
             pd_client,
             task_sched,
@@ -2156,6 +2213,7 @@ mod tests {
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
         let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
+        downstream.get_state().store(DownstreamState::Normal);
         // Enable batch resolved ts in the test.
         let version = FeatureGate::batch_resolved_ts();
         ep.run(Task::Register {
@@ -2184,6 +2242,7 @@ mod tests {
         // Register region 2 to the conn.
         req.set_region_id(2);
         let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
+        downstream.get_state().store(DownstreamState::Normal);
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -2220,6 +2279,7 @@ mod tests {
         ep.run(Task::OpenConn { conn });
         req.set_region_id(3);
         let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id, true);
+        downstream.get_state().store(DownstreamState::Normal);
         ep.run(Task::Register {
             request: req,
             downstream,
@@ -2413,6 +2473,7 @@ mod tests {
                 let region_epoch = req.get_region_epoch().clone();
                 let downstream =
                     Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
+                downstream.get_state().store(DownstreamState::Normal);
                 ep.run(Task::Register {
                     request: req.clone(),
                     downstream,
