@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fmt;
 use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::time::Duration;
 
@@ -12,18 +13,180 @@ use futures::{
     stream, SinkExt, Stream, StreamExt,
 };
 use grpcio::WriteFlags;
-use kvproto::cdcpb::ChangeDataEvent;
-
+use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
+use protobuf::Message;
 use tikv_util::time::Instant;
 use tikv_util::{impl_display_as_debug, warn};
 
 use crate::metrics::*;
-use crate::service::{CdcEvent, EventBatcher};
 
-const CDC_MSG_MAX_BATCH_SIZE: usize = 128;
-// Assume the average size of event is 1KB.
-// 2 = (CDC_MSG_MAX_BATCH_SIZE * 1KB / service::CDC_MAX_RESP_SIZE).ceil() + 1 /* reserve for ResolvedTs */;
-pub const CDC_EVENT_MAX_BATCH_SIZE: usize = 2;
+/// The maximum bytes of events can be batched into one `CdcEvent::Event`, 32KB.
+pub const CDC_EVENT_MAX_BYTES: usize = 32 * 1024;
+
+/// The maximum count of `CdcEvent::Event`s can be batched into
+/// one ChangeDataEvent, 64.
+const CDC_EVENT_MAX_COUNT: usize = 64;
+
+/// The default `channel` capacity for sending incremental scan events.
+///
+/// The maximum bytes of in-memory incremental scan events is about 6MB
+/// per-connection (EventFeed RPC).
+///
+/// 6MB = (CDC_CHANNLE_CAPACITY + CDC_EVENT_MAX_COUNT) * CDC_EVENT_MAX_BYTES.
+pub const CDC_CHANNLE_CAPACITY: usize = 128;
+
+/// The maximum bytes of ChangeDataEvent, 6MB.
+const CDC_RESP_MAX_BYTES: u32 = 6 * 1024 * 1024;
+
+/// Assume the average size of batched `CdcEvent::Event`s is 32KB and
+/// the average count of batched `CdcEvent::Event`s is 64.
+///
+/// 2 = (CDC_EVENT_MAX_BYTES * CDC_EVENT_MAX_COUNT / CDC_MAX_RESP_SIZE).ceil() + 1 /* reserve for ResolvedTs */;
+const CDC_RESP_MAX_BATCH_COUNT: usize = 2;
+
+pub enum CdcEvent {
+    ResolvedTs(ResolvedTs),
+    Event(Event),
+    Barrier(Option<Box<dyn FnOnce(()) + Send>>),
+}
+
+impl CdcEvent {
+    pub fn size(&self) -> u32 {
+        match self {
+            CdcEvent::ResolvedTs(ref r) => {
+                // For region id, it is unlikely to exceed 100,000,000 which is
+                // encoded into 4 bytes.
+                // For TSO, it is likely to be encoded into 9 bytes,
+                // e.g., 426624231625982140.
+                //
+                // See https://play.golang.org/p/GFA9S-z_kUt
+                let approximate_region_id_bytes = 4;
+                let approximate_tso_bytes = 9;
+                // Protobuf encoding adds a tag to every Uvarint.
+                // protobuf::rt::tag_size(1 /* or 2, field number*/) yields 1.
+                let tag_bytes = 1;
+
+                // Bytes of an array of region id.
+                r.regions.len() as u32 * (tag_bytes + approximate_region_id_bytes)
+                // Bytes of a TSO.
+                + (tag_bytes + approximate_tso_bytes)
+            }
+            CdcEvent::Event(ref e) => e.compute_size(),
+            CdcEvent::Barrier(_) => 0,
+        }
+    }
+
+    pub fn event(&self) -> &Event {
+        match self {
+            CdcEvent::ResolvedTs(_) | CdcEvent::Barrier(_) => unreachable!(),
+            CdcEvent::Event(ref e) => e,
+        }
+    }
+
+    pub fn resolved_ts(&self) -> &ResolvedTs {
+        match self {
+            CdcEvent::ResolvedTs(ref r) => r,
+            CdcEvent::Event(_) | CdcEvent::Barrier(_) => unreachable!(),
+        }
+    }
+}
+
+impl fmt::Debug for CdcEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CdcEvent::Barrier(_) => {
+                let mut d = f.debug_tuple("Barrier");
+                d.finish()
+            }
+            CdcEvent::ResolvedTs(ref r) => {
+                let mut d = f.debug_struct("ResolvedTs");
+                d.field("resolved ts", &r.ts);
+                d.field("region count", &r.regions.len());
+                d.finish()
+            }
+            CdcEvent::Event(e) => {
+                let mut d = f.debug_struct("Event");
+                d.field("region_id", &e.region_id);
+                d.field("request_id", &e.request_id);
+                #[cfg(not(feature = "prost-codec"))]
+                if e.has_entries() {
+                    d.field("entries count", &e.get_entries().get_entries().len());
+                }
+                #[cfg(feature = "prost-codec")]
+                if e.event.is_some() {
+                    use kvproto::cdcpb::event;
+                    if let Some(event::Event::Entries(ref es)) = e.event.as_ref() {
+                        d.field("entries count", &es.entries.len());
+                    }
+                }
+                d.finish()
+            }
+        }
+    }
+}
+
+pub struct EventBatcher {
+    buffer: Vec<ChangeDataEvent>,
+    last_size: u32,
+
+    // statistics
+    total_event_bytes: usize,
+    total_resolved_ts_bytes: usize,
+}
+
+impl EventBatcher {
+    pub fn with_capacity(cap: usize) -> EventBatcher {
+        EventBatcher {
+            buffer: Vec::with_capacity(cap),
+            last_size: 0,
+
+            total_event_bytes: 0,
+            total_resolved_ts_bytes: 0,
+        }
+    }
+
+    // The size of the response should not exceed CDC_MAX_RESP_SIZE.
+    // Split the events into multiple responses by CDC_MAX_RESP_SIZE here.
+    pub fn push(&mut self, event: CdcEvent) {
+        let size = event.size();
+        if size >= CDC_RESP_MAX_BYTES {
+            warn!("cdc event too large"; "size" => size, "event" => ?event);
+        }
+        match event {
+            CdcEvent::Event(e) => {
+                if self.buffer.is_empty() || self.last_size + size >= CDC_RESP_MAX_BYTES {
+                    self.last_size = 0;
+                    self.buffer.push(ChangeDataEvent::default());
+                }
+                self.last_size += size;
+                self.buffer.last_mut().unwrap().mut_events().push(e);
+                self.total_event_bytes += size as usize;
+            }
+            CdcEvent::ResolvedTs(r) => {
+                let mut change_data_event = ChangeDataEvent::default();
+                change_data_event.set_resolved_ts(r);
+                self.buffer.push(change_data_event);
+
+                // Make sure the next message is not batched with ResolvedTs.
+                self.last_size = CDC_RESP_MAX_BYTES;
+                self.total_resolved_ts_bytes += size as usize;
+            }
+            CdcEvent::Barrier(_) => {
+                // Barrier requires events must be batched accross the barrier.
+                self.last_size = CDC_RESP_MAX_BYTES;
+            }
+        }
+    }
+
+    pub fn build(self) -> Vec<ChangeDataEvent> {
+        self.buffer
+    }
+
+    // Return the total bytes of event and resolved ts.
+    pub fn statistics(&self) -> (usize, usize) {
+        (self.total_event_bytes, self.total_resolved_ts_bytes)
+    }
+}
 
 #[derive(Clone)]
 pub struct MemoryQuota {
@@ -168,7 +331,8 @@ impl Sink {
         // Allocate quota in advance.
         let mut total_bytes = 0;
         for event in &events {
-            total_bytes += event.size();
+            let bytes = event.size();
+            total_bytes += bytes;
         }
         if !self.memory_quota.alloc(total_bytes as _) {
             return Err(SendError::Congested);
@@ -221,10 +385,10 @@ impl<'a> Drain {
             CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["resolved_ts"]);
 
         let memory_quota = self.memory_quota.clone();
-        let mut chunks = self.drain().ready_chunks(CDC_MSG_MAX_BATCH_SIZE);
+        let mut chunks = self.drain().ready_chunks(CDC_EVENT_MAX_COUNT);
         while let Some(events) = chunks.next().await {
             let mut bytes = 0;
-            let mut batcher = EventBatcher::with_capacity(CDC_EVENT_MAX_BATCH_SIZE);
+            let mut batcher = EventBatcher::with_capacity(CDC_RESP_MAX_BATCH_COUNT);
             events.into_iter().for_each(|(e, size)| {
                 bytes += size;
                 batcher.push(e);
@@ -294,14 +458,23 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::assert_matches::assert_matches;
     use std::sync::mpsc;
     use std::time::Duration;
 
+    use futures::executor::block_on;
+    #[cfg(feature = "prost-codec")]
+    use kvproto::cdcpb::event::{
+        Entries as EventEntries, Event as Event_oneof_event, Row as EventRow,
+    };
+    use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
+    #[cfg(not(feature = "prost-codec"))]
+    use kvproto::cdcpb::{EventEntries, EventRow, Event_oneof_event};
+
+    use super::*;
+
     type Send = Box<dyn FnMut(CdcEvent) -> Result<(), SendError>>;
-    fn new_test_cancal(buffer: usize, capacity: usize, force_send: bool) -> (Send, Drain) {
+    fn new_test_channel(buffer: usize, capacity: usize, force_send: bool) -> (Send, Drain) {
         let memory_quota = MemoryQuota::new(capacity);
         let (mut tx, rx) = channel(buffer, memory_quota);
         let mut flag = true;
@@ -319,7 +492,7 @@ mod tests {
     #[test]
     fn test_barrier() {
         let force_send = false;
-        let (mut send, mut rx) = new_test_cancal(10, usize::MAX, force_send);
+        let (mut send, mut rx) = new_test_channel(10, usize::MAX, force_send);
         send(CdcEvent::Event(Default::default())).unwrap();
         let (btx1, brx1) = mpsc::channel();
         send(CdcEvent::Barrier(Some(Box::new(move |()| {
@@ -353,9 +526,9 @@ mod tests {
     #[test]
     fn test_nonblocking_batch() {
         let force_send = false;
-        for count in 1..CDC_EVENT_MAX_BATCH_SIZE + CDC_EVENT_MAX_BATCH_SIZE / 2 {
+        for count in 1..CDC_RESP_MAX_BATCH_COUNT + CDC_RESP_MAX_BATCH_COUNT / 2 {
             let (mut send, mut drain) =
-                new_test_cancal(CDC_MSG_MAX_BATCH_SIZE * 2, usize::MAX, force_send);
+                new_test_channel(CDC_EVENT_MAX_COUNT * 2, usize::MAX, force_send);
             for _ in 0..count {
                 send(CdcEvent::Event(Default::default())).unwrap();
             }
@@ -383,7 +556,7 @@ mod tests {
         let max_pending_bytes = 1024;
         let buffer = max_pending_bytes / event.size();
         let force_send = false;
-        let (mut send, _rx) = new_test_cancal(buffer as _, max_pending_bytes as _, force_send);
+        let (mut send, _rx) = new_test_channel(buffer as _, max_pending_bytes as _, force_send);
         for _ in 0..buffer {
             send(CdcEvent::Event(e.clone())).unwrap();
         }
@@ -403,7 +576,7 @@ mod tests {
 
         // Make sure we can increase the memory quota capacity.
         {
-            let (mut send, rx) = new_test_cancal(buffer as _, max_pending_bytes as _, force_send);
+            let (mut send, rx) = new_test_channel(buffer as _, max_pending_bytes as _, force_send);
             for _ in 0..buffer {
                 send(CdcEvent::Event(e.clone())).unwrap();
             }
@@ -424,7 +597,7 @@ mod tests {
 
         // Make sure we can reduce the memory quota capacity.
         {
-            let (mut send, rx) = new_test_cancal(buffer as _, max_pending_bytes as _, force_send);
+            let (mut send, rx) = new_test_channel(buffer as _, max_pending_bytes as _, force_send);
             // Send one less event.
             let count = buffer - 1;
             for _ in 0..count {
@@ -476,7 +649,7 @@ mod tests {
         let force_send = false;
         // Make sure memory quota is freed when rx is dropped before tx.
         {
-            let (mut send, rx) = new_test_cancal(buffer as _, max_pending_bytes as _, force_send);
+            let (mut send, rx) = new_test_channel(buffer as _, max_pending_bytes as _, force_send);
             loop {
                 match send(CdcEvent::Event(e.clone())) {
                     Ok(_) => (),
@@ -493,7 +666,7 @@ mod tests {
         }
         // Make sure memory quota is freed when tx is dropped before rx.
         {
-            let (mut send, rx) = new_test_cancal(buffer as _, max_pending_bytes as _, force_send);
+            let (mut send, rx) = new_test_channel(buffer as _, max_pending_bytes as _, force_send);
             loop {
                 match send(CdcEvent::Event(e.clone())) {
                     Ok(_) => (),
@@ -511,7 +684,7 @@ mod tests {
         }
         // Make sure sending message to a closed channel does not leak memory quota.
         {
-            let (mut send, rx) = new_test_cancal(buffer as _, max_pending_bytes as _, force_send);
+            let (mut send, rx) = new_test_channel(buffer as _, max_pending_bytes as _, force_send);
             let memory_quota = rx.memory_quota.clone();
             assert_eq!(memory_quota.in_use(), 0);
             drop(rx);
@@ -526,6 +699,156 @@ mod tests {
             assert_eq!(memory_quota.in_use(), 0);
             memory_quota.free(1024);
             assert_eq!(memory_quota.in_use(), 0);
+        }
+    }
+
+    #[test]
+    fn test_event_batcher() {
+        let check_events = |result: Vec<ChangeDataEvent>, expected: Vec<Vec<CdcEvent>>| {
+            assert_eq!(result.len(), expected.len());
+
+            for i in 0..expected.len() {
+                if !result[i].has_resolved_ts() {
+                    assert_eq!(result[i].events.len(), expected[i].len());
+                    for j in 0..expected[i].len() {
+                        assert_eq!(&result[i].events[j], expected[i][j].event());
+                    }
+                } else {
+                    assert_eq!(expected[i].len(), 1);
+                    assert_eq!(result[i].get_resolved_ts(), expected[i][0].resolved_ts());
+                }
+            }
+        };
+
+        let row_small = EventRow::default();
+        let event_entries = EventEntries {
+            entries: vec![row_small].into(),
+            ..Default::default()
+        };
+        let event_small = Event {
+            event: Some(Event_oneof_event::Entries(event_entries)),
+            ..Default::default()
+        };
+
+        let mut row_big = EventRow::default();
+        row_big.set_key(vec![0_u8; CDC_RESP_MAX_BYTES as usize]);
+        let event_entries = EventEntries {
+            entries: vec![row_big].into(),
+            ..Default::default()
+        };
+        let event_big = Event {
+            event: Some(Event_oneof_event::Entries(event_entries)),
+            ..Default::default()
+        };
+
+        let mut resolved_ts = ResolvedTs::default();
+        resolved_ts.set_ts(1);
+
+        // None empty event should not return a zero size.
+        assert_ne!(CdcEvent::ResolvedTs(resolved_ts.clone()).size(), 0);
+        assert_ne!(CdcEvent::Event(event_big.clone()).size(), 0);
+        assert_ne!(CdcEvent::Event(event_small.clone()).size(), 0);
+
+        // An ReslovedTs event follows a small event, they should not be batched
+        // in one message.
+        let mut batcher = EventBatcher::with_capacity(CDC_RESP_MAX_BATCH_COUNT);
+        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
+        batcher.push(CdcEvent::Event(event_small.clone()));
+
+        check_events(
+            batcher.build(),
+            vec![
+                vec![CdcEvent::ResolvedTs(resolved_ts.clone())],
+                vec![CdcEvent::Event(event_small.clone())],
+            ],
+        );
+
+        // A more complex case.
+        let mut batcher = EventBatcher::with_capacity(1024);
+        batcher.push(CdcEvent::Event(event_small.clone()));
+        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
+        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
+        batcher.push(CdcEvent::Event(event_big.clone()));
+        batcher.push(CdcEvent::Event(event_small.clone()));
+        batcher.push(CdcEvent::Event(event_small.clone()));
+        batcher.push(CdcEvent::Event(event_big.clone()));
+
+        check_events(
+            batcher.build(),
+            vec![
+                vec![CdcEvent::Event(event_small.clone())],
+                vec![CdcEvent::ResolvedTs(resolved_ts.clone())],
+                vec![CdcEvent::ResolvedTs(resolved_ts)],
+                vec![CdcEvent::Event(event_big.clone())],
+                vec![
+                    CdcEvent::Event(event_small.clone()),
+                    CdcEvent::Event(event_small),
+                ],
+                vec![CdcEvent::Event(event_big)],
+            ],
+        );
+    }
+
+    #[test]
+    fn test_event_batcher_statistics() {
+        let mut event_small = Event::default();
+        let row_small = EventRow::default();
+        let mut event_entries = EventEntries::default();
+        event_entries.entries = vec![row_small].into();
+        event_small.event = Some(Event_oneof_event::Entries(event_entries));
+
+        let mut resolved_ts = ResolvedTs::default();
+        resolved_ts.set_ts(1);
+
+        let mut batcher = EventBatcher::with_capacity(1024);
+        batcher.push(CdcEvent::Event(event_small.clone()));
+        assert_eq!(
+            batcher.statistics(),
+            (CdcEvent::Event(event_small.clone()).size() as usize, 0)
+        );
+
+        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
+        assert_eq!(
+            batcher.statistics(),
+            (
+                CdcEvent::Event(event_small.clone()).size() as usize,
+                CdcEvent::ResolvedTs(resolved_ts.clone()).size() as usize
+            )
+        );
+
+        batcher.push(CdcEvent::Event(event_small.clone()));
+        assert_eq!(
+            batcher.statistics(),
+            (
+                CdcEvent::Event(event_small.clone()).size() as usize * 2,
+                CdcEvent::ResolvedTs(resolved_ts.clone()).size() as usize
+            )
+        );
+
+        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
+        assert_eq!(
+            batcher.statistics(),
+            (
+                CdcEvent::Event(event_small).size() as usize * 2,
+                CdcEvent::ResolvedTs(resolved_ts).size() as usize * 2
+            )
+        );
+    }
+
+    #[test]
+    fn test_cdc_event_resolved_ts_size() {
+        // A typical region id.
+        let region_id = 4194304;
+        // A typical ts.
+        let ts = 426624231625982140;
+        for i in 0..17 {
+            let mut resolved_ts = ResolvedTs::default();
+            resolved_ts.ts = ts;
+            resolved_ts.regions = vec![region_id; 2usize.pow(i)];
+            assert_eq!(
+                resolved_ts.compute_size(),
+                CdcEvent::ResolvedTs(resolved_ts).size()
+            );
         }
     }
 }

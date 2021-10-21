@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 //! Functionality for handling optimistic and pessimistic prewrites. These are separate commands
 //! (although maybe they shouldn't be since there is only one protobuf), but
 //! handling of the commands is similar. We therefore have a single type (Prewriter) to handle both
