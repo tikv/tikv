@@ -437,8 +437,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ///   * Request of V2 with legal prefix.
     /// See rfc https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md for detail.
     fn check_api_version<'a>(
-        storage_api_version: &ApiVersion,
-        req_api_version: &ApiVersion,
+        storage_api_version: ApiVersion,
+        req_api_version: ApiVersion,
         cmd: CommandKind,
         keys: impl IntoIterator<Item = &'a [u8]>,
     ) -> Result<()> {
@@ -465,8 +465,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             _ => {}
         }
         Err(Error::from(ErrorInner::ApiVersionNotMatch {
-            storage_api_version: storage_api_version.clone(),
-            req_api_version: req_api_version.clone(),
+            storage_api_version,
+            req_api_version,
         }))
     }
 
@@ -503,8 +503,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .inc();
 
                 Self::check_api_version(
-                    &api_version,
-                    &ctx.api_version,
+                    api_version,
+                    ctx.api_version,
                     CMD,
                     iter::once(&key.as_encoded()[..]),
                 )?;
@@ -620,8 +620,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     );
 
                     Self::check_api_version(
-                        &api_version,
-                        &ctx.api_version,
+                        api_version,
+                        ctx.api_version,
                         CMD,
                         iter::once(&key.as_encoded()[..]),
                     )?;
@@ -768,8 +768,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .inc();
 
                 Self::check_api_version(
-                    &api_version,
-                    &ctx.api_version,
+                    api_version,
+                    ctx.api_version,
                     CMD,
                     keys.iter().map(|x| &x.as_encoded()[..]),
                 )?;
@@ -1252,7 +1252,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version(&api_version, &ctx.api_version, CMD, iter::once(&key[..]))?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&key[..]))?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1423,8 +1423,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .inc();
 
                 Self::check_api_version(
-                    &api_version,
-                    &ctx.api_version,
+                    api_version,
+                    ctx.api_version,
                     CMD,
                     keys.iter().map(|x| &x[..]),
                 )?;
@@ -1494,7 +1494,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_put;
         let api_version = self.api_version;
 
-        Self::check_api_version(&api_version, &ctx.api_version, CMD, iter::once(&key[..]))?;
+        Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&key[..]))?;
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
         let mut m = Modify::Put(
@@ -7416,7 +7416,7 @@ mod tests {
             ),
         ];
 
-        for (i, &(ref storage_api_version, ref req_api_version, cmd, ref keys, is_legal)) in
+        for (i, &(storage_api_version, req_api_version, cmd, ref keys, is_legal)) in
             test_data.iter().enumerate()
         {
             let res = Storage::<RocksEngine, DummyLockManager>::check_api_version(
