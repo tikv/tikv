@@ -380,9 +380,7 @@ where
                 ..
             } = observe_region;
 
-            // register/deregister will fail due to merging/spliting blocked when disk full.
-            // and will generate so much log. so change log level from info to debug.
-            debug!(
+            info!(
                 "deregister observe region";
                 "store_id" => ?self.store_meta.lock().unwrap().store_id,
                 "region_id" => region_id,

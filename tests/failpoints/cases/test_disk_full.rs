@@ -10,6 +10,7 @@ use raftstore::store::msg::*;
 use std::thread;
 use std::time::Duration;
 use test_raftstore::*;
+use tikv_util::time::Instant;
 
 fn assert_disk_full(resp: &RaftCmdResponse) {
     assert!(resp.get_header().get_error().has_disk_full());
@@ -28,6 +29,31 @@ fn get_fp(usage: DiskUsage, store_id: u64) -> String {
         DiskUsage::AlmostFull => format!("disk_almost_full_peer_{}", store_id),
         DiskUsage::AlreadyFull => format!("disk_already_full_peer_{}", store_id),
         _ => unreachable!(),
+    }
+}
+
+// check the region new leader is elected.
+fn assert_region_leader_changed<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    region_id: u64,
+    original_leader: u64,
+) {
+    let timer = Instant::now();
+    loop {
+        if timer.saturating_elapsed() > Duration::from_secs(5) {
+            panic!("Leader cannot change when the only disk full node is leader");
+        }
+        let new_leader = cluster.query_leader(1, region_id, Duration::from_secs(1));
+        if new_leader.is_none() {
+            sleep_ms(10);
+            continue;
+        }
+        if new_leader.unwrap().get_id() == original_leader {
+            sleep_ms(10);
+            continue;
+        } else {
+            break;
+        }
     }
 }
 
@@ -63,6 +89,11 @@ fn test_disk_full_leader_behaviors(usage: DiskUsage) {
     assert_disk_full(&rx.recv_timeout(Duration::from_secs(2)).unwrap());
     let new_last_index = cluster.raft_local_state(1, 1).last_index;
     assert_eq!(old_last_index, new_last_index);
+
+    assert_region_leader_changed(&mut cluster, 1, 1);
+    fail::remove(get_fp(usage, 1));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    fail::cfg(get_fp(usage, 1), "return").unwrap();
 
     // merge/split is only allowed on disk almost full.
     if usage != DiskUsage::AlreadyFull {
@@ -167,8 +198,10 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
         DiskFullOpt::NotAllowedOnFull,
     );
     assert!(res.get_region_error().has_disk_full());
+    assert_region_leader_changed(&mut cluster, 1, 1);
 
     fail::remove(get_fp(usage, 1));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
     let prewrite_ts = get_tso(&pd_client);
     lead_client.must_kv_prewrite(
         vec![new_mutation(Op::Put, b"k4", b"v4")],

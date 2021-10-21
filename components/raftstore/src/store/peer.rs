@@ -519,10 +519,12 @@ where
     /// The number of the last unpersisted ready.
     last_unpersisted_number: u64,
 
+    // disk full peer set.
     pub disk_full_peers: DiskFullPeers,
 
     pub latest_majority_set_update_on_disk_full: Instant,
 
+    // show whether an already disk full TiKV appears in the potential majority set.
     pub dangerous_majority_set: bool,
 
     // region merge logic need to be broadcast to all followers when disk full happens.
@@ -576,6 +578,7 @@ where
 
         let logger = slog_global::get_global().new(slog::o!("region_id" => region.get_id()));
         let raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
+
         let mut peer = Peer {
             peer,
             region_id: region.get_id(),
@@ -2336,12 +2339,34 @@ where
                 // For admin cmds, only region split/merge comes here.
                 let mut stores = Vec::new();
                 let mut opt = disk_full_opt;
+                let mut maybe_transfer_leader = false;
                 if req.has_admin_request() {
                     opt = DiskFullOpt::AllowedOnAlmostFull;
                 }
-                if self.check_proposal_normal_with_disk_usage(ctx, opt, &mut stores) {
+                if self.check_proposal_normal_with_disk_usage(
+                    ctx,
+                    opt,
+                    &mut stores,
+                    &mut maybe_transfer_leader,
+                ) {
                     self.propose_normal(ctx, req)
                 } else {
+                    if maybe_transfer_leader && !self.disk_full_peers.majority {
+                        let target_peer = self
+                            .get_store()
+                            .region()
+                            .get_peers()
+                            .iter()
+                            .find(|x| {
+                                !self.disk_full_peers.has(x.get_id())
+                                    && x.get_id() != self.peer.get_id()
+                            })
+                            .cloned();
+                        if let Some(p) = target_peer {
+                            info!("try transfer leader because of current leader is disk full");
+                            self.pre_transfer_leader(&p);
+                        }
+                    }
                     let errmsg = format!(
                         "propose failed: tikv disk full, cmd diskFullOpt={:?}, leader diskUsage={:?}",
                         disk_full_opt, ctx.self_disk_usage
@@ -3494,6 +3519,7 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         disk_full_opt: DiskFullOpt,
         disk_full_stores: &mut Vec<u64>,
+        maybe_transfer_leader: &mut bool,
     ) -> bool {
         // check self disk status.
         let allowed = match ctx.self_disk_usage {
@@ -3504,6 +3530,7 @@ where
 
         if !allowed {
             disk_full_stores.push(ctx.store.id);
+            *maybe_transfer_leader = true;
             return false;
         }
 
