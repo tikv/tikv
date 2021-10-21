@@ -1306,12 +1306,8 @@ mod tests {
         };
 
         let cm = ConcurrencyManager::new(1.into());
-        let copr = Endpoint::<RocksEngine>::new(
-            &config,
-            read_pool.handle(),
-            cm,
-            PerfLevel::EnableCount,
-        );
+        let copr =
+            Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm, PerfLevel::EnableCount);
 
         let (tx, rx) = std::sync::mpsc::channel();
 
@@ -1695,12 +1691,8 @@ mod tests {
         });
 
         let config = Config::default();
-        let copr = Endpoint::<RocksEngine>::new(
-            &config,
-            read_pool.handle(),
-            cm,
-            PerfLevel::EnableCount,
-        );
+        let copr =
+            Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm, PerfLevel::EnableCount);
 
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);
