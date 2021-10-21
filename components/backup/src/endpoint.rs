@@ -625,7 +625,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         prs: Arc<Mutex<Progress<R>>>,
         request: Request,
         tx: UnboundedSender<BackupResponse>,
-        backend: Arc<Box<dyn ExternalStorage>>,
+        backend: Arc<dyn ExternalStorage>,
     ) {
         let start_ts = request.start_ts;
         let end_ts = request.end_ts;
@@ -804,7 +804,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 return;
             }
         };
-        let backend = Arc::new(backend);
+        let backend = Arc::<dyn ExternalStorage>::from(backend);
         let concurrency = self.config_manager.0.read().unwrap().num_threads;
         self.pool.borrow_mut().adjust_with(concurrency);
         for _ in 0..concurrency {
