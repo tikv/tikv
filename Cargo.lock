@@ -629,7 +629,7 @@ dependencies = [
  "raftstore",
  "resolved_ts",
  "security",
- "semver 0.10.0",
+ "semver 1.0.4",
  "slog",
  "slog-global",
  "tempfile",
@@ -4401,6 +4401,12 @@ checksum = "f301af10236f6df4160f7c3f04eec6dbc70ace82d23326abad5edee88801c6b6"
 dependencies = [
  "semver-parser 0.10.2",
 ]
+
+[[package]]
+name = "semver"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "568a8e6258aa33c13358f81fd834adb854c6f7c9468520910a9b1e8fac068012"
 
 [[package]]
 name = "semver-parser"
