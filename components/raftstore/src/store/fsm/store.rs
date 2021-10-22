@@ -15,7 +15,7 @@ use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
 };
 use crossbeam::channel::{Sender, TryRecvError, TrySendError};
-use engine_traits::{Engines, KvEngine, Mutable, PerfContextKind, WriteBatch, WriteBatchExt};
+use engine_traits::{Engines, KvEngine, Mutable, PerfContextKind, WriteBatch};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
@@ -1265,32 +1265,19 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             io_reschedule_concurrent_count: Arc::new(AtomicUsize::new(0)),
         };
         let region_peers = builder.init()?;
-        let engine = builder.engines.kv.clone();
-        if engine.support_write_batch_vec() {
-            self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatchVec>(
-                workers,
-                region_peers,
-                builder,
-                auto_split_controller,
-                concurrency_manager,
-                mgr,
-                pd_client,
-            )?;
-        } else {
-            self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatch>(
-                workers,
-                region_peers,
-                builder,
-                auto_split_controller,
-                concurrency_manager,
-                mgr,
-                pd_client,
-            )?;
-        }
+        self.start_system::<T, C>(
+            workers,
+            region_peers,
+            builder,
+            auto_split_controller,
+            concurrency_manager,
+            mgr,
+            pd_client,
+        )?;
         Ok(())
     }
 
-    fn start_system<T: Transport + 'static, C: PdClient + 'static, W: WriteBatch<EK> + 'static>(
+    fn start_system<T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
         mut workers: Workers<EK, ER>,
         region_peers: Vec<SenderFsmPair<EK, ER>>,
@@ -1303,7 +1290,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
 
-        let apply_poller_builder = ApplyPollerBuilder::<EK, W>::new(
+        let apply_poller_builder = ApplyPollerBuilder::<EK>::new(
             &builder,
             Box::new(self.router.clone()),
             self.apply_router.clone(),

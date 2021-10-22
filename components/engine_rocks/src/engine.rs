@@ -26,13 +26,16 @@ use crate::{RocksEngineIterator, RocksSnapshot};
 pub struct RocksEngine {
     db: Arc<DB>,
     shared_block_cache: bool,
+    support_write_batch_vec: bool,
 }
 
 impl RocksEngine {
     pub fn from_db(db: Arc<DB>) -> Self {
+        let options = db.get_db_options();
         RocksEngine {
             db,
             shared_block_cache: false,
+            support_write_batch_vec: options.is_enable_multi_batch_write(),
         }
     }
 
@@ -62,6 +65,10 @@ impl RocksEngine {
 
     pub fn set_shared_block_cache(&mut self, enable: bool) {
         self.shared_block_cache = enable;
+    }
+
+    pub fn is_support_multi_batch_write(&self) -> bool {
+        self.support_write_batch_vec
     }
 }
 
