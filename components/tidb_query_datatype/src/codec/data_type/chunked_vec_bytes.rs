@@ -158,6 +158,25 @@ impl BytesWriter {
             chunked_vec: self.chunked_vec,
         }
     }
+
+    pub fn write_from_char_iter(self, iter: impl Iterator<Item = char>) -> BytesGuard {
+        let mut writer = self.begin();
+        for c in iter {
+            let mut buf = [0; 4];
+            let result = c.encode_utf8(&mut buf);
+            writer.partial_write(result.as_bytes());
+        }
+        writer.finish()
+    }
+
+    pub fn write_from_byte_iter(mut self, iter: impl Iterator<Item = u8>) -> BytesGuard {
+        self.chunked_vec.data.extend(iter);
+        self.chunked_vec.bitmap.push(true);
+        self.chunked_vec.finish_append();
+        BytesGuard {
+            chunked_vec: self.chunked_vec,
+        }
+    }
 }
 
 impl<'a> PartialBytesWriter {
