@@ -564,7 +564,10 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let checkpoint_ts = request.checkpoint_ts;
         let sched = self.scheduler.clone();
 
-        if !delegate.subscribe(downstream) {
+        let downstream_ = downstream.clone();
+        if let Err(err) = delegate.subscribe(downstream) {
+            let error_event = err.into_error_event(region_id);
+            let _ = downstream_.sink_error_event(region_id, error_event);
             conn.unsubscribe(request.get_region_id());
             if is_new_delegate {
                 self.capture_regions.remove(&request.get_region_id());
@@ -657,13 +660,19 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
 
     fn on_region_ready(&mut self, observe_id: ObserveID, resolver: Resolver, region: Region) {
         let region_id = region.get_id();
+        let mut failed_downstreams = Vec::new();
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             if delegate.handle.id == observe_id {
                 for downstream in delegate.on_region_ready(resolver, region) {
                     let conn_id = downstream.get_conn_id();
-                    if !delegate.subscribe(downstream) {
-                        let conn = self.connections.get_mut(&conn_id).unwrap();
-                        conn.unsubscribe(region_id);
+                    let downstream_id = downstream.get_id();
+                    if let Err(err) = delegate.subscribe(downstream) {
+                        failed_downstreams.push(Deregister::Downstream {
+                            region_id,
+                            downstream_id,
+                            conn_id,
+                            err: Some(err),
+                        });
                     }
                 }
             } else {
@@ -675,6 +684,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         } else {
             debug!("cdc region not found on region ready (finish building resolver)";
                 "region_id" => region.get_id());
+        }
+
+        // Deregister downstreams if there is any downstream fails to subscribe.
+        for deregister in failed_downstreams {
+            self.on_deregister(deregister);
         }
     }
 
@@ -1446,9 +1460,18 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
                     );
                     return;
                 }
-                let _ = downstream_state
-                    .compare_exchange(DownstreamState::Uninitialized, DownstreamState::Normal);
-                info!("cdc downstream is initialized"; "downstream_id" => ?downstream_id);
+                match downstream_state
+                    .compare_exchange(DownstreamState::Uninitialized, DownstreamState::Normal)
+                {
+                    Ok(_) => {
+                        info!("cdc downstream is initialized"; "downstream_id" => ?downstream_id);
+                    }
+                    Err(state) => {
+                        warn!("cdc downstream fails to initialize";
+                            "downstream_id" => ?downstream_id,
+                            "state" => ?state);
+                    }
+                }
                 cb();
             }
             Task::TxnExtra(txn_extra) => {
@@ -1553,7 +1576,7 @@ mod tests {
     use time::Timespec;
 
     use super::*;
-    use crate::channel;
+    use crate::{channel, recv_timeout};
 
     struct ReceiverRunnable<T: Display + Send> {
         tx: Sender<T>,
@@ -2549,8 +2572,8 @@ mod tests {
 
     // Suppose there are two Conn that capture the same region,
     // Region epoch = 2, Conn A with epoch = 2, Conn B with epoch = 1,
-    // Conn A builds resolver successfully, but is disconnected before schedules
-    // resolver ready. Downstream in Conn A is unsubscribed.
+    // Conn A builds resolver successfully, but is disconnected before
+    // scheduling resolver ready. Downstream in Conn A is unsubscribed.
     // When resolver ready is installed, downstream in Conn B is unsubscribed
     // too, because epoch not match.
     #[test]
@@ -2561,14 +2584,14 @@ mod tests {
 
         // Open conn a
         let (tx1, mut rx1) = channel::channel(1, quota.clone());
-        let _rx1 = rx1.drain();
+        let mut rx1 = rx1.drain();
         let conn_a = Conn::new(tx1, String::new());
         let conn_id_a = conn_a.get_id();
         ep.run(Task::OpenConn { conn: conn_a });
 
         // Open conn b
         let (tx2, mut rx2) = channel::channel(1, quota);
-        let _rx2 = rx2.drain();
+        let mut rx2 = rx2.drain();
         let conn_b = Conn::new(tx2, String::new());
         let conn_id_b = conn_b.get_id();
         ep.run(Task::OpenConn { conn: conn_b });
@@ -2598,8 +2621,7 @@ mod tests {
         req.set_region_id(1);
         req.mut_region_epoch().set_version(1);
         let region_epoch_1 = req.get_region_epoch().clone();
-        let downstream =
-            Downstream::new("".to_string(), region_epoch_1.clone(), 0, conn_id_b, true);
+        let downstream = Downstream::new("".to_string(), region_epoch_1, 0, conn_id_b, true);
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -2611,6 +2633,8 @@ mod tests {
         // Deregister conn a.
         ep.run(Task::Deregister(Deregister::Conn(conn_id_a)));
         assert_eq!(ep.capture_regions.len(), 1);
+        let res = recv_timeout(&mut rx1, Duration::from_millis(100)).unwrap();
+        assert!(res.is_none(), "{:?}", res);
 
         // Schedule resolver ready (resolver is built by conn a).
         let mut region = Region::default();
@@ -2633,5 +2657,16 @@ mod tests {
             observe_id,
             err: Error::request(epoch_not_match),
         }));
+        assert_eq!(ep.capture_regions.len(), 0);
+
+        let event = recv_timeout(&mut rx2, Duration::from_millis(100))
+            .unwrap()
+            .unwrap()
+            .0;
+        assert!(
+            event.event().get_error().has_epoch_not_match(),
+            "{:?}",
+            event
+        );
     }
 }
