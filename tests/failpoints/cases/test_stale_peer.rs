@@ -144,9 +144,7 @@ fn test_stale_peer_destroy_when_apply_snapshot() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
-    let r1 = cluster.run_conf_change();
-    pd_client.must_add_peer(r1, new_peer(2, 2));
-    pd_client.must_add_peer(r1, new_peer(3, 3));
+    cluster.run();
 
     cluster.must_put(b"k1", b"v1");
 
@@ -176,10 +174,11 @@ fn test_stale_peer_destroy_when_apply_snapshot() {
 
     // Wait for leader sending snapshot to peer 3
     notify_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let region = pd_client.get_region(b"k1").unwrap();
     // Wait for peer 3 handling snapshot
     let timer = Instant::now();
     loop {
-        let local_state = cluster.region_local_state(r1, 3);
+        let local_state = cluster.region_local_state(region.get_id(), 3);
         if local_state.get_state() == PeerState::Applying {
             break;
         }
@@ -189,10 +188,11 @@ fn test_stale_peer_destroy_when_apply_snapshot() {
         sleep_ms(10);
     }
 
-    pd_client.must_remove_peer(r1, new_peer(3, 3));
+    pd_client.must_remove_peer(region.get_id(), new_peer(3, 3));
+
     let region = pd_client.get_region(b"k1").unwrap();
     let mut tombstone_msg = RaftMessage::default();
-    tombstone_msg.set_region_id(r1);
+    tombstone_msg.set_region_id(region.get_id());
     tombstone_msg.set_from_peer(new_peer(3, 3));
     tombstone_msg.set_to_peer(new_peer(3, 3));
     tombstone_msg.set_region_epoch(region.get_region_epoch().clone());
