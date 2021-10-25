@@ -182,26 +182,6 @@ fn test_multi_node_base() {
     test_multi_base(&mut cluster)
 }
 
-fn test_multi_drop_packet<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.run();
-    cluster.add_send_filter(CloneFilterFactory(DropPacketFilter::new(30)));
-    test_multi_base_after_bootstrap(cluster);
-}
-
-#[test]
-fn test_multi_node_latency() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_multi_latency(&mut cluster);
-}
-
-#[test]
-fn test_multi_node_drop_packet() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_multi_drop_packet(&mut cluster);
-}
-
 #[test]
 fn test_multi_server_base() {
     let count = 5;
@@ -215,6 +195,13 @@ fn test_multi_latency<T: Simulator>(cluster: &mut Cluster<T>) {
         30,
     ))));
     test_multi_base_after_bootstrap(cluster);
+}
+
+#[test]
+fn test_multi_node_latency() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_multi_latency(&mut cluster);
 }
 
 #[test]
@@ -242,6 +229,19 @@ fn test_multi_server_random_latency() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     test_multi_random_latency(&mut cluster);
+}
+
+fn test_multi_drop_packet<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.run();
+    cluster.add_send_filter(CloneFilterFactory(DropPacketFilter::new(30)));
+    test_multi_base_after_bootstrap(cluster);
+}
+
+#[test]
+fn test_multi_node_drop_packet() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_multi_drop_packet(&mut cluster);
 }
 
 #[test]
