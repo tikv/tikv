@@ -52,7 +52,7 @@ impl<'a> RawValue<&'a [u8]> {
                     return Err(Error::Codec(codec::Error::ValueLength));
                 }
                 let flags = ValueMeta::from_bits(bytes[len - 1])
-                    .ok_or_else(|| Error::Codec(codec::Error::ValueMeta))?;
+                    .ok_or(Error::Codec(codec::Error::ValueMeta))?;
                 let mut meta_size = 1;
                 let expire_ts = if flags.contains(ValueMeta::EXPIRE_TS) {
                     let mut expire_ts_slice = &bytes[len - meta_size - number::U64_SIZE..];
