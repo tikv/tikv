@@ -114,7 +114,7 @@ pub enum Error {
     ClusterID { current: u64, request: u64 },
     #[error("Invalid cf {cf}")]
     InvalidCf { cf: String },
-    #[error("Failed to recv message to channel: {0}")]
+    #[error("Failed to recv message from channel: {0}")]
     ChannelRecv(#[from] RecvError),
     #[error("Failed to send message to channel: {0}")]
     ChannelSend(#[from] SendError<()>),

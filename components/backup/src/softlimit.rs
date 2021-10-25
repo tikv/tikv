@@ -1,4 +1,7 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::cell::RefCell;
+use std::cmp::Ordering as CmpOrder;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -79,20 +82,15 @@ impl SoftLimit {
 
     /// resize the tasks available concurrently.
     pub fn resize(&self, target: usize) -> Result<()> {
-        let current = loop {
-            let current = self.cap.load(Ordering::SeqCst);
-            if self
-                .cap
-                .compare_exchange(current, target, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-            {
-                break current;
+        let current = self.cap.swap(target, Ordering::SeqCst);
+        match current.cmp(&target) {
+            CmpOrder::Greater => {
+                self.take_tokens(current - target)?;
             }
-        };
-        if current > target {
-            self.take_tokens(current - target)?;
-        } else if current < target {
-            self.grant_tokens(target - current)?;
+            CmpOrder::Less => {
+                self.grant_tokens(target - current)?;
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -128,7 +126,7 @@ impl CpuStatistics for RefCell<ThreadInfoStatistics> {
 
     fn get_cpu_usages(&self) -> Self::Container {
         self.borrow_mut().record();
-        self.get_cpu_usages()
+        ThreadInfoStatistics::get_cpu_usages(&*self.borrow())
     }
 }
 
@@ -166,7 +164,7 @@ impl<Statistics: CpuStatistics> SoftLimitByCpu<Statistics> {
         exclude: impl FnMut(&str) -> bool,
     ) -> Result<()> {
         let idle = self.current_idle_exclude(exclude) as usize;
-        limit.resize(idle.checked_sub(self.keep_remain).unwrap_or(0).max(1))?;
+        limit.resize(idle.saturating_sub(self.keep_remain).max(1))?;
         Ok(())
     }
 
@@ -246,7 +244,7 @@ mod softlimit_test {
                 thread::Builder::new()
                     .name(format!("busy_{}", i))
                     .spawn(move || {
-                        while let Err(_) = rx.try_recv() {
+                        while rx.try_recv().is_err() {
                             f()
                         }
                     })
@@ -325,7 +323,7 @@ mod softlimit_test {
             move || working_cloned.load(Ordering::SeqCst) == 3,
         );
 
-        let working_cloned = working.clone();
+        let working_cloned = working;
         limit_cloned.grow(2).unwrap();
         should_satify_in(
             Duration::from_secs(10),

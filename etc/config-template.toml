@@ -1018,8 +1018,8 @@
 ## little larger).
 # sst-max-size = "144MB"
 
-## When set to true, would allow TiKV to restrict the backup thread number accroding to the
-## currenct workload of cluster.
+## Automatically reduce the number of backup threads when the current workload is high,
+## in order to reduce impact on the cluster's performance during back up.
 # enable-auto-tune = true
 
 [pessimistic-txn]

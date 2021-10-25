@@ -451,7 +451,7 @@ impl SoftLimitKeeper {
                 loop {
                     let BackupConfig {
                         enable_auto_tune,
-                        auto_tune_refresh_gap,
+                        auto_tune_refresh_interval: auto_tune_refresh_gap,
                         num_threads,
                         auto_tune_remain_threads,
                         ..
@@ -473,9 +473,7 @@ impl SoftLimitKeeper {
             })
             // should never fail.
             .unwrap();
-        Self {
-            limit: limit.clone(),
-        }
+        Self { limit }
     }
 
     fn limit(&self) -> SoftLimit {
@@ -695,8 +693,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let batch_size = self.config_manager.0.read().unwrap().batch_size;
         let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
 
-        // TODO: make it async.
-        let limit = self.softlimit.limit().clone();
+        let limit = self.softlimit.limit();
         self.pool.borrow_mut().spawn(move || {
             tikv_alloc::add_thread_memory_accessor();
             let _with_io_type = WithIOType::new(IOType::Export);
@@ -739,7 +736,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 for brange in batch {
                     let guard = limit.guard();
                     if let Err(e) = guard {
-                        warn!("failed to reterive limit guard."; "err" => %e);
+                        warn!("failed to retrieve limit guard."; "err" => %e);
                     }
                     if request.cancel.load(Ordering::SeqCst) {
                         warn!("backup task has canceled"; "range" => ?brange);

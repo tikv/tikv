@@ -2187,7 +2187,7 @@ pub struct BackupConfig {
     pub sst_max_size: ReadableSize,
     pub enable_auto_tune: bool,
     pub auto_tune_remain_threads: usize,
-    pub auto_tune_refresh_gap: ReadableDuration,
+    pub auto_tune_refresh_interval: ReadableDuration,
 }
 
 impl BackupConfig {
@@ -2213,7 +2213,7 @@ impl Default for BackupConfig {
             sst_max_size: default_coprocessor.region_max_size,
             enable_auto_tune: true,
             auto_tune_remain_threads: 2,
-            auto_tune_refresh_gap: ReadableDuration::secs(60),
+            auto_tune_refresh_interval: ReadableDuration::secs(60),
         }
     }
 }
