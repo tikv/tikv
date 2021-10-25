@@ -22,8 +22,7 @@ use tikv_util::time::{Instant, Limiter};
 use tokio::time::timeout;
 
 mod hdfs;
-pub use hdfs::set_hadoop_home;
-pub use hdfs::set_hadoop_linux_user;
+pub use hdfs::HdfsConfig;
 pub use hdfs::HdfsStorage;
 mod local;
 pub use local::LocalStorage;
@@ -42,6 +41,11 @@ pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
     EXT_STORAGE_CREATE_HISTOGRAM
         .with_label_values(&[storage.name()])
         .observe(start.saturating_elapsed().as_secs_f64());
+}
+
+#[derive(Debug, Default)]
+pub struct BackendConfig {
+    pub hdfs_config: HdfsConfig,
 }
 
 /// An abstraction of an external storage.

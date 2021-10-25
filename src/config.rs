@@ -2178,7 +2178,7 @@ mod readpool_tests {
     }
 }
 
-#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct HadoopConfig {
@@ -2193,7 +2193,7 @@ pub struct BackupConfig {
     pub num_threads: usize,
     pub batch_size: usize,
     pub sst_max_size: ReadableSize,
-    #[online_config(skip)]
+    #[online_config(submodule)]
     pub hadoop: HadoopConfig,
 }
 

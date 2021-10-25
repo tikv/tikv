@@ -1,11 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    io,
-    lazy::SyncLazy,
-    path,
+    io, path,
     process::{Command, Stdio},
-    sync::Mutex,
 };
 
 use futures::io::AllowStdIo;
@@ -14,38 +11,6 @@ use futures_util::io::copy;
 use url::Url;
 
 use crate::ExternalStorage;
-
-static HADOOP_HOME: SyncLazy<Mutex<Option<String>>> = SyncLazy::new(|| Mutex::new(None));
-static HADOOP_LINUX_USER: SyncLazy<Mutex<Option<String>>> = SyncLazy::new(|| Mutex::new(None));
-
-pub fn set_hadoop_home(path: String) {
-    *HADOOP_HOME.lock().unwrap() = Some(path);
-}
-
-fn get_hadoop_home() -> Option<String> {
-    HADOOP_HOME
-        .lock()
-        .unwrap()
-        .clone()
-        .or_else(|| std::env::var("HADOOP_HOME").ok())
-}
-
-pub fn set_hadoop_linux_user(user: String) {
-    *HADOOP_LINUX_USER.lock().unwrap() = Some(user);
-}
-
-fn get_hadoop_linux_user() -> Option<String> {
-    HADOOP_LINUX_USER
-        .lock()
-        .unwrap()
-        .clone()
-        .or_else(|| std::env::var("HADOOP_LINUX_USER").ok())
-}
-
-/// Returns `$HDFS_CMD` if exists, otherwise return `$HADOOP_HOME/bin/hdfs`
-fn get_hdfs_bin() -> Option<String> {
-    get_hadoop_home().map(|hadoop| format!("{}/bin/hdfs", hadoop))
-}
 
 /// Convert `hdfs:///path` to `/path`
 fn try_convert_to_path(url: &Url) -> &str {
@@ -56,20 +21,49 @@ fn try_convert_to_path(url: &Url) -> &str {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct HdfsConfig {
+    pub hadoop_home: String,
+    pub linux_user: String,
+}
+
 /// A storage to upload file to HDFS
 pub struct HdfsStorage {
     remote: Url,
+    config: HdfsConfig,
 }
 
 impl HdfsStorage {
-    pub fn new(remote: &str) -> io::Result<HdfsStorage> {
+    pub fn new(remote: &str, config: HdfsConfig) -> io::Result<HdfsStorage> {
         let mut remote = Url::parse(remote).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         if !remote.path().ends_with('/') {
             let mut new_path = remote.path().to_owned();
             new_path.push('/');
             remote.set_path(&new_path);
         }
-        Ok(HdfsStorage { remote })
+        Ok(HdfsStorage { remote, config })
+    }
+
+    fn get_hadoop_home(&self) -> Option<String> {
+        if self.config.hadoop_home.is_empty() {
+            std::env::var("HADOOP_HOME").ok()
+        } else {
+            Some(self.config.hadoop_home.clone())
+        }
+    }
+
+    fn get_linux_user(&self) -> Option<String> {
+        if self.config.linux_user.is_empty() {
+            std::env::var("HADOOP_LINUX_USER").ok()
+        } else {
+            Some(self.config.linux_user.clone())
+        }
+    }
+
+    /// Returns `$HDFS_CMD` if exists, otherwise return `$HADOOP_HOME/bin/hdfs`
+    fn get_hdfs_bin(&self) -> Option<String> {
+        self.get_hadoop_home()
+            .map(|hadoop| format!("{}/bin/hdfs", hadoop))
     }
 }
 
@@ -97,7 +91,7 @@ impl ExternalStorage for HdfsStorage {
             ));
         }
 
-        let cmd_path = get_hdfs_bin().ok_or_else(|| {
+        let cmd_path = self.get_hdfs_bin().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::Other,
                 "Cannot found hdfs command, please specify HADOOP_HOME",
@@ -107,7 +101,7 @@ impl ExternalStorage for HdfsStorage {
         let path = try_convert_to_path(&remote_url);
 
         let mut cmd_with_args = vec![];
-        let user = get_hadoop_linux_user();
+        let user = self.get_linux_user();
 
         if let Some(user) = &user {
             cmd_with_args.extend(["sudo", "-u", user]);
@@ -155,14 +149,28 @@ mod tests {
 
     #[test]
     fn test_get_hdfs_bin() {
+        let backend = HdfsStorage::new("hdfs://", HdfsConfig::default()).unwrap();
         std::env::remove_var("HADOOP_HOME");
-        assert!(get_hdfs_bin().is_none());
+        assert!(backend.get_hdfs_bin().is_none());
 
         std::env::set_var("HADOOP_HOME", "/opt/hadoop");
-        assert_eq!(get_hdfs_bin().as_deref(), Some("/opt/hadoop/bin/hdfs"));
+        assert_eq!(
+            backend.get_hdfs_bin().as_deref(),
+            Some("/opt/hadoop/bin/hdfs")
+        );
 
-        set_hadoop_home("/etc/hdfs".to_string());
-        assert_eq!(get_hdfs_bin().as_deref(), Some("/etc/hdfs/bin/hdfs"));
+        let backend = HdfsStorage::new(
+            "hdfs://",
+            HdfsConfig {
+                hadoop_home: "/etc/hdfs".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            backend.get_hdfs_bin().as_deref(),
+            Some("/etc/hdfs/bin/hdfs")
+        );
     }
 
     #[test]
