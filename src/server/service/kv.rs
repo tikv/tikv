@@ -1297,7 +1297,7 @@ fn future_get<E: Engine, L: LockManager>(
     let start = Instant::now();
     let v = storage.get(
         req.take_context(),
-        Key::from_raw(req.get_key()),
+        req.get_key().into(),
         req.get_version().into(),
     );
 

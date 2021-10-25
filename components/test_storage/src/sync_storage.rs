@@ -125,10 +125,10 @@ impl<E: Engine> SyncTestStorage<E> {
     pub fn get(
         &self,
         ctx: Context,
-        key: &Key,
+        raw_key: Vec<u8>,
         start_ts: impl Into<TimeStamp>,
     ) -> Result<(Option<Value>, Statistics, PerfStatisticsDelta)> {
-        block_on(self.store.get(ctx, key.to_owned(), start_ts.into()))
+        block_on(self.store.get(ctx, raw_key, start_ts.into()))
     }
 
     #[allow(dead_code)]

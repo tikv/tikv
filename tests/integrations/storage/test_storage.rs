@@ -956,7 +956,7 @@ fn inc<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, key: &[u8]) -> Re
     let key_address = Key::from_raw(key);
     for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
-        let number: i32 = match store.get(Context::default(), &key_address, start_ts) {
+        let number: i32 = match store.get(Context::default(), key.to_vec(), start_ts) {
             Ok((Some(x), ..)) => String::from_utf8(x).unwrap().parse().unwrap(),
             Ok((None, ..)) => 0,
             Err(_) => {
@@ -1036,10 +1036,11 @@ fn format_key(x: usize) -> Vec<u8> {
 fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -> bool {
     'retry: for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
-        let keys: Vec<Key> = (0..n).map(format_key).map(|x| Key::from_raw(&x)).collect();
+        let raw_keys: Vec<Vec<u8>> = (0..n).map(format_key).collect();
+        let keys: Vec<Key> = raw_keys.iter().map(|x| Key::from_raw(&x)).collect();
         let mut mutations = vec![];
-        for key in keys.iter().take(n) {
-            let number = match store.get(Context::default(), key, start_ts) {
+        for (k, raw_key) in raw_keys.into_iter().take(n).enumerate() {
+            let number = match store.get(Context::default(), raw_key, start_ts) {
                 Ok((Some(n), ..)) => String::from_utf8(n).unwrap().parse().unwrap(),
                 Ok((None, ..)) => 0,
                 Err(_) => {
@@ -1048,7 +1049,10 @@ fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -
                 }
             };
             let next = number + 1;
-            mutations.push(Mutation::Put((key.clone(), next.to_string().into_bytes())));
+            mutations.push(Mutation::Put((
+                keys[k].clone(),
+                next.to_string().into_bytes(),
+            )));
         }
         if store
             .prewrite(Context::default(), mutations, b"k0".to_vec(), start_ts)

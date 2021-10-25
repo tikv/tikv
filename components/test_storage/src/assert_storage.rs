@@ -93,7 +93,7 @@ impl AssertionStorage<SimulateEngine> {
     ) -> Option<Value> {
         let ts = ts.into();
         for _ in 0..3 {
-            let res = self.store.get(self.ctx.clone(), &Key::from_raw(key), ts);
+            let res = self.store.get(self.ctx.clone(), key.to_vec(), ts);
             if let Ok((data, ..)) = res {
                 return data;
             }
@@ -231,23 +231,27 @@ impl AssertionStorage<SimulateEngine> {
 
 impl<E: Engine> AssertionStorage<E> {
     pub fn get_none(&self, key: &[u8], ts: impl Into<TimeStamp>) {
-        let key = Key::from_raw(key);
         assert_eq!(
-            self.store.get(self.ctx.clone(), &key, ts.into()).unwrap().0,
+            self.store
+                .get(self.ctx.clone(), key.to_vec(), ts.into())
+                .unwrap()
+                .0,
             None
         );
     }
 
     pub fn get_err(&self, key: &[u8], ts: impl Into<TimeStamp>) {
-        let key = Key::from_raw(key);
-        assert!(self.store.get(self.ctx.clone(), &key, ts.into()).is_err());
+        assert!(
+            self.store
+                .get(self.ctx.clone(), key.to_vec(), ts.into())
+                .is_err()
+        );
     }
 
     pub fn get_ok(&self, key: &[u8], ts: impl Into<TimeStamp>, expect: &[u8]) {
-        let key = Key::from_raw(key);
         assert_eq!(
             self.store
-                .get(self.ctx.clone(), &key, ts.into())
+                .get(self.ctx.clone(), key.to_vec(), ts.into())
                 .unwrap()
                 .0
                 .unwrap(),

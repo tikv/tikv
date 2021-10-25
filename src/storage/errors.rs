@@ -67,7 +67,7 @@ pub enum ErrorInner {
     TTLsLenNotEqualsToPairs,
 
     #[error("Api version in request does not match with TiKV storage")]
-    ApiVersionNotMatch {
+    ApiVersionNotMatched {
         storage_api_version: ApiVersion,
         req_api_version: ApiVersion,
     },
@@ -118,7 +118,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::TTLsLenNotEqualsToPairs => {
                 error_code::storage::TTLS_LEN_NOT_EQUALS_TO_PAIRS
             }
-            ErrorInner::ApiVersionNotMatch { .. } => error_code::storage::API_VERSION_NOT_MATCHED,
+            ErrorInner::ApiVersionNotMatched { .. } => error_code::storage::API_VERSION_NOT_MATCHED,
         }
     }
 }
