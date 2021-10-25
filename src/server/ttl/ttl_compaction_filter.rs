@@ -8,7 +8,7 @@ use engine_rocks::raw::{
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
 };
 use engine_rocks::RocksTtlProperties;
-use engine_traits::key_prefix::is_raw_key;
+use engine_traits::key_prefix::{self};
 use engine_traits::raw_value::{ttl_current_ts, RawValue};
 use kvproto::kvrpcpb::ApiVersion;
 
@@ -68,14 +68,20 @@ impl CompactionFilter for TTLCompactionFilter {
             return CompactionFilterDecision::Keep;
         }
         // Only consider raw keys.
-        // In API V1, `TTLCompactionFilter` will only be enabled if `enable_ttl=true`,
-        // in which case all data keys are raw keys because txnkv is disabled.
         let origin_key = &key[keys::DATA_PREFIX_KEY.len()..];
-        if self.api_version == ApiVersion::V2 && !is_raw_key(origin_key) {
-            return CompactionFilterDecision::Keep;
+        match self.api_version {
+            // TTL is not enabled in V1.
+            ApiVersion::V1 => unreachable!(),
+            // In V1TTL, txnkv is disabled, so all data keys are raw keys.
+            ApiVersion::V1ttl => (),
+            ApiVersion::V2 => {
+                if !key_prefix::is_raw_key(origin_key) {
+                    return CompactionFilterDecision::Keep;
+                }
+            }
         }
 
-        match RawValue::from_bytes(value, self.api_version, true) {
+        match RawValue::from_bytes(value, self.api_version) {
             Ok(RawValue {
                 expire_ts: Some(expire_ts),
                 ..

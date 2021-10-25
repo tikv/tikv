@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures::executor::block_on;
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{ApiVersion, Context};
 use std::{sync::mpsc::channel, thread, time::Duration};
 use storage::mvcc::tests::must_get;
 use storage::mvcc::{self, tests::must_locked};
@@ -45,6 +45,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -94,6 +95,7 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -137,6 +139,7 @@ fn test_update_max_ts_before_scan_memory_locks() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -185,6 +188,7 @@ macro_rules! lock_release_test {
             let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
                 engine,
                 DummyLockManager {},
+                ApiVersion::V1,
             )
             .build()
             .unwrap();
@@ -263,6 +267,7 @@ fn test_max_commit_ts_error() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -320,6 +325,7 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();

@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use super::ttl::TTLSnapshot;
+use super::encoded::RawEncodeSnapshot;
 
 use crate::storage::kv::{Cursor, Iterator, ScanMode, Snapshot};
 use crate::storage::Statistics;
@@ -19,18 +19,18 @@ const MAX_BATCH_SIZE: usize = 1024;
 
 pub enum RawStore<S: Snapshot> {
     Vanilla(RawStoreInner<S>),
-    TTL(RawStoreInner<TTLSnapshot<S>>),
+    Encoded(RawStoreInner<RawEncodeSnapshot<S>>),
 }
 
 impl<'a, S: Snapshot> RawStore<S> {
-    pub fn new(snapshot: S, api_version: ApiVersion, enable_ttl: bool) -> Self {
-        if enable_ttl {
-            RawStore::TTL(RawStoreInner::new(TTLSnapshot::from_snapshot(
+    pub fn new(snapshot: S, api_version: ApiVersion) -> Self {
+        if api_version == ApiVersion::V1 {
+            RawStore::Vanilla(RawStoreInner::new(snapshot))
+        } else {
+            RawStore::Encoded(RawStoreInner::new(RawEncodeSnapshot::from_snapshot(
                 snapshot,
                 api_version,
             )))
-        } else {
-            RawStore::Vanilla(RawStoreInner::new(snapshot))
         }
     }
 
@@ -42,7 +42,7 @@ impl<'a, S: Snapshot> RawStore<S> {
     ) -> Result<Option<Vec<u8>>> {
         match self {
             RawStore::Vanilla(inner) => inner.raw_get_key_value(cf, key, stats),
-            RawStore::TTL(inner) => inner.raw_get_key_value(cf, key, stats),
+            RawStore::Encoded(inner) => inner.raw_get_key_value(cf, key, stats),
         }
     }
 
@@ -54,7 +54,7 @@ impl<'a, S: Snapshot> RawStore<S> {
     ) -> Result<Option<u64>> {
         match self {
             RawStore::Vanilla(_) => panic!("get ttl on non-ttl store"),
-            RawStore::TTL(inner) => inner
+            RawStore::Encoded(inner) => inner
                 .snapshot
                 .get_key_ttl_cf(cf, key, stats)
                 .map_err(Error::from),
@@ -83,7 +83,7 @@ impl<'a, S: Snapshot> RawStore<S> {
                     .forward_raw_scan(cf, start_key, limit, statistics, option, key_only)
                     .await
             }
-            RawStore::TTL(inner) => {
+            RawStore::Encoded(inner) => {
                 inner
                     .forward_raw_scan(cf, start_key, limit, statistics, option, key_only)
                     .await
@@ -113,7 +113,7 @@ impl<'a, S: Snapshot> RawStore<S> {
                     .reverse_raw_scan(cf, start_key, limit, statistics, option, key_only)
                     .await
             }
-            RawStore::TTL(inner) => {
+            RawStore::Encoded(inner) => {
                 inner
                     .reverse_raw_scan(cf, start_key, limit, statistics, option, key_only)
                     .await

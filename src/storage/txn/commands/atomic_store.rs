@@ -8,7 +8,7 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
-use engine_traits::raw_value::{RawValue, ttl_to_expire_ts};
+use engine_traits::raw_value::{ttl_to_expire_ts, RawValue};
 use engine_traits::CfName;
 use kvproto::kvrpcpb::ApiVersion;
 use txn_types::RawMutation;
@@ -23,7 +23,6 @@ command! {
             cf: CfName,
             mutations: Vec<RawMutation>,
             api_version: ApiVersion,
-            enable_ttl: bool,
         }
 }
 
@@ -65,11 +64,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
                         user_value: value,
                         expire_ts: ttl_to_expire_ts(ttl),
                     };
-                    let m = Modify::Put(
-                        cf,
-                        key,
-                        raw_value.to_bytes(self.api_version, self.enable_ttl),
-                    );
+                    let m = Modify::Put(cf, key, raw_value.to_bytes(self.api_version));
                     data.push(m);
                 }
                 RawMutation::Delete { key } => {

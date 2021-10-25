@@ -22,7 +22,6 @@ pub struct TestEngineBuilder {
     cfs: Option<Vec<CfName>>,
     io_rate_limiter: Option<Arc<IORateLimiter>>,
     api_version: ApiVersion,
-    enable_ttl: bool,
 }
 
 impl TestEngineBuilder {
@@ -32,7 +31,6 @@ impl TestEngineBuilder {
             cfs: None,
             io_rate_limiter: None,
             api_version: ApiVersion::V1,
-            enable_ttl: false,
         }
     }
 
@@ -57,11 +55,6 @@ impl TestEngineBuilder {
         self
     }
 
-    pub fn enable_ttl(mut self, b: bool) -> Self {
-        self.enable_ttl = b;
-        self
-    }
-
     pub fn io_rate_limiter(mut self, limiter: Option<Arc<IORateLimiter>>) -> Self {
         self.io_rate_limiter = limiter;
         self
@@ -79,7 +72,6 @@ impl TestEngineBuilder {
             Some(p) => p.to_str().unwrap().to_owned(),
         };
         let api_version = self.api_version;
-        let enable_ttl = self.enable_ttl;
         let cfs = self.cfs.unwrap_or_else(|| ALL_CFS.to_vec());
         let cache = BlockCacheConfig::default().build_shared_cache();
         let cfs_opts = cfs
@@ -87,9 +79,7 @@ impl TestEngineBuilder {
             .map(|cf| match *cf {
                 CF_DEFAULT => CFOptions::new(
                     CF_DEFAULT,
-                    cfg_rocksdb
-                        .defaultcf
-                        .build_opt(&cache, None, api_version, enable_ttl),
+                    cfg_rocksdb.defaultcf.build_opt(&cache, None, api_version),
                 ),
                 CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
                 CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),

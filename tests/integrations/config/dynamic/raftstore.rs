@@ -4,6 +4,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use engine_rocks::RocksEngine;
+use kvproto::kvrpcpb::ApiVersion;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::config::{Config, RaftstoreConfigManager};
@@ -76,7 +77,7 @@ fn start_raftstore(
             .as_path()
             .display()
             .to_string();
-        Arc::new(SSTImporter::new(&cfg.import, &p, None, false).unwrap())
+        Arc::new(SSTImporter::new(&cfg.import, &p, None, ApiVersion::V1).unwrap())
     };
     let snap_mgr = {
         let p = dir

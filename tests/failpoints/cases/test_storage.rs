@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use grpcio::*;
 use kvproto::kvrpcpb::{
-    self, BatchRollbackRequest, CommitRequest, Context, GetRequest, Op, PrewriteRequest,
-    RawPutRequest,
+    self, ApiVersion, BatchRollbackRequest, CommitRequest, Context, GetRequest, Op,
+    PrewriteRequest, RawPutRequest,
 };
 use kvproto::tikvpb::TikvClient;
 
@@ -40,6 +40,7 @@ fn test_scheduler_leader_change_twice() {
     let storage0 = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine0,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -223,8 +224,8 @@ fn test_pipelined_pessimistic_lock() {
     let before_pipelined_write_finish_fp = "before_pipelined_write_finish";
 
     {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
-            .set_pipelined_pessimistic_lock(false)
+        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+            .pipelined_pessimistic_lock(false)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -249,8 +250,8 @@ fn test_pipelined_pessimistic_lock() {
         fail::remove(rockskv_write_modifies_fp);
     }
 
-    let storage = TestStorageBuilder::new(DummyLockManager {}, false)
-        .set_pipelined_pessimistic_lock(true)
+    let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        .pipelined_pessimistic_lock(true)
         .build()
         .unwrap();
 
@@ -388,6 +389,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine.clone(),
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -678,8 +680,9 @@ fn test_async_apply_prewrite() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
-    .set_async_apply_prewrite(true)
+    .async_apply_prewrite(true)
     .build()
     .unwrap();
 
@@ -779,8 +782,9 @@ fn test_async_apply_prewrite_fallback() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
-    .set_async_apply_prewrite(true)
+    .async_apply_prewrite(true)
     .build()
     .unwrap();
 
@@ -963,8 +967,9 @@ fn test_async_apply_prewrite_1pc() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
-    .set_async_apply_prewrite(true)
+    .async_apply_prewrite(true)
     .build()
     .unwrap();
 
@@ -993,6 +998,7 @@ fn test_atomic_cas_lock_by_latch() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -1082,6 +1088,7 @@ fn test_before_async_write_deadline() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -1117,6 +1124,7 @@ fn test_before_propose_deadline() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -1151,6 +1159,7 @@ fn test_resolve_lock_deadline() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();

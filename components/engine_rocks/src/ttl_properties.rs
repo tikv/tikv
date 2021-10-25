@@ -74,14 +74,20 @@ impl TablePropertiesCollector for TtlPropertiesCollector {
             return;
         }
         // Only consider raw keys.
-        // In API V1, `TtlPropertiesCollector` will only be enabled if `enable_ttl=true`,
-        // in which case all data keys are raw keys because txnkv is disabled.
         let origin_key = &key[keys::DATA_PREFIX_KEY.len()..];
-        if self.api_version == ApiVersion::V2 && !key_prefix::is_raw_key(origin_key) {
-            return;
+        match self.api_version {
+            // TTL is not enabled in V1.
+            ApiVersion::V1 => unreachable!(),
+            // In V1TTL, txnkv is disabled, so all data keys are raw keys.
+            ApiVersion::V1ttl => (),
+            ApiVersion::V2 => {
+                if !key_prefix::is_raw_key(origin_key) {
+                    return;
+                }
+            }
         }
 
-        match RawValue::from_bytes(value, self.api_version, true) {
+        match RawValue::from_bytes(value, self.api_version) {
             Ok(RawValue {
                 expire_ts: Some(expire_ts),
                 ..
@@ -141,12 +147,12 @@ mod tests {
                 };
                 for &(k, ts) in case {
                     let v = RawValue {
-                        value: &[0; 10],
+                        user_value: &[0; 10][..],
                         expire_ts: Some(ts),
                     };
                     collector.add(
                         k.as_bytes(),
-                        &v.to_bytes(api_version, true),
+                        &v.to_bytes(api_version),
                         DBEntryType::Put,
                         0,
                         0,
@@ -169,11 +175,10 @@ mod tests {
             ];
             let props = get_properties(&case1).unwrap();
             assert_eq!(props.max_expire_ts, u64::MAX);
-            if api_version == ApiVersion::V1 {
-                assert_eq!(props.min_expire_ts, 1);
-            } else {
+            match api_version {
+                ApiVersion::V1 | ApiVersion::V1ttl => assert_eq!(props.min_expire_ts, 1),
                 // expire_ts = 0 is no longer a special case in API V2
-                assert_eq!(props.min_expire_ts, 0);
+                ApiVersion::V2 => assert_eq!(props.min_expire_ts, 0),
             }
 
             let case2 = [("za", 0)];
@@ -189,6 +194,7 @@ mod tests {
         }
 
         inner(ApiVersion::V1);
+        inner(ApiVersion::V1ttl);
         inner(ApiVersion::V2);
     }
 }

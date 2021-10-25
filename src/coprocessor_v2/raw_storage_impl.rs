@@ -205,124 +205,134 @@ impl From<Canceled> for PluginErrorShim {
 mod test {
     use super::*;
     use crate::storage::{lock_manager::DummyLockManager, TestStorageBuilder};
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{ApiVersion, Context};
 
     #[tokio::test]
     async fn test_storage_api() {
-        let storage = TestStorageBuilder::new(DummyLockManager, false)
-            .build()
-            .unwrap();
-        let ctx = Context::new();
+        async fn inner(api_version: ApiVersion) {
+            let storage = TestStorageBuilder::new(DummyLockManager, api_version)
+                .build()
+                .unwrap();
+            let ctx = Context::new();
 
-        let raw_storage = RawStorageImpl::new(ctx, &storage);
+            let raw_storage = RawStorageImpl::new(ctx, &storage);
 
-        let key = vec![0];
-        let val1 = vec![42];
-        let val2 = vec![43];
+            let key = vec![0];
+            let val1 = vec![42];
+            let val2 = vec![43];
 
-        // Put
-        raw_storage.put(key.clone(), val1.clone()).await.unwrap();
+            // Put
+            raw_storage.put(key.clone(), val1.clone()).await.unwrap();
 
-        // Get
-        let r = raw_storage.get(key.clone()).await.unwrap();
-        assert_eq!(r, Some(val1.clone()));
+            // Get
+            let r = raw_storage.get(key.clone()).await.unwrap();
+            assert_eq!(r, Some(val1.clone()));
 
-        // Put overwrite
-        raw_storage.put(key.clone(), val2.clone()).await.unwrap();
-        let r = raw_storage.get(key.clone()).await.unwrap();
-        assert_eq!(r, Some(val2.clone()));
+            // Put overwrite
+            raw_storage.put(key.clone(), val2.clone()).await.unwrap();
+            let r = raw_storage.get(key.clone()).await.unwrap();
+            assert_eq!(r, Some(val2.clone()));
 
-        // Delete
-        raw_storage.delete(key.clone()).await.unwrap();
+            // Delete
+            raw_storage.delete(key.clone()).await.unwrap();
 
-        // Get non-existent
-        let r = raw_storage.get(key.clone()).await.unwrap();
-        assert_eq!(r, None);
+            // Get non-existent
+            let r = raw_storage.get(key.clone()).await.unwrap();
+            assert_eq!(r, None);
+        }
+        inner(ApiVersion::V1).await;
+        inner(ApiVersion::V1ttl).await;
+        inner(ApiVersion::V2).await;
     }
 
     #[tokio::test]
     async fn test_storage_api_batch() {
-        let storage = TestStorageBuilder::new(DummyLockManager, false)
-            .build()
-            .unwrap();
-        let ctx = Context::new();
+        async fn inner(api_version: ApiVersion) {
+            let storage = TestStorageBuilder::new(DummyLockManager, api_version)
+                .build()
+                .unwrap();
+            let ctx = Context::new();
 
-        let raw_storage = RawStorageImpl::new(ctx, &storage);
+            let raw_storage = RawStorageImpl::new(ctx, &storage);
 
-        let keys = vec![0, 8, 16].into_iter().map(|k| vec![k]);
-        let values = vec![42, 99, 128].into_iter().map(|v| vec![v]);
-        let non_existing_key = std::iter::once(vec![33]);
+            let keys = vec![0, 8, 16].into_iter().map(|k| vec![k]);
+            let values = vec![42, 99, 128].into_iter().map(|v| vec![v]);
+            let non_existing_key = std::iter::once(vec![33]);
 
-        let full_scan = Range {
-            start: vec![u8::MIN],
-            end: vec![u8::MAX],
-        };
+            let full_scan = Range {
+                start: vec![u8::MIN],
+                end: vec![u8::MAX],
+            };
 
-        // Batch put
-        raw_storage
-            .batch_put(keys.clone().zip(values.clone()).collect())
-            .await
-            .unwrap();
+            // Batch put
+            raw_storage
+                .batch_put(keys.clone().zip(values.clone()).collect())
+                .await
+                .unwrap();
 
-        // Batch get
-        let r = raw_storage
-            .batch_get(keys.clone().take(2).collect())
-            .await
-            .unwrap();
-        assert_eq!(
-            r,
-            keys.clone()
-                .take(2)
-                .zip(values.clone())
-                .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
-        );
-
-        // Batch get (one non-existent)
-        let r = raw_storage
-            .batch_get(
-                keys.clone()
-                    .take(1)
-                    .chain(non_existing_key.clone())
-                    .collect(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            r,
-            keys.clone()
-                .take(1)
-                .zip(values.clone())
-                .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
-        );
-
-        // Full scan
-        let r = raw_storage.scan(full_scan.clone()).await.unwrap();
-        assert_eq!(r.len(), 3);
-
-        // Batch delete (one non-existent)
-        raw_storage
-            .batch_delete(
+            // Batch get
+            let r = raw_storage
+                .batch_get(keys.clone().take(2).collect())
+                .await
+                .unwrap();
+            assert_eq!(
+                r,
                 keys.clone()
                     .take(2)
-                    .chain(non_existing_key.clone())
-                    .collect(),
-            )
-            .await
-            .unwrap();
-        let r = raw_storage.scan(full_scan.clone()).await.unwrap();
-        assert_eq!(r.len(), 1);
+                    .zip(values.clone())
+                    .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
+            );
 
-        // Batch put (one overwrite)
-        raw_storage
-            .batch_put(keys.clone().zip(values.clone()).collect())
-            .await
-            .unwrap();
-        let r = raw_storage.scan(full_scan.clone()).await.unwrap();
-        assert_eq!(r.len(), 3);
+            // Batch get (one non-existent)
+            let r = raw_storage
+                .batch_get(
+                    keys.clone()
+                        .take(1)
+                        .chain(non_existing_key.clone())
+                        .collect(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                r,
+                keys.clone()
+                    .take(1)
+                    .zip(values.clone())
+                    .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
+            );
 
-        // Delete range (all)
-        raw_storage.delete_range(full_scan.clone()).await.unwrap();
-        let r = raw_storage.scan(full_scan.clone()).await.unwrap();
-        assert_eq!(r.len(), 0);
+            // Full scan
+            let r = raw_storage.scan(full_scan.clone()).await.unwrap();
+            assert_eq!(r.len(), 3);
+
+            // Batch delete (one non-existent)
+            raw_storage
+                .batch_delete(
+                    keys.clone()
+                        .take(2)
+                        .chain(non_existing_key.clone())
+                        .collect(),
+                )
+                .await
+                .unwrap();
+            let r = raw_storage.scan(full_scan.clone()).await.unwrap();
+            assert_eq!(r.len(), 1);
+
+            // Batch put (one overwrite)
+            raw_storage
+                .batch_put(keys.clone().zip(values.clone()).collect())
+                .await
+                .unwrap();
+            let r = raw_storage.scan(full_scan.clone()).await.unwrap();
+            assert_eq!(r.len(), 3);
+
+            // Delete range (all)
+            raw_storage.delete_range(full_scan.clone()).await.unwrap();
+            let r = raw_storage.scan(full_scan.clone()).await.unwrap();
+            assert_eq!(r.len(), 0);
+        }
+        inner(ApiVersion::V1).await;
+        inner(ApiVersion::V1ttl).await;
+        inner(ApiVersion::V2).await;
     }
 }

@@ -10,7 +10,7 @@ use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Servic
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::{create_debug, DebugClient};
 use kvproto::import_sstpb::create_import_sst;
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{ApiVersion, Context};
 use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
@@ -328,7 +328,9 @@ impl Simulator for ServerCluster {
         // Create import service.
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(&cfg.import, dir, key_manager.clone(), false).unwrap())
+            Arc::new(
+                SSTImporter::new(&cfg.import, dir, key_manager.clone(), ApiVersion::V1).unwrap(),
+            )
         };
         let import_service = ImportSSTService::new(
             cfg.import.clone(),

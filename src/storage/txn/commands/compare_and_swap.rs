@@ -9,7 +9,7 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
-use engine_traits::raw_value::{RawValue, ttl_to_expire_ts};
+use engine_traits::raw_value::{ttl_to_expire_ts, RawValue};
 use engine_traits::CfName;
 use kvproto::kvrpcpb::ApiVersion;
 use txn_types::{Key, Value};
@@ -28,7 +28,6 @@ command! {
             value: Value,
             ttl: u64,
             api_version: ApiVersion,
-            enable_ttl: bool,
         }
 }
 
@@ -47,10 +46,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
         let (cf, key, value, previous_value, ctx) =
             (self.cf, self.key, self.value, self.previous_value, self.ctx);
         let mut data = vec![];
-        let old_value = if self.enable_ttl {
-            raw::TTLSnapshot::from_snapshot(snapshot, self.api_version).get_cf(cf, &key)?
-        } else {
+        let old_value = if self.api_version == ApiVersion::V1 {
             snapshot.get_cf(cf, &key)?
+        } else {
+            raw::RawEncodeSnapshot::from_snapshot(snapshot, self.api_version).get_cf(cf, &key)?
         };
 
         let pr = if old_value == previous_value {
@@ -58,11 +57,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
                 user_value: value,
                 expire_ts: ttl_to_expire_ts(self.ttl),
             };
-            let m = Modify::Put(
-                cf,
-                key,
-                raw_value.to_bytes(self.api_version, self.enable_ttl),
-            );
+            let m = Modify::Put(cf, key, raw_value.to_bytes(self.api_version));
             data.push(m);
             ProcessResult::RawCompareAndSwapRes {
                 previous_value: old_value,
@@ -101,7 +96,7 @@ mod tests {
 
     #[test]
     fn test_cas_basic() {
-        fn inner(api_version: ApiVersion, enable_ttl: bool) {
+        fn inner(api_version: ApiVersion) {
             let engine = TestEngineBuilder::new().build().unwrap();
             let cm = concurrency_manager::ConcurrencyManager::new(1.into());
             let key = b"k";
@@ -113,7 +108,6 @@ mod tests {
                 b"v1".to_vec(),
                 0,
                 api_version,
-                enable_ttl,
                 Context::default(),
             );
             let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
@@ -127,7 +121,6 @@ mod tests {
                 b"v2".to_vec(),
                 0,
                 api_version,
-                enable_ttl,
                 Context::default(),
             );
             let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
@@ -141,16 +134,15 @@ mod tests {
                 b"v3".to_vec(),
                 0,
                 api_version,
-                enable_ttl,
                 Context::default(),
             );
             let (prev_val, succeed) = sched_command(&engine, cm, cmd).unwrap();
             assert_eq!(prev_val, Some(b"v1".to_vec()));
             assert!(succeed);
         }
-        inner(ApiVersion::V1, false);
-        inner(ApiVersion::V1, true);
-        inner(ApiVersion::V2, true);
+        inner(ApiVersion::V1);
+        inner(ApiVersion::V1ttl);
+        inner(ApiVersion::V2);
     }
 
     pub fn sched_command<E: Engine>(

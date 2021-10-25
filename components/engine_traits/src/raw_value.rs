@@ -23,13 +23,13 @@ pub struct RawValue<T: AsRef<[u8]>> {
 
 impl<'a> RawValue<&'a [u8]> {
     /// Parse from the bytes from storage.
-    pub fn from_bytes(bytes: &'a [u8], api_version: ApiVersion, enable_ttl: bool) -> Result<Self> {
+    pub fn from_bytes(bytes: &'a [u8], api_version: ApiVersion) -> Result<Self> {
         match api_version {
-            ApiVersion::V1 if !enable_ttl => Ok(RawValue {
+            ApiVersion::V1 => Ok(RawValue {
                 user_value: bytes,
                 expire_ts: None,
             }),
-            ApiVersion::V1 => {
+            ApiVersion::V1ttl => {
                 let len = bytes.len();
                 if len < number::U64_SIZE {
                     return Err(Error::Codec(codec::Error::ValueLength));
@@ -70,10 +70,10 @@ impl<'a> RawValue<&'a [u8]> {
     }
 
     /// Encode the raw value and it's metadata into bytes.
-    pub fn to_bytes(self, api_version: ApiVersion, enable_ttl: bool) -> Vec<u8> {
+    pub fn to_bytes(self, api_version: ApiVersion) -> Vec<u8> {
         match api_version {
-            ApiVersion::V1 if !enable_ttl => self.user_value.to_vec(),
-            ApiVersion::V1 => {
+            ApiVersion::V1 => self.user_value.to_vec(),
+            ApiVersion::V1ttl => {
                 let mut buf = Vec::with_capacity(self.user_value.len() + number::U64_SIZE);
                 buf.extend_from_slice(self.user_value);
                 buf.encode_u64(self.expire_ts.unwrap_or(0)).unwrap();
@@ -100,13 +100,9 @@ impl<'a> RawValue<&'a [u8]> {
 
 impl RawValue<Vec<u8>> {
     /// This is equivalent to `RawValue::from_bytes()` but returns the owned user value.
-    pub fn from_owned_bytes(
-        mut bytes: Vec<u8>,
-        api_version: ApiVersion,
-        enable_ttl: bool,
-    ) -> Result<Self> {
+    pub fn from_owned_bytes(mut bytes: Vec<u8>, api_version: ApiVersion) -> Result<Self> {
         let (len, expire_ts) = {
-            let raw_value = RawValue::from_bytes(&bytes, api_version, enable_ttl)?;
+            let raw_value = RawValue::from_bytes(&bytes, api_version)?;
             (raw_value.user_value.len(), raw_value.expire_ts)
         };
         // The user value are always the first part in encoded bytes.
@@ -118,10 +114,10 @@ impl RawValue<Vec<u8>> {
     }
 
     /// This is equivalent to `RawValue::<&[u8]>::to_bytes()` but reduced an allocation.
-    pub fn to_bytes(mut self, api_version: ApiVersion, enable_ttl: bool) -> Vec<u8> {
+    pub fn to_bytes(mut self, api_version: ApiVersion) -> Vec<u8> {
         match api_version {
-            ApiVersion::V1 if !enable_ttl => self.user_value,
-            ApiVersion::V1 => {
+            ApiVersion::V1 => self.user_value,
+            ApiVersion::V1ttl => {
                 self.user_value.reserve(number::U64_SIZE);
                 self.user_value
                     .encode_u64(self.expire_ts.unwrap_or(0))
@@ -153,7 +149,7 @@ pub fn ttl_current_ts() -> u64 {
 
 pub fn ttl_to_expire_ts(ttl: u64) -> Option<u64> {
     if ttl == 0 {
-         None
+        None
     } else {
         Some(ttl.saturating_add(ttl_current_ts()))
     }

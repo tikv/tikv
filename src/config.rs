@@ -584,7 +584,6 @@ impl DefaultCfConfig {
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
-        enable_ttl: bool,
     ) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, region_info_accessor);
         let f = Box::new(RangePropertiesCollectorFactory {
@@ -592,7 +591,7 @@ impl DefaultCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        if enable_ttl {
+        if matches!(api_version, ApiVersion::V1ttl | ApiVersion::V2) {
             cf_opts.add_table_properties_collector_factory(
                 "tikv.ttl-properties-collector",
                 Box::new(TtlPropertiesCollectorFactory { api_version }),
@@ -1085,13 +1084,12 @@ impl DbConfig {
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
-        enable_ttl: bool,
     ) -> Vec<CFOptions<'_>> {
         vec![
             CFOptions::new(
                 CF_DEFAULT,
                 self.defaultcf
-                    .build_opt(cache, region_info_accessor, api_version, enable_ttl),
+                    .build_opt(cache, region_info_accessor, api_version),
             ),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(
@@ -3531,7 +3529,7 @@ mod tests {
                 cfg.rocksdb.build_cf_opts(
                     &cfg.storage.block_cache.build_shared_cache(),
                     None,
-                    cfg.storage.enable_ttl,
+                    cfg.storage.api_version(),
                 ),
             )
             .unwrap(),
