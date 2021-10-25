@@ -850,15 +850,13 @@ where
             }
         }
 
-        if self.get_store().is_applying_snapshot() {
-            if !self.mut_store().cancel_applying_snap() {
-                info!(
-                    "stale peer is applying snapshot, will destroy next time";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                );
-                return None;
-            }
+        if self.get_store().is_applying_snapshot() && !self.mut_store().cancel_applying_snap() {
+            info!(
+                "stale peer is applying snapshot, will destroy next time";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            return None;
         }
 
         // There is no applying snapshot or snapshot is canceled so the `apply_snap_ctx`
