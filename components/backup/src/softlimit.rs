@@ -3,7 +3,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use super::{Error, Result};
+use collections::HashMap;
 use crossbeam::channel::{Receiver, Sender};
+use tikv::storage::Statistics;
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::sys::SysQuota;
 use tikv_util::{error, warn};
@@ -110,24 +112,38 @@ impl SoftLimit {
     }
 }
 
-pub struct SoftLimitByCPU {
-    pub(crate) metrics: RefCell<ThreadInfoStatistics>,
+pub trait CpuStatistics {
+    type Container: IntoIterator<Item = (String, u64)>;
+    fn get_cpu_usages(&self) -> Self::Container;
+}
+
+pub struct SoftLimitByCPU<Statistics> {
+    pub(crate) metrics: Statistics,
     total_time: f64,
     keep_remain: usize,
 }
 
-impl SoftLimitByCPU {
+impl CpuStatistics for RefCell<ThreadInfoStatistics> {
+    type Container = HashMap<String, u64>;
+
+    fn get_cpu_usages(&self) -> Self::Container {
+        self.borrow_mut().record();
+        self.get_cpu_usages()
+    }
+}
+
+impl<Statistics: CpuStatistics> SoftLimitByCPU<Statistics> {
     /// returns the current idle processor.
     /// **note that this might get inaccuracy if there are other processes
     /// running in the same CPU.**
+    #[cfg(test)]
     fn current_idle(&self) -> f64 {
         self.current_idle_exclude(|_| false)
     }
 
     /// returns the current idle processor, ignoring threads with name matches the predicate.
     fn current_idle_exclude(&self, mut exclude: impl FnMut(&str) -> bool) -> f64 {
-        self.metrics.borrow_mut().record();
-        let usages = self.metrics.borrow().get_cpu_usages();
+        let usages = self.metrics.get_cpu_usages();
         let used = usages
             .into_iter()
             .filter(|(s, _)| !exclude(s))
@@ -136,8 +152,9 @@ impl SoftLimitByCPU {
     }
 
     /// apply the limit to the soft limit accroding to the current CPU remaining.
+    #[cfg(test)]
     pub fn exec_over(&self, limit: &SoftLimit) -> Result<()> {
-        self.exec_over_with_exclude(limit, |_| true)
+        self.exec_over_with_exclude(limit, |_| false)
     }
 
     /// apply the limit to the soft limit accroding to the current CPU remaining.
@@ -158,11 +175,9 @@ impl SoftLimitByCPU {
     pub fn set_remain(&mut self, remain: usize) {
         self.keep_remain = remain;
     }
+}
 
-    pub fn new() -> Self {
-        Self::with_remain(0)
-    }
-
+impl SoftLimitByCPU<RefCell<ThreadInfoStatistics>> {
     pub fn with_remain(remain: usize) -> Self {
         let total = SysQuota::cpu_cores_quota();
         let metrics = RefCell::new(ThreadInfoStatistics::new());
@@ -188,7 +203,37 @@ mod softlimit_test {
     use crossbeam::channel;
     use tikv_util::{defer, sys::SysQuota};
 
-    use super::{SoftLimit, SoftLimitByCPU};
+    use super::{CpuStatistics, SoftLimit, SoftLimitByCPU};
+
+    #[derive(Default)]
+    struct TestCpuEnv {
+        used: u64,
+    }
+
+    impl CpuStatistics for TestCpuEnv {
+        type Container = Vec<(String, u64)>;
+
+        fn get_cpu_usages(&self) -> Self::Container {
+            (0..self.used)
+                .map(|i| (format!("thread-{}", i), 100))
+                .collect()
+        }
+    }
+
+    impl TestCpuEnv {
+        fn mock_busy(n: usize) -> SoftLimitByCPU<Self> {
+            let env = Self { used: n as u64 };
+            SoftLimitByCPU {
+                metrics: env,
+                total_time: SysQuota::cpu_cores_quota(),
+                keep_remain: 0,
+            }
+        }
+
+        fn stop_busy(&mut self) {
+            self.used = 0;
+        }
+    }
 
     fn busy<F>(n: usize, f: F) -> impl FnOnce()
     where
@@ -230,7 +275,7 @@ mod softlimit_test {
     fn should_satify_in(d: Duration, name: &str, mut f: impl FnMut() -> bool + Send + 'static) {
         should_finish_in(d, name, move || {
             while !f() {
-                thread::sleep(d.div_f32(10.0));
+                thread::sleep(d.div_f32(50.0));
             }
         })
     }
@@ -238,18 +283,15 @@ mod softlimit_test {
     #[test]
     // FIXME: this test might be unstable :(
     fn test_current_idle() {
-        let stop = busy(2, || {});
-        defer! { stop() }
-        let cpu = SoftLimitByCPU::new();
-        let total = cpu.current_idle();
-        thread::sleep(Duration::from_secs(1));
+        let mut cpu = TestCpuEnv::mock_busy(2);
         let total_after_busy = cpu.current_idle();
+        cpu.metrics.stop_busy();
+        let total = cpu.current_idle();
         assert!(
             (total - total_after_busy - 2f64).abs() < 0.5f64,
-            "total and total_after_busy diff too huge: {} vs {} usage map = {:?}",
+            "total and total_after_busy diff too huge: {} vs {}",
             total,
             total_after_busy,
-            cpu.metrics.borrow().get_cpu_usages()
         );
     }
 
@@ -263,11 +305,10 @@ mod softlimit_test {
         let stop = busy(4, move || {
             let _guard = limit.guard();
             working_cloned.fetch_add(1, Ordering::SeqCst);
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(10));
             working_cloned.fetch_sub(1, Ordering::SeqCst);
         });
         defer! {stop()}
-        thread::sleep(Duration::from_millis(1000));
         let working_cloned = working.clone();
         limit_cloned.shrink(2).unwrap();
         should_satify_in(
@@ -295,35 +336,30 @@ mod softlimit_test {
 
     #[test]
     fn test_cpu_limit() {
-        let stop = busy(2, || {});
-        let cpu_limit = SoftLimitByCPU::new();
+        let mut cpu_limit = TestCpuEnv::mock_busy(2);
         let cpu_count = SysQuota::cpu_cores_quota() as usize;
         let limit = SoftLimit::new(cpu_count);
-        thread::sleep(Duration::from_millis(1000));
         cpu_limit.exec_over(&limit).unwrap();
         assert_eq!(
             limit.current_cap(),
             cpu_count - 2,
             "map = {:?}",
-            cpu_limit.metrics.borrow().get_cpu_usages()
+            cpu_limit.metrics.get_cpu_usages()
         );
-        stop();
-        thread::sleep(Duration::from_millis(1000));
+        cpu_limit.metrics.used = 0;
         cpu_limit.exec_over(&limit).unwrap();
         assert_eq!(limit.current_cap(), cpu_count);
     }
 
     #[test]
     fn test_cpu_limit_remain() {
-        let stop = busy(1, || {});
-        let cpu_limit = SoftLimitByCPU::with_remain(1);
+        let mut cpu_limit = TestCpuEnv::mock_busy(1);
+        cpu_limit.set_remain(1);
         let cpu_count = SysQuota::cpu_cores_quota() as usize;
         let limit = SoftLimit::new(cpu_count);
-        thread::sleep(Duration::from_millis(100));
         cpu_limit.exec_over(&limit).unwrap();
         assert_eq!(limit.current_cap(), cpu_count - 2);
-        stop();
-        thread::sleep(Duration::from_millis(100));
+        cpu_limit.metrics.used = 0;
         cpu_limit.exec_over(&limit).unwrap();
         assert_eq!(limit.current_cap(), cpu_count - 1);
     }

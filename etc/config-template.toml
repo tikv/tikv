@@ -1018,15 +1018,9 @@
 ## little larger).
 # sst-max-size = "144MB"
 
-## When set to true, tikv would try to restrict the backup thread number accroding to the
-## cluster workload.
+## When set to true, would allow TiKV to restrict the backup thread number accroding to the
+## currenct workload of cluster.
 # enable-auto-tune = true
-
-## The restricting of enable-auto-tune would try to keep at least this number of cores idle.
-# auto-tune-remain-threads = 6
-
-## The interval of refreshing the backup thread limit.
-# auto-tune-refresh-gap = "30s"
 
 [pessimistic-txn]
 ## The default and maximum delay before responding to TiDB when pessimistic
