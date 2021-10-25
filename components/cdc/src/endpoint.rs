@@ -2583,8 +2583,7 @@ mod tests {
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
 
         // Open conn a
-        let (tx1, mut rx1) = channel::channel(1, quota.clone());
-        let mut rx1 = rx1.drain();
+        let (tx1, _rx1) = channel::channel(1, quota.clone());
         let conn_a = Conn::new(tx1, String::new());
         let conn_id_a = conn_a.get_id();
         ep.run(Task::OpenConn { conn: conn_a });
@@ -2633,8 +2632,6 @@ mod tests {
         // Deregister conn a.
         ep.run(Task::Deregister(Deregister::Conn(conn_id_a)));
         assert_eq!(ep.capture_regions.len(), 1);
-        let res = recv_timeout(&mut rx1, Duration::from_millis(100)).unwrap();
-        assert!(res.is_none(), "{:?}", res);
 
         // Schedule resolver ready (resolver is built by conn a).
         let mut region = Region::default();
