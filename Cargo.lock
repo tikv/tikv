@@ -5732,7 +5732,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/winoros/tipb.git?branch=sample-rate#faa265605b59c32d2c4eba63952f25ee873e3358"
+source = "git+https://github.com/winoros/tipb.git?branch=sample-rate#759361265b1878b7ca3eb527ff6fcff0715ba4f1"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
