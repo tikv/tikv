@@ -11,7 +11,7 @@ use test_util::alloc_port;
 
 const ONE_SEC: Duration = Duration::from_secs(1);
 
-pub fn case_enable(test_suite: &mut TestSuite) {
+pub fn case_receiver_address(test_suite: &mut TestSuite) {
     test_suite.reset();
     let port = alloc_port();
     test_suite.start_receiver_at(port);
@@ -20,9 +20,8 @@ pub fn case_enable(test_suite: &mut TestSuite) {
     // [req-1, req-2]
     test_suite.setup_workload(vec!["req-1", "req-2"]);
 
-    // | Address | Enabled |
-    // |   x     |    o    |
-    test_suite.cfg_enabled(true);
+    // | Address |
+    // |   x     |
     sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
     assert!(test_suite.fetch_reported_cpu_time().is_empty());
 
@@ -30,8 +29,8 @@ pub fn case_enable(test_suite: &mut TestSuite) {
     // []
     test_suite.cancel_workload();
 
-    // | Address | Enabled |
-    // |   o     |    o    |
+    // | Address |
+    // |   o     |
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
     test_suite.flush_receiver();
     sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
@@ -41,35 +40,36 @@ pub fn case_enable(test_suite: &mut TestSuite) {
     // [req-1, req-2]
     test_suite.setup_workload(vec!["req-1", "req-2"]);
 
-    // | Address | Enabled |
-    // |   o     |    o    |
+    // | Address |
+    // |   o     |
     sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
     let res = test_suite.fetch_reported_cpu_time();
     assert_eq!(res.len(), 2);
     assert!(res.contains_key("req-1"));
     assert!(res.contains_key("req-2"));
 
-    // | Address | Enabled |
-    // |   x     |    o    |
+    // | Address |
+    // |   x     |
     test_suite.cfg_receiver_address("");
     test_suite.flush_receiver();
     sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
     assert!(test_suite.fetch_reported_cpu_time().is_empty());
 
-    // | Address | Enabled |
-    // |   o     |    x    |
-    test_suite.cfg_enabled(false);
+    // | Address |
+    // |   o     |
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
     test_suite.flush_receiver();
     sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
-    assert!(test_suite.fetch_reported_cpu_time().is_empty());
+    let res = test_suite.fetch_reported_cpu_time();
+    assert_eq!(res.len(), 2);
+    assert!(res.contains_key("req-1"));
+    assert!(res.contains_key("req-2"));
 }
 
 pub fn case_report_interval(test_suite: &mut TestSuite) {
     test_suite.reset();
     let port = alloc_port();
     test_suite.start_receiver_at(port);
-    test_suite.cfg_enabled(true);
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
 
     // Workload
@@ -108,7 +108,6 @@ pub fn case_max_resource_groups(test_suite: &mut TestSuite) {
     test_suite.reset();
     let port = alloc_port();
     test_suite.start_receiver_at(port);
-    test_suite.cfg_enabled(true);
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
 
     // Workload

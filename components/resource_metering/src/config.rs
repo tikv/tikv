@@ -10,6 +10,7 @@ use online_config::{ConfigChange, OnlineConfig};
 use serde_derive::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::Scheduler;
+use tikv_util::warn;
 
 const MIN_PRECISION: ReadableDuration = ReadableDuration::secs(1);
 const MAX_PRECISION: ReadableDuration = ReadableDuration::hours(1);
@@ -24,6 +25,7 @@ pub struct Config {
     /// Turn on resource metering.
     ///
     /// This configuration will affect all resource modules such as cpu/summary.
+    #[deprecated(note="Whether resource metering is enabled or not depends on external subscriptions")]
     pub enabled: bool,
 
     /// Data reporting destination address.
@@ -117,14 +119,6 @@ impl online_config::ConfigManager for ConfigManager {
         let mut new_config = self.current_config.clone();
         new_config.update(change);
         new_config.validate()?;
-        // Pause or resume the recorder thread.
-        if self.current_config.enabled != new_config.enabled {
-            if new_config.enabled {
-                self.recorder_ctl.resume();
-            } else {
-                self.recorder_ctl.pause();
-            }
-        }
         if self.current_config.precision != new_config.precision {
             self.recorder_ctl.precision(new_config.precision.0);
         }

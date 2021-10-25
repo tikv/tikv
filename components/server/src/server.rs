@@ -912,7 +912,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             recorder_ctl.clone(),
         );
         let resource_metering_publisher =
-            resource_metering::ResourceMeteringPublisher::new(&reporter);
+            resource_metering::ResourceMeteringPublisher::new(reporter.client_registry());
         reporter_worker.start_with_timer(reporter);
         self.to_stop.push(Box::new(reporter_worker));
         let cfg_manager = resource_metering::ConfigManager::new(

@@ -16,7 +16,7 @@ impl MockPublisherServer {
             .max_send_message_len(-1)
             .build_args();
 
-        let rmp = ResourceMeteringPublisher::new(rpt);
+        let rmp = ResourceMeteringPublisher::new(rpt.client_registry());
 
         let server_builder = ServerBuilder::new(env)
             .channel_args(channel_args)

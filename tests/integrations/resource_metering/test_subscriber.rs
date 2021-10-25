@@ -6,13 +6,12 @@ use std::collections::HashMap;
 use std::iter;
 
 use futures::StreamExt;
-use kvproto::resource_usage_agent::Request;
+use kvproto::resource_usage_agent::ResourceMeteringRequest;
 use rand::prelude::*;
 use resource_metering::TEST_TAG_PREFIX;
 
 pub fn case_basic(test_suite: &mut TestSuite) {
     test_suite.reset();
-    test_suite.cfg_enabled(true);
     test_suite.cfg_max_resource_groups(5);
 
     // Workload
@@ -30,7 +29,7 @@ pub fn case_basic(test_suite: &mut TestSuite) {
 
     // one subscriber
     {
-        let stream = client.sub_cpu_time_record(&Request::default()).unwrap();
+        let stream = client.subscribe(&ResourceMeteringRequest::default()).unwrap();
         let res = test_suite.rt.block_on(async move {
             let mut res: HashMap<String, (Vec<u64>, Vec<u32>)> = HashMap::new();
 
@@ -61,8 +60,8 @@ pub fn case_basic(test_suite: &mut TestSuite) {
 
     // two subscribers
     {
-        let stream1 = client.sub_cpu_time_record(&Request::default()).unwrap();
-        let stream2 = client.sub_cpu_time_record(&Request::default()).unwrap();
+        let stream1 = client.sub_cpu_time_record(&ResourceMeteringRequest::default()).unwrap();
+        let stream2 = client.sub_cpu_time_record(&ResourceMeteringRequest::default()).unwrap();
         let (res1, res2) = test_suite.rt.block_on(async move {
             let mut res1: HashMap<String, (Vec<u64>, Vec<u32>)> = HashMap::new();
             let mut res2: HashMap<String, (Vec<u64>, Vec<u32>)> = HashMap::new();

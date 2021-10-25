@@ -15,7 +15,7 @@ mod linux {
         let mut ts = test_suite::TestSuite::new();
 
         // Dynamic config
-        test_dynamic_config::case_enable(&mut ts);
+        test_dynamic_config::case_receiver_address(&mut ts);
         test_dynamic_config::case_report_interval(&mut ts);
         test_dynamic_config::case_max_resource_groups(&mut ts);
         test_dynamic_config::case_precision(&mut ts);

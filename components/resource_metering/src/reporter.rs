@@ -85,7 +85,7 @@ impl Reporter {
         }
     }
 
-    pub(crate) fn client_registry(&self) -> ClientRegistry {
+    pub fn client_registry(&self) -> ClientRegistry {
         self.client_registry.clone()
     }
 
@@ -107,11 +107,13 @@ impl Reporter {
         self.clients.drain_filter(|c| c.is_closed()).count();
 
         if self.clients.len() > 256 {
-            warn!("too much clients"; "len" => self.clients.len());
+            warn!("too many clients"; "len" => self.clients.len());
         }
 
         let pending_cnt = self.clients.iter().filter(|c| c.is_pending()).count();
         let running_cnt = self.clients.len() - pending_cnt;
+
+        // sampling can be paused if no clients case about the results
         if running_cnt > 0 {
             self.recorder_ctl.resume();
         } else {
@@ -143,6 +145,10 @@ pub struct ClientRegistry {
 }
 
 impl ClientRegistry {
+    pub fn new(tx: Sender<Box<dyn Client>>) -> Self {
+        Self { tx }
+    }
+
     pub fn register(&self, client: Box<dyn Client>) {
         self.tx.send(client).ok();
     }
@@ -187,14 +193,6 @@ mod tests {
     impl Client for MockClient {
         fn upload_records(&mut self, _records: Arc<Records>) {
             OP_COUNT.fetch_add(1, SeqCst);
-        }
-
-        fn is_pending(&self) -> bool {
-            false
-        }
-
-        fn is_closed(&self) -> bool {
-            false
         }
     }
 
