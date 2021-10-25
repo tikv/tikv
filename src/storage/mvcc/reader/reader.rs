@@ -554,7 +554,7 @@ pub mod tests {
     use engine_rocks::{Compat, RocksSnapshot};
     use engine_traits::{IterOptions, Mutable, WriteBatch, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{AssertionLevel, Context};
     use kvproto::metapb::{Peer, Region};
     use raftstore::store::RegionSnapshot;
     use std::ops::Bound;
@@ -637,6 +637,7 @@ pub mod tests {
                 min_commit_ts: TimeStamp::default(),
                 need_old_value: false,
                 is_retry_request: false,
+                assertion_level: AssertionLevel::Off,
             }
         }
 

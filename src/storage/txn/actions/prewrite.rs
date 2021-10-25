@@ -17,7 +17,7 @@ use txn_types::{
     is_short_value, Key, Mutation, MutationType, OldValue, TimeStamp, Value, Write, WriteType,
 };
 
-use kvproto::kvrpcpb::Assertion;
+use kvproto::kvrpcpb::{Assertion, AssertionLevel};
 
 /// Prewrite a single mutation by creating and storing a lock and value.
 pub fn prewrite<S: Snapshot>(
@@ -44,10 +44,13 @@ pub fn prewrite<S: Snapshot>(
         .into())
     );
 
+    let mut lock_amended = false;
+
     let lock_status = match reader.load_lock(&mutation.key)? {
         Some(lock) => mutation.check_lock(lock, is_pessimistic_lock)?,
         None if is_pessimistic_lock => {
-            amend_pessimistic_lock(&mutation.key, reader)?;
+            amend_pessimistic_lock(&mutation, reader)?;
+            lock_amended = true;
             LockStatus::None
         }
         None => LockStatus::None,
@@ -64,7 +67,14 @@ pub fn prewrite<S: Snapshot>(
         (None, false)
     };
 
-    if mutation.assertion != Assertion::None {
+    // Check assertion if necessary. There are couple of different cases:
+    // * If the write is already loaded, then assertion can be checked without introducing too much
+    //   performance overhead. So do assertion in this case.
+    // * If `amend_pessimistic_lock` has happened, assertion can be done during amending. Skip it.
+    // * If constraint check is skipped thus `prev_write` is not loaded, doing assertion here
+    //   introduces too much overhead. However, we'll do it anyway if `assertion_level` is set to
+    //   `Strict` level.
+    if !lock_amended && (txn_props.assertion_level == AssertionLevel::Strict || prev_write_loaded) {
         let (reloaded_prev_write, reloaded) =
             mutation.check_assertion(reader, &prev_write, prev_write_loaded)?;
         if reloaded {
@@ -173,6 +183,7 @@ pub struct TransactionProperties<'a> {
     pub min_commit_ts: TimeStamp,
     pub need_old_value: bool,
     pub is_retry_request: bool,
+    pub assertion_level: AssertionLevel,
 }
 
 impl<'a> TransactionProperties<'a> {
@@ -453,7 +464,9 @@ impl<'a> PrewriteMutation<'a> {
         write: &Option<(Write, TimeStamp)>,
         write_loaded: bool,
     ) -> Result<(Option<(Write, TimeStamp)>, bool)> {
-        if self.assertion == Assertion::None {
+        if self.assertion == Assertion::None
+            || self.txn_props.assertion_level == AssertionLevel::Off
+        {
             return Ok((None, false));
         }
 
@@ -596,8 +609,12 @@ fn async_commit_timestamps(
 
 // TiKV may fails to write pessimistic locks due to pipelined process.
 // If the data is not changed after acquiring the lock, we can still prewrite the key.
-fn amend_pessimistic_lock<S: Snapshot>(key: &Key, reader: &mut SnapshotReader<S>) -> Result<()> {
-    if let Some((commit_ts, _)) = reader.seek_write(key, TimeStamp::max())? {
+fn amend_pessimistic_lock<S: Snapshot>(
+    mutation: &PrewriteMutation,
+    reader: &mut SnapshotReader<S>,
+) -> Result<()> {
+    let write = reader.seek_write(&mutation.key, TimeStamp::max())?;
+    if let Some((commit_ts, _)) = write.as_ref() {
         // The invariants of pessimistic locks are:
         //   1. lock's for_update_ts >= key's latest commit_ts
         //   2. lock's for_update_ts >= txn's start_ts
@@ -607,19 +624,19 @@ fn amend_pessimistic_lock<S: Snapshot>(key: &Key, reader: &mut SnapshotReader<S>
         // However, we can't get lock's for_update_ts in current implementation (txn's for_update_ts is updated for each DML),
         // we can only use txn's start_ts to check -- If the key's commit_ts is less than txn's start_ts, it's less than
         // lock's for_update_ts too.
-        if commit_ts >= reader.start_ts {
+        if *commit_ts >= reader.start_ts {
             warn!(
                 "prewrite failed (pessimistic lock not found)";
                 "start_ts" => reader.start_ts,
-                "commit_ts" => commit_ts,
-                "key" => %key
+                "commit_ts" => *commit_ts,
+                "key" => %mutation.key
             );
             MVCC_CONFLICT_COUNTER
                 .pipelined_acquire_pessimistic_lock_amend_fail
                 .inc();
             return Err(ErrorInner::PessimisticLockNotFound {
                 start_ts: reader.start_ts,
-                key: key.clone().into_raw()?,
+                key: mutation.key.clone().into_raw()?,
             }
             .into());
         }
@@ -629,6 +646,10 @@ fn amend_pessimistic_lock<S: Snapshot>(key: &Key, reader: &mut SnapshotReader<S>
     MVCC_CONFLICT_COUNTER
         .pipelined_acquire_pessimistic_lock_amend_success
         .inc();
+
+    // Check assertion after amending.
+    mutation.check_assertion(reader, &write.map(|(w, ts)| (ts, w)), true)?;
+
     Ok(())
 }
 
@@ -660,6 +681,7 @@ pub mod tests {
             min_commit_ts: TimeStamp::default(),
             need_old_value: false,
             is_retry_request: false,
+            assertion_level: AssertionLevel::Off,
         }
     }
 
@@ -685,6 +707,7 @@ pub mod tests {
             min_commit_ts: 10.into(),
             need_old_value: true,
             is_retry_request: false,
+            assertion_level: AssertionLevel::Off,
         }
     }
 
@@ -994,6 +1017,7 @@ pub mod tests {
                 min_commit_ts: TimeStamp::default(),
                 need_old_value: true,
                 is_retry_request: false,
+                assertion_level: AssertionLevel::Off,
             },
             Mutation::make_check_not_exists(Key::from_raw(key)),
             &None,
@@ -1025,6 +1049,7 @@ pub mod tests {
             min_commit_ts: 10.into(),
             need_old_value: true,
             is_retry_request: false,
+            assertion_level: AssertionLevel::Off,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         let (_, old_value) = prewrite(
@@ -1074,6 +1099,7 @@ pub mod tests {
             min_commit_ts: 10.into(),
             need_old_value: true,
             is_retry_request: false,
+            assertion_level: AssertionLevel::Off,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         let (_, old_value) = prewrite(
@@ -1182,6 +1208,7 @@ pub mod tests {
             min_commit_ts: 51.into(),
             need_old_value: true,
             is_retry_request: false,
+            assertion_level: AssertionLevel::Off,
         };
 
         let cases = vec![
@@ -1241,6 +1268,7 @@ pub mod tests {
             min_commit_ts: 51.into(),
             need_old_value: true,
             is_retry_request: false,
+            assertion_level: AssertionLevel::Off,
         };
 
         let cases: Vec<_> = vec![
@@ -1365,6 +1393,7 @@ pub mod tests {
                 min_commit_ts: TimeStamp::default(),
                 need_old_value: true,
                 is_retry_request: false,
+                assertion_level: AssertionLevel::Off,
             };
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let cm = ConcurrencyManager::new(start_ts);
@@ -1418,6 +1447,7 @@ pub mod tests {
             min_commit_ts: TimeStamp::default(),
             need_old_value: true,
             is_retry_request: false,
+            assertion_level: AssertionLevel::Off,
         };
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new(start_ts);
@@ -1558,6 +1588,7 @@ pub mod tests {
                     min_commit_ts: TimeStamp::default(),
                     need_old_value: true,
                     is_retry_request: false,
+                    assertion_level: AssertionLevel::Off,
                 };
                 let (_, old_value) = prewrite(
                     &mut txn,
@@ -1593,6 +1624,7 @@ pub mod tests {
                     min_commit_ts: TimeStamp::default(),
                     need_old_value: true,
                     is_retry_request: false,
+                    assertion_level: AssertionLevel::Off,
                 };
                 let (_, old_value) = prewrite(
                     &mut txn,

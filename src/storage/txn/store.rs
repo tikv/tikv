@@ -635,7 +635,7 @@ mod tests {
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CfName;
     use engine_traits::{IterOptions, ReadOptions};
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{AssertionLevel, Context};
     use std::sync::Arc;
 
     const KEY_PREFIX: &str = "key_prefix";
@@ -693,6 +693,7 @@ mod tests {
                             min_commit_ts: TimeStamp::default(),
                             need_old_value: false,
                             is_retry_request: false,
+                            assertion_level: AssertionLevel::Off,
                         },
                         Mutation::make_put(Key::from_raw(key), key.to_vec()),
                         &None,
