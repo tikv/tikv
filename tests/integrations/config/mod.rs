@@ -685,6 +685,7 @@ fn test_serde_custom_tikv_config() {
         num_threads: 456,
         batch_size: 7,
         sst_max_size: ReadableSize::mb(789),
+        ..Default::default()
     };
     value.import = ImportConfig {
         num_threads: 123,
