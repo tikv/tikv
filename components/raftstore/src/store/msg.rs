@@ -15,7 +15,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use kvproto::{import_sstpb::SstMeta, kvrpcpb::DiskFullOpt};
 use raft::SnapshotStatus;
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
@@ -101,7 +101,7 @@ where
             cb,
             proposed_cb,
             committed_cb,
-            request_times: SmallVec::new(),
+            request_times: smallvec![Instant::now()],
         }
     }
 
@@ -497,7 +497,6 @@ pub enum PeerMsg<EK: KvEngine> {
     Persisted {
         peer_id: u64,
         ready_number: u64,
-        send_time: Instant,
     },
     /// Message that is not important and can be dropped occasionally.
     CasualMessage(CasualMessage<EK>),
@@ -525,7 +524,6 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::Persisted {
                 peer_id,
                 ready_number,
-                ..
             } => write!(
                 fmt,
                 "Persisted peer_id {}, ready_number {}",

@@ -64,6 +64,10 @@ impl RocksWriteBatch {
     pub fn get_db(&self) -> &DB {
         self.db.as_ref()
     }
+
+    pub fn merge(&mut self, src: &Self) {
+        self.wb.append(src.wb.data());
+    }
 }
 
 impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
