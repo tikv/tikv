@@ -2,13 +2,13 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use super::{Result};
+use super::Result;
 use collections::HashMap;
 use crossbeam::channel::{Receiver, Sender};
 
+use tikv_util::error;
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::sys::SysQuota;
-use tikv_util::{error};
 
 #[derive(Clone)]
 pub struct SoftLimit {
@@ -346,7 +346,7 @@ mod softlimit_test {
             "map = {:?}",
             cpu_limit.metrics.get_cpu_usages()
         );
-        cpu_limit.metrics.used = 0;
+        cpu_limit.metrics.stop_busy();
         cpu_limit.exec_over(&limit).unwrap();
         assert_eq!(limit.current_cap(), cpu_count);
     }
@@ -359,7 +359,7 @@ mod softlimit_test {
         let limit = SoftLimit::new(cpu_count);
         cpu_limit.exec_over(&limit).unwrap();
         assert_eq!(limit.current_cap(), cpu_count - 2);
-        cpu_limit.metrics.used = 0;
+        cpu_limit.metrics.stop_busy();
         cpu_limit.exec_over(&limit).unwrap();
         assert_eq!(limit.current_cap(), cpu_count - 1);
     }
