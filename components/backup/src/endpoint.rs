@@ -38,7 +38,7 @@ use yatp::task::callback::{Handle, TaskCell};
 use yatp::ThreadPool;
 
 use crate::metrics::*;
-use crate::softlimit::{SoftLimit, SoftLimitByCPU};
+use crate::softlimit::{SoftLimit, SoftLimitByCpu};
 use crate::writer::BackupWriterBuilder;
 use crate::Error;
 use crate::*;
@@ -441,7 +441,7 @@ impl SoftLimitKeeper {
             auto_tune_remain_threads,
             ..
         } = *config.0.read().unwrap();
-        let mut cpu_quota = SoftLimitByCPU::with_remain(auto_tune_remain_threads);
+        let mut cpu_quota = SoftLimitByCpu::with_remain(auto_tune_remain_threads);
         let limit = SoftLimit::new(num_threads);
         BACKUP_SOFTLIMIT_GAGUE.set(limit.current_cap() as _);
         let limit_cloned = limit.clone();

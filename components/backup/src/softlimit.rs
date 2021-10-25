@@ -117,7 +117,7 @@ pub trait CpuStatistics {
     fn get_cpu_usages(&self) -> Self::Container;
 }
 
-pub struct SoftLimitByCPU<Statistics> {
+pub struct SoftLimitByCpu<Statistics> {
     pub(crate) metrics: Statistics,
     total_time: f64,
     keep_remain: usize,
@@ -132,7 +132,7 @@ impl CpuStatistics for RefCell<ThreadInfoStatistics> {
     }
 }
 
-impl<Statistics: CpuStatistics> SoftLimitByCPU<Statistics> {
+impl<Statistics: CpuStatistics> SoftLimitByCpu<Statistics> {
     /// returns the current idle processor.
     /// **note that this might get inaccuracy if there are other processes
     /// running in the same CPU.**
@@ -177,7 +177,7 @@ impl<Statistics: CpuStatistics> SoftLimitByCPU<Statistics> {
     }
 }
 
-impl SoftLimitByCPU<RefCell<ThreadInfoStatistics>> {
+impl SoftLimitByCpu<RefCell<ThreadInfoStatistics>> {
     pub fn with_remain(remain: usize) -> Self {
         let total = SysQuota::cpu_cores_quota();
         let metrics = RefCell::new(ThreadInfoStatistics::new());
@@ -203,7 +203,7 @@ mod softlimit_test {
     use crossbeam::channel;
     use tikv_util::{defer, sys::SysQuota};
 
-    use super::{CpuStatistics, SoftLimit, SoftLimitByCPU};
+    use super::{CpuStatistics, SoftLimit, SoftLimitByCpu};
 
     #[derive(Default)]
     struct TestCpuEnv {
@@ -221,9 +221,9 @@ mod softlimit_test {
     }
 
     impl TestCpuEnv {
-        fn mock_busy(n: usize) -> SoftLimitByCPU<Self> {
+        fn mock_busy(n: usize) -> SoftLimitByCpu<Self> {
             let env = Self { used: n as u64 };
-            SoftLimitByCPU {
+            SoftLimitByCpu {
                 metrics: env,
                 total_time: SysQuota::cpu_cores_quota(),
                 keep_remain: 0,
