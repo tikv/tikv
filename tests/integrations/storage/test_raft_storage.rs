@@ -59,7 +59,11 @@ fn test_raft_storage() {
     let region_id = ctx.get_region_id();
     ctx.set_region_id(region_id + 1);
     assert!(storage.get(ctx.clone(), raw_key.clone(), 20).is_err());
-    assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
+    assert!(
+        storage
+            .batch_get(ctx.clone(), &[raw_key.clone()], 20)
+            .is_err()
+    );
     assert!(storage.scan(ctx.clone(), key, None, 1, false, 20).is_err());
     assert!(storage.scan_locks(ctx, 20, None, None, 100).is_err());
 }
@@ -166,7 +170,11 @@ fn test_raft_storage_store_not_match() {
     } else {
         panic!("expect store_not_match, but got {:?}", res);
     }
-    assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
+    assert!(
+        storage
+            .batch_get(ctx.clone(), &[raw_key.clone()], 20)
+            .is_err()
+    );
     assert!(storage.scan(ctx.clone(), key, None, 1, false, 20).is_err());
     assert!(storage.scan_locks(ctx, 20, None, None, 100).is_err());
 }

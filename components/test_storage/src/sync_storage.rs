@@ -135,7 +135,7 @@ impl<E: Engine> SyncTestStorage<E> {
     pub fn batch_get(
         &self,
         ctx: Context,
-        keys: &[Key],
+        keys: &[Vec<u8>],
         start_ts: impl Into<TimeStamp>,
     ) -> Result<(Vec<Result<KvPair>>, Statistics, PerfStatisticsDelta)> {
         block_on(self.store.batch_get(ctx, keys.to_owned(), start_ts.into()))

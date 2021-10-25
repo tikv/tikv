@@ -610,7 +610,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let mut ctx = req.take_context();
                     let region_id = ctx.get_region_id();
                     let peer = ctx.get_peer();
-                    let key = Key::from_raw(req.get_key());
+                    let raw_key = req.get_key();
+                    let key = Key::from_raw(raw_key);
                     tls_collect_query(
                         region_id,
                         peer,
@@ -624,7 +625,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         api_version,
                         ctx.api_version,
                         CMD,
-                        iter::once(&key.as_encoded()[..]),
+                        iter::once(raw_key),
                     )?;
 
                     let start_ts = req.get_version().into();
@@ -740,7 +741,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     pub fn batch_get(
         &self,
         mut ctx: Context,
-        keys: Vec<Key>,
+        raw_keys: Vec<Vec<u8>>,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, Statistics, PerfStatisticsDelta)>> {
         const CMD: CommandKind = CommandKind::batch_get;
@@ -749,6 +750,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
+
+        let keys: Vec<Key> = raw_keys.iter().map(|x| Key::from_raw(x)).collect();
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -772,7 +775,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     api_version,
                     ctx.api_version,
                     CMD,
-                    keys.iter().map(|x| &x.as_encoded()[..]),
+                    raw_keys.iter().map(|x| &x[..]),
                 )?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
@@ -2676,7 +2679,7 @@ mod tests {
             },
             block_on(storage.batch_get(
                 Context::default(),
-                vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
+                vec![b"c".to_vec(), b"d".to_vec()],
                 1.into(),
             )),
         );
@@ -3296,7 +3299,7 @@ mod tests {
             vec![None],
             block_on(storage.batch_get(
                 Context::default(),
-                vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
+                vec![b"c".to_vec(), b"d".to_vec()],
                 2.into(),
             ))
             .unwrap()
@@ -3326,12 +3329,7 @@ mod tests {
             ],
             block_on(storage.batch_get(
                 Context::default(),
-                vec![
-                    Key::from_raw(b"c"),
-                    Key::from_raw(b"x"),
-                    Key::from_raw(b"a"),
-                    Key::from_raw(b"b"),
-                ],
+                vec![b"c".to_vec(), b"x".to_vec(), b"a".to_vec(), b"b".to_vec()],
                 5.into(),
             ))
             .unwrap()
@@ -6606,8 +6604,12 @@ mod tests {
 
         // Test batch_get
         let key_error = extract_key_error(
-            &block_on(storage.batch_get(ctx.clone(), vec![Key::from_raw(b"a"), key], 100.into()))
-                .unwrap_err(),
+            &block_on(storage.batch_get(
+                ctx.clone(),
+                vec![b"a".to_vec(), b"key".to_vec()],
+                100.into(),
+            ))
+            .unwrap_err(),
         );
         assert_eq!(key_error.get_locked().get_key(), b"key");
 

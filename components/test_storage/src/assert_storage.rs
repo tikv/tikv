@@ -260,7 +260,7 @@ impl<E: Engine> AssertionStorage<E> {
     }
 
     pub fn batch_get_ok(&self, keys: &[&[u8]], ts: impl Into<TimeStamp>, expect: Vec<&[u8]>) {
-        let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
+        let keys: Vec<Vec<u8>> = keys.iter().map(|x| x.to_vec()).collect();
         let result: Vec<Vec<u8>> = self
             .store
             .batch_get(self.ctx.clone(), &keys, ts.into())
@@ -274,7 +274,7 @@ impl<E: Engine> AssertionStorage<E> {
     }
 
     pub fn batch_get_err(&self, keys: &[&[u8]], ts: impl Into<TimeStamp>) {
-        let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
+        let keys: Vec<Vec<u8>> = keys.iter().map(|x| x.to_vec()).collect();
         assert!(
             self.store
                 .batch_get(self.ctx.clone(), &keys, ts.into())
