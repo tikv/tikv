@@ -77,15 +77,12 @@ pub trait ExternalStorage: 'static + Send + Sync {
         let min_read_speed: usize = 8192;
 
         let mut input = match file_crypter {
-            Some(x) => {
-                let iv = Iv::from_slice(&x.iv)?;
-                Box::new(DecrypterReader::new(
-                    reader,
-                    encryption_method_from_db_encryption_method(x.method),
-                    &x.key,
-                    iv,
-                )?)
-            }
+            Some(x) => Box::new(DecrypterReader::new(
+                reader,
+                encryption_method_from_db_encryption_method(x.method),
+                &x.key,
+                Iv::from_slice(&x.iv)?,
+            )?),
             None => reader,
         };
 

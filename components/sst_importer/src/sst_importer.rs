@@ -221,7 +221,7 @@ impl SSTImporter {
             let file_crypter = crypter.map(|c| FileEncryptionInfo {
                 method: encryption_method_to_db_encryption_method(c.cipher_type),
                 key: c.cipher_key,
-                iv: meta.cipher_iv.clone(),
+                iv: meta.cipher_iv.to_owned(),
             });
 
             let result = ext_storage.restore(

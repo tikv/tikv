@@ -396,15 +396,11 @@ where
             // a download task.
             // Unfortunately, this currently can't happen because the S3Storage
             // is not Send + Sync. See the documentation of S3Storage for reason.
-            let cipher = if req.has_cipher_info() {
-                let c = req.get_cipher_info().clone();
-                match c.cipher_type {
-                    EncryptionMethod::Plaintext => None,
-                    _ => Some(c),
-                }
-            } else {
-                None
-            };
+            let cipher = req
+                .cipher_info
+                .to_owned()
+                .into_option()
+                .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
 
             let res = importer.download::<E>(
                 req.get_sst(),
