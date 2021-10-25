@@ -2,13 +2,13 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use super::{Error, Result};
+use super::{Result};
 use collections::HashMap;
 use crossbeam::channel::{Receiver, Sender};
-use tikv::storage::Statistics;
+
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::sys::SysQuota;
-use tikv_util::{error, warn};
+use tikv_util::{error};
 
 #[derive(Clone)]
 pub struct SoftLimit {
