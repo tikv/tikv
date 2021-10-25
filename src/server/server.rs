@@ -474,9 +474,11 @@ mod tests {
                 .build(),
         );
 
+        let (tx, _rx) = mpsc::channel();
         let mut gc_worker = GcWorker::new(
             storage.get_engine(),
             router.clone(),
+            tx,
             Default::default(),
             Default::default(),
         );

@@ -1,6 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::test_replica_stale_read::{get_tso, PeerClient};
 use kvproto::disk_usage::DiskUsage;
 use kvproto::kvrpcpb::{DiskFullOpt, Op};
 use kvproto::metapb::Region;
