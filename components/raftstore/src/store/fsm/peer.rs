@@ -1297,14 +1297,19 @@ where
             }
             let disk_full_peers = &self.fsm.peer.disk_full_peers;
 
+            // update refill every 10s when disk full happen.
             disk_full_peers.is_empty()
                 || disk_full_peers
                     .get(peer_id)
                     .map_or(true, |x| x != msg.disk_usage)
-                || cur
+                || (cur
                     .duration_since(self.fsm.peer.latest_majority_set_update_on_disk_full)
                     .as_secs()
-                    > 10 // update refill every 10s when disk full happen.
+                    > 10
+                    || (|| {
+                        fail_point!("disk_full_with_down_node", |_| true);
+                        false
+                    })())
         };
         if refill_disk_usages {
             let prev = self.fsm.peer.disk_full_peers.get(peer_id);
@@ -1357,7 +1362,7 @@ where
 
         let msg_type = msg.get_message().get_msg_type();
         if matches!(self.ctx.self_disk_usage, DiskUsage::AlreadyFull)
-            && [MessageType::MsgTimeoutNow].contains(&msg_type)
+            && MessageType::MsgTimeoutNow == msg_type
         {
             debug!(
                 "skip {:?} because of disk full", msg_type;

@@ -9,6 +9,7 @@ use raftstore::store::msg::*;
 use std::thread;
 use std::time::Duration;
 use test_raftstore::*;
+use tikv_util::config::ReadableDuration;
 use tikv_util::time::Instant;
 
 fn assert_disk_full(resp: &RaftCmdResponse) {
@@ -192,7 +193,7 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
     let prewrite_ts = get_tso(&pd_client);
     let res = lead_client.try_kv_prewrite(
         vec![new_mutation(Op::Put, b"k3", b"v3")],
-        b"k4".to_vec(),
+        b"k3".to_vec(),
         prewrite_ts,
         DiskFullOpt::NotAllowedOnFull,
     );
@@ -218,7 +219,7 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
     let prewrite_ts = get_tso(&pd_client);
     let res = lead_client.try_kv_prewrite(
         vec![new_mutation(Op::Put, b"k5", b"v5")],
-        b"k4".to_vec(),
+        b"k5".to_vec(),
         prewrite_ts,
         DiskFullOpt::AllowedOnAlmostFull,
     );
@@ -248,8 +249,8 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
     // Test pessimistic commit is allowed.
     fail::cfg(get_fp(usage, 1), "return").unwrap();
     let res = lead_client.try_kv_prewrite(
-        vec![new_mutation(Op::Put, b"k5", b"v5")],
-        b"k4".to_vec(),
+        vec![new_mutation(Op::Put, b"k7", b"v7")],
+        b"k7".to_vec(),
         start_ts,
         DiskFullOpt::AllowedOnAlmostFull,
     );
@@ -384,4 +385,201 @@ fn test_disk_full_followers_with_hibernate_regions() {
     // The leader should know peer 2's disk usage changes, because it's keeping to tick.
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+}
+
+// check the region new leader is elected.
+fn assert_region_merged<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    left_region_key: &[u8],
+    right_region_key: &[u8],
+) {
+    let timer = Instant::now();
+    loop {
+        if timer.saturating_elapsed() > Duration::from_secs(5) {
+            panic!("region merge failed");
+        }
+        let region_left = cluster.get_region(left_region_key);
+        let region_right = cluster.get_region(right_region_key);
+        if region_left.get_id() != region_right.get_id() {
+            continue;
+        } else {
+            break;
+        }
+    }
+}
+
+#[test]
+fn test_merge_on_majority_disk_full() {
+    let mut cluster = new_server_cluster(0, 3);
+    // To ensure the thread has full store disk usage infomation.
+    cluster.cfg.raft_store.store_batch_system.pool_size = 1;
+    cluster.pd_client.disable_default_operator();
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let region1 = cluster.get_region(b"k1");
+    let region2 = cluster.get_region(b"k3");
+    let peer_1_1 = region1
+        .get_peers()
+        .iter()
+        .find(|x| x.get_store_id() == 1)
+        .cloned()
+        .unwrap();
+    let peer_2_2 = region2
+        .get_peers()
+        .iter()
+        .find(|x| x.get_store_id() == 2)
+        .cloned()
+        .unwrap();
+
+    cluster.must_transfer_leader(region1.get_id(), peer_1_1);
+    cluster.must_transfer_leader(region2.get_id(), peer_2_2);
+    // To ensure followers have reported disk usages to the leader.
+    for i in 1..3 {
+        fail::cfg(get_fp(DiskUsage::AlmostFull, i), "return").unwrap();
+    }
+    for i in [2u64, 3] {
+        ensure_disk_usage_is_reported(&mut cluster, i, i, &region1);
+    }
+    for i in [1u64, 3] {
+        ensure_disk_usage_is_reported(&mut cluster, i, i, &region2);
+    }
+    cluster.must_try_merge(region1.get_id(), region2.get_id());
+    assert_region_merged(&mut cluster, b"k1", b"k3");
+
+    for i in 1..3 {
+        fail::remove(get_fp(DiskUsage::AlmostFull, i));
+    }
+}
+
+#[test]
+fn test_almost_and_already_full_behavior() {
+    let mut cluster = new_server_cluster(0, 5);
+    // To ensure the thread has full store disk usage infomation.
+    cluster.cfg.raft_store.store_batch_system.pool_size = 1;
+    cluster.pd_client.disable_default_operator();
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    let region = cluster.get_region(b"k1");
+    cluster.must_transfer_leader(region.get_id(), new_peer(1, 1));
+    // To ensure followers have reported disk usages to the leader.
+    for i in [2u64, 3] {
+        fail::cfg(get_fp(DiskUsage::AlmostFull, i), "return").unwrap();
+    }
+    for i in [4u64, 5] {
+        fail::cfg(get_fp(DiskUsage::AlreadyFull, i), "return").unwrap();
+    }
+    for i in 1..5 {
+        ensure_disk_usage_is_reported(&mut cluster, i + 1, i + 1, &region);
+    }
+
+    let lead_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
+    let prewrite_ts = get_tso(&cluster.pd_client);
+    let res = lead_client.try_kv_prewrite(
+        vec![new_mutation(Op::Put, b"k2", b"v2")],
+        b"k2".to_vec(),
+        prewrite_ts,
+        DiskFullOpt::AllowedOnAlmostFull,
+    );
+    assert!(!res.get_region_error().has_disk_full());
+    lead_client.must_kv_commit(
+        vec![b"k2".to_vec()],
+        prewrite_ts,
+        get_tso(&cluster.pd_client),
+    );
+
+    let index_1 = cluster.raft_local_state(1, 1).last_index;
+    let index_2 = cluster.raft_local_state(1, 2).last_index;
+    let index_3 = cluster.raft_local_state(1, 3).last_index;
+    let index_4 = cluster.raft_local_state(1, 4).last_index;
+    let index_5 = cluster.raft_local_state(1, 5).last_index;
+    assert!(index_1 == index_2 && index_1 == index_3 && index_1 > index_4 && index_1 > index_5);
+
+    for i in [2u64, 3] {
+        fail::remove(get_fp(DiskUsage::AlmostFull, i));
+    }
+    for i in [4u64, 5] {
+        fail::remove(get_fp(DiskUsage::AlreadyFull, i));
+    }
+}
+
+fn wait_down_peers_reported<T: Simulator>(
+    cluster: &Cluster<T>,
+    total_down_count: u64,
+    target_report_peer: u64,
+) {
+    let mut peers = cluster.get_down_peers();
+    let timer = Instant::now();
+    loop {
+        if timer.saturating_elapsed() > Duration::from_secs(5) {
+            panic!("Leader cannot change when the only disk full node is leader");
+        }
+
+        if peers.len() == total_down_count as usize && peers.contains_key(&target_report_peer) {
+            return;
+        }
+        sleep_ms(10);
+        peers = cluster.get_down_peers();
+    }
+}
+
+#[test]
+fn test_down_node_when_disk_full() {
+    let mut cluster = new_server_cluster(0, 5);
+    // To ensure the thread has full store disk usage infomation.
+    cluster.cfg.raft_store.store_batch_system.pool_size = 1;
+    cluster.cfg.raft_store.max_peer_down_duration = ReadableDuration::secs(1);
+    cluster.pd_client.disable_default_operator();
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_put(b"k1", b"v1");
+    let region = cluster.get_region(b"k1");
+    for i in 3..6 {
+        fail::cfg(get_fp(DiskUsage::AlmostFull, i), "return").unwrap();
+        ensure_disk_usage_is_reported(&mut cluster, i, i, &region);
+    }
+
+    let lead_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
+    let prewrite_ts = get_tso(&cluster.pd_client);
+    let res = lead_client.try_kv_prewrite(
+        vec![new_mutation(Op::Put, b"k2", b"v2")],
+        b"k2".to_vec(),
+        prewrite_ts,
+        DiskFullOpt::AllowedOnAlmostFull,
+    );
+    assert!(!res.get_region_error().has_disk_full());
+    lead_client.must_kv_commit(
+        vec![b"k2".to_vec()],
+        prewrite_ts,
+        get_tso(&cluster.pd_client),
+    );
+
+    cluster.stop_node(2);
+    wait_down_peers_reported(&cluster, 1, 2u64);
+
+    fail::cfg("disk_full_with_down_node", "return").unwrap();
+    let prewrite_ts = get_tso(&cluster.pd_client);
+    let res = lead_client.try_kv_prewrite(
+        vec![new_mutation(Op::Put, b"k3", b"v3")],
+        b"k3".to_vec(),
+        prewrite_ts,
+        DiskFullOpt::AllowedOnAlmostFull,
+    );
+    assert!(!res.get_region_error().has_disk_full());
+    lead_client.must_kv_commit(
+        vec![b"k3".to_vec()],
+        prewrite_ts,
+        get_tso(&cluster.pd_client),
+    );
+
+    for i in 3..6 {
+        fail::remove(get_fp(DiskUsage::AlmostFull, i));
+    }
+    fail::remove("disk_full_with_down_node");
 }
