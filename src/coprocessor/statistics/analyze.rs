@@ -356,11 +356,6 @@ impl<S: Snapshot> RowSampleBuilder<S> {
 
         let mut is_drained = false;
         let mut time_slice_start = Instant::now();
-        // let mut collector = Box::new(BernoulliRowSampleCollector::new(
-        //     self.max_sample_size,
-        //     self.max_fm_sketch_size,
-        //     self.columns_info.len() + self.column_groups.len(),
-        // ));
         let mut collector = self.new_collector();
         while !is_drained {
             let time_slice_elapsed = time_slice_start.saturating_elapsed();
