@@ -22,12 +22,8 @@ const MIN_REPORT_RECEIVER_INTERVAL: ReadableDuration = ReadableDuration::secs(5)
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    /// Turn on resource metering.
-    ///
-    /// This configuration will affect all resource modules such as cpu/summary.
-    ///
-    /// ### Deprecated
-    /// Whether resource metering is enabled or not depends on external subscriptions only.
+    /// Deprecated: whether resource metering is enabled or not depends on
+    ///             external subscriptions.
     pub enabled: bool,
 
     /// Data reporting destination address.

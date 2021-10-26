@@ -15,8 +15,9 @@ use tikv_util::{defer, warn};
 
 /// `ResourceMeteringPublisher` implements [ResourceMeteringPubSub].
 ///
-/// If a client subscribes to resource metering records, the `ResourceMeteringPublisher` is responsible
-/// for registering them with the reporter. Then the reporter sends data to the client periodically.
+/// If a client subscribes to resource metering records, the `ResourceMeteringPublisher`
+/// is responsible for registering them to the reporter. Then the reporter sends data to
+/// the client periodically.
 ///
 /// [ResourceMeteringPubSub]: kvproto::resource_usage_agent_grpc::ResourceMeteringPubSub
 #[derive(Clone)]
@@ -39,23 +40,22 @@ impl ResourceMeteringPubSub for ResourceMeteringPublisher {
     ) {
         // The `tx` is for the reporter and the `rx` is for the gRPC stream sender.
         //
-        // The reporter calls `tx.try_send` roughly every minute. If the the gRPC stream sender
-        // does not send data out over the network in time, it discards the incoming records to
-        // prevent memory overflow.
+        // The reporter calls `tx.try_send` roughly every minute. If the the gRPC
+        // stream sender does not send data out over the network in time, it discards
+        // the incoming records to prevent memory overflow.
         let (tx, mut rx) = channel(1);
 
-        // If there is an issue with the RPC, e.g. the connection is disconnected, the routine that
-        // drives the gRPC stream sender will exit but the `tx` installed on the reporter will leak.
+        // If there is an issue with the RPC, e.g. the connection is disconnected,
+        // the routine that drives the gRPC stream sender will exit but the `tx`
+        // installed on the reporter will leak.
         //
-        // The AtomicBool `is_closed` is used to notify the reporter that the subscription is finished
-        // and can perform a cleanup.
+        // The AtomicBool `is_closed` is used to notify the reporter that the
+        // subscription is finished and can perform a cleanup.
         let is_closed = Arc::new(AtomicBool::new(false));
-        self.client_registry.register(Box::new(PubClient {
-            tx,
-            is_closed: is_closed.clone(),
-        }));
+        let client = PubClient::new(tx, is_closed.clone());
+        self.client_registry.register(Box::new(client));
 
-        ctx.spawn(async move {
+        let report_task = async move {
             defer! {{ is_closed.store(true, Ordering::SeqCst);}}
             loop {
                 let records = rx.next().await;
@@ -63,13 +63,14 @@ impl ResourceMeteringPubSub for ResourceMeteringPublisher {
                     break;
                 }
 
-                let records: Arc<Records> = records.unwrap();
+                let records = records.unwrap();
                 for (tag, record) in &records.records {
                     let mut req = ResourceUsageRecord::default();
                     req.set_resource_group_tag(tag.clone());
                     req.set_record_list_timestamp_sec(record.timestamps.clone());
                     req.set_record_list_cpu_time_ms(record.cpu_time_list.clone());
-                    if let Err(err) = sink.send((req, WriteFlags::default())).await {
+                    let resp = sink.send((req, WriteFlags::default())).await;
+                    if let Err(err) = resp {
                         warn!("failed to send records"; "error" => ?err);
                         return;
                     };
@@ -79,19 +80,28 @@ impl ResourceMeteringPubSub for ResourceMeteringPublisher {
                     let mut req = ResourceUsageRecord::default();
                     req.set_record_list_timestamp_sec(others.keys().copied().collect());
                     req.set_record_list_cpu_time_ms(others.values().map(|r| r.cpu_time).collect());
-                    if let Err(err) = sink.send((req, WriteFlags::default())).await {
+                    let resp = sink.send((req, WriteFlags::default())).await;
+                    if let Err(err) = resp {
                         warn!("failed to send records"; "error" => ?err);
                         return;
                     }
                 }
             }
-        });
+        };
+
+        ctx.spawn(report_task);
     }
 }
 
 struct PubClient {
     tx: Sender<Arc<Records>>,
     is_closed: Arc<AtomicBool>,
+}
+
+impl PubClient {
+    fn new(tx: Sender<Arc<Records>>, is_closed: Arc<AtomicBool>) -> Self {
+        Self { tx, is_closed }
+    }
 }
 
 impl Client for PubClient {

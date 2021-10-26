@@ -56,7 +56,7 @@ impl Client for GrpcClient {
         // address won't be empty here
         if self.client.is_none() || self.prev_address != address {
             self.init_client(&address);
-            self.prev_address = address.clone();
+            self.prev_address = address;
         }
         let client = self.client.as_ref().unwrap();
         let call_opt = CallOption::default().timeout(Duration::from_secs(2));
