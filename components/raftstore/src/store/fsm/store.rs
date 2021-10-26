@@ -2486,6 +2486,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn on_create_peer(&self, region: Region) {
+	info!("creating a peer"; "peer" => ?region);
         let mut kv_wb = self.ctx.engines.kv.write_batch();
         let region_state_key = keys::region_state_key(region.get_id());
         match self

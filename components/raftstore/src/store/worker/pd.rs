@@ -1072,6 +1072,7 @@ where
         }
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
+	let stats_copy = stats.clone();
         let resp = self.pd_client.store_heartbeat(stats, optional_report);
         let f = async move {
             match resp.await {
@@ -1080,8 +1081,9 @@ where
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }
                     if resp.get_send_detailed_report_in_next_heartbeat() {
+			info!("asked to send detailed report in the next heartbeat");
                         let task = Task::StoreHeartbeat {
-                            stats: pdpb::StoreStats::new(),
+                            stats: stats_copy,
                             store_info,
                             send_detailed_reports: true,
                         };
@@ -1089,21 +1091,33 @@ where
                             error!("notify pd failed"; "err" => ?e);
                         }
                     } else if resp.has_plan() {
+			info!("asked to execute recovery plan");
                         for create in resp.get_plan().get_creates() {
+			    info!("asked to create region"; "region" => ?create);
                             if let Err(e) = router.send_control(StoreMsg::CreatePeer(create.clone())) {
                                 error!("fail to send creat peer message for recovery"; "err" => ?e);
                             }
                         }
                         for delete in resp.get_plan().get_deletes() {
+			    info!("asked to delete peer"; "peer" => delete);
                             if let Err(e) = router.force_send(*delete, PeerMsg::Destroy(*delete)) {
                                 error!("fail to send delete peer message for recovery"; "err" => ?e);
                             }
                         }
                         for update in resp.get_plan().get_updates() {
+			    info!("asked to update region's range"; "region" => ?update);
                             if let Err(e) = router.force_send(update.get_id().clone(), PeerMsg::UpdateRange(update.clone()))
                             {
                                 error!("fail to send update range message for recovery"; "err" => ?e);
                             }
+                        }
+                        let task = Task::StoreHeartbeat {
+                            stats: stats_copy,
+                            store_info,
+                            send_detailed_reports: true,
+                        };
+                        if let Err(e) = scheduler.schedule(task) {
+                            error!("notify pd failed"; "err" => ?e);
                         }
                     }
                 }
