@@ -7,6 +7,7 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -44,28 +45,39 @@ struct BytesBuffer {
 }
 
 pub fn fetch_all_thread_io_bytes() {
-    for sentinel in THREAD_IO_SENTINEL_VEC.lock().unwrap().iter_mut() {
-        let mut sentinel = sentinel.lock().unwrap();
-        let io_bytes = fetch_exact_thread_io_bytes(&sentinel.id);
+    THREAD_IO_SENTINEL_VEC
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|sentinel| {
+            sentinel
+                .try_lock()
+                .map(|mut sentinel| fetch_locked_sentinel(&mut sentinel))
+                .is_err()
+        })
+        .for_each(|sentinel| {
+            let mut sentinel = sentinel.lock().unwrap();
 
-        let io_type = sentinel.bytes.current_io_type as usize;
-        let last_io_bytes = sentinel.bytes.last_io_bytes;
-        sentinel.bytes.total_io_bytes[io_type] += io_bytes - last_io_bytes;
-        sentinel.bytes.last_io_bytes = io_bytes;
-    }
+            fetch_locked_sentinel(&mut sentinel);
+        });
+}
+
+fn fetch_locked_sentinel(sentinel: &mut MutexGuard<ThreadIOSentinel>) {
+    let io_bytes = fetch_exact_thread_io_bytes(&sentinel.id);
+
+    let io_type = sentinel.bytes.current_io_type;
+    let last_io_bytes = sentinel.bytes.last_io_bytes;
+    sentinel.bytes.total_io_bytes[io_type as usize] += io_bytes - last_io_bytes;
+    sentinel.bytes.last_io_bytes = io_bytes;
 }
 
 pub fn set_io_type(new_io_type: IOType) {
     THREAD_IO_SENTINEL.with(|sentinel| {
         let mut sentinel = sentinel.lock().unwrap();
 
-        let io_bytes = fetch_exact_thread_io_bytes(&sentinel.id);
-        let old_io_type = sentinel.bytes.current_io_type as usize;
-        let last_io_bytes = sentinel.bytes.last_io_bytes;
-        sentinel.bytes.total_io_bytes[old_io_type] += io_bytes - last_io_bytes;
+        fetch_locked_sentinel(&mut sentinel);
 
         sentinel.bytes.current_io_type = new_io_type;
-        sentinel.bytes.last_io_bytes = io_bytes;
     })
 }
 
