@@ -177,6 +177,7 @@ fn process() -> Result<()> {
             StorageType::GCS => create_gcs_storage(&opt)?,
             StorageType::Cloud => create_cloud_storage(&opt)?,
         }),
+        Default::default(),
     )?;
 
     match opt.command {
