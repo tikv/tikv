@@ -1255,6 +1255,7 @@ impl Initializer {
         let mut scanner = ScannerBuilder::new(snap, current)
             .fill_cache(false)
             .range(None, None)
+            .hint_min_ts(Some(self.checkpoint_ts))
             .build_delta_scanner(self.checkpoint_ts, self.txn_extra_op)
             .unwrap();
         let conn_id = self.conn_id;
@@ -1579,9 +1580,14 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+    use std::fmt::Display;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender};
+
     use collections::HashSet;
     use engine_rocks::RocksEngine;
-    use engine_traits::DATA_CFS;
+    use engine_traits::{MiscExt, CF_LOCK, CF_WRITE, DATA_CFS};
     use futures::executor::block_on;
     use futures::StreamExt;
     use kvproto::cdcpb::Header;
@@ -1593,16 +1599,13 @@ mod tests {
     use raftstore::store::msg::CasualMessage;
     use raftstore::store::util::RegionReadProgress;
     use raftstore::store::{ReadDelegate, RegionSnapshot, TrackVer};
-    use std::collections::BTreeMap;
-    use std::fmt::Display;
-    use std::sync::atomic::AtomicU64;
-    use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender};
     use tempfile::TempDir;
-    use test_raftstore::MockRaftStoreRouter;
-    use test_raftstore::TestPdClient;
+    use test_raftstore::{MockRaftStoreRouter, TestPdClient};
     use tikv::server::DEFAULT_CLUSTER_ID;
     use tikv::storage::kv::Engine;
-    use tikv::storage::txn::tests::{must_acquire_pessimistic_lock, must_prewrite_put};
+    use tikv::storage::txn::tests::{
+        must_acquire_pessimistic_lock, must_commit, must_prewrite_put,
+    };
     use tikv::storage::TestEngineBuilder;
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker::{dummy_scheduler, LazyWorker, ReceiverWrapper};
@@ -1817,6 +1820,56 @@ mod tests {
         drop(pool);
         initializer.downstream_state.store(DownstreamState::Normal);
         block_on(initializer.on_change_cmd_response(resp)).unwrap_err();
+
+        worker.stop();
+    }
+
+    #[test]
+    fn test_initializer_scanner() {
+        let temp = TempDir::new().unwrap();
+        let engine = TestEngineBuilder::new()
+            .path(temp.path())
+            .cfs(DATA_CFS)
+            .build()
+            .unwrap();
+
+        for i in 1..100 {
+            let (k, v) = (&[b'k', i], &[b'v', i]);
+            let ts = TimeStamp::new(i as _);
+            must_prewrite_put(&engine, k, v, k, ts);
+        }
+        for i in 101..200 {
+            let k = &[b'k', i - 100];
+            let ts1 = TimeStamp::new((i - 100) as _);
+            let ts2 = TimeStamp::new(i as _);
+            must_commit(&engine, k, ts1, ts2);
+        }
+        engine.kv_engine().flush_cf(CF_WRITE, false).unwrap();
+        engine.kv_engine().flush_cf(CF_LOCK, false).unwrap();
+
+        let (mut worker, pool, mut initializer, _rx, mut drain) =
+            mock_initializer(usize::MAX, 1000);
+
+        // To not block test by barrier.
+        pool.spawn(async move {
+            let mut d = drain.drain();
+            while d.next().await.is_some() {}
+        });
+
+        let region = Region::default();
+        let snap = engine.snapshot(Default::default()).unwrap();
+
+        // Shouldn't read any blocks because all SST files of write CF should be filtered.
+        let perf_instant = PerfStatisticsInstant::new();
+        initializer.checkpoint_ts = 200.into();
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
+        assert_eq!(perf_instant.delta().0.block_read_byte, 0);
+
+        // Should read some blocks for write CF.
+        let perf_instant = PerfStatisticsInstant::new();
+        initializer.checkpoint_ts = 100.into();
+        block_on(initializer.async_incremental_scan(snap, region)).unwrap();
+        assert!(perf_instant.delta().0.block_read_byte > 0);
 
         worker.stop();
     }
