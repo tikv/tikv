@@ -303,7 +303,6 @@ macro_rules! numeric_enum_mod {
                     }
                     i += 1;
                 }
-
                 camel
             }
 
@@ -377,7 +376,7 @@ macro_rules! numeric_enum_mod {
                     }
 
                     let cases = vec![
-                        $(($enum::$variant, stringify!($variant)), )*
+                        $(($enum::$variant, super::to_kebab(stringify!($variant))), )*
                     ];
                     for (e, v) in cases {
                         let holder = EnumHolder { e };
