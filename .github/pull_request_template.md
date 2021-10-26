@@ -25,16 +25,16 @@ Using bullet list if this PR is related to multiple issues.
 
 Tests <!-- At least one of them must be included. -->
 
-- [ ] Unit test
-- [ ] Integration test
-- [ ] Manual test (add detailed scripts or steps below)
-- [ ] No code
+* Unit test
+* Integration test
+* Manual test (add detailed scripts or steps below)
+* No code
 
 Side effects
 
-- [ ] Performance regression: Consumes more CPU
-- [ ] Performance regression: Consumes more Memory
-- [ ] Breaking backward compatibility
+* Performance regression: Consumes more CPU
+* Performance regression: Consumes more Memory
+* Breaking backward compatibility
 
 ### Release note
 
