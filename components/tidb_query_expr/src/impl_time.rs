@@ -829,7 +829,7 @@ pub fn string_string_time_diff(
         Err(_) => return Ok(None),
     };
 
-    duration_duration_time_diff(ctx, arg1, &arg2)
+    duration_duration_time_diff(ctx, &arg1, &arg2)
 }
 
 
