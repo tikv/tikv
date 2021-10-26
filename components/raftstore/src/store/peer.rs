@@ -267,7 +267,7 @@ impl<S: Snapshot> ProposedAdminCmd<S> {
     }
 }
 
-struct CmdEpochChecker<S: Snapshot> {
+pub struct CmdEpochChecker<S: Snapshot> {
     // Although it's a deque, because of the characteristics of the settings from `admin_cmd_epoch_lookup`,
     // the max size of admin cmd is 2, i.e. split/merge and change peer.
     proposed_admin_cmd: VecDeque<ProposedAdminCmd<S>>,
@@ -564,7 +564,7 @@ where
     pub max_ts_sync_status: Arc<AtomicU64>,
 
     /// Check whether this proposal can be proposed based on its epoch.
-    cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
+    pub cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
 
     pub disk_full_peers: DiskFullPeers,
 

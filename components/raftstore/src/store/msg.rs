@@ -130,6 +130,14 @@ where
         }
     }
 
+    pub fn has_proposed_cb(&mut self) -> bool {
+        if let Callback::Write { proposed_cb, .. } = self {
+            proposed_cb.is_some()
+        } else {
+            false
+        }
+    }
+
     pub fn invoke_proposed(&mut self) {
         if let Callback::Write { proposed_cb, .. } = self {
             if let Some(cb) = proposed_cb.take() {

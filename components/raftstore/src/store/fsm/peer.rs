@@ -59,15 +59,15 @@ use crate::store::metrics::*;
 use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
 use crate::store::peer::{ConsistencyState, Peer, PersistSnapshotResult, StaleState};
 use crate::store::transport::Transport;
-use crate::store::util::{is_learner, KeysInfoFormatter};
+use crate::store::util::{admin_cmd_epoch_lookup, is_learner, KeysInfoFormatter};
 use crate::store::worker::{
     ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
 };
-use crate::store::PdTask;
 use crate::store::{
     util, AbstractPeer, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTicks, RaftCommand,
     SignificantMsg, SnapKey, StoreMsg,
 };
+use crate::store::{PdTask, RequestInspector};
 use crate::{Error, Result};
 
 /// Limits the maximum number of regions returned by error.
@@ -127,6 +127,8 @@ where
     can_batch_limit: u64,
     should_propose_size: u64,
     batch_req_size: u64,
+    has_proposed_cb: bool,
+    header_checked: Option<bool>,
     request: Option<RaftCmdRequest>,
     callbacks: Vec<(Callback<E::Snapshot>, usize)>,
 }
@@ -334,6 +336,8 @@ where
             can_batch_limit: (cfg.raft_entry_max_size.0 as f64 * 0.2) as u64,
             should_propose_size: (cfg.raft_entry_max_size.0 as f64 * 0.4) as u64,
             batch_req_size: 0,
+            has_proposed_cb: false,
+            header_checked: None,
             request: None,
             callbacks: vec![],
         }
@@ -367,7 +371,7 @@ where
         let req_num = cmd.request.get_requests().len();
         let RaftCommand {
             mut request,
-            callback,
+            mut callback,
             ..
         } = cmd;
         if let Some(batch_req) = self.request.as_mut() {
@@ -378,6 +382,12 @@ where
         } else {
             self.request = Some(request);
         };
+        if callback.has_proposed_cb() {
+            self.has_proposed_cb = true;
+            if self.header_checked.unwrap_or(false) {
+                callback.invoke_proposed();
+            }
+        }
         self.callbacks.push((callback, req_num));
         self.batch_req_size += req_size as u64;
     }
@@ -402,6 +412,8 @@ where
     ) -> Option<(RaftCmdRequest, Callback<E::Snapshot>)> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
+            self.has_proposed_cb = false;
+            self.header_checked = None;
             if self.callbacks.len() == 1 {
                 let (cb, _) = self.callbacks.pop().unwrap();
                 return Some((req, cb));
@@ -620,6 +632,7 @@ where
         }
         // Propose batch request which may be still waiting for more raft-command
         self.propose_batch_raft_command(false);
+        self.header_check_batch_raft_command();
         self.collect_ready();
     }
 
@@ -634,8 +647,38 @@ where
         if let Some((request, callback)) =
             self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics)
         {
-            self.propose_raft_command(request, callback, DiskFullOpt::NotAllowedOnFull)
+            self.propose_raft_command_internal(request, callback, DiskFullOpt::NotAllowedOnFull)
         }
+    }
+
+    fn header_check_batch_raft_command(&mut self) {
+        if self.fsm.batch_req_builder.request.is_none()
+            || !self.fsm.batch_req_builder.has_proposed_cb
+            || self.fsm.batch_req_builder.header_checked.is_some()
+        {
+            return;
+        }
+        let cmd = self.fsm.batch_req_builder.request.take().unwrap();
+        self.fsm.batch_req_builder.header_checked = Some(false);
+        if let Ok(None) = self.pre_propose_raft_command(&cmd) {
+            let term = self.fsm.peer.term();
+            if self.fsm.peer.pending_merge_state.is_none()
+                && self.fsm.peer.raft_group.raft.lead_transferee.is_none()
+                && self.fsm.peer.has_applied_to_current_term()
+                && self
+                    .fsm
+                    .peer
+                    .cmd_epoch_checker
+                    .propose_check_epoch(&cmd, term)
+                    .is_none()
+            {
+                self.fsm.batch_req_builder.header_checked = Some(true);
+                for (cb, _) in &mut self.fsm.batch_req_builder.callbacks {
+                    cb.invoke_proposed();
+                }
+            }
+        }
+        self.fsm.batch_req_builder.request = Some(cmd);
     }
 
     fn on_update_replication_mode(&mut self) {
@@ -1392,6 +1435,18 @@ where
         if msg.has_extra_msg() {
             self.on_extra_message(msg);
             return Ok(());
+        }
+
+        if msg_type == MessageType::MsgTransferLeader {
+            if let Some((request, callback)) =
+                self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics)
+            {
+                self.propose_raft_command_internal(
+                    request,
+                    callback,
+                    DiskFullOpt::NotAllowedOnFull,
+                );
+            }
         }
 
         let is_snapshot = msg.get_message().has_snapshot();
@@ -3506,6 +3561,30 @@ where
     }
 
     fn propose_raft_command(
+        &mut self,
+        msg: RaftCmdRequest,
+        cb: Callback<EK::Snapshot>,
+        diskfullopt: DiskFullOpt,
+    ) {
+        if msg.has_admin_request() {
+            let cmd_type = msg.get_admin_request().get_cmd_type();
+            let epoch_state = admin_cmd_epoch_lookup(cmd_type);
+            if epoch_state.change_ver {
+                if let Some((request, callback)) =
+                    self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics)
+                {
+                    self.propose_raft_command_internal(
+                        request,
+                        callback,
+                        DiskFullOpt::NotAllowedOnFull,
+                    );
+                }
+            }
+        }
+        self.propose_raft_command_internal(msg, cb, diskfullopt);
+    }
+
+    fn propose_raft_command_internal(
         &mut self,
         mut msg: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
