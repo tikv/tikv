@@ -401,6 +401,7 @@ fn assert_region_merged<T: Simulator>(
         let region_left = cluster.get_region(left_region_key);
         let region_right = cluster.get_region(right_region_key);
         if region_left.get_id() != region_right.get_id() {
+            sleep_ms(10);
             continue;
         } else {
             break;
@@ -563,7 +564,6 @@ fn test_down_node_when_disk_full() {
     cluster.stop_node(2);
     wait_down_peers_reported(&cluster, 1, 2u64);
 
-    fail::cfg("disk_full_with_down_node", "return").unwrap();
     let prewrite_ts = get_tso(&cluster.pd_client);
     let res = lead_client.try_kv_prewrite(
         vec![new_mutation(Op::Put, b"k3", b"v3")],
@@ -581,5 +581,4 @@ fn test_down_node_when_disk_full() {
     for i in 3..6 {
         fail::remove(get_fp(DiskUsage::AlmostFull, i));
     }
-    fail::remove("disk_full_with_down_node");
 }

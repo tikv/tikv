@@ -1290,7 +1290,6 @@ where
             }
             self.fsm.peer.disk_full_peers.has(peer_id)
         } else {
-            let cur = Instant::now();
             self.ctx.store_disk_usages.insert(store_id, msg.disk_usage);
             if !self.fsm.peer.is_leader() {
                 return;
@@ -1302,14 +1301,6 @@ where
                 || disk_full_peers
                     .get(peer_id)
                     .map_or(true, |x| x != msg.disk_usage)
-                || (cur
-                    .duration_since(self.fsm.peer.latest_majority_set_update_on_disk_full)
-                    .as_secs()
-                    > 10
-                    || (|| {
-                        fail_point!("disk_full_with_down_node", |_| true);
-                        false
-                    })())
         };
         if refill_disk_usages {
             let prev = self.fsm.peer.disk_full_peers.get(peer_id);
@@ -2879,6 +2870,11 @@ where
                     );
                 }
             }
+        } else {
+            if self.fsm.peer.is_leader() {
+                self.fsm.peer.has_region_merge_proposal = false;
+                self.fsm.peer.refill_disk_full_peers(self.ctx);
+            }
         }
     }
 
@@ -3084,6 +3080,9 @@ where
                 "commit_index" => commit,
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
+
+            self.fsm.peer.has_region_merge_proposal = false;
+            self.fsm.peer.refill_disk_full_peers(self.ctx);
         }
     }
 

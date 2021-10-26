@@ -432,7 +432,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let path =
             Path::new(&self.config.storage.data_dir).join(file_system::SPACE_PLACEHOLDER_FILE);
         if let Err(e) = file_system::remove_file(&path) {
-            panic!("failed to reset space holder: {}", e);
+            warn!("failed to remove space holder on starting: {}", e);
         }
 
         let available = disk_stats.available_space();

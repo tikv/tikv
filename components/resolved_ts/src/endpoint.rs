@@ -448,9 +448,7 @@ where
                 return;
             }
 
-            // register/deregister will fail due to merging/spliting blocked when disk full.
-            // and will generate so much log. so change log level from info to debug.
-            debug!(
+            info!(
                 "register region again";
                 "region_id" => region_id,
                 "observe_id" => ?observe_id,

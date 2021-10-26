@@ -569,8 +569,6 @@ where
     // disk full peer set.
     pub disk_full_peers: DiskFullPeers,
 
-    pub latest_majority_set_update_on_disk_full: Instant,
-
     // show whether an already disk full TiKV appears in the potential majority set.
     pub dangerous_majority_set: bool,
 
@@ -687,7 +685,6 @@ where
             disk_full_peers: DiskFullPeers::default(),
             dangerous_majority_set: false,
             has_region_merge_proposal: false,
-            latest_majority_set_update_on_disk_full: Instant::now(),
             region_merge_proposal_index: 0_u64,
             read_progress: Arc::new(RegionReadProgress::new(
                 region,
@@ -1402,7 +1399,8 @@ where
     }
 
     /// Collects all down peers.
-    pub fn collect_down_peers(&mut self, max_duration: Duration) -> Vec<PeerStats> {
+    pub fn collect_down_peers<T>(&mut self, ctx: &PollContext<EK, ER, T>) -> Vec<PeerStats> {
+        let max_duration = ctx.cfg.max_peer_down_duration.0;
         let mut down_peers = Vec::new();
         let mut down_peer_ids = Vec::new();
         for p in self.region().get_peers() {
@@ -1422,6 +1420,9 @@ where
             }
         }
         self.down_peer_ids = down_peer_ids;
+        if self.down_peer_ids.len() != 0 {
+            self.refill_disk_full_peers(ctx);
+        }
         down_peers
     }
 
@@ -2746,6 +2747,10 @@ where
                 ) {
                     self.propose_normal(ctx, req)
                 } else {
+                    // If leader node is disk full, try to transfer leader to a node with disk usage normal to
+                    // keep write availablity not downback.
+                    // if majority node is disk full, to transfer leader or not is not necessary.
+                    // Note: Need to exclude learner node.
                     if maybe_transfer_leader && !self.disk_full_peers.majority {
                         let target_peer = self
                             .get_store()
@@ -2755,10 +2760,17 @@ where
                             .find(|x| {
                                 !self.disk_full_peers.has(x.get_id())
                                     && x.get_id() != self.peer.get_id()
+                                    && !self.down_peer_ids.contains(&x.get_id())
+                                    && !matches!(x.get_role(), PeerRole::Learner)
                             })
                             .cloned();
                         if let Some(p) = target_peer {
-                            info!("try transfer leader because of current leader is disk full");
+                            debug!(
+                                "try to transfer leader because of current leader disk full: region id = {}, peer id = {}; target peer id = {}",
+                                self.region_id,
+                                self.peer.get_id(),
+                                p.get_id()
+                            );
                             self.pre_transfer_leader(&p);
                         }
                     }
@@ -3498,15 +3510,13 @@ where
             return Err(Error::NotLeader(self.region_id, None));
         }
 
-        // prepareMerge need to be broadcast to as many as followers when disk full.
+        // Prepare Merge need to be broadcast to as many as followers when disk full.
         if req.has_admin_request()
             && (!matches!(poll_ctx.self_disk_usage, DiskUsage::Normal)
                 || !self.disk_full_peers.is_empty())
         {
             match req.get_admin_request().get_cmd_type() {
-                AdminCmdType::PrepareMerge
-                | AdminCmdType::CommitMerge
-                | AdminCmdType::RollbackMerge => {
+                AdminCmdType::PrepareMerge | AdminCmdType::RollbackMerge => {
                     self.has_region_merge_proposal = true;
                     self.region_merge_proposal_index = propose_index;
                     for (k, v) in &mut self.disk_full_peers.peers {
@@ -3564,7 +3574,9 @@ where
         if self.is_handling_snapshot()
             || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
-            // For followers whose disk is full.
+            // Transfer leader to node with disk full will lead to write availablity downback.
+            // But if the current leader is disk full, and send such request, we should allow it,
+            // because it may be a read leader balance request.
             || (!matches!(ctx.self_disk_usage, DiskUsage::Normal) &&
             matches!(peer_disk_usage,DiskUsage::Normal))
         {
@@ -3798,7 +3810,7 @@ where
         self.want_rollback_merge_peers.insert(peer_id);
     }
 
-    pub fn clear_disk_full_peers<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+    pub fn clear_disk_full_peers<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
         let disk_full_peers = mem::take(&mut self.disk_full_peers);
         let raft = &mut self.raft_group.raft;
         for peer in disk_full_peers.peers.into_keys() {
@@ -3806,9 +3818,8 @@ where
         }
     }
 
-    pub fn refill_disk_full_peers<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+    pub fn refill_disk_full_peers<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
         self.clear_disk_full_peers(ctx);
-        let cur = Instant::now();
 
         // Collect disk full peers and all peers' `next_idx` to find a potential quorum.
         let peers_len = self.get_store().region().get_peers().len();
@@ -3850,7 +3861,6 @@ where
             return;
         }
 
-        self.latest_majority_set_update_on_disk_full = cur;
         // Reverse sort peers based on `next_idx`, `usage` and `store healthy status`, then try to get a potential quorum.
         next_idxs.sort_by(|x, y| {
             if x.3 == y.3 {
@@ -3862,6 +3872,8 @@ where
 
         let raft = &mut self.raft_group.raft;
         self.disk_full_peers.majority = !raft.prs().has_quorum(&normal_peers);
+
+        // Here set all peers can be sent when merging.
         for &(peer, _, usage, ..) in &next_idxs {
             if let Some(usage) = usage {
                 if self.has_region_merge_proposal && !matches!(*usage, DiskUsage::AlreadyFull) {
@@ -4066,8 +4078,8 @@ where
         let task = PdTask::Heartbeat(HeartbeatTask {
             term: self.term(),
             region: self.region().clone(),
+            down_peers: self.collect_down_peers(ctx),
             peer: self.peer.clone(),
-            down_peers: self.collect_down_peers(ctx.cfg.max_peer_down_duration.0),
             pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
