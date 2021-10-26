@@ -1,6 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+use async_trait::async_trait;
 use std::io;
 use std::time::Duration;
+use thiserror::Error;
 
 use fail::fail_point;
 use futures_util::{
@@ -14,9 +16,12 @@ use rusoto_core::{
 };
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::{util::AddressingStyle, *};
+use std::error::Error as StdError;
 use tokio::time::{sleep, timeout};
 
-use cloud::blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, StringNonEmpty};
+use cloud::blob::{
+    none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResrouce, StringNonEmpty,
+};
 pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
 use tikv_util::debug;
 use tikv_util::stream::{block_on_external_io, error_stream, retry};
@@ -225,6 +230,21 @@ struct S3Uploader<'client> {
     parts: Vec<CompletedPart>,
 }
 
+#[derive(Debug, Error)]
+enum UploadError {
+    #[error("io error {0}")]
+    Io(#[from] io::Error),
+    #[error("rusoto error {0}")]
+    // Maybe make it a trait if needed?
+    Rusoto(String),
+}
+
+impl<T: 'static + StdError> From<RusotoError<T>> for UploadError {
+    fn from(r: RusotoError<T>) -> Self {
+        Self::Rusoto(format!("{}", r))
+    }
+}
+
 /// Specifies the minimum size to use multi-part upload.
 /// AWS S3 requires each part to be at least 5 MiB.
 const MINIMUM_PART_SIZE: usize = 5 * 1024 * 1024;
@@ -248,9 +268,9 @@ impl<'client> S3Uploader<'client> {
     /// Executes the upload process.
     async fn run(
         mut self,
-        reader: &mut (dyn AsyncRead + Unpin),
+        reader: &mut (dyn AsyncRead + Unpin + Send),
         est_len: u64,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), UploadError> {
         if est_len <= MINIMUM_PART_SIZE as u64 {
             // For short files, execute one put_object to upload the entire thing.
             let mut data = Vec::with_capacity(est_len as usize);
@@ -450,22 +470,24 @@ impl<'client> S3Uploader<'client> {
 
 const STORAGE_NAME: &str = "s3";
 
+#[async_trait]
 impl BlobStorage for S3Storage {
     fn config(&self) -> Box<dyn BlobConfig> {
         Box::new(self.config.clone()) as Box<dyn BlobConfig>
     }
 
-    fn put(
+    async fn put(
         &self,
         name: &str,
-        mut reader: Box<dyn AsyncRead + Send + Unpin>,
+        mut reader: PutResrouce,
         content_length: u64,
     ) -> io::Result<()> {
         let key = self.maybe_prefix_key(name);
         debug!("save file to s3 storage"; "key" => %key);
 
         let uploader = S3Uploader::new(&self.client, &self.config, key);
-        block_on_external_io(uploader.run(&mut *reader, content_length)).map_err(|e| {
+        let result = uploader.run(&mut reader, content_length).await;
+        result.map_err(|e| {
             io::Error::new(io::ErrorKind::Other, format!("failed to put object {}", e))
         })
     }
@@ -621,7 +643,7 @@ mod tests {
         let s = S3Storage::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
         s.put(
             "key2",
-            Box::new(magic_contents.as_bytes()),
+            PutResrouce(Box::new(magic_contents.as_bytes())),
             magic_contents.len() as u64,
         )
         .unwrap();

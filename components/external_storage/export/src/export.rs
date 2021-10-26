@@ -24,7 +24,7 @@ use kvproto::brpb::{Gcs, S3};
 use crate::dylib;
 #[cfg(any(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
 use cloud::blob::BlobConfig;
-use cloud::blob::BlobStorage;
+use cloud::blob::{BlobStorage, PutResrouce};
 use encryption::DataKeyManager;
 #[cfg(feature = "cloud-storage-dylib")]
 use external_storage::dylib_client;
@@ -359,7 +359,7 @@ impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
         reader: Box<dyn AsyncRead + Send + Unpin>,
         content_length: u64,
     ) -> io::Result<()> {
-        (**self).put(name, reader, content_length)
+        block_on_external_io((**self).put(name, PutResrouce(reader), content_length))
     }
 
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {

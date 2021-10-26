@@ -312,6 +312,7 @@ dependencies = [
  "rusoto_sts",
  "slog",
  "slog-global",
+ "thiserror",
  "tikv_util",
  "tokio",
  "url",
@@ -1823,6 +1824,7 @@ dependencies = [
 name = "gcp"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "cloud",
  "futures-util",
  "http",
