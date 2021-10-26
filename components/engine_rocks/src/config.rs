@@ -293,6 +293,10 @@ macro_rules! numeric_enum_mod {
                         camel.push(char_vec.get(i).unwrap().to_ascii_uppercase());
                     } else if char_vec.get(i).unwrap() == &'-' {
                         i += 1;
+                        if (i == char_vec.len()) {
+                            // this is not a valid kabba value
+                            return camel;
+                        }
                         camel.push(char_vec.get(i).unwrap().to_ascii_uppercase());
                     } else {
                         camel.push(*char_vec.get(i).unwrap());
