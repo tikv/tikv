@@ -67,14 +67,15 @@ impl Reporter {
         scheduler: Scheduler<Task>,
         recorder_ctl: RecorderController,
     ) -> Self {
-        let (tx, rx) = bounded(64);
-
         let clt = CollectorImpl::new(scheduler);
         let collector = register_collector(Box::new(clt));
 
+        let (client_sender, client_receiver) = bounded(64);
+        let client_registry = ClientRegistry::new(client_sender);
+
         Self {
-            client_registry: ClientRegistry { tx },
-            client_receiver: rx,
+            client_registry,
+            client_receiver,
             clients,
 
             config,
@@ -126,7 +127,7 @@ impl Reporter {
             return;
         }
 
-        // Whether clients exist or not, records should be taken in order to reset.
+        // No matter clients exist or not, records should be taken in order to reset.
         let records = Arc::new(std::mem::take(&mut self.records));
         for c in &mut self.clients {
             c.as_mut().upload_records(records.clone());

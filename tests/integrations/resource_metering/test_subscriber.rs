@@ -63,10 +63,10 @@ pub fn case_basic(test_suite: &mut TestSuite) {
     // two subscribers
     {
         let stream1 = client
-            .sub_cpu_time_record(&ResourceMeteringRequest::default())
+            .subscribe(&ResourceMeteringRequest::default())
             .unwrap();
         let stream2 = client
-            .sub_cpu_time_record(&ResourceMeteringRequest::default())
+            .subscribe(&ResourceMeteringRequest::default())
             .unwrap();
         let (res1, res2) = test_suite.rt.block_on(async move {
             let mut res1: HashMap<String, (Vec<u64>, Vec<u32>)> = HashMap::new();

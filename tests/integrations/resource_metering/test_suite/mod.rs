@@ -62,6 +62,11 @@ impl TestSuite {
 
         let resource_metering_cfg = tikv_cfg.resource_metering.clone();
         let receiver_address = Arc::new(Mutex::new(resource_metering_cfg.receiver_address.clone()));
+        let recorder_ctl = init_recorder(
+            resource_metering_cfg.enabled,
+            resource_metering_cfg.precision.as_millis(),
+        );
+
         let cfg_controller = ConfigController::new(tikv_cfg);
         cfg_controller.register(
             Module::ResourceMetering,
@@ -69,10 +74,7 @@ impl TestSuite {
                 resource_metering_cfg.clone(),
                 receiver_address.clone(),
                 scheduler.clone(),
-                init_recorder(
-                    resource_metering_cfg.enabled,
-                    resource_metering_cfg.precision.as_millis(),
-                ),
+                recorder_ctl.clone(),
             )),
         );
         let env = Arc::new(Environment::new(2));
@@ -81,6 +83,7 @@ impl TestSuite {
             vec![Box::new(reporter_client)],
             resource_metering_cfg,
             scheduler.clone(),
+            recorder_ctl,
         );
 
         let publisher_server_port = alloc_port();
@@ -119,6 +122,14 @@ impl TestSuite {
         self.cfg_controller
             .update_config("resource-metering.receiver-address", &addr)
             .unwrap();
+        // wait for sampling to be enabled/disabled
+        std::thread::sleep(
+            self.cfg_controller
+                .get_current()
+                .resource_metering
+                .report_receiver_interval
+                .0,
+        );
     }
 
     pub fn cfg_precision(&self, precision: impl Into<String>) {
@@ -161,6 +172,10 @@ impl TestSuite {
         if let Some(mut receiver) = self.receiver_server.take() {
             self.rt.block_on(receiver.shutdown()).unwrap();
         }
+    }
+
+    pub fn shutdown_publisher(&mut self) {
+        self.rt.block_on(self.publisher_server.shutdown()).unwrap();
     }
 
     pub fn setup_workload(&mut self, tags: Vec<impl Into<String>>) {
@@ -251,9 +266,9 @@ impl TestSuite {
 
 impl Drop for TestSuite {
     fn drop(&mut self) {
-        self.reset();
         self.reporter.take().unwrap().stop_worker();
+        self.shutdown_receiver();
+        self.shutdown_publisher();
         fail::remove("cpu-record-test-filter");
-        self.rt.block_on(self.publisher_server.shutdown()).ok();
     }
 }

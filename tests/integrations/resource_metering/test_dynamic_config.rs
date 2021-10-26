@@ -150,7 +150,6 @@ pub fn case_precision(test_suite: &mut TestSuite) {
     let port = alloc_port();
     test_suite.start_receiver_at(port);
     test_suite.cfg_report_receiver_interval("10s");
-    test_suite.cfg_enabled(true);
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
 
     // Workload
