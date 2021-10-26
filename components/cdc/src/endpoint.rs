@@ -41,6 +41,7 @@ use tikv::storage::kv::{PerfStatisticsInstant, Snapshot};
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
+use tikv_kv::PerfStatisticsDelta;
 use tikv_util::sys::inspector::{self_thread_inspector, ThreadInspector};
 use tikv_util::time::{Instant, Limiter};
 use tikv_util::timer::SteadyTimer;
@@ -1292,14 +1293,13 @@ impl Initializer {
         &self,
         scanner: &mut DeltaScanner<S>,
         entries: &mut Vec<Option<TxnEntry>>,
-    ) -> Result<(usize, usize)> {
+    ) -> Result<ScanStat> {
         let mut total_bytes = 0;
         let mut total_size = 0;
 
         let perf_instant = PerfStatisticsInstant::new();
-        // FIXME: handles `Err` and `None` correctly.
-        let inspector = self_thread_inspector().unwrap();
-        let old_disk_read = inspector.io_stat().unwrap().unwrap().read;
+        let inspector = self_thread_inspector().ok();
+        let old_io_stat = inspector.as_ref().and_then(|x| x.io_stat().unwrap_or(None));
         while total_bytes <= self.max_scan_batch_bytes && total_size < self.max_scan_batch_size {
             total_size += 1;
             match scanner.next_entry()? {
@@ -1313,13 +1313,18 @@ impl Initializer {
                 }
             }
         }
-        let new_disk_read = inspector.io_stat().unwrap().unwrap().read;
-        let disk_read = new_disk_read - old_disk_read;
-        CDC_SCAN_DISK_READ_BYTES.inc_by(disk_read as _);
-        TLS_CDC_PERF_STATS.with(|x| *x.borrow_mut() += perf_instant.delta());
-        tls_flush_perf_stats();
-
-        Ok((total_bytes, disk_read as usize))
+        let new_io_stat = inspector.as_ref().and_then(|x| x.io_stat().unwrap_or(None));
+        let disk_read = match (old_io_stat, new_io_stat) {
+            (Some(s1), Some(s2)) => Some((s2.read - s1.read) as usize),
+            _ => None,
+        };
+        let perf_delta = perf_instant.delta();
+        let emit = total_bytes;
+        Ok(ScanStat {
+            emit,
+            disk_read,
+            perf_delta,
+        })
     }
 
     async fn scan_batch<S: Snapshot>(
@@ -1328,11 +1333,22 @@ impl Initializer {
         resolver: Option<&mut Resolver>,
     ) -> Result<Vec<Option<TxnEntry>>> {
         let mut entries = Vec::with_capacity(self.max_scan_batch_size);
-        let (total_bytes, disk_read) = self.do_scan(scanner, &mut entries)?;
-        CDC_SCAN_BYTES.inc_by(total_bytes as _);
-        if disk_read > 0 {
-            self.speed_limiter.consume(disk_read).await;
-        }
+        let ScanStat {
+            emit,
+            disk_read,
+            perf_delta,
+        } = self.do_scan(scanner, &mut entries)?;
+
+        CDC_SCAN_BYTES.inc_by(emit as _);
+        TLS_CDC_PERF_STATS.with(|x| *x.borrow_mut() += perf_delta);
+        tls_flush_perf_stats();
+        let require = if let Some(bytes) = disk_read {
+            CDC_SCAN_DISK_READ_BYTES.inc_by(bytes as _);
+            bytes
+        } else {
+            perf_delta.0.block_read_byte
+        };
+        self.speed_limiter.consume(require).await;
 
         if let Some(resolver) = resolver {
             // Track the locks.
@@ -1425,6 +1441,16 @@ impl Initializer {
             error!("cdc schedule cdc task failed"; "error" => ?e);
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ScanStat {
+    // Fetched bytes to the scanner.
+    emit: usize,
+    // Bytes from the device, `None` if not possible to get it.
+    disk_read: Option<usize>,
+    // Perf delta for RocksDB.
+    perf_delta: PerfStatisticsDelta,
 }
 
 impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {

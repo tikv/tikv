@@ -27,12 +27,12 @@ pub trait ThreadInspector {
     }
 
     /// Get the device name for the given `path`.
-    fn get_device(&self, _path: &str) -> Result<Option<Self::DiskID>, String> {
+    fn get_device(_path: &str) -> Result<Option<Self::DiskID>, String> {
         Ok(None)
     }
 
     /// Disk statistics for the given device.
-    fn disk_stat(&self, _dev: &Self::DiskID) -> Result<Option<DiskStat>, String> {
+    fn disk_stat(_dev: &Self::DiskID) -> Result<Option<DiskStat>, String> {
         Ok(None)
     }
 }
@@ -78,16 +78,16 @@ mod linux {
                 .map(|x| Some(x.into()))
         }
 
-        fn get_device(&self, path: &str) -> Result<Option<Self::DiskID>, String> {
+        fn get_device(path: &str) -> Result<Option<Self::DiskID>, String> {
             let (major, minor) = disk_identify(path)?;
             Ok(Some((major, minor)))
         }
 
-        fn disk_stat(&self, dev: &Self::DiskID) -> Result<Option<DiskStat>, String> {
+        fn disk_stat(dev: &Self::DiskID) -> Result<Option<DiskStat>, String> {
             let path = "/proc/diskstats";
             let lines = read_to_string(&path).map_err(|e| format!("open({}): {}", path, e))?;
             for line in lines.split('\n').map(|x| x.trim()) {
-                let stat = procfs::DiskStat::from_line(&line)
+                let stat = procfs::DiskStat::from_line(line)
                     .map_err(|e| format!("parse disk stat: {}", e))?;
                 if stat.major as u32 == dev.0 && stat.minor as u32 == dev.1 {
                     return Ok(Some(stat.into()));
@@ -123,6 +123,22 @@ mod linux {
 #[cfg(target_os = "linux")]
 pub use self::linux::{self_thread_inspector, Impl as ThreadInspectorImpl};
 
+#[cfg(not(target_os = "linux"))]
+mod notlinux {
+    use super::ThreadInspector;
+    pub struct Impl;
+    impl ThreadInspector for Impl {
+        type DiskID = ();
+    }
+
+    pub fn self_thread_inspector() -> Result<Impl, String> {
+        Ok(Impl)
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub use self::notlinux::{self_thread_inspector, Impl as ThreadInspectorImpl};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,8 +166,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn test_thread_inspector_disk_stat() {
-        let inspector = self_thread_inspector().unwrap();
-        let device = inspector.get_device(".").unwrap().unwrap();
-        assert!(inspector.disk_stat(&device).unwrap().is_some());
+        let device = ThreadInspectorImpl::get_device(".").unwrap().unwrap();
+        assert!(ThreadInspectorImpl::disk_stat(&device).unwrap().is_some());
     }
 }
