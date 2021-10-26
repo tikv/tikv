@@ -263,7 +263,7 @@ impl From<BlobRunMode> for DBTitanDBBlobRunMode {
 }
 
 macro_rules! numeric_enum_mod {
-    ($name:ident $enum:ident { $($variant:ident($str:expr) = $value:expr, )* }) => {
+    ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
         pub mod $name {
             use std::fmt;
 
@@ -271,11 +271,55 @@ macro_rules! numeric_enum_mod {
             use serde::de::{self, Unexpected, Visitor};
             use rocksdb::$enum;
 
+            fn to_kebab(enum_name: &str) -> String {
+                let mut snake = String::new();
+                for (i, ch) in enum_name.char_indices() {
+                    if i > 0 && ch.is_uppercase() {
+                        snake.push('_');
+                    }
+                    snake.push(ch.to_ascii_lowercase());
+                }
+                snake.replace('_', "-")
+            }
+
+            fn to_camel(enum_name: &str) -> String {
+                let mut camel = String::new();
+                let mut i = 0;
+
+                let char_vec: Vec<char> = enum_name.chars().collect();
+
+                while i < char_vec.len() {
+                    if (i == 0) {
+                        camel.push(char_vec.get(i).unwrap().to_ascii_uppercase());
+                    } else if char_vec.get(i).unwrap() == &'-' {
+                        i += 1;
+                        camel.push(char_vec.get(i).unwrap().to_ascii_uppercase());
+                    } else {
+                        camel.push(*char_vec.get(i).unwrap());
+                    }
+                    i += 1;
+                }
+
+                camel
+            }
+
+            fn string_to_static_str(s: String) -> &'static str {
+                Box::leak(s.into_boxed_str())
+            }
+
+            impl From<super::$enum> for rocksdb::$enum {
+                fn from(m: super::$enum) -> Self {
+                    match m {
+                        $( super::$enum::$variant => rocksdb::$enum::$variant, )*
+                    }
+                }
+            }
+
             pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
                 where S: Serializer
             {
                 serializer.serialize_str(match *mode {
-                   $( $enum::$variant => $str, )*
+                   $( $enum::$variant => string_to_static_str(to_kebab(stringify!($variant))), )*
                 })
             }
 
@@ -303,8 +347,9 @@ macro_rules! numeric_enum_mod {
                     fn visit_str<E>(self, value: &str) -> Result<$enum, E>
                         where E: de::Error
                     {
-                        match value {
-                            $( $str => Ok($enum::from($enum::$variant)), )*
+                        let camel_str = string_to_static_str(to_camel(value));
+                        match camel_str {
+                            $( stringify!($variant) => Ok($enum::from($enum::$variant)), )*
                             _ => Err(E::invalid_value(Unexpected::Str(value), &self))
                         }
                     }
@@ -328,7 +373,7 @@ macro_rules! numeric_enum_mod {
                     }
 
                     let cases = vec![
-                        $(($enum::$variant, $str), )*
+                        $(($enum::$variant, stringify!($variant)), )*
                     ];
                     for (e, v) in cases {
                         let holder = EnumHolder { e };
@@ -347,45 +392,17 @@ macro_rules! numeric_enum_mod {
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CompactionPriority {
-    // In Level-based compaction, it Determines which file from a level to be
-    // picked to merge to the next level. We suggest people try
-    // kMinOverlappingRatio first when you tune your database.
     ByCompensatedSize = 0,
-    // First compact files whose data's latest update time is oldest.
-    // Try this if you only update some hot keys in small ranges.
     OldestLargestSeqFirst = 1,
-    // First compact files whose range hasn't been compacted to the next level
-    // for the longest. If your updates are random across the key space,
-    // write amplification is slightly better with this option.
     OldestSmallestSeqFirst = 2,
-    // First compact files whose ratio between overlapping size in next level
-    // and its size is the smallest. It in many cases can optimize write
-    // amplification.
     MinOverlappingRatio = 3,
 }
 
-impl From<CompactionPriority> for rocksdb::CompactionPriority {
-    fn from(m: CompactionPriority) -> Self {
-        match m {
-            CompactionPriority::ByCompensatedSize => rocksdb::CompactionPriority::ByCompensatedSize,
-            CompactionPriority::OldestLargestSeqFirst => {
-                rocksdb::CompactionPriority::OldestLargestSeqFirst
-            }
-            CompactionPriority::OldestSmallestSeqFirst => {
-                rocksdb::CompactionPriority::OldestSmallestSeqFirst
-            }
-            CompactionPriority::MinOverlappingRatio => {
-                rocksdb::CompactionPriority::MinOverlappingRatio
-            }
-        }
-    }
-}
-
 numeric_enum_mod! {compaction_pri_serde CompactionPriority {
-    ByCompensatedSize("by-compensated-siz") = 0,
-    OldestLargestSeqFirst("oldest-largest-seq-first") = 1,
-    OldestSmallestSeqFirst("oldest-smallest-seq-first") = 2,
-    MinOverlappingRatio("min-overlapping-ratio") = 3,
+    ByCompensatedSize = 0,
+    OldestLargestSeqFirst = 1,
+    OldestSmallestSeqFirst = 2,
+    MinOverlappingRatio = 3,
 }}
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -397,20 +414,10 @@ pub enum DBRateLimiterMode {
 }
 
 numeric_enum_mod! {rate_limiter_mode_serde DBRateLimiterMode {
-    ReadOnly("read-only") = 1,
-    WriteOnly("write-only") = 2,
-    AllIo("all-io") = 3,
+    ReadOnly = 1,
+    WriteOnly = 2,
+    AllIo = 3,
 }}
-
-impl From<DBRateLimiterMode> for rocksdb::DBRateLimiterMode {
-    fn from(m: DBRateLimiterMode) -> Self {
-        match m {
-            DBRateLimiterMode::ReadOnly => rocksdb::DBRateLimiterMode::ReadOnly,
-            DBRateLimiterMode::WriteOnly => rocksdb::DBRateLimiterMode::WriteOnly,
-            DBRateLimiterMode::AllIo => rocksdb::DBRateLimiterMode::AllIo,
-        }
-    }
-}
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -421,22 +428,11 @@ pub enum DBCompactionStyle {
     None = 3,
 }
 
-impl From<DBCompactionStyle> for rocksdb::DBCompactionStyle {
-    fn from(m: DBCompactionStyle) -> Self {
-        match m {
-            DBCompactionStyle::Level => rocksdb::DBCompactionStyle::Level,
-            DBCompactionStyle::Universal => rocksdb::DBCompactionStyle::Universal,
-            DBCompactionStyle::Fifo => rocksdb::DBCompactionStyle::Fifo,
-            DBCompactionStyle::None => rocksdb::DBCompactionStyle::None,
-        }
-    }
-}
-
 numeric_enum_mod! {compaction_style_serde DBCompactionStyle {
-    Level("level") = 0,
-    Universal("universal") = 1,
-    Fifo("fifo") = 2,
-    None("none") = 3,
+    Level = 0,
+    Universal = 1,
+    Fifo = 2,
+    None = 3,
 }}
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -448,26 +444,11 @@ pub enum DBRecoveryMode {
     SkipAnyCorruptedRecords = 3,
 }
 
-impl From<DBRecoveryMode> for rocksdb::DBRecoveryMode {
-    fn from(m: DBRecoveryMode) -> Self {
-        match m {
-            DBRecoveryMode::TolerateCorruptedTailRecords => {
-                rocksdb::DBRecoveryMode::TolerateCorruptedTailRecords
-            }
-            DBRecoveryMode::AbsoluteConsistency => rocksdb::DBRecoveryMode::AbsoluteConsistency,
-            DBRecoveryMode::PointInTime => rocksdb::DBRecoveryMode::PointInTime,
-            DBRecoveryMode::SkipAnyCorruptedRecords => {
-                rocksdb::DBRecoveryMode::SkipAnyCorruptedRecords
-            }
-        }
-    }
-}
-
 numeric_enum_mod! {recovery_mode_serde DBRecoveryMode {
-    TolerateCorruptedTailRecords("tolerate-corrupted-tail_records") = 0,
-    AbsoluteConsistency("absolute-consistency") = 1,
-    PointInTime("point-in-time") = 2,
-    SkipAnyCorruptedRecords("skip-any-corrupted_records") = 3,
+    TolerateCorruptedTailRecords = 0,
+    AbsoluteConsistency = 1,
+    PointInTime = 2,
+    SkipAnyCorruptedRecords = 3,
 }}
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -482,30 +463,14 @@ pub enum PerfLevel {
     OutOfBounds,
 }
 
-impl From<PerfLevel> for rocksdb::PerfLevel {
-    fn from(perf_level: PerfLevel) -> Self {
-        match perf_level {
-            PerfLevel::Uninitialized => rocksdb::PerfLevel::Uninitialized,
-            PerfLevel::Disable => rocksdb::PerfLevel::Disable,
-            PerfLevel::EnableCount => rocksdb::PerfLevel::EnableCount,
-            PerfLevel::EnableTimeExceptForMutex => rocksdb::PerfLevel::EnableTimeExceptForMutex,
-            PerfLevel::EnableTimeAndCPUTimeExceptForMutex => {
-                rocksdb::PerfLevel::EnableTimeAndCPUTimeExceptForMutex
-            }
-            PerfLevel::EnableTime => rocksdb::PerfLevel::EnableTime,
-            PerfLevel::OutOfBounds => rocksdb::PerfLevel::OutOfBounds,
-        }
-    }
-}
-
 numeric_enum_mod! {perf_level_serde PerfLevel {
-    Uninitialized("uninitialized") = 0,
-    Disable("disable") = 1,
-    EnableCount("enable-count") = 2,
-    EnableTimeExceptForMutex("enable-time-except-for-mutex") = 3,
-    EnableTimeAndCPUTimeExceptForMutex("enable-time-and-cputime-except-for-mutex") = 4,
-    EnableTime("enable-time") = 5,
-    OutOfBounds("out-of-bounds") = 6,
+    Uninitialized = 0,
+    Disable = 1,
+    EnableCount = 2,
+    EnableTimeExceptForMutex = 3,
+    EnableTimeAndCPUTimeExceptForMutex = 4,
+    EnableTime = 5,
+    OutOfBounds = 6,
 }}
 
 #[cfg(test)]
