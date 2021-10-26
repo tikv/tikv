@@ -668,6 +668,7 @@ where
     }
 
     fn on_update_range(&mut self, region: Region) {
+	info!("updating reigon's range"; "region" => ?region);
         let region_state_key = keys::region_state_key(region.get_id());
         let original_region_state = match self
             .ctx
