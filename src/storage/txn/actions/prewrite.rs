@@ -1353,6 +1353,7 @@ pub mod tests {
             TimeStamp::default(),
             true,
             kvproto::kvrpcpb::Assertion::None,
+            kvproto::kvrpcpb::AssertionLevel::Off,
         );
         // Commit repeatedly, these operations should have no effect.
         must_commit(&engine, b"k1", 10, 25);
@@ -1641,70 +1642,210 @@ pub mod tests {
 
     #[test]
     fn test_prewrite_with_assertion() {
-        for pessimistic in [true, false] {
-            let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
 
-            must_prewrite_put_impl(
-                &engine,
-                b"k1",
+        let prewrite_put = |key: &'_ _,
+                            value,
+                            ts: u64,
+                            is_pessimistic_lock,
+                            for_update_ts: u64,
+                            assertion,
+                            assertion_level,
+                            expect_success| {
+            if expect_success {
+                must_prewrite_put_impl(
+                    &engine,
+                    key,
+                    value,
+                    key,
+                    &None,
+                    ts.into(),
+                    is_pessimistic_lock,
+                    100,
+                    for_update_ts.into(),
+                    1,
+                    (ts + 1).into(),
+                    0.into(),
+                    false,
+                    assertion,
+                    assertion_level,
+                );
+            } else {
+                let err = must_prewrite_put_err_impl(
+                    &engine,
+                    key,
+                    value,
+                    key,
+                    ts,
+                    for_update_ts,
+                    is_pessimistic_lock,
+                    assertion,
+                    assertion_level,
+                );
+                assert!(matches!(err, Error(box ErrorInner::AssertionFailed { .. })));
+            }
+        };
+
+        let test = |key_prefix: &[u8], assertion_level| {
+            let k1 = [key_prefix, b"k1"].concat();
+            let k2 = [key_prefix, b"k2"].concat();
+            let k3 = [key_prefix, b"k3"].concat();
+            let k4 = [key_prefix, b"k4"].concat();
+
+            // Assertion passes (optimistic).
+            prewrite_put(
+                &k1,
                 b"v1",
-                b"k1",
-                &None,
-                10.into(),
-                pessimistic,
-                100,
-                if pessimistic { 10.into() } else { 0.into() },
-                1,
-                11.into(),
-                0.into(),
+                10,
                 false,
+                0,
                 Assertion::NotExist,
+                assertion_level,
+                true,
             );
+            must_commit(&engine, &k1, 10, 15);
 
-            must_commit(&engine, b"k1", 10, 15);
-
-            must_prewrite_put_impl(
-                &engine,
-                b"k1",
+            prewrite_put(
+                &k1,
                 b"v1",
-                b"k1",
-                &None,
-                20.into(),
-                pessimistic,
-                100,
-                if pessimistic { 20.into() } else { 0.into() },
-                1,
-                21.into(),
-                0.into(),
+                20,
                 false,
+                0,
                 Assertion::Exist,
+                assertion_level,
+                true,
             );
+            must_commit(&engine, &k1, 20, 25);
 
-            must_commit(&engine, b"k1", 20, 25);
-
-            let err = must_prewrite_put_err_impl(
-                &engine,
-                b"k1",
-                b"v1",
-                b"k1",
-                30,
-                if pessimistic { 30 } else { 0 },
-                pessimistic,
-                Assertion::NotExist,
-            );
-            assert!(matches!(err, Error(box ErrorInner::AssertionFailed { .. })));
-
-            let err = must_prewrite_put_err_impl(
-                &engine,
-                b"k2",
+            // Assertion passes (pessimistic).
+            prewrite_put(
+                &k2,
                 b"v2",
-                b"k2",
-                30,
-                if pessimistic { 30 } else { 0 },
-                pessimistic,
-                Assertion::Exist,
+                10,
+                true,
+                11,
+                Assertion::NotExist,
+                assertion_level,
+                true,
             );
-            assert!(matches!(err, Error(box ErrorInner::AssertionFailed { .. })));
-        }
+            must_commit(&engine, &k2, 10, 15);
+
+            prewrite_put(
+                &k2,
+                b"v2",
+                20,
+                true,
+                21,
+                Assertion::Exist,
+                assertion_level,
+                true,
+            );
+            must_commit(&engine, &k2, 20, 25);
+
+            // Optimistic transaction assertion fail on fast/strict level.
+            let pass = assertion_level == AssertionLevel::Off;
+            prewrite_put(
+                &k1,
+                b"v1",
+                30,
+                false,
+                0,
+                Assertion::NotExist,
+                assertion_level,
+                pass,
+            );
+            prewrite_put(
+                &k3,
+                b"v3",
+                30,
+                false,
+                0,
+                Assertion::Exist,
+                assertion_level,
+                pass,
+            );
+            must_rollback(&engine, &k1, 30, true);
+            must_rollback(&engine, &k3, 30, true);
+
+            // Pessimistic transaction assertion fail on fast/strict level if assertion happens
+            // during amending pessimistic lock.
+            let pass = assertion_level == AssertionLevel::Off;
+            prewrite_put(
+                &k2,
+                b"v2",
+                30,
+                true,
+                31,
+                Assertion::NotExist,
+                assertion_level,
+                pass,
+            );
+            prewrite_put(
+                &k4,
+                b"v4",
+                30,
+                true,
+                31,
+                Assertion::Exist,
+                assertion_level,
+                pass,
+            );
+            must_rollback(&engine, &k2, 30, true);
+            must_rollback(&engine, &k4, 30, true);
+
+            // Pessimistic transaction fail on strict level no matter whether `is_pessimistic_lock`.
+            let pass = assertion_level != AssertionLevel::Strict;
+            prewrite_put(
+                &k1,
+                b"v1",
+                40,
+                false,
+                41,
+                Assertion::NotExist,
+                assertion_level,
+                pass,
+            );
+            prewrite_put(
+                &k3,
+                b"v3",
+                40,
+                false,
+                41,
+                Assertion::Exist,
+                assertion_level,
+                pass,
+            );
+            must_rollback(&engine, &k1, 40, true);
+            must_rollback(&engine, &k3, 40, true);
+
+            must_acquire_pessimistic_lock(&engine, &k2, &k2, 40, 41);
+            must_acquire_pessimistic_lock(&engine, &k4, &k4, 40, 41);
+            prewrite_put(
+                &k2,
+                b"v2",
+                40,
+                true,
+                41,
+                Assertion::NotExist,
+                assertion_level,
+                pass,
+            );
+            prewrite_put(
+                &k4,
+                b"v4",
+                40,
+                true,
+                41,
+                Assertion::Exist,
+                assertion_level,
+                pass,
+            );
+            must_rollback(&engine, &k1, 40, true);
+            must_rollback(&engine, &k3, 40, true);
+        };
+
+        test(b"a", AssertionLevel::Off);
+        test(b"b", AssertionLevel::Fast);
+        test(b"c", AssertionLevel::Strict);
     }
 }

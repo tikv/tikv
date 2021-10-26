@@ -928,6 +928,7 @@ pub mod tests {
             /* max_commit_ts */ TimeStamp::zero(),
             false,
             kvproto::kvrpcpb::Assertion::None,
+            kvproto::kvrpcpb::AssertionLevel::Off,
         );
         must_success(
             &engine,
@@ -1051,6 +1052,7 @@ pub mod tests {
             /* max_commit_ts */ TimeStamp::zero(),
             false,
             kvproto::kvrpcpb::Assertion::None,
+            kvproto::kvrpcpb::AssertionLevel::Off,
         );
         must_success(
             &engine,

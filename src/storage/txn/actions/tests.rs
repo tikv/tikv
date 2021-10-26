@@ -26,6 +26,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
     max_commit_ts: TimeStamp,
     is_retry_request: bool,
     assertion: Assertion,
+    assertion_level: AssertionLevel,
 ) {
     let ctx = Context::default();
     let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -57,7 +58,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
             min_commit_ts,
             need_old_value: false,
             is_retry_request,
-            assertion_level: AssertionLevel::Off,
+            assertion_level,
         },
         mutation,
         secondary_keys,
@@ -89,6 +90,7 @@ pub fn must_prewrite_put<E: Engine>(
         TimeStamp::default(),
         false,
         Assertion::None,
+        AssertionLevel::Off,
     );
 }
 
@@ -116,6 +118,7 @@ pub fn must_pessimistic_prewrite_put<E: Engine>(
         TimeStamp::default(),
         false,
         Assertion::None,
+        AssertionLevel::Off,
     );
 }
 
@@ -144,6 +147,7 @@ pub fn must_pessimistic_prewrite_put_with_ttl<E: Engine>(
         TimeStamp::default(),
         false,
         Assertion::None,
+        AssertionLevel::Off,
     );
 }
 
@@ -175,6 +179,7 @@ pub fn must_prewrite_put_for_large_txn<E: Engine>(
         TimeStamp::default(),
         false,
         Assertion::None,
+        AssertionLevel::Off,
     );
 }
 
@@ -203,6 +208,7 @@ pub fn must_prewrite_put_async_commit<E: Engine>(
         TimeStamp::default(),
         false,
         Assertion::None,
+        AssertionLevel::Off,
     );
 }
 
@@ -233,6 +239,7 @@ pub fn must_pessimistic_prewrite_put_async_commit<E: Engine>(
         TimeStamp::default(),
         false,
         Assertion::None,
+        AssertionLevel::Off,
     );
 }
 
@@ -269,6 +276,7 @@ pub fn must_prewrite_put_err_impl<E: Engine>(
     for_update_ts: impl Into<TimeStamp>,
     is_pessimistic_lock: bool,
     assertion: Assertion,
+    assertion_level: AssertionLevel,
 ) -> Error {
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let for_update_ts = for_update_ts.into();
@@ -277,11 +285,13 @@ pub fn must_prewrite_put_err_impl<E: Engine>(
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
     let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()), assertion);
+    let mut props = default_txn_props(ts, pk, for_update_ts);
+    props.assertion_level = assertion_level;
 
     prewrite(
         &mut txn,
         &mut reader,
-        &default_txn_props(ts, pk, for_update_ts),
+        &props,
         mutation,
         &None,
         is_pessimistic_lock,
@@ -305,6 +315,7 @@ pub fn must_prewrite_put_err<E: Engine>(
         TimeStamp::zero(),
         false,
         Assertion::None,
+        AssertionLevel::Off,
     )
 }
 
@@ -326,6 +337,7 @@ pub fn must_pessimistic_prewrite_put_err<E: Engine>(
         for_update_ts,
         is_pessimistic_lock,
         Assertion::None,
+        AssertionLevel::Off,
     )
 }
 
