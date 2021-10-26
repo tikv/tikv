@@ -3555,27 +3555,24 @@ where
         cb: Callback<EK::Snapshot>,
         diskfullopt: DiskFullOpt,
     ) {
-        if self.fsm.batch_req_builder.request.is_some() {
-            if msg.has_admin_request() {
-                let cmd_type = msg.get_admin_request().get_cmd_type();
-                let epoch_state = admin_cmd_epoch_lookup(cmd_type);
-                if epoch_state.change_ver
-                    || (cmd_type == AdminCmdType::TransferLeader
-                        && !self.fsm.peer.raft_group.raft.has_pending_conf())
+        if self.fsm.batch_req_builder.request.is_some() && msg.has_admin_request() {
+            let cmd_type = msg.get_admin_request().get_cmd_type();
+            let epoch_state = admin_cmd_epoch_lookup(cmd_type);
+            if epoch_state.change_ver
+                || (cmd_type == AdminCmdType::TransferLeader
+                    && !self.fsm.peer.raft_group.raft.has_pending_conf())
+            {
+                if let Some((request, callback)) =
+                    self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics)
                 {
-                    if let Some((request, callback)) =
-                        self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics)
-                    {
-                        self.propose_raft_command_internal(
-                            request,
-                            callback,
-                            DiskFullOpt::NotAllowedOnFull,
-                        );
-                    }
+                    self.propose_raft_command_internal(
+                        request,
+                        callback,
+                        DiskFullOpt::NotAllowedOnFull,
+                    );
                 }
             }
         }
-
         self.propose_raft_command_internal(msg, cb, diskfullopt);
     }
 
