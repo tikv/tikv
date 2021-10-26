@@ -1938,7 +1938,7 @@ mod tests {
 
         struct RunnerTest {
             store_stat: Arc<Mutex<StoreStat>>,
-            stats_monitor: StatsMonitor<KvTestEngine>,
+            stats_monitor: StatsMonitor<KvTestEngine, RaftTestEngine>,
         }
 
         impl RunnerTest {
