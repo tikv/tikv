@@ -9,7 +9,7 @@ use std::sync::Arc;
 use futures::channel::mpsc::{channel, Sender};
 use futures::{SinkExt, StreamExt};
 use grpcio::{RpcContext, ServerStreamingSink, WriteFlags};
-use kvproto::resource_usage_agent::{ResourceUsageRecord, ResourceMeteringRequest};
+use kvproto::resource_usage_agent::{ResourceMeteringRequest, ResourceUsageRecord};
 use kvproto::resource_usage_agent_grpc::ResourceMeteringPubSub;
 use tikv_util::{defer, warn};
 
@@ -56,7 +56,7 @@ impl ResourceMeteringPubSub for ResourceMeteringPublisher {
         }));
 
         ctx.spawn(async move {
-            defer!{{ is_closed.store(true, Ordering::SeqCst);}}
+            defer! {{ is_closed.store(true, Ordering::SeqCst);}}
             loop {
                 let records = rx.next().await;
                 if records.is_none() {

@@ -124,7 +124,8 @@ mod api_version_serde {
         S: Serializer,
     {
         Ok(match value {
-            ApiVersion::V1 => serializer.serialize_u32(1)?,
+            // FIXME: blocked by @andylokandy, temporary fix
+            ApiVersion::V1 | ApiVersion::V1ttl => serializer.serialize_u32(1)?,
             ApiVersion::V2 => serializer.serialize_u32(2)?,
         })
     }

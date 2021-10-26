@@ -93,9 +93,27 @@ use kvproto::kvrpcpb::{
     RawGetRequest,
 };
 use kvproto::pdpb::QueryKind;
-use kvproto::raft_serverpb::DataEncode;
+// use kvproto::raft_serverpb::DataEncode;
+// FIXME: blocked by @andylokandy, temporary fix
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+enum DataEncode {
+    V1 = 0,
+    V2 = 1,
+}
+impl DataEncode {
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> Option<DataEncode> {
+        match value {
+            0 => Some(DataEncode::V1),
+            1 => Some(DataEncode::V2),
+            _ => None,
+        }
+    }
+}
 use protobuf::well_known_types::Int32Value;
-use protobuf::ProtobufEnum;
 use raftstore::store::util::build_key_range;
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
@@ -222,7 +240,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         reporter: R,
     ) -> Result<Self> {
         let config_data_encode = match config.api_version {
-            ApiVersion::V1 => DataEncode::V1,
+            // FIXME: blocked by @andylokandy, temporary fix
+            ApiVersion::V1 | ApiVersion::V1ttl => DataEncode::V1,
             ApiVersion::V2 => DataEncode::V2,
         };
         Self::ensure_to_use_data_encode(&engine, config_data_encode)?;
@@ -305,7 +324,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// `CF_DEFAULT` (`"default"`) will be returned.
     fn rawkv_cf(api_version: ApiVersion, cf: &str) -> Result<CfName> {
         match api_version {
-            ApiVersion::V1 => {
+            // FIXME: blocked by @andylokandy, temporary fix
+            ApiVersion::V1 | ApiVersion::V1ttl => {
                 if cf.is_empty() {
                     return Ok(CF_DEFAULT);
                 }
