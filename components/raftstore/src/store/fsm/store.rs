@@ -785,13 +785,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 
     fn end(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
         let now = TiInstant::now();
-        if self.poll_ctx.trans.need_flush() {
-            if now.saturating_duration_since(self.last_flush_msg_time)
+        if self.poll_ctx.trans.need_flush()
+            && now.saturating_duration_since(self.last_flush_msg_time)
                 >= Duration::from_micros(self.poll_ctx.cfg.raft_msg_flush_interval_us)
-            {
-                self.last_flush_msg_time = now;
-                self.poll_ctx.trans.flush();
-            }
+        {
+            self.last_flush_msg_time = now;
+            self.poll_ctx.trans.flush();
         }
 
         for peer in peers {

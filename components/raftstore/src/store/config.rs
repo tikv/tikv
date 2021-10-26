@@ -307,7 +307,7 @@ impl Default for Config {
             io_reschedule_concurrent_max_count: 4,
             io_reschedule_hotpot_duration: ReadableDuration::secs(5),
             store_events_flush_interval: ReadableDuration::millis(1),
-            raft_msg_flush_interval_us: 1000,
+            raft_msg_flush_interval_us: 500,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
