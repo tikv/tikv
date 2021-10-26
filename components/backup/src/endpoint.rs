@@ -639,7 +639,14 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let config = BackendConfig {
             hdfs_config: HdfsConfig {
                 hadoop_home: self.config_manager.0.read().unwrap().hadoop.home.clone(),
-                linux_user: self.config_manager.0.read().unwrap().hadoop.linux_user.clone(),
+                linux_user: self
+                    .config_manager
+                    .0
+                    .read()
+                    .unwrap()
+                    .hadoop
+                    .linux_user
+                    .clone(),
             },
         };
 

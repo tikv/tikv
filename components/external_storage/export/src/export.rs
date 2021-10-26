@@ -33,7 +33,7 @@ use external_storage::grpc_client;
 pub use external_storage::{
     read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage,
 };
-use external_storage::{BackendConfig, HdfsStorage, record_storage_create};
+use external_storage::{record_storage_create, BackendConfig, HdfsStorage};
 use futures_io::AsyncRead;
 use kvproto::brpb::{Noop, StorageBackend};
 use tikv_util::stream::block_on_external_io;
@@ -41,7 +41,10 @@ use tikv_util::time::{Instant, Limiter};
 #[cfg(feature = "cloud-storage-dylib")]
 use tikv_util::warn;
 
-pub fn create_storage(storage_backend: &StorageBackend, config: BackendConfig) -> io::Result<Box<dyn ExternalStorage>> {
+pub fn create_storage(
+    storage_backend: &StorageBackend,
+    config: BackendConfig,
+) -> io::Result<Box<dyn ExternalStorage>> {
     if let Some(backend) = &storage_backend.backend {
         create_backend(backend, config)
     } else {
@@ -53,7 +56,7 @@ pub fn create_storage(storage_backend: &StorageBackend, config: BackendConfig) -
 // This function is used by the library/server to avoid any wrapping
 pub fn create_storage_no_client(
     storage_backend: &StorageBackend,
-    config: BackendConfig
+    config: BackendConfig,
 ) -> io::Result<Box<dyn ExternalStorage>> {
     if let Some(backend) = &storage_backend.backend {
         create_backend_inner(backend, config)
@@ -115,7 +118,10 @@ pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>>
     not(feature = "cloud-storage-grpc"),
     not(feature = "cloud-storage-dylib")
 ))]
-pub fn create_backend(backend: &Backend, config: BackendConfig) -> io::Result<Box<dyn ExternalStorage>> {
+pub fn create_backend(
+    backend: &Backend,
+    config: BackendConfig,
+) -> io::Result<Box<dyn ExternalStorage>> {
     create_backend_inner(backend, config)
 }
 
@@ -150,7 +156,10 @@ fn create_config(backend: &Backend) -> Option<io::Result<Box<dyn BlobConfig>>> {
 }
 
 /// Create a new storage from the given storage backend description.
-fn create_backend_inner(backend: &Backend, config: BackendConfig) -> io::Result<Box<dyn ExternalStorage>> {
+fn create_backend_inner(
+    backend: &Backend,
+    config: BackendConfig,
+) -> io::Result<Box<dyn ExternalStorage>> {
     let start = Instant::now();
     let storage: Box<dyn ExternalStorage> = match backend {
         Backend::Local(local) => {
