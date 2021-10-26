@@ -46,6 +46,7 @@ use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
+use protobuf::Message;
 use resource_metering::cpu::collector::{register_collector, Collector, CollectorHandle};
 use resource_metering::cpu::recorder::CpuRecords;
 use tikv_util::metrics::ThreadInfoStatistics;
@@ -1940,7 +1941,7 @@ mod tests {
         impl RunnerTest {
             fn new(
                 interval: u64,
-                scheduler: Scheduler<Task<KvTestEngine>>,
+                scheduler: Scheduler<Task<KvTestEngine, RaftTestEngine>>,
                 store_stat: Arc<Mutex<StoreStat>>,
             ) -> RunnerTest {
                 let mut stats_monitor = StatsMonitor::new(Duration::from_secs(interval), scheduler);
