@@ -684,7 +684,7 @@ impl PdClient for RpcClient {
         req.set_stats(stats);
         if let Some(report) = report_opt {
             req.set_store_report(report);
-	}
+        }
         let executor = move |client: &Client, req: pdpb::StoreHeartbeatRequest| {
             let feature_gate = client.feature_gate.clone();
             let handler = client

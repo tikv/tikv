@@ -668,7 +668,7 @@ where
     }
 
     fn on_update_range(&mut self, region: Region) {
-	info!("updating reigon's range"; "region" => ?region);
+        info!("updating reigon's range"; "region" => ?region);
         let region_state_key = keys::region_state_key(region.get_id());
         let original_region_state = match self
             .ctx
@@ -702,9 +702,17 @@ where
         }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
-        meta.set_region(&self.ctx.coprocessor_host, region.clone(), &mut self.fsm.peer);
+        meta.set_region(
+            &self.ctx.coprocessor_host,
+            region.clone(),
+            &mut self.fsm.peer,
+        );
         self.fsm.peer.post_split();
-        if meta.region_ranges.remove(&enc_end_key(&original_region_state.get_region())).is_none() {
+        if meta
+            .region_ranges
+            .remove(&enc_end_key(&original_region_state.get_region()))
+            .is_none()
+        {
             panic!(
                 "{} original region does not exist in store meta",
                 self.fsm.peer.tag
