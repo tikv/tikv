@@ -213,7 +213,12 @@ pub fn make_local_backend(path: &Path) -> StorageBackend {
 }
 
 pub fn make_hdfs_backend(remote: String) -> StorageBackend {
-    // FIXME: implement prost-codec
+    #[cfg(feature = "prost-codec")]
+    {
+        StorageBackend {
+            backend: Some(Backend::Hdfs(HDFS { remote })),
+        }
+    }
     #[cfg(feature = "protobuf-codec")]
     {
         let mut backend = StorageBackend::default();
