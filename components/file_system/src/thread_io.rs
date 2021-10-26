@@ -10,7 +10,6 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use dashmap::DashMap;
 use nix::unistd::getpid;
 use nix::unistd::gettid;
 use nix::unistd::Pid;
@@ -18,17 +17,17 @@ use strum::EnumCount;
 use thread_local::ThreadLocal;
 
 lazy_static! {
-    static ref THREAD_IO_VEC: Mutex<ThreadLocal<Arc<Mutex<ThreadIO>>>> =
+    static ref THREAD_IO_SENTINEL_VEC: Mutex<ThreadLocal<Arc<Mutex<ThreadIOSentinel>>>> =
         Mutex::new(ThreadLocal::new());
 }
 
 thread_local! {
-    static THREAD_IO: Arc<Mutex<ThreadIO>> = THREAD_IO_VEC.lock().unwrap().get_or(||
-        Arc::new(Mutex::new(ThreadIO::current_default()))
+    static THREAD_IO_SENTINEL: Arc<Mutex<ThreadIOSentinel>> = THREAD_IO_SENTINEL_VEC.lock().unwrap().get_or(||
+        Arc::new(Mutex::new(ThreadIOSentinel::current_default()))
     ).clone();
 }
 
-struct ThreadIO {
+struct ThreadIOSentinel {
     id: ThreadID,
     bytes: BytesBuffer,
 }
@@ -41,53 +40,48 @@ struct ThreadID {
 struct BytesBuffer {
     current_io_type: IOType,
     total_io_bytes: [IOBytes; IOType::COUNT],
-    last_io_bytes: [IOBytes; IOType::COUNT],
+    last_io_bytes: IOBytes,
 }
 
-pub fn init_thread_io() {
-    std::thread::spawn(|| {
-        loop {
-            for thread in THREAD_IO_VEC.lock().unwrap().iter_mut() {
-                let mut thread = thread.lock().unwrap();
-                let io_bytes = fetch_exact_thread_io_bytes(&thread.id);
+pub fn fetch_all_thread_io_bytes() {
+    for sentinel in THREAD_IO_SENTINEL_VEC.lock().unwrap().iter_mut() {
+        let mut sentinel = sentinel.lock().unwrap();
+        let io_bytes = fetch_exact_thread_io_bytes(&sentinel.id);
 
-                let io_type = thread.bytes.current_io_type as usize;
-                let last_io_bytes = thread.bytes.last_io_bytes[io_type];
-                thread.bytes.total_io_bytes[io_type] += io_bytes - last_io_bytes;
-                thread.bytes.last_io_bytes[io_type] = io_bytes;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    });
+        let io_type = sentinel.bytes.current_io_type as usize;
+        let last_io_bytes = sentinel.bytes.last_io_bytes;
+        sentinel.bytes.total_io_bytes[io_type] += io_bytes - last_io_bytes;
+        sentinel.bytes.last_io_bytes = io_bytes;
+    }
 }
 
 pub fn set_io_type(new_io_type: IOType) {
-    THREAD_IO.with(|thread| {
-        let mut thread = thread.lock().unwrap();
+    THREAD_IO_SENTINEL.with(|sentinel| {
+        let mut sentinel = sentinel.lock().unwrap();
 
-        let io_bytes = fetch_exact_thread_io_bytes(&thread.id);
-        let old_io_type = thread.bytes.current_io_type as usize;
-        let last_io_bytes = thread.bytes.last_io_bytes[old_io_type];
-        thread.bytes.total_io_bytes[old_io_type] += io_bytes - last_io_bytes;
+        let io_bytes = fetch_exact_thread_io_bytes(&sentinel.id);
+        let old_io_type = sentinel.bytes.current_io_type as usize;
+        let last_io_bytes = sentinel.bytes.last_io_bytes;
+        sentinel.bytes.total_io_bytes[old_io_type] += io_bytes - last_io_bytes;
 
-        thread.bytes.current_io_type = new_io_type;
-        thread.bytes.last_io_bytes[new_io_type as usize] = io_bytes;
+        sentinel.bytes.current_io_type = new_io_type;
+        sentinel.bytes.last_io_bytes = io_bytes;
     })
 }
 
 pub fn get_io_type() -> IOType {
-    THREAD_IO.with(|thread| {
-        let thread = thread.lock().unwrap();
+    THREAD_IO_SENTINEL.with(|sentinel| {
+        let sentinel = sentinel.lock().unwrap();
 
-        thread.bytes.current_io_type
+        sentinel.bytes.current_io_type
     })
 }
 
 pub(crate) fn fetch_buffered_thread_io_bytes(io_type: IOType) -> IOBytes {
-    THREAD_IO.with(|thread| {
-        let thread = thread.lock().unwrap();
+    THREAD_IO_SENTINEL.with(|sentinel| {
+        let sentinel = sentinel.lock().unwrap();
 
-        thread.bytes.total_io_bytes[io_type as usize]
+        sentinel.bytes.total_io_bytes[io_type as usize]
     })
 }
 
@@ -109,9 +103,9 @@ fn fetch_exact_thread_io_bytes(id: &ThreadID) -> IOBytes {
     IOBytes::default()
 }
 
-impl ThreadIO {
-    fn current_default() -> ThreadIO {
-        ThreadIO {
+impl ThreadIOSentinel {
+    fn current_default() -> ThreadIOSentinel {
+        ThreadIOSentinel {
             id: ThreadID::current(),
             bytes: BytesBuffer::default(),
         }
@@ -132,7 +126,7 @@ impl Default for BytesBuffer {
         BytesBuffer {
             current_io_type: IOType::Other,
             total_io_bytes: [IOBytes::default(); IOType::COUNT],
-            last_io_bytes: [IOBytes::default(); IOType::COUNT],
+            last_io_bytes: IOBytes::default(),
         }
     }
 }
