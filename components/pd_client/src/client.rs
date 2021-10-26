@@ -672,7 +672,6 @@ impl PdClient for RpcClient {
     fn store_heartbeat(
         &self,
         mut stats: pdpb::StoreStats,
-        states: Option<vec<pdpb::GroupState>>,
         report_opt: Option<pdpb::StoreReport>,
     ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         let timer = Instant::now();
@@ -686,10 +685,6 @@ impl PdClient for RpcClient {
         if let Some(report) = report_opt {
             req.set_store_report(report);
 	}
-        if let Some(states) = states {
-            rep.set_group_states(RepeatedFiled::from(states));
-        }
-
         let executor = move |client: &Client, req: pdpb::StoreHeartbeatRequest| {
             let feature_gate = client.feature_gate.clone();
             let handler = client
