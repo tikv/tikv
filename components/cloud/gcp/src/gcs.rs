@@ -19,9 +19,7 @@ use tame_gcs::{
     types::{BucketName, ObjectId},
 };
 use tame_oauth::gcp::{ServiceAccountAccess, ServiceAccountInfo, TokenOrRequest};
-use tikv_util::stream::{
-    block_on_external_io, error_stream, retry, AsyncReadAsSyncStreamOfBytes, RetryError,
-};
+use tikv_util::stream::{error_stream, retry, AsyncReadAsSyncStreamOfBytes, RetryError};
 
 const GOOGLE_APIS: &str = "https://www.googleapis.com";
 const HARDCODED_ENDPOINTS_SUFFIX: &[&str] = &["upload/storage/v1/", "storage/v1/"];

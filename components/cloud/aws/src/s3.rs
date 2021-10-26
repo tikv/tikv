@@ -24,7 +24,7 @@ use cloud::blob::{
 };
 pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
 use tikv_util::debug;
-use tikv_util::stream::{block_on_external_io, error_stream, retry};
+use tikv_util::stream::{error_stream, retry};
 
 use crate::util;
 
