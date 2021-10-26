@@ -1785,28 +1785,6 @@ mod tests {
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
         check_result();
 
-        initializer.max_scan_batch_bytes = total_bytes / 3;
-        let start_1_3 = Instant::now();
-        block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
-        check_result();
-        // 2s to allow certain inaccuracy.
-        assert!(
-            start_1_3.saturating_elapsed() >= Duration::new(2, 0),
-            "{:?}",
-            start_1_3.saturating_elapsed()
-        );
-
-        let start_1_6 = Instant::now();
-        initializer.max_scan_batch_bytes = total_bytes / 6;
-        block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
-        check_result();
-        // 4s to allow certain inaccuracy.
-        assert!(
-            start_1_6.saturating_elapsed() >= Duration::new(4, 0),
-            "{:?}",
-            start_1_6.saturating_elapsed()
-        );
-
         initializer.build_resolver = false;
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
 
