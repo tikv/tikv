@@ -79,12 +79,8 @@ use crate::storage::{
     types::StorageCallbackType,
 };
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{
-    key_prefix::TIDB_RANGES_COMPLEMENT,
-    raw_value::{ttl_to_expire_ts, RawValue},
-    CfName, Iterable, KvEngine, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
-    DATA_KEY_PREFIX_LEN,
-};
+
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::prelude::*;
 use kvproto::kvrpcpb::ApiVersion;
 use kvproto::kvrpcpb::{
@@ -92,8 +88,6 @@ use kvproto::kvrpcpb::{
     RawGetRequest,
 };
 use kvproto::pdpb::QueryKind;
-use protobuf::well_known_types::Int32Value;
-use protobuf::ProtobufEnum;
 use raftstore::store::util::build_key_range;
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
@@ -217,8 +211,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         flow_controller: Arc<FlowController>,
         reporter: R,
     ) -> Result<Self> {
-        Self::ensure_to_use_api_version(&engine, config.api_version())?;
-
         let sched = TxnScheduler::new(
             engine.clone(),
             lock_mgr,
@@ -335,60 +327,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             }
         }
         true
-    }
-
-    /// Change the data encode flag in kvdb if the config file has a different value.
-    /// During the switch bewteen V1 and V2, only TiDB data are allowed to exist, otherwise return error.
-    fn ensure_to_use_api_version(engine: &E, config_api_version: ApiVersion) -> Result<()> {
-        let kv = engine.kv_engine();
-        let kv_api_version = kv
-            .get_msg::<Int32Value>(keys::API_VERSION_KEY)?
-            .unwrap_or_default()
-            .value;
-        let kv_api_version = ApiVersion::from_i32(kv_api_version).expect("unknown api version");
-        if kv_api_version != config_api_version {
-            // Check if there are only TiDB data in the engine
-            let snapshot = kv.snapshot();
-            for cf in DATA_CFS {
-                for (start, end) in TIDB_RANGES_COMPLEMENT {
-                    let mut unexpected_data_key = None;
-                    snapshot.scan_cf(
-                        cf,
-                        &keys::data_key(start),
-                        &keys::data_key(end),
-                        false,
-                        |key, _| {
-                            unexpected_data_key = Some(key[DATA_KEY_PREFIX_LEN..].to_vec());
-                            Ok(false)
-                        },
-                    )?;
-                    if let Some(unexpected_data_key) = unexpected_data_key {
-                        error!(
-                            "unable to switch config `storage.api_version`";
-                            "current" => ?kv_api_version,
-                            "target" => ?config_api_version,
-                            "found data key that is not written by TiDB" => log_wrappers::hex_encode_upper(&unexpected_data_key),
-                        );
-                        return Err(box_err!(
-                            "unable to switch config `storage.api_version` from {:?} to {:?} \
-                            because found data key that is not written by TiDB: {:?}",
-                            kv_api_version,
-                            config_api_version,
-                            log_wrappers::hex_encode_upper(&unexpected_data_key)
-                        ));
-                    }
-                }
-            }
-            // Check completed. Switch the encode flag.
-            kv.put_msg(
-                keys::API_VERSION_KEY,
-                &Int32Value {
-                    value: config_api_version.value(),
-                    ..Default::default()
-                },
-            )?;
-        }
-        Ok(())
     }
 
     /// Get value of the given key from a snapshot.
@@ -2360,7 +2298,7 @@ mod tests {
     use engine_traits::{raw_value::ttl_current_ts, ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
     use errors::extract_key_error;
     use futures::executor::block_on;
-    use kvproto::kvrpcpb::{ApiVersion, CommandPri, Op};
+    use kvproto::kvrpcpb::{CommandPri, Op};
     use std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -7097,93 +7035,5 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-    }
-
-    #[test]
-    fn test_switch_api_version() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-
-        // Write TiDB data.
-        let tidb_key = keys::data_key(b"m_tidb_data");
-        engine
-            .put(
-                &Context::default(),
-                Key::from_raw(&tidb_key),
-                b"val".to_vec(),
-            )
-            .unwrap();
-
-        // Default API Version is V1, should be ablle to swith to V2.
-        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-            engine.clone(),
-            DummyLockManager {},
-            ApiVersion::V2,
-        )
-        .build()
-        .unwrap();
-        drop(storage);
-
-        // Should be able to switch back to V1.
-        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-            engine.clone(),
-            DummyLockManager {},
-            ApiVersion::V1,
-        )
-        .build()
-        .unwrap();
-        drop(storage);
-
-        // Write non-TiDB data.
-        let non_tidb_key = keys::data_key(b"k1");
-        engine
-            .put(
-                &Context::default(),
-                Key::from_raw(&non_tidb_key),
-                b"val".to_vec(),
-            )
-            .unwrap();
-
-        // Should not able to switch from V1 to V2 now.
-        assert!(
-            TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-                engine,
-                DummyLockManager {},
-                ApiVersion::V2
-            )
-            .build()
-            .is_err()
-        );
-
-        // Prepare a new storage and switch it to V2.
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-            engine.clone(),
-            DummyLockManager {},
-            ApiVersion::V2,
-        )
-        .build()
-        .unwrap();
-        drop(storage);
-
-        // Write non-TiDB data.
-        let non_tidb_key = keys::data_key(b"k1");
-        engine
-            .put(
-                &Context::default(),
-                Key::from_raw(&non_tidb_key),
-                b"val".to_vec(),
-            )
-            .unwrap();
-
-        // Should not able to switch from V2 to V1 now.
-        assert!(
-            TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-                engine,
-                DummyLockManager {},
-                ApiVersion::V1
-            )
-            .build()
-            .is_err()
-        );
     }
 }

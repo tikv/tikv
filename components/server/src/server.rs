@@ -713,6 +713,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.system.take().unwrap(),
             &server_config.value().clone(),
             raft_store.clone(),
+            self.config.storage.api_version(),
             self.pd_client.clone(),
             self.state.clone(),
             self.background_worker.clone(),
