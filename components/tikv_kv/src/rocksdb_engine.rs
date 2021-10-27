@@ -15,8 +15,6 @@ use engine_traits::{
 };
 use file_system::IORateLimiter;
 use kvproto::kvrpcpb::Context;
-use kvproto::metapb;
-use raftstore::store::RegionSnapshot;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
 
@@ -34,7 +32,7 @@ const TEMP_DIR: &str = "";
 
 enum Task {
     Write(Vec<Modify>, Callback<()>),
-    Snapshot(Callback<RegionSnapshot<RocksSnapshot>>),
+    Snapshot(Callback<Arc<RocksSnapshot>>),
     Pause(Duration),
 }
 
@@ -58,7 +56,7 @@ impl Runnable for Runner {
             Task::Write(modifies, cb) => {
                 cb((CbContext::new(), write_modifies(&self.0.kv, modifies)))
             }
-            Task::Snapshot(cb) => cb((CbContext::new(), Ok(self.0.kv.snapshot()))),
+            Task::Snapshot(cb) => cb((CbContext::new(), Ok(Arc::new(self.0.kv.snapshot())))),
             Task::Pause(dur) => std::thread::sleep(dur),
         }
     }
@@ -167,47 +165,20 @@ impl Debug for RocksEngine {
 }
 
 impl Engine for RocksEngine {
-    type Snap = RegionSnapshot<RocksSnapshot>;
+    type Snap = Arc<RocksSnapshot>;
     type Local = BaseRocksEngine;
 
     fn kv_engine(&self) -> BaseRocksEngine {
         self.engines.kv.clone()
     }
 
-    fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> Result<Self::Snap> {
-        let mut region = metapb::Region::default();
-        region.set_start_key(start_key.to_owned());
-        region.set_end_key(end_key.to_owned());
-        // Use a fake peer to avoid panic.
-        region.mut_peers().push(Default::default());
-        Ok(RegionSnapshot::<RocksSnapshot>::from_raw(
-            self.kv_engine(),
-            region,
-        ))
+    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> Result<Self::Snap> {
+        self.snapshot(Default::default())
     }
 
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
-        for modify in &mut modifies {
-            match modify {
-                Modify::Delete(_, ref mut key) => {
-                    let bytes = keys::data_key(key.as_encoded());
-                    *key = Key::from_encoded(bytes);
-                }
-                Modify::Put(_, ref mut key, _) => {
-                    let bytes = keys::data_key(key.as_encoded());
-                    *key = Key::from_encoded(bytes);
-                }
-                Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
-                    let bytes = keys::data_key(key1.as_encoded());
-                    *key1 = Key::from_encoded(bytes);
-                    let bytes = keys::data_end_key(key2.as_encoded());
-                    *key2 = Key::from_encoded(bytes);
-                }
-            }
-        }
         write_modifies(&self.engines.kv, modifies)
     }
-
     fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
         self.async_write_ext(ctx, batch, cb, None, None)
     }
