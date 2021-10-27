@@ -842,7 +842,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Start resource metering.
-        let resource_metering_cpu_recorder = resource_metering::cpu::recorder::init_recorder();
+        let resource_metering_cpu_recorder =
+            resource_metering::cpu::recorder::init_recorder(self.config.resource_metering.enabled);
         let mut resource_metering_reporter_worker = Box::new(
             WorkerBuilder::new("resource-metering-reporter")
                 .pending_capacity(30)
