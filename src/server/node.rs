@@ -10,11 +10,13 @@ use crate::import::SSTImporter;
 use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
+use crate::storage::key_prefix::TIDB_RANGES_COMPLEMENT;
 use crate::storage::kv::FlowStatsReporter;
 use crate::storage::txn::flow_controller::FlowController;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{Engines, KvEngine, RaftEngine};
+use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
+use kvproto::kvrpcpb::ApiVersion;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
@@ -67,6 +69,7 @@ pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
+    api_version: ApiVersion,
     system: RaftBatchSystem<EK, ER>,
     has_started: bool,
 
@@ -86,6 +89,7 @@ where
         system: RaftBatchSystem<EK, ER>,
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
+        api_version: ApiVersion,
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
         bg_worker: Worker,
@@ -130,6 +134,7 @@ where
             cluster_id: cfg.cluster_id,
             store,
             store_cfg,
+            api_version,
             pd_client,
             system,
             has_started: false,
@@ -245,7 +250,57 @@ where
         if store_id == INVALID_ID {
             return Err(box_err!("invalid store ident {:?}", ident));
         }
+
+        self.check_api_version(engines, ident)?;
+
         Ok(store_id)
+    }
+
+    // During the api version switch only TiDB data are allowed to exist otherwise
+    // returns error.
+    fn check_api_version(&self, engines: &Engines<EK, ER>, ident: StoreIdent) -> Result<()> {
+        if ident.api_version != self.api_version {
+            // Check if there are only TiDB data in the engine
+            let snapshot = engines.kv.snapshot();
+            for cf in DATA_CFS {
+                for (start, end) in TIDB_RANGES_COMPLEMENT {
+                    let mut unexpected_data_key = None;
+                    snapshot.scan_cf(
+                        cf,
+                        &keys::data_key(start),
+                        &keys::data_key(end),
+                        false,
+                        |key, _| {
+                            unexpected_data_key = Some(key[DATA_KEY_PREFIX_LEN..].to_vec());
+                            Ok(false)
+                        },
+                    )?;
+                    if let Some(unexpected_data_key) = unexpected_data_key {
+                        error!(
+                            "unable to switch `storage.api_version`";
+                            "current" => ?ident.api_version,
+                            "target" => ?self.api_version,
+                            "found data key that is not written by TiDB" => log_wrappers::hex_encode_upper(&unexpected_data_key),
+                        );
+                        return Err(box_err!(
+                            "unable to switch `storage.api_version` from {:?} to {:?} \
+                            because found data key that is not written by TiDB: {:?}",
+                            ident.api_version,
+                            self.api_version,
+                            log_wrappers::hex_encode_upper(&unexpected_data_key)
+                        ));
+                    }
+                }
+            }
+            // Switch api version
+            let ident = StoreIdent {
+                api_version: self.api_version,
+                ..ident
+            };
+            engines.kv.put_msg(keys::STORE_IDENT_KEY, &ident)?;
+            engines.sync_kv()?;
+        }
+        Ok(())
     }
 
     fn alloc_id(&self) -> Result<u64> {
