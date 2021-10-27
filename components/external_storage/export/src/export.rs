@@ -33,10 +33,10 @@ use encryption::{
 use external_storage::dylib_client;
 #[cfg(feature = "cloud-storage-grpc")]
 use external_storage::grpc_client;
-use external_storage::record_storage_create;
 pub use external_storage::{
     read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage,
 };
+use external_storage::{record_storage_create, BackendConfig, HdfsStorage};
 use futures_io::AsyncRead;
 use kvproto::brpb::{Noop, StorageBackend};
 use tikv_util::stream::block_on_external_io;
@@ -44,9 +44,12 @@ use tikv_util::time::{Instant, Limiter};
 #[cfg(feature = "cloud-storage-dylib")]
 use tikv_util::warn;
 
-pub fn create_storage(storage_backend: &StorageBackend) -> io::Result<Box<dyn ExternalStorage>> {
+pub fn create_storage(
+    storage_backend: &StorageBackend,
+    config: BackendConfig,
+) -> io::Result<Box<dyn ExternalStorage>> {
     if let Some(backend) = &storage_backend.backend {
-        create_backend(backend)
+        create_backend(backend, config)
     } else {
         Err(bad_storage_backend(storage_backend))
     }
@@ -56,9 +59,10 @@ pub fn create_storage(storage_backend: &StorageBackend) -> io::Result<Box<dyn Ex
 // This function is used by the library/server to avoid any wrapping
 pub fn create_storage_no_client(
     storage_backend: &StorageBackend,
+    config: BackendConfig,
 ) -> io::Result<Box<dyn ExternalStorage>> {
     if let Some(backend) = &storage_backend.backend {
-        create_backend_inner(backend)
+        create_backend_inner(backend, config)
     } else {
         Err(bad_storage_backend(storage_backend))
     }
@@ -117,8 +121,11 @@ pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>>
     not(feature = "cloud-storage-grpc"),
     not(feature = "cloud-storage-dylib")
 ))]
-pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>> {
-    create_backend_inner(backend)
+pub fn create_backend(
+    backend: &Backend,
+    config: BackendConfig,
+) -> io::Result<Box<dyn ExternalStorage>> {
+    create_backend_inner(backend, config)
 }
 
 #[cfg(any(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
@@ -152,13 +159,17 @@ fn create_config(backend: &Backend) -> Option<io::Result<Box<dyn BlobConfig>>> {
 }
 
 /// Create a new storage from the given storage backend description.
-fn create_backend_inner(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>> {
+fn create_backend_inner(
+    backend: &Backend,
+    config: BackendConfig,
+) -> io::Result<Box<dyn ExternalStorage>> {
     let start = Instant::now();
     let storage: Box<dyn ExternalStorage> = match backend {
         Backend::Local(local) => {
             let p = Path::new(&local.path);
             Box::new(LocalStorage::new(p)?) as Box<dyn ExternalStorage>
         }
+        Backend::Hdfs(hdfs) => Box::new(HdfsStorage::new(&hdfs.remote, config.hdfs_config)?),
         Backend::Noop(_) => Box::new(NoopStorage::default()) as Box<dyn ExternalStorage>,
         #[cfg(feature = "cloud-aws")]
         Backend::S3(config) => blob_store(S3Storage::from_input(config.clone())?),
@@ -173,7 +184,6 @@ fn create_backend_inner(backend: &Backend) -> io::Result<Box<dyn ExternalStorage
                 return Err(bad_backend(Backend::CloudDynamic(dyn_backend.clone())));
             }
         },
-        Backend::Hdfs(..) => unimplemented!(),
         #[cfg(not(any(feature = "cloud-gcp", feature = "cloud-aws")))]
         _ => return Err(bad_backend(backend.clone())),
     };
@@ -210,6 +220,21 @@ pub fn make_local_backend(path: &Path) -> StorageBackend {
     {
         let mut backend = StorageBackend::default();
         backend.mut_local().set_path(path);
+        backend
+    }
+}
+
+pub fn make_hdfs_backend(remote: String) -> StorageBackend {
+    #[cfg(feature = "prost-codec")]
+    {
+        StorageBackend {
+            backend: Some(Backend::Hdfs(HDFS { remote })),
+        }
+    }
+    #[cfg(feature = "protobuf-codec")]
+    {
+        let mut backend = StorageBackend::default();
+        backend.mut_hdfs().set_remote(remote);
         backend
     }
 }
@@ -272,7 +297,7 @@ mod tests {
         let temp_dir = Builder::new().tempdir().unwrap();
         let path = temp_dir.path();
         let backend = make_local_backend(&path.join("not_exist"));
-        match create_storage(&backend) {
+        match create_storage(&backend, Default::default()) {
             Ok(_) => panic!("must be NotFound error"),
             Err(e) => {
                 assert_eq!(e.kind(), io::ErrorKind::NotFound);
@@ -280,13 +305,13 @@ mod tests {
         }
 
         let backend = make_local_backend(path);
-        create_storage(&backend).unwrap();
+        create_storage(&backend, Default::default()).unwrap();
 
         let backend = make_noop_backend();
-        create_storage(&backend).unwrap();
+        create_storage(&backend, Default::default()).unwrap();
 
         let backend = StorageBackend::default();
-        assert!(create_storage(&backend).is_err());
+        assert!(create_storage(&backend, Default::default()).is_err());
     }
 }
 
