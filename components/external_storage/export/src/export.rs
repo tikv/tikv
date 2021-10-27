@@ -22,6 +22,7 @@ use kvproto::brpb::{Gcs, S3};
 
 #[cfg(feature = "cloud-storage-dylib")]
 use crate::dylib;
+use async_trait::async_trait;
 #[cfg(any(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
 use cloud::blob::BlobConfig;
 use cloud::blob::{BlobStorage, PutResrouce};
@@ -32,7 +33,7 @@ use external_storage::dylib_client;
 use external_storage::grpc_client;
 use external_storage::record_storage_create;
 pub use external_storage::{
-    read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage,
+    read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage, UnpinReader,
 };
 use futures_io::AsyncRead;
 use kvproto::brpb::{Noop, StorageBackend};
@@ -307,6 +308,7 @@ pub struct EncryptedExternalStorage {
     pub storage: Box<dyn ExternalStorage>,
 }
 
+#[async_trait]
 impl ExternalStorage for EncryptedExternalStorage {
     fn name(&self) -> &'static str {
         self.storage.name()
@@ -314,13 +316,8 @@ impl ExternalStorage for EncryptedExternalStorage {
     fn url(&self) -> io::Result<url::Url> {
         self.storage.url()
     }
-    fn write(
-        &self,
-        name: &str,
-        reader: Box<dyn AsyncRead + Send + Unpin>,
-        content_length: u64,
-    ) -> io::Result<()> {
-        self.storage.write(name, reader, content_length)
+    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
+        self.storage.write(name, reader, content_length).await
     }
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
         self.storage.read(name)
@@ -346,6 +343,7 @@ impl ExternalStorage for EncryptedExternalStorage {
     }
 }
 
+#[async_trait]
 impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
     fn name(&self) -> &'static str {
         (**self).config().name()
@@ -353,13 +351,10 @@ impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
     fn url(&self) -> io::Result<url::Url> {
         (**self).config().url()
     }
-    fn write(
-        &self,
-        name: &str,
-        reader: Box<dyn AsyncRead + Send + Unpin>,
-        content_length: u64,
-    ) -> io::Result<()> {
-        block_on_external_io((**self).put(name, PutResrouce(reader), content_length))
+    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
+        (**self)
+            .put(name, PutResrouce(reader.0), content_length)
+            .await
     }
 
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {

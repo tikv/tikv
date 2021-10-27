@@ -528,6 +528,7 @@ mod tests {
     use super::*;
     use rusoto_core::signature::SignedRequest;
     use rusoto_mock::MockRequestDispatcher;
+    use tikv_util::stream::block_on_external_io;
 
     #[test]
     fn test_s3_config() {
@@ -641,11 +642,11 @@ mod tests {
         let credentials_provider =
             StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
         let s = S3Storage::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
-        s.put(
+        block_on_external_io(s.put(
             "key2",
             PutResrouce(Box::new(magic_contents.as_bytes())),
             magic_contents.len() as u64,
-        )
+        ))
         .unwrap();
     }
 

@@ -13,6 +13,7 @@ use std::marker::Unpin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use file_system::File;
 use futures_io::AsyncRead;
 use futures_util::AsyncReadExt;
@@ -39,20 +40,22 @@ pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
         .observe(start.saturating_elapsed().as_secs_f64());
 }
 
+/// UnpinReader is a simple wrapper for AsyncRead + Unpin + Send.
+/// This wrapper would remove the lifetime at the argument of the generted async function
+/// in order to make rustc happy. (And reduce the length of signture of write.)
+/// see https://github.com/rust-lang/rust/issues/63033
+pub struct UnpinReader(pub Box<dyn AsyncRead + Unpin + Send>);
+
 /// An abstraction of an external storage.
 // TODO: these should all be returning a future (i.e. async fn).
+#[async_trait]
 pub trait ExternalStorage: 'static + Send + Sync {
     fn name(&self) -> &'static str;
 
     fn url(&self) -> io::Result<url::Url>;
 
     /// Write all contents of the read to the given path.
-    fn write(
-        &self,
-        name: &str,
-        reader: Box<dyn AsyncRead + Send + Unpin>,
-        content_length: u64,
-    ) -> io::Result<()>;
+    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()>;
 
     /// Read all contents of the given path.
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_>;
@@ -82,6 +85,7 @@ pub trait ExternalStorage: 'static + Send + Sync {
     }
 }
 
+#[async_trait]
 impl ExternalStorage for Arc<dyn ExternalStorage> {
     fn name(&self) -> &'static str {
         (**self).name()
@@ -91,13 +95,8 @@ impl ExternalStorage for Arc<dyn ExternalStorage> {
         (**self).url()
     }
 
-    fn write(
-        &self,
-        name: &str,
-        reader: Box<dyn AsyncRead + Send + Unpin>,
-        content_length: u64,
-    ) -> io::Result<()> {
-        (**self).write(name, reader, content_length)
+    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
+        (**self).write(name, reader, content_length).await
     }
 
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
@@ -105,6 +104,7 @@ impl ExternalStorage for Arc<dyn ExternalStorage> {
     }
 }
 
+#[async_trait]
 impl ExternalStorage for Box<dyn ExternalStorage> {
     fn name(&self) -> &'static str {
         self.as_ref().name()
@@ -114,13 +114,8 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
         self.as_ref().url()
     }
 
-    fn write(
-        &self,
-        name: &str,
-        reader: Box<dyn AsyncRead + Send + Unpin>,
-        content_length: u64,
-    ) -> io::Result<()> {
-        self.as_ref().write(name, reader, content_length)
+    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
+        self.as_ref().write(name, reader, content_length).await
     }
 
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
