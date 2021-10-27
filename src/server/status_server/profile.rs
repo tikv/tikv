@@ -410,13 +410,13 @@ mod tests {
             .build()
             .unwrap();
 
-        // Test activated profiling can be stopped by canceling the period stream.
+        // Test heap profiling can be stopped by sending an error.
         let (mut tx, rx) = mpsc::channel(1);
         let res = rt.spawn(activate_heap_profile(rx, || {}));
         block_on(tx.send(Err("test".to_string()))).unwrap();
         assert!(block_on(res).unwrap().is_err());
 
-        // Test activated profiling can be stopped by the handle.
+        // Test heap profiling can be activated again.
         let (tx, rx) = sync_channel::<i32>(1);
         let on_activated = move || drop(tx);
         let check_activated = move || rx.recv().is_err();
