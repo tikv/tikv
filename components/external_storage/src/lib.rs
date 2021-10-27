@@ -83,16 +83,7 @@ pub trait ExternalStorage: 'static + Send + Sync {
         // a "TimedOut" error.
         // (at 8 KB/s for a 2 MB buffer, this means we timeout after 4m16s.)
         let min_read_speed: usize = 8192;
-
-        let mut input = match file_crypter {
-            Some(x) => Box::new(DecrypterReader::new(
-                reader,
-                encryption_method_from_db_encryption_method(x.method),
-                &x.key,
-                Iv::from_slice(&x.iv)?,
-            )?),
-            None => reader,
-        };
+        let mut input = encrypt_wrap_reader(file_crypter, reader)?;
 
         block_on_external_io(read_external_storage_into_file(
             &mut input,
@@ -148,6 +139,23 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
         self.as_ref().read(name)
     }
+}
+
+pub fn encrypt_wrap_reader<'a>(
+    file_crypter: Option<FileEncryptionInfo>,
+    reader: Box<dyn AsyncRead + Unpin + 'a>,
+) -> io::Result<Box<dyn AsyncRead + Unpin + 'a>> {
+    let input = match file_crypter {
+        Some(x) => Box::new(DecrypterReader::new(
+            reader,
+            encryption_method_from_db_encryption_method(x.method),
+            &x.key,
+            Iv::from_slice(&x.iv)?,
+        )?),
+        None => reader,
+    };
+
+    Ok(input)
 }
 
 pub async fn read_external_storage_into_file(

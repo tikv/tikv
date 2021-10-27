@@ -26,17 +26,15 @@ use crate::dylib;
 #[cfg(any(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
 use cloud::blob::BlobConfig;
 use cloud::blob::BlobStorage;
-use encryption::{
-    encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader, Iv,
-};
+use encryption::DataKeyManager;
 #[cfg(feature = "cloud-storage-dylib")]
 use external_storage::dylib_client;
 #[cfg(feature = "cloud-storage-grpc")]
 use external_storage::grpc_client;
+use external_storage::{encrypt_wrap_reader, record_storage_create, BackendConfig, HdfsStorage};
 pub use external_storage::{
     read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage,
 };
-use external_storage::{record_storage_create, BackendConfig, HdfsStorage};
 use futures_io::AsyncRead;
 use kvproto::brpb::{Noop, StorageBackend};
 use tikv_util::stream::block_on_external_io;
@@ -365,16 +363,7 @@ impl ExternalStorage for EncryptedExternalStorage {
         let file_writer: &mut dyn Write =
             &mut self.key_manager.create_file_for_write(&restore_name)?;
         let min_read_speed: usize = 8192;
-
-        let mut input = match file_crypter {
-            Some(x) => Box::new(DecrypterReader::new(
-                reader,
-                encryption_method_from_db_encryption_method(x.method),
-                &x.key,
-                Iv::from_slice(&x.iv)?,
-            )?),
-            None => reader,
-        };
+        let mut input = encrypt_wrap_reader(file_crypter, reader)?;
 
         block_on_external_io(read_external_storage_into_file(
             &mut input,
