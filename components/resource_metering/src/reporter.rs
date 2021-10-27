@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::collector::{register_collector, CollectorHandle, CollectorImpl};
+use crate::metrics::REPORT_DATA_COUNTER;
 use crate::{Client, Config, RawRecords, RecorderController, Records};
 
 use std::fmt::{self, Display, Formatter};
@@ -129,6 +130,9 @@ impl Reporter {
 
         // No matter clients exist or not, records should be taken in order to reset.
         let records = Arc::new(std::mem::take(&mut self.records));
+        REPORT_DATA_COUNTER
+            .with_label_values(&["collected"])
+            .inc_by(records.len() as _);
         for c in &mut self.clients {
             c.as_mut().upload_records(records.clone());
         }

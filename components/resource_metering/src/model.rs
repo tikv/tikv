@@ -219,6 +219,10 @@ impl Records {
             false
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.records.len() + self.others.is_empty().then(|| 0).unwrap_or(1)
+    }
 }
 
 #[cfg(test)]

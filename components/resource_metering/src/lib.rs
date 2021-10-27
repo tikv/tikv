@@ -18,6 +18,7 @@ mod client;
 mod collector;
 mod config;
 mod localstorage;
+pub(crate) mod metrics;
 mod model;
 mod publisher;
 mod recorder;

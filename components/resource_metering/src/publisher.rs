@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::metrics::{IGNORED_DATA_COUNTER, REPORT_DATA_COUNTER, REPORT_DURATION_HISTOGRAM};
 use crate::reporter::ClientRegistry;
 use crate::{Client, Records};
 
@@ -63,6 +64,7 @@ impl ResourceMeteringPubSub for ResourceMeteringPublisher {
                     break;
                 }
 
+                let _t = REPORT_DURATION_HISTOGRAM.start_timer();
                 let records = records.unwrap();
                 for (tag, record) in &records.records {
                     let mut req = ResourceUsageRecord::default();
@@ -74,6 +76,7 @@ impl ResourceMeteringPubSub for ResourceMeteringPublisher {
                         warn!("failed to send records"; "error" => ?err);
                         return;
                     };
+                    REPORT_DATA_COUNTER.with_label_values(&["sent"]).inc();
                 }
                 let others = &records.others;
                 if !others.is_empty() {
@@ -85,6 +88,7 @@ impl ResourceMeteringPubSub for ResourceMeteringPublisher {
                         warn!("failed to send records"; "error" => ?err);
                         return;
                     }
+                    REPORT_DATA_COUNTER.with_label_values(&["sent"]).inc();
                 }
             }
         };
@@ -106,7 +110,9 @@ impl PubClient {
 
 impl Client for PubClient {
     fn upload_records(&mut self, records: Arc<Records>) {
-        self.tx.try_send(records).ok();
+        if self.tx.try_send(records).is_err() {
+            IGNORED_DATA_COUNTER.with_label_values(&["report"]).inc();
+        }
     }
 
     fn is_closed(&self) -> bool {
