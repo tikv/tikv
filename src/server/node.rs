@@ -251,7 +251,7 @@ where
             return Err(box_err!("invalid store ident {:?}", ident));
         }
 
-        self.check_api_version(ident)?;
+        self.check_api_version(engines, ident)?;
 
         Ok(store_id)
     }
