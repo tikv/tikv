@@ -53,7 +53,18 @@ impl Runnable for Reporter {
 impl RunnableWithTimer for Reporter {
     fn on_timeout(&mut self) {
         self.handle_client_register();
-        self.upload();
+
+        let pending_cnt = self.clients.iter().filter(|c| c.is_pending()).count();
+        let running_cnt = self.clients.len() - pending_cnt;
+
+        // sampling will be paused if no clients case about the results
+        if running_cnt > 0 {
+            self.recorder_ctl.resume();
+            self.upload();
+        } else {
+            self.records.clear();
+            self.recorder_ctl.pause();
+        }
     }
 
     fn get_interval(&self) -> Duration {
@@ -111,16 +122,6 @@ impl Reporter {
         if self.clients.len() > 256 {
             warn!("too many clients"; "len" => self.clients.len());
         }
-
-        let pending_cnt = self.clients.iter().filter(|c| c.is_pending()).count();
-        let running_cnt = self.clients.len() - pending_cnt;
-
-        // sampling can be paused if no clients case about the results
-        if running_cnt > 0 {
-            self.recorder_ctl.resume();
-        } else {
-            self.recorder_ctl.pause();
-        }
     }
 
     fn upload(&mut self) {
@@ -128,7 +129,6 @@ impl Reporter {
             return;
         }
 
-        // No matter clients exist or not, records should be taken in order to reset.
         let records = Arc::new(std::mem::take(&mut self.records));
         REPORT_DATA_COUNTER
             .with_label_values(&["collected"])
