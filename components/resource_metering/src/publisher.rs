@@ -115,7 +115,7 @@ impl Client for PubClient {
         }
     }
 
-    fn is_closed(&self) -> bool {
+    fn is_down(&self) -> bool {
         self.is_closed.load(Ordering::SeqCst)
     }
 }

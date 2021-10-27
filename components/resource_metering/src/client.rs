@@ -23,9 +23,9 @@ pub trait Client: Send {
         false
     }
 
-    // `is_closed` indicates that the client has been closed and can be cleared.
-    // Note that: once a client is closed, it cannot go back to be non-closed.
-    fn is_closed(&self) -> bool {
+    // `is_down` indicates that the client has been closed and can be cleared.
+    // Note that: once a client is down, it cannot go back to be up.
+    fn is_down(&self) -> bool {
         false
     }
 }

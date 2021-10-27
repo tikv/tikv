@@ -106,7 +106,7 @@ impl Reporter {
         }
 
         // remove closed clients
-        self.clients.drain_filter(|c| c.is_closed()).count();
+        self.clients.drain_filter(|c| c.is_down()).count();
 
         if self.clients.len() > 256 {
             warn!("too many clients"; "len" => self.clients.len());
