@@ -94,6 +94,7 @@ impl<'a, I, T> Future for ProfileGuard<'a, I, T> {
 }
 
 /// Trigger a heap profie and return the content.
+#[allow(dead_code)]
 pub async fn start_one_heap_profile<F>(end: F, use_jeprof: bool) -> Result<Vec<u8>, String>
 where
     F: Future<Output = Result<(), String>> + Send + 'static,
