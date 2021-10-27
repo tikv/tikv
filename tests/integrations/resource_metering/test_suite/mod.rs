@@ -63,7 +63,7 @@ impl TestSuite {
             Box::new(ConfigManager::new(
                 resource_metering_cfg.clone(),
                 scheduler.clone(),
-                init_recorder(),
+                init_recorder(tikv_cfg.resource_metering.enabled),
             )),
         );
         let env = Arc::new(Environment::new(2));

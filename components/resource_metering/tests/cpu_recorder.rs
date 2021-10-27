@@ -161,8 +161,7 @@ mod linux {
 
     #[test]
     fn test_cpu_record() {
-        let handle = init_recorder();
-        handle.resume();
+        let handle = init_recorder(true);
         fail::cfg("cpu-record-test-filter", "return").unwrap();
 
         defer! {{
