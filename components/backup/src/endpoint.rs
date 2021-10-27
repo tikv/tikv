@@ -11,6 +11,7 @@ use std::{fmt, thread};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, CfName, SstCompressionType};
+use external_storage::{BackendConfig, HdfsConfig};
 use external_storage_export::{create_storage, ExternalStorage};
 use file_system::{IOType, WithIOType};
 use futures::channel::mpsc::*;
@@ -692,6 +693,19 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let concurrency_manager = self.concurrency_manager.clone();
         let batch_size = self.config_manager.0.read().unwrap().batch_size;
         let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
+        let config = BackendConfig {
+            hdfs_config: HdfsConfig {
+                hadoop_home: self.config_manager.0.read().unwrap().hadoop.home.clone(),
+                linux_user: self
+                    .config_manager
+                    .0
+                    .read()
+                    .unwrap()
+                    .hadoop
+                    .linux_user
+                    .clone(),
+            },
+        };
 
         let limit = self.softlimit.limit();
         self.pool.borrow_mut().spawn(move || {
@@ -702,7 +716,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             });
 
             // Check if we can open external storage.
-            let backend = match create_storage(&request.backend) {
+            let backend = match create_storage(&request.backend, config) {
                 Ok(backend) => backend,
                 Err(err) => {
                     error_unknown!(?err; "backup create storage failed");

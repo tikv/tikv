@@ -85,7 +85,7 @@ fn test_backup_and_import() {
 
     // Use importer to restore backup files.
     let backend = make_local_backend(&storage_path);
-    let storage = create_storage(&backend).unwrap();
+    let storage = create_storage(&backend, Default::default()).unwrap();
     let region = suite.cluster.get_region(b"");
     let mut sst_meta = SstMeta::default();
     sst_meta.region_id = region.get_id();
@@ -175,7 +175,7 @@ fn test_backup_huge_range_and_import() {
 
     // Use importer to restore backup files.
     let backend = make_local_backend(&storage_path);
-    let storage = create_storage(&backend).unwrap();
+    let storage = create_storage(&backend, Default::default()).unwrap();
     let region = suite.cluster.get_region(b"");
     let mut sst_meta = SstMeta::default();
     sst_meta.region_id = region.get_id();
@@ -318,7 +318,7 @@ fn test_backup_rawkv() {
 
     // Use importer to restore backup files.
     let backend = make_local_backend(&storage_path);
-    let storage = create_storage(&backend).unwrap();
+    let storage = create_storage(&backend, Default::default()).unwrap();
     let region = suite.cluster.get_region(b"");
     let mut sst_meta = SstMeta::default();
     sst_meta.region_id = region.get_id();
