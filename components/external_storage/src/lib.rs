@@ -21,6 +21,9 @@ use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
 use tikv_util::time::{Instant, Limiter};
 use tokio::time::timeout;
 
+mod hdfs;
+pub use hdfs::HdfsConfig;
+pub use hdfs::HdfsStorage;
 mod local;
 pub use local::LocalStorage;
 mod noop;
@@ -45,6 +48,11 @@ pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
 /// in order to make rustc happy. (And reduce the length of signture of write.)
 /// see https://github.com/rust-lang/rust/issues/63033
 pub struct UnpinReader(pub Box<dyn AsyncRead + Unpin + Send>);
+
+#[derive(Debug, Default)]
+pub struct BackendConfig {
+    pub hdfs_config: HdfsConfig,
+}
 
 /// An abstraction of an external storage.
 // TODO: these should all be returning a future (i.e. async fn).

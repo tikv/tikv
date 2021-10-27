@@ -441,7 +441,8 @@ mod tests {
             .unwrap();
         let db = rocks.get_rocksdb();
         let backend = external_storage_export::make_local_backend(temp.path());
-        let storage = external_storage_export::create_storage(&backend).unwrap();
+        let storage =
+            external_storage_export::create_storage(&backend, Default::default()).unwrap();
 
         // Test empty file.
         let mut r = kvproto::metapb::Region::default();
