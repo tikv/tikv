@@ -179,6 +179,7 @@ impl Engine for RocksEngine {
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
         write_modifies(&self.engines.kv, modifies)
     }
+
     fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
         self.async_write_ext(ctx, batch, cb, None, None)
     }

@@ -966,7 +966,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> Result<()> {
         if self.api_version == ApiVersion::V1ttl {
             return Err(box_err!(
-                "can't sched txn cmd({}) with TTL enabled in API V1",
+                "can't sched txn cmd({}) in API V1 with TTL enabled",
                 cmd.cmd.tag()
             ));
         }
@@ -1870,12 +1870,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                match api_version {
-                    ApiVersion::V1 | ApiVersion::V1ttl => {
-                        return Err(box_err!("raw_checksum is only available in API V2"));
-                    }
-                    _ => (),
+                if let ApiVersion::V1 | ApiVersion::V1ttl = api_version {
+                    return Err(box_err!("raw_checksum is only available in API V2"));
                 }
+
                 if algorithm != ChecksumAlgorithm::Crc64Xor {
                     return Err(box_err!("unknown checksum algorithm {:?}", algorithm));
                 }
@@ -3809,7 +3807,7 @@ mod tests {
                 .into_iter()
                 .map(|(key, value, _)| (key, value))
                 .collect();
-            let ttls = if matches!(api_version, ApiVersion::V1ttl | ApiVersion::V2) {
+            let ttls = if let ApiVersion::V1ttl | ApiVersion::V2 = api_version {
                 test_data
                     .clone()
                     .into_iter()
@@ -3838,7 +3836,7 @@ mod tests {
                         .unwrap(),
                 );
             }
-            if matches!(api_version, ApiVersion::V1ttl | ApiVersion::V2) {
+            if let ApiVersion::V1ttl | ApiVersion::V2 = api_version {
                 // Verify ttl one by one
                 for (key, _, ttl) in test_data {
                     let res =

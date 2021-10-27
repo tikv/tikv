@@ -337,6 +337,7 @@ mod tests {
             let metas = w.finish().unwrap();
             assert_eq!(metas.len(), 1);
         }
+        inner(ApiVersion::V1);
         inner(ApiVersion::V1ttl);
         inner(ApiVersion::V2);
     }

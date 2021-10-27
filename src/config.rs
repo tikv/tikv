@@ -591,7 +591,7 @@ impl DefaultCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        if matches!(api_version, ApiVersion::V1ttl | ApiVersion::V2) {
+        if let ApiVersion::V1ttl | ApiVersion::V2 = api_version {
             cf_opts.add_table_properties_collector_factory(
                 "tikv.ttl-properties-collector",
                 Box::new(TtlPropertiesCollectorFactory { api_version }),

@@ -77,7 +77,7 @@ fn start_raftstore(
             .as_path()
             .display()
             .to_string();
-        Arc::new(SSTImporter::new(&cfg.import, &p, None, ApiVersion::V1).unwrap())
+        Arc::new(SSTImporter::new(&cfg.import, &p, None, cfg.storage.api_version()).unwrap())
     };
     let snap_mgr = {
         let p = dir

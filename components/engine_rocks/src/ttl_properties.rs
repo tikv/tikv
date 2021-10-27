@@ -167,11 +167,11 @@ mod tests {
             };
 
             let case1 = [
-                ("za", 0),
-                ("zb", UnixSecs::now().into_inner()),
-                ("zc", 1),
-                ("zd", u64::MAX),
-                ("ze", 0),
+                ("zr\0a", 0),
+                ("zr\0b", UnixSecs::now().into_inner()),
+                ("zr\0c", 1),
+                ("zr\0d", u64::MAX),
+                ("zr\0e", 0),
             ];
             let props = get_properties(&case1).unwrap();
             assert_eq!(props.max_expire_ts, u64::MAX);
@@ -181,19 +181,17 @@ mod tests {
                 ApiVersion::V2 => assert_eq!(props.min_expire_ts, 0),
             }
 
-            let case2 = [("za", 0)];
+            let case2 = [("zr\0a", 0)];
             assert!(get_properties(&case2).is_err());
 
             let case3 = [];
             assert!(get_properties(&case3).is_err());
 
-            let case4 = [("za", 1)];
+            let case4 = [("zr\0a", 1)];
             let props = get_properties(&case4).unwrap();
             assert_eq!(props.max_expire_ts, 1);
             assert_eq!(props.min_expire_ts, 1);
         }
-
-        inner(ApiVersion::V1);
         inner(ApiVersion::V1ttl);
         inner(ApiVersion::V2);
     }
