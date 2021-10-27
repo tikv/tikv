@@ -716,7 +716,8 @@ where
             acceptor.set_ca_file(&self.security_config.ca_path)?;
             acceptor.set_certificate_chain_file(&self.security_config.cert_path)?;
             acceptor.set_private_key_file(&self.security_config.key_path, SslFiletype::PEM)?;
-            if !self.security_config.cert_allowed_cn.is_empty() {
+            if !self.security_config.cert_allowed_cn.is_empty()
+                || !self.security_config.cert_allowed_san.is_empty() {
                 acceptor.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
             }
             let acceptor = acceptor.build();
@@ -755,7 +756,6 @@ impl ServerConnection for AddrStream {
 //
 // For now, the check only verifies the role of the peer certificate.
 fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool {
-    // if `cert_allowed_cn` is empty, skip check and return true
     if !security_config.cert_allowed_cn.is_empty() {
         if let Some(x509) = cert {
             if let Some(name) = x509
@@ -771,10 +771,36 @@ fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool 
                 );
             }
         }
-        false
-    } else {
-        true
+        return false;
     }
+
+    if !security_config.cert_allowed_san.is_empty() {
+        if let Some(x509) = cert {
+            if let Some(sans) = x509.subject_alt_names() {
+                for san in sans.into_iter() {
+                    let mut is_peer_authorized = false;
+                    if let Some(dns_name) = san.dnsname() {
+                        is_peer_authorized = security::match_peer_names(
+                            &security_config.cert_allowed_san,
+                            dns_name,
+                        );
+                    } else if let Some(uri) = san.uri() {
+                        is_peer_authorized = security::match_peer_names(
+                            &security_config.cert_allowed_san,
+                            uri,
+                        );
+                    }
+                    if is_peer_authorized {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    // if `cert_allowed_cn` and `cert_allowed_san` is empty, skip check and return true
+    true
 }
 
 fn tls_incoming(
