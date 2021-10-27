@@ -4,7 +4,7 @@ use lazy_static::*;
 use prometheus::*;
 
 lazy_static! {
-    pub static ref STAT_TASK_COUNT: prometheus::IntCounter = prometheus::register_int_counter!(
+    pub static ref STAT_TASK_COUNT: IntCounter = register_int_counter!(
         "tikv_resource_metering_stat_task_count",
         "Counter of stat_task call"
     )
