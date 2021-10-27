@@ -850,23 +850,27 @@ where
             }
         }
 
-        if self.get_store().is_applying_snapshot() {
-            if !self.mut_store().cancel_applying_snap() {
-                info!(
-                    "stale peer is applying snapshot, will destroy next time";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                );
-                return None;
-            } else {
-                // The snapshot is canceled so the context should be None.
-                // Remember the snapshot should not be canceled and the context
-                // should be None only after applying snapshot in normal case.
-                // But here is safe becasue this peer is about to destroy and
-                // `pending_remove` will be true, namely no more ready will be fetched.
-                self.apply_snap_ctx = None;
-            }
+        if self.get_store().is_applying_snapshot() && !self.mut_store().cancel_applying_snap() {
+            info!(
+                "stale peer is applying snapshot, will destroy next time";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            return None;
         }
+
+        // There is no applying snapshot or snapshot is canceled so the `apply_snap_ctx`
+        // should be set to None.
+        // 1. If the snapshot is canceled, the `apply_snap_ctx` should be None.
+        //    Remember the snapshot should not be canceled and the context should
+        //    be None only after applying snapshot in normal case. But here is safe
+        //    becasue this peer is about to destroy and `pending_remove` will be true,
+        //    namely no more ready will be fetched.
+        // 2. If there is no applying snapshot, the `apply_snap_ctx` should also be None.
+        //    It's possible that the snapshot was canceled successfully before but
+        //    `cancel_applying_snap` returns false. If so, at this time, `apply_snap_ctx`
+        //    is Some and should be set to None.
+        self.apply_snap_ctx = None;
 
         self.pending_remove = true;
 
