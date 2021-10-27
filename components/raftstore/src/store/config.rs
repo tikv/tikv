@@ -197,7 +197,13 @@ pub struct Config {
 
     pub cmd_batch: bool,
 
-    // When the size of raft db writebatch exceeds this value, write will be triggered.
+    /// When the count of concurrent ready exceeds this value, command will not be proposed
+    /// until the previous ready has been persisted.
+    /// If `cmd_batch` is 0, this config will have no effect.
+    /// If it is 0, it means no limit.
+    pub cmd_batch_concurrent_ready_max_count: usize,
+
+    /// When the size of raft db writebatch exceeds this value, write will be triggered.
     pub raft_write_size_limit: ReadableSize,
 
     pub waterfall_metrics: bool,
@@ -292,6 +298,7 @@ impl Default for Config {
             perf_level: PerfLevel::EnableTime,
             evict_cache_on_memory_ratio: 0.2,
             cmd_batch: true,
+            cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
             waterfall_metrics: false,
             io_reschedule_concurrent_max_count: 4,
@@ -472,8 +479,16 @@ impl Config {
         } else {
             self.store_batch_system.max_batch_size = Some(1024);
         }
+        if self.store_io_pool_size == 0 {
+            return Err(box_err!("store-io-pool-size should be greater than 0"));
+        }
+        if self.store_io_notify_capacity == 0 {
+            return Err(box_err!(
+                "store-io-notify-capacity should be greater than 0"
+            ));
+        }
         if self.future_poll_size == 0 {
-            return Err(box_err!("future-poll-size should be greater than 0."));
+            return Err(box_err!("future-poll-size should be greater than 0"));
         }
 
         // Avoid hibernated peer being reported as down peer.
@@ -661,10 +676,10 @@ impl Config {
             .set(self.store_batch_system.pool_size as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_io_pool_size"])
-            .set((self.store_io_pool_size as i32).into());
+            .set(self.store_io_pool_size as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_io_notify_capacity"])
-            .set((self.store_io_notify_capacity as i32).into());
+            .set(self.store_io_notify_capacity as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
@@ -675,6 +690,9 @@ impl Config {
             .with_label_values(&["cmd_batch"])
             .set((self.cmd_batch as i32).into());
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["cmd_batch_concurrent_ready_max_count"])
+            .set(self.cmd_batch_concurrent_ready_max_count as f64);
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_write_size_limit"])
             .set(self.raft_write_size_limit.0 as f64);
         CONFIG_RAFTSTORE_GAUGE
@@ -682,7 +700,7 @@ impl Config {
             .set((self.waterfall_metrics as i32).into());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["io_reschedule_concurrent_max_count"])
-            .set((self.io_reschedule_concurrent_max_count as i32).into());
+            .set(self.io_reschedule_concurrent_max_count as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["io_reschedule_hotpot_duration"])
             .set(self.io_reschedule_hotpot_duration.as_secs() as f64);

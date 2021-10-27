@@ -353,11 +353,6 @@ lazy_static! {
         "Total number of raft messages flushed immediately"
     )
     .unwrap();
-    pub static ref RAFT_MESSAGE_DELAY_FLUSH_COUNTER: IntCounter = register_int_counter!(
-        "tikv_server_raft_message_delay_flush_total",
-        "Total number of raft messages flushed delay"
-    )
-    .unwrap();
     pub static ref CONFIG_ROCKSDB_GAUGE: GaugeVec = register_gauge_vec!(
         "tikv_config_rocksdb",
         "Config information of rocksdb",
