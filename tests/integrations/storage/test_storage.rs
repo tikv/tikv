@@ -861,9 +861,10 @@ const RAW_KEY_CASE: &[u8] = &[RAW_KEY_PREFIX, 0, b'a'];
 #[test]
 fn test_txn_store_txnkv_api_version() {
     let test_data = vec![
-        // config api_version = V1, for backward compatible.
+        // config api_version = V1|V1ttl, for backward compatible.
         (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, true),
         (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, true),
+        (ApiVersion::V1ttl, ApiVersion::V1, TXN_KEY_CASE, true),
         // config api_version = V1, reject V2 request.
         (ApiVersion::V1, ApiVersion::V2, TIDB_KEY_CASE, false),
         // config api_version = V2.
@@ -900,8 +901,9 @@ fn test_txn_store_txnkv_api_version() {
 #[test]
 fn test_txn_store_rawkv_api_version() {
     let test_data = vec![
-        // config api_version = V1, for backward compatible.
+        // config api_version = V1|V1ttl, for backward compatible.
         (ApiVersion::V1, ApiVersion::V1, RAW_KEY_CASE, true),
+        (ApiVersion::V1ttl, ApiVersion::V1, RAW_KEY_CASE, true),
         // config api_version = V1, reject V2 request.
         (ApiVersion::V1, ApiVersion::V2, RAW_KEY_CASE, false),
         // config api_version = V2.
