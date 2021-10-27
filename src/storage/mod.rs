@@ -376,7 +376,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: impl IntoIterator<Item = &'a [u8]>,
     ) -> Result<()> {
         match (storage_api_version, req_api_version) {
-            (ApiVersion::V1, ApiVersion::V1) => {
+            (ApiVersion::V1 | ApiVersion::V1ttl, ApiVersion::V1) => {
                 return Ok(());
             }
             (ApiVersion::V2, ApiVersion::V1) if Self::is_txn_command(cmd) => {
@@ -2187,6 +2187,14 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
 
     pub fn set_async_apply_prewrite(mut self, enabled: bool) -> Self {
         self.config.enable_async_apply_prewrite = enabled;
+        self
+    }
+
+    pub fn set_api_version(mut self, api_version: ApiVersion) -> Self {
+        self.config.api_version = match api_version {
+            ApiVersion::V1 | ApiVersion::V1ttl => 1,
+            ApiVersion::V2 => 2,
+        };
         self
     }
 
@@ -7185,6 +7193,13 @@ mod tests {
             ),
             (
                 ApiVersion::V1,
+                ApiVersion::V1,
+                CommandKind::raw_get,
+                vec![RAW_KEY_CASE],
+                true,
+            ),
+            (
+                ApiVersion::V1ttl,
                 ApiVersion::V1,
                 CommandKind::raw_get,
                 vec![RAW_KEY_CASE],
