@@ -66,7 +66,7 @@ impl<S: Snapshot> RawEncodeSnapshot<S> {
 }
 
 impl<S: Snapshot> Snapshot for RawEncodeSnapshot<S> {
-    type Iter = TTLIterator<S::Iter>;
+    type Iter = RawEncodeIterator<S::Iter>;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         self.map_value(self.s.get(key))
@@ -81,7 +81,7 @@ impl<S: Snapshot> Snapshot for RawEncodeSnapshot<S> {
     }
 
     fn iter(&self, iter_opt: IterOptions) -> Result<Self::Iter> {
-        Ok(TTLIterator::new(
+        Ok(RawEncodeIterator::new(
             self.s.iter(iter_opt)?,
             self.current_ts,
             self.api_version,
@@ -89,7 +89,7 @@ impl<S: Snapshot> Snapshot for RawEncodeSnapshot<S> {
     }
 
     fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
-        Ok(TTLIterator::new(
+        Ok(RawEncodeIterator::new(
             self.s.iter_cf(cf, iter_opt)?,
             self.current_ts,
             self.api_version,
@@ -116,16 +116,16 @@ impl<S: Snapshot> Snapshot for RawEncodeSnapshot<S> {
     }
 }
 
-pub struct TTLIterator<I: Iterator> {
+pub struct RawEncodeIterator<I: Iterator> {
     i: I,
     current_ts: u64,
     skip_ttl: usize,
     api_version: ApiVersion,
 }
 
-impl<I: Iterator> TTLIterator<I> {
+impl<I: Iterator> RawEncodeIterator<I> {
     fn new(i: I, current_ts: u64, api_version: ApiVersion) -> Self {
-        TTLIterator {
+        RawEncodeIterator {
             i,
             current_ts,
             skip_ttl: 0,
@@ -140,6 +140,7 @@ impl<I: Iterator> TTLIterator<I> {
             }
 
             if *res.as_ref().unwrap() {
+                println!("{:?}, {:?}", self.i.key(), self.i.value());
                 let raw_value = RawValue::from_bytes(self.i.value(), self.api_version)?;
                 if raw_value
                     .expire_ts
@@ -161,7 +162,7 @@ impl<I: Iterator> TTLIterator<I> {
     }
 }
 
-impl<I: Iterator> Drop for TTLIterator<I> {
+impl<I: Iterator> Drop for RawEncodeIterator<I> {
     fn drop(&mut self) {
         TTL_TOMBSTONE.with(|m| {
             *m.borrow_mut() += self.skip_ttl;
@@ -169,7 +170,7 @@ impl<I: Iterator> Drop for TTLIterator<I> {
     }
 }
 
-impl<I: Iterator> Iterator for TTLIterator<I> {
+impl<I: Iterator> Iterator for RawEncodeIterator<I> {
     fn next(&mut self) -> Result<bool> {
         let res = self.i.next();
         self.find_valid_value(res, true)

@@ -22,7 +22,7 @@ fn test_ttl_checker() {
         let engine = builder.build_with_cfg(&cfg).unwrap();
 
         let kvdb = engine.get_rocksdb();
-        let key1 = b"zkey1";
+        let key1 = b"zr\0key1";
         let value1 = RawValue {
             user_value: vec![0; 10],
             expire_ts: Some(10),
@@ -30,14 +30,14 @@ fn test_ttl_checker() {
         kvdb.put_cf(CF_DEFAULT, key1, &value1.to_bytes(api_version))
             .unwrap();
         kvdb.flush_cf(CF_DEFAULT, true).unwrap();
-        let key2 = b"zkey2";
+        let key2 = b"zr\0key2";
         let value2 = RawValue {
             user_value: vec![0; 10],
             expire_ts: Some(120),
         };
         kvdb.put_cf(CF_DEFAULT, key2, &value2.to_bytes(api_version))
             .unwrap();
-        let key3 = b"zkey3";
+        let key3 = b"zr\0key3";
         let value3 = RawValue {
             user_value: vec![0; 10],
             expire_ts: Some(20),
@@ -45,7 +45,7 @@ fn test_ttl_checker() {
         kvdb.put_cf(CF_DEFAULT, key3, &value3.to_bytes(api_version))
             .unwrap();
         kvdb.flush_cf(CF_DEFAULT, true).unwrap();
-        let key4 = b"zkey4";
+        let key4 = b"zr\0key4";
         let value4 = RawValue {
             user_value: vec![0; 10],
             expire_ts: None,
@@ -53,7 +53,7 @@ fn test_ttl_checker() {
         kvdb.put_cf(CF_DEFAULT, key4, &value4.to_bytes(api_version))
             .unwrap();
         kvdb.flush_cf(CF_DEFAULT, true).unwrap();
-        let key5 = b"zkey5";
+        let key5 = b"zr\0key5";
         let value5 = RawValue {
             user_value: vec![0; 10],
             expire_ts: Some(10),
@@ -68,14 +68,14 @@ fn test_ttl_checker() {
         assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
 
-        let _ = check_ttl_and_compact_files(&kvdb, b"zkey1", b"zkey25", false);
+        let _ = check_ttl_and_compact_files(&kvdb, b"zr\0key1", b"zr\0key25", false);
         assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
 
-        let _ = check_ttl_and_compact_files(&kvdb, b"zkey2", b"zkey6", false);
+        let _ = check_ttl_and_compact_files(&kvdb, b"zr\0key2", b"zr\0key6", false);
         assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());
@@ -99,7 +99,7 @@ fn test_ttl_compaction_filter() {
         let engine = builder.build_with_cfg(&cfg).unwrap();
         let kvdb = engine.get_rocksdb();
 
-        let key1 = b"zkey1";
+        let key1 = b"zr\0key1";
         let value1 = RawValue {
             user_value: vec![0; 10],
             expire_ts: Some(10),
@@ -114,14 +114,14 @@ fn test_ttl_compaction_filter() {
 
         assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
 
-        let key2 = b"zkey2";
+        let key2 = b"zr\0key2";
         let value2 = RawValue {
             user_value: vec![0; 10],
             expire_ts: Some(120),
         };
         kvdb.put_cf(CF_DEFAULT, key2, &value2.to_bytes(api_version))
             .unwrap();
-        let key3 = b"zkey3";
+        let key3 = b"zr\0key3";
         let value3 = RawValue {
             user_value: vec![0; 10],
             expire_ts: Some(20),
@@ -130,7 +130,7 @@ fn test_ttl_compaction_filter() {
             .unwrap();
         kvdb.flush_cf(CF_DEFAULT, true).unwrap();
 
-        let key4 = b"zkey4";
+        let key4 = b"zr\0key4";
         let value4 = RawValue {
             user_value: vec![0; 10],
             expire_ts: None,
