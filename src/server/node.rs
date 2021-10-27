@@ -251,8 +251,14 @@ where
             return Err(box_err!("invalid store ident {:?}", ident));
         }
 
-        // During the api version switch only TiDB data are allowed to exist otherwise
-        // returns error.
+        self.check_api_version(ident)?;
+
+        Ok(store_id)
+    }
+
+    // During the api version switch only TiDB data are allowed to exist otherwise
+    // returns error.
+    fn check_api_version(&self, engines: &Engines<EK, ER>, ident: StoreIdent) -> Result<()> {
         if ident.api_version != self.api_version {
             // Check if there are only TiDB data in the engine
             let snapshot = engines.kv.snapshot();
@@ -294,8 +300,7 @@ where
             engines.kv.put_msg(keys::STORE_IDENT_KEY, &ident)?;
             engines.sync_kv()?;
         }
-
-        Ok(store_id)
+        Ok(())
     }
 
     fn alloc_id(&self) -> Result<u64> {
