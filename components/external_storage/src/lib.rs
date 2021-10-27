@@ -2,7 +2,6 @@
 
 //! External storage support.
 //! Cloud provider backends can be found under components/cloud
-#![feature(once_cell)]
 
 #[macro_use]
 extern crate slog_global;
