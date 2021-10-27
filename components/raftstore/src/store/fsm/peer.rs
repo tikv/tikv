@@ -632,7 +632,7 @@ where
         }
         // Propose batch request which may be still waiting for more raft-command
         self.propose_batch_raft_command(false);
-        self.header_check_batch_raft_command();
+        self.check_batch_cmd_and_proposed_cb();
         self.collect_ready();
     }
 
@@ -651,7 +651,7 @@ where
         }
     }
 
-    fn header_check_batch_raft_command(&mut self) {
+    fn check_batch_cmd_and_proposed_cb(&mut self) {
         if self.fsm.peer.pending_remove
             || self.fsm.batch_req_builder.request.is_none()
             || !self.fsm.batch_req_builder.has_proposed_cb
