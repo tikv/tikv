@@ -1365,7 +1365,6 @@ impl Initializer {
                 }
             }
         }
-
         Ok(entries)
     }
 
@@ -1622,7 +1621,7 @@ mod tests {
         type Task = T;
 
         fn run(&mut self, task: T) {
-            self.tx.send(task).unwrap();
+            let _ = self.tx.send(task);
         }
     }
 
@@ -1830,7 +1829,7 @@ mod tests {
         let engine = TestEngineBuilder::new()
             .path(temp.path())
             .cfs(DATA_CFS)
-            .build()
+            .build_without_cache()
             .unwrap();
 
         for i in 1..100 {
@@ -1844,8 +1843,8 @@ mod tests {
             let ts2 = TimeStamp::new(i as _);
             must_commit(&engine, k, ts1, ts2);
         }
-        engine.kv_engine().flush_cf(CF_WRITE, false).unwrap();
-        engine.kv_engine().flush_cf(CF_LOCK, false).unwrap();
+        engine.kv_engine().flush_cf(CF_WRITE, true).unwrap();
+        engine.kv_engine().flush_cf(CF_LOCK, true).unwrap();
 
         let (mut worker, pool, mut initializer, _rx, mut drain) =
             mock_initializer(usize::MAX, 1000);
@@ -1859,17 +1858,17 @@ mod tests {
         let region = Region::default();
         let snap = engine.snapshot(Default::default()).unwrap();
 
-        // Shouldn't read any blocks because all SST files of write CF should be filtered.
+        // Should only read one block for CF_LOCK.
         let perf_instant = PerfStatisticsInstant::new();
         initializer.checkpoint_ts = 200.into();
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
-        assert_eq!(perf_instant.delta().0.block_read_byte, 0);
+        assert_eq!(perf_instant.delta().0.block_read_count, 1);
 
-        // Should read some blocks for write CF.
+        // Should read 2 blocks, one for CF_LOCK and one for CF_WRITE.
         let perf_instant = PerfStatisticsInstant::new();
-        initializer.checkpoint_ts = 100.into();
+        initializer.checkpoint_ts = 0.into();
         block_on(initializer.async_incremental_scan(snap, region)).unwrap();
-        assert!(perf_instant.delta().0.block_read_byte > 0);
+        assert_eq!(perf_instant.delta().0.block_read_count, 2);
 
         worker.stop();
     }
