@@ -1,9 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-// {Limit, Selection, Aggregation, TopN} are passed into Executor as Box<T> in Prost,
-// but plain T in Protobuf. We used .into() to support both types,
-// but T -> T in Protobuf generates this clippy warning. We just allow it here.
-
 use super::*;
 
 use protobuf::Message;
