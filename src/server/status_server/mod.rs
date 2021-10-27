@@ -717,7 +717,8 @@ where
             acceptor.set_certificate_chain_file(&self.security_config.cert_path)?;
             acceptor.set_private_key_file(&self.security_config.key_path, SslFiletype::PEM)?;
             if !self.security_config.cert_allowed_cn.is_empty()
-                || !self.security_config.cert_allowed_san.is_empty() {
+                || !self.security_config.cert_allowed_san.is_empty()
+            {
                 acceptor.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
             }
             let acceptor = acceptor.build();
@@ -780,15 +781,11 @@ fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool 
                 for san in sans.into_iter() {
                     let mut is_peer_authorized = false;
                     if let Some(dns_name) = san.dnsname() {
-                        is_peer_authorized = security::match_peer_names(
-                            &security_config.cert_allowed_san,
-                            dns_name,
-                        );
+                        is_peer_authorized =
+                            security::match_peer_names(&security_config.cert_allowed_san, dns_name);
                     } else if let Some(uri) = san.uri() {
-                        is_peer_authorized = security::match_peer_names(
-                            &security_config.cert_allowed_san,
-                            uri,
-                        );
+                        is_peer_authorized =
+                            security::match_peer_names(&security_config.cert_allowed_san, uri);
                     }
                     if is_peer_authorized {
                         return true;
@@ -1042,21 +1039,21 @@ mod tests {
 
     #[test]
     fn test_security_status_service_without_cn() {
-        do_test_security_status_service(HashSet::default(), true);
+        do_test_security_status_service(HashSet::default(), HashSet::default(), true);
     }
 
     #[test]
     fn test_security_status_service_with_cn() {
         let mut allowed_cn = HashSet::default();
         allowed_cn.insert("tikv-server".to_owned());
-        do_test_security_status_service(allowed_cn, true);
+        do_test_security_status_service(allowed_cn, HashSet::default(), true);
     }
 
     #[test]
     fn test_security_status_service_with_cn_fail() {
         let mut allowed_cn = HashSet::default();
         allowed_cn.insert("invaild-cn".to_owned());
-        do_test_security_status_service(allowed_cn, false);
+        do_test_security_status_service(allowed_cn, HashSet::default(), false);
     }
 
     #[test]
@@ -1297,12 +1294,16 @@ mod tests {
         status_server.stop();
     }
 
-    fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
+    fn do_test_security_status_service(
+        allowed_cn: HashSet<String>,
+        allowed_san: HashSet<String>,
+        expected: bool,
+    ) {
         let mut status_server = StatusServer::new(
             1,
             None,
             ConfigController::default(),
-            Arc::new(new_security_cfg(Some(allowed_cn))),
+            Arc::new(new_security_cfg(Some(allowed_cn), Some(allowed_san))),
             MockRouter,
         )
         .unwrap();

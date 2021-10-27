@@ -289,7 +289,10 @@ fn check_common_name(cert_allowed_cn: &HashSet<String>, ctx: &RpcContext) -> Res
 /// Check peer SAN with cert-allowed-san field.
 /// Similar to check_common_name, but allows for a match on any available certificate SAN (there
 /// may be multiple).
-fn check_subject_alternative_name(cert_allowed_san: &HashSet<String>, ctx: &RpcContext) -> Result<(), String> {
+fn check_subject_alternative_name(
+    cert_allowed_san: &HashSet<String>,
+    ctx: &RpcContext,
+) -> Result<(), String> {
     if let Some(auth_ctx) = ctx.auth_context() {
         let auth_property_sans = auth_ctx
             .into_iter()
@@ -302,7 +305,7 @@ fn check_subject_alternative_name(cert_allowed_san: &HashSet<String>, ctx: &RpcC
             }
         }
 
-        Err(format!("no matching x509_subject_alternative_name or doesn't exist"))
+        Err("no matching x509_subject_alternative_name or doesn't exist".to_string())
     } else {
         Ok(())
     }
