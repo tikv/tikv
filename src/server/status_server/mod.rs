@@ -660,9 +660,9 @@ where
                             (Method::GET, "/debug/pprof/heap_deactivate") => {
                                 Self::deactivate_heap_prof(req)
                             }
-                            (Method::GET, "/debug/pprof/heap") => {
-                                Self::dump_heap_prof_to_resp(req).await
-                            }
+                            // (Method::GET, "/debug/pprof/heap") => {
+                            //     Self::dump_heap_prof_to_resp(req).await
+                            // }
                             (Method::GET, "/config") => {
                                 Self::get_config(req, &cfg_controller).await
                             }
