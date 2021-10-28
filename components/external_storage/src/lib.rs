@@ -141,6 +141,8 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
     }
 }
 
+// Wrap the reader with file_crypter
+// Return the reader directly if file_crypter is None
 pub fn encrypt_wrap_reader<'a>(
     file_crypter: Option<FileEncryptionInfo>,
     reader: Box<dyn AsyncRead + Unpin + 'a>,
