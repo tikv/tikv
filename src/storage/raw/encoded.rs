@@ -140,7 +140,6 @@ impl<I: Iterator> RawEncodeIterator<I> {
             }
 
             if *res.as_ref().unwrap() {
-                println!("{:?}, {:?}", self.i.key(), self.i.value());
                 let raw_value = RawValue::from_bytes(self.i.value(), self.api_version)?;
                 if raw_value
                     .expire_ts
