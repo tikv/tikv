@@ -587,7 +587,7 @@ mod tests {
         .unwrap();
         let mut reader = s.get("mykey");
         let mut buf = Vec::new();
-        let ret = block_on_external_io(reader.read_to_end(&mut buf));
+        let ret = reader.read_to_end(&mut buf).await;
         assert!(ret.unwrap() == 0);
         assert!(buf.is_empty());
 
@@ -704,7 +704,7 @@ mod tests {
 
         let mut reader = storage.get("huge_file");
         let mut buf = Vec::new();
-        block_on_external_io(reader.read_to_end(&mut buf)).unwrap();
+        reader.read_to_end(&mut buf).await.unwrap();
         assert_eq!(buf.len(), LEN);
         assert_eq!(buf.iter().position(|b| *b != 50_u8), None);
     }
