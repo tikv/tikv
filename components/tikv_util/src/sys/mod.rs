@@ -4,6 +4,12 @@ pub mod cpu_time;
 
 #[cfg(target_os = "linux")]
 mod cgroup;
+<<<<<<< HEAD
+=======
+pub mod cpu_time;
+pub mod disk;
+pub mod inspector;
+>>>>>>> b25bf2f11... cdc: limit incremental scan speed correctly (#11152)
 
 // re-export some traits for ease of use
 pub use sysinfo::{DiskExt, NetworkExt, ProcessExt, ProcessorExt, SystemExt};
