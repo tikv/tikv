@@ -39,11 +39,13 @@ pub trait ThreadInspector {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use super::{DiskStat, IoStat, ThreadInspector};
-    use procfs::process::Process;
     use std::fs::{read_to_string, File};
     use std::os::unix::io::AsRawFd;
     use std::path::Path;
+
+    use procfs::process::Process;
+
+    use super::{DiskStat, IoStat, ThreadInspector};
 
     pub struct Impl(Process);
 
