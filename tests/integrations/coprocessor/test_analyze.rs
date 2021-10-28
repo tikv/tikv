@@ -73,7 +73,12 @@ fn new_analyze_index_req(
     )
 }
 
-fn new_analyze_sampling_req(table: &Table, idx: i64, sample_size: i64) -> Request {
+fn new_analyze_sampling_req(
+    table: &Table,
+    idx: i64,
+    sample_size: i64,
+    sample_rate: f64,
+) -> Request {
     let mut col_req = AnalyzeColumnsReq::default();
     let mut col_groups: Vec<AnalyzeColumnGroup> = Vec::new();
     let mut col_group = AnalyzeColumnGroup::default();
@@ -85,6 +90,7 @@ fn new_analyze_sampling_req(table: &Table, idx: i64, sample_size: i64) -> Reques
     col_req.set_column_groups(col_groups.into());
     col_req.set_columns_info(table.columns_info().into());
     col_req.set_sample_size(sample_size);
+    col_req.set_sample_rate(sample_rate);
     let mut analy_req = AnalyzeReq::default();
     analy_req.set_tp(AnalyzeType::TypeColumn);
     analy_req.set_tp(AnalyzeType::TypeFullSampling);
@@ -263,7 +269,7 @@ fn test_analyze_index() {
 }
 
 #[test]
-fn test_analyze_sampling() {
+fn test_analyze_sampling_reservoir() {
     let data = vec![
         (1, Some("name:0"), 2),
         (2, Some("name:4"), 3),
@@ -280,13 +286,44 @@ fn test_analyze_sampling() {
     let (_, endpoint) = init_data_with_commit(&product, &data, true);
 
     // Pass the 2nd column as a column group.
-    let req = new_analyze_sampling_req(&product, 1, 5);
+    let req = new_analyze_sampling_req(&product, 1, 5, 0.0);
     let resp = handle_request(&endpoint, req);
     assert!(!resp.get_data().is_empty());
     let mut analyze_resp = AnalyzeColumnsResp::default();
     analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
     let collector = analyze_resp.get_row_collector();
     assert_eq!(collector.get_samples().len(), 5);
+    // The column group is at 4th place and the data should be equal to the 2nd.
+    assert_eq!(collector.get_null_counts(), vec![0, 1, 0, 1]);
+    assert_eq!(collector.get_count(), 9);
+    assert_eq!(collector.get_fm_sketch().len(), 4);
+    assert_eq!(collector.get_total_size(), vec![81, 64, 18, 64]);
+}
+
+#[test]
+fn test_analyze_sampling_bernoulli() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, None, 4),
+        (6, Some("name:1"), 1),
+        (7, Some("name:1"), 1),
+        (8, Some("name:1"), 1),
+        (9, Some("name:2"), 1),
+        (10, Some("name:2"), 1),
+    ];
+
+    let product = ProductTable::new();
+    let (_, endpoint) = init_data_with_commit(&product, &data, true);
+
+    // Pass the 2nd column as a column group.
+    let req = new_analyze_sampling_req(&product, 1, 0, 0.5);
+    let resp = handle_request(&endpoint, req);
+    assert!(!resp.get_data().is_empty());
+    let mut analyze_resp = AnalyzeColumnsResp::default();
+    analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
+    let collector = analyze_resp.get_row_collector();
     // The column group is at 4th place and the data should be equal to the 2nd.
     assert_eq!(collector.get_null_counts(), vec![0, 1, 0, 1]);
     assert_eq!(collector.get_count(), 9);
