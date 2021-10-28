@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::iter::Iterator;
 use std::time::Instant;
 use std::{cmp, mem, u64};
@@ -686,25 +686,45 @@ where
             panic!("fail to update RegionLocalstate {:?} err {:?}", region, e);
         }
 
-        let mut meta = self.ctx.store_meta.lock().unwrap();
-        meta.set_region(
-            &self.ctx.coprocessor_host,
-            region.clone(),
-            &mut self.fsm.peer,
-        );
-        self.fsm.peer.post_split();
-        if meta
-            .region_ranges
-            .remove(&enc_end_key(&original_region_state.get_region()))
-            .is_none()
         {
-            panic!(
-                "{} original region does not exist in store meta",
-                self.fsm.peer.tag
+            let mut meta = self.ctx.store_meta.lock().unwrap();
+            meta.set_region(
+                &self.ctx.coprocessor_host,
+                region.clone(),
+                &mut self.fsm.peer,
             );
+            if meta
+                .region_ranges
+                .remove(&enc_end_key(&original_region_state.get_region()))
+                .is_none()
+            {
+                panic!(
+                    "{} original region does not exist in store meta",
+                    self.fsm.peer.tag
+                );
+            }
+            meta.region_ranges
+                .insert(enc_end_key(&region), region.get_id());
         }
-        meta.region_ranges
-            .insert(enc_end_key(&region), region.get_id());
+        let mut new_peer_list = HashSet::new();
+        for peer in region.get_peers() {
+            new_peer_list.insert(peer.get_id());
+        }
+        self.fsm
+            .peer
+            .peer_heartbeats
+            .retain(|&k, _| new_peer_list.contains(&k));
+        self.fsm
+            .peer
+            .peers_start_pending_time
+            .retain(|&(k, _)| new_peer_list.contains(&k));
+        self.fsm.peer.clear_peer_cache();
+        self.fsm.peer.post_split();
+
+        if !self.fsm.peer.has_valid_leader() {
+            self.fsm.reset_hibernate_state(GroupState::Chaos);
+            self.register_raft_base_tick();
+        }
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
