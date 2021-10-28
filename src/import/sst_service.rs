@@ -4,9 +4,8 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use collections::HashSet;
-
 use super::make_rpc_error;
+use collections::HashSet;
 use engine_traits::{KvEngine, CF_WRITE};
 use file_system::{set_io_type, IOType};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
@@ -16,6 +15,7 @@ use futures::TryFutureExt;
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
+use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::{errorpb, kvrpcpb::Context};
 
 #[cfg(feature = "prost-codec")]
@@ -396,11 +396,18 @@ where
             // a download task.
             // Unfortunately, this currently can't happen because the S3Storage
             // is not Send + Sync. See the documentation of S3Storage for reason.
+            let cipher = req
+                .cipher_info
+                .to_owned()
+                .into_option()
+                .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
+
             let res = importer.download::<E>(
                 req.get_sst(),
                 req.get_storage_backend(),
                 req.get_name(),
                 req.get_rewrite_rule(),
+                cipher,
                 limiter,
                 engine,
             );
