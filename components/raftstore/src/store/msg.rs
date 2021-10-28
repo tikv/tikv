@@ -22,7 +22,7 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
 use crate::store::SnapKey;
-use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
+use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant, error};
 
 use super::{AbstractPeer, RegionSnapshot};
 
@@ -75,6 +75,7 @@ pub enum Callback<S: Snapshot> {
         /// It's used to notify the caller to move on early because it's very likely the request
         /// will be applied to the raftstore.
         proposed_cb: Option<ExtCallback>,
+        proposed_cb_called: bool,
         /// `committed_cb` is called after a request is committed and before it's being applied, and
         /// it's guaranteed that the request will be successfully applied soon.
         committed_cb: Option<ExtCallback>,
@@ -100,6 +101,7 @@ where
         Callback::Write {
             cb,
             proposed_cb,
+            proposed_cb_called: false,
             committed_cb,
             request_times: smallvec![Instant::now()],
         }
@@ -123,7 +125,10 @@ where
                 };
                 read(resp);
             }
-            Callback::Write { cb, .. } => {
+            Callback::Write { cb, proposed_cb_called, .. } => {
+                if proposed_cb_called && resp.get_header().has_error() {
+                    error!("proposed cb has been called but response has error {:?}", resp); 
+                }
                 let resp = WriteResponse { response: resp };
                 cb(resp);
             }
@@ -139,9 +144,10 @@ where
     }
 
     pub fn invoke_proposed(&mut self) {
-        if let Callback::Write { proposed_cb, .. } = self {
+        if let Callback::Write { proposed_cb, proposed_cb_called, .. } = self {
             if let Some(cb) = proposed_cb.take() {
-                cb()
+                cb();
+                *proposed_cb_called = true;
             }
         }
     }
