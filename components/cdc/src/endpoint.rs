@@ -1290,6 +1290,8 @@ impl Initializer {
         Ok(())
     }
 
+    // It's extracted from `Initializer::scan_batch` to avoid becoming an asynchronous block,
+    // so that we can limit scan speed based on the thread disk I/O or RocksDB block read bytes.
     fn do_scan<S: Snapshot>(
         &self,
         scanner: &mut DeltaScanner<S>,
@@ -1298,6 +1300,7 @@ impl Initializer {
         let mut total_bytes = 0;
         let mut total_size = 0;
 
+        // This code block shouldn't be switched to other threads.
         let perf_instant = PerfStatisticsInstant::new();
         let inspector = self_thread_inspector().ok();
         let old_io_stat = inspector.as_ref().and_then(|x| x.io_stat().unwrap_or(None));
