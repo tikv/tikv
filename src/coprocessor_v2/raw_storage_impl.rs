@@ -32,9 +32,8 @@ impl<'a, E: Engine, L: LockManager> RawStorageImpl<'a, E, L> {
 impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
     async fn get(&self, key: Key) -> PluginResult<Option<Value>> {
         let ctx = self.context.clone();
-        let cf = engine_traits::CF_DEFAULT.to_string();
 
-        let res = self.storage.raw_get(ctx, cf, key);
+        let res = self.storage.raw_get(ctx, String::new(), key);
 
         let value = res.await.map_err(PluginErrorShim::from)?;
         Ok(value)
@@ -42,9 +41,8 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
     async fn batch_get(&self, keys: Vec<Key>) -> PluginResult<Vec<KvPair>> {
         let ctx = self.context.clone();
-        let cf = engine_traits::CF_DEFAULT.to_string();
 
-        let res = self.storage.raw_batch_get(ctx, cf, keys);
+        let res = self.storage.raw_batch_get(ctx, String::new(), keys);
 
         let v = res.await.map_err(PluginErrorShim::from)?;
         let kv_pairs = extract_kv_pairs(Ok(v))
@@ -56,13 +54,12 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
     async fn scan(&self, key_range: Range<Key>) -> PluginResult<Vec<Value>> {
         let ctx = self.context.clone();
-        let cf = engine_traits::CF_DEFAULT.to_string();
         let key_only = false;
         let reverse = false;
 
         let res = self.storage.raw_scan(
             ctx,
-            cf,
+            String::new(),
             key_range.start,
             Some(key_range.end),
             usize::MAX,
@@ -80,11 +77,12 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
     async fn put(&self, key: Key, value: Value) -> PluginResult<()> {
         let ctx = self.context.clone();
-        let cf = engine_traits::CF_DEFAULT.to_string();
         let ttl = 0; // unlimited
         let (cb, f) = paired_future_callback();
 
-        let res = self.storage.raw_put(ctx, cf, key, value, ttl, cb);
+        let res = self
+            .storage
+            .raw_put(ctx, String::new(), key, value, ttl, cb);
 
         match res {
             Err(e) => Err(e),
@@ -96,11 +94,12 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
     async fn batch_put(&self, kv_pairs: Vec<KvPair>) -> PluginResult<()> {
         let ctx = self.context.clone();
-        let cf = engine_traits::CF_DEFAULT.to_string();
         let ttls = vec![0; kv_pairs.len()]; // unlimited
         let (cb, f) = paired_future_callback();
 
-        let res = self.storage.raw_batch_put(ctx, cf, kv_pairs, ttls, cb);
+        let res = self
+            .storage
+            .raw_batch_put(ctx, String::new(), kv_pairs, ttls, cb);
 
         match res {
             Err(e) => Err(e),
@@ -112,10 +111,9 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
     async fn delete(&self, key: Key) -> PluginResult<()> {
         let ctx = self.context.clone();
-        let cf = engine_traits::CF_DEFAULT.to_string();
         let (cb, f) = paired_future_callback();
 
-        let res = self.storage.raw_delete(ctx, cf, key, cb);
+        let res = self.storage.raw_delete(ctx, String::new(), key, cb);
 
         match res {
             Err(e) => Err(e),
@@ -127,10 +125,9 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
     async fn batch_delete(&self, keys: Vec<Key>) -> PluginResult<()> {
         let ctx = self.context.clone();
-        let cf = engine_traits::CF_DEFAULT.to_string();
         let (cb, f) = paired_future_callback();
 
-        let res = self.storage.raw_batch_delete(ctx, cf, keys, cb);
+        let res = self.storage.raw_batch_delete(ctx, String::new(), keys, cb);
 
         match res {
             Err(e) => Err(e),
@@ -142,13 +139,12 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
     async fn delete_range(&self, key_range: Range<Key>) -> PluginResult<()> {
         let ctx = self.context.clone();
-        let cf = engine_traits::CF_DEFAULT.to_string();
 
         let (cb, f) = paired_future_callback();
 
-        let res = self
-            .storage
-            .raw_delete_range(ctx, cf, key_range.start, key_range.end, cb);
+        let res =
+            self.storage
+                .raw_delete_range(ctx, String::new(), key_range.start, key_range.end, cb);
 
         match res {
             Err(e) => Err(e),
@@ -209,13 +205,7 @@ mod test {
 
     #[tokio::test]
     async fn test_storage_api() {
-        test_storage_api_impl(ApiVersion::V1).await;
-        test_storage_api_impl(ApiVersion::V1ttl).await;
-        test_storage_api_impl(ApiVersion::V2).await;
-    }
-
-    async fn test_storage_api_impl(api_version: ApiVersion) {
-        let storage = TestStorageBuilder::new(DummyLockManager, api_version)
+        let storage = TestStorageBuilder::new(DummyLockManager, ApiVersion::V2)
             .build()
             .unwrap();
         let ctx = Context::new();
@@ -248,13 +238,7 @@ mod test {
 
     #[tokio::test]
     async fn test_storage_api_batch() {
-        test_storage_api_batch_impl(ApiVersion::V1).await;
-        test_storage_api_batch_impl(ApiVersion::V1ttl).await;
-        test_storage_api_batch_impl(ApiVersion::V2).await;
-    }
-
-    async fn test_storage_api_batch_impl(api_version: ApiVersion) {
-        let storage = TestStorageBuilder::new(DummyLockManager, api_version)
+        let storage = TestStorageBuilder::new(DummyLockManager, ApiVersion::V2)
             .build()
             .unwrap();
         let ctx = Context::new();

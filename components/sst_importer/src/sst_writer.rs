@@ -295,13 +295,12 @@ mod tests {
     }
 
     #[test]
-    fn test_raw_write_sst() {
-        test_raw_write_sst_impl(ApiVersion::V1);
-        test_raw_write_sst_impl(ApiVersion::V1ttl);
-        test_raw_write_sst_impl(ApiVersion::V2);
+    fn test_raw_write_sst_ttl() {
+        test_raw_write_sst_ttl_impl(ApiVersion::V1ttl);
+        test_raw_write_sst_ttl_impl(ApiVersion::V2);
     }
 
-    fn test_raw_write_sst_impl(api_version: ApiVersion) {
+    fn test_raw_write_sst_ttl_impl(api_version: ApiVersion) {
         let mut meta = SstMeta::default();
         meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
 
@@ -333,11 +332,23 @@ mod tests {
         w.write(batch).unwrap();
         assert_eq!(w.default_entries, 1);
         assert_eq!(w.default_deletes, 1);
-        // ttl takes 8 more bytes
-        assert_eq!(
-            w.default_bytes as usize,
-            b"zk1".len() + b"short_value".len() + 8 + b"zk2".len()
-        );
+        match api_version {
+            ApiVersion::V1ttl => {
+                // ttl takes 8 more bytes
+                assert_eq!(
+                    w.default_bytes as usize,
+                    b"zk1".len() + b"short_value".len() + 8 + b"zk2".len()
+                );
+            }
+            ApiVersion::V2 => {
+                // ttl takes 8 more bytes and meta take 1 more byte
+                assert_eq!(
+                    w.default_bytes as usize,
+                    b"zk1".len() + b"short_value".len() + b"zk2".len() + 9
+                );
+            }
+            _ => unreachable!(),
+        }
 
         let metas = w.finish().unwrap();
         assert_eq!(metas.len(), 1);
