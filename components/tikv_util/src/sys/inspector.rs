@@ -141,17 +141,16 @@ mod notlinux {
 #[cfg(not(target_os = "linux"))]
 pub use self::notlinux::{self_thread_inspector, Impl as ThreadInspectorImpl};
 
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
 
-    #[cfg(unix)]
     fn page_size() -> u64 {
         unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) as u64 }
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn test_thread_inspector_io_stat() {
         let inspector = self_thread_inspector().unwrap();
@@ -165,7 +164,6 @@ mod tests {
         assert_eq!(io2.write - io1.write, page_size())
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn test_thread_inspector_disk_stat() {
         let device = ThreadInspectorImpl::get_device(".").unwrap().unwrap();
