@@ -490,7 +490,15 @@ impl BlobStorage for S3Storage {
         let uploader = S3Uploader::new(&self.client, &self.config, key);
         let result = uploader.run(&mut reader, content_length).await;
         result.map_err(|e| {
-            io::Error::new(io::ErrorKind::Other, format!("failed to put object {}", e))
+            let error_code = if let UploadError::Io(ref io_error) = e {
+                io_error.kind()
+            } else {
+                io::ErrorKind::Other
+            };
+            // Even we can check whether there is an `io::Error` internal and extract it directly,
+            // We still need to keep the message 'failed to put object' here for adapting the string-matching based
+            // retry logic in BR :(
+            io::Error::new(error_code, format!("failed to put object {}", e))
         })
     }
 
