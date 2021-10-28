@@ -10,6 +10,7 @@ use std::time::Instant;
 use std::{cmp, mem, u64};
 
 use batch_system::{BasicMailbox, Fsm};
+use bytes::Bytes;
 use collections::HashMap;
 use engine_traits::CF_RAFT;
 use engine_traits::{
@@ -33,7 +34,7 @@ use kvproto::raft_serverpb::{
 };
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use protobuf::Message;
-use raft::eraftpb::{ConfChangeType, MessageType};
+use raft::eraftpb::{self, ConfChangeType, MessageType};
 use raft::{self, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
@@ -654,6 +655,10 @@ where
 
     fn on_update_range(&mut self, region: Region) {
         info!("updating reigon's range"; "region" => ?region);
+        let mut new_peer_list = HashSet::new();
+        for peer in region.get_peers() {
+            new_peer_list.insert(peer.get_id());
+        }
         let region_state_key = keys::region_state_key(region.get_id());
         let original_region_state = match self
             .ctx
@@ -686,6 +691,30 @@ where
             panic!("fail to update RegionLocalstate {:?} err {:?}", region, e);
         }
 
+        let to_be_removed: Vec<u64> = self
+            .region()
+            .get_peers()
+            .iter()
+            .filter(|&peer| !new_peer_list.contains(&peer.get_id()))
+            .map(|peer| peer.get_id())
+            .collect();
+        let mut cc = eraftpb::ConfChangeV2::default();
+        let changes: Vec<_> = to_be_removed
+            .iter()
+            .map(|&p| {
+                let mut ccs = eraftpb::ConfChangeSingle::default();
+                ccs.set_change_type(eraftpb::ConfChangeType::RemoveNode);
+                ccs.set_node_id(p);
+                ccs
+            })
+            .collect();
+        if changes.len() <= 1 {
+            cc.set_transition(eraftpb::ConfChangeTransition::Auto);
+        } else {
+            cc.set_transition(eraftpb::ConfChangeTransition::Explicit);
+        }
+        cc.set_changes(changes.into());
+        cc.set_context(Bytes::from_static(b"unsafe recover"));
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(
@@ -706,9 +735,8 @@ where
             meta.region_ranges
                 .insert(enc_end_key(&region), region.get_id());
         }
-        let mut new_peer_list = HashSet::new();
-        for peer in region.get_peers() {
-            new_peer_list.insert(peer.get_id());
+        if let Err(e) = self.fsm.peer.raft_group.apply_conf_change(&cc) {
+            panic!("fail to apply conf change for unsafe recover {:?}", e);
         }
         self.fsm
             .peer
@@ -718,7 +746,9 @@ where
             .peer
             .peers_start_pending_time
             .retain(|&(k, _)| new_peer_list.contains(&k));
-        self.fsm.peer.clear_peer_cache();
+        for peer in to_be_removed {
+            self.fsm.peer.remove_peer_from_cache(peer);
+        }
         self.fsm.peer.post_split();
 
         if !self.fsm.peer.has_valid_leader() {
