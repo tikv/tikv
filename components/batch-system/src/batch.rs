@@ -5,6 +5,7 @@
 //! represents a peer, the other is control FSM, which usually represents something
 //! that controls how the former is created or metrics are collected.
 
+// #[PerformanceCriticalPath]
 use crate::config::Config;
 use crate::fsm::{Fsm, FsmScheduler, Priority};
 use crate::mailbox::BasicMailbox;

@@ -270,9 +270,11 @@ impl Simulator for ServerCluster {
             block_on(self.pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
+        let (tx, _rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
             engine.clone(),
             sim_router.clone(),
+            tx,
             cfg.gc.clone(),
             Default::default(),
         );
@@ -385,6 +387,7 @@ impl Simulator for ServerCluster {
             system,
             &server_cfg.value().clone(),
             Arc::new(VersionTrack::new(raft_store)),
+            cfg.storage.api_version(),
             Arc::clone(&self.pd_client),
             state,
             bg_worker.clone(),

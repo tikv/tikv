@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::server::metrics::{GrpcTypeKind, REQUEST_BATCH_SIZE_HISTOGRAM_VEC};
 use crate::server::service::kv::{
     batch_commands_response, GrpcRequestDuration, MeasuredSingleResponse,
