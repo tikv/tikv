@@ -71,7 +71,7 @@ mod tests {
         .unwrap();
         let mut reader = noop.read("a.log");
         let mut buf = vec![];
-        block_on(reader.read_to_end(&mut buf)).unwrap();
+        reader.read_to_end(&mut buf).await.unwrap();
         assert!(buf.is_empty());
     }
 
