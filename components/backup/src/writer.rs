@@ -1,12 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fmt::Display;
+use std::io::Read;
 use std::sync::Arc;
 
 use engine_rocks::raw::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder};
-use external_storage_export::ExternalStorage;
+use external_storage_export::{ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
 use futures_util::io::AllowStdIo;
 use kvproto::brpb::File;
@@ -21,6 +23,31 @@ use txn_types::KvPair;
 
 use crate::metrics::*;
 use crate::{backup_file_name, Error, Result};
+
+#[derive(Debug, Clone, Copy)]
+/// CfNameWrap wraps the CfName type.
+/// For removing the 'static lifetime bound in the async function,
+/// which doesn't compile due to 'captures lifetime that does not appear in bounds' :(.
+/// FIXME: remove this.
+pub struct CfNameWrap(pub &'static str);
+
+impl Display for CfNameWrap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<CfName> for CfNameWrap {
+    fn from(f: CfName) -> Self {
+        Self(f)
+    }
+}
+
+impl Into<CfName> for CfNameWrap {
+    fn into(self) -> CfName {
+        self.0
+    }
+}
 
 struct Writer {
     writer: RocksSstWriter,
@@ -71,26 +98,36 @@ impl Writer {
         Ok(())
     }
 
-    fn save_and_build_file(
+    // FIXME: we cannot get sst_info in [save_and_build_file], which may cause the !Send type
+    // [RocksEnternalSstFileInfo] sent between threads.
+    fn finish_read(writer: RocksSstWriter) -> Result<(u64, impl Read)> {
+        let (sst_info, sst_reader) = writer.finish_read()?;
+        Ok((sst_info.file_size(), sst_reader))
+    }
+
+    async fn save_and_build_file(
         self,
         name: &str,
-        cf: &'static str,
+        cf: CfNameWrap,
         limiter: Limiter,
         storage: &dyn ExternalStorage,
     ) -> Result<File> {
-        let (sst_info, sst_reader) = self.writer.finish_read()?;
+        let (size, sst_reader) = Self::finish_read(self.writer)?;
         BACKUP_RANGE_SIZE_HISTOGRAM_VEC
-            .with_label_values(&[cf])
-            .observe(sst_info.file_size() as f64);
+            .with_label_values(&[cf.into()])
+            .observe(size as f64);
         let file_name = format!("{}_{}.sst", name, cf);
 
         let (reader, hasher) = Sha256Reader::new(sst_reader)
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
-        storage.write(
-            &file_name,
-            Box::new(limiter.limit(AllowStdIo::new(reader))),
-            sst_info.file_size(),
-        )?;
+        storage
+            .write(
+                &file_name,
+                // AllowStdIo here only intrduces the Sha256 reader and an in-memory sst reader.
+                UnpinReader(Box::new(limiter.limit(AllowStdIo::new(reader)))),
+                size,
+            )
+            .await?;
         let sha256 = hasher
             .lock()
             .unwrap()
@@ -104,8 +141,8 @@ impl Writer {
         file.set_crc64xor(self.checksum);
         file.set_total_kvs(self.total_kvs);
         file.set_total_bytes(self.total_bytes);
-        file.set_cf(cf.to_owned());
-        file.set_size(sst_info.file_size());
+        file.set_cf(cf.0.to_owned());
+        file.set_size(size);
         Ok(file)
     }
 
@@ -234,28 +271,24 @@ impl BackupWriter {
     }
 
     /// Save buffered SST files to the given external storage.
-    pub fn save(self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
+    pub async fn save(self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
         let start = Instant::now();
         let mut files = Vec::with_capacity(2);
         let write_written = !self.write.is_empty() || !self.default.is_empty();
         if !self.default.is_empty() {
             // Save default cf contents.
-            let default = self.default.save_and_build_file(
-                &self.name,
-                CF_DEFAULT,
-                self.limiter.clone(),
-                storage,
-            )?;
+            let default = self
+                .default
+                .save_and_build_file(&self.name, CF_DEFAULT.into(), self.limiter.clone(), storage)
+                .await?;
             files.push(default);
         }
         if write_written {
             // Save write cf contents.
-            let write = self.write.save_and_build_file(
-                &self.name,
-                CF_WRITE,
-                self.limiter.clone(),
-                storage,
-            )?;
+            let write = self
+                .write
+                .save_and_build_file(&self.name, CF_WRITE.into(), self.limiter.clone(), storage)
+                .await?;
             files.push(write);
         }
         BACKUP_RANGE_HISTOGRAM_VEC
@@ -286,21 +319,21 @@ impl BackupRawKVWriter {
     pub fn new(
         db: Arc<DB>,
         name: &str,
-        cf: CfName,
+        cf: CfNameWrap,
         limiter: Limiter,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
     ) -> Result<BackupRawKVWriter> {
         let writer = RocksSstWriterBuilder::new()
             .set_in_memory(true)
-            .set_cf(cf)
+            .set_cf(cf.into())
             .set_db(RocksEngine::from_ref(&db))
             .set_compression_type(compression_type)
             .set_compression_level(compression_level)
             .build(name)?;
         Ok(BackupRawKVWriter {
             name: name.to_owned(),
-            cf,
+            cf: cf.into(),
             writer: Writer::new(writer),
             limiter,
         })
@@ -328,16 +361,14 @@ impl BackupRawKVWriter {
     }
 
     /// Save buffered SST files to the given external storage.
-    pub fn save(self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
+    pub async fn save(self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
         let start = Instant::now();
         let mut files = Vec::with_capacity(1);
         if !self.writer.is_empty() {
-            let file = self.writer.save_and_build_file(
-                &self.name,
-                self.cf,
-                self.limiter.clone(),
-                storage,
-            )?;
+            let file = self
+                .writer
+                .save_and_build_file(&self.name, self.cf.into(), self.limiter.clone(), storage)
+                .await?;
             files.push(file);
         }
         BACKUP_RANGE_HISTOGRAM_VEC

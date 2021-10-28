@@ -6,7 +6,7 @@ use tokio::io;
 use async_trait::async_trait;
 use futures_executor::block_on;
 use futures_io::AsyncRead;
-use futures_util::io::{copy, AllowStdIo};
+
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
 use crate::UnpinReader;

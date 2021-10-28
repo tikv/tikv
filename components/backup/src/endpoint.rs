@@ -14,6 +14,7 @@ use engine_traits::{name_to_cf, CfName, SstCompressionType};
 use external_storage_export::{create_storage, ExternalStorage};
 use file_system::{IOType, WithIOType};
 use futures::channel::mpsc::*;
+use futures::Future;
 use kvproto::brpb::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
@@ -34,11 +35,11 @@ use tikv_util::{
     box_err, debug, defer, error, error_unknown, impl_display_as_debug, info, thd_name, warn,
 };
 use txn_types::{Key, Lock, TimeStamp};
-use yatp::task::callback::{Handle, TaskCell};
+use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
 
 use crate::metrics::*;
-use crate::writer::BackupWriterBuilder;
+use crate::writer::{BackupWriterBuilder, CfNameWrap};
 use crate::Error;
 use crate::*;
 
@@ -144,10 +145,10 @@ pub struct BackupRange {
 
 impl BackupRange {
     /// Get entries from the scanner and save them to storage
-    fn backup<E: Engine>(
+    async fn backup<E: Engine>(
         &self,
         writer_builder: BackupWriterBuilder,
-        engine: &E,
+        engine: E,
         concurrency_manager: ConcurrencyManager,
         backup_ts: TimeStamp,
         begin_ts: TimeStamp,
@@ -252,7 +253,7 @@ impl BackupRange {
                         },
                     )
                 };
-                match writer.save(&storage.storage) {
+                match writer.save(&storage.storage).await {
                     Ok(mut split_files) => {
                         for file in split_files.iter_mut() {
                             file.set_start_key(last_key.clone());
@@ -288,7 +289,7 @@ impl BackupRange {
             .observe(start_scan.saturating_elapsed().as_secs_f64());
 
         if writer.need_flush_keys() {
-            match writer.save(&storage.storage) {
+            match writer.save(&storage.storage).await {
                 Ok(mut split_files) => {
                     cur_key = self
                         .end_key
@@ -372,13 +373,13 @@ impl BackupRange {
         Ok(statistics)
     }
 
-    fn backup_raw_kv_to_file<E: Engine>(
+    async fn backup_raw_kv_to_file<E: Engine>(
         &self,
-        engine: &E,
+        engine: E,
         db: Arc<DB>,
         storage: &LimitedStorage,
         file_name: String,
-        cf: CfName,
+        cf: CfNameWrap,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
     ) -> Result<(Vec<File>, Statistics)> {
@@ -396,12 +397,12 @@ impl BackupRange {
                 return Err(e);
             }
         };
-        let stat = match self.backup_raw(&mut writer, engine) {
+        let stat = match self.backup_raw(&mut writer, &engine) {
             Ok(s) => s,
             Err(e) => return Err(e),
         };
         // Save sst files to storage.
-        match writer.save(&storage.storage) {
+        match writer.save(&storage.storage).await {
             Ok(files) => Ok((files, stat)),
             Err(e) => {
                 error_unknown!(?e; "backup save file failed");
@@ -564,12 +565,12 @@ impl ControlThreadPool {
 
     fn spawn<F>(&mut self, func: F)
     where
-        F: FnOnce() + Send + 'static,
+        F: Future<Output = ()> + Send + 'static,
     {
         let workers = self.workers.as_ref().unwrap();
         let w = workers.clone();
-        workers.spawn(move |_: &mut Handle<'_>| {
-            func();
+        workers.spawn(async move {
+            func.await;
             // Debug service requires jobs in the old thread pool continue to run even after
             // the pool is recreated. So the pool needs to be ref counted and dropped after
             // task has finished.
@@ -588,7 +589,7 @@ impl ControlThreadPool {
         let workers = Arc::new(
             yatp::Builder::new(thd_name!("bkwkr"))
                 .max_thread_count(new_size)
-                .build_callback_pool(),
+                .build_future_pool(),
         );
         let _ = self.workers.replace(workers);
         self.size = new_size;
@@ -637,7 +638,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
 
         // TODO: make it async.
-        self.pool.borrow_mut().spawn(move || {
+        self.pool.borrow_mut().spawn(async move {
             tikv_alloc::add_thread_memory_accessor();
             let _with_io_type = WithIOType::new(IOType::Export);
             defer!({
@@ -677,6 +678,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 };
 
                 for brange in batch {
+                    let engine = engine.clone();
                     if request.cancel.load(Ordering::SeqCst) {
                         warn!("backup task has canceled"; "range" => ?brange);
                         return;
@@ -695,16 +697,19 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     let ct = to_sst_compression_type(request.compression_type);
 
                     let (res, start_key, end_key) = if is_raw_kv {
-                        (
-                            brange.backup_raw_kv_to_file(
-                                &engine,
+                        let result = brange
+                            .backup_raw_kv_to_file(
+                                engine,
                                 db.clone(),
                                 &storage,
                                 name,
-                                cf,
+                                cf.into(),
                                 ct,
                                 request.compression_level,
-                            ),
+                            )
+                            .await;
+                        (
+                            result,
                             brange.start_key.map_or_else(Vec::new, |k| k.into_encoded()),
                             brange.end_key.map_or_else(Vec::new, |k| k.into_encoded()),
                         )
@@ -718,15 +723,18 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                             request.compression_level,
                             sst_max_size,
                         );
-                        (
-                            brange.backup(
+                        let result = brange
+                            .backup(
                                 writer_builder,
-                                &engine,
+                                engine,
                                 concurrency_manager.clone(),
                                 backup_ts,
                                 start_ts,
                                 &storage,
-                            ),
+                            )
+                            .await;
+                        (
+                            result,
                             brange
                                 .start_key
                                 .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
@@ -1052,8 +1060,8 @@ pub mod tests {
 
         for i in 8..16 {
             let ctr = counter.clone();
-            pool.spawn(move || {
-                sleep(Duration::from_millis(100));
+            pool.spawn(async move {
+                tokio::time::sleep(Duration::from_millis(100)).await;
                 ctr.fetch_or(1 << i, Ordering::SeqCst);
             });
         }
