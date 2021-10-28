@@ -13,6 +13,11 @@ use tikv_util::error;
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::sys::SysQuota;
 
+/// SoftLimit is an simple "worker pool" just for
+/// restricting the number of workers can running concurrently.
+/// It is just a synchronous version of [tokio::sync::Semaphore].
+/// (With a poor(has O(n) space complex) but simple implementation.(not involved lock conditions))
+/// We should replace it with [tokio::sync::Semaphore] once backup has been refactored to asynchronous.
 #[derive(Clone)]
 pub struct SoftLimit {
     sx: Sender<()>,
@@ -32,18 +37,13 @@ impl Drop for Guard {
     }
 }
 
-/// SoftLimit is an simple "worker pool" just for
-/// restricting the number of workers can running concurrently.
-/// It is just a synchronous version of [tokio::sync::Semaphore].
-/// (With a poor(has O(n) space complex) but simple implementation.(not involved lock conditions))
-/// We should replace it with [tokio::sync::Semaphore] once backup has been refactored to asynchronous.
 impl SoftLimit {
     fn enter(&self) -> Result<()> {
         self.rx.recv()?;
         Ok(())
     }
 
-    /// guard make a guard for one concurrent executing task.
+    /// Makes a guard for one concurrent executing task.
     /// drop the guard for releasing the resource.
     pub fn guard(&self) -> Result<Guard> {
         self.enter()?;
@@ -66,7 +66,7 @@ impl SoftLimit {
         Ok(())
     }
 
-    /// shrink shrinks the tasks can be executed concurrently by n
+    /// Shrinks the tasks can be executed concurrently by n
     /// would block until the quota applied.
     #[cfg(test)]
     pub fn shrink(&self, n: usize) -> Result<()> {
@@ -75,7 +75,7 @@ impl SoftLimit {
         Ok(())
     }
 
-    /// grow grows the tasks can be executed concurrently by n
+    /// Grows the tasks can be executed concurrently by n
     #[cfg(test)]
     pub fn grow(&self, n: usize) -> Result<()> {
         self.cap.fetch_add(n, Ordering::SeqCst);

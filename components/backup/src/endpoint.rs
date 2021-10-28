@@ -444,7 +444,7 @@ impl SoftLimitKeeper {
         } = *config.0.read().unwrap();
         let mut cpu_quota = SoftLimitByCpu::with_remain(auto_tune_remain_threads);
         let limit = SoftLimit::new(num_threads);
-        BACKUP_SOFTLIMIT_GAGUE.set(limit.current_cap() as _);
+        BACKUP_SOFTLIMIT_GAUGE.set(limit.current_cap() as _);
         let limit_cloned = limit.clone();
         thread::Builder::new()
             .name("backup.softlimit_keeper".to_owned())
@@ -468,7 +468,7 @@ impl SoftLimitKeeper {
                     } else if let Err(e) = cpu_quota.exec_over_with_exclude(&limit_cloned, |s| s.contains("bkwkr")) {
                         error!("error during appling the soft limit for backup."; "err" => %e);
                     }
-                    BACKUP_SOFTLIMIT_GAGUE.set(limit_cloned.current_cap() as _);
+                    BACKUP_SOFTLIMIT_GAUGE.set(limit_cloned.current_cap() as _);
                     thread::sleep(auto_tune_refresh_gap.0);
                 }
             })

@@ -36,7 +36,7 @@ lazy_static! {
         &["error"]
     )
     .unwrap();
-    pub static ref BACKUP_SOFTLIMIT_GAGUE: IntGauge = register_int_gauge!(
+    pub static ref BACKUP_SOFTLIMIT_GAUGE: IntGauge = register_int_gauge!(
         "tikv_backup_softlimit",
         "Soft limit applied to the backup thread pool."
     )
