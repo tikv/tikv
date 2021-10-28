@@ -34,6 +34,9 @@ impl Drop for Guard {
 
 /// SoftLimit is an simple "worker pool" just for
 /// restricting the number of workers can running concurrently.
+/// It is just a synchronous version of [tokio::sync::Semaphore].
+/// (With a poor(has O(n) space complex) but simple implementation.(not involved lock conditions))
+/// We should replace it with [tokio::sync::Semaphore] once backup has been refactored to asynchronous.
 impl SoftLimit {
     fn enter(&self) -> Result<()> {
         self.rx.recv()?;
