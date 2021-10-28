@@ -41,6 +41,8 @@ use tikv::storage::kv::{PerfStatisticsInstant, Snapshot};
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
+use tikv_kv::PerfStatisticsDelta;
+use tikv_util::sys::inspector::{self_thread_inspector, ThreadInspector};
 use tikv_util::time::{Instant, Limiter};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
@@ -1253,6 +1255,7 @@ impl Initializer {
         let mut scanner = ScannerBuilder::new(snap, current)
             .fill_cache(false)
             .range(None, None)
+            .hint_min_ts(Some(self.checkpoint_ts))
             .build_delta_scanner(self.checkpoint_ts, self.txn_extra_op)
             .unwrap();
         let conn_id = self.conn_id;
@@ -1287,15 +1290,20 @@ impl Initializer {
         Ok(())
     }
 
+    // It's extracted from `Initializer::scan_batch` to avoid becoming an asynchronous block,
+    // so that we can limit scan speed based on the thread disk I/O or RocksDB block read bytes.
     fn do_scan<S: Snapshot>(
         &self,
         scanner: &mut DeltaScanner<S>,
         entries: &mut Vec<Option<TxnEntry>>,
-    ) -> Result<usize> {
+    ) -> Result<ScanStat> {
         let mut total_bytes = 0;
         let mut total_size = 0;
 
+        // This code block shouldn't be switched to other threads.
         let perf_instant = PerfStatisticsInstant::new();
+        let inspector = self_thread_inspector().ok();
+        let old_io_stat = inspector.as_ref().and_then(|x| x.io_stat().unwrap_or(None));
         while total_bytes <= self.max_scan_batch_bytes && total_size < self.max_scan_batch_size {
             total_size += 1;
             match scanner.next_entry()? {
@@ -1309,8 +1317,18 @@ impl Initializer {
                 }
             }
         }
-        TLS_CDC_PERF_STATS.with(|x| *x.borrow_mut() += perf_instant.delta());
-        Ok(total_bytes)
+        let new_io_stat = inspector.as_ref().and_then(|x| x.io_stat().unwrap_or(None));
+        let disk_read = match (old_io_stat, new_io_stat) {
+            (Some(s1), Some(s2)) => Some((s2.read - s1.read) as usize),
+            _ => None,
+        };
+        let perf_delta = perf_instant.delta();
+        let emit = total_bytes;
+        Ok(ScanStat {
+            emit,
+            disk_read,
+            perf_delta,
+        })
     }
 
     async fn scan_batch<S: Snapshot>(
@@ -1319,13 +1337,22 @@ impl Initializer {
         resolver: Option<&mut Resolver>,
     ) -> Result<Vec<Option<TxnEntry>>> {
         let mut entries = Vec::with_capacity(self.max_scan_batch_size);
-        let total_bytes = self.do_scan(scanner, &mut entries)?;
-        tls_flush_perf_stats();
+        let ScanStat {
+            emit,
+            disk_read,
+            perf_delta,
+        } = self.do_scan(scanner, &mut entries)?;
 
-        if total_bytes > 0 {
-            self.speed_limiter.consume(total_bytes).await;
-            CDC_SCAN_BYTES.inc_by(total_bytes as _);
-        }
+        CDC_SCAN_BYTES.inc_by(emit as _);
+        TLS_CDC_PERF_STATS.with(|x| *x.borrow_mut() += perf_delta);
+        tls_flush_perf_stats();
+        let require = if let Some(bytes) = disk_read {
+            CDC_SCAN_DISK_READ_BYTES.inc_by(bytes as _);
+            bytes
+        } else {
+            perf_delta.0.block_read_byte
+        };
+        self.speed_limiter.consume(require).await;
 
         if let Some(resolver) = resolver {
             // Track the locks.
@@ -1341,7 +1368,6 @@ impl Initializer {
                 }
             }
         }
-
         Ok(entries)
     }
 
@@ -1418,6 +1444,16 @@ impl Initializer {
             error!("cdc schedule cdc task failed"; "error" => ?e);
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ScanStat {
+    // Fetched bytes to the scanner.
+    emit: usize,
+    // Bytes from the device, `None` if not possible to get it.
+    disk_read: Option<usize>,
+    // Perf delta for RocksDB.
+    perf_delta: PerfStatisticsDelta,
 }
 
 impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
@@ -1546,9 +1582,14 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+    use std::fmt::Display;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender};
+
     use collections::HashSet;
     use engine_rocks::RocksEngine;
-    use engine_traits::DATA_CFS;
+    use engine_traits::{MiscExt, CF_LOCK, CF_WRITE, DATA_CFS};
     use futures::executor::block_on;
     use futures::StreamExt;
     use kvproto::cdcpb::Header;
@@ -1560,16 +1601,13 @@ mod tests {
     use raftstore::store::msg::CasualMessage;
     use raftstore::store::util::RegionReadProgress;
     use raftstore::store::{ReadDelegate, RegionSnapshot, TrackVer};
-    use std::collections::BTreeMap;
-    use std::fmt::Display;
-    use std::sync::atomic::AtomicU64;
-    use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender};
     use tempfile::TempDir;
-    use test_raftstore::MockRaftStoreRouter;
-    use test_raftstore::TestPdClient;
+    use test_raftstore::{MockRaftStoreRouter, TestPdClient};
     use tikv::server::DEFAULT_CLUSTER_ID;
     use tikv::storage::kv::Engine;
-    use tikv::storage::txn::tests::{must_acquire_pessimistic_lock, must_prewrite_put};
+    use tikv::storage::txn::tests::{
+        must_acquire_pessimistic_lock, must_commit, must_prewrite_put,
+    };
     use tikv::storage::TestEngineBuilder;
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker::{dummy_scheduler, LazyWorker, ReceiverWrapper};
@@ -1586,7 +1624,7 @@ mod tests {
         type Task = T;
 
         fn run(&mut self, task: T) {
-            self.tx.send(task).unwrap();
+            let _ = self.tx.send(task);
         }
     }
 
@@ -1752,28 +1790,6 @@ mod tests {
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
         check_result();
 
-        initializer.max_scan_batch_bytes = total_bytes / 3;
-        let start_1_3 = Instant::now();
-        block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
-        check_result();
-        // 2s to allow certain inaccuracy.
-        assert!(
-            start_1_3.saturating_elapsed() >= Duration::new(2, 0),
-            "{:?}",
-            start_1_3.saturating_elapsed()
-        );
-
-        let start_1_6 = Instant::now();
-        initializer.max_scan_batch_bytes = total_bytes / 6;
-        block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
-        check_result();
-        // 4s to allow certain inaccuracy.
-        assert!(
-            start_1_6.saturating_elapsed() >= Duration::new(4, 0),
-            "{:?}",
-            start_1_6.saturating_elapsed()
-        );
-
         initializer.build_resolver = false;
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
 
@@ -1806,6 +1822,56 @@ mod tests {
         drop(pool);
         initializer.downstream_state.store(DownstreamState::Normal);
         block_on(initializer.on_change_cmd_response(resp)).unwrap_err();
+
+        worker.stop();
+    }
+
+    #[test]
+    fn test_initializer_scanner() {
+        let temp = TempDir::new().unwrap();
+        let engine = TestEngineBuilder::new()
+            .path(temp.path())
+            .cfs(DATA_CFS)
+            .build_without_cache()
+            .unwrap();
+
+        for i in 1..100 {
+            let (k, v) = (&[b'k', i], &[b'v', i]);
+            let ts = TimeStamp::new(i as _);
+            must_prewrite_put(&engine, k, v, k, ts);
+        }
+        for i in 101..200 {
+            let k = &[b'k', i - 100];
+            let ts1 = TimeStamp::new((i - 100) as _);
+            let ts2 = TimeStamp::new(i as _);
+            must_commit(&engine, k, ts1, ts2);
+        }
+        engine.kv_engine().flush_cf(CF_WRITE, true).unwrap();
+        engine.kv_engine().flush_cf(CF_LOCK, true).unwrap();
+
+        let (mut worker, pool, mut initializer, _rx, mut drain) =
+            mock_initializer(usize::MAX, 1000);
+
+        // To not block test by barrier.
+        pool.spawn(async move {
+            let mut d = drain.drain();
+            while d.next().await.is_some() {}
+        });
+
+        let region = Region::default();
+        let snap = engine.snapshot(Default::default()).unwrap();
+
+        // Should only read one block for CF_LOCK.
+        let perf_instant = PerfStatisticsInstant::new();
+        initializer.checkpoint_ts = 200.into();
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
+        assert_eq!(perf_instant.delta().0.block_read_count, 1);
+
+        // Should read 2 blocks, one for CF_LOCK and one for CF_WRITE.
+        let perf_instant = PerfStatisticsInstant::new();
+        initializer.checkpoint_ts = 0.into();
+        block_on(initializer.async_incremental_scan(snap, region)).unwrap();
+        assert_eq!(perf_instant.delta().0.block_read_count, 2);
 
         worker.stop();
     }
