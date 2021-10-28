@@ -878,7 +878,7 @@ fn test_txn_store_txnkv_api_version() {
     ];
 
     for (config_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
-        let mut store = AssertionStorage::new_opt(config_api_version);
+        let mut store = AssertionStorage::new(config_api_version);
         store.ctx.set_api_version(req_api_version);
 
         if is_legal {
@@ -915,7 +915,7 @@ fn test_txn_store_rawkv_api_version() {
     ];
 
     for (config_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
-        let mut store = AssertionStorage::new_opt(config_api_version);
+        let mut store = AssertionStorage::new(config_api_version);
         store.ctx.set_api_version(req_api_version);
 
         if is_legal {

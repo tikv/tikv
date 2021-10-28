@@ -30,7 +30,7 @@ impl Default for AssertionStorage<RocksEngine> {
 }
 
 impl AssertionStorage<RocksEngine> {
-    pub fn new_opt(api_version: ApiVersion) -> Self {
+    pub fn new(api_version: ApiVersion) -> Self {
         AssertionStorage {
             ctx: Context::default(),
             store: SyncTestStorageBuilder::new()
@@ -85,7 +85,7 @@ impl AssertionStorage<SimulateEngine> {
         );
     }
 
-    fn get_from_custer(
+    fn get_from_cluster(
         &mut self,
         cluster: &mut Cluster<ServerCluster>,
         key: &[u8],
@@ -109,7 +109,7 @@ impl AssertionStorage<SimulateEngine> {
         key: &[u8],
         ts: impl Into<TimeStamp>,
     ) {
-        assert_eq!(self.get_from_custer(cluster, key, ts), None);
+        assert_eq!(self.get_from_cluster(cluster, key, ts), None);
     }
 
     pub fn put_ok_for_cluster(
