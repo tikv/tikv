@@ -866,8 +866,8 @@ where
     }
 
     fn on_clear_region_size(&mut self) {
-        self.fsm.peer.approximate_size = 0;
-        self.fsm.peer.approximate_keys = 0;
+        self.fsm.peer.approximate_size = None;
+        self.fsm.peer.approximate_keys = None;
         self.fsm.peer.has_calculated_region_size = false;
         self.register_split_region_check_tick();
     }
@@ -2399,8 +2399,8 @@ where
         let region_id = derived.get_id();
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
-        let estimated_size = self.fsm.peer.approximate_size / new_region_count;
-        let estimated_keys = self.fsm.peer.approximate_keys / new_region_count;
+        let estimated_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
+        let estimated_keys = self.fsm.peer.approximate_keys.map(|v| v / new_region_count);
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
         self.fsm.peer.post_split();
@@ -3949,7 +3949,7 @@ where
     }
 
     fn on_approximate_region_size(&mut self, size: u64) {
-        self.fsm.peer.approximate_size = size;
+        self.fsm.peer.approximate_size = Some(size);
         self.fsm.peer.has_calculated_region_size = true;
         self.register_split_region_check_tick();
         self.register_pd_heartbeat_tick();
@@ -3957,7 +3957,7 @@ where
     }
 
     fn on_approximate_region_keys(&mut self, keys: u64) {
-        self.fsm.peer.approximate_keys = keys;
+        self.fsm.peer.approximate_keys = Some(keys);
         self.register_split_region_check_tick();
         self.register_pd_heartbeat_tick();
     }
@@ -4192,8 +4192,10 @@ where
             size += sst.total_bytes;
             keys += sst.total_kvs;
         }
-        self.fsm.peer.approximate_size += size;
-        self.fsm.peer.approximate_keys += keys;
+        self.fsm.peer.approximate_size =
+            Some(self.fsm.peer.approximate_size.unwrap_or_default() + size);
+        self.fsm.peer.approximate_keys =
+            Some(self.fsm.peer.approximate_keys.unwrap_or_default() + keys);
         // The ingested file may be overlapped with the data in engine, so we need to check it
         // again to get the accurate value.
         self.fsm.peer.has_calculated_region_size = false;
