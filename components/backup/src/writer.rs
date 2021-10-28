@@ -43,9 +43,9 @@ impl From<CfName> for CfNameWrap {
     }
 }
 
-impl Into<CfName> for CfNameWrap {
-    fn into(self) -> CfName {
-        self.0
+impl From<CfNameWrap> for CfName {
+    fn from(w: CfNameWrap) -> CfName {
+        w.0
     }
 }
 
@@ -427,8 +427,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_writer() {
+    #[tokio::test]
+    async fn test_writer() {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
@@ -457,7 +457,7 @@ mod tests {
         )
         .unwrap();
         writer.write(vec![].into_iter(), false).unwrap();
-        assert!(writer.save(&storage).unwrap().is_empty());
+        assert!(writer.save(&storage).await.unwrap().is_empty());
 
         // Test write only txn.
         let mut writer = BackupWriter::new(
@@ -480,7 +480,7 @@ mod tests {
                 false,
             )
             .unwrap();
-        let files = writer.save(&storage).unwrap();
+        let files = writer.save(&storage).await.unwrap();
         assert_eq!(files.len(), 1);
         check_sst(
             &[(
@@ -521,7 +521,7 @@ mod tests {
                 false,
             )
             .unwrap();
-        let files = writer.save(&storage).unwrap();
+        let files = writer.save(&storage).await.unwrap();
         assert_eq!(files.len(), 2);
         check_sst(
             &[

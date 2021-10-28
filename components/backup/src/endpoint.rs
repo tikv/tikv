@@ -32,11 +32,13 @@ use tikv::storage::Statistics;
 use tikv_util::time::{Instant, Limiter};
 use tikv_util::worker::Runnable;
 use tikv_util::{
-    box_err, debug, defer, error, error_unknown, impl_display_as_debug, info, thd_name, warn,
+    box_err, debug, error, error_unknown, impl_display_as_debug, info, warn,
 };
+use tokio::io::Result as TokioResult;
+use tokio::runtime::Runtime;
 use txn_types::{Key, Lock, TimeStamp};
-use yatp::task::future::TaskCell;
-use yatp::ThreadPool;
+
+
 
 use crate::metrics::*;
 use crate::writer::{BackupWriterBuilder, CfNameWrap};
@@ -552,7 +554,7 @@ impl<R: RegionInfoProvider> Progress<R> {
 
 struct ControlThreadPool {
     size: usize,
-    workers: Option<Arc<ThreadPool<TaskCell>>>,
+    workers: Option<Arc<Runtime>>,
 }
 
 impl ControlThreadPool {
@@ -578,6 +580,24 @@ impl ControlThreadPool {
         });
     }
 
+    /// Create a standard tokio runtime
+    /// (which allows io and time reactor, involve thread memory accessor),
+    /// use `bkwkr` as the thread name.
+    fn create_tokio_runtime(thread_count: usize) -> TokioResult<Runtime> {
+        tokio::runtime::Builder::new_multi_thread()
+            .thread_name("bkwkr")
+            .enable_io()
+            .enable_time()
+            .on_thread_start(|| {
+                tikv_alloc::add_thread_memory_accessor();
+            })
+            .on_thread_stop(|| {
+                tikv_alloc::remove_thread_memory_accessor();
+            })
+            .worker_threads(thread_count)
+            .build()
+    }
+
     /// Lazily adjust the thread pool's size
     ///
     /// Resizing if the thread pool need to expend or there
@@ -587,9 +607,8 @@ impl ControlThreadPool {
             return;
         }
         let workers = Arc::new(
-            yatp::Builder::new(thd_name!("bkwkr"))
-                .max_thread_count(new_size)
-                .build_future_pool(),
+            Self::create_tokio_runtime(new_size)
+                .expect("failed to create tokio runtime for backup worker."),
         );
         let _ = self.workers.replace(workers);
         self.size = new_size;
@@ -639,11 +658,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
 
         // TODO: make it async.
         self.pool.borrow_mut().spawn(async move {
-            tikv_alloc::add_thread_memory_accessor();
             let _with_io_type = WithIOType::new(IOType::Export);
-            defer!({
-                tikv_alloc::remove_thread_memory_accessor();
-            });
 
             // Check if we can open external storage.
             let backend = match create_storage(&request.backend) {
@@ -932,6 +947,7 @@ pub mod tests {
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::config::ReadableSize;
+    use tokio::time;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use super::*;
@@ -1049,8 +1065,8 @@ pub mod tests {
 
         for i in 0..8 {
             let ctr = counter.clone();
-            pool.spawn(move || {
-                sleep(Duration::from_millis(100));
+            pool.spawn(async move {
+                time::sleep(Duration::from_millis(100)).await;
                 ctr.fetch_or(1 << i, Ordering::SeqCst);
             });
         }
@@ -1061,7 +1077,7 @@ pub mod tests {
         for i in 8..16 {
             let ctr = counter.clone();
             pool.spawn(async move {
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                time::sleep(Duration::from_millis(100)).await;
                 ctr.fetch_or(1 << i, Ordering::SeqCst);
             });
         }

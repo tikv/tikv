@@ -25,7 +25,7 @@ use crate::dylib;
 use async_trait::async_trait;
 #[cfg(any(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
 use cloud::blob::BlobConfig;
-use cloud::blob::{BlobStorage, PutResrouce};
+use cloud::blob::{BlobStorage, PutResource};
 use encryption::DataKeyManager;
 #[cfg(feature = "cloud-storage-dylib")]
 use external_storage::dylib_client;
@@ -353,7 +353,7 @@ impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
     }
     async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
         (**self)
-            .put(name, PutResrouce(reader.0), content_length)
+            .put(name, PutResource(reader.0), content_length)
             .await
     }
 

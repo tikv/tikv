@@ -3,7 +3,7 @@ use std::{convert::TryInto, fmt::Display, io, sync::Arc};
 
 use async_trait::async_trait;
 use cloud::blob::{
-    none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResrouce, StringNonEmpty,
+    none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
 };
 use futures_util::{
     future::TryFutureExt,
@@ -400,7 +400,7 @@ impl BlobStorage for GCSStorage {
     async fn put(
         &self,
         name: &str,
-        mut reader: PutResrouce,
+        mut reader: PutResource,
         content_length: u64,
     ) -> io::Result<()> {
         if content_length == 0 {

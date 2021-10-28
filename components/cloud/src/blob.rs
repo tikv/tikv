@@ -13,9 +13,10 @@ pub trait BlobConfig: 'static + Send + Sync {
     fn url(&self) -> io::Result<url::Url>;
 }
 
-pub struct PutResrouce(pub Box<dyn AsyncRead + Send + Unpin>);
+/// PutResource is a simple wrapper for put.
+pub struct PutResource(pub Box<dyn AsyncRead + Send + Unpin>);
 
-impl AsyncRead for PutResrouce {
+impl AsyncRead for PutResource {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -24,6 +25,13 @@ impl AsyncRead for PutResrouce {
         Pin::new(&mut *self.get_mut().0).poll_read(cx, buf)
     }
 }
+
+impl From<Box<dyn AsyncRead + Send + Unpin>> for PutResource {
+    fn from(s: Box<dyn AsyncRead + Send + Unpin>) -> Self {
+        Self(s)
+    }
+}
+
 /// An abstraction for blob storage.
 /// Currently the same as ExternalStorage
 #[async_trait]
@@ -31,7 +39,7 @@ pub trait BlobStorage: 'static + Send + Sync {
     fn config(&self) -> Box<dyn BlobConfig>;
 
     /// Write all contents of the read to the given path.
-    async fn put(&self, name: &str, reader: PutResrouce, content_length: u64) -> io::Result<()>;
+    async fn put(&self, name: &str, reader: PutResource, content_length: u64) -> io::Result<()>;
 
     /// Read all contents of the given path.
     fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_>;
@@ -53,7 +61,7 @@ impl BlobStorage for Box<dyn BlobStorage> {
         (**self).config()
     }
 
-    async fn put(&self, name: &str, reader: PutResrouce, content_length: u64) -> io::Result<()> {
+    async fn put(&self, name: &str, reader: PutResource, content_length: u64) -> io::Result<()> {
         let fut = (**self).put(name, reader, content_length);
         fut.await
     }

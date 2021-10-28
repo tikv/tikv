@@ -20,7 +20,7 @@ use std::error::Error as StdError;
 use tokio::time::{sleep, timeout};
 
 use cloud::blob::{
-    none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResrouce, StringNonEmpty,
+    none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
 };
 pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
 use tikv_util::debug;
@@ -230,6 +230,8 @@ struct S3Uploader<'client> {
     parts: Vec<CompletedPart>,
 }
 
+/// The errors a uploader can meet.
+/// This was made for make the result of [S3Uploader::run] get [Send].
 #[derive(Debug, Error)]
 enum UploadError {
     #[error("io error {0}")]
@@ -479,7 +481,7 @@ impl BlobStorage for S3Storage {
     async fn put(
         &self,
         name: &str,
-        mut reader: PutResrouce,
+        mut reader: PutResource,
         content_length: u64,
     ) -> io::Result<()> {
         let key = self.maybe_prefix_key(name);
@@ -547,8 +549,8 @@ mod tests {
     }
 
     #[cfg(feature = "failpoints")]
-    #[test]
-    fn test_s3_storage() {
+    #[tokio::test]
+    async fn test_s3_storage() {
         let magic_contents = "5678";
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
         let mut bucket = BucketConf::default(bucket_name);
@@ -570,9 +572,10 @@ mod tests {
         let s = S3Storage::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
         s.put(
             "mykey",
-            Box::new(magic_contents.as_bytes()),
+            PutResource(Box::new(magic_contents.as_bytes())),
             magic_contents.len() as u64,
         )
+        .await
         .unwrap();
         let mut reader = s.get("mykey");
         let mut buf = Vec::new();
@@ -583,11 +586,13 @@ mod tests {
         // inject put error
         let s3_put_obj_err_fp = "s3_put_obj_err";
         fail::cfg(s3_put_obj_err_fp, "return").unwrap();
-        let resp = s.put(
-            "mykey",
-            Box::new(magic_contents.as_bytes()),
-            magic_contents.len() as u64,
-        );
+        let resp = s
+            .put(
+                "mykey",
+                PutResource(Box::new(magic_contents.as_bytes())),
+                magic_contents.len() as u64,
+            )
+            .await;
         fail::remove(s3_put_obj_err_fp);
         assert!(resp.is_err());
 
@@ -599,22 +604,26 @@ mod tests {
         fail::cfg(s3_timeout_injected_fp, "return(100)").unwrap();
         // inject 200ms delay
         fail::cfg(s3_sleep_injected_fp, "return(200)").unwrap();
-        let resp = s.put(
-            "mykey",
-            Box::new(magic_contents.as_bytes()),
-            magic_contents.len() as u64,
-        );
+        let resp = s
+            .put(
+                "mykey",
+                PutResource(Box::new(magic_contents.as_bytes())),
+                magic_contents.len() as u64,
+            )
+            .await;
         fail::remove(s3_sleep_injected_fp);
         // timeout occur due to delay 200ms
         assert!(resp.is_err());
 
         // inject 50ms delay
         fail::cfg(s3_sleep_injected_fp, "return(50)").unwrap();
-        let resp = s.put(
-            "mykey",
-            Box::new(magic_contents.as_bytes()),
-            magic_contents.len() as u64,
-        );
+        let resp = s
+            .put(
+                "mykey",
+                PutResource(Box::new(magic_contents.as_bytes())),
+                magic_contents.len() as u64,
+            )
+            .await;
         fail::remove(s3_sleep_injected_fp);
         fail::remove(s3_timeout_injected_fp);
         // no timeout
@@ -644,7 +653,7 @@ mod tests {
         let s = S3Storage::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
         block_on_external_io(s.put(
             "key2",
-            PutResrouce(Box::new(magic_contents.as_bytes())),
+            PutResource(Box::new(magic_contents.as_bytes())),
             magic_contents.len() as u64,
         ))
         .unwrap();
