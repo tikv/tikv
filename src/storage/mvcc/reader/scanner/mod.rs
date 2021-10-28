@@ -6,7 +6,8 @@ mod forward;
 use engine::IterOption;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
-use txn_types::{Key, TimeStamp, TsSet, Value, Write, WriteRef, WriteType};
+use std::fmt::Formatter;
+use txn_types::{Key, Lock, TimeStamp, TsSet, Value, Write, WriteRef, WriteType};
 
 use self::backward::BackwardKvScanner;
 use self::forward::{
@@ -224,6 +225,24 @@ pub struct ScannerConfig<S: Snapshot> {
     check_has_newer_ts_data: bool,
 }
 
+impl<S: Snapshot> std::fmt::Debug for ScannerConfig<S> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScannerConfig")
+            .field("fill_cache", &self.fill_cache)
+            .field("omit_value", &self.omit_value)
+            .field("isolation_level", &self.isolation_level)
+            .field("lower_bound", &self.lower_bound)
+            .field("upper_bound", &self.upper_bound)
+            .field("hint_min_ts", &self.hint_min_ts)
+            .field("hint_max_ts", &self.hint_max_ts)
+            .field("ts", &self.ts)
+            .field("desc", &self.desc)
+            .field("bypass_locks", &self.bypass_locks)
+            .field("check_has_newer_ts_data", &self.check_has_newer_ts_data)
+            .finish()
+    }
+}
+
 impl<S: Snapshot> ScannerConfig<S> {
     fn new(snapshot: S, ts: TimeStamp, desc: bool) -> Self {
         Self {
@@ -367,14 +386,16 @@ pub fn has_data_in_range<S: Snapshot>(
 /// Seek for the next valid (write type == Put or Delete) write record.
 /// The write cursor must indicate a data key of the user key of which ts <= after_ts.
 /// Return None if cannot find any valid write record.
-pub fn seek_for_valid_write<I>(
+pub fn seek_for_valid_write<I, S>(
     write_cursor: &mut Cursor<I>,
     user_key: &Key,
     after_ts: TimeStamp,
     statistics: &mut Statistics,
+    debug_info: Option<&SeekForValidWriteDebugInfo<'_, S>>,
 ) -> Result<Option<Write>>
 where
     I: Iterator,
+    S: Snapshot,
 {
     let mut ret = None;
     while write_cursor.valid()?
@@ -386,9 +407,11 @@ where
         let write_ref = WriteRef::parse(write_cursor.value(&mut statistics.write))?;
         match write_ref.write_type {
             WriteType::Put | WriteType::Delete => {
-                assert_ge!(
-                    after_ts,
-                    Key::decode_ts_from(write_cursor.key(&mut statistics.write))?
+                let key_ts = Key::decode_ts_from(write_cursor.key(&mut statistics.write))?;
+                assert!(
+                    after_ts >= key_ts,
+                    "assertion failed: after_ts({}) > key_ts({}), user_key:{}, write_key: {}, curr_write: {:?}, debug_info: {:?}",
+                    after_ts, key_ts, user_key, Key::from_encoded_slice(write_cursor.key(&mut statistics.write)), write_ref, debug_info
                 );
                 ret = Some(write_ref.to_owned());
                 break;
@@ -405,17 +428,25 @@ where
 /// Seek for the last written value.
 /// The write cursor must indicate a data key of the user key of which ts <= after_ts.
 /// Return None if cannot find any valid write record or found a delete record.
-pub fn seek_for_valid_value<I>(
+pub fn seek_for_valid_value<I, S>(
     write_cursor: &mut Cursor<I>,
     default_cursor: &mut Cursor<I>,
     user_key: &Key,
     after_ts: TimeStamp,
     statistics: &mut Statistics,
+    debug_info: &SeekForValidWriteDebugInfo<'_, S>,
 ) -> Result<Option<Value>>
 where
     I: Iterator,
+    S: Snapshot,
 {
-    if let Some(write) = seek_for_valid_write(write_cursor, user_key, after_ts, statistics)? {
+    if let Some(write) = seek_for_valid_write(
+        write_cursor,
+        user_key,
+        after_ts,
+        statistics,
+        Some(debug_info),
+    )? {
         if write.write_type == WriteType::Put {
             let value = if let Some(v) = write.short_value {
                 v
@@ -426,6 +457,33 @@ where
         }
     };
     Ok(None)
+}
+
+#[derive(Clone)]
+pub struct SeekForValidWriteDebugInfo<'a, S: Snapshot> {
+    pub lock: Option<&'a Lock>,
+    pub write_start_ts: Option<TimeStamp>,
+    pub write_commit_ts: Option<TimeStamp>,
+    pub write_type: Option<WriteType>,
+    pub scanner_ts: TimeStamp,
+    pub scanner_from_ts: TimeStamp,
+    pub extra_op: ExtraOp,
+    pub scanner_cfg: Option<&'a ScannerConfig<S>>,
+}
+
+impl<'a, S: Snapshot> std::fmt::Debug for SeekForValidWriteDebugInfo<'a, S> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SeekForValidWriteDebugInfo")
+            .field("lock", &self.lock)
+            .field("write_start_ts", &self.write_start_ts)
+            .field("write_commit_ts", &self.write_commit_ts)
+            .field("write_type", &self.write_type)
+            .field("scanner_ts", &self.scanner_ts)
+            .field("scanner_from_ts", &self.scanner_from_ts)
+            .field("extra_op", &self.extra_op)
+            .field("scanner_cfg", &self.scanner_cfg)
+            .finish()
+    }
 }
 
 #[cfg(test)]

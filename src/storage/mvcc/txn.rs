@@ -1026,11 +1026,12 @@ impl<S: Snapshot> MvccTxn<S> {
                     let write_cursor = self.reader.write_cursor.as_mut().unwrap();
                     // Skip the current write record.
                     write_cursor.next(&mut self.reader.statistics.write);
-                    let write = seek_for_valid_write(
+                    let write = seek_for_valid_write::<_, S>(
                         write_cursor,
                         key,
                         self.start_ts,
                         &mut self.reader.statistics,
+                        None,
                     )?;
                     write.map(|w| OldValue {
                         short_value: w.short_value,

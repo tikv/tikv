@@ -9,6 +9,7 @@ pub use self::reader::{check_need_gc, MvccReader};
 pub use self::scanner::test_util;
 pub use self::scanner::{
     has_data_in_range, seek_for_valid_write, DeltaScanner, EntryScanner, Scanner, ScannerBuilder,
+    SeekForValidWriteDebugInfo,
 };
 
 #[derive(Debug, PartialEq, Clone, Copy)]

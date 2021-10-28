@@ -606,12 +606,24 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             {
                 // When meet a lock, the write cursor must indicate the same user key.
                 // Seek for the last valid committed here.
+                let debug_info = super::SeekForValidWriteDebugInfo {
+                    lock: Some(&lock),
+                    scanner_ts: cfg.ts,
+                    scanner_from_ts: self.from_ts,
+                    extra_op: self.extra_op,
+                    scanner_cfg: Some(&cfg),
+
+                    write_start_ts: None,
+                    write_commit_ts: None,
+                    write_type: None,
+                };
                 super::seek_for_valid_value(
                     &mut cursors.write,
                     cursors.default.as_mut().unwrap(),
                     &current_user_key,
-                    std::cmp::max(lock.ts, lock.for_update_ts),
+                    0.into(), //std::cmp::max(lock.ts, lock.for_update_ts),
                     statistics,
+                    &debug_info,
                 )?
             } else {
                 None
@@ -633,7 +645,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
     fn handle_write(
         &mut self,
         current_user_key: Key,
-        _cfg: &mut ScannerConfig<S>,
+        cfg: &mut ScannerConfig<S>,
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
@@ -698,12 +710,24 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             let old_value = if self.extra_op == ExtraOp::ReadOldValue
                 && (write_type == WriteType::Put || write_type == WriteType::Delete)
             {
+                let debug_info = super::SeekForValidWriteDebugInfo {
+                    write_start_ts: Some(start_ts),
+                    write_commit_ts: Some(commit_ts),
+                    write_type: Some(write_type),
+                    scanner_ts: cfg.ts,
+                    scanner_from_ts: self.from_ts,
+                    extra_op: self.extra_op,
+                    scanner_cfg: Some(&cfg),
+
+                    lock: None,
+                };
                 super::seek_for_valid_value(
                     &mut cursors.write,
                     cursors.default.as_mut().unwrap(),
                     &current_user_key,
                     commit_ts,
                     statistics,
+                    &debug_info,
                 )?
             } else {
                 None
