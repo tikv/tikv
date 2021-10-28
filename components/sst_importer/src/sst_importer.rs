@@ -1398,164 +1398,167 @@ mod tests {
 
     #[test]
     fn test_download_rawkv_sst() {
-        fn inner(api_version: ApiVersion) {
-            // creates a sample SST file.
-            let (_ext_sst_dir, backend, meta) =
-                create_sample_external_rawkv_sst_file(b"0", b"z", false).unwrap();
+        test_download_rawkv_sst_impl(ApiVersion::V1);
+        test_download_rawkv_sst_impl(ApiVersion::V1ttl);
+        test_download_rawkv_sst_impl(ApiVersion::V2);
+    }
 
-            // performs the download.
-            let importer_dir = tempfile::tempdir().unwrap();
-            let cfg = Config::default();
-            let importer = SSTImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
-            let db = create_sst_test_engine().unwrap();
+    fn test_download_rawkv_sst_impl(api_version: ApiVersion) {
+        // creates a sample SST file.
+        let (_ext_sst_dir, backend, meta) =
+            create_sample_external_rawkv_sst_file(b"0", b"z", false).unwrap();
 
-            let range = importer
-                .download::<TestEngine>(
-                    &meta,
-                    &backend,
-                    "sample.sst",
-                    &RewriteRule::default(),
-                    Limiter::new(INFINITY),
-                    db,
-                )
-                .unwrap()
-                .unwrap();
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
+        let db = create_sst_test_engine().unwrap();
 
-            assert_eq!(range.get_start(), b"a");
-            assert_eq!(range.get_end(), b"d");
+        let range = importer
+            .download::<TestEngine>(
+                &meta,
+                &backend,
+                "sample.sst",
+                &RewriteRule::default(),
+                Limiter::new(INFINITY),
+                db,
+            )
+            .unwrap()
+            .unwrap();
 
-            // verifies that the file is saved to the correct place.
-            let sst_file_path = importer.dir.join(&meta).unwrap().save;
-            let sst_file_metadata = sst_file_path.metadata().unwrap();
-            assert!(sst_file_metadata.is_file());
-            assert_eq!(sst_file_metadata.len(), meta.get_length());
+        assert_eq!(range.get_start(), b"a");
+        assert_eq!(range.get_end(), b"d");
 
-            // verifies the SST content is correct.
-            let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
-            sst_reader.verify_checksum().unwrap();
-            let mut iter = sst_reader.iter();
-            iter.seek(SeekKey::Start).unwrap();
-            assert_eq!(
-                collect(iter),
-                vec![
-                    (b"za".to_vec(), b"v1".to_vec()),
-                    (b"zb".to_vec(), b"v2".to_vec()),
-                    (b"zb\x00".to_vec(), b"v3".to_vec()),
-                    (b"zc".to_vec(), b"v4".to_vec()),
-                    (b"zc\x00".to_vec(), b"v5".to_vec()),
-                    (b"zc\x00\x00".to_vec(), b"v6".to_vec()),
-                    (b"zd".to_vec(), b"v7".to_vec()),
-                ]
-            );
-        }
-        inner(ApiVersion::V1);
-        inner(ApiVersion::V1ttl);
-        inner(ApiVersion::V2);
+        // verifies that the file is saved to the correct place.
+        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_metadata = sst_file_path.metadata().unwrap();
+        assert!(sst_file_metadata.is_file());
+        assert_eq!(sst_file_metadata.len(), meta.get_length());
+
+        // verifies the SST content is correct.
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter();
+        iter.seek(SeekKey::Start).unwrap();
+        assert_eq!(
+            collect(iter),
+            vec![
+                (b"za".to_vec(), b"v1".to_vec()),
+                (b"zb".to_vec(), b"v2".to_vec()),
+                (b"zb\x00".to_vec(), b"v3".to_vec()),
+                (b"zc".to_vec(), b"v4".to_vec()),
+                (b"zc\x00".to_vec(), b"v5".to_vec()),
+                (b"zc\x00\x00".to_vec(), b"v6".to_vec()),
+                (b"zd".to_vec(), b"v7".to_vec()),
+            ]
+        );
     }
 
     #[test]
     fn test_download_rawkv_sst_partial() {
-        fn inner(api_version: ApiVersion) {
-            // creates a sample SST file.
-            let (_ext_sst_dir, backend, meta) =
-                create_sample_external_rawkv_sst_file(b"b", b"c\x00", false).unwrap();
+        test_download_rawkv_sst_partial_impl(ApiVersion::V1);
+        test_download_rawkv_sst_partial_impl(ApiVersion::V1ttl);
+        test_download_rawkv_sst_partial_impl(ApiVersion::V2);
+    }
 
-            // performs the download.
-            let importer_dir = tempfile::tempdir().unwrap();
-            let cfg = Config::default();
-            let importer = SSTImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
-            let db = create_sst_test_engine().unwrap();
+    fn test_download_rawkv_sst_partial_impl(api_version: ApiVersion) {
+        // creates a sample SST file.
+        let (_ext_sst_dir, backend, meta) =
+            create_sample_external_rawkv_sst_file(b"b", b"c\x00", false).unwrap();
 
-            let range = importer
-                .download::<TestEngine>(
-                    &meta,
-                    &backend,
-                    "sample.sst",
-                    &RewriteRule::default(),
-                    Limiter::new(INFINITY),
-                    db,
-                )
-                .unwrap()
-                .unwrap();
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
+        let db = create_sst_test_engine().unwrap();
 
-            assert_eq!(range.get_start(), b"b");
-            assert_eq!(range.get_end(), b"c\x00");
+        let range = importer
+            .download::<TestEngine>(
+                &meta,
+                &backend,
+                "sample.sst",
+                &RewriteRule::default(),
+                Limiter::new(INFINITY),
+                db,
+            )
+            .unwrap()
+            .unwrap();
 
-            // verifies that the file is saved to the correct place.
-            let sst_file_path = importer.dir.join(&meta).unwrap().save;
-            let sst_file_metadata = sst_file_path.metadata().unwrap();
-            assert!(sst_file_metadata.is_file());
+        assert_eq!(range.get_start(), b"b");
+        assert_eq!(range.get_end(), b"c\x00");
 
-            // verifies the SST content is correct.
-            let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
-            sst_reader.verify_checksum().unwrap();
-            let mut iter = sst_reader.iter();
-            iter.seek(SeekKey::Start).unwrap();
-            assert_eq!(
-                collect(iter),
-                vec![
-                    (b"zb".to_vec(), b"v2".to_vec()),
-                    (b"zb\x00".to_vec(), b"v3".to_vec()),
-                    (b"zc".to_vec(), b"v4".to_vec()),
-                    (b"zc\x00".to_vec(), b"v5".to_vec()),
-                ]
-            );
-        }
-        inner(ApiVersion::V1);
-        inner(ApiVersion::V1ttl);
-        inner(ApiVersion::V2);
+        // verifies that the file is saved to the correct place.
+        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_metadata = sst_file_path.metadata().unwrap();
+        assert!(sst_file_metadata.is_file());
+
+        // verifies the SST content is correct.
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter();
+        iter.seek(SeekKey::Start).unwrap();
+        assert_eq!(
+            collect(iter),
+            vec![
+                (b"zb".to_vec(), b"v2".to_vec()),
+                (b"zb\x00".to_vec(), b"v3".to_vec()),
+                (b"zc".to_vec(), b"v4".to_vec()),
+                (b"zc\x00".to_vec(), b"v5".to_vec()),
+            ]
+        );
     }
 
     #[test]
     fn test_download_rawkv_sst_partial_exclusive_end_key() {
-        fn inner(api_version: ApiVersion) {
-            // creates a sample SST file.
-            let (_ext_sst_dir, backend, meta) =
-                create_sample_external_rawkv_sst_file(b"b", b"c\x00", true).unwrap();
+        test_download_rawkv_sst_partial_exclusive_end_key_impl(ApiVersion::V1);
+        test_download_rawkv_sst_partial_exclusive_end_key_impl(ApiVersion::V1ttl);
+        test_download_rawkv_sst_partial_exclusive_end_key_impl(ApiVersion::V2);
+    }
 
-            // performs the download.
-            let importer_dir = tempfile::tempdir().unwrap();
-            let cfg = Config::default();
-            let importer = SSTImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
-            let db = create_sst_test_engine().unwrap();
+    fn test_download_rawkv_sst_partial_exclusive_end_key_impl(api_version: ApiVersion) {
+        // creates a sample SST file.
+        let (_ext_sst_dir, backend, meta) =
+            create_sample_external_rawkv_sst_file(b"b", b"c\x00", true).unwrap();
 
-            let range = importer
-                .download::<TestEngine>(
-                    &meta,
-                    &backend,
-                    "sample.sst",
-                    &RewriteRule::default(),
-                    Limiter::new(INFINITY),
-                    db,
-                )
-                .unwrap()
-                .unwrap();
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
+        let db = create_sst_test_engine().unwrap();
 
-            assert_eq!(range.get_start(), b"b");
-            assert_eq!(range.get_end(), b"c");
+        let range = importer
+            .download::<TestEngine>(
+                &meta,
+                &backend,
+                "sample.sst",
+                &RewriteRule::default(),
+                Limiter::new(INFINITY),
+                db,
+            )
+            .unwrap()
+            .unwrap();
 
-            // verifies that the file is saved to the correct place.
-            let sst_file_path = importer.dir.join(&meta).unwrap().save;
-            let sst_file_metadata = sst_file_path.metadata().unwrap();
-            assert!(sst_file_metadata.is_file());
+        assert_eq!(range.get_start(), b"b");
+        assert_eq!(range.get_end(), b"c");
 
-            // verifies the SST content is correct.
-            let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
-            sst_reader.verify_checksum().unwrap();
-            let mut iter = sst_reader.iter();
-            iter.seek(SeekKey::Start).unwrap();
-            assert_eq!(
-                collect(iter),
-                vec![
-                    (b"zb".to_vec(), b"v2".to_vec()),
-                    (b"zb\x00".to_vec(), b"v3".to_vec()),
-                    (b"zc".to_vec(), b"v4".to_vec()),
-                ]
-            );
-        }
-        inner(ApiVersion::V1);
-        inner(ApiVersion::V1ttl);
-        inner(ApiVersion::V2);
+        // verifies that the file is saved to the correct place.
+        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_metadata = sst_file_path.metadata().unwrap();
+        assert!(sst_file_metadata.is_file());
+
+        // verifies the SST content is correct.
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter();
+        iter.seek(SeekKey::Start).unwrap();
+        assert_eq!(
+            collect(iter),
+            vec![
+                (b"zb".to_vec(), b"v2".to_vec()),
+                (b"zb\x00".to_vec(), b"v3".to_vec()),
+                (b"zc".to_vec(), b"v4".to_vec()),
+            ]
+        );
     }
 
     #[test]

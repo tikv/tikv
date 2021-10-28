@@ -3673,664 +3673,656 @@ mod tests {
 
     #[test]
     fn test_raw_delete_range() {
-        fn inner(api_version: ApiVersion) {
-            let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
-                .build()
-                .unwrap();
-            let (tx, rx) = channel();
+        test_raw_delete_range_impl(ApiVersion::V1);
+        test_raw_delete_range_impl(ApiVersion::V1ttl);
+        test_raw_delete_range_impl(ApiVersion::V2);
+    }
 
-            let test_data = [
-                (b"a", b"001"),
-                (b"b", b"002"),
-                (b"c", b"003"),
-                (b"d", b"004"),
-                (b"e", b"005"),
-            ];
+    fn test_raw_delete_range_impl(api_version: ApiVersion) {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
 
-            // Write some key-value pairs to the db
-            for kv in &test_data {
-                storage
-                    .raw_put(
-                        Context::default(),
-                        "".to_string(),
-                        kv.0.to_vec(),
-                        kv.1.to_vec(),
-                        0,
-                        expect_ok_callback(tx.clone(), 0),
-                    )
-                    .unwrap();
-            }
+        let test_data = [
+            (b"a", b"001"),
+            (b"b", b"002"),
+            (b"c", b"003"),
+            (b"d", b"004"),
+            (b"e", b"005"),
+        ];
 
-            expect_value(
-                b"004".to_vec(),
-                block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec()))
-                    .unwrap(),
-            );
-
-            // Delete ["d", "e")
+        // Write some key-value pairs to the db
+        for kv in &test_data {
             storage
-                .raw_delete_range(
+                .raw_put(
                     Context::default(),
                     "".to_string(),
-                    b"d".to_vec(),
-                    b"e".to_vec(),
-                    expect_ok_callback(tx.clone(), 1),
+                    kv.0.to_vec(),
+                    kv.1.to_vec(),
+                    0,
+                    expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
-            rx.recv().unwrap();
-
-            // Assert key "d" has gone
-            expect_value(
-                b"003".to_vec(),
-                block_on(storage.raw_get(Context::default(), "".to_string(), b"c".to_vec()))
-                    .unwrap(),
-            );
-            expect_none(
-                block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec()))
-                    .unwrap(),
-            );
-            expect_value(
-                b"005".to_vec(),
-                block_on(storage.raw_get(Context::default(), "".to_string(), b"e".to_vec()))
-                    .unwrap(),
-            );
-
-            // Delete ["aa", "ab")
-            storage
-                .raw_delete_range(
-                    Context::default(),
-                    "".to_string(),
-                    b"aa".to_vec(),
-                    b"ab".to_vec(),
-                    expect_ok_callback(tx.clone(), 2),
-                )
-                .unwrap();
-            rx.recv().unwrap();
-
-            // Assert nothing happened
-            expect_value(
-                b"001".to_vec(),
-                block_on(storage.raw_get(Context::default(), "".to_string(), b"a".to_vec()))
-                    .unwrap(),
-            );
-            expect_value(
-                b"002".to_vec(),
-                block_on(storage.raw_get(Context::default(), "".to_string(), b"b".to_vec()))
-                    .unwrap(),
-            );
-
-            // Delete all
-            storage
-                .raw_delete_range(
-                    Context::default(),
-                    "".to_string(),
-                    b"a".to_vec(),
-                    b"z".to_vec(),
-                    expect_ok_callback(tx, 3),
-                )
-                .unwrap();
-            rx.recv().unwrap();
-
-            // Assert now no key remains
-            for kv in &test_data {
-                expect_none(
-                    block_on(storage.raw_get(Context::default(), "".to_string(), kv.0.to_vec()))
-                        .unwrap(),
-                );
-            }
-
-            rx.recv().unwrap();
         }
-        inner(ApiVersion::V1);
-        inner(ApiVersion::V1ttl);
-        inner(ApiVersion::V2);
+
+        expect_value(
+            b"004".to_vec(),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec())).unwrap(),
+        );
+
+        // Delete ["d", "e")
+        storage
+            .raw_delete_range(
+                Context::default(),
+                "".to_string(),
+                b"d".to_vec(),
+                b"e".to_vec(),
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Assert key "d" has gone
+        expect_value(
+            b"003".to_vec(),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"c".to_vec())).unwrap(),
+        );
+        expect_none(
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec())).unwrap(),
+        );
+        expect_value(
+            b"005".to_vec(),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"e".to_vec())).unwrap(),
+        );
+
+        // Delete ["aa", "ab")
+        storage
+            .raw_delete_range(
+                Context::default(),
+                "".to_string(),
+                b"aa".to_vec(),
+                b"ab".to_vec(),
+                expect_ok_callback(tx.clone(), 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Assert nothing happened
+        expect_value(
+            b"001".to_vec(),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"a".to_vec())).unwrap(),
+        );
+        expect_value(
+            b"002".to_vec(),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"b".to_vec())).unwrap(),
+        );
+
+        // Delete all
+        storage
+            .raw_delete_range(
+                Context::default(),
+                "".to_string(),
+                b"a".to_vec(),
+                b"z".to_vec(),
+                expect_ok_callback(tx, 3),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Assert now no key remains
+        for kv in &test_data {
+            expect_none(
+                block_on(storage.raw_get(Context::default(), "".to_string(), kv.0.to_vec()))
+                    .unwrap(),
+            );
+        }
+
+        rx.recv().unwrap();
     }
 
     #[test]
     fn test_raw_batch_put() {
-        fn inner(api_version: ApiVersion) {
-            let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
-                .build()
-                .unwrap();
-            let (tx, rx) = channel();
+        test_raw_batch_put_impl(ApiVersion::V1);
+        test_raw_batch_put_impl(ApiVersion::V1ttl);
+        test_raw_batch_put_impl(ApiVersion::V2);
+    }
 
-            let test_data = vec![
-                (b"a".to_vec(), b"aa".to_vec(), 10),
-                (b"b".to_vec(), b"bb".to_vec(), 20),
-                (b"c".to_vec(), b"cc".to_vec(), 30),
-                (b"d".to_vec(), b"dd".to_vec(), 0),
-                (b"e".to_vec(), b"ee".to_vec(), 40),
-            ];
+    fn test_raw_batch_put_impl(api_version: ApiVersion) {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
 
-            let kvpairs = test_data
+        let test_data = vec![
+            (b"a".to_vec(), b"aa".to_vec(), 10),
+            (b"b".to_vec(), b"bb".to_vec(), 20),
+            (b"c".to_vec(), b"cc".to_vec(), 30),
+            (b"d".to_vec(), b"dd".to_vec(), 0),
+            (b"e".to_vec(), b"ee".to_vec(), 40),
+        ];
+
+        let kvpairs = test_data
+            .clone()
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        let ttls = if let ApiVersion::V1ttl | ApiVersion::V2 = api_version {
+            test_data
                 .clone()
                 .into_iter()
-                .map(|(key, value, _)| (key, value))
-                .collect();
-            let ttls = if let ApiVersion::V1ttl | ApiVersion::V2 = api_version {
-                test_data
-                    .clone()
-                    .into_iter()
-                    .map(|(_, _, ttl)| ttl)
-                    .collect()
-            } else {
-                vec![0; test_data.len()]
-            };
-            // Write key-value pairs in a batch
-            storage
-                .raw_batch_put(
-                    Context::default(),
-                    "".to_string(),
-                    kvpairs,
-                    ttls,
-                    expect_ok_callback(tx, 0),
-                )
-                .unwrap();
-            rx.recv().unwrap();
+                .map(|(_, _, ttl)| ttl)
+                .collect()
+        } else {
+            vec![0; test_data.len()]
+        };
+        // Write key-value pairs in a batch
+        storage
+            .raw_batch_put(
+                Context::default(),
+                "".to_string(),
+                kvpairs,
+                ttls,
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
 
-            // Verify pairs one by one
-            for (key, val, _) in &test_data {
-                expect_value(
-                    val.to_vec(),
-                    block_on(storage.raw_get(Context::default(), "".to_string(), key.to_vec()))
-                        .unwrap(),
-                );
-            }
-            if let ApiVersion::V1ttl | ApiVersion::V2 = api_version {
-                // Verify ttl one by one
-                for (key, _, ttl) in test_data {
-                    let res =
-                        block_on(storage.raw_get_key_ttl(Context::default(), "".to_string(), key))
-                            .unwrap();
-                    assert_eq!(res, Some(ttl));
-                }
+        // Verify pairs one by one
+        for (key, val, _) in &test_data {
+            expect_value(
+                val.to_vec(),
+                block_on(storage.raw_get(Context::default(), "".to_string(), key.to_vec()))
+                    .unwrap(),
+            );
+        }
+        if let ApiVersion::V1ttl | ApiVersion::V2 = api_version {
+            // Verify ttl one by one
+            for (key, _, ttl) in test_data {
+                let res =
+                    block_on(storage.raw_get_key_ttl(Context::default(), "".to_string(), key))
+                        .unwrap();
+                assert_eq!(res, Some(ttl));
             }
         }
-        inner(ApiVersion::V1);
-        inner(ApiVersion::V1ttl);
-        inner(ApiVersion::V2);
     }
 
     #[test]
     fn test_raw_batch_get() {
-        fn inner(api_version: ApiVersion) {
-            let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
-                .build()
+        test_raw_batch_get_impl(ApiVersion::V1);
+        test_raw_batch_get_impl(ApiVersion::V1ttl);
+        test_raw_batch_get_impl(ApiVersion::V2);
+    }
+
+    fn test_raw_batch_get_impl(api_version: ApiVersion) {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+
+        let test_data = vec![
+            (b"a".to_vec(), b"aa".to_vec()),
+            (b"b".to_vec(), b"bb".to_vec()),
+            (b"c".to_vec(), b"cc".to_vec()),
+            (b"d".to_vec(), b"dd".to_vec()),
+            (b"e".to_vec(), b"ee".to_vec()),
+        ];
+
+        // Write key-value pairs one by one
+        for &(ref key, ref value) in &test_data {
+            storage
+                .raw_put(
+                    Context::default(),
+                    "".to_string(),
+                    key.clone(),
+                    value.clone(),
+                    0,
+                    expect_ok_callback(tx.clone(), 0),
+                )
                 .unwrap();
-            let (tx, rx) = channel();
-
-            let test_data = vec![
-                (b"a".to_vec(), b"aa".to_vec()),
-                (b"b".to_vec(), b"bb".to_vec()),
-                (b"c".to_vec(), b"cc".to_vec()),
-                (b"d".to_vec(), b"dd".to_vec()),
-                (b"e".to_vec(), b"ee".to_vec()),
-            ];
-
-            // Write key-value pairs one by one
-            for &(ref key, ref value) in &test_data {
-                storage
-                    .raw_put(
-                        Context::default(),
-                        "".to_string(),
-                        key.clone(),
-                        value.clone(),
-                        0,
-                        expect_ok_callback(tx.clone(), 0),
-                    )
-                    .unwrap();
-            }
-            rx.recv().unwrap();
-
-            // Verify pairs in a batch
-            let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
-            let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
-            expect_multi_values(
-                results,
-                block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)).unwrap(),
-            );
         }
-        inner(ApiVersion::V1);
-        inner(ApiVersion::V1ttl);
-        inner(ApiVersion::V2);
+        rx.recv().unwrap();
+
+        // Verify pairs in a batch
+        let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
+        let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
+        expect_multi_values(
+            results,
+            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)).unwrap(),
+        );
     }
 
     #[test]
     fn test_batch_raw_get() {
-        fn inner(api_version: ApiVersion) {
-            let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
-                .build()
+        test_batch_raw_get_impl(ApiVersion::V1);
+        test_batch_raw_get_impl(ApiVersion::V1ttl);
+        test_batch_raw_get_impl(ApiVersion::V2);
+    }
+
+    fn test_batch_raw_get_impl(api_version: ApiVersion) {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+
+        let test_data = vec![
+            (b"a".to_vec(), b"aa".to_vec()),
+            (b"b".to_vec(), b"bb".to_vec()),
+            (b"c".to_vec(), b"cc".to_vec()),
+            (b"d".to_vec(), b"dd".to_vec()),
+            (b"e".to_vec(), b"ee".to_vec()),
+        ];
+
+        // Write key-value pairs one by one
+        for &(ref key, ref value) in &test_data {
+            storage
+                .raw_put(
+                    Context::default(),
+                    "".to_string(),
+                    key.clone(),
+                    value.clone(),
+                    0,
+                    expect_ok_callback(tx.clone(), 0),
+                )
                 .unwrap();
-            let (tx, rx) = channel();
-
-            let test_data = vec![
-                (b"a".to_vec(), b"aa".to_vec()),
-                (b"b".to_vec(), b"bb".to_vec()),
-                (b"c".to_vec(), b"cc".to_vec()),
-                (b"d".to_vec(), b"dd".to_vec()),
-                (b"e".to_vec(), b"ee".to_vec()),
-            ];
-
-            // Write key-value pairs one by one
-            for &(ref key, ref value) in &test_data {
-                storage
-                    .raw_put(
-                        Context::default(),
-                        "".to_string(),
-                        key.clone(),
-                        value.clone(),
-                        0,
-                        expect_ok_callback(tx.clone(), 0),
-                    )
-                    .unwrap();
-            }
-            rx.recv().unwrap();
-
-            // Verify pairs in a batch
-            let mut ids = vec![];
-            let cmds = test_data
-                .iter()
-                .map(|&(ref k, _)| {
-                    let mut req = RawGetRequest::default();
-                    req.set_key(k.clone());
-                    ids.push(ids.len() as u64);
-                    req
-                })
-                .collect();
-            let results: Vec<Option<Vec<u8>>> =
-                test_data.into_iter().map(|(_, v)| Some(v)).collect();
-            let consumer = GetConsumer::new();
-            block_on(storage.raw_batch_get_command(cmds, ids, consumer.clone())).unwrap();
-            let x: Vec<Option<Vec<u8>>> = consumer
-                .take_data()
-                .into_iter()
-                .map(|x| x.unwrap())
-                .collect();
-            assert_eq!(x, results);
         }
-        inner(ApiVersion::V1);
-        inner(ApiVersion::V1ttl);
-        inner(ApiVersion::V2);
+        rx.recv().unwrap();
+
+        // Verify pairs in a batch
+        let mut ids = vec![];
+        let cmds = test_data
+            .iter()
+            .map(|&(ref k, _)| {
+                let mut req = RawGetRequest::default();
+                req.set_key(k.clone());
+                ids.push(ids.len() as u64);
+                req
+            })
+            .collect();
+        let results: Vec<Option<Vec<u8>>> = test_data.into_iter().map(|(_, v)| Some(v)).collect();
+        let consumer = GetConsumer::new();
+        block_on(storage.raw_batch_get_command(cmds, ids, consumer.clone())).unwrap();
+        let x: Vec<Option<Vec<u8>>> = consumer
+            .take_data()
+            .into_iter()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(x, results);
     }
 
     #[test]
     fn test_raw_batch_delete() {
-        fn inner(api_version: ApiVersion) {
-            let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
-                .build()
-                .unwrap();
-            let (tx, rx) = channel();
+        test_raw_batch_delete_impl(ApiVersion::V1);
+        test_raw_batch_delete_impl(ApiVersion::V1ttl);
+        test_raw_batch_delete_impl(ApiVersion::V2);
+    }
 
-            let test_data = vec![
-                (b"a".to_vec(), b"aa".to_vec()),
-                (b"b".to_vec(), b"bb".to_vec()),
-                (b"c".to_vec(), b"cc".to_vec()),
-                (b"d".to_vec(), b"dd".to_vec()),
-                (b"e".to_vec(), b"ee".to_vec()),
-            ];
+    fn test_raw_batch_delete_impl(api_version: ApiVersion) {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
 
-            // Write key-value pairs in batch
-            storage
-                .raw_batch_put(
-                    Context::default(),
-                    "".to_string(),
-                    test_data.clone(),
-                    vec![0; test_data.len()],
-                    expect_ok_callback(tx.clone(), 0),
-                )
-                .unwrap();
-            rx.recv().unwrap();
+        let test_data = vec![
+            (b"a".to_vec(), b"aa".to_vec()),
+            (b"b".to_vec(), b"bb".to_vec()),
+            (b"c".to_vec(), b"cc".to_vec()),
+            (b"d".to_vec(), b"dd".to_vec()),
+            (b"e".to_vec(), b"ee".to_vec()),
+        ];
 
-            // Verify pairs exist
-            let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
-            let results = test_data
-                .iter()
-                .map(|&(ref k, ref v)| Some((k.clone(), v.clone())))
-                .collect();
-            expect_multi_values(
-                results,
-                block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)).unwrap(),
-            );
+        // Write key-value pairs in batch
+        storage
+            .raw_batch_put(
+                Context::default(),
+                "".to_string(),
+                test_data.clone(),
+                vec![0; test_data.len()],
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
 
-            // Delete ["b", "d"]
-            storage
-                .raw_batch_delete(
-                    Context::default(),
-                    "".to_string(),
-                    vec![b"b".to_vec(), b"d".to_vec()],
-                    expect_ok_callback(tx.clone(), 1),
-                )
-                .unwrap();
-            rx.recv().unwrap();
+        // Verify pairs exist
+        let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
+        let results = test_data
+            .iter()
+            .map(|&(ref k, ref v)| Some((k.clone(), v.clone())))
+            .collect();
+        expect_multi_values(
+            results,
+            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)).unwrap(),
+        );
 
-            // Assert "b" and "d" are gone
-            expect_value(
-                b"aa".to_vec(),
-                block_on(storage.raw_get(Context::default(), "".to_string(), b"a".to_vec()))
-                    .unwrap(),
-            );
-            expect_none(
-                block_on(storage.raw_get(Context::default(), "".to_string(), b"b".to_vec()))
-                    .unwrap(),
-            );
-            expect_value(
-                b"cc".to_vec(),
-                block_on(storage.raw_get(Context::default(), "".to_string(), b"c".to_vec()))
-                    .unwrap(),
-            );
-            expect_none(
-                block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec()))
-                    .unwrap(),
-            );
-            expect_value(
-                b"ee".to_vec(),
-                block_on(storage.raw_get(Context::default(), "".to_string(), b"e".to_vec()))
-                    .unwrap(),
-            );
+        // Delete ["b", "d"]
+        storage
+            .raw_batch_delete(
+                Context::default(),
+                "".to_string(),
+                vec![b"b".to_vec(), b"d".to_vec()],
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
 
-            // Delete ["a", "c", "e"]
-            storage
-                .raw_batch_delete(
-                    Context::default(),
-                    "".to_string(),
-                    vec![b"a".to_vec(), b"c".to_vec(), b"e".to_vec()],
-                    expect_ok_callback(tx, 2),
-                )
-                .unwrap();
-            rx.recv().unwrap();
+        // Assert "b" and "d" are gone
+        expect_value(
+            b"aa".to_vec(),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"a".to_vec())).unwrap(),
+        );
+        expect_none(
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"b".to_vec())).unwrap(),
+        );
+        expect_value(
+            b"cc".to_vec(),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"c".to_vec())).unwrap(),
+        );
+        expect_none(
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec())).unwrap(),
+        );
+        expect_value(
+            b"ee".to_vec(),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"e".to_vec())).unwrap(),
+        );
 
-            // Assert no key remains
-            for (k, _) in test_data {
-                expect_none(
-                    block_on(storage.raw_get(Context::default(), "".to_string(), k)).unwrap(),
-                );
-            }
+        // Delete ["a", "c", "e"]
+        storage
+            .raw_batch_delete(
+                Context::default(),
+                "".to_string(),
+                vec![b"a".to_vec(), b"c".to_vec(), b"e".to_vec()],
+                expect_ok_callback(tx, 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Assert no key remains
+        for (k, _) in test_data {
+            expect_none(block_on(storage.raw_get(Context::default(), "".to_string(), k)).unwrap());
         }
-        inner(ApiVersion::V1);
-        inner(ApiVersion::V1ttl);
-        inner(ApiVersion::V2);
     }
 
     #[test]
     fn test_raw_scan() {
-        fn inner(api_version: ApiVersion) {
-            let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
-                .build()
-                .unwrap();
-            let (tx, rx) = channel();
+        test_raw_scan_impl(ApiVersion::V1);
+        test_raw_scan_impl(ApiVersion::V1ttl);
+        test_raw_scan_impl(ApiVersion::V2);
+    }
 
-            let test_data = vec![
-                (b"r\0a".to_vec(), b"aa".to_vec()),
-                (b"r\0a1".to_vec(), b"aa11".to_vec()),
-                (b"r\0a2".to_vec(), b"aa22".to_vec()),
-                (b"r\0a3".to_vec(), b"aa33".to_vec()),
-                (b"r\0b".to_vec(), b"bb".to_vec()),
-                (b"r\0b1".to_vec(), b"bb11".to_vec()),
-                (b"r\0b2".to_vec(), b"bb22".to_vec()),
-                (b"r\0b3".to_vec(), b"bb33".to_vec()),
-                (b"r\0c".to_vec(), b"cc".to_vec()),
-                (b"r\0c1".to_vec(), b"cc11".to_vec()),
-                (b"r\0c2".to_vec(), b"cc22".to_vec()),
-                (b"r\0c3".to_vec(), b"cc33".to_vec()),
-                (b"r\0d".to_vec(), b"dd".to_vec()),
-                (b"r\0d1".to_vec(), b"dd11".to_vec()),
-                (b"r\0d2".to_vec(), b"dd22".to_vec()),
-                (b"r\0d3".to_vec(), b"dd33".to_vec()),
-                (b"r\0e".to_vec(), b"ee".to_vec()),
-                (b"r\0e1".to_vec(), b"ee11".to_vec()),
-                (b"r\0e2".to_vec(), b"ee22".to_vec()),
-                (b"r\0e3".to_vec(), b"ee33".to_vec()),
-            ];
+    fn test_raw_scan_impl(api_version: ApiVersion) {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
 
-            // Write key-value pairs in batch
-            storage
-                .raw_batch_put(
-                    Context::default(),
-                    "".to_string(),
-                    test_data.clone(),
-                    vec![0; test_data.len()],
-                    expect_ok_callback(tx, 0),
-                )
-                .unwrap();
-            rx.recv().unwrap();
+        let test_data = vec![
+            (b"r\0a".to_vec(), b"aa".to_vec()),
+            (b"r\0a1".to_vec(), b"aa11".to_vec()),
+            (b"r\0a2".to_vec(), b"aa22".to_vec()),
+            (b"r\0a3".to_vec(), b"aa33".to_vec()),
+            (b"r\0b".to_vec(), b"bb".to_vec()),
+            (b"r\0b1".to_vec(), b"bb11".to_vec()),
+            (b"r\0b2".to_vec(), b"bb22".to_vec()),
+            (b"r\0b3".to_vec(), b"bb33".to_vec()),
+            (b"r\0c".to_vec(), b"cc".to_vec()),
+            (b"r\0c1".to_vec(), b"cc11".to_vec()),
+            (b"r\0c2".to_vec(), b"cc22".to_vec()),
+            (b"r\0c3".to_vec(), b"cc33".to_vec()),
+            (b"r\0d".to_vec(), b"dd".to_vec()),
+            (b"r\0d1".to_vec(), b"dd11".to_vec()),
+            (b"r\0d2".to_vec(), b"dd22".to_vec()),
+            (b"r\0d3".to_vec(), b"dd33".to_vec()),
+            (b"r\0e".to_vec(), b"ee".to_vec()),
+            (b"r\0e1".to_vec(), b"ee11".to_vec()),
+            (b"r\0e2".to_vec(), b"ee22".to_vec()),
+            (b"r\0e3".to_vec(), b"ee33".to_vec()),
+        ];
 
-            // Scan pairs with key only
-            let mut results: Vec<Option<KvPair>> = test_data
-                .iter()
-                .map(|&(ref k, _)| Some((k.clone(), vec![])))
-                .collect();
-            expect_multi_values(
-                results.clone(),
-                block_on(storage.raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"r\0".to_vec(),
-                    None,
-                    20,
-                    true,
-                    false,
-                ))
-                .unwrap(),
-            );
-            results = results.split_off(10);
-            expect_multi_values(
-                results,
-                block_on(storage.raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"r\0c2".to_vec(),
-                    None,
-                    20,
-                    true,
-                    false,
-                ))
-                .unwrap(),
-            );
-            let mut results: Vec<Option<KvPair>> = test_data
-                .clone()
-                .into_iter()
-                .map(|(k, v)| Some((k, v)))
-                .collect();
-            expect_multi_values(
-                results.clone(),
-                block_on(storage.raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"r\0".to_vec(),
-                    None,
-                    20,
-                    false,
-                    false,
-                ))
-                .unwrap(),
-            );
-            results = results.split_off(10);
-            expect_multi_values(
-                results,
-                block_on(storage.raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"r\0c2".to_vec(),
-                    None,
-                    20,
-                    false,
-                    false,
-                ))
-                .unwrap(),
-            );
-            let results: Vec<Option<KvPair>> = test_data
-                .clone()
-                .into_iter()
-                .map(|(k, v)| Some((k, v)))
-                .rev()
-                .collect();
-            expect_multi_values(
-                results,
-                block_on(storage.raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"r\0z".to_vec(),
-                    None,
-                    20,
-                    false,
-                    true,
-                ))
-                .unwrap(),
-            );
-            let results: Vec<Option<KvPair>> = test_data
-                .clone()
-                .into_iter()
-                .map(|(k, v)| Some((k, v)))
-                .rev()
-                .take(5)
-                .collect();
-            expect_multi_values(
-                results,
-                block_on(storage.raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"r\0z".to_vec(),
-                    None,
-                    5,
-                    false,
-                    true,
-                ))
-                .unwrap(),
-            );
+        // Write key-value pairs in batch
+        storage
+            .raw_batch_put(
+                Context::default(),
+                "".to_string(),
+                test_data.clone(),
+                vec![0; test_data.len()],
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
 
-            // Scan with end_key
-            let results: Vec<Option<KvPair>> = test_data
-                .clone()
-                .into_iter()
-                .skip(6)
-                .take(4)
-                .map(|(k, v)| Some((k, v)))
-                .collect();
-            expect_multi_values(
-                results,
-                block_on(storage.raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"r\0b2".to_vec(),
-                    Some(b"r\0c2".to_vec()),
-                    20,
-                    false,
-                    false,
-                ))
-                .unwrap(),
-            );
-            let results: Vec<Option<KvPair>> = test_data
-                .clone()
-                .into_iter()
-                .skip(6)
-                .take(1)
-                .map(|(k, v)| Some((k, v)))
-                .collect();
-            expect_multi_values(
-                results,
-                block_on(storage.raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"r\0b2".to_vec(),
-                    Some(b"r\0b2\x00".to_vec()),
-                    20,
-                    false,
-                    false,
-                ))
-                .unwrap(),
-            );
-
-            // Reverse scan with end_key
-            let results: Vec<Option<KvPair>> = test_data
-                .clone()
-                .into_iter()
-                .rev()
-                .skip(10)
-                .take(4)
-                .map(|(k, v)| Some((k, v)))
-                .collect();
-            expect_multi_values(
-                results,
-                block_on(storage.raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"r\0c2".to_vec(),
-                    Some(b"r\0b2".to_vec()),
-                    20,
-                    false,
-                    true,
-                ))
-                .unwrap(),
-            );
-            let results: Vec<Option<KvPair>> = test_data
-                .into_iter()
-                .skip(6)
-                .take(1)
-                .map(|(k, v)| Some((k, v)))
-                .collect();
-            expect_multi_values(
-                results,
-                block_on(storage.raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"r\0b2\x00".to_vec(),
-                    Some(b"r\0b2".to_vec()),
-                    20,
-                    false,
-                    true,
-                ))
-                .unwrap(),
-            );
-
-            // End key tests. Confirm that lower/upper bound works correctly.
-            let results = vec![
-                (b"r\0c1".to_vec(), b"cc11".to_vec()),
-                (b"r\0c2".to_vec(), b"cc22".to_vec()),
-                (b"r\0c3".to_vec(), b"cc33".to_vec()),
-                (b"r\0d".to_vec(), b"dd".to_vec()),
-                (b"r\0d1".to_vec(), b"dd11".to_vec()),
-                (b"r\0d2".to_vec(), b"dd22".to_vec()),
-            ]
+        // Scan pairs with key only
+        let mut results: Vec<Option<KvPair>> = test_data
+            .iter()
+            .map(|&(ref k, _)| Some((k.clone(), vec![])))
+            .collect();
+        expect_multi_values(
+            results.clone(),
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"r\0".to_vec(),
+                None,
+                20,
+                true,
+                false,
+            ))
+            .unwrap(),
+        );
+        results = results.split_off(10);
+        expect_multi_values(
+            results,
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"r\0c2".to_vec(),
+                None,
+                20,
+                true,
+                false,
+            ))
+            .unwrap(),
+        );
+        let mut results: Vec<Option<KvPair>> = test_data
+            .clone()
             .into_iter()
-            .map(|(k, v)| Some((k, v)));
-            expect_multi_values(
-                results.clone().collect(),
-                block_on(async {
-                    storage
-                        .raw_scan(
-                            Context::default(),
-                            "".to_string(),
-                            b"r\0c1".to_vec(),
-                            Some(b"r\0d3".to_vec()),
-                            20,
-                            false,
-                            false,
-                        )
-                        .await
-                })
-                .unwrap(),
-            );
-            expect_multi_values(
-                results.rev().collect(),
-                block_on(async {
-                    storage
-                        .raw_scan(
-                            Context::default(),
-                            "".to_string(),
-                            b"r\0d3".to_vec(),
-                            Some(b"r\0c1".to_vec()),
-                            20,
-                            false,
-                            true,
-                        )
-                        .await
-                })
-                .unwrap(),
-            );
-        }
-        inner(ApiVersion::V1);
-        inner(ApiVersion::V1ttl);
-        inner(ApiVersion::V2);
+            .map(|(k, v)| Some((k, v)))
+            .collect();
+        expect_multi_values(
+            results.clone(),
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"r\0".to_vec(),
+                None,
+                20,
+                false,
+                false,
+            ))
+            .unwrap(),
+        );
+        results = results.split_off(10);
+        expect_multi_values(
+            results,
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"r\0c2".to_vec(),
+                None,
+                20,
+                false,
+                false,
+            ))
+            .unwrap(),
+        );
+        let results: Vec<Option<KvPair>> = test_data
+            .clone()
+            .into_iter()
+            .map(|(k, v)| Some((k, v)))
+            .rev()
+            .collect();
+        expect_multi_values(
+            results,
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"r\0z".to_vec(),
+                None,
+                20,
+                false,
+                true,
+            ))
+            .unwrap(),
+        );
+        let results: Vec<Option<KvPair>> = test_data
+            .clone()
+            .into_iter()
+            .map(|(k, v)| Some((k, v)))
+            .rev()
+            .take(5)
+            .collect();
+        expect_multi_values(
+            results,
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"r\0z".to_vec(),
+                None,
+                5,
+                false,
+                true,
+            ))
+            .unwrap(),
+        );
+
+        // Scan with end_key
+        let results: Vec<Option<KvPair>> = test_data
+            .clone()
+            .into_iter()
+            .skip(6)
+            .take(4)
+            .map(|(k, v)| Some((k, v)))
+            .collect();
+        expect_multi_values(
+            results,
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"r\0b2".to_vec(),
+                Some(b"r\0c2".to_vec()),
+                20,
+                false,
+                false,
+            ))
+            .unwrap(),
+        );
+        let results: Vec<Option<KvPair>> = test_data
+            .clone()
+            .into_iter()
+            .skip(6)
+            .take(1)
+            .map(|(k, v)| Some((k, v)))
+            .collect();
+        expect_multi_values(
+            results,
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"r\0b2".to_vec(),
+                Some(b"r\0b2\x00".to_vec()),
+                20,
+                false,
+                false,
+            ))
+            .unwrap(),
+        );
+
+        // Reverse scan with end_key
+        let results: Vec<Option<KvPair>> = test_data
+            .clone()
+            .into_iter()
+            .rev()
+            .skip(10)
+            .take(4)
+            .map(|(k, v)| Some((k, v)))
+            .collect();
+        expect_multi_values(
+            results,
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"r\0c2".to_vec(),
+                Some(b"r\0b2".to_vec()),
+                20,
+                false,
+                true,
+            ))
+            .unwrap(),
+        );
+        let results: Vec<Option<KvPair>> = test_data
+            .into_iter()
+            .skip(6)
+            .take(1)
+            .map(|(k, v)| Some((k, v)))
+            .collect();
+        expect_multi_values(
+            results,
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"r\0b2\x00".to_vec(),
+                Some(b"r\0b2".to_vec()),
+                20,
+                false,
+                true,
+            ))
+            .unwrap(),
+        );
+
+        // End key tests. Confirm that lower/upper bound works correctly.
+        let results = vec![
+            (b"r\0c1".to_vec(), b"cc11".to_vec()),
+            (b"r\0c2".to_vec(), b"cc22".to_vec()),
+            (b"r\0c3".to_vec(), b"cc33".to_vec()),
+            (b"r\0d".to_vec(), b"dd".to_vec()),
+            (b"r\0d1".to_vec(), b"dd11".to_vec()),
+            (b"r\0d2".to_vec(), b"dd22".to_vec()),
+        ]
+        .into_iter()
+        .map(|(k, v)| Some((k, v)));
+        expect_multi_values(
+            results.clone().collect(),
+            block_on(async {
+                storage
+                    .raw_scan(
+                        Context::default(),
+                        "".to_string(),
+                        b"r\0c1".to_vec(),
+                        Some(b"r\0d3".to_vec()),
+                        20,
+                        false,
+                        false,
+                    )
+                    .await
+            })
+            .unwrap(),
+        );
+        expect_multi_values(
+            results.rev().collect(),
+            block_on(async {
+                storage
+                    .raw_scan(
+                        Context::default(),
+                        "".to_string(),
+                        b"r\0d3".to_vec(),
+                        Some(b"r\0c1".to_vec()),
+                        20,
+                        false,
+                        true,
+                    )
+                    .await
+            })
+            .unwrap(),
+        );
     }
 
     #[test]
@@ -4433,327 +4425,326 @@ mod tests {
 
     #[test]
     fn test_raw_batch_scan() {
-        fn inner(api_version: ApiVersion) {
-            let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
-                .build()
-                .unwrap();
-            let (tx, rx) = channel();
+        test_raw_batch_scan_impl(ApiVersion::V1);
+        test_raw_batch_scan_impl(ApiVersion::V1ttl);
+        test_raw_batch_scan_impl(ApiVersion::V2);
+    }
 
-            let test_data = vec![
-                (b"a".to_vec(), b"aa".to_vec()),
-                (b"a1".to_vec(), b"aa11".to_vec()),
-                (b"a2".to_vec(), b"aa22".to_vec()),
-                (b"a3".to_vec(), b"aa33".to_vec()),
-                (b"b".to_vec(), b"bb".to_vec()),
-                (b"b1".to_vec(), b"bb11".to_vec()),
-                (b"b2".to_vec(), b"bb22".to_vec()),
-                (b"b3".to_vec(), b"bb33".to_vec()),
-                (b"c".to_vec(), b"cc".to_vec()),
-                (b"c1".to_vec(), b"cc11".to_vec()),
-                (b"c2".to_vec(), b"cc22".to_vec()),
-                (b"c3".to_vec(), b"cc33".to_vec()),
-                (b"d".to_vec(), b"dd".to_vec()),
-                (b"d1".to_vec(), b"dd11".to_vec()),
-                (b"d2".to_vec(), b"dd22".to_vec()),
-                (b"d3".to_vec(), b"dd33".to_vec()),
-                (b"e".to_vec(), b"ee".to_vec()),
-                (b"e1".to_vec(), b"ee11".to_vec()),
-                (b"e2".to_vec(), b"ee22".to_vec()),
-                (b"e3".to_vec(), b"ee33".to_vec()),
-            ];
+    fn test_raw_batch_scan_impl(api_version: ApiVersion) {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
 
-            // Write key-value pairs in batch
-            storage
-                .raw_batch_put(
-                    Context::default(),
-                    "".to_string(),
-                    test_data.clone(),
-                    vec![0; test_data.len()],
-                    expect_ok_callback(tx, 0),
-                )
-                .unwrap();
-            rx.recv().unwrap();
+        let test_data = vec![
+            (b"a".to_vec(), b"aa".to_vec()),
+            (b"a1".to_vec(), b"aa11".to_vec()),
+            (b"a2".to_vec(), b"aa22".to_vec()),
+            (b"a3".to_vec(), b"aa33".to_vec()),
+            (b"b".to_vec(), b"bb".to_vec()),
+            (b"b1".to_vec(), b"bb11".to_vec()),
+            (b"b2".to_vec(), b"bb22".to_vec()),
+            (b"b3".to_vec(), b"bb33".to_vec()),
+            (b"c".to_vec(), b"cc".to_vec()),
+            (b"c1".to_vec(), b"cc11".to_vec()),
+            (b"c2".to_vec(), b"cc22".to_vec()),
+            (b"c3".to_vec(), b"cc33".to_vec()),
+            (b"d".to_vec(), b"dd".to_vec()),
+            (b"d1".to_vec(), b"dd11".to_vec()),
+            (b"d2".to_vec(), b"dd22".to_vec()),
+            (b"d3".to_vec(), b"dd33".to_vec()),
+            (b"e".to_vec(), b"ee".to_vec()),
+            (b"e1".to_vec(), b"ee11".to_vec()),
+            (b"e2".to_vec(), b"ee22".to_vec()),
+            (b"e3".to_vec(), b"ee33".to_vec()),
+        ];
 
-            // Verify pairs exist
-            let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
-            let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
-            expect_multi_values(
-                results,
-                block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)).unwrap(),
-            );
+        // Write key-value pairs in batch
+        storage
+            .raw_batch_put(
+                Context::default(),
+                "".to_string(),
+                test_data.clone(),
+                vec![0; test_data.len()],
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
 
-            let results = vec![
-                Some((b"a".to_vec(), b"aa".to_vec())),
-                Some((b"a1".to_vec(), b"aa11".to_vec())),
-                Some((b"a2".to_vec(), b"aa22".to_vec())),
-                Some((b"a3".to_vec(), b"aa33".to_vec())),
-                Some((b"b".to_vec(), b"bb".to_vec())),
-                Some((b"b1".to_vec(), b"bb11".to_vec())),
-                Some((b"b2".to_vec(), b"bb22".to_vec())),
-                Some((b"b3".to_vec(), b"bb33".to_vec())),
-                Some((b"c".to_vec(), b"cc".to_vec())),
-                Some((b"c1".to_vec(), b"cc11".to_vec())),
-                Some((b"c2".to_vec(), b"cc22".to_vec())),
-                Some((b"c3".to_vec(), b"cc33".to_vec())),
-                Some((b"d".to_vec(), b"dd".to_vec())),
-            ];
-            let ranges: Vec<KeyRange> = vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
-                .into_iter()
-                .map(|k| {
-                    let mut range = KeyRange::default();
-                    range.set_start_key(k);
-                    range
-                })
-                .collect();
-            expect_multi_values(
-                results,
-                block_on(storage.raw_batch_scan(
-                    Context::default(),
-                    "".to_string(),
-                    ranges.clone(),
-                    5,
-                    false,
-                    false,
-                ))
-                .unwrap(),
-            );
+        // Verify pairs exist
+        let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
+        let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
+        expect_multi_values(
+            results,
+            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)).unwrap(),
+        );
 
-            let results = vec![
-                Some((b"a".to_vec(), vec![])),
-                Some((b"a1".to_vec(), vec![])),
-                Some((b"a2".to_vec(), vec![])),
-                Some((b"a3".to_vec(), vec![])),
-                Some((b"b".to_vec(), vec![])),
-                Some((b"b1".to_vec(), vec![])),
-                Some((b"b2".to_vec(), vec![])),
-                Some((b"b3".to_vec(), vec![])),
-                Some((b"c".to_vec(), vec![])),
-                Some((b"c1".to_vec(), vec![])),
-                Some((b"c2".to_vec(), vec![])),
-                Some((b"c3".to_vec(), vec![])),
-                Some((b"d".to_vec(), vec![])),
-            ];
-            expect_multi_values(
-                results,
-                block_on(storage.raw_batch_scan(
-                    Context::default(),
-                    "".to_string(),
-                    ranges.clone(),
-                    5,
-                    true,
-                    false,
-                ))
-                .unwrap(),
-            );
-
-            let results = vec![
-                Some((b"a".to_vec(), b"aa".to_vec())),
-                Some((b"a1".to_vec(), b"aa11".to_vec())),
-                Some((b"a2".to_vec(), b"aa22".to_vec())),
-                Some((b"b".to_vec(), b"bb".to_vec())),
-                Some((b"b1".to_vec(), b"bb11".to_vec())),
-                Some((b"b2".to_vec(), b"bb22".to_vec())),
-                Some((b"c".to_vec(), b"cc".to_vec())),
-                Some((b"c1".to_vec(), b"cc11".to_vec())),
-                Some((b"c2".to_vec(), b"cc22".to_vec())),
-            ];
-            expect_multi_values(
-                results,
-                block_on(storage.raw_batch_scan(
-                    Context::default(),
-                    "".to_string(),
-                    ranges.clone(),
-                    3,
-                    false,
-                    false,
-                ))
-                .unwrap(),
-            );
-
-            let results = vec![
-                Some((b"a".to_vec(), vec![])),
-                Some((b"a1".to_vec(), vec![])),
-                Some((b"a2".to_vec(), vec![])),
-                Some((b"b".to_vec(), vec![])),
-                Some((b"b1".to_vec(), vec![])),
-                Some((b"b2".to_vec(), vec![])),
-                Some((b"c".to_vec(), vec![])),
-                Some((b"c1".to_vec(), vec![])),
-                Some((b"c2".to_vec(), vec![])),
-            ];
-            expect_multi_values(
-                results,
-                block_on(storage.raw_batch_scan(
-                    Context::default(),
-                    "".to_string(),
-                    ranges,
-                    3,
-                    true,
-                    false,
-                ))
-                .unwrap(),
-            );
-
-            let results = vec![
-                Some((b"a2".to_vec(), b"aa22".to_vec())),
-                Some((b"a1".to_vec(), b"aa11".to_vec())),
-                Some((b"a".to_vec(), b"aa".to_vec())),
-                Some((b"b2".to_vec(), b"bb22".to_vec())),
-                Some((b"b1".to_vec(), b"bb11".to_vec())),
-                Some((b"b".to_vec(), b"bb".to_vec())),
-                Some((b"c2".to_vec(), b"cc22".to_vec())),
-                Some((b"c1".to_vec(), b"cc11".to_vec())),
-                Some((b"c".to_vec(), b"cc".to_vec())),
-            ];
-            let ranges: Vec<KeyRange> = vec![
-                (b"a3".to_vec(), b"a".to_vec()),
-                (b"b3".to_vec(), b"b".to_vec()),
-                (b"c3".to_vec(), b"c".to_vec()),
-            ]
+        let results = vec![
+            Some((b"a".to_vec(), b"aa".to_vec())),
+            Some((b"a1".to_vec(), b"aa11".to_vec())),
+            Some((b"a2".to_vec(), b"aa22".to_vec())),
+            Some((b"a3".to_vec(), b"aa33".to_vec())),
+            Some((b"b".to_vec(), b"bb".to_vec())),
+            Some((b"b1".to_vec(), b"bb11".to_vec())),
+            Some((b"b2".to_vec(), b"bb22".to_vec())),
+            Some((b"b3".to_vec(), b"bb33".to_vec())),
+            Some((b"c".to_vec(), b"cc".to_vec())),
+            Some((b"c1".to_vec(), b"cc11".to_vec())),
+            Some((b"c2".to_vec(), b"cc22".to_vec())),
+            Some((b"c3".to_vec(), b"cc33".to_vec())),
+            Some((b"d".to_vec(), b"dd".to_vec())),
+        ];
+        let ranges: Vec<KeyRange> = vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
             .into_iter()
-            .map(|(s, e)| {
+            .map(|k| {
                 let mut range = KeyRange::default();
-                range.set_start_key(s);
-                range.set_end_key(e);
+                range.set_start_key(k);
                 range
             })
             .collect();
-            expect_multi_values(
-                results,
-                block_on(storage.raw_batch_scan(
-                    Context::default(),
-                    "".to_string(),
-                    ranges,
-                    5,
-                    false,
-                    true,
-                ))
-                .unwrap(),
-            );
+        expect_multi_values(
+            results,
+            block_on(storage.raw_batch_scan(
+                Context::default(),
+                "".to_string(),
+                ranges.clone(),
+                5,
+                false,
+                false,
+            ))
+            .unwrap(),
+        );
 
-            let results = vec![
-                Some((b"c2".to_vec(), b"cc22".to_vec())),
-                Some((b"c1".to_vec(), b"cc11".to_vec())),
-                Some((b"b2".to_vec(), b"bb22".to_vec())),
-                Some((b"b1".to_vec(), b"bb11".to_vec())),
-                Some((b"a2".to_vec(), b"aa22".to_vec())),
-                Some((b"a1".to_vec(), b"aa11".to_vec())),
-            ];
-            let ranges: Vec<KeyRange> = vec![b"c3".to_vec(), b"b3".to_vec(), b"a3".to_vec()]
-                .into_iter()
-                .map(|s| {
-                    let mut range = KeyRange::default();
-                    range.set_start_key(s);
-                    range
-                })
-                .collect();
-            expect_multi_values(
-                results,
-                block_on(storage.raw_batch_scan(
-                    Context::default(),
-                    "".to_string(),
-                    ranges,
-                    2,
-                    false,
-                    true,
-                ))
-                .unwrap(),
-            );
+        let results = vec![
+            Some((b"a".to_vec(), vec![])),
+            Some((b"a1".to_vec(), vec![])),
+            Some((b"a2".to_vec(), vec![])),
+            Some((b"a3".to_vec(), vec![])),
+            Some((b"b".to_vec(), vec![])),
+            Some((b"b1".to_vec(), vec![])),
+            Some((b"b2".to_vec(), vec![])),
+            Some((b"b3".to_vec(), vec![])),
+            Some((b"c".to_vec(), vec![])),
+            Some((b"c1".to_vec(), vec![])),
+            Some((b"c2".to_vec(), vec![])),
+            Some((b"c3".to_vec(), vec![])),
+            Some((b"d".to_vec(), vec![])),
+        ];
+        expect_multi_values(
+            results,
+            block_on(storage.raw_batch_scan(
+                Context::default(),
+                "".to_string(),
+                ranges.clone(),
+                5,
+                true,
+                false,
+            ))
+            .unwrap(),
+        );
 
-            let results = vec![
-                Some((b"a2".to_vec(), vec![])),
-                Some((b"a1".to_vec(), vec![])),
-                Some((b"a".to_vec(), vec![])),
-                Some((b"b2".to_vec(), vec![])),
-                Some((b"b1".to_vec(), vec![])),
-                Some((b"b".to_vec(), vec![])),
-                Some((b"c2".to_vec(), vec![])),
-                Some((b"c1".to_vec(), vec![])),
-                Some((b"c".to_vec(), vec![])),
-            ];
-            let ranges: Vec<KeyRange> = vec![
-                (b"a3".to_vec(), b"a".to_vec()),
-                (b"b3".to_vec(), b"b".to_vec()),
-                (b"c3".to_vec(), b"c".to_vec()),
-            ]
+        let results = vec![
+            Some((b"a".to_vec(), b"aa".to_vec())),
+            Some((b"a1".to_vec(), b"aa11".to_vec())),
+            Some((b"a2".to_vec(), b"aa22".to_vec())),
+            Some((b"b".to_vec(), b"bb".to_vec())),
+            Some((b"b1".to_vec(), b"bb11".to_vec())),
+            Some((b"b2".to_vec(), b"bb22".to_vec())),
+            Some((b"c".to_vec(), b"cc".to_vec())),
+            Some((b"c1".to_vec(), b"cc11".to_vec())),
+            Some((b"c2".to_vec(), b"cc22".to_vec())),
+        ];
+        expect_multi_values(
+            results,
+            block_on(storage.raw_batch_scan(
+                Context::default(),
+                "".to_string(),
+                ranges.clone(),
+                3,
+                false,
+                false,
+            ))
+            .unwrap(),
+        );
+
+        let results = vec![
+            Some((b"a".to_vec(), vec![])),
+            Some((b"a1".to_vec(), vec![])),
+            Some((b"a2".to_vec(), vec![])),
+            Some((b"b".to_vec(), vec![])),
+            Some((b"b1".to_vec(), vec![])),
+            Some((b"b2".to_vec(), vec![])),
+            Some((b"c".to_vec(), vec![])),
+            Some((b"c1".to_vec(), vec![])),
+            Some((b"c2".to_vec(), vec![])),
+        ];
+        expect_multi_values(
+            results,
+            block_on(storage.raw_batch_scan(
+                Context::default(),
+                "".to_string(),
+                ranges,
+                3,
+                true,
+                false,
+            ))
+            .unwrap(),
+        );
+
+        let results = vec![
+            Some((b"a2".to_vec(), b"aa22".to_vec())),
+            Some((b"a1".to_vec(), b"aa11".to_vec())),
+            Some((b"a".to_vec(), b"aa".to_vec())),
+            Some((b"b2".to_vec(), b"bb22".to_vec())),
+            Some((b"b1".to_vec(), b"bb11".to_vec())),
+            Some((b"b".to_vec(), b"bb".to_vec())),
+            Some((b"c2".to_vec(), b"cc22".to_vec())),
+            Some((b"c1".to_vec(), b"cc11".to_vec())),
+            Some((b"c".to_vec(), b"cc".to_vec())),
+        ];
+        let ranges: Vec<KeyRange> = vec![
+            (b"a3".to_vec(), b"a".to_vec()),
+            (b"b3".to_vec(), b"b".to_vec()),
+            (b"c3".to_vec(), b"c".to_vec()),
+        ]
+        .into_iter()
+        .map(|(s, e)| {
+            let mut range = KeyRange::default();
+            range.set_start_key(s);
+            range.set_end_key(e);
+            range
+        })
+        .collect();
+        expect_multi_values(
+            results,
+            block_on(storage.raw_batch_scan(
+                Context::default(),
+                "".to_string(),
+                ranges,
+                5,
+                false,
+                true,
+            ))
+            .unwrap(),
+        );
+
+        let results = vec![
+            Some((b"c2".to_vec(), b"cc22".to_vec())),
+            Some((b"c1".to_vec(), b"cc11".to_vec())),
+            Some((b"b2".to_vec(), b"bb22".to_vec())),
+            Some((b"b1".to_vec(), b"bb11".to_vec())),
+            Some((b"a2".to_vec(), b"aa22".to_vec())),
+            Some((b"a1".to_vec(), b"aa11".to_vec())),
+        ];
+        let ranges: Vec<KeyRange> = vec![b"c3".to_vec(), b"b3".to_vec(), b"a3".to_vec()]
             .into_iter()
-            .map(|(s, e)| {
+            .map(|s| {
                 let mut range = KeyRange::default();
                 range.set_start_key(s);
-                range.set_end_key(e);
                 range
             })
             .collect();
-            expect_multi_values(
-                results,
-                block_on(storage.raw_batch_scan(
-                    Context::default(),
-                    "".to_string(),
-                    ranges,
-                    5,
-                    true,
-                    true,
-                ))
-                .unwrap(),
-            );
-        }
-        inner(ApiVersion::V1);
-        inner(ApiVersion::V1ttl);
-        inner(ApiVersion::V2);
+        expect_multi_values(
+            results,
+            block_on(storage.raw_batch_scan(
+                Context::default(),
+                "".to_string(),
+                ranges,
+                2,
+                false,
+                true,
+            ))
+            .unwrap(),
+        );
+
+        let results = vec![
+            Some((b"a2".to_vec(), vec![])),
+            Some((b"a1".to_vec(), vec![])),
+            Some((b"a".to_vec(), vec![])),
+            Some((b"b2".to_vec(), vec![])),
+            Some((b"b1".to_vec(), vec![])),
+            Some((b"b".to_vec(), vec![])),
+            Some((b"c2".to_vec(), vec![])),
+            Some((b"c1".to_vec(), vec![])),
+            Some((b"c".to_vec(), vec![])),
+        ];
+        let ranges: Vec<KeyRange> = vec![
+            (b"a3".to_vec(), b"a".to_vec()),
+            (b"b3".to_vec(), b"b".to_vec()),
+            (b"c3".to_vec(), b"c".to_vec()),
+        ]
+        .into_iter()
+        .map(|(s, e)| {
+            let mut range = KeyRange::default();
+            range.set_start_key(s);
+            range.set_end_key(e);
+            range
+        })
+        .collect();
+        expect_multi_values(
+            results,
+            block_on(storage.raw_batch_scan(
+                Context::default(),
+                "".to_string(),
+                ranges,
+                5,
+                true,
+                true,
+            ))
+            .unwrap(),
+        );
     }
 
     #[test]
     fn test_raw_get_key_ttl() {
-        fn inner(api_version: ApiVersion) {
-            let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
-                .build()
-                .unwrap();
-            let (tx, rx) = channel();
+        test_raw_get_key_ttl_impl(ApiVersion::V1ttl);
+        test_raw_get_key_ttl_impl(ApiVersion::V2);
+    }
 
-            let test_data = vec![
-                (b"a".to_vec(), b"aa".to_vec(), 10),
-                (b"b".to_vec(), b"bb".to_vec(), 20),
-                (b"c".to_vec(), b"cc".to_vec(), 0),
-                (b"d".to_vec(), b"dd".to_vec(), 10),
-                (b"e".to_vec(), b"ee".to_vec(), 20),
-                (b"f".to_vec(), b"ff".to_vec(), u64::MAX),
-            ];
+    fn test_raw_get_key_ttl_impl(api_version: ApiVersion) {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
 
-            // Write key-value pairs one by one
-            for &(ref key, ref value, ttl) in &test_data {
-                storage
-                    .raw_put(
-                        Context::default(),
-                        "".to_string(),
-                        key.clone(),
-                        value.clone(),
-                        ttl,
-                        expect_ok_callback(tx.clone(), 0),
-                    )
-                    .unwrap();
-            }
-            rx.recv().unwrap();
+        let test_data = vec![
+            (b"a".to_vec(), b"aa".to_vec(), 10),
+            (b"b".to_vec(), b"bb".to_vec(), 20),
+            (b"c".to_vec(), b"cc".to_vec(), 0),
+            (b"d".to_vec(), b"dd".to_vec(), 10),
+            (b"e".to_vec(), b"ee".to_vec(), 20),
+            (b"f".to_vec(), b"ff".to_vec(), u64::MAX),
+        ];
 
-            for &(ref key, _, ttl) in &test_data {
-                let res = block_on(storage.raw_get_key_ttl(
+        // Write key-value pairs one by one
+        for &(ref key, ref value, ttl) in &test_data {
+            storage
+                .raw_put(
                     Context::default(),
                     "".to_string(),
                     key.clone(),
-                ))
+                    value.clone(),
+                    ttl,
+                    expect_ok_callback(tx.clone(), 0),
+                )
                 .unwrap();
-                if ttl != 0 {
-                    if ttl > u64::MAX - ttl_current_ts() {
-                        assert_eq!(res, Some(u64::MAX - ttl_current_ts()));
-                    } else {
-                        assert_eq!(res, Some(ttl));
-                    }
+        }
+        rx.recv().unwrap();
+
+        for &(ref key, _, ttl) in &test_data {
+            let res =
+                block_on(storage.raw_get_key_ttl(Context::default(), "".to_string(), key.clone()))
+                    .unwrap();
+            if ttl != 0 {
+                if ttl > u64::MAX - ttl_current_ts() {
+                    assert_eq!(res, Some(u64::MAX - ttl_current_ts()));
                 } else {
-                    assert_eq!(res, Some(0));
+                    assert_eq!(res, Some(ttl));
                 }
+            } else {
+                assert_eq!(res, Some(0));
             }
         }
-        inner(ApiVersion::V1ttl);
-        inner(ApiVersion::V2);
     }
 
     #[test]

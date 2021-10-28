@@ -96,53 +96,54 @@ mod tests {
 
     #[test]
     fn test_cas_basic() {
-        fn inner(api_version: ApiVersion) {
-            let engine = TestEngineBuilder::new().build().unwrap();
-            let cm = concurrency_manager::ConcurrencyManager::new(1.into());
-            let key = b"k";
+        test_cas_basic_impl(ApiVersion::V1);
+        test_cas_basic_impl(ApiVersion::V1ttl);
+        test_cas_basic_impl(ApiVersion::V2);
+    }
 
-            let cmd = RawCompareAndSwap::new(
-                CF_DEFAULT,
-                Key::from_encoded(key.to_vec()),
-                None,
-                b"v1".to_vec(),
-                0,
-                api_version,
-                Context::default(),
-            );
-            let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
-            assert!(prev_val.is_none());
-            assert!(succeed);
+    fn test_cas_basic_impl(api_version: ApiVersion) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let key = b"k";
 
-            let cmd = RawCompareAndSwap::new(
-                CF_DEFAULT,
-                Key::from_encoded(key.to_vec()),
-                None,
-                b"v2".to_vec(),
-                0,
-                api_version,
-                Context::default(),
-            );
-            let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
-            assert_eq!(prev_val, Some(b"v1".to_vec()));
-            assert!(!succeed);
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            Key::from_encoded(key.to_vec()),
+            None,
+            b"v1".to_vec(),
+            0,
+            api_version,
+            Context::default(),
+        );
+        let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
+        assert!(prev_val.is_none());
+        assert!(succeed);
 
-            let cmd = RawCompareAndSwap::new(
-                CF_DEFAULT,
-                Key::from_encoded(key.to_vec()),
-                Some(b"v1".to_vec()),
-                b"v3".to_vec(),
-                0,
-                api_version,
-                Context::default(),
-            );
-            let (prev_val, succeed) = sched_command(&engine, cm, cmd).unwrap();
-            assert_eq!(prev_val, Some(b"v1".to_vec()));
-            assert!(succeed);
-        }
-        inner(ApiVersion::V1);
-        inner(ApiVersion::V1ttl);
-        inner(ApiVersion::V2);
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            Key::from_encoded(key.to_vec()),
+            None,
+            b"v2".to_vec(),
+            0,
+            api_version,
+            Context::default(),
+        );
+        let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
+        assert_eq!(prev_val, Some(b"v1".to_vec()));
+        assert!(!succeed);
+
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            Key::from_encoded(key.to_vec()),
+            Some(b"v1".to_vec()),
+            b"v3".to_vec(),
+            0,
+            api_version,
+            Context::default(),
+        );
+        let (prev_val, succeed) = sched_command(&engine, cm, cmd).unwrap();
+        assert_eq!(prev_val, Some(b"v1".to_vec()));
+        assert!(succeed);
     }
 
     pub fn sched_command<E: Engine>(

@@ -139,60 +139,60 @@ mod tests {
 
     #[test]
     fn test_ttl_properties() {
-        fn inner(api_version: ApiVersion) {
-            let get_properties = |case: &[(&'static str, u64)]| -> Result<TtlProperties> {
-                let mut collector = TtlPropertiesCollector {
-                    api_version,
-                    prop: Default::default(),
-                };
-                for &(k, ts) in case {
-                    let v = RawValue {
-                        user_value: &[0; 10][..],
-                        expire_ts: Some(ts),
-                    };
-                    collector.add(
-                        k.as_bytes(),
-                        &v.to_bytes(api_version),
-                        DBEntryType::Put,
-                        0,
-                        0,
-                    );
-                }
-                for &(k, _) in case {
-                    let v = vec![0; 10];
-                    collector.add(k.as_bytes(), &v, DBEntryType::Other, 0, 0);
-                }
-                let result = UserProperties(collector.finish());
-                RocksTtlProperties::decode(&result)
+        test_ttl_properties_impl(ApiVersion::V1ttl);
+        test_ttl_properties_impl(ApiVersion::V2);
+    }
+    fn test_ttl_properties_impl(api_version: ApiVersion) {
+        let get_properties = |case: &[(&'static str, u64)]| -> Result<TtlProperties> {
+            let mut collector = TtlPropertiesCollector {
+                api_version,
+                prop: Default::default(),
             };
-
-            let case1 = [
-                ("zr\0a", 0),
-                ("zr\0b", UnixSecs::now().into_inner()),
-                ("zr\0c", 1),
-                ("zr\0d", u64::MAX),
-                ("zr\0e", 0),
-            ];
-            let props = get_properties(&case1).unwrap();
-            assert_eq!(props.max_expire_ts, u64::MAX);
-            match api_version {
-                ApiVersion::V1 | ApiVersion::V1ttl => assert_eq!(props.min_expire_ts, 1),
-                // expire_ts = 0 is no longer a special case in API V2
-                ApiVersion::V2 => assert_eq!(props.min_expire_ts, 0),
+            for &(k, ts) in case {
+                let v = RawValue {
+                    user_value: &[0; 10][..],
+                    expire_ts: Some(ts),
+                };
+                collector.add(
+                    k.as_bytes(),
+                    &v.to_bytes(api_version),
+                    DBEntryType::Put,
+                    0,
+                    0,
+                );
             }
+            for &(k, _) in case {
+                let v = vec![0; 10];
+                collector.add(k.as_bytes(), &v, DBEntryType::Other, 0, 0);
+            }
+            let result = UserProperties(collector.finish());
+            RocksTtlProperties::decode(&result)
+        };
 
-            let case2 = [("zr\0a", 0)];
-            assert!(get_properties(&case2).is_err());
-
-            let case3 = [];
-            assert!(get_properties(&case3).is_err());
-
-            let case4 = [("zr\0a", 1)];
-            let props = get_properties(&case4).unwrap();
-            assert_eq!(props.max_expire_ts, 1);
-            assert_eq!(props.min_expire_ts, 1);
+        let case1 = [
+            ("zr\0a", 0),
+            ("zr\0b", UnixSecs::now().into_inner()),
+            ("zr\0c", 1),
+            ("zr\0d", u64::MAX),
+            ("zr\0e", 0),
+        ];
+        let props = get_properties(&case1).unwrap();
+        assert_eq!(props.max_expire_ts, u64::MAX);
+        match api_version {
+            ApiVersion::V1 | ApiVersion::V1ttl => assert_eq!(props.min_expire_ts, 1),
+            // expire_ts = 0 is no longer a special case in API V2
+            ApiVersion::V2 => assert_eq!(props.min_expire_ts, 0),
         }
-        inner(ApiVersion::V1ttl);
-        inner(ApiVersion::V2);
+
+        let case2 = [("zr\0a", 0)];
+        assert!(get_properties(&case2).is_err());
+
+        let case3 = [];
+        assert!(get_properties(&case3).is_err());
+
+        let case4 = [("zr\0a", 1)];
+        let props = get_properties(&case4).unwrap();
+        assert_eq!(props.max_expire_ts, 1);
+        assert_eq!(props.min_expire_ts, 1);
     }
 }

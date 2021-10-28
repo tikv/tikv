@@ -296,50 +296,51 @@ mod tests {
 
     #[test]
     fn test_raw_write_sst() {
-        fn inner(api_version: ApiVersion) {
-            let mut meta = SstMeta::default();
-            meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+        test_raw_write_sst_impl(ApiVersion::V1);
+        test_raw_write_sst_impl(ApiVersion::V1ttl);
+        test_raw_write_sst_impl(ApiVersion::V2);
+    }
 
-            let importer_dir = tempfile::tempdir().unwrap();
-            let cfg = Config::default();
-            let importer = SSTImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
-            let db_path = importer_dir.path().join("db");
-            let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
+    fn test_raw_write_sst_impl(api_version: ApiVersion) {
+        let mut meta = SstMeta::default();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
 
-            let mut w = importer.new_raw_writer::<TestEngine>(&db, meta).unwrap();
-            let mut batch = RawWriteBatch::default();
-            let mut pairs = vec![];
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
+        let db_path = importer_dir.path().join("db");
+        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
 
-            // put value
-            let mut pair = Pair::default();
-            pair.set_key(b"k1".to_vec());
-            pair.set_value(b"short_value".to_vec());
-            pairs.push(pair);
+        let mut w = importer.new_raw_writer::<TestEngine>(&db, meta).unwrap();
+        let mut batch = RawWriteBatch::default();
+        let mut pairs = vec![];
 
-            // delete value
-            let mut pair = Pair::default();
-            pair.set_key(b"k2".to_vec());
-            pair.set_op(PairOp::Delete);
-            pairs.push(pair);
+        // put value
+        let mut pair = Pair::default();
+        pair.set_key(b"k1".to_vec());
+        pair.set_value(b"short_value".to_vec());
+        pairs.push(pair);
 
-            // generate meta
-            batch.set_ttl(10);
-            batch.set_pairs(pairs.into());
-            w.write(batch).unwrap();
-            assert_eq!(w.default_entries, 1);
-            assert_eq!(w.default_deletes, 1);
-            // ttl takes 8 more bytes
-            assert_eq!(
-                w.default_bytes as usize,
-                b"zk1".len() + b"short_value".len() + 8 + b"zk2".len()
-            );
+        // delete value
+        let mut pair = Pair::default();
+        pair.set_key(b"k2".to_vec());
+        pair.set_op(PairOp::Delete);
+        pairs.push(pair);
 
-            let metas = w.finish().unwrap();
-            assert_eq!(metas.len(), 1);
-        }
-        inner(ApiVersion::V1);
-        inner(ApiVersion::V1ttl);
-        inner(ApiVersion::V2);
+        // generate meta
+        batch.set_ttl(10);
+        batch.set_pairs(pairs.into());
+        w.write(batch).unwrap();
+        assert_eq!(w.default_entries, 1);
+        assert_eq!(w.default_deletes, 1);
+        // ttl takes 8 more bytes
+        assert_eq!(
+            w.default_bytes as usize,
+            b"zk1".len() + b"short_value".len() + 8 + b"zk2".len()
+        );
+
+        let metas = w.finish().unwrap();
+        assert_eq!(metas.len(), 1);
     }
 
     #[test]
