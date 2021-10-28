@@ -3,7 +3,6 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use kvproto::kvrpcpb::ApiVersion;
 use tempfile::Builder;
 
 use kvproto::metapb;

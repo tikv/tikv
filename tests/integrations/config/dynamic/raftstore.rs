@@ -4,7 +4,6 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use engine_rocks::RocksEngine;
-use kvproto::kvrpcpb::ApiVersion;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::config::{Config, RaftstoreConfigManager};
