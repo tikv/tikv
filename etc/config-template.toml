@@ -1024,6 +1024,10 @@
 ## little larger).
 # sst-max-size = "144MB"
 
+## Automatically reduce the number of backup threads when the current workload is high,
+## in order to reduce impact on the cluster's performance during back up.
+# enable-auto-tune = false 
+
 [backup.hadoop]
 ## let TiKV know how to find the hdfs shell command.
 ## Equivalent to the $HADOOP_HOME enviroment variable.
