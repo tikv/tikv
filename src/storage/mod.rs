@@ -334,20 +334,91 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         true
     }
 
+    /// Check whether a raw kv command or not.
+    #[inline]
+    fn is_raw_command(cmd: CommandKind) -> bool {
+        matches!(
+            cmd,
+            CommandKind::raw_batch_get_command
+                | CommandKind::raw_get
+                | CommandKind::raw_batch_get
+                | CommandKind::raw_scan
+                | CommandKind::raw_batch_scan
+                | CommandKind::raw_put
+                | CommandKind::raw_batch_put
+                | CommandKind::raw_delete
+                | CommandKind::raw_delete_range
+                | CommandKind::raw_batch_delete
+                | CommandKind::raw_get_key_ttl
+                | CommandKind::raw_compare_and_swap
+                | CommandKind::raw_atomic_store
+                | CommandKind::raw_checksum
+        )
+    }
+
+    /// Check whether a trancsation kv command or not.
+    #[inline]
+    fn is_txn_command(cmd: CommandKind) -> bool {
+        !Self::is_raw_command(cmd)
+    }
+
+    /// Check api version.
+    ///
+    /// When config.api_version = V1: accept request of V1 only.
+    /// When config.api_version = V2: accept the following:
+    ///   * Request of V1 from TiDB, for compatiblity.
+    ///   * Request of V2 with legal prefix.
+    /// See rfc https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md for detail.
+    fn check_api_version<'a>(
+        storage_api_version: ApiVersion,
+        req_api_version: ApiVersion,
+        cmd: CommandKind,
+        keys: impl IntoIterator<Item = &'a [u8]>,
+    ) -> Result<()> {
+        match (storage_api_version, req_api_version) {
+            (ApiVersion::V1 | ApiVersion::V1ttl, ApiVersion::V1) => {
+                return Ok(());
+            }
+            (ApiVersion::V2, ApiVersion::V1) if Self::is_txn_command(cmd) => {
+                // For compatibility, accept TiDB request only.
+                if keys.into_iter().all(key_prefix::is_tidb_key) {
+                    return Ok(());
+                }
+            }
+            (ApiVersion::V2, ApiVersion::V2) if Self::is_raw_command(cmd) => {
+                if keys.into_iter().all(key_prefix::is_raw_key) {
+                    return Ok(());
+                }
+            }
+            (ApiVersion::V2, ApiVersion::V2) if Self::is_txn_command(cmd) => {
+                if keys.into_iter().all(key_prefix::is_txn_key) {
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
+        Err(Error::from(ErrorInner::ApiVersionNotMatched {
+            storage_api_version,
+            req_api_version,
+        }))
+    }
+
     /// Get value of the given key from a snapshot.
     ///
     /// Only writes that are committed before `start_ts` are visible.
     pub fn get(
         &self,
         mut ctx: Context,
-        key: Key,
+        raw_key: Vec<u8>,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Option<Value>, Statistics, PerfStatisticsDelta)>> {
+        let key: Key = Key::from_raw(&raw_key);
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
+        let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -364,6 +435,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
                     .inc();
+
+                Self::check_api_version(
+                    api_version,
+                    ctx.api_version,
+                    CMD,
+                    iter::once(&raw_key[..]),
+                )?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
@@ -442,6 +520,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
         let concurrency_manager = self.concurrency_manager.clone();
+        let api_version = self.api_version;
 
         // The resource tags of these batched requests are not the same, and it is quite expensive
         // to distinguish them, so we can find random one of them as a representative.
@@ -464,7 +543,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let mut ctx = req.take_context();
                     let region_id = ctx.get_region_id();
                     let peer = ctx.get_peer();
-                    let key = Key::from_raw(req.get_key());
+                    let raw_key = req.get_key();
+                    let key = Key::from_raw(raw_key);
                     tls_collect_query(
                         region_id,
                         peer,
@@ -473,6 +553,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         false,
                         QueryKind::Get,
                     );
+
+                    Self::check_api_version(
+                        api_version,
+                        ctx.api_version,
+                        CMD,
+                        iter::once(raw_key),
+                    )?;
+
                     let start_ts = req.get_version().into();
                     let isolation_level = ctx.get_isolation_level();
                     let fill_cache = !ctx.get_not_fill_cache();
@@ -586,7 +674,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     pub fn batch_get(
         &self,
         mut ctx: Context,
-        keys: Vec<Key>,
+        raw_keys: Vec<Vec<u8>>,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, Statistics, PerfStatisticsDelta)>> {
         const CMD: CommandKind = CommandKind::batch_get;
@@ -594,6 +682,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority_tag = get_priority_tag(priority);
         let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
+        let api_version = self.api_version;
+
+        let keys: Vec<Key> = raw_keys.iter().map(|x| Key::from_raw(x)).collect();
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -612,6 +703,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
                     .inc();
+
+                Self::check_api_version(
+                    api_version,
+                    ctx.api_version,
+                    CMD,
+                    raw_keys.iter().map(|x| &x[..]),
+                )?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
@@ -728,6 +826,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
                     .inc();
+
+                // TODO: check_api_version
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
@@ -871,6 +971,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
                     .inc();
+
+                // TODO: check_api_version
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
@@ -1034,6 +1136,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         notify_only: bool,
         callback: Callback<()>,
     ) -> Result<()> {
+        // TODO: check_api_version
+
         let mut modifies = Vec::with_capacity(DATA_CFS.len());
         for cf in DATA_CFS {
             modifies.push(Modify::DeleteRange(
@@ -1084,6 +1188,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
                     .inc();
+
+                Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&key[..]))?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1154,6 +1260,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                     .get(CMD)
                     .observe(gets.len() as f64);
+
+                // TODO: check_api_version
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let read_id = Some(ThreadReadId::new());
                 let mut snaps = vec![];
@@ -1250,6 +1359,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
+                Self::check_api_version(
+                    api_version,
+                    ctx.api_version,
+                    CMD,
+                    keys.iter().map(|x| &x[..]),
+                )?;
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
@@ -1312,9 +1428,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttl: u64,
         callback: Callback<()>,
     ) -> Result<()> {
+        const CMD: CommandKind = CommandKind::raw_put;
+        let api_version = self.api_version;
+
+        Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&key[..]))?;
+
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
         let mut m = Modify::Put(
-            Self::rawkv_cf(self.api_version, &cf)?,
+            Self::rawkv_cf(api_version, &cf)?,
             Key::from_encoded(key),
             value,
         );
@@ -1346,6 +1467,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
+        // TODO: check_api_version
+
         let cf = Self::rawkv_cf(self.api_version, &cf)?;
 
         check_key_size!(
@@ -1399,6 +1522,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
+        // TODO: check_api_version
+
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
 
         let mut batch = WriteData::from_modifies(vec![Modify::Delete(
@@ -1425,6 +1550,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         end_key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
+        // TODO: check_api_version
+
         check_key_size!(
             Some(&start_key)
                 .into_iter()
@@ -1458,6 +1585,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
+        // TODO: check_api_version
+
         let cf = Self::rawkv_cf(self.api_version, &cf)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
 
@@ -1522,6 +1651,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
                     .inc();
+
+                // TODO: check_api_version
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1613,6 +1744,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
                     .inc();
+
+                // TODO: check_api_version
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
@@ -1736,6 +1870,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
+                // TODO: check_api_version
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
@@ -1781,6 +1917,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttl: u64,
         cb: Callback<(Option<Value>, bool)>,
     ) -> Result<()> {
+        // TODO: check_api_version
+
         let cf = Self::rawkv_cf(self.api_version, &cf)?;
         let ttl = if self.enable_ttl {
             Some(ttl)
@@ -1803,6 +1941,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
+        // TODO: check_api_version
+
         if self.enable_ttl {
             if ttls.len() != pairs.len() {
                 return Err(Error::from(ErrorInner::TTLsLenNotEqualsToPairs));
@@ -1843,6 +1983,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
+        // TODO: check_api_version
+
         let cf = Self::rawkv_cf(self.api_version, &cf)?;
         let muations = keys
             .into_iter()
@@ -1873,6 +2015,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
+                // TODO: check_api_version
                 if api_version != ApiVersion::V2 {
                     return Err(box_err!("raw_checksum is only available in API V2"));
                 }
@@ -2044,6 +2187,14 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
 
     pub fn set_async_apply_prewrite(mut self, enabled: bool) -> Self {
         self.config.enable_async_apply_prewrite = enabled;
+        self
+    }
+
+    pub fn set_api_version(mut self, api_version: ApiVersion) -> Self {
+        self.config.api_version = match api_version {
+            ApiVersion::V1 | ApiVersion::V1ttl => 1,
+            ApiVersion::V2 => 2,
+        };
         self
     }
 
@@ -2287,6 +2438,7 @@ mod tests {
     use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
     use engine_traits::{ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
+    use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, Op};
@@ -2331,7 +2483,7 @@ mod tests {
             .unwrap();
         assert_eq!(wr.lock_guards.len(), 1);
 
-        let result = block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()));
+        let result = block_on(storage.get(Context::default(), b"x".to_vec(), 100.into()));
         assert!(matches!(
             result,
             Err(Error(box ErrorInner::Txn(txn::Error(
@@ -2347,7 +2499,7 @@ mod tests {
             .unwrap();
         let (tx, rx) = channel();
         expect_none(
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()))
+            block_on(storage.get(Context::default(), b"x".to_vec(), 100.into()))
                 .unwrap()
                 .0,
         );
@@ -2369,7 +2521,7 @@ mod tests {
                 ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())),
+            block_on(storage.get(Context::default(), b"x".to_vec(), 101.into())),
         );
         storage
             .sched_txn_command(
@@ -2384,13 +2536,13 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         expect_none(
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()))
+            block_on(storage.get(Context::default(), b"x".to_vec(), 100.into()))
                 .unwrap()
                 .0,
         );
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into()))
+            block_on(storage.get(Context::default(), b"x".to_vec(), 101.into()))
                 .unwrap()
                 .0,
         );
@@ -2434,7 +2586,7 @@ mod tests {
                 ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 1.into())),
+            block_on(storage.get(Context::default(), b"x".to_vec(), 1.into())),
         );
         expect_error(
             |e| match e {
@@ -2463,7 +2615,7 @@ mod tests {
             },
             block_on(storage.batch_get(
                 Context::default(),
-                vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
+                vec![b"c".to_vec(), b"d".to_vec()],
                 1.into(),
             )),
         );
@@ -3083,7 +3235,7 @@ mod tests {
             vec![None],
             block_on(storage.batch_get(
                 Context::default(),
-                vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
+                vec![b"c".to_vec(), b"d".to_vec()],
                 2.into(),
             ))
             .unwrap()
@@ -3113,12 +3265,7 @@ mod tests {
             ],
             block_on(storage.batch_get(
                 Context::default(),
-                vec![
-                    Key::from_raw(b"c"),
-                    Key::from_raw(b"x"),
-                    Key::from_raw(b"a"),
-                    Key::from_raw(b"b"),
-                ],
+                vec![b"c".to_vec(), b"x".to_vec(), b"a".to_vec(), b"b".to_vec()],
                 5.into(),
             ))
             .unwrap()
@@ -3273,13 +3420,13 @@ mod tests {
         rx.recv().unwrap();
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 120.into()))
+            block_on(storage.get(Context::default(), b"x".to_vec(), 120.into()))
                 .unwrap()
                 .0,
         );
         expect_value(
             b"101".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 120.into()))
+            block_on(storage.get(Context::default(), b"y".to_vec(), 120.into()))
                 .unwrap()
                 .0,
         );
@@ -3313,7 +3460,7 @@ mod tests {
             .unwrap();
         let (tx, rx) = channel();
         expect_none(
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()))
+            block_on(storage.get(Context::default(), b"x".to_vec(), 100.into()))
                 .unwrap()
                 .0,
         );
@@ -3380,7 +3527,7 @@ mod tests {
         rx.recv().unwrap();
         assert_eq!(cm.max_ts(), 100.into());
         expect_none(
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 105.into()))
+            block_on(storage.get(Context::default(), b"x".to_vec(), 105.into()))
                 .unwrap()
                 .0,
         );
@@ -3438,7 +3585,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         expect_none(
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), ts(230, 0)))
+            block_on(storage.get(Context::default(), b"x".to_vec(), ts(230, 0)))
                 .unwrap()
                 .0,
         );
@@ -3453,7 +3600,7 @@ mod tests {
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         expect_none(
-            block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into()))
+            block_on(storage.get(ctx, b"x".to_vec(), 100.into()))
                 .unwrap()
                 .0,
         );
@@ -3483,7 +3630,7 @@ mod tests {
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         expect_none(
-            block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into()))
+            block_on(storage.get(ctx, b"x".to_vec(), 100.into()))
                 .unwrap()
                 .0,
         );
@@ -3491,7 +3638,7 @@ mod tests {
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into()))
+            block_on(storage.get(ctx, b"x".to_vec(), 101.into()))
                 .unwrap()
                 .0,
         );
@@ -3509,7 +3656,7 @@ mod tests {
             .unwrap();
         let (tx, rx) = channel();
         expect_none(
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()))
+            block_on(storage.get(Context::default(), b"x".to_vec(), 100.into()))
                 .unwrap()
                 .0,
         );
@@ -3547,7 +3694,7 @@ mod tests {
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into()))
+            block_on(storage.get(ctx, b"x".to_vec(), 101.into()))
                 .unwrap()
                 .0,
         );
@@ -3595,19 +3742,19 @@ mod tests {
         rx.recv().unwrap();
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into()))
+            block_on(storage.get(Context::default(), b"x".to_vec(), 101.into()))
                 .unwrap()
                 .0,
         );
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 101.into()))
+            block_on(storage.get(Context::default(), b"y".to_vec(), 101.into()))
                 .unwrap()
                 .0,
         );
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into()))
+            block_on(storage.get(Context::default(), b"z".to_vec(), 101.into()))
                 .unwrap()
                 .0,
         );
@@ -3624,18 +3771,18 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         expect_none(
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into()))
+            block_on(storage.get(Context::default(), b"x".to_vec(), 101.into()))
                 .unwrap()
                 .0,
         );
         expect_none(
-            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 101.into()))
+            block_on(storage.get(Context::default(), b"y".to_vec(), 101.into()))
                 .unwrap()
                 .0,
         );
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into()))
+            block_on(storage.get(Context::default(), b"z".to_vec(), 101.into()))
                 .unwrap()
                 .0,
         );
@@ -3651,7 +3798,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         expect_none(
-            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into()))
+            block_on(storage.get(Context::default(), b"z".to_vec(), 101.into()))
                 .unwrap()
                 .0,
         );
@@ -6387,14 +6534,18 @@ mod tests {
 
         // Test get
         let key_error = extract_key_error(
-            &block_on(storage.get(ctx.clone(), key.clone(), 100.into())).unwrap_err(),
+            &block_on(storage.get(ctx.clone(), b"key".to_vec(), 100.into())).unwrap_err(),
         );
         assert_eq!(key_error.get_locked().get_key(), b"key");
 
         // Test batch_get
         let key_error = extract_key_error(
-            &block_on(storage.batch_get(ctx.clone(), vec![Key::from_raw(b"a"), key], 100.into()))
-                .unwrap_err(),
+            &block_on(storage.batch_get(
+                ctx.clone(),
+                vec![b"a".to_vec(), b"key".to_vec()],
+                100.into(),
+            ))
+            .unwrap_err(),
         );
         assert_eq!(key_error.get_locked().get_key(), b"key");
 
@@ -7023,5 +7174,126 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+    }
+
+    #[test]
+    fn test_check_api_version() {
+        const TIDB_KEY_CASE: &[u8] = b"t_a";
+        const TXN_KEY_CASE: &[u8] = &[key_prefix::TXN_KEY_PREFIX, 0, b'a'];
+        const RAW_KEY_CASE: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'a'];
+
+        let test_data = vec![
+            // storage api_version = V1, for backward compatible.
+            (
+                ApiVersion::V1,                    // storage api_version
+                ApiVersion::V1,                    // request api_version
+                CommandKind::get,                  // command kind
+                vec![TIDB_KEY_CASE, RAW_KEY_CASE], // keys
+                true,                              // is_legal
+            ),
+            (
+                ApiVersion::V1,
+                ApiVersion::V1,
+                CommandKind::raw_get,
+                vec![RAW_KEY_CASE],
+                true,
+            ),
+            (
+                ApiVersion::V1ttl,
+                ApiVersion::V1,
+                CommandKind::raw_get,
+                vec![RAW_KEY_CASE],
+                true,
+            ),
+            // storage api_version = V1, reject V2 request.
+            (
+                ApiVersion::V1,
+                ApiVersion::V2,
+                CommandKind::get,
+                vec![TIDB_KEY_CASE],
+                false,
+            ),
+            // storage api_version = V2.
+            // backward compatible for TiDB request, and TiDB request only.
+            (
+                ApiVersion::V2,
+                ApiVersion::V1,
+                CommandKind::get,
+                vec![TIDB_KEY_CASE, TIDB_KEY_CASE],
+                true,
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V1,
+                CommandKind::raw_get,
+                vec![TIDB_KEY_CASE, TIDB_KEY_CASE],
+                false,
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V1,
+                CommandKind::get,
+                vec![TIDB_KEY_CASE, TXN_KEY_CASE],
+                false,
+            ),
+            // V2 api validation.
+            (
+                ApiVersion::V2,
+                ApiVersion::V2,
+                CommandKind::get,
+                vec![TXN_KEY_CASE],
+                true,
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V2,
+                CommandKind::raw_get,
+                vec![RAW_KEY_CASE, RAW_KEY_CASE],
+                true,
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V2,
+                CommandKind::get,
+                vec![RAW_KEY_CASE, TXN_KEY_CASE],
+                false,
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V2,
+                CommandKind::raw_get,
+                vec![RAW_KEY_CASE, TXN_KEY_CASE],
+                false,
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V2,
+                CommandKind::get,
+                vec![TIDB_KEY_CASE],
+                false,
+            ),
+        ];
+
+        for (i, &(storage_api_version, req_api_version, cmd, ref keys, is_legal)) in
+            test_data.iter().enumerate()
+        {
+            let res = Storage::<RocksEngine, DummyLockManager>::check_api_version(
+                storage_api_version,
+                req_api_version,
+                cmd,
+                keys.clone(),
+            );
+            if is_legal {
+                assert!(res.is_ok(), "case {}", i);
+            } else {
+                assert!(res.is_err(), "case {}", i);
+                assert_eq!(
+                    res.unwrap_err().error_code(),
+                    error_code::storage::API_VERSION_NOT_MATCHED,
+                    "case {}",
+                    i
+                );
+            }
+        }
     }
 }
