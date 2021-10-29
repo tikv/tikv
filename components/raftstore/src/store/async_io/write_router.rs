@@ -3,8 +3,6 @@
 // #[PerformanceCriticalPath]
 //! The implementation of write router for raftstore.
 
-//TODO: remove it
-#![allow(dead_code)]
 use std::mem;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -12,6 +10,7 @@ use std::time::Duration;
 
 use crate::store::async_io::write::WriteMsg;
 use crate::store::config::Config;
+use crate::store::fsm::store::PollContext;
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
 
@@ -32,6 +31,28 @@ where
     fn io_reschedule_concurrent_count(&self) -> &Arc<AtomicUsize>;
     fn config(&self) -> &Config;
     fn raft_metrics(&self) -> &RaftMetrics;
+}
+
+impl<EK, ER, T> WriteRouterContext<EK, ER> for PollContext<EK, ER, T>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn write_senders(&self) -> &Vec<Sender<WriteMsg<EK, ER>>> {
+        &self.write_senders
+    }
+
+    fn io_reschedule_concurrent_count(&self) -> &Arc<AtomicUsize> {
+        &self.io_reschedule_concurrent_count
+    }
+
+    fn config(&self) -> &Config {
+        &self.cfg
+    }
+
+    fn raft_metrics(&self) -> &RaftMetrics {
+        &self.raft_metrics
+    }
 }
 
 /// A router for each peer that routes write messages to the write worker.

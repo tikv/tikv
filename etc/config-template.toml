@@ -414,6 +414,12 @@
 ## Use how many threads to handle raft io tasks
 # store-io-pool-size = 2
 
+## When the count of concurrent ready exceeds this value, command will not be proposed 
+## until the previous ready has been persisted.
+## If `cmd_batch` is 0, this config will have no effect.
+## If it is 0, it means no limit.
+# cmd-batch-concurrent-ready-max-count = 1
+
 ## When the size of raft db writebatch exceeds this value, write will be triggered.
 # raft-write-size-limit = "1MB"
 
@@ -1017,6 +1023,19 @@
 ## [b,c), [c,d), [d,e) and the size of [a,b), [b,c), [c,d) will be `sst-max-size` (or a
 ## little larger).
 # sst-max-size = "144MB"
+
+## Automatically reduce the number of backup threads when the current workload is high,
+## in order to reduce impact on the cluster's performance during back up.
+# enable-auto-tune = false 
+
+[backup.hadoop]
+## let TiKV know how to find the hdfs shell command.
+## Equivalent to the $HADOOP_HOME enviroment variable.
+# home = ""
+
+## TiKV will run the hdfs shell command under this linux user.
+## TiKV will use the current linux user if not provided.
+# linux-user = ""
 
 [pessimistic-txn]
 ## The default and maximum delay before responding to TiDB when pessimistic
