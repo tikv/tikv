@@ -17,7 +17,7 @@ use file_system::File;
 use tikv_util::box_err;
 
 const AES_BLOCK_SIZE: usize = 16;
-const MAX_INPLACE_CRYPTION_SIZE: usize = 10240;
+const MAX_INPLACE_CRYPTION_SIZE: usize = 1024 * 1024;
 
 /// Encrypt or decrypt content as data being read.
 pub struct CrypterReader<R> {
@@ -137,15 +137,10 @@ impl<W> CrypterWriter<W> {
 
     /// Finalize the internal writer and encrypter and return the writer.
     pub fn finalize(mut self) -> IoResult<W> {
-        self.do_finalize()?;
-        Ok(self.writer)
-    }
-
-    fn do_finalize(&mut self) -> IoResult<()> {
         if let Some(crypter) = self.crypter.as_mut() {
             crypter.finalize()?;
         }
-        Ok(())
+        Ok(self.writer)
     }
 }
 
