@@ -3,6 +3,7 @@
 use std::io::Error as IoError;
 use std::{error, result};
 
+use crossbeam::channel::{RecvError, SendError};
 use engine_traits::Error as EngineTraitError;
 use kvproto::brpb::Error as ErrorPb;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
@@ -113,6 +114,10 @@ pub enum Error {
     ClusterID { current: u64, request: u64 },
     #[error("Invalid cf {cf}")]
     InvalidCf { cf: String },
+    #[error("Failed to recv message from channel: {0}")]
+    ChannelRecv(#[from] RecvError),
+    #[error("Failed to send message to channel: {0}")]
+    ChannelSend(#[from] SendError<()>),
 }
 
 macro_rules! impl_from {

@@ -9,6 +9,7 @@ use file_system::IORateLimiter;
 use kvproto::kvrpcpb::ApiVersion;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tikv_util::config::ReadableSize;
 
 // Duplicated from rocksdb_engine
 const TEMP_DIR: &str = "";
@@ -63,17 +64,34 @@ impl TestEngineBuilder {
     /// Build a `RocksEngine`.
     pub fn build(self) -> Result<RocksEngine> {
         let cfg_rocksdb = crate::config::DbConfig::default();
-        self.build_with_cfg(&cfg_rocksdb)
+        self.do_build(&cfg_rocksdb, true)
     }
 
     pub fn build_with_cfg(self, cfg_rocksdb: &crate::config::DbConfig) -> Result<RocksEngine> {
+        self.do_build(cfg_rocksdb, true)
+    }
+
+    pub fn build_without_cache(self) -> Result<RocksEngine> {
+        let cfg_rocksdb = crate::config::DbConfig::default();
+        self.do_build(&cfg_rocksdb, false)
+    }
+
+    fn do_build(
+        self,
+        cfg_rocksdb: &crate::config::DbConfig,
+        enable_block_cache: bool,
+    ) -> Result<RocksEngine> {
         let path = match self.path {
             None => TEMP_DIR.to_owned(),
             Some(p) => p.to_str().unwrap().to_owned(),
         };
         let api_version = self.api_version;
         let cfs = self.cfs.unwrap_or_else(|| ALL_CFS.to_vec());
-        let cache = BlockCacheConfig::default().build_shared_cache();
+        let mut cache_opt = BlockCacheConfig::default();
+        if !enable_block_cache {
+            cache_opt.capacity.0 = Some(ReadableSize::kb(0));
+        }
+        let cache = cache_opt.build_shared_cache();
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {

@@ -180,6 +180,7 @@ where
         Ok(make_response(StatusCode::OK, body))
     }
 
+    #[allow(dead_code)]
     async fn dump_heap_prof_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
         let query = req.uri().query().unwrap_or("");
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
@@ -660,9 +661,9 @@ where
                             (Method::GET, "/debug/pprof/heap_deactivate") => {
                                 Self::deactivate_heap_prof(req)
                             }
-                            (Method::GET, "/debug/pprof/heap") => {
-                                Self::dump_heap_prof_to_resp(req).await
-                            }
+                            // (Method::GET, "/debug/pprof/heap") => {
+                            //     Self::dump_heap_prof_to_resp(req).await
+                            // }
                             (Method::GET, "/config") => {
                                 Self::get_config(req, &cfg_controller).await
                             }
