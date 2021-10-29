@@ -339,6 +339,8 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crc64fast",
+ "crossbeam",
+ "encryption",
  "engine_rocks",
  "engine_traits",
  "error_code",
@@ -646,6 +648,7 @@ dependencies = [
  "test_util",
  "thiserror",
  "tikv",
+ "tikv_kv",
  "tikv_util",
  "time",
  "tokio",
@@ -1392,6 +1395,8 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "bytes 1.0.1",
+ "encryption",
+ "engine_traits",
  "fail",
  "ffi-support",
  "file_system",
@@ -1429,6 +1434,7 @@ dependencies = [
  "aws",
  "cloud",
  "encryption",
+ "engine_traits",
  "external_storage",
  "ffi-support",
  "file_system",
@@ -5748,8 +5754,10 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#dc47a87b52aaa5ff150d179f47ba6c25dc441227"
+source = "git+https://github.com/pingcap/tipb.git#ec68283c17354fe66f3ab3288ad135c095178182"
 dependencies = [
+ "futures 0.3.15",
+ "grpcio",
  "lazy_static",
  "prost",
  "prost-derive",
