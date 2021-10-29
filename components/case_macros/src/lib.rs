@@ -5,7 +5,10 @@ extern crate proc_macro;
 
 use proc_macro::{Group, Ident, Literal, TokenStream, TokenTree};
 
-fn transform_non_keyword_ident_to_string_liternal<Transform>(ident: &Ident, transform: Transform) -> Literal
+fn transform_non_keyword_ident_to_string_liternal<Transform>(
+    ident: &Ident,
+    transform: Transform,
+) -> Literal
 where
     Transform: FnOnce(String) -> String,
 {
@@ -28,7 +31,8 @@ macro_rules! transform_idents_to_string_liternal_in_stream {
                         .into_iter()
                         .map(|group_token_tree| {
                             if let TokenTree::Ident(ref ident) = group_token_tree {
-                                transform_non_keyword_ident_to_string_liternal(ident, $transform).into()
+                                transform_non_keyword_ident_to_string_liternal(ident, $transform)
+                                    .into()
                             } else {
                                 group_token_tree
                             }

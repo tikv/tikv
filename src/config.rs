@@ -3256,6 +3256,7 @@ mod tests {
     use crate::server::ttl::TTLCheckerTask;
     use crate::storage::config::StorageConfigManger;
     use crate::storage::txn::flow_controller::FlowController;
+    use case_macros::*;
     use engine_rocks::raw_util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
     use raft_log_engine::RecoveryMode;
@@ -3264,7 +3265,6 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
-    use case_macros::*;
 
     #[test]
     fn test_case_macro() {
@@ -3273,7 +3273,6 @@ mod tests {
 
         let h = camel_to_kebab!(WelcomeToMyHouse);
         assert_eq!(h, "welcome-to-my-house");
-
     }
 
     #[test]
@@ -4283,7 +4282,6 @@ mod tests {
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap_err();
     }
-
 
     #[test]
     fn test_module_from_str() {
