@@ -793,7 +793,6 @@ pub fn duration_duration_time_diff(
     Ok(Some(res))
 }
 
-
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn string_duration_time_diff(
@@ -831,8 +830,6 @@ pub fn string_string_time_diff(
 
     duration_duration_time_diff(ctx, &arg1, &arg2)
 }
-
-
 
 /// Cast Duration into string representation and drop subsec if possible.
 fn duration_to_string(duration: Duration) -> String {
