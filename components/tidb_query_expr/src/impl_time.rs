@@ -371,6 +371,24 @@ pub fn add_date_and_string(
     Ok(Some(res))
 }
 
+#[rpn_fn()]
+#[inline]
+pub fn add_time_datetime_null(_arg0: &DateTime, _arg1: &DateTime) -> Result<Option<DateTime>> {
+    Ok(None)
+}
+
+#[rpn_fn()]
+#[inline]
+pub fn add_time_duration_null(_arg0: &DateTime, _arg1: &DateTime) -> Result<Option<Duration>> {
+    Ok(None)
+}
+
+#[rpn_fn()]
+#[inline]
+pub fn add_time_string_null(_arg0: &DateTime, _arg1: &DateTime) -> Result<Option<Bytes>> {
+    Ok(None)
+}
+
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn sub_duration_and_duration(
@@ -1722,6 +1740,43 @@ mod tests {
                 .evaluate(ScalarFuncSig::AddDateAndString);
             let output = output.unwrap();
             assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_add_time_result_null() {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            (Some("2021-03-26"), Some("2021-03-26 00:00:00")),
+            (Some("2021-03-26 00:00:00"), Some("2021-03-26")),
+            (Some("2021-03-26 00:00:00"), Some("2021-03-26 23:59:59")),
+        ];
+        for (arg0, arg1) in cases {
+            let arg0 =
+                arg0.map(|arg0| Time::parse_datetime(&mut ctx, arg0, MAX_FSP, true).unwrap());
+            let arg1 =
+                arg1.map(|arg1| Time::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
+
+            let output: Result<Option<DateTime>> = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::AddTimeDateTimeNull);
+            let output = output.unwrap();
+            assert_eq!(output, None);
+
+            let output: Result<Option<Duration>> = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::AddTimeDurationNull);
+            let output = output.unwrap();
+            assert_eq!(output, None);
+
+            let output: Result<Option<Bytes>> = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::AddTimeStringNull);
+            let output = output.unwrap();
+            assert_eq!(output, None);
         }
     }
 
