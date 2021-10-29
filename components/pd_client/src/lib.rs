@@ -221,7 +221,7 @@ pub trait PdClient: Send + Sync {
     fn store_heartbeat(
         &self,
         _stats: pdpb::StoreStats,
-        _reports: Option<Vec<pdpb::PeerReport>>,
+        _report: Option<pdpb::StoreReport>,
     ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         unimplemented!();
     }

@@ -138,7 +138,7 @@ where
     StoreHeartbeat {
         stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
-        send_detailed_reports: bool,
+        send_detailed_report: bool,
     },
     ReportBatchSplit {
         regions: Vec<metapb::Region>,
@@ -924,7 +924,7 @@ where
         &mut self,
         mut stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
-        send_detailed_reports: bool,
+        send_detailed_report: bool,
     ) {
         let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
             Err(e) => {
@@ -1031,9 +1031,9 @@ where
         let slow_score = self.slow_score.get();
         stats.set_slow_score(slow_score as u64);
 
-        let mut optional_reports = None;
-        if send_detailed_reports {
-            let mut reports = Vec::new();
+        let mut optional_report = None;
+        if send_detailed_report {
+            let mut store_report = pdpb::StoreReport::new();
             if let Ok(_) = store_info.kv_engine.scan_cf(
                 CF_RAFT,
                 keys::REGION_META_MIN_KEY,
@@ -1061,7 +1061,7 @@ where
                     let mut peer_report = pdpb::PeerReport::new();
                     peer_report.set_region_state(region_local_state);
                     peer_report.set_raft_state(raft_local_state);
-                    reports.push(peer_report);
+                    store_report.mut_peer_reports().push(peer_report);
                     return Ok(true);
                 },
             ) {
@@ -1071,7 +1071,7 @@ where
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
         let stats_copy = stats.clone();
-        let resp = self.pd_client.store_heartbeat(stats, optional_reports);
+        let resp = self.pd_client.store_heartbeat(stats, optional_report);
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -1083,7 +1083,7 @@ where
                         let task = Task::StoreHeartbeat {
                             stats: stats_copy,
                             store_info,
-                            send_detailed_reports: true,
+                            send_detailed_report: true,
                         };
                         if let Err(e) = scheduler.schedule(task) {
                             error!("notify pd failed"; "err" => ?e);
@@ -1116,7 +1116,7 @@ where
                         let task = Task::StoreHeartbeat {
                             stats: stats_copy,
                             store_info,
-                            send_detailed_reports: true,
+                            send_detailed_report: true,
                         };
                         if let Err(e) = scheduler.schedule(task) {
                             error!("notify pd failed"; "err" => ?e);
@@ -1652,8 +1652,8 @@ where
             Task::StoreHeartbeat {
                 stats,
                 store_info,
-                send_detailed_reports,
-            } => self.handle_store_heartbeat(stats, store_info, send_detailed_reports),
+                send_detailed_report,
+            } => self.handle_store_heartbeat(stats, store_info, send_detailed_report),
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
