@@ -128,7 +128,7 @@ impl Writer {
         storage
             .write(
                 &file_name,
-                // AllowStdIo here only intrduces the Sha256 reader and an in-memory sst reader.
+                // AllowStdIo here only introduces the Sha256 reader and an in-memory sst reader.
                 UnpinReader(Box::new(limiter.limit(AllowStdIo::new(reader)))),
                 size,
             )
