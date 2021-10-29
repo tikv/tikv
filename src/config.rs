@@ -3258,6 +3258,17 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+    use case_macros::*;
+
+    #[test]
+    fn test_case_macro() {
+        let h = camel_to_kebab!(HelloWorld);
+        assert_eq!(h, "hello-world");
+
+        let h = camel_to_kebab!(WelcomeToMyHouse);
+        assert_eq!(h, "welcome-to-my-house");
+
+    }
 
     #[test]
     fn test_check_critical_cfg_with() {
@@ -4266,6 +4277,7 @@ mod tests {
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap_err();
     }
+
 
     #[test]
     fn test_module_from_str() {

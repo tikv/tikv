@@ -587,6 +587,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "case_macros"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "cast"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5404,6 +5412,7 @@ dependencies = [
  "backtrace",
  "batch-system",
  "byteorder",
+ "case_macros",
  "chrono",
  "codec",
  "collections",
