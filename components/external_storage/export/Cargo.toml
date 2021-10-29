@@ -75,6 +75,7 @@ gcp = { optional = true, path = "../../cloud/gcp", default-features = false }
 grpcio = { optional = true, version = "0.9",  default-features = false, features = ["openssl-vendored"] }
 encryption = { path = "../../encryption", default-features = false }
 external_storage = { path = "../", default-features = false }
+engine_traits = { path = "../../engine_traits", default-features = false }
 ffi-support = { optional = true, version = "0.4.2" }
 file_system = { optional = true, path = "../../file_system" }
 futures = { optional = true, version = "0.3" }
