@@ -26,7 +26,7 @@ pub struct CrypterReader<R> {
 }
 
 impl<R> CrypterReader<R> {
-    pub fn new_encypter(
+    pub fn new_encrypter(
         reader: R,
         method: EncryptionMethod,
         key: &[u8],
@@ -103,7 +103,7 @@ pub struct CrypterWriter<W> {
 }
 
 impl<W> CrypterWriter<W> {
-    pub fn new_encypter(
+    pub fn new_encrypter(
         writer: W,
         method: EncryptionMethod,
         key: &[u8],
@@ -370,7 +370,7 @@ mod tests {
                 let mut plaintext = vec![0; 1024];
                 OsRng.fill_bytes(&mut plaintext);
                 let buf = Vec::with_capacity(1024);
-                let mut encrypter = CrypterWriter::new_encypter(buf, method, &key, iv).unwrap();
+                let mut encrypter = CrypterWriter::new_encrypter(buf, method, &key, iv).unwrap();
                 encrypter.write_all(&plaintext).unwrap();
 
                 let buf = std::io::Cursor::new(encrypter.finalize().unwrap());
@@ -416,7 +416,7 @@ mod tests {
             let key = generate_data_key(method);
             let readable_text = std::io::Cursor::new(plaintext.clone());
             let iv = Iv::new_ctr();
-            let encrypter = CrypterReader::new_encypter(readable_text, method, &key, iv).unwrap();
+            let encrypter = CrypterReader::new_encrypter(readable_text, method, &key, iv).unwrap();
             let mut decrypter = CrypterReader::new_decrypter(encrypter, method, &key, iv).unwrap();
             let mut read = vec![0; 10240];
             for offset in offsets {
@@ -452,7 +452,7 @@ mod tests {
             let key = generate_data_key(method);
             let writable_text = std::io::Cursor::new(written.clone());
             let iv = Iv::new_ctr();
-            let encrypter = CrypterWriter::new_encypter(writable_text, method, &key, iv).unwrap();
+            let encrypter = CrypterWriter::new_encrypter(writable_text, method, &key, iv).unwrap();
             let mut decrypter = CrypterWriter::new_decrypter(encrypter, method, &key, iv).unwrap();
             // First write full data.
             assert_eq!(decrypter.seek(SeekFrom::Start(0)).unwrap(), 0);

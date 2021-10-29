@@ -53,7 +53,7 @@ where
         let enc_info = box_try!(key_mgr.new_file(path));
         let mthd = encryption_method_from_db_encryption_method(enc_info.method);
         if mthd != EncryptionMethod::Plaintext {
-            let writer = box_try!(CrypterWriter::new_encypter(
+            let writer = box_try!(CrypterWriter::new_encrypter(
                 file.take().unwrap(),
                 mthd,
                 &enc_info.key,
