@@ -691,6 +691,7 @@ fn test_serde_custom_tikv_config() {
             home: "/root/hadoop".to_string(),
             linux_user: "hadoop".to_string(),
         },
+        ..Default::default()
     };
     value.import = ImportConfig {
         num_threads: 123,
