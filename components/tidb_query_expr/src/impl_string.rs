@@ -527,7 +527,8 @@ pub fn right_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<Bytes
 #[inline]
 pub fn upper_utf8(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     let s = str::from_utf8(arg)?;
-    Ok(writer.write_ref(Some(s.to_uppercase().as_bytes())))
+    let res = s.chars().flat_map(char::to_uppercase);
+    Ok(writer.write_from_char_iter(res))
 }
 
 #[rpn_fn(writer)]
@@ -542,7 +543,8 @@ pub fn upper(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 #[inline]
 pub fn lower_utf8(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     let s = str::from_utf8(arg)?;
-    Ok(writer.write_ref(Some(s.to_lowercase().as_bytes())))
+    let res = s.chars().flat_map(char::to_lowercase);
+    Ok(writer.write_from_char_iter(res))
 }
 
 #[rpn_fn(writer)]

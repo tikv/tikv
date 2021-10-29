@@ -78,7 +78,7 @@ lazy_static! {
     .unwrap();
     pub static ref CDC_SCAN_BYTES: IntCounter = register_int_counter!(
         "tikv_cdc_scan_bytes_total",
-        "Total bytes of CDC incremental scan"
+        "Total fetched bytes of CDC incremental scan"
     )
     .unwrap();
     pub static ref CDC_SCAN_TASKS: IntGaugeVec = register_int_gauge_vec!(
@@ -87,6 +87,10 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref CDC_SCAN_DISK_READ_BYTES: IntCounter = register_int_counter!(
+        "tikv_cdc_scan_disk_read_bytes_total",
+        "Total disk read bytes of CDC incremental scan"
+    ).unwrap();
     pub static ref CDC_MIN_RESOLVED_TS_REGION: IntGauge = register_int_gauge!(
         "tikv_cdc_min_resolved_ts_region",
         "The region which has minimal resolved ts"
