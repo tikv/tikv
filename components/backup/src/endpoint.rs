@@ -3,10 +3,10 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::f64::INFINITY;
+use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{fmt};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::DB;

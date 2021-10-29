@@ -6,10 +6,10 @@ use std::marker::Unpin;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::{self, File};
-use tokio_util::compat::FuturesAsyncReadCompatExt;
+use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
 use futures_io::AsyncRead;
-use futures_util::{io::AllowStdIo, stream::TryStreamExt};
+use futures_util::stream::TryStreamExt;
 use rand::Rng;
 
 use crate::UnpinReader;
@@ -98,7 +98,7 @@ impl ExternalStorage for LocalStorage {
         debug!("read file from local storage";
             "name" => %name, "base" => %self.base.display());
         match StdFile::open(self.base.join(name)) {
-            Ok(file) => Box::new(AllowStdIo::new(file)) as _,
+            Ok(file) => Box::new(File::from_std(file).compat()) as _,
             Err(e) => Box::new(error_stream(e).into_async_read()) as _,
         }
     }
