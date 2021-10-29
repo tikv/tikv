@@ -2014,7 +2014,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let task = PdTask::StoreHeartbeat {
             stats,
             store_info,
-            send_detailed_reports: false,
+            send_detailed_report: false,
         };
         if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
             error!("notify pd failed";

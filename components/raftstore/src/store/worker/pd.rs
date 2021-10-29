@@ -1065,7 +1065,7 @@ where
                     return Ok(true);
                 },
             ) {
-                optional_reports = Some(reports);
+                optional_report = Some(store_report);
             }
         }
         let router = self.router.clone();
