@@ -339,9 +339,12 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crc64fast",
+ "crossbeam",
+ "encryption",
  "engine_rocks",
  "engine_traits",
  "error_code",
+ "external_storage",
  "external_storage_export",
  "file_system",
  "futures 0.3.15",
@@ -629,7 +632,7 @@ dependencies = [
  "raftstore",
  "resolved_ts",
  "security",
- "semver 0.10.0",
+ "semver 1.0.4",
  "slog",
  "slog-global",
  "tempfile",
@@ -637,6 +640,7 @@ dependencies = [
  "test_util",
  "thiserror",
  "tikv",
+ "tikv_kv",
  "tikv_util",
  "time",
  "tokio",
@@ -1383,6 +1387,8 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "bytes 1.0.1",
+ "encryption",
+ "engine_traits",
  "fail",
  "ffi-support",
  "file_system",
@@ -1420,6 +1426,7 @@ dependencies = [
  "aws",
  "cloud",
  "encryption",
+ "engine_traits",
  "external_storage",
  "ffi-support",
  "file_system",
@@ -2336,7 +2343,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#d6dd964d6b8cfcb28d1ffa07d9002ba32f0b0418"
+source = "git+https://github.com/pingcap/kvproto.git#8e3f74722d72e86cc692fae25c5bea7412315d6c"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4403,6 +4410,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "semver"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "568a8e6258aa33c13358f81fd834adb854c6f7c9468520910a9b1e8fac068012"
+
+[[package]]
 name = "semver-parser"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5732,8 +5745,10 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#dc47a87b52aaa5ff150d179f47ba6c25dc441227"
+source = "git+https://github.com/pingcap/tipb.git#ec68283c17354fe66f3ab3288ad135c095178182"
 dependencies = [
+ "futures 0.3.15",
+ "grpcio",
  "lazy_static",
  "prost",
  "prost-derive",
