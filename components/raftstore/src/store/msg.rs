@@ -22,7 +22,7 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
 use crate::store::SnapKey;
-use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant, error};
+use tikv_util::{deadline::Deadline, error, escape, memory::HeapSize, time::Instant};
 
 use super::{AbstractPeer, RegionSnapshot};
 
@@ -125,9 +125,16 @@ where
                 };
                 read(resp);
             }
-            Callback::Write { cb, proposed_cb_called, .. } => {
+            Callback::Write {
+                cb,
+                proposed_cb_called,
+                ..
+            } => {
                 if proposed_cb_called && resp.get_header().has_error() {
-                    error!("proposed cb has been called but response has error {:?}", resp); 
+                    error!(
+                        "proposed callback has been called but response error {:?}",
+                        resp
+                    );
                 }
                 let resp = WriteResponse { response: resp };
                 cb(resp);
@@ -144,7 +151,12 @@ where
     }
 
     pub fn invoke_proposed(&mut self) {
-        if let Callback::Write { proposed_cb, proposed_cb_called, .. } = self {
+        if let Callback::Write {
+            proposed_cb,
+            proposed_cb_called,
+            ..
+        } = self
+        {
             if let Some(cb) = proposed_cb.take() {
                 cb();
                 *proposed_cb_called = true;

@@ -2930,7 +2930,7 @@ where
         Ok(prs)
     }
 
-    fn transfer_leader(&mut self, peer: &metapb::Peer) {
+    pub fn transfer_leader(&mut self, peer: &metapb::Peer) {
         info!(
             "transfer leader";
             "region_id" => self.region_id,
@@ -2939,6 +2939,7 @@ where
         );
 
         self.raft_group.transfer_leader(peer.get_id());
+        self.should_wake_up = true;
     }
 
     fn pre_transfer_leader(&mut self, peer: &metapb::Peer) -> bool {
@@ -3468,23 +3469,23 @@ where
         Ok(Either::Left(propose_index))
     }
 
-    fn execute_transfer_leader<T>(
+    pub fn execute_transfer_leader<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         msg: &eraftpb::Message,
-    ) {
+    ) -> Option<metapb::Peer> {
         // log_term is set by original leader, represents the term last log is written
         // in, which should be equal to the original leader's term.
         if msg.get_log_term() != self.term() {
-            return;
+            return None;
         }
 
         if self.is_leader() {
             let from = match self.get_peer_from_cache(msg.get_from()) {
                 Some(p) => p,
-                None => return,
+                None => return None,
             };
-            match self.ready_to_transfer_leader(ctx, msg.get_index(), &from) {
+            return match self.ready_to_transfer_leader(ctx, msg.get_index(), &from) {
                 Some(reason) => {
                     info!(
                         "reject to transfer leader";
@@ -3495,13 +3496,10 @@ where
                         "index" => msg.get_index(),
                         "last_index" => self.get_store().last_index(),
                     );
+                    None
                 }
-                None => {
-                    self.transfer_leader(&from);
-                    self.should_wake_up = true;
-                }
-            }
-            return;
+                None => Some(from),
+            };
         }
 
         #[allow(clippy::suspicious_operation_groupings)]
@@ -3517,7 +3515,7 @@ where
                 "peer_id" => self.peer.get_id(),
                 "from" => msg.get_from(),
             );
-            return;
+            return None;
         }
 
         let mut msg = eraftpb::Message::new();
@@ -3527,6 +3525,8 @@ where
         msg.set_index(self.get_store().applied_index());
         msg.set_log_term(self.term());
         self.raft_group.raft.msgs.push(msg);
+
+        None
     }
 
     /// Return true to if the transfer leader request is accepted.

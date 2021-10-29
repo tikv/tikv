@@ -652,10 +652,10 @@ where
     }
 
     fn check_batch_cmd_and_proposed_cb(&mut self) {
-        if self.fsm.peer.pending_remove
-            || self.fsm.batch_req_builder.request.is_none()
+        if self.fsm.batch_req_builder.request.is_none()
             || !self.fsm.batch_req_builder.has_proposed_cb
             || self.fsm.batch_req_builder.header_checked.is_some()
+            || self.fsm.peer.pending_remove
         {
             return;
         }
@@ -1468,7 +1468,13 @@ where
         let from_peer_id = msg.get_from_peer().get_id();
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
 
-        let result = self.fsm.peer.step(self.ctx, msg.take_message());
+        let result = if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
+            self.on_transfer_leader_msg(msg.get_message());
+            Ok(())
+        } else {
+            self.fsm.peer.step(self.ctx, msg.take_message())
+        };
+
         stepped.set(result.is_ok());
 
         if is_snapshot {
@@ -2061,6 +2067,13 @@ where
                     }),
                 )
                 .unwrap();
+        }
+    }
+
+    fn on_transfer_leader_msg(&mut self, msg: &raft::eraftpb::Message) {
+        if let Some(peer) = self.fsm.peer.execute_transfer_leader(&mut self.ctx, msg) {
+            self.propose_batch_raft_command(true);
+            self.fsm.peer.transfer_leader(&peer);
         }
     }
 
@@ -3558,10 +3571,7 @@ where
         if self.fsm.batch_req_builder.request.is_some() && msg.has_admin_request() {
             let cmd_type = msg.get_admin_request().get_cmd_type();
             let epoch_state = admin_cmd_epoch_lookup(cmd_type);
-            if epoch_state.change_ver
-                || (cmd_type == AdminCmdType::TransferLeader
-                    && !self.fsm.peer.raft_group.raft.has_pending_conf())
-            {
+            if epoch_state.change_ver {
                 if let Some((request, callback)) =
                     self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics)
                 {
