@@ -202,8 +202,8 @@ mod softlimit_test {
             let mut result = vec![];
             // randomly make some threads, used the cpu of self.used%.
             for idx in 0.. {
-                let thread_usage = rand::thread_rng().gen_range(50..100);
-                remain = remain.saturating_sub(thread_usage);
+                let thread_usage = rand::thread_rng().gen_range(50..100).min(remain);
+                remain = remain - thread_usage;
                 result.push((format!("worker-{}", idx), thread_usage));
                 if remain == 0 {
                     break;
