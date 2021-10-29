@@ -2414,7 +2414,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .kv
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
         {
-            Ok(Some(_)) => {
+            Ok(Some(region_state)) => {
+                info!(
+                    "target region already exists, existing region: {:?}, want to create: {:?}",
+                    region_state, region
+                );
                 return;
             }
             Ok(None) => {}
@@ -2422,12 +2426,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 panic!("cannot determine whether {:?} exists, err {:?}", region, e)
             }
         };
-        peer_storage::write_peer_state(&mut kv_wb, &region, PeerState::Normal, None).unwrap_or_else(|e| {
-            panic!(
-                "fail to add peer state into write batch while creating {:?} err {:?}",
-                region, e
-            )
-        });
+        peer_storage::write_peer_state(&mut kv_wb, &region, PeerState::Normal, None)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "fail to add peer state into write batch while creating {:?} err {:?}",
+                    region, e
+                )
+            });
         peer_storage::write_initial_apply_state(&mut kv_wb, region.get_id()).unwrap_or_else(|e| {
             panic!(
                 "fail to add apply state into write batch while creating {:?} err {:?}",
@@ -2458,13 +2463,30 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         peer.peer.init_replication_mode(&mut *replication_state);
         peer.peer.activate(self.ctx);
         let mut meta = self.ctx.store_meta.lock().unwrap();
-        meta.regions.insert(region.get_id(), region.clone());
-        meta.region_ranges
-            .insert(enc_end_key(&region), region.get_id());
-        meta.readers
-            .insert(region.get_id(), ReadDelegate::from_peer(peer.get_peer()));
-        meta.region_read_progress
-            .insert(region.get_id(), peer.peer.read_progress.clone());
+        if let Some(existing_region) = meta.regions.insert(region.get_id(), region.clone()) {
+            panic!(
+                "region {:?} already exists, fail to insert {:?} into store meta",
+                existing_region, region
+            );
+        }
+        if !meta
+            .region_ranges
+            .insert(enc_end_key(&region), region.get_id())
+            .is_none()
+            || !meta
+                .readers
+                .insert(region.get_id(), ReadDelegate::from_peer(peer.get_peer()))
+                .is_none()
+            || !meta
+                .region_read_progress
+                .insert(region.get_id(), peer.peer.read_progress.clone())
+                .is_none()
+        {
+            panic!(
+                "key conflicts while insert region {:?} into store meta",
+                region
+            );
+        }
         let mailbox = BasicMailbox::new(sender, peer, self.ctx.router.state_cnt().clone());
         self.ctx.router.register(region.get_id(), mailbox);
         self.ctx

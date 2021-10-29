@@ -620,7 +620,9 @@ where
                         }
                     }
                 }
-                PeerMsg::UpdateRange(region) => self.on_update_range(region),
+                PeerMsg::UpdateRegionForUnsafeRecover(region) => {
+                    self.on_update_region_for_unsafe_recover(region)
+                }
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -653,12 +655,42 @@ where
         }
     }
 
-    fn on_update_range(&mut self, region: Region) {
-        info!("updating reigon's range"; "region" => ?region);
+    fn on_update_region_for_unsafe_recover(&mut self, region: Region) {
+        info!(
+            "updating the reigon for unsafe recover, original: {:?}, target: {:?}",
+            self.region(),
+            region
+        );
         let mut new_peer_list = HashSet::new();
         for peer in region.get_peers() {
             new_peer_list.insert(peer.get_id());
         }
+        let to_be_removed: Vec<u64> = self
+            .region()
+            .get_peers()
+            .iter()
+            .filter(|&peer| !new_peer_list.contains(&peer.get_id()))
+            .map(|peer| peer.get_id())
+            .collect();
+        if to_be_removed.len() == 0
+            && self.region().get_start_key() == region.get_start_key()
+            && self.region().get_end_key() == region.get_end_key()
+        {
+            // Nothing to be updated, return directly.
+            return;
+        }
+        if self.fsm.peer.has_valid_leader() {
+            panic!("region update for unsafe recover should only occur in leaderless reigons");
+        }
+        if self.fsm.peer.raft_group.store().applied_index()
+            != self.fsm.peer.raft_group.store().commit_index()
+        {
+            warn!(
+                "cannot proceed region update for unsafe recover, applied index is not equal to commit index"
+            );
+            return;
+        }
+
         let region_state_key = keys::region_state_key(region.get_id());
         let original_region_state = match self
             .ctx
@@ -666,7 +698,7 @@ where
             .kv
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
         {
-            Ok(Some(original_region_state)) => original_region_state,
+            Ok(Some(region_state)) => region_state,
             Ok(None) => {
                 panic!("Can't find RegionLocalState while updating {:?}", region);
             }
@@ -677,7 +709,6 @@ where
                 );
             }
         };
-
         let mut kv_wb = self.ctx.engines.kv.write_batch();
         write_peer_state(&mut kv_wb, &region, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!(
@@ -691,13 +722,6 @@ where
             panic!("fail to update RegionLocalstate {:?} err {:?}", region, e);
         }
 
-        let to_be_removed: Vec<u64> = self
-            .region()
-            .get_peers()
-            .iter()
-            .filter(|&peer| !new_peer_list.contains(&peer.get_id()))
-            .map(|peer| peer.get_id())
-            .collect();
         let mut cc = eraftpb::ConfChangeV2::default();
         let changes: Vec<_> = to_be_removed
             .iter()
@@ -715,6 +739,9 @@ where
         }
         cc.set_changes(changes.into());
         cc.set_context(Bytes::from_static(b"unsafe recover"));
+        if let Err(e) = self.fsm.peer.raft_group.apply_conf_change(&cc) {
+            panic!("fail to apply conf change for unsafe recover {:?}", e);
+        }
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(
@@ -732,11 +759,16 @@ where
                     self.fsm.peer.tag
                 );
             }
-            meta.region_ranges
-                .insert(enc_end_key(&region), region.get_id());
-        }
-        if let Err(e) = self.fsm.peer.raft_group.apply_conf_change(&cc) {
-            panic!("fail to apply conf change for unsafe recover {:?}", e);
+            if !meta
+                .region_ranges
+                .insert(enc_end_key(&region), region.get_id())
+                .is_none()
+            {
+                panic!(
+                    "key conflicts while inserting region {:?} into store meta",
+                    region
+                );
+            }
         }
         self.fsm
             .peer
@@ -750,11 +782,8 @@ where
             self.fsm.peer.remove_peer_from_cache(peer);
         }
         self.fsm.peer.post_split();
-
-        if !self.fsm.peer.has_valid_leader() {
-            self.fsm.reset_hibernate_state(GroupState::Chaos);
-            self.register_raft_base_tick();
-        }
+        self.fsm.reset_hibernate_state(GroupState::Chaos);
+        self.register_raft_base_tick();
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {

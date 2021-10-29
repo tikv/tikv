@@ -1108,7 +1108,7 @@ where
                             info!("asked to update region's range"; "region" => ?update);
                             if let Err(e) = router.force_send(
                                 update.get_id().clone(),
-                                PeerMsg::UpdateRange(update.clone()),
+                                PeerMsg::UpdateRegionForUnsafeRecover(update.clone()),
                             ) {
                                 error!("fail to send update range message for recovery"; "err" => ?e);
                             }

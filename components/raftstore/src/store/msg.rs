@@ -505,7 +505,7 @@ pub enum PeerMsg<EK: KvEngine> {
     /// Asks region to change replication mode.
     UpdateReplicationMode,
     Destroy(u64),
-    UpdateRange(metapb::Region),
+    UpdateRegionForUnsafeRecover(metapb::Region),
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
@@ -534,8 +534,8 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
             PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
-            PeerMsg::UpdateRange(region) => {
-                write!(fmt, "Update Region Id {} to {:?}", region.get_id(), region)
+            PeerMsg::UpdateRegionForUnsafeRecover(region) => {
+                write!(fmt, "Update Region {} to {:?}", region.get_id(), region)
             }
         }
     }
