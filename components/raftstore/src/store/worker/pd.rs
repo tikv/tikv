@@ -1031,10 +1031,9 @@ where
         let slow_score = self.slow_score.get();
         stats.set_slow_score(slow_score as u64);
 
-        let mut optional_report = None;
+        let mut optional_reports = None;
         if send_detailed_reports {
-            let mut store_report = pdpb::StoreReport::new();
-            store_report.set_store_id(self.store_id);
+            let mut reports = Vec::new();
             if let Ok(_) = store_info.kv_engine.scan_cf(
                 CF_RAFT,
                 keys::REGION_META_MIN_KEY,
@@ -1062,25 +1061,25 @@ where
                     let mut peer_report = pdpb::PeerReport::new();
                     peer_report.set_region_state(region_local_state);
                     peer_report.set_raft_state(raft_local_state);
-                    store_report.reports.push(peer_report);
+                    reports.push(peer_report);
                     return Ok(true);
                 },
             ) {
-                optional_report = Some(store_report);
+                optional_reports = Some(reports);
             }
         }
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
         let stats_copy = stats.clone();
-        let resp = self.pd_client.store_heartbeat(stats, optional_report);
+        let resp = self.pd_client.store_heartbeat(stats, optional_reports);
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
                     if let Some(status) = resp.replication_status.take() {
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }
-                    if resp.get_send_detailed_report_in_next_heartbeat() {
-                        info!("asked to send detailed report in the next heartbeat");
+                    if resp.get_require_detailed_report() {
+                        info!("required to send detailed report in the next heartbeat");
                         let task = Task::StoreHeartbeat {
                             stats: stats_copy,
                             store_info,
