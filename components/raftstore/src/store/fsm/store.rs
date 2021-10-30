@@ -2433,12 +2433,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     region, e
                 )
             });
-        peer_storage::write_initial_apply_state(&mut kv_wb, region.get_id()).unwrap_or_else(|e| {
-            panic!(
-                "fail to add apply state into write batch while creating {:?} err {:?}",
-                region, e
-            )
-        });
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
         if let Err(e) = kv_wb.write_opt(&write_opts) {
@@ -2463,10 +2457,17 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         peer.peer.init_replication_mode(&mut *replication_state);
         peer.peer.activate(self.ctx);
         let mut meta = self.ctx.store_meta.lock().unwrap();
-        if let Some(existing_region) = meta.regions.insert(region.get_id(), region.clone()) {
+        for (_, id) in meta.region_ranges.range((
+            Excluded(data_key(region.get_start_key())),
+            Unbounded::<Vec<u8>>,
+        )) {
+            let exist_region = &meta.regions[&id];
+            if enc_start_key(exist_region) >= data_end_key(region.get_end_key()) {
+                break;
+            }
             panic!(
-                "region {:?} already exists, fail to insert {:?} into store meta",
-                existing_region, region
+                "{:?} is overlapped with an existing region {:?}",
+                region, exist_region
             );
         }
         if !meta

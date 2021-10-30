@@ -1483,7 +1483,11 @@ impl PdClient for TestPdClient {
         Box::pin(ok(resp))
     }
 
-    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<pdpb::StoreHeartbeatResponse> {
+    fn store_heartbeat(
+        &self,
+        stats: pdpb::StoreStats,
+        _: Option<pdpb::StoreReport>,
+    ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         if let Err(e) = self.check_bootstrap() {
             return Box::pin(err(e));
         }

@@ -10,7 +10,6 @@ use std::time::Instant;
 use std::{cmp, mem, u64};
 
 use batch_system::{BasicMailbox, Fsm};
-use bytes::Bytes;
 use collections::HashMap;
 use engine_traits::CF_RAFT;
 use engine_traits::{
@@ -656,11 +655,6 @@ where
     }
 
     fn on_update_region_for_unsafe_recover(&mut self, region: Region) {
-        info!(
-            "updating the reigon for unsafe recover, original: {:?}, target: {:?}",
-            self.region(),
-            region
-        );
         let mut new_peer_list = HashSet::new();
         for peer in region.get_peers() {
             new_peer_list.insert(peer.get_id());
@@ -679,6 +673,11 @@ where
             // Nothing to be updated, return directly.
             return;
         }
+        info!(
+            "updating the reigon for unsafe recover, original: {:?}, target: {:?}",
+            self.region(),
+            region
+        );
         if self.fsm.peer.has_valid_leader() {
             panic!("region update for unsafe recover should only occur in leaderless reigons");
         }
@@ -722,26 +721,6 @@ where
             panic!("fail to update RegionLocalstate {:?} err {:?}", region, e);
         }
 
-        let mut cc = eraftpb::ConfChangeV2::default();
-        let changes: Vec<_> = to_be_removed
-            .iter()
-            .map(|&p| {
-                let mut ccs = eraftpb::ConfChangeSingle::default();
-                ccs.set_change_type(eraftpb::ConfChangeType::RemoveNode);
-                ccs.set_node_id(p);
-                ccs
-            })
-            .collect();
-        if changes.len() <= 1 {
-            cc.set_transition(eraftpb::ConfChangeTransition::Auto);
-        } else {
-            cc.set_transition(eraftpb::ConfChangeTransition::Explicit);
-        }
-        cc.set_changes(changes.into());
-        cc.set_context(Bytes::from_static(b"unsafe recover"));
-        if let Err(e) = self.fsm.peer.raft_group.apply_conf_change(&cc) {
-            panic!("fail to apply conf change for unsafe recover {:?}", e);
-        }
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(
@@ -759,6 +738,19 @@ where
                     self.fsm.peer.tag
                 );
             }
+            for (_, id) in meta.region_ranges.range((
+                Excluded(keys::data_key(region.get_start_key())),
+                Unbounded::<Vec<u8>>,
+            )) {
+                let exist_region = &meta.regions[&id];
+                if enc_start_key(exist_region) >= keys::data_end_key(region.get_end_key()) {
+                    break;
+                }
+                panic!(
+                    "{:?} is overlapped with an existing region {:?}",
+                    region, exist_region
+                );
+            }
             if !meta
                 .region_ranges
                 .insert(enc_end_key(&region), region.get_id())
@@ -768,6 +760,17 @@ where
                     "key conflicts while inserting region {:?} into store meta",
                     region
                 );
+            }
+        }
+        for peer_id in to_be_removed.clone() {
+            let mut cc = eraftpb::ConfChangeV2::default();
+            let mut ccs = eraftpb::ConfChangeSingle::default();
+            ccs.set_change_type(eraftpb::ConfChangeType::RemoveNode);
+            ccs.set_node_id(peer_id);
+            cc.set_transition(eraftpb::ConfChangeTransition::Auto);
+            cc.mut_changes().push(ccs);
+            if let Err(e) = self.fsm.peer.raft_group.apply_conf_change(&cc) {
+                panic!("fail to apply conf change for unsafe recover {:?}", e);
             }
         }
         self.fsm
