@@ -2461,7 +2461,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             Excluded(data_key(region.get_start_key())),
             Unbounded::<Vec<u8>>,
         )) {
-            let exist_region = &meta.regions[&id];
+            let exist_region = &meta.regions[id];
             if enc_start_key(exist_region) >= data_end_key(region.get_end_key()) {
                 break;
             }
@@ -2470,18 +2470,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 region, exist_region
             );
         }
-        if !meta
+        if meta
             .region_ranges
-            .insert(enc_end_key(&region), region.get_id())
-            .is_none()
-            || !meta
+            .insert(enc_end_key(&region), region.get_id()).is_some()
+            || meta
                 .readers
-                .insert(region.get_id(), ReadDelegate::from_peer(peer.get_peer()))
-                .is_none()
-            || !meta
+                .insert(region.get_id(), ReadDelegate::from_peer(peer.get_peer())).is_some()
+            || meta
                 .region_read_progress
-                .insert(region.get_id(), peer.peer.read_progress.clone())
-                .is_none()
+                .insert(region.get_id(), peer.peer.read_progress.clone()).is_some()
         {
             panic!(
                 "key conflicts while insert region {:?} into store meta",

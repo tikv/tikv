@@ -1034,7 +1034,7 @@ where
         let mut optional_report = None;
         if send_detailed_report {
             let mut store_report = pdpb::StoreReport::new();
-            if let Ok(_) = store_info.kv_engine.scan_cf(
+            store_info.kv_engine.scan_cf(
                 CF_RAFT,
                 keys::REGION_META_MIN_KEY,
                 keys::REGION_META_MAX_KEY,
@@ -1062,11 +1062,10 @@ where
                     peer_report.set_region_state(region_local_state);
                     peer_report.set_raft_state(raft_local_state);
                     store_report.mut_peer_reports().push(peer_report);
-                    return Ok(true);
-                },
-            ) {
-                optional_report = Some(store_report);
-            }
+                    Ok(true)
+                }
+            ).unwrap();
+            optional_report = Some(store_report);
         }
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
@@ -1100,14 +1099,14 @@ where
                         }
                         for delete in resp.get_plan().get_deletes() {
                             info!("asked to delete peer"; "peer" => delete);
-                            if let Err(e) = router.force_send(*delete, PeerMsg::Destroy(*delete)) {
+                            if let Err(e) = router.force_send(delete.clone(), PeerMsg::Destroy(delete.clone())) {
                                 error!("fail to send delete peer message for recovery"; "err" => ?e);
                             }
                         }
                         for update in resp.get_plan().get_updates() {
                             info!("asked to update region's range"; "region" => ?update);
                             if let Err(e) = router.force_send(
-                                update.get_id().clone(),
+                                update.get_id(),
                                 PeerMsg::UpdateRegionForUnsafeRecover(update.clone()),
                             ) {
                                 error!("fail to send update range message for recovery"; "err" => ?e);

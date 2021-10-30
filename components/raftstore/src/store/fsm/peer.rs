@@ -666,7 +666,7 @@ where
             .filter(|&peer| !new_peer_list.contains(&peer.get_id()))
             .map(|peer| peer.get_id())
             .collect();
-        if to_be_removed.len() == 0
+        if to_be_removed.is_empty()
             && self.region().get_start_key() == region.get_start_key()
             && self.region().get_end_key() == region.get_end_key()
         {
@@ -730,7 +730,7 @@ where
             );
             if meta
                 .region_ranges
-                .remove(&enc_end_key(&original_region_state.get_region()))
+                .remove(&enc_end_key(original_region_state.get_region()))
                 .is_none()
             {
                 panic!(
@@ -742,7 +742,7 @@ where
                 Excluded(keys::data_key(region.get_start_key())),
                 Unbounded::<Vec<u8>>,
             )) {
-                let exist_region = &meta.regions[&id];
+                let exist_region = &meta.regions[id];
                 if enc_start_key(exist_region) >= keys::data_end_key(region.get_end_key()) {
                     break;
                 }
@@ -751,10 +751,9 @@ where
                     region, exist_region
                 );
             }
-            if !meta
+            if meta
                 .region_ranges
-                .insert(enc_end_key(&region), region.get_id())
-                .is_none()
+                .insert(enc_end_key(&region), region.get_id()).is_some()
             {
                 panic!(
                     "key conflicts while inserting region {:?} into store meta",
