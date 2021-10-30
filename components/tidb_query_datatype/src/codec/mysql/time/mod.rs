@@ -100,6 +100,7 @@ fn round_components(parts: &mut [u32]) -> Option<()> {
 }
 
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn chrono_datetime<T: TimeZone>(
     time_zone: &T,
     year: u32,

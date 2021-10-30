@@ -473,7 +473,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn create_raftstore_compaction_listener(&self) -> engine_rocks::CompactionListener {
-        fn size_change_filter(info: &engine_rocks::RocksCompactionJobInfo) -> bool {
+        fn size_change_filter(info: &engine_rocks::RocksCompactionJobInfo<'_>) -> bool {
             // When calculating region size, we only consider write and default
             // column families.
             let cf = info.cf_name();

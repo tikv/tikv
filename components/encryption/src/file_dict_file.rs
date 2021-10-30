@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 enum LogRecord {
-    INSERT(FileInfo),
-    REMOVE,
+    Insert(FileInfo),
+    Remove,
 }
 
 /// FileDictionaryFile is used to store log style file dictionary.
@@ -43,7 +43,7 @@ pub struct FileDictionaryFile {
     enable_log: bool,
     // Determine whether compact the log.
     file_rewrite_threshold: u64,
-    // Record the number of `REMOVE` to determine whether compact the log.
+    // Record the number of `Remove` to determine whether compact the log.
     removed: u64,
     // Record size of the file.
     file_size: usize,
@@ -179,10 +179,10 @@ impl FileDictionaryFile {
                             remained.consume(used_size);
                             last_record_name = file_name.clone();
                             match mode {
-                                LogRecord::INSERT(info) => {
+                                LogRecord::Insert(info) => {
                                     file_dict.files.insert(file_name, info);
                                 }
-                                LogRecord::REMOVE => {
+                                LogRecord::Remove => {
                                     let original = file_dict.files.remove(&file_name);
                                     if original.is_none() {
                                         return Err(box_err!(
@@ -221,7 +221,7 @@ impl FileDictionaryFile {
         self.file_dict.files.insert(name.to_owned(), info.clone());
         if self.enable_log {
             let file = self.append_file.as_mut().unwrap();
-            let bytes = Self::convert_record_to_bytes(name, LogRecord::INSERT(info.clone()))?;
+            let bytes = Self::convert_record_to_bytes(name, LogRecord::Insert(info.clone()))?;
 
             fail::fail_point!("file_dict_log_append_incomplete", |truncate_num| {
                 let mut bytes = bytes.clone();
@@ -251,7 +251,7 @@ impl FileDictionaryFile {
         self.file_dict.files.remove(name);
         if self.enable_log {
             let file = self.append_file.as_mut().unwrap();
-            let bytes = Self::convert_record_to_bytes(name, LogRecord::REMOVE)?;
+            let bytes = Self::convert_record_to_bytes(name, LogRecord::Remove)?;
             file.write_all(&bytes)?;
             file.sync_all()?;
 
@@ -282,13 +282,13 @@ impl FileDictionaryFile {
 
         let mut header_buf = [0; Self::RECORD_HEADER_SIZE];
         let info_len = match record_type {
-            LogRecord::INSERT(info) => {
+            LogRecord::Insert(info) => {
                 header_buf[Self::RECORD_HEADER_SIZE - 1] = 1;
                 let info_bytes = info.write_to_bytes()?;
                 content.extend_from_slice(&info_bytes);
                 info_bytes.len() as u16
             }
-            LogRecord::REMOVE => {
+            LogRecord::Remove => {
                 header_buf[Self::RECORD_HEADER_SIZE - 1] = 2;
                 0
             }
@@ -363,11 +363,11 @@ impl FileDictionaryFile {
         // return result
         let used_size = Self::RECORD_HEADER_SIZE + name_len + info_len;
         let record = match mode {
-            2 => LogRecord::REMOVE,
+            2 => LogRecord::Remove,
             1 => {
                 let mut file_info = FileInfo::default();
                 file_info.merge_from_bytes(&remained[0..info_len])?;
-                LogRecord::INSERT(file_info)
+                LogRecord::Insert(file_info)
             }
             _ => return Err(box_err!("file corrupted! record type is unknown: {}", mode)),
         };

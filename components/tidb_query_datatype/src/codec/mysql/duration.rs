@@ -119,10 +119,10 @@ mod parser {
         let (mut rest, hour) = number(input)?;
         hhmmss[0] = hour;
 
-        for i in 1..=2 {
+        for (i, current) in hhmmss.iter_mut().enumerate().skip(1) {
             if let Ok((remain, _)) = colon(rest) {
                 let (remain, num) = number(remain)?;
-                hhmmss[i] = num;
+                *current = num;
                 rest = remain;
             } else {
                 if i == 1 && require_colon {
