@@ -1,31 +1,30 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+// TODO(mornyx): Temporarily put all the code in linux module and need to be split later.
 #[cfg(target_os = "linux")]
 mod linux {
-    use std::collections::HashMap;
+    use collections::HashMap;
+    use resource_metering::utils;
+    use resource_metering::{
+        register_collector, Collector, RawRecord, RawRecords, RecorderBuilder, ResourceMeteringTag,
+        TagInfos, TEST_TAG_PREFIX,
+    };
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
     use std::time::Duration;
-
-    use lazy_static::lazy_static;
-    use resource_metering::cpu::collector::{register_collector, Collector};
-    use resource_metering::cpu::recorder::{init_recorder, CpuRecords, TEST_TAG_PREFIX};
-    use resource_metering::{ResourceMeteringTag, TagInfos};
-    use tikv_util::defer;
+    use Operation::*;
 
     enum Operation {
         SetContext(&'static str),
         ResetContext,
-        CpuHeavy(u64),
+        CpuHeavy(u32),
         Sleep(u64),
     }
-
-    use Operation::*;
 
     struct Operations {
         ops: Vec<Operation>,
         current_ctx: Option<&'static str>,
-        cpu_time: HashMap<String, u64>,
+        records: HashMap<Vec<u8>, RawRecord>,
     }
 
     impl Operations {
@@ -33,53 +32,55 @@ mod linux {
             Self {
                 ops: Vec::default(),
                 current_ctx: None,
-                cpu_time: HashMap::default(),
+                records: HashMap::default(),
             }
         }
 
         fn then(mut self, op: Operation) -> Self {
             match op {
-                Operation::SetContext(tag) => {
+                SetContext(tag) => {
                     assert!(self.current_ctx.is_none(), "cannot set nested contexts");
                     self.current_ctx = Some(tag);
                     self.ops.push(op);
                     self
                 }
-                Operation::ResetContext => {
+                ResetContext => {
                     assert!(self.current_ctx.is_some(), "context is not set");
-                    self.ops.push(op);
                     self.current_ctx = None;
+                    self.ops.push(op);
                     self
                 }
-                Operation::CpuHeavy(ms) => {
+                CpuHeavy(ms) => {
                     if let Some(tag) = self.current_ctx {
-                        *self.cpu_time.entry(tag.to_string()).or_insert(0) += ms;
+                        self.records
+                            .entry(tag.as_bytes().to_vec())
+                            .or_insert_with(RawRecord::default)
+                            .cpu_time += ms;
                     }
                     self.ops.push(op);
                     self
                 }
-                Operation::Sleep(_) => {
+                Sleep(_) => {
                     self.ops.push(op);
                     self
                 }
             }
         }
 
-        fn spawn(self) -> (JoinHandle<()>, HashMap<String, u64>) {
+        fn spawn(self) -> (JoinHandle<()>, HashMap<Vec<u8>, RawRecord>) {
             assert!(
                 self.current_ctx.is_none(),
                 "should keep context clean finally"
             );
 
-            let Operations { ops, cpu_time, .. } = self;
+            let Operations { ops, records, .. } = self;
 
             let handle = std::thread::spawn(|| {
                 let mut guard = None;
-                let thread_id = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
 
                 for op in ops {
                     match op {
-                        Operation::SetContext(tag) => {
+                        SetContext(tag) => {
                             let tag = ResourceMeteringTag::from(Arc::new(TagInfos {
                                 store_id: 0,
                                 region_id: 0,
@@ -90,39 +91,36 @@ mod linux {
                                     t
                                 },
                             }));
-
                             guard = Some(tag.attach());
                         }
-                        Operation::ResetContext => {
+                        ResetContext => {
                             guard.take();
                         }
-                        Operation::CpuHeavy(ms) => {
-                            let begin_stat = procinfo::pid::stat_task(*PID, thread_id).unwrap();
-                            let begin_ticks =
-                                (begin_stat.utime as u64).wrapping_add(begin_stat.stime as u64);
-
+                        CpuHeavy(ms) => {
+                            let begin_stat =
+                                utils::stat_task(utils::process_id(), utils::thread_id()).unwrap();
+                            let begin_ticks = begin_stat.utime.wrapping_add(begin_stat.stime);
                             loop {
                                 Self::heavy_job();
-                                let later_stat = procinfo::pid::stat_task(*PID, thread_id).unwrap();
-
-                                let later_ticks =
-                                    (later_stat.utime as u64).wrapping_add(later_stat.stime as u64);
+                                let later_stat =
+                                    utils::stat_task(utils::process_id(), utils::thread_id())
+                                        .unwrap();
+                                let later_ticks = later_stat.utime.wrapping_add(later_stat.stime);
                                 let delta_ms = later_ticks.wrapping_sub(begin_ticks) * 1_000
-                                    / (*CLK_TCK as u64);
-
-                                if delta_ms >= ms {
+                                    / utils::clock_tick();
+                                if delta_ms >= ms as i64 {
                                     break;
                                 }
                             }
                         }
-                        Operation::Sleep(ms) => {
+                        Sleep(ms) => {
                             std::thread::sleep(Duration::from_millis(ms));
                         }
                     }
                 }
             });
 
-            (handle, cpu_time)
+            (handle, records)
         }
 
         fn heavy_job() -> u64 {
@@ -139,36 +137,63 @@ mod linux {
 
     #[derive(Default, Clone)]
     struct DummyCollector {
-        records: Arc<Mutex<HashMap<String, u64>>>,
+        records: Arc<Mutex<HashMap<Vec<u8>, RawRecord>>>,
     }
 
     impl Collector for DummyCollector {
-        fn collect(&self, records: Arc<CpuRecords>) {
+        fn collect(&self, records: Arc<RawRecords>) {
             if let Ok(mut r) = self.records.lock() {
-                for (tag, ms) in &records.records {
-                    let (_, t) = tag.infos.extra_attachment.split_at(TEST_TAG_PREFIX.len());
-                    let str = String::from_utf8_lossy(t).into_owned();
-                    *r.entry(str).or_insert(0) += *ms;
+                for (tag, record) in records.records.iter() {
+                    let (_, k) = tag.infos.extra_attachment.split_at(TEST_TAG_PREFIX.len());
+                    r.entry(k.to_vec())
+                        .or_insert_with(RawRecord::default)
+                        .merge(record);
                 }
             }
         }
     }
 
-    lazy_static! {
-        static ref PID: libc::pid_t = unsafe { libc::getpid() };
-        static ref CLK_TCK: libc::c_long = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    impl DummyCollector {
+        fn check(&self, mut expected: HashMap<Vec<u8>, RawRecord>) {
+            const MAX_DRIFT: u32 = 50;
+
+            // Wait a collect interval to avoid losing records.
+            std::thread::sleep(Duration::from_millis(1200));
+
+            let mut records = self.records.lock().unwrap();
+            for k in expected.keys() {
+                records.entry(k.clone()).or_insert_with(RawRecord::default);
+            }
+            for k in records.keys() {
+                expected.entry(k.clone()).or_insert_with(RawRecord::default);
+            }
+            for (k, expected_value) in expected {
+                let value = records.get(&k).unwrap();
+                let l = value.cpu_time.saturating_sub(MAX_DRIFT);
+                let r = value.cpu_time.saturating_add(MAX_DRIFT);
+                if !(l <= expected_value.cpu_time && expected_value.cpu_time <= r) {
+                    panic!(
+                        "tag {} cpu time expected {} but got {}",
+                        String::from_utf8_lossy(&k),
+                        expected_value.cpu_time,
+                        value.cpu_time
+                    );
+                }
+            }
+        }
     }
 
     #[test]
-    fn test_cpu_record() {
-        let handle = init_recorder();
+    fn test_cpu_recorder() {
+        // let collector = MockCollector::default();
+        // let records = collector.records.clone();
+
+        let handle = RecorderBuilder::default()
+            .add_sub_recorder(Box::new(resource_metering::CpuRecorder::default()))
+            .spawn()
+            .unwrap();
         handle.resume();
         fail::cfg("cpu-record-test-filter", "return").unwrap();
-
-        defer! {{
-            fail::remove("cpu-record-test-filter");
-            handle.pause();
-        }};
 
         // Heavy CPU only with 1 thread
         {
@@ -292,40 +317,13 @@ mod linux {
         }
     }
 
-    impl DummyCollector {
-        fn check(&self, mut expected: HashMap<String, u64>) {
-            // Wait a collect interval to avoid losing records.
-            std::thread::sleep(Duration::from_millis(1200));
-
-            const MAX_DRIFT: u64 = 50;
-            let mut res = self.records.lock().unwrap();
-
-            for k in expected.keys() {
-                res.entry(k.clone()).or_insert(0);
-            }
-            for k in res.keys() {
-                expected.entry(k.clone()).or_insert(0);
-            }
-
-            for (k, expected_value) in expected {
-                let value = res.get(&k).unwrap();
-                let l = value.saturating_sub(MAX_DRIFT);
-                let r = value.saturating_add(MAX_DRIFT);
-                if !(l <= expected_value && expected_value <= r) {
-                    panic!(
-                        "tag {} cpu time expected {} but got {}",
-                        k, expected_value, value
-                    );
-                }
-            }
-        }
-    }
-
-    fn merge(maps: impl IntoIterator<Item = HashMap<String, u64>>) -> HashMap<String, u64> {
+    fn merge(
+        maps: impl IntoIterator<Item = HashMap<Vec<u8>, RawRecord>>,
+    ) -> HashMap<Vec<u8>, RawRecord> {
         let mut map = HashMap::default();
         for m in maps {
             for (k, v) in m {
-                *map.entry(k).or_insert(0) += v;
+                map.entry(k).or_insert_with(RawRecord::default).merge(&v);
             }
         }
         map

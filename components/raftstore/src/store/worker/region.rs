@@ -585,6 +585,7 @@ where
 
     fn delete_all_in_range(&self, ranges: &[Range]) -> Result<()> {
         for cf in self.engine.cf_names() {
+            // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
             let strategy = if cf == CF_LOCK {
                 DeleteStrategy::DeleteByKey
             } else if self.use_delete_range {
@@ -763,9 +764,9 @@ mod tests {
     use engine_test::ctor::CFOptions;
     use engine_test::ctor::ColumnFamilyOptions;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::KvEngine;
     use engine_traits::{
-        CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt,
+        CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable, Peekable, SyncMutable,
+        WriteBatch, WriteBatchExt,
     };
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};

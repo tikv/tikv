@@ -28,6 +28,7 @@ protobuf-codec = [
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
   "file_system/protobuf-codec",
+  "encryption/protobuf-codec",
 ]
 prost-codec = [
   "concurrency_manager/prost-codec",
@@ -47,6 +48,7 @@ prost-codec = [
   "tikv_util/prost-codec",
   "txn_types/prost-codec",
   "file_system/prost-codec",
+  "encryption/prost-codec",
 ]
 test-engines-rocksdb = [
   "tikv/test-engines-rocksdb",
@@ -70,8 +72,10 @@ crc64fast = "0.1"
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
+external_storage = { path = "../external_storage", default-features = false }
 external_storage_export = { path = "../external_storage/export", default-features = false }
 file_system = { path = "../file_system", default-features = false }
+encryption = {path = "../encryption", default-features = false}
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
@@ -98,6 +102,7 @@ tikv_util = { path = "../tikv_util", default-features = false }
 collections = { path = "../collections" }
 txn_types = { path = "../txn_types", default-features = false }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+crossbeam = "0.8"
 
 [dev-dependencies]
 rand = "0.8"

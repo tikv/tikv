@@ -111,6 +111,8 @@ pub enum Collation {
     Utf8Mb4GeneralCi = -45,
     Utf8Mb4UnicodeCi = -224,
     Latin1Bin = -47,
+    GbkBin = -87,
+    GbkChineseCi = -28,
 }
 
 impl Collation {
@@ -126,6 +128,7 @@ impl Collation {
             -47 => Ok(Collation::Latin1Bin),
             -63 | 63 | 47 => Ok(Collation::Binary),
             -224 | -192 => Ok(Collation::Utf8Mb4UnicodeCi),
+            -87 => Ok(Collation::GbkBin),
             n if n >= 0 => Ok(Collation::Utf8Mb4BinNoPadding),
             n => Err(DataTypeError::UnsupportedCollation { code: n }),
         }

@@ -277,10 +277,6 @@ impl Instant {
         Instant::MonotonicCoarse(monotonic_coarse_now())
     }
 
-    // This function may panic if the current time is earlier than this
-    // instant. Deprecated.
-    // pub fn elapsed(&self) -> Duration;
-
     pub fn saturating_elapsed(&self) -> Duration {
         match *self {
             Instant::Monotonic(t) => {
