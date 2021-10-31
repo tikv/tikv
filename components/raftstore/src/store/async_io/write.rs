@@ -153,7 +153,7 @@ where
     WriteTask(WriteTask<EK, ER>),
     LatencyInspect {
         send_time: Instant,
-        inspector: LatencyInspector,
+        inspector: Vec<LatencyInspector>,
     },
     Shutdown,
 }
@@ -342,7 +342,7 @@ where
     metrics: StoreWriteMetrics,
     message_metrics: RaftSendMessageMetrics,
     perf_context: EK::PerfContext,
-    pending_latency_inspect: Vec<(Instant, LatencyInspector)>,
+    pending_latency_inspect: Vec<(Instant, Vec<LatencyInspector>)>,
 }
 
 impl<EK, ER, N, T> Worker<EK, ER, N, T>
@@ -590,9 +590,15 @@ where
     }
 
     fn clear_latency_inspect(&mut self) {
-        for (time, mut inspector) in std::mem::take(&mut self.pending_latency_inspect) {
-            inspector.record_store_write(time.saturating_elapsed());
-            inspector.finish();
+        if self.pending_latency_inspect.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        for (time, inspectors) in std::mem::take(&mut self.pending_latency_inspect) {
+            for mut inspector in inspectors {
+                inspector.record_store_write(now.saturating_duration_since(time));
+                inspector.finish();
+            }
         }
     }
 }
