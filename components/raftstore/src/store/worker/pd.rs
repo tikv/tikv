@@ -1102,9 +1102,7 @@ where
                         }
                         for delete in resp.get_plan().get_deletes() {
                             info!("asked to delete peer"; "peer" => delete);
-                            if let Err(e) =
-                                router.force_send(*delete, PeerMsg::Destroy(*delete))
-                            {
+                            if let Err(e) = router.force_send(*delete, PeerMsg::Destroy(*delete)) {
                                 error!("fail to send delete peer message for recovery"; "err" => ?e);
                             }
                         }
