@@ -1034,37 +1034,40 @@ where
         let mut optional_report = None;
         if send_detailed_report {
             let mut store_report = pdpb::StoreReport::new();
-            store_info.kv_engine.scan_cf(
-                CF_RAFT,
-                keys::REGION_META_MIN_KEY,
-                keys::REGION_META_MAX_KEY,
-                false,
-                |key, value| {
-                    let (_, suffix) = box_try!(keys::decode_region_meta_key(key));
-                    if suffix != keys::REGION_STATE_SUFFIX {
-                        return Ok(true);
-                    }
+            store_info
+                .kv_engine
+                .scan_cf(
+                    CF_RAFT,
+                    keys::REGION_META_MIN_KEY,
+                    keys::REGION_META_MAX_KEY,
+                    false,
+                    |key, value| {
+                        let (_, suffix) = box_try!(keys::decode_region_meta_key(key));
+                        if suffix != keys::REGION_STATE_SUFFIX {
+                            return Ok(true);
+                        }
 
-                    let mut region_local_state = RegionLocalState::default();
-                    region_local_state.merge_from_bytes(value)?;
-                    if region_local_state.get_state() == PeerState::Tombstone {
-                        return Ok(true);
-                    }
-                    let raft_local_state = match store_info
-                        .raft_engine
-                        .get_raft_state(region_local_state.get_region().get_id())
-                        .unwrap()
-                    {
-                        None => return Ok(true),
-                        Some(value) => value,
-                    };
-                    let mut peer_report = pdpb::PeerReport::new();
-                    peer_report.set_region_state(region_local_state);
-                    peer_report.set_raft_state(raft_local_state);
-                    store_report.mut_peer_reports().push(peer_report);
-                    Ok(true)
-                }
-            ).unwrap();
+                        let mut region_local_state = RegionLocalState::default();
+                        region_local_state.merge_from_bytes(value)?;
+                        if region_local_state.get_state() == PeerState::Tombstone {
+                            return Ok(true);
+                        }
+                        let raft_local_state = match store_info
+                            .raft_engine
+                            .get_raft_state(region_local_state.get_region().get_id())
+                            .unwrap()
+                        {
+                            None => return Ok(true),
+                            Some(value) => value,
+                        };
+                        let mut peer_report = pdpb::PeerReport::new();
+                        peer_report.set_region_state(region_local_state);
+                        peer_report.set_raft_state(raft_local_state);
+                        store_report.mut_peer_reports().push(peer_report);
+                        Ok(true)
+                    },
+                )
+                .unwrap();
             optional_report = Some(store_report);
         }
         let router = self.router.clone();
@@ -1099,7 +1102,9 @@ where
                         }
                         for delete in resp.get_plan().get_deletes() {
                             info!("asked to delete peer"; "peer" => delete);
-                            if let Err(e) = router.force_send(delete.clone(), PeerMsg::Destroy(delete.clone())) {
+                            if let Err(e) =
+                                router.force_send(delete.clone(), PeerMsg::Destroy(delete.clone()))
+                            {
                                 error!("fail to send delete peer message for recovery"; "err" => ?e);
                             }
                         }

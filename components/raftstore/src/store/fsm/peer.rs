@@ -753,7 +753,8 @@ where
             }
             if meta
                 .region_ranges
-                .insert(enc_end_key(&region), region.get_id()).is_some()
+                .insert(enc_end_key(&region), region.get_id())
+                .is_some()
             {
                 panic!(
                     "key conflicts while inserting region {:?} into store meta",

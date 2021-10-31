@@ -2472,13 +2472,16 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
         if meta
             .region_ranges
-            .insert(enc_end_key(&region), region.get_id()).is_some()
+            .insert(enc_end_key(&region), region.get_id())
+            .is_some()
             || meta
                 .readers
-                .insert(region.get_id(), ReadDelegate::from_peer(peer.get_peer())).is_some()
+                .insert(region.get_id(), ReadDelegate::from_peer(peer.get_peer()))
+                .is_some()
             || meta
                 .region_read_progress
-                .insert(region.get_id(), peer.peer.read_progress.clone()).is_some()
+                .insert(region.get_id(), peer.peer.read_progress.clone())
+                .is_some()
         {
             panic!(
                 "key conflicts while insert region {:?} into store meta",
