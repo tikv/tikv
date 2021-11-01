@@ -2336,7 +2336,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/mrcroxx/kvproto?branch=speed-up-evict-leader#7259e0ede74baa1f24542b877f1b261a49b09bd5"
+source = "git+https://github.com/pingcap/kvproto.git#b7d07d198381d476b9131af1630b2504037aca15"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
