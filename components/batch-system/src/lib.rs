@@ -10,7 +10,10 @@ mod router;
 #[cfg(feature = "test-runner")]
 pub mod test_runner;
 
-pub use self::batch::{create_system, BatchRouter, BatchSystem, HandlerBuilder, PollHandler};
+pub use self::batch::{
+    create_system, BatchRouter, BatchSystem, FsmTypes, HandlerBuilder, PollHandler, Poller,
+    PoolState, SCALE_FINISHED_CHANNEL,
+};
 pub use self::config::Config;
 pub use self::fsm::{Fsm, Priority};
 pub use self::mailbox::{BasicMailbox, Mailbox};

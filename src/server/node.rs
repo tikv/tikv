@@ -23,6 +23,7 @@ use kvproto::replication_modepb::ReplicationStatus;
 use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
+use raftstore::store::config::RaftstoreConfigTask;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::AutoSplitController;
@@ -216,6 +217,11 @@ where
     /// Gets the store id.
     pub fn id(&self) -> u64 {
         self.store.get_id()
+    }
+
+    /// Gets the Scheduler of RaftstoreConfigTask, it must be called after start.
+    pub fn get_scheduler(&mut self) -> Scheduler<RaftstoreConfigTask> {
+        self.system.get_refresh_config_scheduler()
     }
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the

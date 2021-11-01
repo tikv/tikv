@@ -89,18 +89,13 @@ fn start_raftstore(
     };
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
     let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
-    let cfg_controller = ConfigController::new(cfg);
-    cfg_controller.register(
-        Module::Raftstore,
-        Box::new(RaftstoreConfigManager(cfg_track.clone())),
-    );
     let pd_worker = LazyWorker::new("store-config");
     let (split_check_scheduler, _) = dummy_scheduler();
 
     system
         .spawn(
             Default::default(),
-            cfg_track,
+            cfg_track.clone(),
             engines,
             MockTransport,
             Arc::new(TestPdClient::new(0, true)),
@@ -116,6 +111,16 @@ fn start_raftstore(
             ConcurrencyManager::new(1.into()),
         )
         .unwrap();
+
+    let cfg_controller = ConfigController::new(cfg);
+    cfg_controller.register(
+        Module::Raftstore,
+        Box::new(RaftstoreConfigManager::new(
+            system.get_refresh_config_scheduler(),
+            cfg_track,
+        )),
+    );
+
     (cfg_controller, raft_router, system.apply_router(), system)
 }
 

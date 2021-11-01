@@ -21,6 +21,7 @@ tikv_alloc = { path = "../tikv_alloc", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
 file_system = { path = "../file_system", default-features = false }
 collections = { path = "../collections" }
+online_config = { path = "../online_config" }
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -28,6 +29,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 derive_more = { version = "0.99", optional = true }
 prometheus = { version = "0.12", default-features = false, features = ["nightly"] }
 lazy_static = "1.3"
+fail = "0.4"
 
 [dev-dependencies]
 criterion = "0.3"

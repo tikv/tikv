@@ -788,11 +788,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             Box::new(SplitCheckConfigManager(split_check_scheduler.clone())),
         );
 
-        cfg_controller.register(
-            tikv::config::Module::Raftstore,
-            Box::new(RaftstoreConfigManager(raft_store)),
-        );
-
         let split_config_manager =
             SplitConfigManager(Arc::new(VersionTrack::new(self.config.split.clone())));
         cfg_controller.register(
@@ -915,6 +910,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         cfg_controller.register(
             tikv::config::Module::ResourceMetering,
             Box::new(cfg_manager),
+        );
+
+        cfg_controller.register(
+            tikv::config::Module::Raftstore,
+            Box::new(RaftstoreConfigManager::new(
+                node.get_scheduler(),
+                raft_store,
+            )),
         );
 
         self.servers = Some(Servers {

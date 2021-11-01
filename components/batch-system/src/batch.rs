@@ -10,19 +10,25 @@ use crate::config::Config;
 use crate::fsm::{Fsm, FsmScheduler, Priority};
 use crate::mailbox::BasicMailbox;
 use crate::router::Router;
-use crossbeam::channel::{self, SendError};
+use crossbeam::channel::{self, Receiver, SendError, Sender};
+use fail::fail_point;
 use file_system::{set_io_type, IOType};
+use lazy_static::lazy_static;
 use std::borrow::Cow;
-use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
-use std::thread::{self, JoinHandle};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, current, JoinHandle, ThreadId};
 use std::time::Duration;
 use tikv_util::mpsc;
 use tikv_util::time::Instant;
 use tikv_util::{debug, error, info, safe_panic, thd_name, warn};
 
+lazy_static! {
+    pub static ref SCALE_FINISHED_CHANNEL: (Sender<()>, Receiver<()>) = channel::bounded(1);
+}
+
 /// A unify type for FSMs so that they can be sent to channel easily.
-enum FsmTypes<N, C> {
+pub enum FsmTypes<N, C> {
     Normal(Box<N>),
     Control(Box<C>),
     // Used as a signal that scheduler should be shutdown.
@@ -217,7 +223,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
 ///
 /// Note that, every poll thread has its own handler, which doesn't have to be
 /// Sync.
-pub trait PollHandler<N, C> {
+pub trait PollHandler<N, C>: Send + 'static {
     /// This function is called at the very beginning of every round.
     fn begin(&mut self, batch_size: usize);
 
@@ -248,12 +254,40 @@ pub trait PollHandler<N, C> {
 }
 
 /// Internal poller that fetches batch and call handler hooks for readiness.
-struct Poller<N: Fsm, C: Fsm, Handler> {
-    router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
-    fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
-    handler: Handler,
-    max_batch_size: usize,
-    reschedule_duration: Duration,
+pub struct Poller<N: Fsm, C: Fsm, Handler> {
+    pub router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
+    pub fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
+    pub handler: Handler,
+    pub max_batch_size: usize,
+    pub reschedule_duration: Duration,
+    pub pool_size: Option<Arc<AtomicUsize>>,
+    pub expected_pool_size: Option<Arc<AtomicUsize>>,
+    pub pool_scale_finished: Option<channel::Sender<()>>,
+    pub joinable_workers: Option<Arc<Mutex<Vec<ThreadId>>>>,
+}
+
+impl<N, C, Handler> Drop for Poller<N, C, Handler>
+where
+    N: Fsm,
+    C: Fsm,
+{
+    fn drop(&mut self) {
+        if let Some(joinable_workers) = &self.joinable_workers {
+            joinable_workers.lock().unwrap().push(current().id());
+        }
+        if let Some(pool_size) = &self.pool_size {
+            if pool_size.fetch_sub(1, Ordering::AcqRel) - 1
+                == self
+                    .expected_pool_size
+                    .take()
+                    .unwrap()
+                    .load(Ordering::Relaxed)
+            {
+                self.pool_scale_finished.take().unwrap().send(()).unwrap();
+                info!("Decrease pool done");
+            }
+        }
+    }
 }
 
 enum ReschedulePolicy {
@@ -282,7 +316,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
     }
 
     // Poll for readiness and forward to handler. Remove stale peer if necessary.
-    fn poll(&mut self) {
+    pub fn poll(&mut self) {
+        fail_point!("poll");
         let mut batch = Batch::with_capacity(self.max_batch_size);
         let mut reschedule_fsms = Vec::with_capacity(self.max_batch_size);
 
@@ -383,9 +418,13 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     low_receiver: channel::Receiver<FsmTypes<N, C>>,
     pool_size: usize,
     max_batch_size: usize,
-    workers: Vec<JoinHandle<()>>,
+    workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
     reschedule_duration: Duration,
     low_priority_pool_size: usize,
+    alive_workers: Arc<AtomicUsize>,
+    expected_workers: Arc<AtomicUsize>,
+    joinable_workers: Arc<Mutex<Vec<ThreadId>>>,
+    pool_state_builder: Option<PoolStateBuilder<N, C>>,
 }
 
 impl<N, C> BatchSystem<N, C>
@@ -395,6 +434,24 @@ where
 {
     pub fn router(&self) -> &BatchRouter<N, C> {
         &self.router
+    }
+
+    pub fn build_pool_state<H: HandlerBuilder<N, C>>(
+        &mut self,
+        handler_builder: H,
+    ) -> Option<PoolState<N, C, H>> {
+        self.name_prefix.as_ref()?;
+        let pool_state_builder = self.pool_state_builder.take().unwrap();
+        Some(pool_state_builder.build(
+            self.name_prefix.as_ref().unwrap().clone(),
+            self.alive_workers.clone(),
+            self.low_priority_pool_size,
+            self.expected_workers.clone(),
+            self.workers.clone(),
+            self.joinable_workers.clone(),
+            handler_builder,
+            self.pool_size,
+        ))
     }
 
     fn start_poller<B>(&mut self, name: String, priority: Priority, builder: &mut B)
@@ -413,6 +470,26 @@ where
             handler,
             max_batch_size: self.max_batch_size,
             reschedule_duration: self.reschedule_duration,
+            pool_size: if priority == Priority::Normal {
+                Some(Arc::clone(&self.alive_workers))
+            } else {
+                None
+            },
+            expected_pool_size: if priority == Priority::Normal {
+                Some(Arc::clone(&self.expected_workers))
+            } else {
+                None
+            },
+            pool_scale_finished: if priority == Priority::Normal {
+                Some(SCALE_FINISHED_CHANNEL.0.clone())
+            } else {
+                None
+            },
+            joinable_workers: if priority == Priority::Normal {
+                Some(Arc::clone(&self.joinable_workers))
+            } else {
+                None
+            },
         };
         let props = tikv_util::thread_group::current_properties();
         let t = thread::Builder::new()
@@ -423,7 +500,10 @@ where
                 poller.poll();
             })
             .unwrap();
-        self.workers.push(t);
+        if priority == Priority::Normal {
+            self.alive_workers.fetch_add(1, Ordering::AcqRel);
+        }
+        self.workers.lock().unwrap().push(t);
     }
 
     /// Start the batch system.
@@ -458,7 +538,7 @@ where
         info!("shutdown batch system {}", name_prefix);
         self.router.broadcast_shutdown();
         let mut last_error = None;
-        for h in self.workers.drain(..) {
+        for h in self.workers.lock().unwrap().drain(..) {
             debug!("waiting for {}", h.thread().name().unwrap());
             if let Err(e) = h.join() {
                 error!("failed to join worker thread: {:?}", e);
@@ -470,6 +550,57 @@ where
         }
         info!("batch system {} is stopped.", name_prefix);
     }
+}
+
+struct PoolStateBuilder<N, C> {
+    max_batch_size: usize,
+    reschedule_duration: Duration,
+    pub fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
+    pub fsm_sender: channel::Sender<FsmTypes<N, C>>,
+}
+
+impl<N, C> PoolStateBuilder<N, C> {
+    fn build<H: HandlerBuilder<N, C>>(
+        self,
+        name_prefix: String,
+        pool_size: Arc<AtomicUsize>,
+        low_priority_pool_size: usize,
+        expected_pool_size: Arc<AtomicUsize>,
+        workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
+        joinable_workers: Arc<Mutex<Vec<ThreadId>>>,
+        handler_builder: H,
+        id_base: usize,
+    ) -> PoolState<N, C, H> {
+        PoolState {
+            name_prefix,
+            handler_builder,
+            fsm_receiver: self.fsm_receiver,
+            fsm_sender: self.fsm_sender,
+            pool_size,
+            low_priority_pool_size,
+            expected_pool_size,
+            workers,
+            joinable_workers,
+            max_batch_size: self.max_batch_size,
+            reschedule_duration: self.reschedule_duration,
+            id_base,
+        }
+    }
+}
+
+pub struct PoolState<N, C, H: HandlerBuilder<N, C>> {
+    pub name_prefix: String,
+    pub handler_builder: H,
+    pub fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
+    pub fsm_sender: channel::Sender<FsmTypes<N, C>>,
+    pub pool_size: Arc<AtomicUsize>,
+    pub low_priority_pool_size: usize,
+    pub expected_pool_size: Arc<AtomicUsize>,
+    pub workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    pub joinable_workers: Arc<Mutex<Vec<ThreadId>>>,
+    pub max_batch_size: usize,
+    pub reschedule_duration: Duration,
+    pub id_base: usize,
 }
 
 pub type BatchRouter<N, C> = Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>;
@@ -491,8 +622,14 @@ pub fn create_system<N: Fsm, C: Fsm>(
         low_sender: tx2.clone(),
     };
     let control_scheduler = ControlScheduler {
-        sender: tx,
+        sender: tx.clone(),
         low_sender: tx2,
+    };
+    let pool_state_builder = PoolStateBuilder {
+        max_batch_size: cfg.max_batch_size(),
+        reschedule_duration: cfg.reschedule_duration.0,
+        fsm_receiver: rx.clone(),
+        fsm_sender: tx,
     };
     let router = Router::new(control_box, normal_scheduler, control_scheduler, state_cnt);
     let system = BatchSystem {
@@ -503,8 +640,12 @@ pub fn create_system<N: Fsm, C: Fsm>(
         pool_size: cfg.pool_size,
         max_batch_size: cfg.max_batch_size(),
         reschedule_duration: cfg.reschedule_duration.0,
-        workers: vec![],
+        workers: Arc::new(Mutex::new(Vec::new())),
         low_priority_pool_size: cfg.low_priority_pool_size,
+        alive_workers: Arc::new(AtomicUsize::new(0)),
+        expected_workers: Arc::new(AtomicUsize::new(cfg.pool_size)),
+        joinable_workers: Arc::new(Mutex::new(Vec::new())),
+        pool_state_builder: Some(pool_state_builder),
     };
     (router, system)
 }

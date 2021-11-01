@@ -3025,7 +3025,23 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
         Ok(())
     }
     let mut res = HashMap::new();
-    for (name, value) in change {
+    for (mut name, value) in change {
+        name = name.replace(
+            "raftstore.store-pool-size",
+            "raftstore.store_batch_system.pool_size",
+        );
+        name = name.replace(
+            "raftstore.apply-pool-size",
+            "raftstore.apply_batch_system.pool_size",
+        );
+        name = name.replace(
+            "raftstore.store_pool_size",
+            "raftstore.store_batch_system.pool_size",
+        );
+        name = name.replace(
+            "raftstore.apply_pool_size",
+            "raftstore.apply_batch_system.pool_size",
+        );
         let fields: Vec<_> = name
             .as_str()
             .split('.')
@@ -3092,7 +3108,23 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
         }
     }
     let mut dst = HashMap::new();
-    for (name, value) in change {
+    for (mut name, value) in change {
+        name = name.replace(
+            "raftstore.store-pool-size",
+            "raftstore.store_batch_system.pool_size",
+        );
+        name = name.replace(
+            "raftstore.apply-pool-size",
+            "raftstore.apply_batch_system.pool_size",
+        );
+        name = name.replace(
+            "raftstore.store_pool_size",
+            "raftstore.store_batch_system.pool_size",
+        );
+        name = name.replace(
+            "raftstore.apply_pool_size",
+            "raftstore.apply_batch_system.pool_size",
+        );
         let fields: Vec<_> = name
             .as_str()
             .split('.')
