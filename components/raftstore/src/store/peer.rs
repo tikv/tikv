@@ -493,9 +493,9 @@ where
     /// of deleted entries.
     pub compaction_declined_bytes: u64,
     /// Approximate size of the region.
-    pub approximate_size: u64,
+    pub approximate_size: Option<u64>,
     /// Approximate keys of the region.
-    pub approximate_keys: u64,
+    pub approximate_keys: Option<u64>,
     /// Whether this region has calculated region size by split-check thread. If we just splitted
     ///  the region or ingested one file which may be overlapped with the existed data, the
     /// `approximate_size` is not very accurate.
@@ -635,8 +635,8 @@ where
             down_peer_ids: vec![],
             size_diff_hint: 0,
             delete_keys_hint: 0,
-            approximate_size: 0,
-            approximate_keys: 0,
+            approximate_size: None,
+            approximate_keys: None,
             has_calculated_region_size: false,
             compaction_declined_bytes: 0,
             leader_unreachable: false,
@@ -850,23 +850,27 @@ where
             }
         }
 
-        if self.get_store().is_applying_snapshot() {
-            if !self.mut_store().cancel_applying_snap() {
-                info!(
-                    "stale peer is applying snapshot, will destroy next time";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                );
-                return None;
-            } else {
-                // The snapshot is canceled so the context should be None.
-                // Remember the snapshot should not be canceled and the context
-                // should be None only after applying snapshot in normal case.
-                // But here is safe becasue this peer is about to destroy and
-                // `pending_remove` will be true, namely no more ready will be fetched.
-                self.apply_snap_ctx = None;
-            }
+        if self.get_store().is_applying_snapshot() && !self.mut_store().cancel_applying_snap() {
+            info!(
+                "stale peer is applying snapshot, will destroy next time";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            return None;
         }
+
+        // There is no applying snapshot or snapshot is canceled so the `apply_snap_ctx`
+        // should be set to None.
+        // 1. If the snapshot is canceled, the `apply_snap_ctx` should be None.
+        //    Remember the snapshot should not be canceled and the context should
+        //    be None only after applying snapshot in normal case. But here is safe
+        //    becasue this peer is about to destroy and `pending_remove` will be true,
+        //    namely no more ready will be fetched.
+        // 2. If there is no applying snapshot, the `apply_snap_ctx` should also be None.
+        //    It's possible that the snapshot was canceled successfully before but
+        //    `cancel_applying_snap` returns false. If so, at this time, `apply_snap_ctx`
+        //    is Some and should be set to None.
+        self.apply_snap_ctx = None;
 
         self.pending_remove = true;
 
@@ -4118,7 +4122,7 @@ where
         self.send_extra_message(extra_msg, &mut ctx.trans, &to_peer);
     }
 
-    pub fn require_updating_max_ts(&self, pd_scheduler: &Scheduler<PdTask<EK>>) {
+    pub fn require_updating_max_ts(&self, pd_scheduler: &Scheduler<PdTask<EK, ER>>) {
         let epoch = self.region().get_region_epoch();
         let term_low_bits = self.term() & ((1 << 32) - 1); // 32 bits
         let version_lot_bits = epoch.get_version() & ((1 << 31) - 1); // 31 bits
