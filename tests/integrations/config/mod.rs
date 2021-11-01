@@ -5,7 +5,6 @@ use std::io::Read;
 use std::iter::FromIterator;
 use std::path::PathBuf;
 
-use kvproto::kvrpcpb::ApiVersion;
 use slog::Level;
 
 use batch_system::Config as BatchSystemConfig;
@@ -619,7 +618,7 @@ fn test_serde_custom_tikv_config() {
         enable_async_apply_prewrite: true,
         enable_ttl: true,
         ttl_check_poll_interval: ReadableDuration::hours(0),
-        api_version: ApiVersion::V1,
+        api_version: 1,
         flow_control: FlowControlConfig {
             enable: false,
             l0_files_threshold: 10,
@@ -688,6 +687,11 @@ fn test_serde_custom_tikv_config() {
         num_threads: 456,
         batch_size: 7,
         sst_max_size: ReadableSize::mb(789),
+        hadoop: HadoopConfig {
+            home: "/root/hadoop".to_string(),
+            linux_user: "hadoop".to_string(),
+        },
+        ..Default::default()
     };
     value.import = ImportConfig {
         num_threads: 123,

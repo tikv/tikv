@@ -476,7 +476,7 @@ mod tests {
 
         // cgroup-v2 $ cgset -r memory.max=1G tikv-test
         // cgroup-v1 $ cgset -r memory.limit_in_bytes=1G tikv-test
-        let mut child = if is_cgroup2_unified_mode() {
+        let mut child = if is_cgroup2_unified_mode().unwrap() {
             Command::new("cgset")
                 .args(&["-r", "memory.max=1G", &group])
                 .spawn()
@@ -492,7 +492,7 @@ mod tests {
         // cgroup-v2 $ cgset -r cpu.max='1000000 1000000' tikv-test
         // cgroup-v1 $ cgset -r cpu.cfs_quota_us=1000000 tikv-test
         // cgroup-v1 $ cgset -r cpu.cfs_period_us=1000000 tikv-test
-        if is_cgroup2_unified_mode() {
+        if is_cgroup2_unified_mode().unwrap() {
             let mut child = Command::new("cgset")
                 .args(&["-r", "cpu.max=1000000 1000000", &group])
                 .spawn()

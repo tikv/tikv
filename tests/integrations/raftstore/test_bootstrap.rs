@@ -62,6 +62,7 @@ fn test_node_bootstrap_with_prepared_data() {
         system,
         &cfg.server,
         Arc::new(VersionTrack::new(cfg.raft_store.clone())),
+        cfg.storage.api_version(),
         Arc::clone(&pd_client),
         Arc::default(),
         bg_worker,
@@ -138,4 +139,52 @@ fn test_node_bootstrap_with_prepared_data() {
 fn test_node_bootstrap_idempotent() {
     let mut cluster = new_node_cluster(0, 3);
     test_bootstrap_idempotent(&mut cluster);
+}
+
+#[test]
+fn test_node_switch_api_version() {
+    // Bootstrap
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.run();
+
+    // Write TiDB data.
+    cluster.put(b"m_tidb_data", b"").unwrap();
+    cluster.shutdown();
+
+    // Default API Version is V1, should be able to swith to V2.
+    cluster.cfg.storage.api_version = 2;
+    cluster.cfg.storage.enable_ttl = true;
+    cluster.start().unwrap();
+    cluster.shutdown();
+
+    // Should be able to switch back to V1.
+    cluster.cfg.storage.api_version = 1;
+    cluster.cfg.storage.enable_ttl = false;
+    cluster.start().unwrap();
+
+    // Write non-TiDB data.
+    cluster.put(b"k1", b"").unwrap();
+    cluster.shutdown();
+
+    // Should not be able to switch from V1 to V2 now.
+    cluster.cfg.storage.api_version = 2;
+    cluster.cfg.storage.enable_ttl = true;
+    assert!(cluster.start().is_err());
+    cluster.shutdown();
+
+    // Prepare a new storage and switch it to V2.
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.cfg.storage.api_version = 2;
+    cluster.cfg.storage.enable_ttl = true;
+    cluster.run();
+
+    // Write non-TiDB data.
+    cluster.put(b"k1", b"").unwrap();
+    cluster.shutdown();
+
+    // Should not be able to switch from V2 to V1 now.
+    cluster.cfg.storage.api_version = 1;
+    cluster.cfg.storage.enable_ttl = false;
+    assert!(cluster.start().is_err());
+    cluster.shutdown();
 }
