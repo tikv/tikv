@@ -21,8 +21,8 @@ fn test_unsafe_recover_update_region() {
     pd_client.disable_default_operator();
 
     let election_timeout = configure_for_lease_read(&mut cluster, None, None);
-    cluster.add_send_filter(IsolationFilterFactory::new(nodes[1]));
-    cluster.add_send_filter(IsolationFilterFactory::new(nodes[2]));
+    cluster.stop_node(nodes[1]);
+    cluster.stop_node(nodes[2]);
     // Wait for the leader lease to expire.
     thread::sleep(election_timeout * 2);
 
@@ -55,8 +55,8 @@ fn test_unsafe_recover_create_region() {
     pd_client.disable_default_operator();
 
     let election_timeout = configure_for_lease_read(&mut cluster, None, None);
-    cluster.add_send_filter(IsolationFilterFactory::new(nodes[1]));
-    cluster.add_send_filter(IsolationFilterFactory::new(nodes[2]));
+    cluster.stop_node(nodes[1]);
+    cluster.stop_node(nodes[2]);
     // Wait for the leader lease to expire.
     thread::sleep(election_timeout * 2);
 
@@ -73,7 +73,7 @@ fn test_unsafe_recover_create_region() {
     update.mut_region_epoch().set_conf_ver(1);
     // Removes the boostrap region, since it overlaps with any regions we create.
     cluster.must_update_region_for_unsafe_recover(nodes[0], &update);
-    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
     let mut create = metapb::Region::default();
     create.set_id(101);
     create.set_start_key(b"anykey".to_vec());
