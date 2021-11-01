@@ -40,6 +40,10 @@ fn assert_same_files(files1: Vec<kvproto::brpb::File>, files2: Vec<kvproto::brpb
         assert_same_file_name(f1.name, f2.name);
         f1.name = "".to_string();
         f2.name = "".to_string();
+        // the cipher_iv is different because iv is generated randomly
+        assert_ne!(f1.cipher_iv, f2.cipher_iv);
+        f1.cipher_iv = "".to_string().into_bytes();
+        f2.cipher_iv = "".to_string().into_bytes();
         assert_eq!(f1, f2);
     }
 }

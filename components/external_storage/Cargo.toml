@@ -10,10 +10,12 @@ protobuf-codec = [
   "protobuf/bytes",
   "tikv_util/protobuf-codec",
   "grpcio/protobuf-codec",
+  "encryption/protobuf-codec",
 ]
 prost-codec = [
   "tikv_util/prost-codec",
   "grpcio/prost-codec",
+  "encryption/prost-codec",
 ]
 cloud-storage-dylib = [
   "ffi-support",
@@ -50,6 +52,8 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tame-oauth = "0.4.2"
 tikv_alloc = { path = "../tikv_alloc" }
+engine_traits = { path = "../engine_traits" }
+encryption = { path = "../encryption" }
 tikv_util = { path = "../tikv_util", default-features = false }
 tokio = { version = "1.5", features = ["time"] }
 tokio-util = { version = "0.6", features = ["compat"], optional = true }
