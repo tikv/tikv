@@ -54,7 +54,6 @@ use crate::bytes_capacity;
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::store::async_io::write::{StoreWriters, WriteMsg};
-use crate::store::async_io::write_router::WriteRouter;
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
@@ -646,8 +645,6 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     cfg_tracker: Tracker<Config>,
 
     trace_event: TraceEvent,
-    // used for inspecting latency.
-    pub write_router: WriteRouter<EK, ER>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
@@ -832,14 +829,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 
         for mut inspector in std::mem::take(&mut self.poll_ctx.pending_latency_inspect) {
             inspector.record_store_process(self.timer.saturating_elapsed());
-            self.write_router.send_write_msg(
-                &mut self.poll_ctx,
-                None,
-                WriteMsg::LatencyInspect {
-                    send_time: TiInstant::now(),
-                    inspector,
-                },
-            );
+            let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
+            let _ = self.poll_ctx.write_senders[writer_id].send(WriteMsg::LatencyInspect {
+                send_time: TiInstant::now(),
+                inspector,
+            });
         }
 
         for peer in peers {
@@ -1109,7 +1103,6 @@ where
             poll_ctx: ctx,
             cfg_tracker: self.cfg.clone().tracker(tag),
             trace_event: TraceEvent::default(),
-            write_router: WriteRouter::new("store".to_string()),
         }
     }
 }
