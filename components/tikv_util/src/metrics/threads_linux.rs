@@ -9,7 +9,7 @@ use collections::HashMap;
 use lazy_static::lazy_static;
 use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
-use prometheus::{self, proto, CounterVec, IntCounterVec, IntGaugeVec, Opts};
+use prometheus::{self, proto, GaugeVec, IntGaugeVec, Opts};
 
 use crate::time::Instant;
 
@@ -23,11 +23,84 @@ pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
 }
 
 struct Metrics {
-    cpu_totals: CounterVec,
-    io_totals: CounterVec,
+    cpu_totals: GaugeVec,
+    io_totals: GaugeVec,
     threads_state: IntGaugeVec,
-    voluntary_ctxt_switches: IntCounterVec,
-    nonvoluntary_ctxt_switches: IntCounterVec,
+    voluntary_ctxt_switches: IntGaugeVec,
+    nonvoluntary_ctxt_switches: IntGaugeVec,
+}
+
+impl Metrics {
+    fn new<S: Into<String>>(namespace: S) -> Metrics {
+        let ns = namespace.into();
+        let cpu_totals = GaugeVec::new(
+            Opts::new(
+                "thread_cpu_seconds_total",
+                "Total user and system CPU time spent in \
+                 seconds by threads.",
+            )
+            .namespace(ns.clone()),
+            &["name", "tid"],
+        )
+        .unwrap();
+        let threads_state = IntGaugeVec::new(
+            Opts::new("threads_state", "Number of threads in each state.").namespace(ns.clone()),
+            &["state"],
+        )
+        .unwrap();
+        let io_totals = GaugeVec::new(
+            Opts::new(
+                "threads_io_bytes_total",
+                "Total number of bytes which threads cause to be fetched from or sent to the storage layer.",
+            ).namespace(ns.clone()),
+            &["name", "tid", "io"],
+        )
+        .unwrap();
+        let voluntary_ctxt_switches = IntGaugeVec::new(
+            Opts::new(
+                "thread_voluntary_context_switches",
+                "Number of thread voluntary context switches.",
+            )
+            .namespace(ns.clone()),
+            &["name", "tid"],
+        )
+        .unwrap();
+        let nonvoluntary_ctxt_switches = IntGaugeVec::new(
+            Opts::new(
+                "thread_nonvoluntary_context_switches",
+                "Number of thread nonvoluntary context switches.",
+            )
+            .namespace(ns),
+            &["name", "tid"],
+        )
+        .unwrap();
+
+        Metrics {
+            cpu_totals,
+            io_totals,
+            threads_state,
+            voluntary_ctxt_switches,
+            nonvoluntary_ctxt_switches,
+        }
+    }
+
+    fn descs(&self) -> Vec<Desc> {
+        let mut descs: Vec<Desc> = vec![];
+        descs.extend(self.cpu_totals.desc().into_iter().cloned());
+        descs.extend(self.threads_state.desc().into_iter().cloned());
+        descs.extend(self.io_totals.desc().into_iter().cloned());
+        descs.extend(self.voluntary_ctxt_switches.desc().into_iter().cloned());
+        descs.extend(self.nonvoluntary_ctxt_switches.desc().into_iter().cloned());
+        descs
+    }
+
+    fn reset(&mut self) {
+        self.cpu_totals.reset();
+        self.threads_state.reset();
+        self.io_totals.reset();
+        self.voluntary_ctxt_switches.reset();
+        self.nonvoluntary_ctxt_switches.reset();
+    }
 }
 
 /// A collector to collect threads metrics, including CPU usage
@@ -41,63 +114,11 @@ struct ThreadsCollector {
 
 impl ThreadsCollector {
     fn new<S: Into<String>>(pid: pid_t, namespace: S) -> ThreadsCollector {
-        let mut descs: Vec<Desc> = vec![];
-        let ns = namespace.into();
-        let cpu_totals = CounterVec::new(
-            Opts::new(
-                "thread_cpu_seconds_total",
-                "Total user and system CPU time spent in \
-                 seconds by threads.",
-            )
-            .namespace(ns.clone()),
-            &["name", "tid"],
-        )
-        .unwrap();
-        descs.extend(cpu_totals.desc().into_iter().cloned());
-        let threads_state = IntGaugeVec::new(
-            Opts::new("threads_state", "Number of threads in each state.").namespace(ns.clone()),
-            &["state"],
-        )
-        .unwrap();
-        descs.extend(threads_state.desc().into_iter().cloned());
-        let io_totals = CounterVec::new(
-            Opts::new(
-                "threads_io_bytes_total",
-                "Total number of bytes which threads cause to be fetched from or sent to the storage layer.",
-            ).namespace(ns.clone()),
-            &["name", "tid", "io"],
-        )
-        .unwrap();
-        descs.extend(io_totals.desc().into_iter().cloned());
-        let voluntary_ctxt_switches = IntCounterVec::new(
-            Opts::new(
-                "thread_voluntary_context_switches",
-                "Number of thread voluntary context switches.",
-            )
-            .namespace(ns.clone()),
-            &["name", "tid"],
-        )
-        .unwrap();
-        let nonvoluntary_ctxt_switches = IntCounterVec::new(
-            Opts::new(
-                "thread_nonvoluntary_context_switches",
-                "Number of thread nonvoluntary context switches.",
-            )
-            .namespace(ns),
-            &["name", "tid"],
-        )
-        .unwrap();
-
+        let metrics = Metrics::new(namespace);
         ThreadsCollector {
             pid,
-            descs,
-            metrics: Mutex::new(Metrics {
-                cpu_totals,
-                io_totals,
-                threads_state,
-                voluntary_ctxt_switches,
-                nonvoluntary_ctxt_switches,
-            }),
+            descs: metrics.descs(),
+            metrics: Mutex::new(metrics),
             tid_retriever: Mutex::new(TidRetriever::new(pid)),
         }
     }
@@ -110,12 +131,15 @@ impl Collector for ThreadsCollector {
 
     fn collect(&self) -> Vec<proto::MetricFamily> {
         // Synchronous collecting metrics.
-        let metrics = self.metrics.lock().unwrap();
+        let mut metrics = self.metrics.lock().unwrap();
         // Clean previous threads state.
         metrics.threads_state.reset();
 
         let mut tid_retriever = self.tid_retriever.lock().unwrap();
-        let tids = tid_retriever.get_tids();
+        let (tids, updated) = tid_retriever.get_tids();
+        if updated {
+            metrics.reset();
+        }
         for tid in tids {
             let tid = *tid;
             if let Ok(stat) = pid::stat_task(self.pid, tid) {
@@ -127,11 +151,7 @@ impl Collector for ThreadsCollector {
                     .cpu_totals
                     .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                     .unwrap();
-                let past = cpu_total.get();
-                let delta = total - past;
-                if delta > 0.0 {
-                    cpu_total.inc_by(delta);
-                }
+                cpu_total.set(total);
 
                 // Threads states.
                 let state = metrics
@@ -148,21 +168,13 @@ impl Collector for ThreadsCollector {
                         .io_totals
                         .get_metric_with_label_values(&[&name, &format!("{}", tid), "read"])
                         .unwrap();
-                    let read_past = read_total.get();
-                    let read_delta = read_bytes as f64 - read_past;
-                    if read_delta > 0.0 {
-                        read_total.inc_by(read_delta);
-                    }
+                    read_total.set(read_bytes as f64);
 
                     let write_total = metrics
                         .io_totals
                         .get_metric_with_label_values(&[&name, &format!("{}", tid), "write"])
                         .unwrap();
-                    let write_past = write_total.get();
-                    let write_delta = write_bytes as f64 - write_past;
-                    if write_delta > 0.0 {
-                        write_total.inc_by(write_delta);
-                    }
+                    write_total.set(write_bytes as f64);
                 }
 
                 if let Ok(status) = pid::status_task(self.pid, tid) {
@@ -172,11 +184,7 @@ impl Collector for ThreadsCollector {
                         .voluntary_ctxt_switches
                         .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                         .unwrap();
-                    let voluntary_past = voluntary_total.get();
-                    let voluntary_delta = voluntary_ctxt_switches - voluntary_past;
-                    if voluntary_delta > 0 {
-                        voluntary_total.inc_by(voluntary_delta);
-                    }
+                    voluntary_total.set(voluntary_ctxt_switches as i64);
 
                     // Thread nonvoluntary context switches.
                     let nonvoluntary_ctxt_switches = status.nonvoluntary_ctxt_switches;
@@ -184,11 +192,7 @@ impl Collector for ThreadsCollector {
                         .nonvoluntary_ctxt_switches
                         .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                         .unwrap();
-                    let nonvoluntary_past = nonvoluntary_total.get();
-                    let nonvoluntary_delta = nonvoluntary_ctxt_switches - nonvoluntary_past;
-                    if nonvoluntary_delta > 0 {
-                        nonvoluntary_total.inc_by(nonvoluntary_delta);
-                    }
+                    nonvoluntary_total.set(nonvoluntary_ctxt_switches as i64);
                 }
             }
         }
@@ -390,7 +394,7 @@ impl ThreadInfoStatistics {
         self.last_instant = current_instant;
         self.metrics_rate.clear();
 
-        let tids = self.tid_retriever.get_tids();
+        let (tids, _) = self.tid_retriever.get_tids();
 
         for tid in tids {
             let tid = *tid;
@@ -475,9 +479,10 @@ impl TidRetriever {
         }
     }
 
-    pub fn get_tids(&mut self) -> &[pid_t] {
+    pub fn get_tids(&mut self) -> (&[pid_t], bool) {
         // Update the tid list according to tid_buffer_update_interval.
         // If tid is not changed, update the tid list less frequently.
+        let mut updated = false;
         if self.tid_buffer_last_update.saturating_elapsed() >= self.tid_buffer_update_interval {
             let new_tid_buffer = get_thread_ids(self.pid).unwrap();
             if new_tid_buffer == self.tid_buffer {
@@ -488,11 +493,12 @@ impl TidRetriever {
             } else {
                 self.tid_buffer = new_tid_buffer;
                 self.tid_buffer_update_interval = TID_MIN_UPDATE_INTERVAL;
+                updated = true;
             }
             self.tid_buffer_last_update = Instant::now();
         }
 
-        &self.tid_buffer
+        (&self.tid_buffer, updated)
     }
 }
 
