@@ -1296,13 +1296,12 @@ where
             }
             let disk_full_peers = &self.fsm.peer.disk_full_peers;
 
-            // update refill every 10s when disk full happen.
             disk_full_peers.is_empty()
                 || disk_full_peers
                     .get(peer_id)
                     .map_or(true, |x| x != msg.disk_usage)
         };
-        if refill_disk_usages {
+        if refill_disk_usages || self.fsm.peer.has_region_merge_proposal {
             let prev = self.fsm.peer.disk_full_peers.get(peer_id);
             if Some(msg.disk_usage) != prev {
                 info!(
@@ -2870,11 +2869,6 @@ where
                     );
                 }
             }
-        } else {
-            if self.fsm.peer.is_leader() {
-                self.fsm.peer.has_region_merge_proposal = false;
-                self.fsm.peer.refill_disk_full_peers(self.ctx);
-            }
         }
     }
 
@@ -3080,9 +3074,6 @@ where
                 "commit_index" => commit,
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
-
-            self.fsm.peer.has_region_merge_proposal = false;
-            self.fsm.peer.refill_disk_full_peers(self.ctx);
         }
     }
 

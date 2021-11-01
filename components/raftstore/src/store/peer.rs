@@ -1420,7 +1420,7 @@ where
             }
         }
         self.down_peer_ids = down_peer_ids;
-        if self.down_peer_ids.len() != 0 {
+        if !self.down_peer_ids.is_empty() {
             self.refill_disk_full_peers(ctx);
         }
         down_peers
@@ -3906,8 +3906,11 @@ where
                 break;
             }
         }
+
         self.dangerous_majority_set = has_dangurous_set;
 
+        // For the Peer with AlreadFull in potential quorum set, we still need to send logs to it.
+        // To support incoming configure change.
         if quorum_ok {
             for peer in potential_quorum {
                 if let Some(x) = self.disk_full_peers.peers.get_mut(&peer) {
