@@ -830,10 +830,14 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         for mut inspector in std::mem::take(&mut self.poll_ctx.pending_latency_inspect) {
             inspector.record_store_process(self.timer.saturating_elapsed());
             let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
-            let _ = self.poll_ctx.write_senders[writer_id].send(WriteMsg::LatencyInspect {
-                send_time: TiInstant::now(),
-                inspector,
-            });
+            if let Err(err) =
+                self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
+                    send_time: TiInstant::now(),
+                    inspector,
+                })
+            {
+                warn!("send latency inspecting to write workers failed"; "err" => ?err);
+            }
         }
 
         for peer in peers {
