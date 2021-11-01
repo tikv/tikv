@@ -64,7 +64,7 @@ fn test_pd_client_deadlock() {
         request!(client => block_on(region_heartbeat(0, Region::default(), Peer::default(), RegionStat::default(), None))),
         request!(client => block_on(ask_split(Region::default()))),
         request!(client => block_on(ask_batch_split(Region::default(), 1))),
-        request!(client => block_on(store_heartbeat(Default::default()))),
+        request!(client => block_on(store_heartbeat(Default::default(), None))),
         request!(client => block_on(report_batch_split(vec![]))),
         request!(client => scatter_region(RegionInfo::new(Region::default(), None))),
         request!(client => block_on(get_gc_safe_point())),
