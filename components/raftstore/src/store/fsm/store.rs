@@ -848,9 +848,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             .process_ready
             .observe(duration_to_sec(dur));
 
-        if now.saturating_duration_since(self.last_flush_time)
-            >= self.poll_ctx.cfg.store_events_flush_interval.0
-        {
+        if now.saturating_duration_since(self.last_flush_time) >= Duration::from_millis(1) {
             self.last_flush_time = now;
             self.need_flush_events = false;
             self.flush_events();

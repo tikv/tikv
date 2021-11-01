@@ -211,7 +211,6 @@ pub struct Config {
     pub io_reschedule_concurrent_max_count: usize,
     pub io_reschedule_hotpot_duration: ReadableDuration,
 
-    pub store_events_flush_interval: ReadableDuration,
     pub raft_msg_flush_interval_us: u64,
 
     // Deprecated! These configuration has been moved to Coprocessor.
@@ -306,7 +305,6 @@ impl Default for Config {
             waterfall_metrics: false,
             io_reschedule_concurrent_max_count: 4,
             io_reschedule_hotpot_duration: ReadableDuration::secs(5),
-            store_events_flush_interval: ReadableDuration::millis(1),
             raft_msg_flush_interval_us: 250,
 
             // They are preserved for compatibility check.
@@ -709,9 +707,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["io_reschedule_hotpot_duration"])
             .set(self.io_reschedule_hotpot_duration.as_secs() as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["store_events_flush_interval"])
-            .set(self.store_events_flush_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_msg_flush_interval_us"])
             .set(self.raft_msg_flush_interval_us as f64);

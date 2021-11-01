@@ -200,7 +200,6 @@ waterfall-metrics = true
 io-reschedule-concurrent-max-count = 1234
 io-reschedule-hotpot-duration = "4321s"
 inspect-interval = "444ms"
-store-events-flush-interval = "1234ms"
 raft-msg-flush-interval-us = 2333
 
 [coprocessor]
