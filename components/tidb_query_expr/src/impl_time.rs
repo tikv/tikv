@@ -811,6 +811,44 @@ pub fn duration_duration_time_diff(
     Ok(Some(res))
 }
 
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn string_duration_time_diff(
+    ctx: &mut EvalContext,
+    arg1: BytesRef,
+    arg2: &Duration,
+) -> Result<Option<Duration>> {
+    let arg1 = std::str::from_utf8(arg1).map_err(Error::Encoding)?;
+    let arg1 = match Duration::parse(ctx, arg1, MAX_FSP) {
+        Ok(arg) => arg,
+        Err(_) => return Ok(None),
+    };
+
+    duration_duration_time_diff(ctx, &arg1, arg2)
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn string_string_time_diff(
+    ctx: &mut EvalContext,
+    arg1: BytesRef,
+    arg2: BytesRef,
+) -> Result<Option<Duration>> {
+    let arg1 = std::str::from_utf8(arg1).map_err(Error::Encoding)?;
+    let arg1 = match Duration::parse(ctx, arg1, MAX_FSP) {
+        Ok(arg) => arg,
+        Err(_) => return Ok(None),
+    };
+
+    let arg2 = std::str::from_utf8(arg2).map_err(Error::Encoding)?;
+    let arg2 = match Duration::parse(ctx, arg2, MAX_FSP) {
+        Ok(arg) => arg,
+        Err(_) => return Ok(None),
+    };
+
+    duration_duration_time_diff(ctx, &arg1, &arg2)
+}
+
 /// Cast Duration into string representation and drop subsec if possible.
 fn duration_to_string(duration: Duration) -> String {
     match duration.subsec_micros() {
@@ -2360,6 +2398,126 @@ mod tests {
                 .push_param(duration1)
                 .push_param(duration2)
                 .evaluate::<Duration>(ScalarFuncSig::DurationDurationTimeDiff)
+                .unwrap();
+            assert_eq!(output, expected, "got {}", output.unwrap().to_string());
+        }
+    }
+
+    #[test]
+    fn test_string_duration_time_diff() {
+        let cases = vec![
+            (Some("00:02:02"), Some("00:01:01"), Some("00:01:01")),
+            (Some("12:00:00"), Some("00:00:01"), Some("11:59:59")),
+            (Some("24:00:00"), Some("00:00:01"), Some("23:59:59")),
+            (Some("24:00:01"), Some("00:00:02"), Some("23:59:59")),
+            (None, None, None),
+            // corner case
+            (
+                Some("00:59:59.999999"),
+                Some("01:00:00.000000"),
+                Some("-00:00:00.000001"),
+            ),
+            (
+                Some("00:59:59.999999"),
+                Some("-00:00:00.000001"),
+                Some("01:00:00.000000"),
+            ),
+            (
+                Some("-00:00:00.000001"),
+                Some("00:00:00.000001"),
+                Some("-00:00:00.000002"),
+            ),
+            (
+                Some("-00:00:00.000001"),
+                Some("-00:00:00.000001"),
+                Some("00:00:00.000000"),
+            ),
+            // overflow or underflow case
+            (
+                Some("-00:00:01"),
+                Some("838:59:59.000000"),
+                Some("-838:59:59.000000"),
+            ),
+            (
+                Some("838:59:59.000000"),
+                Some("-00:00:01"),
+                Some("838:59:59.000000"),
+            ),
+            (
+                Some("838:59:59.000000"),
+                Some("-838:59:59.000000"),
+                Some("838:59:59.000000"),
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (string, duration, exp) in cases {
+            let expected = exp.map(|exp| Duration::parse(&mut ctx, exp, MAX_FSP).unwrap());
+            let string = string.map(|str| str.as_bytes().to_vec());
+            let duration = duration.map(|arg1| Duration::parse(&mut ctx, arg1, MAX_FSP).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(string)
+                .push_param(duration)
+                .evaluate::<Duration>(ScalarFuncSig::StringDurationTimeDiff)
+                .unwrap();
+            assert_eq!(output, expected, "got {}", output.unwrap().to_string());
+        }
+    }
+
+    #[test]
+    fn test_string_string_time_diff() {
+        let cases = vec![
+            (Some("00:02:02"), Some("00:01:01"), Some("00:01:01")),
+            (Some("12:00:00"), Some("00:00:01"), Some("11:59:59")),
+            (Some("24:00:00"), Some("00:00:01"), Some("23:59:59")),
+            (Some("24:00:01"), Some("00:00:02"), Some("23:59:59")),
+            (None, None, None),
+            // corner case
+            (
+                Some("00:59:59.999999"),
+                Some("01:00:00.000000"),
+                Some("-00:00:00.000001"),
+            ),
+            (
+                Some("00:59:59.999999"),
+                Some("-00:00:00.000001"),
+                Some("01:00:00.000000"),
+            ),
+            (
+                Some("-00:00:00.000001"),
+                Some("00:00:00.000001"),
+                Some("-00:00:00.000002"),
+            ),
+            (
+                Some("-00:00:00.000001"),
+                Some("-00:00:00.000001"),
+                Some("00:00:00.000000"),
+            ),
+            // overflow or underflow case
+            (
+                Some("-00:00:01"),
+                Some("838:59:59.000000"),
+                Some("-838:59:59.000000"),
+            ),
+            (
+                Some("838:59:59.000000"),
+                Some("-00:00:01"),
+                Some("838:59:59.000000"),
+            ),
+            (
+                Some("838:59:59.000000"),
+                Some("-838:59:59.000000"),
+                Some("838:59:59.000000"),
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (string1, string2, exp) in cases {
+            let expected = exp.map(|exp| Duration::parse(&mut ctx, exp, MAX_FSP).unwrap());
+            let string1 = string1.map(|str| str.as_bytes().to_vec());
+            let string2 = string2.map(|str| str.as_bytes().to_vec());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(string1)
+                .push_param(string2)
+                .evaluate::<Duration>(ScalarFuncSig::StringStringTimeDiff)
                 .unwrap();
             assert_eq!(output, expected, "got {}", output.unwrap().to_string());
         }
