@@ -64,7 +64,7 @@ use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
     create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRes, ApplyRouter,
 };
-use crate::store::local_metrics::RaftMetrics;
+use crate::store::local_metrics::{RaftMetrics, RaftReadyMetrics};
 use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::peer_storage;
@@ -638,52 +638,24 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     tag: String,
     store_msg_buf: Vec<StoreMsg<EK>>,
     peer_msg_buf: Vec<PeerMsg<EK>>,
-    previous_metrics: RaftMetrics,
+    previous_metrics: RaftReadyMetrics,
     timer: TiInstant,
     poll_ctx: PollContext<EK, ER, T>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
-
     trace_event: TraceEvent,
+    last_flush_time: TiInstant,
+    need_flush_events: bool,
+    last_flush_msg_time: TiInstant,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
-    fn handle_raft_ready(&mut self, _peers: &mut [Box<PeerFsm<EK, ER>>]) {
-        // Only enable the fail point when the store id is equal to 3, which is
-        // the id of slow store in tests.
-        fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
+    fn flush_events(&mut self) {
+        self.flush_ticks();
+        self.poll_ctx.raft_metrics.flush();
+        self.poll_ctx.store_stat.flush();
 
-        if self.poll_ctx.trans.need_flush() {
-            self.poll_ctx.trans.flush();
-        }
-
-        let dur = self.timer.saturating_elapsed();
-        if !self.poll_ctx.store_stat.is_busy {
-            let election_timeout = Duration::from_millis(
-                self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
-                    * self.poll_ctx.cfg.raft_election_timeout_ticks as u64,
-            );
-            if dur >= election_timeout {
-                self.poll_ctx.store_stat.is_busy = true;
-            }
-        }
-
-        self.poll_ctx
-            .raft_metrics
-            .append_log
-            .observe(duration_to_sec(dur) as f64);
-
-        slow_log!(
-            dur,
-            "{} handle {} pending peers include {} ready, {} entries, {} messages and {} \
-             snapshots",
-            self.tag,
-            self.poll_ctx.pending_count,
-            self.poll_ctx.ready_count,
-            self.poll_ctx.raft_metrics.ready.append - self.previous_metrics.ready.append,
-            self.poll_ctx.raft_metrics.ready.message - self.previous_metrics.ready.message,
-            self.poll_ctx.raft_metrics.ready.snapshot - self.previous_metrics.ready.snapshot
-        );
+        MEMTRACE_PEERS.trace(mem::take(&mut self.trace_event));
     }
 
     fn flush_ticks(&mut self) {
@@ -712,7 +684,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     for RaftPoller<EK, ER, T>
 {
     fn begin(&mut self, _batch_size: usize) {
-        self.previous_metrics = self.poll_ctx.raft_metrics.clone();
+        self.previous_metrics = self.poll_ctx.raft_metrics.ready.clone();
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.ready_count = 0;
         self.poll_ctx.has_ready = false;
@@ -815,40 +787,84 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn end(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
-        self.flush_ticks();
-        if self.poll_ctx.has_ready {
-            self.handle_raft_ready(peers);
+        for peer in peers {
+            peer.update_memory_trace(&mut self.trace_event);
         }
+
+        let now = TiInstant::now();
+        if self.poll_ctx.trans.need_flush()
+            && now.saturating_duration_since(self.last_flush_msg_time)
+                >= Duration::from_micros(self.poll_ctx.cfg.raft_msg_flush_interval_us)
+        {
+            self.last_flush_msg_time = now;
+            self.poll_ctx.trans.flush();
+        }
+
+        let dur = now.saturating_duration_since(self.timer);
+        if self.poll_ctx.has_ready {
+            // Only enable the fail point when the store id is equal to 3, which is
+            // the id of slow store in tests.
+            fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
+
+            if !self.poll_ctx.store_stat.is_busy {
+                let election_timeout = Duration::from_millis(
+                    self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
+                        * self.poll_ctx.cfg.raft_election_timeout_ticks as u64,
+                );
+                if dur >= election_timeout {
+                    self.poll_ctx.store_stat.is_busy = true;
+                }
+            }
+
+            slow_log!(
+                dur,
+                "{} handle {} pending peers include {} ready, {} entries, {} messages and {} \
+                 snapshots",
+                self.tag,
+                self.poll_ctx.pending_count,
+                self.poll_ctx.ready_count,
+                self.poll_ctx.raft_metrics.ready.append - self.previous_metrics.append,
+                self.poll_ctx.raft_metrics.ready.message - self.previous_metrics.message,
+                self.poll_ctx.raft_metrics.ready.snapshot - self.previous_metrics.snapshot
+            );
+        }
+
         self.poll_ctx.current_time = None;
         self.poll_ctx
             .raft_metrics
             .process_ready
-            .observe(duration_to_sec(self.timer.saturating_elapsed()) as f64);
-        self.poll_ctx.raft_metrics.flush();
-        self.poll_ctx.store_stat.flush();
+            .observe(duration_to_sec(dur));
 
-        for mut inspector in std::mem::take(&mut self.poll_ctx.pending_latency_inspect) {
-            inspector.record_store_process(self.timer.saturating_elapsed());
+        if now.saturating_duration_since(self.last_flush_time) >= Duration::from_millis(1) {
+            self.last_flush_time = now;
+            self.need_flush_events = false;
+            self.flush_events();
+        } else {
+            self.need_flush_events = true;
+        }
+
+        if !self.poll_ctx.pending_latency_inspect.is_empty() {
+            for inspector in &mut self.poll_ctx.pending_latency_inspect {
+                inspector.record_store_process(dur);
+            }
             let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
             if let Err(err) =
                 self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
-                    send_time: TiInstant::now(),
-                    inspector,
+                    send_time: now,
+                    inspector: std::mem::take(&mut self.poll_ctx.pending_latency_inspect),
                 })
             {
                 warn!("send latency inspecting to write workers failed"; "err" => ?err);
             }
         }
-
-        for peer in peers {
-            peer.update_memory_trace(&mut self.trace_event);
-        }
-        MEMTRACE_PEERS.trace(mem::take(&mut self.trace_event));
     }
 
     fn pause(&mut self) {
         if self.poll_ctx.trans.need_flush() {
             self.poll_ctx.trans.flush();
+        }
+        if self.need_flush_events {
+            self.flush_events();
         }
     }
 }
@@ -1101,12 +1117,15 @@ where
             tag: tag.clone(),
             store_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             peer_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
-            previous_metrics: ctx.raft_metrics.clone(),
+            previous_metrics: ctx.raft_metrics.ready.clone(),
             timer: TiInstant::now(),
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
             cfg_tracker: self.cfg.clone().tracker(tag),
             trace_event: TraceEvent::default(),
+            last_flush_time: TiInstant::now(),
+            need_flush_events: false,
+            last_flush_msg_time: TiInstant::now(),
         }
     }
 }
