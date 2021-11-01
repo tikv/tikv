@@ -857,6 +857,7 @@ fn test_txn_store_write_conflict() {
 const TIDB_KEY_CASE: &[u8] = b"t_a";
 const TXN_KEY_CASE: &[u8] = &[TXN_KEY_PREFIX, 0, b'a'];
 const RAW_KEY_CASE: &[u8] = &[RAW_KEY_PREFIX, 0, b'a'];
+const RAW_KEY_CASE_Z: &[u8] = &[RAW_KEY_PREFIX, 0, b'z'];
 
 #[test]
 fn test_txn_store_txnkv_api_version() {
@@ -927,6 +928,10 @@ fn test_txn_store_rawkv_api_version() {
         let mut range = KeyRange::default();
         range.set_start_key(key.to_vec());
 
+        let mut range_raw_z = KeyRange::default();
+        range_raw_z.set_start_key(key.to_vec());
+        range_raw_z.set_end_key(RAW_KEY_CASE_Z.to_vec());
+
         if is_legal {
             store.raw_get_ok(cf.to_owned(), key.to_vec(), None);
             store.raw_put_ok(cf.to_owned(), key.to_vec(), b"value".to_vec());
@@ -967,6 +972,13 @@ fn test_txn_store_rawkv_api_version() {
                 b"new_value".to_vec(),
                 (Some(b"value".to_vec()), true),
             );
+
+            store.raw_batch_put_atomic_ok(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
+            store.raw_batch_delete_atomic_ok(cf.to_owned(), vec![key.to_vec()]);
+
+            if let ApiVersion::V2 = config_api_version {
+                store.raw_checksum_ok(vec![range_raw_z.clone()], (0, 0, 0));
+            }
         } else {
             store.raw_get_err(cf.to_owned(), key.to_vec());
             if enable_ttl {
@@ -986,7 +998,19 @@ fn test_txn_store_rawkv_api_version() {
             store.raw_scan_err(cf.to_owned(), key.to_vec(), 100);
             store.raw_batch_scan_err(cf.to_owned(), vec![range.clone()], 100);
 
-            store.raw_compare_and_swap_atomic_err(cf.to_owned(), key.to_vec(), None, b"value".to_vec());
+            store.raw_compare_and_swap_atomic_err(
+                cf.to_owned(),
+                key.to_vec(),
+                None,
+                b"value".to_vec(),
+            );
+
+            store.raw_batch_put_atomic_err(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
+            store.raw_batch_delete_atomic_err(cf.to_owned(), vec![key.to_vec()]);
+
+            if let ApiVersion::V2 = config_api_version {
+                store.raw_checksum_err(vec![range_raw_z.clone()]);
+            }
         }
     }
 }

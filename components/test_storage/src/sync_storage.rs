@@ -2,7 +2,9 @@
 
 use collections::HashMap;
 use futures::executor::block_on;
-use kvproto::kvrpcpb::{ApiVersion, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
+use kvproto::kvrpcpb::{
+    ApiVersion, ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest,
+};
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::router::RaftStoreBlackHole;
 use std::sync::{atomic::AtomicU64, Arc};
@@ -347,7 +349,6 @@ impl<E: Engine> SyncTestStorage<E> {
     ) -> Result<Vec<Option<Vec<u8>>>> {
         let mut ids = vec![];
         let requests: Vec<RawGetRequest> = keys
-            .to_owned()
             .into_iter()
             .map(|key| {
                 let mut req = RawGetRequest::default();
@@ -473,5 +474,12 @@ impl<E: Engine> SyncTestStorage<E> {
         keys: Vec<Vec<u8>>,
     ) -> Result<()> {
         wait_op!(|cb| self.store.raw_batch_delete_atomic(ctx, cf, keys, cb)).unwrap()
+    }
+
+    pub fn raw_checksum(&self, ctx: Context, ranges: Vec<KeyRange>) -> Result<(u64, u64, u64)> {
+        block_on(
+            self.store
+                .raw_checksum(ctx, ChecksumAlgorithm::Crc64Xor, ranges),
+        )
     }
 }

@@ -954,6 +954,43 @@ impl<E: Engine> AssertionStorage<E> {
             .unwrap_err();
     }
 
+    pub fn raw_batch_put_atomic_ok(&self, cf: String, pairs: Vec<KvPair>) {
+        let ttls = vec![0; pairs.len()];
+        self.store
+            .raw_batch_put_atomic(self.ctx.clone(), cf, pairs, ttls)
+            .unwrap();
+    }
+
+    pub fn raw_batch_put_atomic_err(&self, cf: String, pairs: Vec<KvPair>) {
+        let ttls = vec![0; pairs.len()];
+        self.store
+            .raw_batch_put_atomic(self.ctx.clone(), cf, pairs, ttls)
+            .unwrap_err();
+    }
+
+    pub fn raw_batch_delete_atomic_ok(&self, cf: String, keys: Vec<Vec<u8>>) {
+        self.store
+            .raw_batch_delete_atomic(self.ctx.clone(), cf, keys)
+            .unwrap();
+    }
+
+    pub fn raw_batch_delete_atomic_err(&self, cf: String, keys: Vec<Vec<u8>>) {
+        self.store
+            .raw_batch_delete_atomic(self.ctx.clone(), cf, keys)
+            .unwrap_err();
+    }
+
+    pub fn raw_checksum_ok(&self, ranges: Vec<KeyRange>, expect: (u64, u64, u64)) {
+        let result = self.store.raw_checksum(self.ctx.clone(), ranges).unwrap();
+        assert_eq!(result, expect);
+    }
+
+    pub fn raw_checksum_err(&self, ranges: Vec<KeyRange>) {
+        self.store
+            .raw_checksum(self.ctx.clone(), ranges)
+            .unwrap_err();
+    }
+
     pub fn test_txn_store_gc(&self, key: &str) {
         let key_bytes = key.as_bytes();
         self.put_ok(key_bytes, b"v1", 5, 10);
