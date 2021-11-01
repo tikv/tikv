@@ -221,6 +221,7 @@ fn test_serde_custom_tikv_config() {
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
+        raft_msg_flush_interval_us: 2333,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

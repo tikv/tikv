@@ -54,7 +54,6 @@ use crate::bytes_capacity;
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::store::async_io::write::{StoreWriters, WriteMsg};
-use crate::store::async_io::write_router::WriteRouter;
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
@@ -65,7 +64,7 @@ use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
     create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRes, ApplyRouter,
 };
-use crate::store::local_metrics::RaftMetrics;
+use crate::store::local_metrics::{RaftMetrics, RaftReadyMetrics};
 use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::peer_storage;
@@ -171,7 +170,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    pub router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK, ER>>,
+    pub router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>,
 }
 
 impl<EK, ER> Clone for RaftRouter<EK, ER>
@@ -191,9 +190,9 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    type Target = BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK, ER>>;
+    type Target = BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>;
 
-    fn deref(&self) -> &BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK, ER>> {
+    fn deref(&self) -> &BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>> {
         &self.router
     }
 }
@@ -404,6 +403,7 @@ where
     pub store_disk_usages: HashMap<u64, DiskUsage>,
     pub write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
     pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
+    pub pending_latency_inspect: Vec<util::LatencyInspector>,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -505,23 +505,19 @@ struct Store {
     last_unreachable_report: HashMap<u64, Instant>,
 }
 
-pub struct StoreFsm<EK, ER>
+pub struct StoreFsm<EK>
 where
     EK: KvEngine,
-    ER: RaftEngine,
 {
     store: Store,
-    // used for inspecting latency.
-    write_router: WriteRouter<EK, ER>,
     receiver: Receiver<StoreMsg<EK>>,
 }
 
-impl<EK, ER> StoreFsm<EK, ER>
+impl<EK> StoreFsm<EK>
 where
     EK: KvEngine,
-    ER: RaftEngine,
 {
-    pub fn new(cfg: &Config) -> (LooseBoundedSender<StoreMsg<EK>>, Box<StoreFsm<EK, ER>>) {
+    pub fn new(cfg: &Config) -> (LooseBoundedSender<StoreMsg<EK>>, Box<StoreFsm<EK>>) {
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         let fsm = Box::new(StoreFsm {
             store: Store {
@@ -532,17 +528,15 @@ where
                 consistency_check_time: HashMap::default(),
                 last_unreachable_report: HashMap::default(),
             },
-            write_router: WriteRouter::new("store".to_string()),
             receiver: rx,
         });
         (tx, fsm)
     }
 }
 
-impl<EK, ER> Fsm for StoreFsm<EK, ER>
+impl<EK> Fsm for StoreFsm<EK>
 where
     EK: KvEngine,
-    ER: RaftEngine,
 {
     type Message = StoreMsg<EK>;
 
@@ -553,7 +547,7 @@ where
 }
 
 struct StoreFsmDelegate<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'static> {
-    fsm: &'a mut StoreFsm<EK, ER>,
+    fsm: &'a mut StoreFsm<EK>,
     ctx: &'a mut PollContext<EK, ER, T>,
 }
 
@@ -614,14 +608,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     mut inspector,
                 } => {
                     inspector.record_store_wait(send_time.saturating_elapsed());
-                    self.fsm.write_router.send_write_msg(
-                        self.ctx,
-                        None,
-                        WriteMsg::LatencyInspect {
-                            send_time: TiInstant::now(),
-                            inspector,
-                        },
-                    );
+                    self.ctx.pending_latency_inspect.push(inspector);
                 }
                 StoreMsg::CreatePeer(region) => self.on_create_peer(region),
             }
@@ -651,52 +638,24 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     tag: String,
     store_msg_buf: Vec<StoreMsg<EK>>,
     peer_msg_buf: Vec<PeerMsg<EK>>,
-    previous_metrics: RaftMetrics,
+    previous_metrics: RaftReadyMetrics,
     timer: TiInstant,
     poll_ctx: PollContext<EK, ER, T>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
-
     trace_event: TraceEvent,
+    last_flush_time: TiInstant,
+    need_flush_events: bool,
+    last_flush_msg_time: TiInstant,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
-    fn handle_raft_ready(&mut self, _peers: &mut [Box<PeerFsm<EK, ER>>]) {
-        // Only enable the fail point when the store id is equal to 3, which is
-        // the id of slow store in tests.
-        fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
+    fn flush_events(&mut self) {
+        self.flush_ticks();
+        self.poll_ctx.raft_metrics.flush();
+        self.poll_ctx.store_stat.flush();
 
-        if self.poll_ctx.trans.need_flush() {
-            self.poll_ctx.trans.flush();
-        }
-
-        let dur = self.timer.saturating_elapsed();
-        if !self.poll_ctx.store_stat.is_busy {
-            let election_timeout = Duration::from_millis(
-                self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
-                    * self.poll_ctx.cfg.raft_election_timeout_ticks as u64,
-            );
-            if dur >= election_timeout {
-                self.poll_ctx.store_stat.is_busy = true;
-            }
-        }
-
-        self.poll_ctx
-            .raft_metrics
-            .append_log
-            .observe(duration_to_sec(dur) as f64);
-
-        slow_log!(
-            dur,
-            "{} handle {} pending peers include {} ready, {} entries, {} messages and {} \
-             snapshots",
-            self.tag,
-            self.poll_ctx.pending_count,
-            self.poll_ctx.ready_count,
-            self.poll_ctx.raft_metrics.ready.append - self.previous_metrics.ready.append,
-            self.poll_ctx.raft_metrics.ready.message - self.previous_metrics.ready.message,
-            self.poll_ctx.raft_metrics.ready.snapshot - self.previous_metrics.ready.snapshot
-        );
+        MEMTRACE_PEERS.trace(mem::take(&mut self.trace_event));
     }
 
     fn flush_ticks(&mut self) {
@@ -721,11 +680,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, StoreFsm<EK, ER>>
+impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, StoreFsm<EK>>
     for RaftPoller<EK, ER, T>
 {
     fn begin(&mut self, _batch_size: usize) {
-        self.previous_metrics = self.poll_ctx.raft_metrics.clone();
+        self.previous_metrics = self.poll_ctx.raft_metrics.ready.clone();
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.ready_count = 0;
         self.poll_ctx.has_ready = false;
@@ -755,7 +714,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         }
     }
 
-    fn handle_control(&mut self, store: &mut StoreFsm<EK, ER>) -> Option<usize> {
+    fn handle_control(&mut self, store: &mut StoreFsm<EK>) -> Option<usize> {
         let mut expected_msg_count = None;
         while self.store_msg_buf.len() < self.messages_per_tick {
             match store.receiver.try_recv() {
@@ -828,27 +787,84 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn end(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
-        self.flush_ticks();
-        if self.poll_ctx.has_ready {
-            self.handle_raft_ready(peers);
+        for peer in peers {
+            peer.update_memory_trace(&mut self.trace_event);
         }
+
+        let now = TiInstant::now();
+        if self.poll_ctx.trans.need_flush()
+            && now.saturating_duration_since(self.last_flush_msg_time)
+                >= Duration::from_micros(self.poll_ctx.cfg.raft_msg_flush_interval_us)
+        {
+            self.last_flush_msg_time = now;
+            self.poll_ctx.trans.flush();
+        }
+
+        let dur = now.saturating_duration_since(self.timer);
+        if self.poll_ctx.has_ready {
+            // Only enable the fail point when the store id is equal to 3, which is
+            // the id of slow store in tests.
+            fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
+
+            if !self.poll_ctx.store_stat.is_busy {
+                let election_timeout = Duration::from_millis(
+                    self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
+                        * self.poll_ctx.cfg.raft_election_timeout_ticks as u64,
+                );
+                if dur >= election_timeout {
+                    self.poll_ctx.store_stat.is_busy = true;
+                }
+            }
+
+            slow_log!(
+                dur,
+                "{} handle {} pending peers include {} ready, {} entries, {} messages and {} \
+                 snapshots",
+                self.tag,
+                self.poll_ctx.pending_count,
+                self.poll_ctx.ready_count,
+                self.poll_ctx.raft_metrics.ready.append - self.previous_metrics.append,
+                self.poll_ctx.raft_metrics.ready.message - self.previous_metrics.message,
+                self.poll_ctx.raft_metrics.ready.snapshot - self.previous_metrics.snapshot
+            );
+        }
+
         self.poll_ctx.current_time = None;
         self.poll_ctx
             .raft_metrics
             .process_ready
-            .observe(duration_to_sec(self.timer.saturating_elapsed()) as f64);
-        self.poll_ctx.raft_metrics.flush();
-        self.poll_ctx.store_stat.flush();
+            .observe(duration_to_sec(dur));
 
-        for peer in peers {
-            peer.update_memory_trace(&mut self.trace_event);
+        if now.saturating_duration_since(self.last_flush_time) >= Duration::from_millis(1) {
+            self.last_flush_time = now;
+            self.need_flush_events = false;
+            self.flush_events();
+        } else {
+            self.need_flush_events = true;
         }
-        MEMTRACE_PEERS.trace(mem::take(&mut self.trace_event));
+
+        if !self.poll_ctx.pending_latency_inspect.is_empty() {
+            for inspector in &mut self.poll_ctx.pending_latency_inspect {
+                inspector.record_store_process(dur);
+            }
+            let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
+            if let Err(err) =
+                self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
+                    send_time: now,
+                    inspector: std::mem::take(&mut self.poll_ctx.pending_latency_inspect),
+                })
+            {
+                warn!("send latency inspecting to write workers failed"; "err" => ?err);
+            }
+        }
     }
 
     fn pause(&mut self) {
         if self.poll_ctx.trans.need_flush() {
             self.poll_ctx.trans.flush();
+        }
+        if self.need_flush_events {
+            self.flush_events();
         }
     }
 }
@@ -1046,7 +1062,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
     }
 }
 
-impl<EK, ER, T> HandlerBuilder<PeerFsm<EK, ER>, StoreFsm<EK, ER>> for RaftPollerBuilder<EK, ER, T>
+impl<EK, ER, T> HandlerBuilder<PeerFsm<EK, ER>, StoreFsm<EK>> for RaftPollerBuilder<EK, ER, T>
 where
     EK: KvEngine + 'static,
     ER: RaftEngine + 'static,
@@ -1093,6 +1109,7 @@ where
             store_disk_usages: Default::default(),
             write_senders: self.write_senders.clone(),
             io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
+            pending_latency_inspect: vec![],
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1100,12 +1117,15 @@ where
             tag: tag.clone(),
             store_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             peer_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
-            previous_metrics: ctx.raft_metrics.clone(),
+            previous_metrics: ctx.raft_metrics.ready.clone(),
             timer: TiInstant::now(),
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
             cfg_tracker: self.cfg.clone().tracker(tag),
             trace_event: TraceEvent::default(),
+            last_flush_time: TiInstant::now(),
+            need_flush_events: false,
+            last_flush_msg_time: TiInstant::now(),
         }
     }
 }
@@ -1124,7 +1144,7 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
 }
 
 pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
-    system: BatchSystem<PeerFsm<EK, ER>, StoreFsm<EK, ER>>,
+    system: BatchSystem<PeerFsm<EK, ER>, StoreFsm<EK>>,
     apply_router: ApplyRouter<EK>,
     apply_system: ApplyBatchSystem<EK>,
     router: RaftRouter<EK, ER>,
