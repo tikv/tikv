@@ -3522,7 +3522,15 @@ where
                     for (k, v) in &mut self.disk_full_peers.peers {
                         if !matches!(v.0, DiskUsage::AlreadyFull) {
                             v.1 = true;
-                            self.raft_group.raft.adjust_max_inflight_msgs(*k, 1);
+                            self.raft_group
+                                .raft
+                                .adjust_max_inflight_msgs(*k, poll_ctx.cfg.raft_max_inflight_msgs);
+                            debug!(
+                                "{:?} adjust max inflight msgs to {} on peer: {:?}",
+                                req.get_admin_request().get_cmd_type(),
+                                poll_ctx.cfg.raft_max_inflight_msgs,
+                                k
+                            );
                         }
                     }
                 }
@@ -3878,7 +3886,11 @@ where
             if let Some(usage) = usage {
                 if self.has_region_merge_proposal && !matches!(*usage, DiskUsage::AlreadyFull) {
                     self.disk_full_peers.peers.insert(peer, (*usage, true));
-                    raft.adjust_max_inflight_msgs(peer, 1);
+                    raft.adjust_max_inflight_msgs(peer, ctx.cfg.raft_max_inflight_msgs);
+                    debug!(
+                        "refill disk full peer max inflight to {} on a merge region: peer {}",
+                        ctx.cfg.raft_max_inflight_msgs, peer
+                    );
                 } else {
                     self.disk_full_peers.peers.insert(peer, (*usage, false));
                     raft.adjust_max_inflight_msgs(peer, 0);
@@ -3916,7 +3928,9 @@ where
                 if let Some(x) = self.disk_full_peers.peers.get_mut(&peer) {
                     // It can help to establish a quorum.
                     x.1 = true;
-                    raft.adjust_max_inflight_msgs(peer, 1);
+                    if !self.has_region_merge_proposal {
+                        raft.adjust_max_inflight_msgs(peer, 1);
+                    }
                 }
             }
         }
