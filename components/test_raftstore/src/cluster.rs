@@ -1514,15 +1514,12 @@ impl<T: Simulator> Cluster<T> {
                     )
                     .unwrap();
             }
-            match block_on(self.pd_client.get_region_by_id(region.get_id())) {
-                Ok(Some(current)) => {
-                    if current.get_start_key() == region.get_start_key()
-                        && current.get_end_key() == region.get_end_key()
-                    {
-                        return;
-                    }
+            if let Ok(Some(current)) = block_on(self.pd_client.get_region_by_id(region.get_id())) {
+                if current.get_start_key() == region.get_start_key()
+                    && current.get_end_key() == region.get_end_key()
+                {
+                    return;
                 }
-                _ => {}
             }
             if try_cnt > 500 {
                 panic!("region {:?} is not updated", region);
@@ -1544,9 +1541,8 @@ impl<T: Simulator> Cluster<T> {
                 // In case the message is ignored, re-send it every 50 tries.
                 StoreRouter::send(&router, StoreMsg::CreatePeer(region.clone())).unwrap();
             }
-            match block_on(self.pd_client.get_region_by_id(region.get_id())) {
-                Ok(Some(_)) => return,
-                _ => {}
+            if let Ok(Some(_)) = block_on(self.pd_client.get_region_by_id(region.get_id())) {
+                return;
             }
             if try_cnt > 250 {
                 panic!("region {:?} is not created", region);

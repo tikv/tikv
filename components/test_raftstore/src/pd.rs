@@ -503,7 +503,7 @@ impl PdCluster {
             region.get_region_epoch().clone(),
         );
         assert!(end_key > start_key);
-        let created_by_unsafe_recover = (start_key.len() != 0 || end_key.len() != 0)
+        let created_by_unsafe_recover = (!start_key.is_empty() || !end_key.is_empty())
             && incoming_epoch.get_version() == 1
             && incoming_epoch.get_conf_ver() == 1;
         let overlaps = self.get_overlap(start_key, end_key);
