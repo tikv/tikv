@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::f64::INFINITY;
 use std::fmt;
 use std::sync::atomic::*;
-use std::sync::*;
+use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use concurrency_manager::ConcurrencyManager;
@@ -37,6 +37,9 @@ use tikv_util::worker::Runnable;
 use tikv_util::{box_err, debug, error, error_unknown, impl_display_as_debug, info, warn};
 use tokio::io::Result as TokioResult;
 use tokio::runtime::Runtime;
+use tokio::sync::{mpsc, Mutex};
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_stream::StreamExt;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::metrics::*;
@@ -539,12 +542,12 @@ impl<R: RegionInfoProvider> Progress<R> {
     /// Forward the progress by `ranges` BackupRanges
     ///
     /// The size of the returned BackupRanges should <= `ranges`
-    fn forward(&mut self, limit: usize) -> Vec<BackupRange> {
+    async fn forward(&mut self, limit: usize) -> Vec<BackupRange> {
         if self.finished {
             return Vec::new();
         }
         let store_id = self.store_id;
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::unbounded_channel();
         let start_key_ = self
             .next_start
             .clone()
@@ -596,7 +599,7 @@ impl<R: RegionInfoProvider> Progress<R> {
             error!(?e; "backup seek region failed");
         }
 
-        let branges: Vec<_> = rx.iter().collect();
+        let branges: Vec<_> = UnboundedReceiverStream::new(rx).collect().await;
         if let Some(b) = branges.last() {
             // The region's end key is empty means it is the last
             // region, we need to set the `finished` flag here in case
@@ -770,8 +773,8 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     // Release lock as soon as possible.
                     // It is critical to speed up backup, otherwise workers are
                     // blocked by each other.
-                    let mut progress = prs.lock().unwrap();
-                    let batch = progress.forward(batch_size);
+                    let mut progress = prs.lock().await;
+                    let batch = progress.forward(batch_size).await;
                     if batch.is_empty() {
                         return;
                     }
@@ -1035,6 +1038,7 @@ pub mod tests {
     use raftstore::coprocessor::SeekRegionCallback;
     use raftstore::store::util::new_peer;
     use rand::Rng;
+    use std::sync::Mutex;
     use tempfile::TempDir;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv::storage::{RocksEngine, TestEngineBuilder};
@@ -1215,7 +1219,7 @@ pub mod tests {
                 let mut ranges = Vec::with_capacity(expect.len());
                 while ranges.len() != expect.len() {
                     let n = (rand::random::<usize>() % 3) + 1;
-                    let mut r = prs.forward(n);
+                    let mut r = block_on(prs.forward(n));
                     // The returned backup ranges should <= n
                     assert!(r.len() <= n);
 
