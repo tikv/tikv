@@ -2213,7 +2213,12 @@ where
 
     fn on_transfer_leader_msg(&mut self, msg: &raft::eraftpb::Message) {
         if let Some(peer) = self.fsm.peer.execute_transfer_leader(&mut self.ctx, msg) {
-            self.propose_batch_raft_command(true);
+            if self.fsm.batch_req_builder.request.is_some()
+                && self.fsm.batch_req_builder.header_checked.unwrap_or(false)
+            {
+                self.propose_batch_raft_command(true);
+            }
+
             self.fsm.peer.transfer_leader(&peer);
         }
     }
@@ -3709,7 +3714,10 @@ where
         cb: Callback<EK::Snapshot>,
         diskfullopt: DiskFullOpt,
     ) {
-        if self.fsm.batch_req_builder.request.is_some() && msg.has_admin_request() {
+        if msg.has_admin_request()
+            && self.fsm.batch_req_builder.request.is_some()
+            && self.fsm.batch_req_builder.header_checked.unwrap_or(false)
+        {
             let cmd_type = msg.get_admin_request().get_cmd_type();
             let epoch_state = admin_cmd_epoch_lookup(cmd_type);
             if epoch_state.change_ver {
