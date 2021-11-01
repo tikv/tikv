@@ -7,14 +7,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use futures::executor::ThreadPool;
-use kvproto::brpb::StorageBackend;
+use kvproto::brpb::{CipherInfo, StorageBackend};
 use kvproto::import_sstpb::*;
 
-use encryption::DataKeyManager;
+use encryption::{encryption_method_to_db_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
-    name_to_cf, CfName, EncryptionKeyManager, Iterator, KvEngine, SSTMetaInfo, SeekKey,
-    SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
+    name_to_cf, CfName, EncryptionKeyManager, FileEncryptionInfo, Iterator, KvEngine, SSTMetaInfo,
+    SeekKey, SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
+    CF_WRITE,
 };
 use file_system::{get_io_rate_limiter, OpenOptions};
 use tikv_util::time::{Instant, Limiter};
@@ -143,6 +144,7 @@ impl SSTImporter {
         backend: &StorageBackend,
         name: &str,
         rewrite_rule: &RewriteRule,
+        crypter: Option<CipherInfo>,
         speed_limiter: Limiter,
         engine: E,
     ) -> Result<Option<Range>> {
@@ -153,7 +155,15 @@ impl SSTImporter {
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
         );
-        match self.do_download::<E>(meta, backend, name, rewrite_rule, speed_limiter, engine) {
+        match self.do_download::<E>(
+            meta,
+            backend,
+            name,
+            rewrite_rule,
+            crypter,
+            speed_limiter,
+            engine,
+        ) {
             Ok(r) => {
                 info!("download"; "meta" => ?meta, "name" => name, "range" => ?r);
                 Ok(r)
@@ -183,6 +193,7 @@ impl SSTImporter {
         backend: &StorageBackend,
         name: &str,
         rewrite_rule: &RewriteRule,
+        crypter: Option<CipherInfo>,
         speed_limiter: Limiter,
         engine: E,
     ) -> Result<Option<Range>> {
@@ -205,8 +216,19 @@ impl SSTImporter {
                     ext_storage as _
                 };
 
-            let result =
-                ext_storage.restore(name, path.temp.to_owned(), meta.length, &speed_limiter);
+            let file_crypter = crypter.map(|c| FileEncryptionInfo {
+                method: encryption_method_to_db_encryption_method(c.cipher_type),
+                key: c.cipher_key,
+                iv: meta.cipher_iv.to_owned(),
+            });
+
+            let result = ext_storage.restore(
+                name,
+                path.temp.to_owned(),
+                meta.length,
+                &speed_limiter,
+                file_crypter,
+            );
             IMPORTER_DOWNLOAD_BYTES.observe(meta.length as _);
             result.map_err(|e| Error::CannotReadExternalStorage {
                 url: url.to_string(),
@@ -911,6 +933,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &RewriteRule::default(),
+                None,
                 Limiter::new(INFINITY),
                 db,
             )
@@ -964,6 +987,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &RewriteRule::default(),
+                None,
                 Limiter::new(INFINITY),
                 db,
             )
@@ -1012,6 +1036,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t567", 0),
+                None,
                 Limiter::new(INFINITY),
                 db,
             )
@@ -1059,6 +1084,7 @@ mod tests {
                 &backend,
                 "sample_default.sst",
                 &new_rewrite_rule(b"", b"", 16),
+                None,
                 Limiter::new(INFINITY),
                 db,
             )
@@ -1102,6 +1128,7 @@ mod tests {
                 &backend,
                 "sample_write.sst",
                 &new_rewrite_rule(b"", b"", 16),
+                None,
                 Limiter::new(INFINITY),
                 db,
             )
@@ -1164,6 +1191,7 @@ mod tests {
                     &backend,
                     "sample.sst",
                     &new_rewrite_rule(b"t123", b"t9102", 0),
+                    None,
                     Limiter::new(INFINITY),
                     db,
                 )
@@ -1238,6 +1266,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &RewriteRule::default(),
+                None,
                 Limiter::new(INFINITY),
                 db,
             )
@@ -1282,6 +1311,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t5", 0),
+                None,
                 Limiter::new(INFINITY),
                 db,
             )
@@ -1326,6 +1356,7 @@ mod tests {
             &backend,
             "sample.sst",
             &RewriteRule::default(),
+            None,
             Limiter::new(INFINITY),
             db,
         );
@@ -1351,6 +1382,7 @@ mod tests {
             &backend,
             "sample.sst",
             &RewriteRule::default(),
+            None,
             Limiter::new(INFINITY),
             db,
         );
@@ -1374,6 +1406,7 @@ mod tests {
             &backend,
             "sample.sst",
             &new_rewrite_rule(b"xxx", b"yyy", 0),
+            None,
             Limiter::new(INFINITY),
             db,
         );
@@ -1405,6 +1438,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &RewriteRule::default(),
+                None,
                 Limiter::new(INFINITY),
                 db,
             )
@@ -1457,6 +1491,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &RewriteRule::default(),
+                None,
                 Limiter::new(INFINITY),
                 db,
             )
@@ -1505,6 +1540,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &RewriteRule::default(),
+                None,
                 Limiter::new(INFINITY),
                 db,
             )
@@ -1552,6 +1588,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t789", 0),
+                None,
                 Limiter::new(INFINITY),
                 db,
             )

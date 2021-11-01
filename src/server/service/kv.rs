@@ -1297,7 +1297,7 @@ fn future_get<E: Engine, L: LockManager>(
     let start = Instant::now();
     let v = storage.get(
         req.take_context(),
-        Key::from_raw(req.get_key()),
+        req.get_key().into(),
         req.get_version().into(),
     );
 
@@ -1373,9 +1373,12 @@ fn future_batch_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: BatchGetRequest,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
-    let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let start = Instant::now();
-    let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
+    let v = storage.batch_get(
+        req.take_context(),
+        req.get_keys().to_vec(),
+        req.get_version().into(),
+    );
 
     async move {
         let v = v.await;

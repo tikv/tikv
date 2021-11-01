@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 #[cfg(feature = "cloud-aws")]
 pub use aws::{Config as S3Config, S3Storage};
+use engine_traits::FileEncryptionInfo;
 #[cfg(feature = "cloud-gcp")]
 pub use gcp::{Config as GCSConfig, GCSStorage};
 
@@ -27,10 +28,10 @@ use encryption::DataKeyManager;
 use external_storage::dylib_client;
 #[cfg(feature = "cloud-storage-grpc")]
 use external_storage::grpc_client;
+use external_storage::{encrypt_wrap_reader, record_storage_create, BackendConfig, HdfsStorage};
 pub use external_storage::{
     read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage,
 };
-use external_storage::{record_storage_create, BackendConfig, HdfsStorage};
 use futures_io::AsyncRead;
 use kvproto::brpb::{Noop, StorageBackend};
 use tikv_util::stream::block_on_external_io;
@@ -299,11 +300,14 @@ impl ExternalStorage for EncryptedExternalStorage {
         restore_name: std::path::PathBuf,
         expected_length: u64,
         speed_limiter: &Limiter,
+        file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
-        let mut input = self.read(storage_name);
+        let reader = self.read(storage_name);
         let file_writer: &mut dyn Write =
             &mut self.key_manager.create_file_for_write(&restore_name)?;
         let min_read_speed: usize = 8192;
+        let mut input = encrypt_wrap_reader(file_crypter, reader)?;
+
         block_on_external_io(read_external_storage_into_file(
             &mut input,
             file_writer,

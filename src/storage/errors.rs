@@ -5,6 +5,7 @@ use std::error::Error as StdError;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 
+use kvproto::kvrpcpb::ApiVersion;
 use kvproto::{errorpb, kvrpcpb};
 use thiserror::Error;
 
@@ -64,6 +65,12 @@ pub enum ErrorInner {
 
     #[error("The length of ttls does not equal to the length of pairs")]
     TTLsLenNotEqualsToPairs,
+
+    #[error("Api version in request does not match with TiKV storage")]
+    ApiVersionNotMatched {
+        storage_api_version: ApiVersion,
+        req_api_version: ApiVersion,
+    },
 }
 
 impl From<DeadlineError> for ErrorInner {
@@ -111,6 +118,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::TTLsLenNotEqualsToPairs => {
                 error_code::storage::TTLS_LEN_NOT_EQUALS_TO_PAIRS
             }
+            ErrorInner::ApiVersionNotMatched { .. } => error_code::storage::API_VERSION_NOT_MATCHED,
         }
     }
 }
