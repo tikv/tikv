@@ -450,8 +450,11 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
             .pool
             .spawn(async move {
                 let mut resp = GetStoreInfoResponse::default();
-                match debugger.get_store_id() {
-                    Ok(store_id) => resp.set_store_id(store_id),
+                match debugger.get_store_info() {
+                    Ok(info) => {
+                        resp.set_store_id(info.store_id);
+                        resp.set_api_version(info.api_version)
+                    }
                     Err(_) => resp.set_store_id(0),
                 }
                 Ok(resp)

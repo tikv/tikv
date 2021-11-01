@@ -7,6 +7,7 @@ use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::{error::Error as StdError, result};
 
 use kvproto::debugpb::{self, Db as DBType};
+use kvproto::kvrpcpb::ApiVersion;
 use kvproto::metapb::{PeerRole, Region};
 use kvproto::raft_serverpb::*;
 use protobuf::Message;
@@ -118,6 +119,11 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 pub struct Debugger<ER: RaftEngine> {
     engines: Engines<RocksEngine, ER>,
     cfg_controller: ConfigController,
+}
+
+pub struct DebugStoreInfo {
+    pub store_id: u64,
+    pub api_version: ApiVersion,
 }
 
 impl<ER: RaftEngine> Debugger<ER> {
@@ -809,6 +815,19 @@ impl<ER: RaftEngine> Debugger<ER> {
             .map_err(|e| box_err!(e))
             .and_then(|ident| match ident {
                 Some(ident) => Ok(ident.get_store_id()),
+                None => Err(Error::NotFound("No store ident key".to_owned())),
+            })
+    }
+
+    pub fn get_store_info(&self) -> Result<DebugStoreInfo> {
+        let db = &self.engines.kv;
+        db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+            .map_err(|e| box_err!(e))
+            .and_then(|ident| match ident {
+                Some(ident) => Ok(DebugStoreInfo {
+                    store_id: ident.get_store_id(),
+                    api_version: ident.get_api_version(),
+                }),
                 None => Err(Error::NotFound("No store ident key".to_owned())),
             })
     }
@@ -1511,6 +1530,14 @@ mod tests {
                 db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
             }
         }
+
+        fn set_store_api_version(&self, api_version: ApiVersion) {
+            if let Ok(mut ident) = self.get_store_ident() {
+                ident.set_api_version(api_version);
+                let db = &self.engines.kv;
+                db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
+            }
+        }
     }
 
     #[test]
@@ -2207,10 +2234,16 @@ mod tests {
         let cluster_id: u64 = 4242;
         debugger.set_store_id(store_id);
         debugger.set_cluster_id(cluster_id);
+        debugger.set_store_api_version(ApiVersion::V2);
         assert_eq!(store_id, debugger.get_store_id().expect("get store id"));
         assert_eq!(
             cluster_id,
             debugger.get_cluster_id().expect("get cluster id")
         );
+
+        assert_eq!(
+            ApiVersion::V2,
+            debugger.get_store_info().unwrap().api_version
+        )
     }
 }
