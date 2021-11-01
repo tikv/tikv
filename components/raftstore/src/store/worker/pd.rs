@@ -104,8 +104,8 @@ pub struct HeartbeatTask {
     pub pending_peers: Vec<metapb::Peer>,
     pub written_bytes: u64,
     pub written_keys: u64,
-    pub approximate_size: u64,
-    pub approximate_keys: u64,
+    pub approximate_size: Option<u64>,
+    pub approximate_keys: Option<u64>,
     pub replication_status: Option<RegionReplicationStatus>,
 }
 
@@ -1564,6 +1564,16 @@ where
             }
 
             Task::Heartbeat(hb_task) => {
+                // HACK! In order to keep the compatible of protos, we use 0 to identify
+                // the size uninitialized regions, and use 1 to identify the empty regions.
+                //
+                // See tikv/tikv#11114 for details.
+                let approximate_size = match hb_task.approximate_size {
+                    Some(0) => 1,
+                    Some(v) => v,
+                    None => 0, // size uninitialized
+                };
+                let approximate_keys = hb_task.approximate_keys.unwrap_or_default();
                 let (
                     read_bytes_delta,
                     read_keys_delta,
@@ -1578,8 +1588,8 @@ where
                         .region_peers
                         .entry(region_id)
                         .or_insert_with(PeerStat::default);
-                    peer_stat.approximate_size = hb_task.approximate_size;
-                    peer_stat.approximate_keys = hb_task.approximate_keys;
+                    peer_stat.approximate_size = approximate_size;
+                    peer_stat.approximate_keys = approximate_keys;
 
                     let read_bytes_delta =
                         peer_stat.read_bytes - peer_stat.last_region_report_read_bytes;
@@ -1643,8 +1653,8 @@ where
                         read_bytes: read_bytes_delta,
                         read_keys: read_keys_delta,
                         query_stats,
-                        approximate_size: hb_task.approximate_size,
-                        approximate_keys: hb_task.approximate_keys,
+                        approximate_size,
+                        approximate_keys,
                         last_report_ts,
                         cpu_usage,
                     },
