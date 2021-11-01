@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::{ApiVersion, Context, LockInfo, KeyRange};
+use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
 
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
 use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner, RocksEngine};
@@ -24,16 +24,16 @@ impl Default for AssertionStorage<RocksEngine> {
     fn default() -> Self {
         AssertionStorage {
             ctx: Context::default(),
-            store: SyncTestStorageBuilder::new().build().unwrap(),
+            store: SyncTestStorageBuilder::new(false).build().unwrap(),
         }
     }
 }
 
 impl AssertionStorage<RocksEngine> {
-    pub fn new(api_version: ApiVersion) -> Self {
+    pub fn new(api_version: ApiVersion, enable_ttl: bool) -> Self {
         AssertionStorage {
             ctx: Context::default(),
-            store: SyncTestStorageBuilder::new()
+            store: SyncTestStorageBuilder::new(enable_ttl)
                 .api_version(api_version)
                 .build()
                 .unwrap(),
@@ -757,6 +757,21 @@ impl<E: Engine> AssertionStorage<E> {
         self.store.raw_get(self.ctx.clone(), cf, key).unwrap_err();
     }
 
+    pub fn raw_get_key_ttl_ok(&self, cf: String, key: Vec<u8>, ttl: Option<u64>) {
+        assert_eq!(
+            self.store
+                .raw_get_key_ttl(self.ctx.clone(), cf, key)
+                .unwrap(),
+            ttl
+        );
+    }
+
+    pub fn raw_get_key_ttl_err(&self, cf: String, key: Vec<u8>) {
+        self.store
+            .raw_get_key_ttl(self.ctx.clone(), cf, key)
+            .unwrap_err();
+    }
+
     pub fn raw_batch_get_ok(&self, cf: String, keys: Vec<Vec<u8>>, expect: Vec<(&[u8], &[u8])>) {
         let result: Vec<KvPair> = self
             .store
@@ -835,7 +850,9 @@ impl<E: Engine> AssertionStorage<E> {
     }
 
     pub fn raw_delete_range_ok(&self, cf: String, start_key: Vec<u8>, end_key: Vec<u8>) {
-        self.store.raw_delete_range(self.ctx.clone(), cf, start_key, end_key).unwrap()
+        self.store
+            .raw_delete_range(self.ctx.clone(), cf, start_key, end_key)
+            .unwrap()
     }
 
     pub fn raw_delete_range_err(&self, cf: String, start_key: Vec<u8>, end_key: Vec<u8>) {
@@ -845,7 +862,9 @@ impl<E: Engine> AssertionStorage<E> {
     }
 
     pub fn raw_batch_delete_ok(&self, cf: String, keys: Vec<Vec<u8>>) {
-        self.store.raw_batch_delete(self.ctx.clone(), cf, keys).unwrap()
+        self.store
+            .raw_batch_delete(self.ctx.clone(), cf, keys)
+            .unwrap()
     }
 
     pub fn raw_batch_delete_err(&self, cf: String, keys: Vec<Vec<u8>>) {
@@ -875,15 +894,8 @@ impl<E: Engine> AssertionStorage<E> {
         assert_eq!(result, expect);
     }
 
-    pub fn raw_scan_err(
-        &self,
-        cf: String,
-        start_key: Vec<u8>,
-        limit: usize,
-        _expect: Vec<(&[u8], &[u8])>,
-    ) {
-        self
-            .store
+    pub fn raw_scan_err(&self, cf: String, start_key: Vec<u8>, limit: usize) {
+        self.store
             .raw_scan(self.ctx.clone(), cf, start_key, None, limit)
             .unwrap_err();
     }
@@ -909,16 +921,36 @@ impl<E: Engine> AssertionStorage<E> {
         assert_eq!(result, expect);
     }
 
-    pub fn raw_batch_scan_err(
+    pub fn raw_batch_scan_err(&self, cf: String, ranges: Vec<KeyRange>, limit: usize) {
+        self.store
+            .raw_batch_scan(self.ctx.clone(), cf, ranges, limit)
+            .unwrap_err();
+    }
+
+    pub fn raw_compare_and_swap_atomic_ok(
         &self,
         cf: String,
-        ranges: Vec<KeyRange>,
-        limit: usize,
-        _expect: Vec<(&[u8], &[u8])>,
+        key: Vec<u8>,
+        previous_value: Option<Vec<u8>>,
+        value: Vec<u8>,
+        expect: (Option<Vec<u8>>, bool),
     ) {
-        self
+        let result = self
             .store
-            .raw_batch_scan(self.ctx.clone(), cf, ranges, limit)
+            .raw_compare_and_swap_atomic(self.ctx.clone(), cf, key, previous_value, value, 0)
+            .unwrap();
+        assert_eq!(result, expect);
+    }
+
+    pub fn raw_compare_and_swap_atomic_err(
+        &self,
+        cf: String,
+        key: Vec<u8>,
+        previous_value: Option<Vec<u8>>,
+        value: Vec<u8>,
+    ) {
+        self.store
+            .raw_compare_and_swap_atomic(self.ctx.clone(), cf, key, previous_value, value, 0)
             .unwrap_err();
     }
 

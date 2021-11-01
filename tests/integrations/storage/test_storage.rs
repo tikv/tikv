@@ -9,7 +9,7 @@ use std::u64;
 
 use rand::random;
 
-use kvproto::kvrpcpb::{ApiVersion, Context, LockInfo, KeyRange};
+use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
 
 use engine_traits::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
@@ -878,7 +878,7 @@ fn test_txn_store_txnkv_api_version() {
     ];
 
     for (config_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
-        let mut store = AssertionStorage::new(config_api_version);
+        let mut store = AssertionStorage::new(config_api_version, false);
         store.ctx.set_api_version(req_api_version);
 
         if is_legal {
@@ -917,7 +917,11 @@ fn test_txn_store_rawkv_api_version() {
     let cf = "";
 
     for (config_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
-        let mut store = AssertionStorage::new(config_api_version);
+        let enable_ttl = match config_api_version {
+            ApiVersion::V1ttl | ApiVersion::V2 => true,
+            ApiVersion::V1 => false,
+        };
+        let mut store = AssertionStorage::new(config_api_version, enable_ttl);
         store.ctx.set_api_version(req_api_version);
 
         let mut range = KeyRange::default();
@@ -927,6 +931,9 @@ fn test_txn_store_rawkv_api_version() {
             store.raw_get_ok(cf.to_owned(), key.to_vec(), None);
             store.raw_put_ok(cf.to_owned(), key.to_vec(), b"value".to_vec());
             store.raw_get_ok(cf.to_owned(), key.to_vec(), Some(b"value".to_vec()));
+            if enable_ttl {
+                store.raw_get_key_ttl_ok(cf.to_owned(), key.to_vec(), Some(0));
+            }
 
             store.raw_batch_get_ok(
                 cf.to_owned(),
@@ -946,9 +953,25 @@ fn test_txn_store_rawkv_api_version() {
             store.raw_batch_put_ok(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
 
             store.raw_scan_ok(cf.to_owned(), key.to_vec(), 100, vec![(key, b"value")]);
-            store.raw_batch_scan_ok(cf.to_owned(), vec![range.clone()], 100, vec![(key, b"value")]);
+            store.raw_batch_scan_ok(
+                cf.to_owned(),
+                vec![range.clone()],
+                100,
+                vec![(key, b"value")],
+            );
+
+            store.raw_compare_and_swap_atomic_ok(
+                cf.to_owned(),
+                key.to_vec(),
+                Some(b"value".to_vec()),
+                b"new_value".to_vec(),
+                (Some(b"value".to_vec()), true),
+            );
         } else {
             store.raw_get_err(cf.to_owned(), key.to_vec());
+            if enable_ttl {
+                store.raw_get_key_ttl_err(cf.to_owned(), key.to_vec());
+            }
             store.raw_put_err(cf.to_owned(), key.to_vec(), b"value".to_vec());
 
             store.raw_batch_get_err(cf.to_owned(), vec![key.to_vec(), key.to_vec()]);
@@ -960,8 +983,10 @@ fn test_txn_store_rawkv_api_version() {
 
             store.raw_batch_put_err(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
 
-            store.raw_scan_err(cf.to_owned(), key.to_vec(), 100, vec![]);
-            store.raw_batch_scan_err(cf.to_owned(), vec![range.clone()], 100, vec![]);
+            store.raw_scan_err(cf.to_owned(), key.to_vec(), 100);
+            store.raw_batch_scan_err(cf.to_owned(), vec![range.clone()], 100);
+
+            store.raw_compare_and_swap_atomic_err(cf.to_owned(), key.to_vec(), None, b"value".to_vec());
         }
     }
 }

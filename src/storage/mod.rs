@@ -2252,6 +2252,11 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
         self
     }
 
+    pub fn set_enable_ttl(mut self, enable_ttl: bool) -> Self {
+        self.config.enable_ttl = enable_ttl;
+        self
+    }
+
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E, L>> {
         let read_pool = build_read_pool_for_test(

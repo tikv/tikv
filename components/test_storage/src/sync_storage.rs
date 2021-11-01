@@ -2,7 +2,7 @@
 
 use collections::HashMap;
 use futures::executor::block_on;
-use kvproto::kvrpcpb::{ApiVersion, Context, GetRequest, LockInfo, RawGetRequest, KeyRange};
+use kvproto::kvrpcpb::{ApiVersion, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::router::RaftStoreBlackHole;
 use std::sync::{atomic::AtomicU64, Arc};
@@ -25,22 +25,24 @@ pub struct SyncTestStorageBuilder<E: Engine> {
     config: Option<Config>,
     gc_config: Option<GcConfig>,
     api_version: Option<ApiVersion>,
+    enable_ttl: bool,
 }
 
 impl SyncTestStorageBuilder<RocksEngine> {
-    pub fn new() -> Self {
+    pub fn new(enable_ttl: bool) -> Self {
         Self {
-            engine: TestEngineBuilder::new().build().unwrap(),
+            engine: TestEngineBuilder::new().ttl(enable_ttl).build().unwrap(),
             config: None,
             gc_config: None,
             api_version: None,
+            enable_ttl,
         }
     }
 }
 
 impl Default for SyncTestStorageBuilder<RocksEngine> {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
@@ -51,6 +53,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
             config: None,
             gc_config: None,
             api_version: None,
+            enable_ttl: false,
         }
     }
 
@@ -78,6 +81,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         if let Some(api_version) = self.api_version.take() {
             builder = builder.set_api_version(api_version);
         }
+        builder = builder.set_enable_ttl(self.enable_ttl);
         let (tx, _rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
             self.engine,
@@ -322,6 +326,10 @@ impl<E: Engine> SyncTestStorage<E> {
         block_on(self.store.raw_get(ctx, cf, key))
     }
 
+    pub fn raw_get_key_ttl(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<Option<u64>> {
+        block_on(self.store.raw_get_key_ttl(ctx, cf, key))
+    }
+
     pub fn raw_batch_get(
         &self,
         ctx: Context,
@@ -363,29 +371,26 @@ impl<E: Engine> SyncTestStorage<E> {
         wait_op!(|cb| self.store.raw_put(ctx, cf, key, value, 0, cb)).unwrap()
     }
 
-    pub fn raw_batch_put(
-        &self,
-        ctx: Context,
-        cf: String,
-        pairs: Vec<KvPair>,
-    ) -> Result<()> {
-        wait_op!(|cb| self.store.raw_batch_put(ctx, cf, pairs, vec![], cb)).unwrap()
+    pub fn raw_batch_put(&self, ctx: Context, cf: String, pairs: Vec<KvPair>) -> Result<()> {
+        let ttls = vec![0; pairs.len()];
+        wait_op!(|cb| self.store.raw_batch_put(ctx, cf, pairs, ttls, cb)).unwrap()
     }
 
     pub fn raw_delete(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<()> {
         wait_op!(|cb| self.store.raw_delete(ctx, cf, key, cb)).unwrap()
     }
 
-    pub fn raw_delete_range(&self, ctx: Context, cf: String, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
-        wait_op!(|cb| self.store.raw_delete_range(ctx, cf, start_key, end_key, cb)).unwrap()
-    }
-
-    pub fn raw_batch_delete(
+    pub fn raw_delete_range(
         &self,
         ctx: Context,
         cf: String,
-        keys: Vec<Vec<u8>>,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
     ) -> Result<()> {
+        wait_op!(|cb| self.store.raw_delete_range(ctx, cf, start_key, end_key, cb)).unwrap()
+    }
+
+    pub fn raw_batch_delete(&self, ctx: Context, cf: String, keys: Vec<Vec<u8>>) -> Result<()> {
         wait_op!(|cb| self.store.raw_batch_delete(ctx, cf, keys, cb)).unwrap()
     }
 
