@@ -658,6 +658,7 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     cfg_tracker: Tracker<Config>,
     trace_event: TraceEvent,
     last_flush_time: TiInstant,
+    need_flush_events: bool,
     last_flush_msg_time: TiInstant,
 }
 
@@ -799,6 +800,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn end(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
+        for peer in peers {
+            peer.update_memory_trace(&mut self.trace_event);
+        }
+
         let now = TiInstant::now();
         if self.poll_ctx.trans.need_flush()
             && now.saturating_duration_since(self.last_flush_msg_time)
@@ -808,24 +813,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             self.poll_ctx.trans.flush();
         }
 
-        for peer in peers {
-            peer.update_memory_trace(&mut self.trace_event);
-        }
-
-        if now.saturating_duration_since(self.last_flush_time)
-            >= self.poll_ctx.cfg.store_events_flush_interval.0
-        {
-            self.last_flush_time = now;
-            self.flush_events();
-        }
-
-        let dur = self.timer.saturating_elapsed();
+        let dur = now.saturating_duration_since(self.timer);
         if self.poll_ctx.has_ready {
             // Only enable the fail point when the store id is equal to 3, which is
             // the id of slow store in tests.
             fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
 
-            let dur = self.timer.saturating_elapsed();
             if !self.poll_ctx.store_stat.is_busy {
                 let election_timeout = Duration::from_millis(
                     self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
@@ -854,14 +847,25 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             .raft_metrics
             .process_ready
             .observe(duration_to_sec(dur));
+
+        if now.saturating_duration_since(self.last_flush_time)
+            >= self.poll_ctx.cfg.store_events_flush_interval.0
+        {
+            self.last_flush_time = now;
+            self.need_flush_events = false;
+            self.flush_events();
+        } else {
+            self.need_flush_events = true;
+        }
     }
 
     fn pause(&mut self) {
         if self.poll_ctx.trans.need_flush() {
             self.poll_ctx.trans.flush();
         }
-
-        self.flush_events();
+        if self.need_flush_events {
+            self.flush_events();
+        }
     }
 }
 
@@ -1119,6 +1123,7 @@ where
             cfg_tracker: self.cfg.clone().tracker(tag),
             trace_event: TraceEvent::default(),
             last_flush_time: TiInstant::now(),
+            need_flush_events: false,
             last_flush_msg_time: TiInstant::now(),
         }
     }
