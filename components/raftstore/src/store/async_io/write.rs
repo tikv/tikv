@@ -16,6 +16,7 @@ use crate::store::fsm::RaftRouter;
 use crate::store::local_metrics::{RaftSendMessageMetrics, StoreWriteMetrics};
 use crate::store::metrics::*;
 use crate::store::transport::Transport;
+use crate::store::util::LatencyInspector;
 use crate::store::PeerMsg;
 use crate::Result;
 
@@ -150,6 +151,10 @@ where
     ER: RaftEngine,
 {
     WriteTask(WriteTask<EK, ER>),
+    LatencyInspect {
+        send_time: Instant,
+        inspector: Vec<LatencyInspector>,
+    },
     Shutdown,
 }
 
@@ -166,6 +171,7 @@ where
                 t.region_id, t.peer_id, t.ready_number
             ),
             WriteMsg::Shutdown => write!(fmt, "WriteMsg::Shutdown"),
+            WriteMsg::LatencyInspect { .. } => write!(fmt, "WriteMsg::LatencyInspect"),
         }
     }
 }
@@ -336,6 +342,7 @@ where
     metrics: StoreWriteMetrics,
     message_metrics: RaftSendMessageMetrics,
     perf_context: EK::PerfContext,
+    pending_latency_inspect: Vec<(Instant, Vec<LatencyInspector>)>,
 }
 
 impl<EK, ER, N, T> Worker<EK, ER, N, T>
@@ -375,6 +382,7 @@ where
             metrics: StoreWriteMetrics::new(cfg.value().waterfall_metrics),
             message_metrics: Default::default(),
             perf_context,
+            pending_latency_inspect: vec![],
         }
     }
 
@@ -404,6 +412,7 @@ where
             }
 
             if self.batch.is_empty() {
+                self.clear_latency_inspect();
                 continue;
             }
 
@@ -416,6 +425,7 @@ where
 
             self.metrics.flush();
 
+            self.clear_latency_inspect();
             // update config
             if let Some(incoming) = self.cfg_tracker.any_new() {
                 self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
@@ -447,6 +457,12 @@ where
                     .task_wait
                     .observe(duration_to_sec(task.send_time.saturating_elapsed()));
                 self.batch.add_write_task(task);
+            }
+            WriteMsg::LatencyInspect {
+                send_time,
+                inspector,
+            } => {
+                self.pending_latency_inspect.push((send_time, inspector));
             }
         }
         false
@@ -571,6 +587,19 @@ where
         STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(duration_to_sec(now2.saturating_elapsed()));
 
         self.batch.clear();
+    }
+
+    fn clear_latency_inspect(&mut self) {
+        if self.pending_latency_inspect.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        for (time, inspectors) in std::mem::take(&mut self.pending_latency_inspect) {
+            for mut inspector in inspectors {
+                inspector.record_store_write(now.saturating_duration_since(time));
+                inspector.finish();
+            }
+        }
     }
 }
 

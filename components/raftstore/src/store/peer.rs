@@ -493,9 +493,9 @@ where
     /// of deleted entries.
     pub compaction_declined_bytes: u64,
     /// Approximate size of the region.
-    pub approximate_size: u64,
+    pub approximate_size: Option<u64>,
     /// Approximate keys of the region.
-    pub approximate_keys: u64,
+    pub approximate_keys: Option<u64>,
     /// Whether this region has calculated region size by split-check thread. If we just splitted
     ///  the region or ingested one file which may be overlapped with the existed data, the
     /// `approximate_size` is not very accurate.
@@ -635,8 +635,8 @@ where
             down_peer_ids: vec![],
             size_diff_hint: 0,
             delete_keys_hint: 0,
-            approximate_size: 0,
-            approximate_keys: 0,
+            approximate_size: None,
+            approximate_keys: None,
             has_calculated_region_size: false,
             compaction_declined_bytes: 0,
             leader_unreachable: false,
@@ -4122,7 +4122,7 @@ where
         self.send_extra_message(extra_msg, &mut ctx.trans, &to_peer);
     }
 
-    pub fn require_updating_max_ts(&self, pd_scheduler: &Scheduler<PdTask<EK>>) {
+    pub fn require_updating_max_ts(&self, pd_scheduler: &Scheduler<PdTask<EK, ER>>) {
         let epoch = self.region().get_region_epoch();
         let term_low_bits = self.term() & ((1 << 32) - 1); // 32 bits
         let version_lot_bits = epoch.get_version() & ((1 << 31) - 1); // 31 bits

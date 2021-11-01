@@ -1024,6 +1024,19 @@
 ## little larger).
 # sst-max-size = "144MB"
 
+## Automatically reduce the number of backup threads when the current workload is high,
+## in order to reduce impact on the cluster's performance during back up.
+# enable-auto-tune = false 
+
+[backup.hadoop]
+## let TiKV know how to find the hdfs shell command.
+## Equivalent to the $HADOOP_HOME enviroment variable.
+# home = ""
+
+## TiKV will run the hdfs shell command under this linux user.
+## TiKV will use the current linux user if not provided.
+# linux-user = ""
+
 [pessimistic-txn]
 ## The default and maximum delay before responding to TiDB when pessimistic
 ## transactions encounter locks
