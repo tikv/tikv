@@ -443,11 +443,12 @@ fn test_merge_on_majority_disk_full() {
     for i in 1..3 {
         fail::cfg(get_fp(DiskUsage::AlmostFull, i), "return").unwrap();
     }
-    for i in [2u64, 3] {
-        ensure_disk_usage_is_reported(&mut cluster, i, i, &region1);
+    for peer in region1.get_peers().iter() {
+        ensure_disk_usage_is_reported(&mut cluster, peer.get_id(), peer.get_store_id(), &region1);
     }
-    for i in [1u64, 3] {
-        ensure_disk_usage_is_reported(&mut cluster, i, i, &region2);
+
+    for peer in region2.get_peers().iter() {
+        ensure_disk_usage_is_reported(&mut cluster, peer.get_id(), peer.get_store_id(), &region2);
     }
     cluster.must_try_merge(region1.get_id(), region2.get_id());
     assert_region_merged(&mut cluster, b"k1", b"k3");

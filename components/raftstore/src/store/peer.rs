@@ -3828,6 +3828,12 @@ where
 
     pub fn refill_disk_full_peers<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
         self.clear_disk_full_peers(ctx);
+        debug!(
+            "region id {}, peer id {}, store id {}: refill disk full peers when peer disk usage status changed or merge triggered",
+            self.region_id,
+            self.peer.get_id(),
+            self.peer.get_store_id()
+        );
 
         // Collect disk full peers and all peers' `next_idx` to find a potential quorum.
         let peers_len = self.get_store().region().get_peers().len();
@@ -3860,9 +3866,17 @@ where
                 }
             }
         }
-
-        if self.has_region_merge_proposal && min_peer_index >= self.region_merge_proposal_index {
-            self.has_region_merge_proposal = false;
+        if self.has_region_merge_proposal {
+            debug!(
+                "region id {}, peer id {}, store id {} has a merge request, with region_merge_proposal_index {}",
+                self.region_id,
+                self.peer.get_id(),
+                self.peer.get_store_id(),
+                self.region_merge_proposal_index
+            );
+            if min_peer_index > self.region_merge_proposal_index {
+                self.has_region_merge_proposal = false;
+            }
         }
 
         if normal_peers.len() == peers_len {
@@ -3888,12 +3902,16 @@ where
                     self.disk_full_peers.peers.insert(peer, (*usage, true));
                     raft.adjust_max_inflight_msgs(peer, ctx.cfg.raft_max_inflight_msgs);
                     debug!(
-                        "refill disk full peer max inflight to {} on a merge region: peer {}",
-                        ctx.cfg.raft_max_inflight_msgs, peer
+                        "refill disk full peer max inflight to {} on a merging region: region id {}, peer id {}",
+                        ctx.cfg.raft_max_inflight_msgs, self.region_id, peer
                     );
                 } else {
                     self.disk_full_peers.peers.insert(peer, (*usage, false));
                     raft.adjust_max_inflight_msgs(peer, 0);
+                    debug!(
+                        "refill disk full peer max inflight to {} on region without merging: region id {}, peer id {}",
+                        0, self.region_id, peer
+                    );
                 }
             }
         }
