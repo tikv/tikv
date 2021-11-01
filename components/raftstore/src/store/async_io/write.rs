@@ -412,6 +412,7 @@ where
             }
 
             if self.batch.is_empty() {
+                self.clear_latency_inspect();
                 continue;
             }
 
@@ -424,11 +425,7 @@ where
 
             self.metrics.flush();
 
-            for (time, mut inspector) in std::mem::take(&mut self.pending_latency_inspect) {
-                inspector.record_store_process(time.saturating_elapsed());
-                inspector.finish();
-            }
-
+            self.clear_latency_inspect();
             // update config
             if let Some(incoming) = self.cfg_tracker.any_new() {
                 self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
@@ -590,6 +587,13 @@ where
         STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(duration_to_sec(now2.saturating_elapsed()));
 
         self.batch.clear();
+    }
+
+    fn clear_latency_inspect(&mut self) {
+        for (time, mut inspector) in std::mem::take(&mut self.pending_latency_inspect) {
+            inspector.record_store_write(time.saturating_elapsed());
+            inspector.finish();
+        }
     }
 }
 
