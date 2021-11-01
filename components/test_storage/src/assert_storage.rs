@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::{ApiVersion, Context, LockInfo};
+use kvproto::kvrpcpb::{ApiVersion, Context, LockInfo, KeyRange};
 
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
 use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner, RocksEngine};
@@ -778,6 +778,28 @@ impl<E: Engine> AssertionStorage<E> {
             .unwrap_err();
     }
 
+    pub fn raw_batch_get_command_ok(&self, cf: String, keys: Vec<Vec<u8>>, expect: Vec<&[u8]>) {
+        let result: Vec<Option<Vec<u8>>> = self
+            .store
+            .raw_batch_get_command(self.ctx.clone(), cf, keys)
+            .unwrap()
+            .into_iter()
+            .collect();
+        let expect: Vec<Option<Vec<u8>>> = expect
+            .into_iter()
+            .map(|x| if x.is_empty() { None } else { Some(x.to_vec()) })
+            .collect();
+        assert_eq!(result, expect);
+    }
+
+    pub fn raw_batch_get_command_err(&self, cf: String, keys: Vec<Vec<u8>>) {
+        assert!(
+            self.store
+                .raw_batch_get_command(self.ctx.clone(), cf, keys)
+                .is_err()
+        );
+    }
+
     pub fn raw_put_ok(&self, cf: String, key: Vec<u8>, value: Vec<u8>) {
         self.store
             .raw_put(self.ctx.clone(), cf, key, value)
@@ -790,6 +812,18 @@ impl<E: Engine> AssertionStorage<E> {
             .unwrap_err();
     }
 
+    pub fn raw_batch_put_ok(&self, cf: String, pairs: Vec<KvPair>) {
+        self.store
+            .raw_batch_put(self.ctx.clone(), cf, pairs)
+            .unwrap();
+    }
+
+    pub fn raw_batch_put_err(&self, cf: String, pairs: Vec<KvPair>) {
+        self.store
+            .raw_batch_put(self.ctx.clone(), cf, pairs)
+            .unwrap_err();
+    }
+
     pub fn raw_delete_ok(&self, cf: String, key: Vec<u8>) {
         self.store.raw_delete(self.ctx.clone(), cf, key).unwrap()
     }
@@ -797,6 +831,26 @@ impl<E: Engine> AssertionStorage<E> {
     pub fn raw_delete_err(&self, cf: String, key: Vec<u8>) {
         self.store
             .raw_delete(self.ctx.clone(), cf, key)
+            .unwrap_err();
+    }
+
+    pub fn raw_delete_range_ok(&self, cf: String, start_key: Vec<u8>, end_key: Vec<u8>) {
+        self.store.raw_delete_range(self.ctx.clone(), cf, start_key, end_key).unwrap()
+    }
+
+    pub fn raw_delete_range_err(&self, cf: String, start_key: Vec<u8>, end_key: Vec<u8>) {
+        self.store
+            .raw_delete_range(self.ctx.clone(), cf, start_key, end_key)
+            .unwrap_err();
+    }
+
+    pub fn raw_batch_delete_ok(&self, cf: String, keys: Vec<Vec<u8>>) {
+        self.store.raw_batch_delete(self.ctx.clone(), cf, keys).unwrap()
+    }
+
+    pub fn raw_batch_delete_err(&self, cf: String, keys: Vec<Vec<u8>>) {
+        self.store
+            .raw_batch_delete(self.ctx.clone(), cf, keys)
             .unwrap_err();
     }
 
@@ -819,6 +873,53 @@ impl<E: Engine> AssertionStorage<E> {
             .map(|(k, v)| (k.to_vec(), v.to_vec()))
             .collect();
         assert_eq!(result, expect);
+    }
+
+    pub fn raw_scan_err(
+        &self,
+        cf: String,
+        start_key: Vec<u8>,
+        limit: usize,
+        _expect: Vec<(&[u8], &[u8])>,
+    ) {
+        self
+            .store
+            .raw_scan(self.ctx.clone(), cf, start_key, None, limit)
+            .unwrap_err();
+    }
+
+    pub fn raw_batch_scan_ok(
+        &self,
+        cf: String,
+        ranges: Vec<KeyRange>,
+        limit: usize,
+        expect: Vec<(&[u8], &[u8])>,
+    ) {
+        let result: Vec<KvPair> = self
+            .store
+            .raw_batch_scan(self.ctx.clone(), cf, ranges, limit)
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap())
+            .collect();
+        let expect: Vec<KvPair> = expect
+            .into_iter()
+            .map(|(k, v)| (k.to_vec(), v.to_vec()))
+            .collect();
+        assert_eq!(result, expect);
+    }
+
+    pub fn raw_batch_scan_err(
+        &self,
+        cf: String,
+        ranges: Vec<KeyRange>,
+        limit: usize,
+        _expect: Vec<(&[u8], &[u8])>,
+    ) {
+        self
+            .store
+            .raw_batch_scan(self.ctx.clone(), cf, ranges, limit)
+            .unwrap_err();
     }
 
     pub fn test_txn_store_gc(&self, key: &str) {

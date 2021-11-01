@@ -1261,7 +1261,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(CMD)
                     .observe(gets.len() as f64);
 
-                // TODO: check_api_version
+                for get in &gets {
+                    Self::check_api_version(
+                        api_version,
+                        get.get_context().api_version,
+                        CMD,
+                        iter::once(&get.key[..]),
+                    )?;
+                }
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let read_id = Some(ThreadReadId::new());
@@ -1467,7 +1474,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
-        // TODO: check_api_version
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::raw_batch_put,
+            pairs.iter().map(|(ref k, _)| &k[..]),
+        )?;
 
         let cf = Self::rawkv_cf(self.api_version, &cf)?;
 
@@ -1522,7 +1534,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        // TODO: check_api_version
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::raw_delete,
+            iter::once(&key[..]),
+        )?;
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
 
@@ -1550,15 +1567,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         end_key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        // TODO: check_api_version
-
-        check_key_size!(
-            Some(&start_key)
-                .into_iter()
-                .chain(Some(&end_key).into_iter()),
-            self.max_key_size,
-            callback
-        );
+        let keys = Some(&start_key[..])
+            .into_iter()
+            .chain(Some(&end_key[..]).into_iter());
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::raw_delete_range,
+            keys.to_owned(),
+        )?;
+        check_key_size!(keys, self.max_key_size, callback);
 
         let cf = Self::rawkv_cf(self.api_version, &cf)?;
         let start_key = Key::from_encoded(start_key);
@@ -1585,7 +1603,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
-        // TODO: check_api_version
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::raw_batch_delete,
+            keys.iter().map(|x| &x[..]),
+        )?;
 
         let cf = Self::rawkv_cf(self.api_version, &cf)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
@@ -1652,7 +1675,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                // TODO: check_api_version
+                let keys = Some(&start_key[..])
+                    .into_iter()
+                    .chain(end_key.as_ref().map(|x| &x[..]));
+                Self::check_api_version(api_version, ctx.api_version, CMD, keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1745,7 +1771,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                // TODO: check_api_version
+                let mut keys = Vec::with_capacity(ranges.len() << 1);
+                for range in &ranges {
+                    keys.push(range.get_start_key());
+                    if !range.end_key.is_empty() {
+                        keys.push(range.get_end_key());
+                    }
+                }
+                Self::check_api_version(api_version, ctx.api_version, CMD, keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1870,7 +1903,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                // TODO: check_api_version
+                Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&key[..]))?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1917,7 +1950,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttl: u64,
         cb: Callback<(Option<Value>, bool)>,
     ) -> Result<()> {
-        // TODO: check_api_version
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::raw_compare_and_swap,
+            iter::once(&key[..]),
+        )?;
 
         let cf = Self::rawkv_cf(self.api_version, &cf)?;
         let ttl = if self.enable_ttl {
@@ -1941,7 +1979,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
-        // TODO: check_api_version
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::raw_atomic_store,
+            pairs.iter().map(|(ref k, _)| &k[..]),
+        )?;
 
         if self.enable_ttl {
             if ttls.len() != pairs.len() {
@@ -1983,7 +2026,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
-        // TODO: check_api_version
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::raw_atomic_store,
+            keys.iter().map(|x| &x[..]),
+        )?;
 
         let cf = Self::rawkv_cf(self.api_version, &cf)?;
         let muations = keys
@@ -2015,13 +2063,19 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                // TODO: check_api_version
                 if api_version != ApiVersion::V2 {
                     return Err(box_err!("raw_checksum is only available in API V2"));
                 }
                 if algorithm != ChecksumAlgorithm::Crc64Xor {
                     return Err(box_err!("unknown checksum algorithm {:?}", algorithm));
                 }
+
+                let mut keys = Vec::with_capacity(ranges.len() << 1);
+                for range in &ranges {
+                    keys.push(range.get_start_key());
+                    keys.push(range.get_end_key());
+                }
+                Self::check_api_version(api_version, ctx.api_version, CMD, keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {

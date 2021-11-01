@@ -9,7 +9,7 @@ use std::u64;
 
 use rand::random;
 
-use kvproto::kvrpcpb::{ApiVersion, Context, LockInfo};
+use kvproto::kvrpcpb::{ApiVersion, Context, LockInfo, KeyRange};
 
 use engine_traits::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
@@ -914,24 +914,54 @@ fn test_txn_store_rawkv_api_version() {
         (ApiVersion::V2, ApiVersion::V2, RAW_KEY_CASE, true),
     ];
 
+    let cf = "";
+
     for (config_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
         let mut store = AssertionStorage::new(config_api_version);
         store.ctx.set_api_version(req_api_version);
 
+        let mut range = KeyRange::default();
+        range.set_start_key(key.to_vec());
+
         if is_legal {
-            store.raw_get_ok("".to_string(), key.to_vec(), None);
-            store.raw_put_ok("".to_string(), key.to_vec(), b"value".to_vec());
-            store.raw_get_ok("".to_string(), key.to_vec(), Some(b"value".to_vec()));
+            store.raw_get_ok(cf.to_owned(), key.to_vec(), None);
+            store.raw_put_ok(cf.to_owned(), key.to_vec(), b"value".to_vec());
+            store.raw_get_ok(cf.to_owned(), key.to_vec(), Some(b"value".to_vec()));
 
             store.raw_batch_get_ok(
-                "".to_string(),
+                cf.to_owned(),
                 vec![key.to_vec(), key.to_vec()],
                 vec![(key, b"value"), (key, b"value")],
             );
+            store.raw_batch_get_command_ok(
+                cf.to_owned(),
+                vec![key.to_vec(), key.to_vec()],
+                vec![b"value", b"value"],
+            );
+
+            store.raw_delete_ok(cf.to_owned(), key.to_vec());
+            store.raw_delete_range_ok(cf.to_owned(), key.to_vec(), key.to_vec());
+            store.raw_batch_delete_ok(cf.to_owned(), vec![key.to_vec()]);
+
+            store.raw_batch_put_ok(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
+
+            store.raw_scan_ok(cf.to_owned(), key.to_vec(), 100, vec![(key, b"value")]);
+            store.raw_batch_scan_ok(cf.to_owned(), vec![range.clone()], 100, vec![(key, b"value")]);
         } else {
-            store.raw_get_err("".to_string(), key.to_vec());
-            store.raw_put_err("".to_string(), key.to_vec(), b"value".to_vec());
-            store.raw_batch_get_err("".to_string(), vec![key.to_vec(), key.to_vec()]);
+            store.raw_get_err(cf.to_owned(), key.to_vec());
+            store.raw_put_err(cf.to_owned(), key.to_vec(), b"value".to_vec());
+
+            store.raw_batch_get_err(cf.to_owned(), vec![key.to_vec(), key.to_vec()]);
+            store.raw_batch_get_command_err(cf.to_owned(), vec![key.to_vec(), key.to_vec()]);
+
+            store.raw_delete_err(cf.to_owned(), key.to_vec());
+            store.raw_delete_range_err(cf.to_owned(), key.to_vec(), key.to_vec());
+            store.raw_batch_delete_err(cf.to_owned(), vec![key.to_vec()]);
+
+            store.raw_batch_put_err(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
+
+            store.raw_scan_err(cf.to_owned(), key.to_vec(), 100, vec![]);
+            store.raw_batch_scan_err(cf.to_owned(), vec![range.clone()], 100, vec![]);
         }
     }
 }

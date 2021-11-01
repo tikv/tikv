@@ -2,7 +2,7 @@
 
 use collections::HashMap;
 use futures::executor::block_on;
-use kvproto::kvrpcpb::{ApiVersion, Context, GetRequest, LockInfo};
+use kvproto::kvrpcpb::{ApiVersion, Context, GetRequest, LockInfo, RawGetRequest, KeyRange};
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::router::RaftStoreBlackHole;
 use std::sync::{atomic::AtomicU64, Arc};
@@ -331,12 +331,62 @@ impl<E: Engine> SyncTestStorage<E> {
         block_on(self.store.raw_batch_get(ctx, cf, keys))
     }
 
+    pub fn raw_batch_get_command(
+        &self,
+        ctx: Context,
+        cf: String,
+        keys: Vec<Vec<u8>>,
+    ) -> Result<Vec<Option<Vec<u8>>>> {
+        let mut ids = vec![];
+        let requests: Vec<RawGetRequest> = keys
+            .to_owned()
+            .into_iter()
+            .map(|key| {
+                let mut req = RawGetRequest::default();
+                req.set_context(ctx.clone());
+                req.set_key(key);
+                req.set_cf(cf.to_owned());
+                ids.push(ids.len() as u64);
+                req
+            })
+            .collect();
+        let p = GetConsumer::new();
+        block_on(self.store.raw_batch_get_command(requests, ids, p.clone()))?;
+        let mut values = vec![];
+        for value in p.take_data().into_iter() {
+            values.push(value?);
+        }
+        Ok(values)
+    }
+
     pub fn raw_put(&self, ctx: Context, cf: String, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
         wait_op!(|cb| self.store.raw_put(ctx, cf, key, value, 0, cb)).unwrap()
     }
 
+    pub fn raw_batch_put(
+        &self,
+        ctx: Context,
+        cf: String,
+        pairs: Vec<KvPair>,
+    ) -> Result<()> {
+        wait_op!(|cb| self.store.raw_batch_put(ctx, cf, pairs, vec![], cb)).unwrap()
+    }
+
     pub fn raw_delete(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<()> {
         wait_op!(|cb| self.store.raw_delete(ctx, cf, key, cb)).unwrap()
+    }
+
+    pub fn raw_delete_range(&self, ctx: Context, cf: String, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
+        wait_op!(|cb| self.store.raw_delete_range(ctx, cf, start_key, end_key, cb)).unwrap()
+    }
+
+    pub fn raw_batch_delete(
+        &self,
+        ctx: Context,
+        cf: String,
+        keys: Vec<Vec<u8>>,
+    ) -> Result<()> {
+        wait_op!(|cb| self.store.raw_batch_delete(ctx, cf, keys, cb)).unwrap()
     }
 
     pub fn raw_scan(
@@ -364,6 +414,19 @@ impl<E: Engine> SyncTestStorage<E> {
         block_on(
             self.store
                 .raw_scan(ctx, cf, start_key, end_key, limit, false, true),
+        )
+    }
+
+    pub fn raw_batch_scan(
+        &self,
+        ctx: Context,
+        cf: String,
+        ranges: Vec<KeyRange>,
+        limit: usize,
+    ) -> Result<Vec<Result<KvPair>>> {
+        block_on(
+            self.store
+                .raw_batch_scan(ctx, cf, ranges, limit, false, false),
         )
     }
 
