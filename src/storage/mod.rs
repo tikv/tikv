@@ -362,6 +362,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         !Self::is_raw_command(cmd)
     }
 
+    // pub fn api_version(&self) -> ApiVersion {
+    //     self.api_version
+    // }
+
     /// Check api version.
     ///
     /// When config.api_version = V1: accept request of V1 only.
@@ -401,6 +405,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             storage_api_version,
             req_api_version,
         }))
+    }
+
+    pub fn check_api_version_ext<'a>(
+        &self,
+        req_api_version: ApiVersion,
+        cmd: CommandKind,
+        keys: impl IntoIterator<Item = &'a [u8]>,
+    ) -> Result<()> {
+        Self::check_api_version(self.api_version, req_api_version, cmd, keys)
     }
 
     /// Get value of the given key from a snapshot.
