@@ -1149,12 +1149,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     pub fn delete_range(
         &self,
         ctx: Context,
-        start_key: Key,
-        end_key: Key,
+        raw_start_key: Vec<u8>,
+        raw_end_key: Vec<u8>,
         notify_only: bool,
         callback: Callback<()>,
     ) -> Result<()> {
-        // TODO: check_api_version
+        let (start_key, end_key) = (Key::from_raw(&raw_start_key), Key::from_raw(&raw_end_key));
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::delete_range,
+            vec![&raw_start_key[..], &raw_end_key[..]],
+        )?;
 
         let mut modifies = Vec::with_capacity(DATA_CFS.len());
         for cf in DATA_CFS {
@@ -3840,8 +3846,8 @@ mod tests {
         storage
             .delete_range(
                 Context::default(),
-                Key::from_raw(b"x"),
-                Key::from_raw(b"z"),
+                b"x".to_vec(),
+                b"z".to_vec(),
                 false,
                 expect_ok_callback(tx.clone(), 5),
             )
@@ -3867,8 +3873,8 @@ mod tests {
         storage
             .delete_range(
                 Context::default(),
-                Key::from_raw(b""),
-                Key::from_raw(&[255]),
+                b"".to_vec(),
+                vec![255],
                 false,
                 expect_ok_callback(tx, 9),
             )

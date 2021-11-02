@@ -1468,8 +1468,8 @@ fn future_delete_range<E: Engine, L: LockManager>(
     let (cb, f) = paired_future_callback();
     let res = storage.delete_range(
         req.take_context(),
-        Key::from_raw(req.get_start_key()),
-        Key::from_raw(req.get_end_key()),
+        req.take_start_key(),
+        req.take_end_key(),
         req.get_notify_only(),
         cb,
     );

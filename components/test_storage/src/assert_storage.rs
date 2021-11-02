@@ -776,6 +776,28 @@ impl<E: Engine> AssertionStorage<E> {
         self.store.gc(self.ctx.clone(), safe_point.into()).unwrap();
     }
 
+    pub fn delete_range_ok(&self, raw_start_key: &[u8], raw_end_key: &[u8]) {
+        self.store
+            .delete_range(
+                self.ctx.clone(),
+                raw_start_key.to_owned(),
+                raw_end_key.to_owned(),
+                false,
+            )
+            .unwrap();
+    }
+
+    pub fn delete_range_err(&self, raw_start_key: &[u8], raw_end_key: &[u8]) {
+        self.store
+            .delete_range(
+                self.ctx.clone(),
+                raw_start_key.to_owned(),
+                raw_end_key.to_owned(),
+                false,
+            )
+            .unwrap_err();
+    }
+
     pub fn raw_get_ok(&self, cf: String, key: Vec<u8>, value: Option<Vec<u8>>) {
         assert_eq!(
             self.store.raw_get(self.ctx.clone(), cf, key).unwrap(),

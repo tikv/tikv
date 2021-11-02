@@ -893,6 +893,8 @@ fn test_txn_store_txnkv_api_version() {
 
             store.scan_ok(key, 100, 10, vec![Some((key, b"x"))]);
             store.scan_locks_ok(20, key, b"", 10, vec![]);
+
+            store.delete_range_ok(key, key);
         } else {
             store.get_err(key, 10);
             //TODO: store.put_err(key, b"x", 5, 10);
@@ -901,6 +903,8 @@ fn test_txn_store_txnkv_api_version() {
 
             store.scan_err(key, 100, 10);
             store.scan_locks_err(20, key, b"", 10);
+
+            store.delete_range_err(key, key);
         }
     }
 }

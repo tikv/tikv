@@ -324,6 +324,19 @@ impl<E: Engine> SyncTestStorage<E> {
         wait_op!(|cb| self.gc_worker.gc(safe_point.into(), cb)).unwrap()
     }
 
+    pub fn delete_range(
+        &self,
+        ctx: Context,
+        raw_start_key: Vec<u8>,
+        raw_end_key: Vec<u8>,
+        notify_only: bool,
+    ) -> Result<()> {
+        wait_op!(|cb| self
+            .store
+            .delete_range(ctx, raw_start_key, raw_end_key, notify_only, cb))
+        .unwrap()
+    }
+
     pub fn raw_get(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         block_on(self.store.raw_get(ctx, cf, key))
     }
