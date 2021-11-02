@@ -34,6 +34,7 @@ use tikv::import::SSTImporter;
 use tikv::server;
 use tikv::server::gc_worker::sync_gc;
 use tikv::server::service::{batch_commands_request, batch_commands_response};
+use tikv::storage::key_prefix::{RAW_KEY_PREFIX, TXN_KEY_PREFIX};
 use tikv_util::worker::{dummy_scheduler, LazyWorker};
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType, TimeStamp};
@@ -1741,4 +1742,128 @@ fn test_get_lock_wait_info_api() {
     );
     must_kv_pessimistic_rollback(&client, ctx, b"a".to_vec(), 20);
     handle.join().unwrap();
+}
+
+#[test]
+fn test_api_version() {
+    const TIDB_KEY_CASE: &[u8] = b"t_a";
+    const TXN_KEY_CASE: &[u8] = &[TXN_KEY_PREFIX, 0, b'a'];
+    const RAW_KEY_CASE: &[u8] = &[RAW_KEY_PREFIX, 0, b'a'];
+
+    let test_data = vec![
+        // config api_version = V1|V1ttl, for backward compatible.
+        (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, true),
+        (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, true),
+        (ApiVersion::V1ttl, ApiVersion::V1, TXN_KEY_CASE, false),
+        // config api_version = V1, reject V2 request.
+        (ApiVersion::V1, ApiVersion::V2, TIDB_KEY_CASE, false),
+        // config api_version = V2.
+        // backward compatible for TiDB request, and TiDB request only.
+        (ApiVersion::V2, ApiVersion::V1, TIDB_KEY_CASE, true),
+        (ApiVersion::V2, ApiVersion::V1, TXN_KEY_CASE, false),
+        // V2 api validation.
+        (ApiVersion::V2, ApiVersion::V2, TXN_KEY_CASE, true),
+        (ApiVersion::V2, ApiVersion::V2, RAW_KEY_CASE, false),
+        (ApiVersion::V2, ApiVersion::V2, TIDB_KEY_CASE, false),
+    ];
+
+    for (config_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
+        let (cluster, leader, mut ctx) =
+            must_new_and_configure_cluster(|cluster| match config_api_version {
+                ApiVersion::V1 => {
+                    cluster.cfg.storage.api_version = 1;
+                    cluster.cfg.storage.enable_ttl = false;
+                }
+                ApiVersion::V1ttl => {
+                    cluster.cfg.storage.api_version = 1;
+                    cluster.cfg.storage.enable_ttl = true;
+                }
+                ApiVersion::V2 => {
+                    cluster.cfg.storage.api_version = 2;
+                    cluster.cfg.storage.enable_ttl = false;
+                }
+            });
+        let env = Arc::new(Environment::new(1));
+        let channel =
+            ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+        let client = TikvClient::new(channel);
+
+        ctx.set_api_version(req_api_version);
+
+        let (k, v) = (key.to_vec(), b"value".to_vec());
+        let mut ts = 0;
+
+        if is_legal {
+            // Prewrite
+            ts += 1;
+            let prewrite_start_version = ts;
+            let mut mutation = Mutation::default();
+            mutation.set_op(Op::Put);
+            mutation.set_key(k.clone());
+            mutation.set_value(v.clone());
+            must_kv_prewrite(
+                &client,
+                ctx.clone(),
+                vec![mutation],
+                k.clone(),
+                prewrite_start_version,
+            );
+
+            // Pessimistic Lock
+            ts += 1;
+            let resp = kv_pessimistic_lock(&client, ctx.clone(), vec![k.clone()], ts, ts, false);
+            assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+            assert_eq!(resp.errors.len(), 1);
+            assert!(resp.errors[0].has_locked());
+            assert!(resp.values.is_empty());
+            assert!(resp.not_founds.is_empty());
+
+            // Commit
+            ts += 1;
+            let commit_version = ts;
+            must_kv_commit(
+                &client,
+                ctx.clone(),
+                vec![k.clone()],
+                prewrite_start_version,
+                commit_version,
+                commit_version,
+            );
+
+            // Get
+            ts += 1;
+            let get_version = ts;
+            let mut get_req = GetRequest::default();
+            get_req.set_context(ctx.clone());
+            get_req.key = k.clone();
+            get_req.version = get_version;
+            let get_resp = client.kv_get(&get_req).unwrap();
+            assert!(!get_resp.has_region_error());
+            assert!(!get_resp.has_error());
+            assert!(get_resp.get_exec_details_v2().has_time_detail());
+        } else {
+            // Prewrite
+            ts += 1;
+            let prewrite_start_version = ts;
+            let mut mutation = Mutation::default();
+            mutation.set_op(Op::Put);
+            mutation.set_key(k.clone());
+            mutation.set_value(v.clone());
+            let res = try_kv_prewrite(
+                &client,
+                ctx.clone(),
+                vec![mutation],
+                k.clone(),
+                prewrite_start_version,
+            );
+            assert!(!res.errors.is_empty());
+
+            // Pessimistic Lock
+            ts += 1;
+            let resp = kv_pessimistic_lock(&client, ctx.clone(), vec![k.clone()], ts, ts, false);
+            assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+            assert_eq!(resp.errors.len(), 1);
+            assert!(!resp.errors[0].has_locked(), "{:?}", resp.get_errors());
+        }
+    }
 }
