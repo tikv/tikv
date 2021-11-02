@@ -300,11 +300,16 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             key_error.set_retryable(format!("{:?}", err));
         }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::TxnNotFound { start_ts, key },
+            box MvccErrorInner::TxnNotFound {
+                start_ts,
+                key,
+                lock_ts,
+            },
         ))))) => {
             let mut txn_not_found = kvrpcpb::TxnNotFound::default();
             txn_not_found.set_start_ts(start_ts.into_inner());
             txn_not_found.set_primary_key(key.to_owned());
+            txn_not_found.set_lock_ts(lock_ts.into_inner());
             key_error.set_txn_not_found(txn_not_found);
         }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(

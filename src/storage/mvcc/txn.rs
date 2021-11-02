@@ -208,6 +208,7 @@ pub(crate) fn make_txn_error(
             "txnnotfound" => ErrorInner::TxnNotFound {
                 start_ts,
                 key: key.to_raw().unwrap(),
+                lock_ts: TimeStamp::zero(),
             },
             "locktypenotmatch" => ErrorInner::LockTypeNotMatch {
                 start_ts,

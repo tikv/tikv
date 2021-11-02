@@ -142,9 +142,11 @@ pub mod tests {
     use crate::storage::kv::Engine;
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
+    use crate::storage::txn::commands::test_util::assert_txn_not_found;
     use crate::storage::txn::commands::{pessimistic_rollback, WriteCommand, WriteContext};
     use crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT;
     use crate::storage::txn::tests::*;
+    use crate::storage::txn::Error as TxnError;
     use crate::storage::{types::TxnStatus, ProcessResult, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
@@ -208,7 +210,7 @@ pub mod tests {
         rollback_if_not_exist: bool,
         force_sync_commit: bool,
         resolving_pessimistic_lock: bool,
-    ) {
+    ) -> TxnError {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
@@ -225,20 +227,17 @@ pub mod tests {
             resolving_pessimistic_lock,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
-        assert!(
-            command
-                .process_write(
-                    snapshot,
-                    WriteContext {
-                        lock_mgr: &DummyLockManager,
-                        concurrency_manager: cm,
-                        extra_op: Default::default(),
-                        statistics: &mut Default::default(),
-                        async_apply_prewrite: false,
-                    },
-                )
-                .is_err()
+        let res = command.process_write(
+            snapshot,
+            WriteContext {
+                lock_mgr: &DummyLockManager,
+                concurrency_manager: cm,
+                extra_op: Default::default(),
+                statistics: &mut Default::default(),
+                async_apply_prewrite: false,
+            },
         );
+        res.map(|_| ()).unwrap_err()
     }
 
     fn committed(commit_ts: impl Into<TimeStamp>) -> impl FnOnce(TxnStatus) -> bool {
@@ -550,7 +549,8 @@ pub mod tests {
             // A protected rollback record will be written.
             must_get_rollback_protected(&engine, k, ts(3, 0), true);
         } else {
-            must_err(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), r, false, false);
+            let err = must_err(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), r, false, false);
+            assert_txn_not_found(err, ts(3, 0), TimeStamp::zero(), k);
         }
 
         // Lock the key with TTL=100.
@@ -715,7 +715,8 @@ pub mod tests {
                 WriteType::Rollback,
             );
         } else {
-            must_err(&engine, k, ts(6, 0), ts(12, 0), ts(12, 0), r, false, false);
+            let err = must_err(&engine, k, ts(6, 0), ts(12, 0), ts(12, 0), r, false, false);
+            assert_txn_not_found(err, ts(6, 0), ts(20, 0), k);
         }
 
         // TTL check is based on physical time (in ms). When logical time's difference is larger
@@ -1001,7 +1002,8 @@ pub mod tests {
 
         // Path: there is no commit or rollback record, error should be reported if
         // rollback_if_not_exist is set to false.
-        must_err(&engine, k, ts(3, 0), ts(5, 0), ts(5, 0), false, false, true);
+        let err = must_err(&engine, k, ts(3, 0), ts(5, 0), ts(5, 0), false, false, true);
+        assert_txn_not_found(err, ts(3, 0), TimeStamp::zero(), k);
 
         // Path: the pessimistic primary key lock does exist, and it's not expired yet.
         must_acquire_pessimistic_lock_with_ttl(&engine, k, k, ts(10, 0), ts(10, 0), 10);

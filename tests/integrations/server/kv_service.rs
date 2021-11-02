@@ -1187,6 +1187,37 @@ fn test_async_commit_check_txn_status() {
 }
 
 #[test]
+fn test_check_txn_status_returns_lock_ts() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+
+    let (client, ctx) = build_client(&cluster);
+
+    let start_ts = block_on(cluster.pd_client.get_tso()).unwrap();
+    let mut req = PrewriteRequest::default();
+    req.set_context(ctx.clone());
+    req.set_primary_lock(b"key".to_vec());
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"key".to_vec());
+    mutation.set_value(b"value".to_vec());
+    req.mut_mutations().push(mutation);
+    req.set_start_version(start_ts.into_inner());
+    req.set_lock_ttl(20000);
+    client.kv_prewrite(&req).unwrap();
+
+    let mut req = CheckTxnStatusRequest::default();
+    req.set_context(ctx);
+    req.set_primary_key(b"key".to_vec());
+    req.set_lock_ts(start_ts.next().into_inner());
+    req.set_rollback_if_not_exist(false);
+    let resp = client.kv_check_txn_status(&req).unwrap();
+    assert!(resp.get_error().has_txn_not_found());
+    let txn_not_found = resp.get_error().get_txn_not_found();
+    assert_eq!(txn_not_found.get_lock_ts(), start_ts.into_inner());
+}
+
+#[test]
 fn test_read_index_check_memory_locks() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.hibernate_regions = false;
@@ -1344,20 +1375,34 @@ fn test_prewrite_check_max_commit_ts() {
 #[test]
 fn test_txn_heart_beat() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
-    let mut req = TxnHeartBeatRequest::default();
     let k = b"k".to_vec();
     let start_ts = 10;
+
+    let mut req = PrewriteRequest::default();
+    req.set_context(ctx.clone());
+    req.set_primary_lock(k.clone());
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(b"value".to_vec());
+    req.mut_mutations().push(mutation);
+    req.set_start_version(start_ts);
+    req.set_lock_ttl(20000);
+    client.kv_prewrite(&req).unwrap();
+
+    let mut req = TxnHeartBeatRequest::default();
     req.set_context(ctx);
     req.set_primary_lock(k.clone());
-    req.set_start_version(start_ts);
+    req.set_start_version(start_ts + 1);
     req.set_advise_lock_ttl(1000);
     let resp = client.kv_txn_heart_beat(&req).unwrap();
     assert!(!resp.has_region_error());
     assert_eq!(
         resp.get_error().get_txn_not_found(),
         &TxnNotFound {
-            start_ts,
+            start_ts: start_ts + 1,
             primary_key: k,
+            lock_ts: start_ts,
             ..Default::default()
         }
     );

@@ -885,4 +885,24 @@ pub mod test_util {
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())
     }
+
+    pub fn assert_txn_not_found(
+        err: Error,
+        expected_start_ts: impl Into<TimeStamp>,
+        expected_lock_ts: impl Into<TimeStamp>,
+        expected_key: &[u8],
+    ) {
+        match err {
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::TxnNotFound {
+                start_ts,
+                key,
+                lock_ts,
+            }))) => {
+                assert_eq!(start_ts, expected_start_ts.into());
+                assert_eq!(lock_ts, expected_lock_ts.into());
+                assert_eq!(key, expected_key)
+            }
+            e => panic!("unexpected error: {:?}", e),
+        }
+    }
 }

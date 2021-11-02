@@ -67,10 +67,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
                 }
                 lock
             }
-            _ => {
+            l => {
+                let lock_ts = l.map(|l| l.ts).unwrap_or_default();
                 return Err(MvccError::from(MvccErrorInner::TxnNotFound {
                     start_ts: self.start_ts,
                     key: self.primary_key.into_raw()?,
+                    lock_ts,
                 })
                 .into());
             }
@@ -99,9 +101,11 @@ pub mod tests {
     use crate::storage::kv::TestEngineBuilder;
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
+    use crate::storage::txn::commands::test_util::assert_txn_not_found;
     use crate::storage::txn::commands::WriteCommand;
     use crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT;
     use crate::storage::txn::tests::*;
+    use crate::storage::txn::Error as TxnError;
     use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
@@ -153,7 +157,7 @@ pub mod tests {
         primary_key: &[u8],
         start_ts: impl Into<TimeStamp>,
         advise_ttl: u64,
-    ) {
+    ) -> TxnError {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
@@ -165,20 +169,17 @@ pub mod tests {
             advise_ttl,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
-        assert!(
-            command
-                .process_write(
-                    snapshot,
-                    WriteContext {
-                        lock_mgr: &DummyLockManager,
-                        concurrency_manager: cm,
-                        extra_op: Default::default(),
-                        statistics: &mut Default::default(),
-                        async_apply_prewrite: false,
-                    },
-                )
-                .is_err()
+        let res = command.process_write(
+            snapshot,
+            WriteContext {
+                lock_mgr: &DummyLockManager,
+                concurrency_manager: cm,
+                extra_op: Default::default(),
+                statistics: &mut Default::default(),
+                async_apply_prewrite: false,
+            },
         );
+        res.map(|_| ()).unwrap_err()
     }
 
     #[test]
@@ -195,14 +196,17 @@ pub mod tests {
             // The lock's TTL is updated and persisted into the db.
             must_success(&engine, k, ts, 90, 110);
             // Heart beat another transaction's lock will lead to an error.
-            must_err(&engine, k, ts - 1, 150);
-            must_err(&engine, k, ts + 1, 150);
+            let err = must_err(&engine, k, ts - 1, 150);
+            assert_txn_not_found(err, ts - 1, ts, k);
+            let err = must_err(&engine, k, ts + 1, 150);
+            assert_txn_not_found(err, ts + 1, ts, k);
             // The existing lock is not changed.
             must_success(&engine, k, ts, 90, 110);
         };
 
         // No lock.
-        must_err(&engine, k, 5, 100);
+        let err = must_err(&engine, k, 5, 100);
+        assert_txn_not_found(err, 5, TimeStamp::zero(), k);
 
         // Create a lock with TTL=100.
         // The initial TTL will be set to 0 after calling must_prewrite_put. Update it first.
@@ -217,8 +221,10 @@ pub mod tests {
         must_unlocked(&engine, k);
 
         // No lock.
-        must_err(&engine, k, 5, 100);
-        must_err(&engine, k, 10, 100);
+        let err = must_err(&engine, k, 5, 100);
+        assert_txn_not_found(err, 5, TimeStamp::zero(), k);
+        let err = must_err(&engine, k, 10, 100);
+        assert_txn_not_found(err, 10, TimeStamp::zero(), k);
 
         must_acquire_pessimistic_lock(&engine, k, k, 8, 15);
         must_pessimistic_locked(&engine, k, 8, 15);

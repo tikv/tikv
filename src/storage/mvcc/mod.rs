@@ -69,8 +69,12 @@ pub enum ErrorInner {
         key: Vec<u8>,
     },
 
-    #[error("txn not found {} key: {}", .start_ts, log_wrappers::Value::key(.key))]
-    TxnNotFound { start_ts: TimeStamp, key: Vec<u8> },
+    #[error("txn not found {} key: {}, lock_ts: {}", .start_ts, log_wrappers::Value::key(.key), .lock_ts)]
+    TxnNotFound {
+        start_ts: TimeStamp,
+        key: Vec<u8>,
+        lock_ts: TimeStamp,
+    },
 
     #[error(
         "lock type not match, start_ts:{}, key:{}, pessimistic:{}",
@@ -166,9 +170,14 @@ impl ErrorInner {
                 commit_ts: *commit_ts,
                 key: key.to_owned(),
             }),
-            ErrorInner::TxnNotFound { start_ts, key } => Some(ErrorInner::TxnNotFound {
+            ErrorInner::TxnNotFound {
+                start_ts,
+                key,
+                lock_ts,
+            } => Some(ErrorInner::TxnNotFound {
                 start_ts: *start_ts,
                 key: key.to_owned(),
+                lock_ts: *lock_ts,
             }),
             ErrorInner::LockTypeNotMatch {
                 start_ts,
