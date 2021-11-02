@@ -890,11 +890,17 @@ fn test_txn_store_txnkv_api_version() {
 
             store.batch_get_ok(&[key, key, key], 10, vec![b"x", b"x", b"x"]);
             store.batch_get_command_ok(&[key, key, key], 10, vec![b"x", b"x", b"x"]);
+
+            store.scan_ok(key, 100, 10, vec![Some((key, b"x"))]);
+            store.scan_locks_ok(20, key, b"", 10, vec![]);
         } else {
             store.get_err(key, 10);
             //TODO: store.put_err(key, b"x", 5, 10);
             store.batch_get_err(&[key, key, key], 10);
             store.batch_get_command_err(&[key, key, key], 10);
+
+            store.scan_err(key, 100, 10);
+            store.scan_locks_err(20, key, b"", 10);
         }
     }
 }
@@ -973,11 +979,11 @@ fn test_txn_store_rawkv_api_version() {
                 (Some(b"value".to_vec()), true),
             );
 
-            store.raw_batch_put_atomic_ok(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
             store.raw_batch_delete_atomic_ok(cf.to_owned(), vec![key.to_vec()]);
+            store.raw_batch_put_atomic_ok(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
 
             if let ApiVersion::V2 = config_api_version {
-                store.raw_checksum_ok(vec![range_raw_z.clone()], (0, 0, 0));
+                store.raw_checksum_ok(vec![range_raw_z.clone()], (0x2D6EE02DA4C9FDA, 1, 8));
             }
         } else {
             store.raw_get_err(cf.to_owned(), key.to_vec());
@@ -1005,8 +1011,8 @@ fn test_txn_store_rawkv_api_version() {
                 b"value".to_vec(),
             );
 
-            store.raw_batch_put_atomic_err(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
             store.raw_batch_delete_atomic_err(cf.to_owned(), vec![key.to_vec()]);
+            store.raw_batch_put_atomic_err(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
 
             if let ApiVersion::V2 = config_api_version {
                 store.raw_checksum_err(vec![range_raw_z.clone()]);

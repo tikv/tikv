@@ -182,16 +182,16 @@ impl<E: Engine> SyncTestStorage<E> {
     pub fn scan(
         &self,
         ctx: Context,
-        start_key: Key,
-        end_key: Option<Key>,
+        raw_start_key: Vec<u8>,
+        raw_end_key: Option<Vec<u8>>,
         limit: usize,
         key_only: bool,
         start_ts: impl Into<TimeStamp>,
     ) -> Result<Vec<Result<KvPair>>> {
         block_on(self.store.scan(
             ctx,
-            start_key,
-            end_key,
+            raw_start_key,
+            raw_end_key,
             limit,
             0,
             start_ts.into(),
@@ -203,16 +203,16 @@ impl<E: Engine> SyncTestStorage<E> {
     pub fn reverse_scan(
         &self,
         ctx: Context,
-        start_key: Key,
-        end_key: Option<Key>,
+        raw_start_key: Vec<u8>,
+        raw_end_key: Option<Vec<u8>>,
         limit: usize,
         key_only: bool,
         start_ts: impl Into<TimeStamp>,
     ) -> Result<Vec<Result<KvPair>>> {
         block_on(self.store.scan(
             ctx,
-            start_key,
-            end_key,
+            raw_start_key,
+            raw_end_key,
             limit,
             0,
             start_ts.into(),
@@ -279,13 +279,13 @@ impl<E: Engine> SyncTestStorage<E> {
         &self,
         ctx: Context,
         max_ts: impl Into<TimeStamp>,
-        start_key: Option<Key>,
-        end_key: Option<Key>,
+        raw_start_key: Option<Vec<u8>>,
+        raw_end_key: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<Vec<LockInfo>> {
         block_on(
             self.store
-                .scan_lock(ctx, max_ts.into(), start_key, end_key, limit),
+                .scan_lock(ctx, max_ts.into(), raw_start_key, raw_end_key, limit),
         )
     }
 

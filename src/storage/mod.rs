@@ -792,19 +792,24 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     pub fn scan(
         &self,
         mut ctx: Context,
-        start_key: Key,
-        end_key: Option<Key>,
+        raw_start_key: Vec<u8>,
+        raw_end_key: Option<Vec<u8>>,
         limit: usize,
         sample_step: usize,
         start_ts: TimeStamp,
         key_only: bool,
         reverse_scan: bool,
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
+        let (start_key, end_key) = (
+            Key::from_raw(&raw_start_key),
+            raw_end_key.as_ref().map(|x| Key::from_raw(&x[..])),
+        );
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
+        let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -827,7 +832,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                // TODO: check_api_version
+                let keys = Some(&raw_start_key[..])
+                    .into_iter()
+                    .chain(raw_end_key.as_ref().map(|x| &x[..]).into_iter());
+                Self::check_api_version(api_version, ctx.api_version, CMD, keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
@@ -938,15 +946,20 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         &self,
         mut ctx: Context,
         max_ts: TimeStamp,
-        start_key: Option<Key>,
-        end_key: Option<Key>,
+        raw_start_key: Option<Vec<u8>>,
+        raw_end_key: Option<Vec<u8>>,
         limit: usize,
     ) -> impl Future<Output = Result<Vec<LockInfo>>> {
+        let (start_key, end_key) = (
+            raw_start_key.as_ref().map(|x| Key::from_raw(&x[..])),
+            raw_end_key.as_ref().map(|x| Key::from_raw(&x[..])),
+        );
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
+        let api_version = self.api_version;
         // Do not allow replica read for scan_lock.
         ctx.set_replica_read(false);
 
@@ -972,7 +985,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                // TODO: check_api_version
+                let keys = raw_start_key
+                    .as_ref()
+                    .map(|x| &x[..])
+                    .into_iter()
+                    .chain(raw_end_key.as_ref().map(|x| &x[..]).into_iter());
+                Self::check_api_version(api_version, ctx.api_version, CMD, keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
@@ -2656,7 +2674,7 @@ mod tests {
             },
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"x"),
+                b"x".to_vec(),
                 None,
                 1000,
                 0,
@@ -2726,7 +2744,7 @@ mod tests {
             vec![None, None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 1000,
                 0,
@@ -2741,7 +2759,7 @@ mod tests {
             vec![None, None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 1000,
                 0,
@@ -2756,8 +2774,8 @@ mod tests {
             vec![None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
-                Some(Key::from_raw(b"c")),
+                b"\x00".to_vec(),
+                Some(b"c".to_vec()),
                 1000,
                 0,
                 5.into(),
@@ -2771,8 +2789,8 @@ mod tests {
             vec![None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
-                Some(Key::from_raw(b"b")),
+                b"\xff".to_vec(),
+                Some(b"b".to_vec()),
                 1000,
                 0,
                 5.into(),
@@ -2786,7 +2804,7 @@ mod tests {
             vec![None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 2,
                 0,
@@ -2801,7 +2819,7 @@ mod tests {
             vec![None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 2,
                 0,
@@ -2837,7 +2855,7 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 1000,
                 0,
@@ -2856,7 +2874,7 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 1000,
                 0,
@@ -2874,7 +2892,7 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 1000,
                 2,
@@ -2892,7 +2910,7 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 1000,
                 2,
@@ -2907,7 +2925,7 @@ mod tests {
             vec![Some((b"a".to_vec(), b"aa".to_vec()))],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 1,
                 2,
@@ -2922,7 +2940,7 @@ mod tests {
             vec![Some((b"c".to_vec(), b"cc".to_vec()))],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 1,
                 2,
@@ -2940,8 +2958,8 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
-                Some(Key::from_raw(b"c")),
+                b"\x00".to_vec(),
+                Some(b"c".to_vec()),
                 1000,
                 0,
                 5.into(),
@@ -2958,8 +2976,8 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
-                Some(Key::from_raw(b"b")),
+                b"\xff".to_vec(),
+                Some(b"b".to_vec()),
                 1000,
                 0,
                 5.into(),
@@ -2977,7 +2995,7 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 2,
                 0,
@@ -2995,7 +3013,7 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 2,
                 0,
@@ -3066,7 +3084,7 @@ mod tests {
             vec![None, None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 1000,
                 0,
@@ -3081,7 +3099,7 @@ mod tests {
             vec![None, None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 1000,
                 0,
@@ -3096,8 +3114,8 @@ mod tests {
             vec![None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
-                Some(Key::from_raw(b"c")),
+                b"\x00".to_vec(),
+                Some(b"c".to_vec()),
                 1000,
                 0,
                 5.into(),
@@ -3111,8 +3129,8 @@ mod tests {
             vec![None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
-                Some(Key::from_raw(b"b")),
+                b"\xff".to_vec(),
+                Some(b"b".to_vec()),
                 1000,
                 0,
                 5.into(),
@@ -3126,7 +3144,7 @@ mod tests {
             vec![None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 2,
                 0,
@@ -3141,7 +3159,7 @@ mod tests {
             vec![None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 2,
                 0,
@@ -3177,7 +3195,7 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 1000,
                 0,
@@ -3196,7 +3214,7 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 1000,
                 0,
@@ -3211,8 +3229,8 @@ mod tests {
             vec![Some((b"a".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
-                Some(Key::from_raw(b"c")),
+                b"\x00".to_vec(),
+                Some(b"c".to_vec()),
                 1000,
                 0,
                 5.into(),
@@ -3226,8 +3244,8 @@ mod tests {
             vec![Some((b"c".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
-                Some(Key::from_raw(b"b")),
+                b"\xff".to_vec(),
+                Some(b"b".to_vec()),
                 1000,
                 0,
                 5.into(),
@@ -3242,7 +3260,7 @@ mod tests {
             vec![Some((b"a".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 2,
                 0,
@@ -3257,7 +3275,7 @@ mod tests {
             vec![Some((b"c".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 2,
                 0,
@@ -5067,7 +5085,7 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             100.into(),
-            Some(Key::from_raw(b"a")),
+            Some(b"a".to_vec()),
             None,
             10,
         ))
@@ -5077,7 +5095,7 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             100.into(),
-            Some(Key::from_raw(b"y")),
+            Some(b"y".to_vec()),
             None,
             10,
         ))
@@ -5109,7 +5127,7 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             101.into(),
-            Some(Key::from_raw(b"b")),
+            Some(b"b".to_vec()),
             None,
             4,
         ))
@@ -5127,7 +5145,7 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             101.into(),
-            Some(Key::from_raw(b"b")),
+            Some(b"b".to_vec()),
             None,
             0,
         ))
@@ -5146,8 +5164,8 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             101.into(),
-            Some(Key::from_raw(b"b")),
-            Some(Key::from_raw(b"c")),
+            Some(b"b".to_vec()),
+            Some(b"c".to_vec()),
             0,
         ))
         .unwrap();
@@ -5156,8 +5174,8 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             101.into(),
-            Some(Key::from_raw(b"b")),
-            Some(Key::from_raw(b"z")),
+            Some(b"b".to_vec()),
+            Some(b"z".to_vec()),
             4,
         ))
         .unwrap();
@@ -5174,8 +5192,8 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             101.into(),
-            Some(Key::from_raw(b"b")),
-            Some(Key::from_raw(b"z")),
+            Some(b"b".to_vec()),
+            Some(b"z".to_vec()),
             3,
         ))
         .unwrap();
@@ -5206,8 +5224,8 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             101.into(),
-            Some(Key::from_raw(b"b")),
-            Some(Key::from_raw(b"z")),
+            Some(b"b".to_vec()),
+            Some(b"z".to_vec()),
             0,
         ))
         .unwrap();
@@ -5228,8 +5246,8 @@ mod tests {
         block_on(storage.scan_lock(
             Context::default(),
             101.into(),
-            Some(Key::from_raw(b"b")),
-            Some(Key::from_raw(b"z")),
+            Some(b"b".to_vec()),
+            Some(b"z".to_vec()),
             1,
         ))
         .unwrap_err();
@@ -5239,8 +5257,8 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             101.into(),
-            Some(Key::from_raw(b"b")),
-            Some(Key::from_raw(b"z")),
+            Some(b"b".to_vec()),
+            Some(b"z".to_vec()),
             0,
         ))
         .unwrap();
@@ -6612,7 +6630,7 @@ mod tests {
         let key_error = extract_key_error(
             &block_on(storage.scan(
                 ctx.clone(),
-                Key::from_raw(b"a"),
+                b"a".to_vec(),
                 None,
                 10,
                 0,

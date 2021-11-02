@@ -427,12 +427,12 @@ impl<E: Engine> AssertionStorage<E> {
 
     pub fn scan_ok(
         &self,
-        start_key: &[u8],
+        raw_start_key: &[u8],
         limit: usize,
         ts: impl Into<TimeStamp>,
         expect: Vec<Option<(&[u8], &[u8])>>,
     ) {
-        let key_address = Key::from_raw(start_key);
+        let key_address = raw_start_key.to_owned();
         let result = self
             .store
             .scan(self.ctx.clone(), key_address, None, limit, false, ts.into())
@@ -445,14 +445,21 @@ impl<E: Engine> AssertionStorage<E> {
         assert_eq!(result, expect);
     }
 
+    pub fn scan_err(&self, raw_start_key: &[u8], limit: usize, ts: impl Into<TimeStamp>) {
+        let key_address = raw_start_key.to_owned();
+        self.store
+            .scan(self.ctx.clone(), key_address, None, limit, false, ts.into())
+            .unwrap_err();
+    }
+
     pub fn reverse_scan_ok(
         &self,
-        start_key: &[u8],
+        raw_start_key: &[u8],
         limit: usize,
         ts: impl Into<TimeStamp>,
         expect: Vec<Option<(&[u8], &[u8])>>,
     ) {
-        let key_address = Key::from_raw(start_key);
+        let key_address = raw_start_key.to_owned();
         let result = self
             .store
             .reverse_scan(self.ctx.clone(), key_address, None, limit, false, ts.into())
@@ -472,7 +479,7 @@ impl<E: Engine> AssertionStorage<E> {
         ts: impl Into<TimeStamp>,
         expect: Vec<Option<&[u8]>>,
     ) {
-        let key_address = Key::from_raw(start_key);
+        let key_address = start_key.to_owned();
         let result = self
             .store
             .scan(self.ctx.clone(), key_address, None, limit, true, ts.into())
@@ -685,12 +692,12 @@ impl<E: Engine> AssertionStorage<E> {
         let start_key = if start_key.is_empty() {
             None
         } else {
-            Some(Key::from_raw(start_key))
+            Some(start_key.to_vec())
         };
         let end_key = if end_key.is_empty() {
             None
         } else {
-            Some(Key::from_raw(end_key))
+            Some(end_key.to_vec())
         };
 
         assert_eq!(
@@ -699,6 +706,29 @@ impl<E: Engine> AssertionStorage<E> {
                 .unwrap(),
             expect
         );
+    }
+
+    pub fn scan_locks_err(
+        &self,
+        max_ts: impl Into<TimeStamp>,
+        start_key: &[u8],
+        end_key: &[u8],
+        limit: usize,
+    ) {
+        let start_key = if start_key.is_empty() {
+            None
+        } else {
+            Some(start_key.to_vec())
+        };
+        let end_key = if end_key.is_empty() {
+            None
+        } else {
+            Some(end_key.to_vec())
+        };
+
+        self.store
+            .scan_locks(self.ctx.clone(), max_ts.into(), start_key, end_key, limit)
+            .unwrap_err();
     }
 
     pub fn resolve_lock_ok(

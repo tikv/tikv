@@ -366,7 +366,7 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     let locks = block_on(storage.scan_lock(
         Context::default(),
         20.into(),
-        Some(Key::from_raw(b"k1")),
+        Some(b"k1".to_vec()),
         None,
         2,
     ))
