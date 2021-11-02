@@ -200,6 +200,7 @@ waterfall-metrics = true
 io-reschedule-concurrent-max-count = 1234
 io-reschedule-hotpot-duration = "4321s"
 inspect-interval = "444ms"
+raft-msg-flush-interval-us = 2333
 
 [coprocessor]
 split-region-on-table = false
@@ -576,6 +577,10 @@ type = "plaintext"
 num-threads = 456
 batch-size = 7
 sst-max-size = "789MB"
+
+[backup.hadoop]
+home = "/root/hadoop"
+linux-user = "hadoop"
 
 [import]
 num-threads = 123

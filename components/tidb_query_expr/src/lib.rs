@@ -680,6 +680,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::AddDatetimeAndDuration => add_datetime_and_duration_fn_meta(),
         ScalarFuncSig::AddDatetimeAndString => add_datetime_and_string_fn_meta(),
         ScalarFuncSig::AddDateAndString => add_date_and_string_fn_meta(),
+        ScalarFuncSig::AddTimeDateTimeNull => add_time_datetime_null_fn_meta(),
+        ScalarFuncSig::AddTimeDurationNull => add_time_duration_null_fn_meta(),
+        ScalarFuncSig::AddTimeStringNull => add_time_string_null_fn_meta(),
         ScalarFuncSig::SubDatetimeAndDuration => sub_datetime_and_duration_fn_meta(),
         ScalarFuncSig::SubDatetimeAndString => sub_datetime_and_string_fn_meta(),
         ScalarFuncSig::FromDays => from_days_fn_meta(),
@@ -702,6 +705,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::SubDurationAndString => sub_duration_and_string_fn_meta(),
         ScalarFuncSig::MakeTime => make_time_fn_meta(),
         ScalarFuncSig::DurationDurationTimeDiff => duration_duration_time_diff_fn_meta(),
+        ScalarFuncSig::StringDurationTimeDiff => string_duration_time_diff_fn_meta(),
+        ScalarFuncSig::StringStringTimeDiff => string_string_time_diff_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
