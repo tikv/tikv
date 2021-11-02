@@ -4,22 +4,9 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
-[features]
-default = ["protobuf-codec"]
-protobuf-codec = [
-  "encryption/protobuf-codec",
-  "grpcio/protobuf-codec",
-  "tikv_util/protobuf-codec",
-]
-prost-codec = [
-  "encryption/prost-codec",
-  "grpcio/prost-codec",
-  "tikv_util/prost-codec",
-]
-
 [dependencies]
 encryption = { path = "../encryption", default-features = false }
-grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 serde = "1.0"
 serde_derive = "1.0"
 serde_json = "1.0"

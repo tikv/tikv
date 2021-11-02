@@ -4553,7 +4553,6 @@ mod tests {
     use crate::store::msg::ExtCallback;
     use crate::store::util::u64_to_timespec;
     use kvproto::raft_cmdpb;
-    #[cfg(feature = "protobuf-codec")]
     use protobuf::ProtobufEnum;
 
     #[test]

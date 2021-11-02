@@ -12,7 +12,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
+default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -33,76 +33,6 @@ cloud-aws = [
 cloud-gcp = [
   "encryption_export/cloud-gcp",
   "sst_importer/cloud-gcp",
-]
-protobuf-codec = [
-  "protobuf/bytes",
-  "batch-system/protobuf-codec",
-  "codec/protobuf-codec",
-  "concurrency_manager/protobuf-codec",
-  "encryption_export/protobuf-codec",
-  "engine_panic/protobuf-codec",
-  "engine_rocks/protobuf-codec",
-  "engine_test/protobuf-codec",
-  "engine_traits/protobuf-codec",
-  "engine_traits_tests/protobuf-codec",
-  "error_code/protobuf-codec",
-  "grpcio/protobuf-codec",
-  "into_other/protobuf-codec",
-  "keys/protobuf-codec",
-  "kvproto/protobuf-codec",
-  "pd_client/protobuf-codec",
-  "raft/protobuf-codec",
-  "raftstore/protobuf-codec",
-  "raft_log_engine/protobuf-codec",
-  "security/protobuf-codec",
-  "sst_importer/protobuf-codec",
-  "tidb_query_aggr/protobuf-codec",
-  "tidb_query_common/protobuf-codec",
-  "tidb_query_datatype/protobuf-codec",
-  "tidb_query_executors/protobuf-codec",
-  "tidb_query_expr/protobuf-codec",
-  "tipb/protobuf-codec",
-  "tikv_kv/protobuf-codec",
-  "tikv_util/protobuf-codec",
-  "txn_types/protobuf-codec",
-  "grpcio-health/protobuf-codec",
-  "file_system/protobuf-codec",
-  "resource_metering/protobuf-codec",
-  "protobuf/bytes",
-]
-prost-codec = [
-  "batch-system/prost-codec",
-  "codec/prost-codec",
-  "concurrency_manager/prost-codec",
-  "encryption_export/prost-codec",
-  "engine_panic/prost-codec",
-  "engine_rocks/prost-codec",
-  "engine_test/prost-codec",
-  "engine_traits/prost-codec",
-  "engine_traits_tests/prost-codec",
-  "error_code/prost-codec",
-  "grpcio/prost-codec",
-  "into_other/prost-codec",
-  "keys/prost-codec",
-  "kvproto/prost-codec",
-  "pd_client/prost-codec",
-  "raft/prost-codec",
-  "raftstore/prost-codec",
-  "raft_log_engine/prost-codec",
-  "security/prost-codec",
-  "sst_importer/prost-codec",
-  "tidb_query_aggr/prost-codec",
-  "tidb_query_common/prost-codec",
-  "tidb_query_datatype/prost-codec",
-  "tidb_query_executors/prost-codec",
-  "tidb_query_expr/prost-codec",
-  "tipb/prost-codec",
-  "tikv_kv/prost-codec",
-  "tikv_util/prost-codec",
-  "txn_types/prost-codec",
-  "grpcio-health/prost-codec",
-  "file_system/prost-codec",
-  "resource_metering/prost-codec",
 ]
 testexport = ["raftstore/testexport"]
 test-engines-rocksdb = [
@@ -128,7 +58,6 @@ name = "tikv"
 anyhow = "1.0"
 async-stream = "0.2"
 async-trait = "0.1"
-async-std = "1.10"
 backtrace = "0.3"
 batch-system = { path = "components/batch-system", default-features = false }
 byteorder = "1.2"
@@ -152,8 +81,8 @@ fs2 = "0.4"
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
-grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
-grpcio-health = { version = "0.9", default-features = false }
+grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio-health = { version = "0.9", default-features = false, features = ["protobuf-codec"] }
 hex = "0.4"
 hyper-tls = "0.5"
 itertools = "0.10"
@@ -163,7 +92,7 @@ hyper-openssl = "0.9"
 http = "0"
 into_other = { path = "components/into_other", default-features = false }
 keys = { path = "components/keys", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.3"
 libc = "0.2"
 libloading = "0.7"
@@ -179,10 +108,9 @@ num_cpus = "1"
 pd_client = { path = "components/pd_client", default-features = false }
 pin-project = "1.0"
 pnet_datalink = "0.23"
-prost = "0.7"
 pprof = { version = "^0.4", default-features = false, features = ["flamegraph", "protobuf"] }
-protobuf = "2.8"
-raft = { version = "0.6.0-alpha", default-features = false }
+protobuf = { version = "2.8", features = ["bytes"] }
+raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
 raftstore = { path = "components/raftstore", default-features = false }
 raft_log_engine = { path = "components/raft_log_engine", default-features = false }
 rand = "0.7.3"
@@ -218,7 +146,7 @@ tikv_util = { path = "components/tikv_util", default-features = false }
 collections = { path = "components/collections" }
 coprocessor_plugin_api = { path = "components/coprocessor_plugin_api" }
 time = "0.1"
-tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
+tipb = { git = "https://github.com/pingcap/tipb.git" }
 tokio = { version = "1.12", features = ["full"] }
 tokio-timer = "0.2"
 tokio-openssl = "0.6"

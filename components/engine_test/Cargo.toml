@@ -6,21 +6,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec", "test-engines-rocksdb"]
-
-protobuf-codec = [
-  "engine_panic/protobuf-codec",
-  "engine_rocks/protobuf-codec",
-  "engine_traits/protobuf-codec",
-  "tikv_util/protobuf-codec",
-]
-
-prost-codec = [
-  "engine_panic/prost-codec",
-  "engine_rocks/prost-codec",
-  "engine_traits/prost-codec",
-  "tikv_util/prost-codec",
-]
+default = ["test-engines-rocksdb"]
 
 test-engine-kv-panic = []
 test-engine-kv-rocksdb = []
