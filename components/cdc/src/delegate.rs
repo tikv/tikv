@@ -6,15 +6,6 @@ use std::sync::Arc;
 
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    event::{
-        row::OpType as EventRowOpType, Entries as EventEntries, Event as Event_oneof_event,
-        LogType as EventLogType, Row as EventRow,
-    },
-    Error as EventError, Event,
-};
-#[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::{
     Error as EventError, Event, EventEntries, EventLogType, EventRow, EventRowOpType,
     Event_oneof_event,
@@ -763,14 +754,7 @@ impl Delegate {
 }
 
 fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {
-    #[cfg(feature = "prost-codec")]
-    {
-        row.r#type = ty.into();
-    }
-    #[cfg(not(feature = "prost-codec"))]
-    {
-        row.r_type = ty;
-    }
+    row.r_type = ty;
 }
 
 fn make_overlapped_rollback(key: Key, row: &mut EventRow) {

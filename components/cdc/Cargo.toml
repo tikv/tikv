@@ -5,38 +5,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec", "test-engines-rocksdb"]
-protobuf-codec = [
-  "protobuf/bytes",
-  "concurrency_manager/protobuf-codec",
-  "engine_traits/protobuf-codec",
-  "grpcio/protobuf-codec",
-  "kvproto/protobuf-codec",
-  "pd_client/protobuf-codec",
-  "raft/protobuf-codec",
-  "raftstore/protobuf-codec",
-  "resolved_ts/protobuf-codec",
-  "security/protobuf-codec",
-  "tikv/protobuf-codec",
-  "tikv_kv/protobuf-codec",
-  "tikv_util/protobuf-codec",
-  "txn_types/protobuf-codec",
-]
-prost-codec = [
-  "concurrency_manager/prost-codec",
-  "engine_traits/prost-codec",
-  "grpcio/prost-codec",
-  "kvproto/prost-codec",
-  "pd_client/prost-codec",
-  "raft/prost-codec",
-  "raftstore/prost-codec",
-  "resolved_ts/prost-codec",
-  "security/prost-codec",
-  "tikv/prost-codec",
-  "tikv_kv/prost-codec",
-  "tikv_util/prost-codec",
-  "txn_types/prost-codec",
-]
+default = ["test-engines-rocksdb"]
 test-engines-rocksdb = [
   "tikv/test-engines-rocksdb",
 ]
@@ -57,10 +26,10 @@ bitflags = "1.0"
 crossbeam = "0.8"
 engine_traits = { path = "../engine_traits", default-features = false }
 futures = "0.3"
-grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 pd_client = { path = "../pd_client", default-features = false }
-raft = { version = "0.6.0-alpha", default-features = false }
+raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
 raftstore = { path = "../raftstore", default-features = false }
 resolved_ts = { path = "../resolved_ts", default-features = false }
 security = { path = "../security", default-features = false }
@@ -81,8 +50,7 @@ lazy_static = "1.3"
 log_wrappers = { path = "../log_wrappers" }
 prometheus = { version = "0.12", default-features = false, features = ["nightly"] }
 prometheus-static-metric = "0.5"
-protobuf = "2.8"
-prost = "0.7"
+protobuf = { version = "2.8", features = ["bytes"] }
 futures-timer = "3.0"
 
 [dev-dependencies]
@@ -92,7 +60,7 @@ tempfile = "3.0"
 test_raftstore = { path = "../test_raftstore", default-features = false }
 test_util = { path = "../test_util", default-features = false }
 panic_hook = { path = "../panic_hook" }
-raft = { version = "0.6.0-alpha", default-features = false }
+raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
 time = "0.1"
 criterion = "0.3"
 
@@ -109,4 +77,3 @@ required-features = ["failpoints"]
 [[bench]]
 name = "cdc_event"
 harness = false
-required-features = ["protobuf-codec"]

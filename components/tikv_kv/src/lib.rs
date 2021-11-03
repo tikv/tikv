@@ -164,10 +164,7 @@ pub struct SnapContext<'a> {
 impl<'a> Default for SnapContext<'a> {
     fn default() -> Self {
         SnapContext {
-            #[cfg(feature = "protobuf-codec")]
             pb_ctx: Default::default(),
-            #[cfg(feature = "prost-codec")]
-            pb_ctx: Context::default_ref(),
             read_id: None,
             start_ts: Default::default(),
             key_ranges: Default::default(),
