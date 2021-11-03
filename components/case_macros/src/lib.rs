@@ -83,5 +83,3 @@ pub fn kebab_case(stream: TokenStream) -> TokenStream {
 pub fn snake_case(stream: TokenStream) -> TokenStream {
     transform_idents_in_stream_to_string!(stream, &|s: String| to_snake(&s))
 }
-
-
