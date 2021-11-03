@@ -445,15 +445,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
-                // The bypass_locks set will be checked at most once. `TsSet::vec` is more efficient
-                // here.
+                // The bypass_locks and access_locks set will be checked at most once.
+                // `TsSet::vec` is more efficient here.
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
+                let access_locks = TsSet::vec_from_u64s(ctx.take_committed_locks());
 
                 let snap_ctx = prepare_snap_ctx(
                     &ctx,
                     iter::once(&key),
                     start_ts,
                     &bypass_locks,
+                    &access_locks,
                     &concurrency_manager,
                     CMD,
                 )?;
@@ -469,6 +471,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
+                        access_locks,
                         false,
                     );
                     let result = snap_store
@@ -565,6 +568,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let isolation_level = ctx.get_isolation_level();
                     let fill_cache = !ctx.get_not_fill_cache();
                     let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
+                    let access_locks = TsSet::vec_from_u64s(ctx.take_committed_locks());
                     let region_id = ctx.get_region_id();
 
                     let snap_ctx = match prepare_snap_ctx(
@@ -572,6 +576,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         iter::once(&key),
                         start_ts,
                         &bypass_locks,
+                        &access_locks,
                         &concurrency_manager,
                         CMD,
                     ) {
@@ -597,6 +602,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         isolation_level,
                         fill_cache,
                         bypass_locks,
+                        access_locks,
                         region_id,
                         id,
                     ));
@@ -610,6 +616,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         isolation_level,
                         fill_cache,
                         bypass_locks,
+                        access_locks,
                         region_id,
                         id,
                     ) = req_snap;
@@ -620,6 +627,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 .isolation_level(isolation_level)
                                 .multi(false)
                                 .bypass_locks(bypass_locks)
+                                .access_locks(access_locks)
                                 .build()
                             {
                                 Ok(mut point_getter) => {
@@ -714,12 +722,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
+                let access_locks = TsSet::from_u64s(ctx.take_committed_locks());
 
                 let snap_ctx = prepare_snap_ctx(
                     &ctx,
                     &keys,
                     start_ts,
                     &bypass_locks,
+                    &access_locks,
                     &concurrency_manager,
                     CMD,
                 )?;
@@ -735,6 +745,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
+                        access_locks,
                         false,
                     );
                     let result = snap_store
@@ -832,6 +843,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
+                let access_locks = TsSet::from_u64s(ctx.take_committed_locks());
 
                 // Update max_ts and check the in-memory lock table before getting the snapshot
                 if !ctx.get_stale_read() {
@@ -841,6 +853,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now();
                     concurrency_manager
                         .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
+                            // TODO(youjiali1995): seems needn't do this.
+                            if access_locks.contains(lock.ts) {
+                                return Ok(());
+                            }
                             Lock::check_ts_conflict(
                                 Cow::Borrowed(lock),
                                 key,
@@ -887,6 +903,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
+                        access_locks,
                         false,
                     );
 
@@ -2067,6 +2084,7 @@ fn prepare_snap_ctx<'a>(
     keys: impl IntoIterator<Item = &'a Key> + Clone,
     start_ts: TimeStamp,
     bypass_locks: &'a TsSet,
+    access_locks: &'a TsSet,
     concurrency_manager: &ConcurrencyManager,
     cmd: CommandKind,
 ) -> Result<SnapContext<'a>> {
@@ -2081,6 +2099,10 @@ fn prepare_snap_ctx<'a>(
         for key in keys.clone() {
             concurrency_manager
                 .read_key_check(key, |lock| {
+                    // TODO(youjiali1995): seems needn't do this.
+                    if access_locks.contains(lock.ts) {
+                        return Ok(());
+                    }
                     Lock::check_ts_conflict(Cow::Borrowed(lock), key, start_ts, bypass_locks)
                 })
                 .map_err(|e| {
@@ -6537,22 +6559,32 @@ mod tests {
             &block_on(storage.get(ctx.clone(), b"key".to_vec(), 100.into())).unwrap_err(),
         );
         assert_eq!(key_error.get_locked().get_key(), b"key");
+        // Ignore memory locks in resolved or committed locks.
+        ctx.set_resolved_locks(vec![10]);
+        assert!(block_on(storage.get(ctx.clone(), b"key".to_vec(), 100.into())).is_ok());
+        ctx.take_resolved_locks();
+        ctx.set_committed_locks(vec![10]);
+        assert!(block_on(storage.get(ctx.clone(), b"key".to_vec(), 100.into())).is_ok());
+        ctx.take_committed_locks();
 
         // Test batch_get
-        let key_error = extract_key_error(
-            &block_on(storage.batch_get(
-                ctx.clone(),
-                vec![b"a".to_vec(), b"key".to_vec()],
-                100.into(),
-            ))
-            .unwrap_err(),
-        );
+        let batch_get = |ctx| {
+            block_on(storage.batch_get(ctx, vec![b"a".to_vec(), b"key".to_vec()], 100.into()))
+        };
+        let key_error = extract_key_error(&batch_get(ctx.clone()).unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");
+        // Ignore memory locks in resolved or committed locks.
+        ctx.set_resolved_locks(vec![10]);
+        assert!(batch_get(ctx.clone()).is_ok());
+        ctx.take_resolved_locks();
+        ctx.set_committed_locks(vec![10]);
+        assert!(batch_get(ctx.clone()).is_ok());
+        ctx.take_committed_locks();
 
         // Test scan
-        let key_error = extract_key_error(
-            &block_on(storage.scan(
-                ctx.clone(),
+        let scan = |ctx| {
+            block_on(storage.scan(
+                ctx,
                 Key::from_raw(b"a"),
                 None,
                 10,
@@ -6561,9 +6593,16 @@ mod tests {
                 false,
                 false,
             ))
-            .unwrap_err(),
-        );
+        };
+        let key_error = extract_key_error(&scan(ctx.clone()).unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");
+        // Ignore memory locks in resolved or committed locks.
+        ctx.set_resolved_locks(vec![10]);
+        assert!(scan(ctx.clone()).is_ok());
+        ctx.take_resolved_locks();
+        ctx.set_committed_locks(vec![10]);
+        assert!(scan(ctx.clone()).is_ok());
+        ctx.take_committed_locks();
 
         // Test batch_get_command
         let mut req1 = GetRequest::default();
@@ -6574,18 +6613,88 @@ mod tests {
         req2.set_context(ctx);
         req2.set_key(b"key".to_vec());
         req2.set_version(100);
-        let consumer = GetConsumer::new();
-        block_on(storage.batch_get_command(
-            vec![req1, req2],
-            vec![1, 2],
-            consumer.clone(),
-            Instant::now(),
-        ))
-        .unwrap();
-        let res = consumer.take_data();
+        let batch_get_command = |req2| {
+            let consumer = GetConsumer::new();
+            block_on(storage.batch_get_command(
+                vec![req1.clone(), req2],
+                vec![1, 2],
+                consumer.clone(),
+                Instant::now(),
+            ))
+            .unwrap();
+            consumer.take_data()
+        };
+        let res = batch_get_command(req2.clone());
         assert!(res[0].is_ok());
         let key_error = extract_key_error(res[1].as_ref().unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");
+        // Ignore memory locks in resolved or committed locks.
+        req2.mut_context().set_resolved_locks(vec![10]);
+        let res = batch_get_command(req2.clone());
+        assert!(res[0].is_ok());
+        assert!(res[1].is_ok());
+        req2.mut_context().take_resolved_locks();
+        req2.mut_context().set_committed_locks(vec![10]);
+        let res = batch_get_command(req2.clone());
+        assert!(res[0].is_ok());
+        assert!(res[1].is_ok());
+    }
+
+    #[test]
+    fn test_read_access_locks() {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
+            .build()
+            .unwrap();
+
+        let (k1, v1) = (b"k1".to_vec(), b"v1".to_vec());
+        let (k2, v2) = (b"k2".to_vec(), b"v2".to_vec());
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![
+                        Mutation::Put((Key::from_raw(&k1), v1.clone())),
+                        Mutation::Put((Key::from_raw(&k2), v2.clone())),
+                    ],
+                    k1.clone(),
+                    100.into(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let mut ctx = Context::default();
+        ctx.set_isolation_level(IsolationLevel::Si);
+        ctx.set_committed_locks(vec![100]);
+        assert_eq!(
+            block_on(storage.get(ctx.clone(), k1.clone(), 110.into()))
+                .unwrap()
+                .0,
+            Some(v1.clone())
+        );
+        let res =
+            block_on(storage.batch_get(ctx.clone(), vec![k1.clone(), k2.clone()], 110.into()))
+                .unwrap()
+                .0;
+        if &res[0].as_ref().unwrap().0 == &k1 {
+            assert_eq!(&res[0].as_ref().unwrap().1, &v1);
+            assert_eq!(&res[1].as_ref().unwrap().1, &v2);
+        } else {
+            assert_eq!(&res[0].as_ref().unwrap().1, &v2);
+            assert_eq!(&res[1].as_ref().unwrap().1, &v1);
+        }
+
+        let mut req = GetRequest::default();
+        req.set_context(ctx);
+        req.set_key(k1);
+        req.set_version(110);
+        let consumer = GetConsumer::new();
+        block_on(storage.batch_get_command(vec![req], vec![1], consumer.clone(), Instant::now()))
+            .unwrap();
+        let res = consumer.take_data();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].as_ref().unwrap(), &Some(v1))
     }
 
     #[test]

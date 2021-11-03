@@ -116,6 +116,9 @@ pub struct ReqContext {
     /// The set of timestamps of locks that can be bypassed during the reading.
     pub bypass_locks: TsSet,
 
+    /// The set of timestamps of locks that should be accessed during the reading.
+    pub access_locks: TsSet,
+
     /// The data version to match. If it matches the underlying data version,
     /// request will not be processed (i.e. cache hit).
     ///
@@ -146,6 +149,7 @@ impl ReqContext {
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
+        let access_locks = TsSet::from_u64s(context.take_committed_locks());
         let lower_bound = match ranges.first().as_ref() {
             Some(range) => range.start.clone(),
             None => vec![],
@@ -163,6 +167,7 @@ impl ReqContext {
             txn_start_ts,
             ranges,
             bypass_locks,
+            access_locks,
             cache_match_version,
             lower_bound,
             upper_bound,
