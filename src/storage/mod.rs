@@ -362,10 +362,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         !Self::is_raw_command(cmd)
     }
 
-    // pub fn api_version(&self) -> ApiVersion {
-    //     self.api_version
-    // }
-
     /// Check api version.
     ///
     /// When config.api_version = V1: accept request of V1 only.

@@ -1842,6 +1842,14 @@ fn test_api_version() {
             assert!(!get_resp.has_error());
             assert!(get_resp.get_exec_details_v2().has_time_detail());
         } else {
+            let expect_err = |errs: &[KeyError]| {
+                assert!(errs.len() > 0);
+                assert!(
+                    errs[0].get_abort().starts_with("Error(Other") // Error(Other("[src/storage/mod.rs:1081]: can't sched txn cmd(prewrite) with TTL enabled"))
+                    || errs[0].get_abort().starts_with("Error(ApiVersionNotMatched") // Error(ApiVersionNotMatched { storage_api_version: V1, req_api_version: V2 })
+                );
+            };
+
             // Prewrite
             ts += 1;
             let prewrite_start_version = ts;
@@ -1856,7 +1864,7 @@ fn test_api_version() {
                 k.clone(),
                 prewrite_start_version,
             );
-            assert!(!res.errors.is_empty());
+            expect_err(res.get_errors());
 
             // Pessimistic Lock
             ts += 1;
@@ -1864,6 +1872,7 @@ fn test_api_version() {
             assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
             assert_eq!(resp.errors.len(), 1);
             assert!(!resp.errors[0].has_locked(), "{:?}", resp.get_errors());
+            expect_err(resp.get_errors());
         }
     }
 }

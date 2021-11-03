@@ -1864,12 +1864,8 @@ macro_rules! txn_command_future {
             $storage: &Storage<E, L>,
             $req: $req_ty,
         ) -> impl Future<Output = ServerResult<$resp_ty>> {
-            let pre_check = $pre_check;
             let (cb, f) = paired_future_callback();
-            let res = match pre_check {
-                Ok(()) => $storage.sched_txn_command($req.into(), cb),
-                Err(e) => Err(e)
-            };
+            let res = $pre_check.and($storage.sched_txn_command($req.into(), cb));
 
             async move {
                 let $v = match res {
