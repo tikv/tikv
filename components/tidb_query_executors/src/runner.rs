@@ -395,7 +395,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         BATCH_INITIAL_SIZE
     }
 
-    pub async fn handle_request(&mut self) -> Result<SelectResponse> {
+    pub async fn handle_request(&mut self) -> Result<(SelectResponse, IntervalRange)> {
         let mut chunks = vec![];
         let mut batch_size = Self::batch_initial_size();
         let mut warnings = self.config.new_eval_warnings();
@@ -426,7 +426,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
             if drained {
                 self.out_most_executor
-                    .collect_exec_stats(&mut self.exec_stats);
+                .collect_exec_stats(&mut self.exec_stats);
+                
+                let range = self.out_most_executor.take_scanned_range();
 
                 let mut sel_resp = SelectResponse::default();
                 sel_resp.set_chunks(chunks.into());
@@ -459,7 +461,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
                 sel_resp.set_warnings(warnings.warnings.into());
                 sel_resp.set_warning_count(warnings.warning_cnt as i64);
-                return Ok(sel_resp);
+                return Ok((sel_resp, range));
             }
 
             // Grow batch size

@@ -120,15 +120,17 @@ impl RequestHandler for BatchDAGHandler {
 }
 
 fn handle_qe_response(
-    result: tidb_query_common::Result<SelectResponse>,
+    result: tidb_query_common::Result<(SelectResponse, IntervalRange)>,
     can_be_cached: bool,
     data_version: Option<u64>,
 ) -> Result<Response> {
     use tidb_query_common::error::ErrorInner;
 
     match result {
-        Ok(sel_resp) => {
+        Ok((sel_resp, range)) => {
             let mut resp = Response::default();
+            resp.mut_range().set_start(range.lower_inclusive);
+            resp.mut_range().set_end(range.upper_exclusive);
             resp.set_data(box_try!(sel_resp.write_to_bytes()));
             resp.set_can_be_cached(can_be_cached);
             resp.set_is_cache_hit(false);
