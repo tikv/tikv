@@ -6,7 +6,7 @@ fn test_snapshot_encryption<T: Simulator>(cluster: &mut Cluster<T>) {
     configure_for_encryption(cluster);
     cluster.pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
-    for i in 0..100 {
+    for i in 0..10 {
         cluster.must_put(format!("key-{:02}", i).as_bytes(), b"value");
         cluster.must_put_cf("write", format!("key-{:02}", i).as_bytes(), b"value");
         cluster.must_put_cf("lock", format!("key-{:02}", i).as_bytes(), b"value");
@@ -25,12 +25,15 @@ fn test_snapshot_encryption<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_node_snapshot_encryption() {
     let mut cluster = new_node_cluster(0, 2);
     test_snapshot_encryption(&mut cluster);
-    std::mem::forget(cluster.take_path());
+    let _path = cluster.take_path();
+    drop(cluster);
 }
 
 #[test]
 fn test_server_snapshot_encryption() {
     let mut cluster = new_server_cluster(0, 2);
     test_snapshot_encryption(&mut cluster);
-    std::mem::forget(cluster.take_path());
+    // Directory should be cleaned up before background task stopped.
+    let _path = cluster.take_path();
+    drop(cluster);
 }
