@@ -53,7 +53,7 @@ impl<T: Storage> RangesScanner<T> {
             scan_backward_in_range,
             is_key_only,
             scanned_rows_per_range: Vec::with_capacity(ranges_len),
-            is_scanned_range_aware: true,//is_scanned_range_aware,
+            is_scanned_range_aware,
             current_range: IntervalRange {
                 lower_inclusive: Vec::with_capacity(KEY_BUFFER_CAPACITY),
                 upper_exclusive: Vec::with_capacity(KEY_BUFFER_CAPACITY),

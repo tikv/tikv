@@ -153,6 +153,7 @@ pub fn build_executors<S: Storage + 'static>(
     ranges: Vec<KeyRange>,
     config: Arc<EvalConfig>,
     is_scanned_range_aware: bool,
+    page_size: Option<u64>,
 ) -> Result<Box<dyn BatchExecutor<StorageStats = S::Statistics>>> {
     let mut executor_descriptors = executor_descriptors.into_iter();
     let mut first_ed = executor_descriptors
@@ -331,6 +332,17 @@ pub fn build_executors<S: Storage + 'static>(
         executor = new_executor;
         is_src_scan_executor = false;
     }
+    
+    if let Some(page_size) = page_size {
+        executor = Box::new(
+            BatchLimitExecutor::new(
+                executor,  
+                page_size as usize,
+                is_src_scan_executor,
+            )?
+            .collect_summary(summary_slot_index),
+        )
+    }
 
     Ok(executor)
 }
@@ -343,6 +355,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         deadline: Deadline,
         stream_row_limit: usize,
         is_streaming: bool,
+        paging_size: Option<u64>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -353,7 +366,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             storage,
             ranges,
             config.clone(),
-            is_streaming, // For streaming request, executors will continue scan from range end where last scan is finished
+            is_streaming || paging_size.is_some(), // For streaming request, executors will continue scan from range end where last scan is finished
+            paging_size,
         )?;
 
         let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
