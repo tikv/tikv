@@ -9,7 +9,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
-use std::{mem, u64};
+use std::u64;
 
 use collections::HashMap;
 use engine_rocks::FlowInfo;
@@ -67,7 +67,7 @@ pub struct FlowController {
     discard_ratio: Arc<AtomicU32>,
     limiter: Arc<Limiter>,
     enabled: Arc<AtomicBool>,
-    tx: SyncSender<Msg>,
+    tx: Option<SyncSender<Msg>>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -84,7 +84,7 @@ impl Drop for FlowController {
             return;
         }
 
-        if let Err(e) = self.tx.send(Msg::Close) {
+        if let Some(Err(e)) = self.tx.as_ref().map(|tx| tx.send(Msg::Close)) {
             error!("send quit message for flow controller failed"; "err" => ?e);
             return;
         }
@@ -99,14 +99,11 @@ impl Drop for FlowController {
 impl FlowController {
     // only for test
     pub fn empty() -> Self {
-        let (tx, rx) = mpsc::sync_channel(2);
-        mem::forget(rx);
-
         Self {
             discard_ratio: Arc::new(AtomicU32::new(0)),
             limiter: Arc::new(Limiter::new(f64::INFINITY)),
             enabled: Arc::new(AtomicBool::new(false)),
-            tx,
+            tx: None,
             handle: None,
         }
     }
@@ -136,7 +133,7 @@ impl FlowController {
             discard_ratio,
             limiter,
             enabled: Arc::new(AtomicBool::new(config.enable)),
-            tx,
+            tx: Some(tx),
             handle: Some(checker.start(rx, flow_info_receiver)),
         }
     }
@@ -167,10 +164,12 @@ impl FlowController {
 
     pub fn enable(&self, enable: bool) {
         self.enabled.store(enable, Ordering::Relaxed);
-        if enable {
-            self.tx.send(Msg::Enable).unwrap();
-        } else {
-            self.tx.send(Msg::Disable).unwrap();
+        if let Some(tx) = &self.tx {
+            if enable {
+                tx.send(Msg::Enable).unwrap();
+            } else {
+                tx.send(Msg::Disable).unwrap();
+            }
         }
     }
 
