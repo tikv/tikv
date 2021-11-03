@@ -5,21 +5,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec", "cloud-aws", "cloud-gcp"]
-protobuf-codec = [
-  "encryption_export/protobuf-codec",
-  "grpcio/protobuf-codec",
-  "kvproto/protobuf-codec",
-  "security/protobuf-codec",
-  "tikv_util/protobuf-codec",
-]
-prost-codec = [
-  "encryption_export/prost-codec",
-  "grpcio/prost-codec",
-  "kvproto/prost-codec",
-  "security/prost-codec",
-  "tikv_util/prost-codec",
-]
+default = ["cloud-aws", "cloud-gcp"]
 cloud-aws = [ "encryption_export/cloud-aws" ]
 cloud-gcp = [ "encryption_export/cloud-gcp" ]
 
@@ -27,8 +13,8 @@ cloud-gcp = [ "encryption_export/cloud-gcp" ]
 backtrace = "0.3"
 encryption_export = { path = "../encryption/export", default-features = false }
 fail = "0.4"
-grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 rand = "0.8"
 rand_isaac = "0.3"
 security = { path = "../security", default-features = false }

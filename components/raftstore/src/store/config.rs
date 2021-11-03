@@ -211,6 +211,8 @@ pub struct Config {
     pub io_reschedule_concurrent_max_count: usize,
     pub io_reschedule_hotpot_duration: ReadableDuration,
 
+    pub raft_msg_flush_interval_us: u64,
+
     // Deprecated! These configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
@@ -303,6 +305,7 @@ impl Default for Config {
             waterfall_metrics: false,
             io_reschedule_concurrent_max_count: 4,
             io_reschedule_hotpot_duration: ReadableDuration::secs(5),
+            raft_msg_flush_interval_us: 250,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -704,6 +707,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["io_reschedule_hotpot_duration"])
             .set(self.io_reschedule_hotpot_duration.as_secs() as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_msg_flush_interval_us"])
+            .set(self.raft_msg_flush_interval_us as f64);
     }
 
     fn write_change_into_metrics(change: ConfigChange) {

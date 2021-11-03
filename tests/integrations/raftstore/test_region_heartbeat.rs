@@ -183,8 +183,6 @@ fn test_region_heartbeat_timestamp() {
     panic!("reported ts should be updated");
 }
 
-// FIXME(nrc) failing on CI only
-#[cfg(feature = "protobuf-codec")]
 #[test]
 fn test_region_heartbeat_term() {
     let mut cluster = new_server_cluster(0, 3);
