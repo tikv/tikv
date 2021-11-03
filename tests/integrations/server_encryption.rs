@@ -17,8 +17,8 @@ fn test_snapshot_encryption<T: Simulator>(cluster: &mut Cluster<T>) {
     // ensure that peer 2 has all previous logs.
     cluster.must_put(b"00", b"00");
     must_get_equal(&cluster.get_engine(2), b"key-00", b"value");
-    must_get_cf_equal(&cluster.get_engine(2), "lock", b"key-50", b"value");
-    must_get_cf_equal(&cluster.get_engine(2), "write", b"key-99", b"value");
+    must_get_cf_equal(&cluster.get_engine(2), "lock", b"key-05", b"value");
+    must_get_cf_equal(&cluster.get_engine(2), "write", b"key-09", b"value");
 }
 
 #[test]
