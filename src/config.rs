@@ -3268,11 +3268,17 @@ mod tests {
 
     #[test]
     fn test_case_macro() {
-        let h = camel_to_kebab!(HelloWorld);
+        let h = kebab_case!(HelloWorld);
         assert_eq!(h, "hello-world");
 
-        let h = camel_to_kebab!(WelcomeToMyHouse);
+        let h = kebab_case!(WelcomeToMyHouse);
         assert_eq!(h, "welcome-to-my-house");
+
+        let h = snake_case!(HelloWorld);
+        assert_eq!(h, "hello_world");
+
+        let h = snake_case!(WelcomeToMyHouse);
+        assert_eq!(h, "welcome_to_my_house");
     }
 
     #[test]

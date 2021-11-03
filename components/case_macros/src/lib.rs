@@ -5,6 +5,7 @@ extern crate proc_macro;
 
 use proc_macro::{Group, Ident, Literal, TokenStream, TokenTree};
 
+#[inline]
 fn transform_non_keyword_ident_to_string_liternal<Transform>(
     ident: &Ident,
     transform: Transform,
@@ -15,7 +16,7 @@ where
     Literal::string(&transform(ident.to_string()))
 }
 
-macro_rules! transform_idents_to_string_liternal_in_stream {
+macro_rules! transform_idents_in_stream_to_string {
     ($stream:ident, $transform:expr) => {
         $stream
             .into_iter()
@@ -46,6 +47,17 @@ macro_rules! transform_idents_to_string_liternal_in_stream {
 }
 
 fn to_kebab(enum_name: &str) -> String {
+    let mut kebab = String::new();
+    for (i, ch) in enum_name.char_indices() {
+        if i > 0 && ch.is_uppercase() {
+            kebab.push('_');
+        }
+        kebab.push(ch.to_ascii_lowercase());
+    }
+    kebab.replace('_', "-")
+}
+
+fn to_snake(enum_name: &str) -> String {
     let mut snake = String::new();
     for (i, ch) in enum_name.char_indices() {
         if i > 0 && ch.is_uppercase() {
@@ -53,13 +65,23 @@ fn to_kebab(enum_name: &str) -> String {
         }
         snake.push(ch.to_ascii_lowercase());
     }
-    snake.replace('_', "-")
+    snake
 }
 
 /// Expands idents in the input stream as kebab-case string literal
 /// Caller should make sure the input identifer is a valid camel-case identifer
 /// e.g. `HelloWorld` -> `hello-world`
 #[proc_macro]
-pub fn camel_to_kebab(stream: TokenStream) -> TokenStream {
-    transform_idents_to_string_liternal_in_stream!(stream, &|s: String| to_kebab(&s))
+pub fn kebab_case(stream: TokenStream) -> TokenStream {
+    transform_idents_in_stream_to_string!(stream, &|s: String| to_kebab(&s))
 }
+
+/// Expands idents in the input stream as snake-case string literal
+/// Caller should make sure the input identifer is a valid camel-case identifer
+/// e.g. `HelloWorld` -> `hello_world`
+#[proc_macro]
+pub fn snake_case(stream: TokenStream) -> TokenStream {
+    transform_idents_in_stream_to_string!(stream, &|s: String| to_snake(&s))
+}
+
+
