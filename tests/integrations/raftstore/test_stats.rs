@@ -546,6 +546,9 @@ fn test_query_num(query: Box<Query>, enable_ttl: bool) {
     });
 
     let k = b"key".to_vec();
+    // When a peer becomes leader, it can't read before committing to current term.
+    // Force a successful read to wait for the correct timing.
+    cluster.must_get(k);
     let store_id = 1;
     if enable_ttl {
         raw_put(&cluster, &client, &ctx, store_id, k.clone());
