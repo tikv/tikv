@@ -10,7 +10,7 @@ pub const RAW_KEY_PREFIX: u8 = b'r';
 pub const TXN_KEY_PREFIX: u8 = b'x';
 
 /// KeyPrefixToCheck
-/// 
+///
 /// Accept different kinds of keys, to avoid tedious casting at caller side.
 pub trait KeyPrefixToCheck {
     /// Checks if the key is in TiDB encode.
