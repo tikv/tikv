@@ -6667,12 +6667,14 @@ mod tests {
         let mut ctx = Context::default();
         ctx.set_isolation_level(IsolationLevel::Si);
         ctx.set_committed_locks(vec![100]);
+        // get
         assert_eq!(
             block_on(storage.get(ctx.clone(), k1.clone(), 110.into()))
                 .unwrap()
                 .0,
             Some(v1.clone())
         );
+        // batch get
         let res =
             block_on(storage.batch_get(ctx.clone(), vec![k1.clone(), k2.clone()], 110.into()))
                 .unwrap()
@@ -6684,17 +6686,41 @@ mod tests {
             assert_eq!(&res[0].as_ref().unwrap().1, &v2);
             assert_eq!(&res[1].as_ref().unwrap().1, &v1);
         }
-
+        // batch get commands
         let mut req = GetRequest::default();
-        req.set_context(ctx);
-        req.set_key(k1);
+        req.set_context(ctx.clone());
+        req.set_key(k1.clone());
         req.set_version(110);
         let consumer = GetConsumer::new();
         block_on(storage.batch_get_command(vec![req], vec![1], consumer.clone(), Instant::now()))
             .unwrap();
         let res = consumer.take_data();
         assert_eq!(res.len(), 1);
-        assert_eq!(res[0].as_ref().unwrap(), &Some(v1))
+        assert_eq!(res[0].as_ref().unwrap(), &Some(v1.clone()));
+        // scan
+        for desc in &[false] {
+            let mut values = vec![
+                Some((k1.clone(), v1.clone())),
+                Some((k2.clone(), v2.clone())),
+            ];
+            if *desc {
+                values.reverse();
+            }
+            expect_multi_values(
+                values,
+                block_on(storage.scan(
+                    ctx.clone(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    1000,
+                    0,
+                    110.into(),
+                    false,
+                    *desc,
+                ))
+                .unwrap(),
+            );
+        }
     }
 
     #[test]

@@ -355,6 +355,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .bypass_locks(self.bypass_locks.clone())
+            .access_locks(self.access_locks.clone())
             .check_has_newer_ts_data(check_has_newer_ts_data)
             .build()?;
 
