@@ -14,7 +14,6 @@ use tikv_util::{box_try, debug, error, warn};
 
 use crate::store::{CasualMessage, CasualRouter};
 
-const MAX_GC_REGION_BATCH: usize = 128;
 const COMPACT_LOG_INTERVAL: Duration = Duration::from_secs(60);
 
 pub enum Task {
@@ -64,15 +63,17 @@ pub struct Runner<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> {
     tasks: Vec<Task>,
     engines: Engines<EK, ER>,
     gc_entries: Option<Sender<usize>>,
+    task_batch_size: usize,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
-    pub fn new(ch: R, engines: Engines<EK, ER>) -> Runner<EK, ER, R> {
+    pub fn new(ch: R, engines: Engines<EK, ER>, task_batch_size: usize) -> Runner<EK, ER, R> {
         Runner {
             ch,
             engines,
             tasks: vec![],
             gc_entries: None,
+            task_batch_size,
         }
     }
 
@@ -146,7 +147,7 @@ where
     fn run(&mut self, task: Task) {
         let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
         self.tasks.push(task);
-        if self.tasks.len() < MAX_GC_REGION_BATCH {
+        if self.tasks.len() < self.task_batch_size {
             return;
         }
         self.flush();
@@ -199,6 +200,7 @@ mod tests {
             engines,
             ch: r,
             tasks: vec![],
+            task_batch_size: 128,
         };
 
         // generate raft logs

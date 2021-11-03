@@ -63,9 +63,9 @@ pub struct Config {
     // Interval to gc unnecessary raft log.
     pub raft_log_gc_tick_interval: ReadableDuration,
     // A threshold to gc stale raft log, must >= 1.
-    // Note: this config is not needed after #8668, but some tests rely on it.
-    #[doc(hidden)]
     pub raft_log_gc_threshold: u64,
+    // When region gc task exceed this value, gc work will be trigger.
+    pub raft_log_gc_batch_size: usize,
     // When entry count exceed this value, gc will be forced trigger.
     pub raft_log_gc_count_limit: u64,
     // When the approximate size of raft log entries exceed this value,
@@ -246,10 +246,11 @@ impl Default for Config {
             raft_max_inflight_msgs: 256,
             raft_entry_max_size: ReadableSize::mb(8),
             raft_log_gc_tick_interval: ReadableDuration::secs(1),
-            raft_log_gc_threshold: 1,
+            raft_log_gc_threshold: 50,
             // Assume the average size of entries is 1k.
             raft_log_gc_count_limit: split_size * 3 / 4 / ReadableSize::kb(1),
             raft_log_gc_size_limit: split_size * 3 / 4,
+            raft_log_gc_batch_size: 128,
             raft_engine_purge_interval: ReadableDuration::secs(10),
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
@@ -366,6 +367,12 @@ impl Config {
             return Err(box_err!(
                 "raft log gc threshold must >= 1, not {}",
                 self.raft_log_gc_threshold
+            ));
+        }
+        if self.raft_log_gc_batch_size < 1 {
+            return Err(box_err!(
+                "raft log gc batch size must >= 1, not {}",
+                self.raft_log_gc_batch_size
             ));
         }
 
@@ -546,6 +553,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_threshold"])
             .set(self.raft_log_gc_threshold as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_log_gc_batch_size"])
+            .set(self.raft_log_gc_batch_size as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_count_limit"])
             .set(self.raft_log_gc_count_limit as f64);
