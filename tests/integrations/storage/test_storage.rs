@@ -897,7 +897,7 @@ fn test_txn_store_txnkv_api_version() {
             store.delete_range_ok(key, key);
         } else {
             store.get_err(key, 10);
-            //TODO: store.put_err(key, b"x", 5, 10);
+            // check api version at service tier: store.put_err(key, b"x", 5, 10);
             store.batch_get_err(&[key, key, key], 10);
             store.batch_get_command_err(&[key, key, key], 10);
 
