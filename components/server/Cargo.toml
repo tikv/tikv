@@ -17,49 +17,6 @@ failpoints = ["tikv/failpoints"]
 bcc-iosnoop = ["tikv/bcc-iosnoop"]
 cloud-aws = ["encryption_export/cloud-aws"]
 cloud-gcp = ["encryption_export/cloud-gcp"]
-protobuf-codec = [
-  "protobuf/bytes",
-  "backup/protobuf-codec",
-  "cdc/protobuf-codec",
-  "concurrency_manager/protobuf-codec",
-  "encryption_export/protobuf-codec",
-  "engine_rocks/protobuf-codec",
-  "engine_traits/protobuf-codec",
-  "error_code/protobuf-codec",
-  "file_system/protobuf-codec",
-  "grpcio/protobuf-codec",
-  "keys/protobuf-codec",
-  "kvproto/protobuf-codec",
-  "pd_client/protobuf-codec",
-  "raft/protobuf-codec",
-  "raftstore/protobuf-codec",
-  "raft_log_engine/protobuf-codec",
-  "security/protobuf-codec",
-  "tikv/protobuf-codec",
-  "tikv_util/protobuf-codec",
-  "txn_types/protobuf-codec",
-]
-prost-codec = [
-  "backup/prost-codec",
-  "cdc/prost-codec",
-  "concurrency_manager/prost-codec",
-  "encryption_export/prost-codec",
-  "engine_rocks/prost-codec",
-  "engine_traits/prost-codec",
-  "error_code/prost-codec",
-  "file_system/prost-codec",
-  "grpcio/prost-codec",
-  "keys/prost-codec",
-  "kvproto/prost-codec",
-  "pd_client/prost-codec",
-  "raft/prost-codec",
-  "raftstore/prost-codec",
-  "raft_log_engine/prost-codec",
-  "security/prost-codec",
-  "tikv/prost-codec",
-  "tikv_util/prost-codec",
-  "txn_types/prost-codec",
-]
 test-engines-rocksdb = [
   "tikv/test-engines-rocksdb",
 ]
@@ -89,7 +46,7 @@ tokio = { version = "1.5", features = ["rt-multi-thread"] }
 grpcio = { version = "0.9", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 keys = { path = "../keys", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../log_wrappers" }
@@ -97,8 +54,8 @@ nix = "0.11"
 pd_client = { path = "../pd_client", default-features = false }
 prometheus = { version = "0.12", features = ["nightly"] }
 promptly = "0.3.0"
-protobuf = "2.8"
-raft = { version = "0.6.0-alpha", default-features = false }
+protobuf = { version = "2.8", features = ["bytes"] }
+raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { path = "../raft_log_engine", default-features = false }
 raftstore = { path = "../raftstore", default-features = false }
 rand = "0.8"

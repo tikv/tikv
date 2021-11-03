@@ -1500,6 +1500,57 @@ impl<T: Simulator> Cluster<T> {
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
         self.add_send_filter(PartitionFilterFactory::new(s1, s2));
     }
+
+    pub fn must_update_region_for_unsafe_recover(&mut self, node_id: u64, region: &metapb::Region) {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+        let mut try_cnt = 0;
+        loop {
+            if try_cnt % 50 == 0 {
+                // In case the message is ignored, re-send it every 50 tries.
+                router
+                    .force_send(
+                        region.get_id(),
+                        PeerMsg::UpdateRegionForUnsafeRecover(region.clone()),
+                    )
+                    .unwrap();
+            }
+            if let Ok(Some(current)) = block_on(self.pd_client.get_region_by_id(region.get_id())) {
+                if current.get_start_key() == region.get_start_key()
+                    && current.get_end_key() == region.get_end_key()
+                {
+                    return;
+                }
+            }
+            if try_cnt > 500 {
+                panic!("region {:?} is not updated", region);
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
+    }
+
+    pub fn must_recreate_region_for_unsafe_recover(
+        &mut self,
+        node_id: u64,
+        region: &metapb::Region,
+    ) {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+        let mut try_cnt = 0;
+        loop {
+            if try_cnt % 50 == 0 {
+                // In case the message is ignored, re-send it every 50 tries.
+                StoreRouter::send(&router, StoreMsg::CreatePeer(region.clone())).unwrap();
+            }
+            if let Ok(Some(_)) = block_on(self.pd_client.get_region_by_id(region.get_id())) {
+                return;
+            }
+            if try_cnt > 250 {
+                panic!("region {:?} is not created", region);
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
+    }
 }
 
 impl<T: Simulator> Drop for Cluster<T> {
