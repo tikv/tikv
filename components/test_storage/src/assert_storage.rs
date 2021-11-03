@@ -427,12 +427,12 @@ impl<E: Engine> AssertionStorage<E> {
 
     pub fn scan_ok(
         &self,
-        raw_start_key: &[u8],
+        start_key: &[u8],
         limit: usize,
         ts: impl Into<TimeStamp>,
         expect: Vec<Option<(&[u8], &[u8])>>,
     ) {
-        let key_address = raw_start_key.to_owned();
+        let key_address = start_key.to_owned();
         let result = self
             .store
             .scan(self.ctx.clone(), key_address, None, limit, false, ts.into())
@@ -445,8 +445,8 @@ impl<E: Engine> AssertionStorage<E> {
         assert_eq!(result, expect);
     }
 
-    pub fn scan_err(&self, raw_start_key: &[u8], limit: usize, ts: impl Into<TimeStamp>) {
-        let key_address = raw_start_key.to_owned();
+    pub fn scan_err(&self, start_key: &[u8], limit: usize, ts: impl Into<TimeStamp>) {
+        let key_address = start_key.to_owned();
         self.store
             .scan(self.ctx.clone(), key_address, None, limit, false, ts.into())
             .unwrap_err();
@@ -454,12 +454,12 @@ impl<E: Engine> AssertionStorage<E> {
 
     pub fn reverse_scan_ok(
         &self,
-        raw_start_key: &[u8],
+        start_key: &[u8],
         limit: usize,
         ts: impl Into<TimeStamp>,
         expect: Vec<Option<(&[u8], &[u8])>>,
     ) {
-        let key_address = raw_start_key.to_owned();
+        let key_address = start_key.to_owned();
         let result = self
             .store
             .reverse_scan(self.ctx.clone(), key_address, None, limit, false, ts.into())
@@ -776,23 +776,23 @@ impl<E: Engine> AssertionStorage<E> {
         self.store.gc(self.ctx.clone(), safe_point.into()).unwrap();
     }
 
-    pub fn delete_range_ok(&self, raw_start_key: &[u8], raw_end_key: &[u8]) {
+    pub fn delete_range_ok(&self, start_key: &[u8], end_key: &[u8]) {
         self.store
             .delete_range(
                 self.ctx.clone(),
-                raw_start_key.to_owned(),
-                raw_end_key.to_owned(),
+                start_key.to_owned(),
+                end_key.to_owned(),
                 false,
             )
             .unwrap();
     }
 
-    pub fn delete_range_err(&self, raw_start_key: &[u8], raw_end_key: &[u8]) {
+    pub fn delete_range_err(&self, start_key: &[u8], end_key: &[u8]) {
         self.store
             .delete_range(
                 self.ctx.clone(),
-                raw_start_key.to_owned(),
-                raw_end_key.to_owned(),
+                start_key.to_owned(),
+                end_key.to_owned(),
                 false,
             )
             .unwrap_err();

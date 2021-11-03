@@ -9,24 +9,62 @@ pub const TIDB_RANGES_COMPLEMENT: &[(&[u8], &[u8])] =
 pub const RAW_KEY_PREFIX: u8 = b'r';
 pub const TXN_KEY_PREFIX: u8 = b'x';
 
-/// Checks if the key is in TiDB encode.
-///
-/// Returning true doesn't mean that the key is certainly written by
-/// TiDB, but instead, it matches the definition of TiDB key in API V2,
-/// therefore, the key is treated as TiDB data in order to fulfill the
-/// compatibility.
-pub fn is_tidb_key(key: &[u8]) -> bool {
-    matches!(KeyPrefix::parse(key).0, KeyPrefix::TiDB)
+pub trait KeyPrefixToCheck {
+    /// Checks if the key is in TiDB encode.
+    ///
+    /// Returning true doesn't mean that the key is certainly written by
+    /// TiDB, but instead, it matches the definition of TiDB key in API V2,
+    /// therefore, the key is treated as TiDB data in order to fulfill the
+    /// compatibility.
+    fn is_tidb_key(&self) -> bool;
+
+    /// Checks if the key is in RawKV encode.
+    fn is_raw_key(&self) -> bool;
+
+    /// Checks if the key is in TxnKV encode.
+    fn is_txn_key(&self) -> bool;
 }
 
-/// Checks if the key is in RawKV encode.
-pub fn is_raw_key(key: &[u8]) -> bool {
-    matches!(KeyPrefix::parse(key).0, KeyPrefix::Raw { .. })
+impl KeyPrefixToCheck for &[u8] {
+    fn is_tidb_key(&self) -> bool {
+        matches!(KeyPrefix::parse(self).0, KeyPrefix::TiDB)
+    }
+
+    fn is_raw_key(&self) -> bool {
+        matches!(KeyPrefix::parse(self).0, KeyPrefix::Raw { .. })
+    }
+
+    fn is_txn_key(&self) -> bool {
+        matches!(KeyPrefix::parse(self).0, KeyPrefix::Txn { .. })
+    }
 }
 
-/// Checks if the key is in TxnKV encode.
-pub fn is_txn_key(key: &[u8]) -> bool {
-    matches!(KeyPrefix::parse(key).0, KeyPrefix::Txn { .. })
+impl KeyPrefixToCheck for Vec<u8> {
+    fn is_tidb_key(&self) -> bool {
+        (&self[..]).is_tidb_key()
+    }
+
+    fn is_raw_key(&self) -> bool {
+        (&self[..]).is_raw_key()
+    }
+
+    fn is_txn_key(&self) -> bool {
+        (&self[..]).is_txn_key()
+    }
+}
+
+impl KeyPrefixToCheck for &Vec<u8> {
+    fn is_tidb_key(&self) -> bool {
+        (&self[..]).is_tidb_key()
+    }
+
+    fn is_raw_key(&self) -> bool {
+        (&self[..]).is_raw_key()
+    }
+
+    fn is_txn_key(&self) -> bool {
+        (&self[..]).is_txn_key()
+    }
 }
 
 /// The key prefix in API V2.
@@ -95,5 +133,50 @@ mod tests {
             KeyPrefix::parse(&[RAW_KEY_PREFIX, 244]),
             (KeyPrefix::Unknown, &[RAW_KEY_PREFIX, 244][..])
         );
+    }
+
+    #[test]
+    fn test_keyprefix_to_check() {
+        let test_data: Vec<(&[u8], bool)> = vec![
+            (b"t_a", true),
+            (b"m_a", true),
+            (b"ra", false),
+            (b"xa", false),
+            (b"?", false),
+        ];
+        for (i, (key, expect)) in test_data.into_iter().enumerate() {
+            let vec_key = key.to_vec();
+            assert_eq!((&vec_key).is_tidb_key(), expect, "case {}", i);
+            assert_eq!(vec_key.is_tidb_key(), expect, "case {}", i);
+            assert_eq!(key.is_tidb_key(), expect, "case {}", i);
+        }
+
+        let test_data: Vec<(&[u8], bool)> = vec![
+            (b"t_a", false),
+            (b"m_a", false),
+            (b"ra", true),
+            (b"xa", false),
+            (b"?", false),
+        ];
+        for (i, (key, expect)) in test_data.into_iter().enumerate() {
+            let vec_key = key.to_vec();
+            assert_eq!((&vec_key).is_raw_key(), expect, "case {}", i);
+            assert_eq!(vec_key.is_raw_key(), expect, "case {}", i);
+            assert_eq!(key.is_raw_key(), expect, "case {}", i);
+        }
+
+        let test_data: Vec<(&[u8], bool)> = vec![
+            (b"t_a", false),
+            (b"m_a", false),
+            (b"ra", false),
+            (b"xa", true),
+            (b"?", false),
+        ];
+        for (i, (key, expect)) in test_data.into_iter().enumerate() {
+            let vec_key = key.to_vec();
+            assert_eq!((&vec_key).is_txn_key(), expect, "case {}", i);
+            assert_eq!(vec_key.is_txn_key(), expect, "case {}", i);
+            assert_eq!(key.is_txn_key(), expect, "case {}", i);
+        }
     }
 }

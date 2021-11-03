@@ -72,6 +72,7 @@ use crate::storage::txn::flow_controller::FlowController;
 use crate::server::lock_manager::waiter_manager;
 use crate::storage::{
     config::Config,
+    key_prefix::KeyPrefixToCheck,
     kv::{with_tls_engine, Modify, WriteData},
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
@@ -369,11 +370,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ///   * Request of V1 from TiDB, for compatiblity.
     ///   * Request of V2 with legal prefix.
     /// See rfc https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md for detail.
-    fn check_api_version<'a>(
+    fn check_api_version<T: KeyPrefixToCheck>(
         storage_api_version: ApiVersion,
         req_api_version: ApiVersion,
         cmd: CommandKind,
-        keys: impl IntoIterator<Item = &'a [u8]>,
+        keys: impl IntoIterator<Item = T>,
     ) -> Result<()> {
         match (storage_api_version, req_api_version) {
             (ApiVersion::V1 | ApiVersion::V1ttl, ApiVersion::V1) => {
@@ -381,17 +382,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             }
             (ApiVersion::V2, ApiVersion::V1) if Self::is_txn_command(cmd) => {
                 // For compatibility, accept TiDB request only.
-                if keys.into_iter().all(key_prefix::is_tidb_key) {
+                if keys.into_iter().all(|x| KeyPrefixToCheck::is_tidb_key(&x)) {
                     return Ok(());
                 }
             }
             (ApiVersion::V2, ApiVersion::V2) if Self::is_raw_command(cmd) => {
-                if keys.into_iter().all(key_prefix::is_raw_key) {
+                if keys.into_iter().all(|x| KeyPrefixToCheck::is_raw_key(&x)) {
                     return Ok(());
                 }
             }
             (ApiVersion::V2, ApiVersion::V2) if Self::is_txn_command(cmd) => {
-                if keys.into_iter().all(key_prefix::is_txn_key) {
+                if keys.into_iter().all(|x| KeyPrefixToCheck::is_txn_key(&x)) {
                     return Ok(());
                 }
             }
@@ -436,12 +437,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version(
-                    api_version,
-                    ctx.api_version,
-                    CMD,
-                    iter::once(&raw_key[..]),
-                )?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&raw_key))?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
@@ -704,12 +700,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version(
-                    api_version,
-                    ctx.api_version,
-                    CMD,
-                    raw_keys.iter().map(|x| &x[..]),
-                )?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, &raw_keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
@@ -832,9 +823,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                let keys = Some(&raw_start_key[..])
+                let keys = Some(raw_start_key)
                     .into_iter()
-                    .chain(raw_end_key.as_ref().map(|x| &x[..]).into_iter());
+                    .chain(raw_end_key.into_iter());
                 Self::check_api_version(api_version, ctx.api_version, CMD, keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
@@ -985,11 +976,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                let keys = raw_start_key
-                    .as_ref()
-                    .map(|x| &x[..])
-                    .into_iter()
-                    .chain(raw_end_key.as_ref().map(|x| &x[..]).into_iter());
+                let keys = raw_start_key.into_iter().chain(raw_end_key.into_iter());
                 Self::check_api_version(api_version, ctx.api_version, CMD, keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
@@ -1159,7 +1146,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             self.api_version,
             ctx.api_version,
             CommandKind::delete_range,
-            vec![&raw_start_key[..], &raw_end_key[..]],
+            vec![raw_start_key, raw_end_key],
         )?;
 
         let mut modifies = Vec::with_capacity(DATA_CFS.len());
@@ -1213,7 +1200,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&key[..]))?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&key))?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1290,7 +1277,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         api_version,
                         get.get_context().api_version,
                         CMD,
-                        iter::once(&get.key[..]),
+                        iter::once(get.get_key()),
                     )?;
                 }
 
@@ -1390,12 +1377,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version(
-                    api_version,
-                    ctx.api_version,
-                    CMD,
-                    keys.iter().map(|x| &x[..]),
-                )?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, keys.iter())?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1462,7 +1444,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_put;
         let api_version = self.api_version;
 
-        Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&key[..]))?;
+        Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&key))?;
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
         let mut m = Modify::Put(
@@ -1502,7 +1484,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             self.api_version,
             ctx.api_version,
             CommandKind::raw_batch_put,
-            pairs.iter().map(|(ref k, _)| &k[..]),
+            pairs.iter().map(|(ref k, _)| k),
         )?;
 
         let cf = Self::rawkv_cf(self.api_version, &cf)?;
@@ -1562,7 +1544,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             self.api_version,
             ctx.api_version,
             CommandKind::raw_delete,
-            iter::once(&key[..]),
+            iter::once(&key),
         )?;
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
@@ -1591,16 +1573,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         end_key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let keys = Some(&start_key[..])
-            .into_iter()
-            .chain(Some(&end_key[..]).into_iter());
+        let keys = vec![&start_key, &end_key];
+        check_key_size!(keys.iter(), self.max_key_size, callback);
         Self::check_api_version(
             self.api_version,
             ctx.api_version,
             CommandKind::raw_delete_range,
-            keys.to_owned(),
+            keys,
         )?;
-        check_key_size!(keys, self.max_key_size, callback);
 
         let cf = Self::rawkv_cf(self.api_version, &cf)?;
         let start_key = Key::from_encoded(start_key);
@@ -1631,7 +1611,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             self.api_version,
             ctx.api_version,
             CommandKind::raw_batch_delete,
-            keys.iter().map(|x| &x[..]),
+            keys.iter(),
         )?;
 
         let cf = Self::rawkv_cf(self.api_version, &cf)?;
@@ -1699,9 +1679,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                let keys = Some(&start_key[..])
+                let keys = Some(&start_key)
                     .into_iter()
-                    .chain(end_key.as_ref().map(|x| &x[..]));
+                    .chain(end_key.as_ref().into_iter());
                 Self::check_api_version(api_version, ctx.api_version, CMD, keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
@@ -1927,7 +1907,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&key[..]))?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&key))?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1978,7 +1958,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             self.api_version,
             ctx.api_version,
             CommandKind::raw_compare_and_swap,
-            iter::once(&key[..]),
+            iter::once(&key),
         )?;
 
         let cf = Self::rawkv_cf(self.api_version, &cf)?;
@@ -2007,7 +1987,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             self.api_version,
             ctx.api_version,
             CommandKind::raw_atomic_store,
-            pairs.iter().map(|(ref k, _)| &k[..]),
+            pairs.iter().map(|(ref k, _)| k),
         )?;
 
         if self.enable_ttl {
@@ -2054,7 +2034,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             self.api_version,
             ctx.api_version,
             CommandKind::raw_atomic_store,
-            keys.iter().map(|x| &x[..]),
+            keys.iter(),
         )?;
 
         let cf = Self::rawkv_cf(self.api_version, &cf)?;
@@ -7357,14 +7337,14 @@ mod tests {
             ),
         ];
 
-        for (i, &(storage_api_version, req_api_version, cmd, ref keys, is_legal)) in
-            test_data.iter().enumerate()
+        for (i, (storage_api_version, req_api_version, cmd, keys, is_legal)) in
+            test_data.into_iter().enumerate()
         {
             let res = Storage::<RocksEngine, DummyLockManager>::check_api_version(
                 storage_api_version,
                 req_api_version,
                 cmd,
-                keys.clone(),
+                keys,
             );
             if is_legal {
                 assert!(res.is_ok(), "case {}", i);
