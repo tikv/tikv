@@ -95,6 +95,14 @@ impl rocksdb::EventListener for RocksEventListener {
     fn on_background_error(&self, reason: DBBackgroundErrorReason, result: Result<(), String>) {
         assert!(result.is_err());
         if let Err(err) = result {
+            if matches!(
+                reason,
+                DBBackgroundErrorReason::Flush | DBBackgroundErrorReason::Compaction
+            ) && err.contains("No space left")
+            {
+                // Ignoring NoSpace error and let RocksDB automatically recovers.
+                return;
+            }
             let r = match reason {
                 DBBackgroundErrorReason::Flush => "flush",
                 DBBackgroundErrorReason::Compaction => "compaction",
