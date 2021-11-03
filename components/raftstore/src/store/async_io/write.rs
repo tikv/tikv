@@ -600,7 +600,7 @@ where
             write_raft_time,
             send_time,
             callback_time,
-            thread::current().name().unwrap_or("")
+            self.tag
         );
 
         self.batch.clear();
