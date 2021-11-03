@@ -33,7 +33,7 @@ use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
 
-const GENERATE_POOL_SIZE: usize = 2;
+const GENERATE_POOL_SIZE: usize = 32;
 
 // used to periodically check whether we should delete a stale peer's range in region runner
 
