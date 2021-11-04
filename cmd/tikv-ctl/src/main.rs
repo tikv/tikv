@@ -1,9 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 #![feature(once_cell)]
 
-#[macro_use]
-extern crate log;
-
 use clap::{crate_authors, AppSettings};
 use encryption_export::{
     create_backend, data_key_manager_from_config, encryption_method_from_db_encryption_method,
