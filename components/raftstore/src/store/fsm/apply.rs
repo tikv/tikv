@@ -5727,4 +5727,9 @@ mod tests {
         });
         res.unwrap_err();
     }
+
+    #[test]
+    fn test_xxx() {
+        println!("{}", std::mem::size_of::<RaftApplyState>());
+    }
 }
