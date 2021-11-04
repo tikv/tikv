@@ -1600,7 +1600,7 @@ where
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
 
         let result = if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
-            self.on_transfer_leader_msg(&msg, peer_disk_usage);
+            self.on_transfer_leader_msg(msg.get_message(), peer_disk_usage);
             Ok(())
         } else {
             self.fsm.peer.step(self.ctx, msg.take_message())
@@ -2201,27 +2201,30 @@ where
         }
     }
 
-    fn on_transfer_leader_msg(&mut self, msg: &RaftMessage, peer_disk_usage: DiskUsage) {
-        let raft_msg = msg.get_message();
+    fn on_transfer_leader_msg(&mut self, msg: &eraftpb::Message, peer_disk_usage: DiskUsage) {
         // log_term is set by original leader, represents the term last log is written
         // in, which should be equal to the original leader's term.
-        if raft_msg.get_log_term() != self.fsm.peer.term() {
+        if msg.get_log_term() != self.fsm.peer.term() {
             return;
         }
         if self.fsm.peer.is_leader() {
-            match self.fsm.peer.ready_to_transfer_leader(
-                &mut self.ctx,
-                raft_msg.get_index(),
-                msg.get_from_peer(),
-            ) {
+            let from = match self.fsm.peer.get_peer_from_cache(msg.get_from()) {
+                Some(p) => p,
+                None => return,
+            };
+            match self
+                .fsm
+                .peer
+                .ready_to_transfer_leader(&mut self.ctx, msg.get_index(), &from)
+            {
                 Some(reason) => {
                     info!(
                         "reject to transfer leader";
                         "region_id" => self.fsm.region_id(),
                         "peer_id" => self.fsm.peer_id(),
-                        "to" => ?msg.get_from_peer(),
+                        "to" => ?from,
                         "reason" => reason,
-                        "index" => raft_msg.get_index(),
+                        "index" => msg.get_index(),
                         "last_index" => self.fsm.peer.get_store().last_index(),
                     );
                 }
@@ -2232,13 +2235,13 @@ where
                         self.propose_batch_raft_command(true);
                     }
 
-                    self.fsm.peer.transfer_leader(msg.get_from_peer());
+                    self.fsm.peer.transfer_leader(&from);
                 }
             }
         } else {
             self.fsm
                 .peer
-                .execute_transfer_leader(&mut self.ctx, raft_msg, peer_disk_usage);
+                .execute_transfer_leader(&mut self.ctx, msg, peer_disk_usage);
         }
     }
 

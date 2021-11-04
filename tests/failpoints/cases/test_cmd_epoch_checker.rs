@@ -503,7 +503,7 @@ fn test_propose_before_transfer_leader() {
 }
 
 #[test]
-fn test_propose_before_some_admin_requests() {
+fn test_propose_before_split_and_merge() {
     let mut cluster = new_node_cluster(0, 3);
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
