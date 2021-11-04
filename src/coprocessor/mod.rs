@@ -116,7 +116,7 @@ pub struct ReqContext {
     /// The set of timestamps of locks that can be bypassed during the reading.
     pub bypass_locks: TsSet,
 
-    /// The set of timestamps of locks that should be accessed during the reading.
+    /// The set of timestamps of locks that can be accessed during the reading.
     pub access_locks: TsSet,
 
     /// The data version to match. If it matches the underlying data version,

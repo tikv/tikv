@@ -274,7 +274,6 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
     }
 
     fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>> {
-        // TODO(youjiali1995)
         if self.point_getter_cache.is_none() {
             self.point_getter_cache = Some(
                 PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)

@@ -130,6 +130,10 @@ impl<E: Engine> Store<E> {
         }
     }
 
+    pub fn current_ts(&self) -> TimeStamp {
+        self.current_ts
+    }
+
     pub fn begin(&mut self) {
         self.current_ts = (next_id() as u64).into();
         self.handles.clear();
