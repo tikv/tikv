@@ -66,6 +66,9 @@ pub struct BatchExecutorsRunner<SS> {
     /// 1. default: result is encoded row by row using datum format.
     /// 2. chunk: result is encoded column by column using chunk format.
     encode_type: EncodeType,
+
+    /// Whether is a paging request
+    paging_size: Option<u64>,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
@@ -332,18 +335,6 @@ pub fn build_executors<S: Storage + 'static>(
         executor = new_executor;
         is_src_scan_executor = false;
     }
-    
-    if let Some(page_size) = page_size {
-        executor = Box::new(
-            BatchLimitExecutor::new(
-                executor,  
-                page_size as usize,
-                is_src_scan_executor,
-            )?
-            .collect_summary(summary_slot_index),
-        )
-    }
-
     Ok(executor)
 }
 
@@ -400,6 +391,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             exec_stats,
             stream_row_limit,
             encode_type,
+            paging_size,
         })
     }
 
@@ -409,7 +401,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         BATCH_INITIAL_SIZE
     }
 
-    pub async fn handle_request(&mut self) -> Result<(SelectResponse, IntervalRange)> {
+    pub async fn handle_request(&mut self) -> Result<(SelectResponse, Option<IntervalRange>)> {
         let mut chunks = vec![];
         let mut batch_size = Self::batch_initial_size();
         let mut warnings = self.config.new_eval_warnings();
@@ -438,11 +430,15 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 chunks.push(chunk);
             }
 
-            if drained {
+            if drained || self.paging_size.map_or(false, |p| record_len > p as usize) {
                 self.out_most_executor
                 .collect_exec_stats(&mut self.exec_stats);
-                
-                let range = self.out_most_executor.take_scanned_range();
+
+                let range = if self.paging_size.is_some() {
+                    Some(self.out_most_executor.take_scanned_range())
+                } else {
+                    None
+                };
 
                 let mut sel_resp = SelectResponse::default();
                 sel_resp.set_chunks(chunks.into());
@@ -548,7 +544,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         let mut result = self.out_most_executor.next_batch(batch_size);
 
-        let is_drained = result.is_drained?;
+        let is_drained = result.is_drained?; 
 
         if !result.logical_rows.is_empty() {
             assert_eq!(
