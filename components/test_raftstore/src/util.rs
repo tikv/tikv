@@ -709,10 +709,6 @@ pub fn ignore_merge_target_integrity<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.pd_client.ignore_merge_target_integrity();
 }
 
-pub fn configure_for_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.raft_reject_transfer_leader_duration = ReadableDuration::secs(1);
-}
-
 pub fn configure_for_lease_read<T: Simulator>(
     cluster: &mut Cluster<T>,
     base_tick_ms: Option<u64>,

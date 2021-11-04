@@ -1037,7 +1037,7 @@ where
     ) -> ApplyResult<EK::Snapshot> {
         fail_point!(
             "yield_apply_first_region",
-            self.region.get_start().is_empty() && !self.region.get_end().is_empty(),
+            self.region.get_start_key().is_empty() && !self.region.get_end_key().is_empty(),
             |_| ApplyResult::Yield
         );
 
