@@ -2,12 +2,13 @@
 
 use std::fs::File;
 use std::io::Read;
+use std::iter::FromIterator;
 use std::path::PathBuf;
 
 use slog::Level;
 
 use batch_system::Config as BatchSystemConfig;
-use collections::HashSet;
+use collections::{HashMap, HashSet};
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
 use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::raw::{
@@ -68,7 +69,7 @@ fn test_serde_custom_tikv_config() {
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
         addr: "example.com:443".to_owned(),
-        labels: map! { "a".to_owned() => "b".to_owned() },
+        labels: HashMap::from_iter([("a".to_owned(), "b".to_owned())]),
         advertise_addr: "example.com:443".to_owned(),
         status_addr: "example.com:443".to_owned(),
         advertise_status_addr: "example.com:443".to_owned(),
@@ -214,11 +215,13 @@ fn test_serde_custom_tikv_config() {
         perf_level: PerfLevel::Disable,
         evict_cache_on_memory_ratio: 0.8,
         cmd_batch: false,
+        cmd_batch_concurrent_ready_max_count: 123,
         raft_write_size_limit: ReadableSize::mb(34),
         waterfall_metrics: true,
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
+        raft_msg_flush_interval_us: 2333,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -616,6 +619,7 @@ fn test_serde_custom_tikv_config() {
         enable_async_apply_prewrite: true,
         enable_ttl: true,
         ttl_check_poll_interval: ReadableDuration::hours(0),
+        api_version: 1,
         flow_control: FlowControlConfig {
             enable: false,
             l0_files_threshold: 10,
@@ -684,6 +688,11 @@ fn test_serde_custom_tikv_config() {
         num_threads: 456,
         batch_size: 7,
         sst_max_size: ReadableSize::mb(789),
+        hadoop: HadoopConfig {
+            home: "/root/hadoop".to_string(),
+            linux_user: "hadoop".to_string(),
+        },
+        ..Default::default()
     };
     value.import = ImportConfig {
         num_threads: 123,

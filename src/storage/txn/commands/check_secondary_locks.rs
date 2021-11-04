@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{LockType, MvccTxn, SnapshotReader, TimeStamp, TxnCommitRecord};
@@ -165,10 +166,12 @@ pub mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::commands::WriteCommand;
+    use crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT;
     use crate::storage::txn::tests::*;
     use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+    use tikv_util::deadline::Deadline;
 
     pub fn must_success<E: Engine>(
         engine: &E,
@@ -184,6 +187,7 @@ pub mod tests {
             ctx: ctx.clone(),
             keys: vec![Key::from_raw(key)],
             start_ts: lock_ts,
+            deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
         let result = command
             .process_write(
@@ -219,6 +223,7 @@ pub mod tests {
                 ctx: Default::default(),
                 keys: vec![key],
                 start_ts: ts,
+                deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
             };
             let result = command
                 .process_write(

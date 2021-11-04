@@ -134,7 +134,7 @@ type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
 pub struct NodeCluster {
     trans: ChannelTransport,
     pd_client: Arc<TestPdClient>,
-    nodes: HashMap<u64, Node<TestPdClient, RocksEngine>>,
+    nodes: HashMap<u64, Node<TestPdClient, RocksEngine, RocksEngine>>,
     snap_mgrs: HashMap<u64, SnapManager>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
@@ -183,7 +183,10 @@ impl NodeCluster {
         self.post_create_coprocessor_host = Some(op)
     }
 
-    pub fn get_node(&mut self, node_id: u64) -> Option<&mut Node<TestPdClient, RocksEngine>> {
+    pub fn get_node(
+        &mut self,
+        node_id: u64,
+    ) -> Option<&mut Node<TestPdClient, RocksEngine, RocksEngine>> {
         self.nodes.get_mut(&node_id)
     }
 
@@ -214,6 +217,7 @@ impl Simulator for NodeCluster {
             system,
             &cfg.server,
             Arc::new(VersionTrack::new(raft_store)),
+            cfg.storage.api_version(),
             Arc::clone(&self.pd_client),
             Arc::default(),
             bg_worker.clone(),

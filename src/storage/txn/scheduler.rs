@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath
 //! Scheduler which schedules the execution of `storage::Command`s.
 //!
 //! There is one scheduler for each store. It receives commands from clients, executes them against
@@ -30,20 +31,16 @@ use std::u64;
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use futures::compat::Future01CompatExt;
-use futures::{select, FutureExt as _};
 use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
-use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
-use tikv_util::{
-    callback::must_call, deadline::Deadline, time::Instant, timer::GLOBAL_TIMER_HANDLE,
-};
+use resource_metering::{FutureExt, ResourceMeteringTag};
+use tikv_util::{time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::TimeStamp;
 
 use crate::server::lock_manager::waiter_manager;
 use crate::storage::config::Config;
 use crate::storage::kv::{
-    drop_snapshot_callback, with_tls_engine, Engine, ExtCallback, Result as EngineResult,
-    SnapContext, Statistics,
+    self, with_tls_engine, Engine, ExtCallback, Result as EngineResult, SnapContext, Statistics,
 };
 use crate::storage::lock_manager::{self, DiagnosticContext, LockManager, WaitTimeout};
 use crate::storage::metrics::{self, *};
@@ -67,31 +64,22 @@ const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
 // The default limit is set to be very large. Then, requests without `max_exectuion_duration`
 // will not be aborted unexpectedly.
-const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
+pub const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Task is a running command.
 pub(super) struct Task {
     pub(super) cid: u64,
     pub(super) cmd: Command,
     pub(super) extra_op: ExtraOp,
-    pub(super) deadline: Deadline,
 }
 
 impl Task {
     /// Creates a task for a running command.
     pub(super) fn new(cid: u64, cmd: Command) -> Task {
-        let max_execution_duration_ms = cmd.ctx().max_execution_duration_ms;
-        let execution_duration_limit = if max_execution_duration_ms == 0 {
-            DEFAULT_EXECUTION_DURATION_LIMIT
-        } else {
-            Duration::from_millis(max_execution_duration_ms)
-        };
-        let deadline = Deadline::from_now(execution_duration_limit);
         Task {
             cid,
             cmd,
             extra_op: ExtraOp::Noop,
-            deadline,
         }
     }
 }
@@ -272,7 +260,7 @@ impl<L: LockManager> SchedulerInner<L> {
         let tctx = task_slot.get_mut(&cid).unwrap();
         // Check deadline early during acquiring latches to avoid expired requests blocking
         // other requests.
-        if let Err(e) = tctx.task.as_ref().unwrap().deadline.check() {
+        if let Err(e) = tctx.task.as_ref().unwrap().cmd.deadline().check() {
             // `acquire_lock_on_wakeup` is called when another command releases its locks and wakes up
             // command `cid`. This command inserted its lock before and now the lock is at the
             // front of the queue. The actual acquired count is one more than the `owned_count`
@@ -395,7 +383,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tctx = task_slot
             .entry(cid)
             .or_insert_with(|| self.inner.new_task_context(Task::new(cid, cmd), callback));
-        let deadline = tctx.task.as_ref().unwrap().deadline;
+        let deadline = tctx.task.as_ref().unwrap().cmd.deadline();
         if self.inner.latches.acquire(&mut tctx.lock, cid) {
             fail_point!("txn_scheduler_acquire_success");
             tctx.on_schedule();
@@ -462,97 +450,82 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    /// Initiates an async operation to get a snapshot from the storage engine, then execute the
-    /// task in the sched pool.
+    /// Executes the task in the sched pool.
     fn execute(&self, mut task: Task) {
-        let cid = task.cid;
-        let tag = task.cmd.tag();
-        let ctx = task.cmd.ctx().clone();
         let sched = self.clone();
+        self.get_sched_pool(task.cmd.priority())
+            .pool
+            .spawn(async move {
+                if sched.check_task_deadline_exceeded(&task) {
+                    return;
+                }
 
-        let cb = must_call(
-            move |(cb_ctx, snapshot)| {
-                debug!(
-                    "receive snapshot finish msg";
-                    "cid" => task.cid, "cb_ctx" => ?cb_ctx
-                );
+                let tag = task.cmd.tag();
+                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
 
-                match snapshot {
-                    Ok(snapshot) => {
-                        SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
+                let snap_ctx = SnapContext {
+                    pb_ctx: task.cmd.ctx(),
+                    ..Default::default()
+                };
+                // The program is currently in scheduler worker threads.
+                // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
+                match unsafe {
+                    with_tls_engine(|engine: &E| kv::snapshot_for_write(engine, snap_ctx))
+                }
+                .await
+                {
+                    Ok((cb_ctx, snapshot)) => {
+                        debug!(
+                            "receive snapshot finish msg";
+                            "cid" => task.cid, "cb_ctx" => ?cb_ctx
+                        );
 
-                        if !sched
-                            .inner
-                            .get_task_slot(task.cid)
-                            .get(&task.cid)
-                            .unwrap()
-                            .try_own()
-                        {
-                            sched
-                                .get_sched_pool(task.cmd.priority())
-                                .clone()
-                                .pool
-                                .spawn(async move {
+                        match snapshot {
+                            Ok(snapshot) => {
+                                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
+
+                                if !sched
+                                    .inner
+                                    .get_task_slot(task.cid)
+                                    .get(&task.cid)
+                                    .unwrap()
+                                    .try_own()
+                                {
                                     sched.finish_with_err(
                                         task.cid,
                                         StorageErrorInner::DeadlineExceeded,
                                     );
-                                })
-                                .unwrap();
-                            return;
-                        }
+                                    return;
+                                }
 
-                        if let Some(term) = cb_ctx.term {
-                            task.cmd.ctx_mut().set_term(term);
-                        }
-                        task.extra_op = cb_ctx.txn_extra_op;
+                                if let Some(term) = cb_ctx.term {
+                                    task.cmd.ctx_mut().set_term(term);
+                                }
+                                task.extra_op = cb_ctx.txn_extra_op;
 
-                        debug!(
-                            "process cmd with snapshot";
-                            "cid" => task.cid, "cb_ctx" => ?cb_ctx
-                        );
-                        sched.process_by_worker(snapshot, task);
-                    }
-                    Err(err) => {
-                        SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
+                                debug!(
+                                    "process cmd with snapshot";
+                                    "cid" => task.cid, "cb_ctx" => ?cb_ctx
+                                );
+                                sched.process(snapshot, task).await;
+                            }
+                            Err(err) => {
+                                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
 
-                        info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
-                        sched
-                            .get_sched_pool(task.cmd.priority())
-                            .clone()
-                            .pool
-                            .spawn(async move {
+                                info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
                                 sched.finish_with_err(task.cid, Error::from(err));
-                            })
-                            .unwrap();
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
+
+                        info!("engine async_snapshot failed"; "err" => ?e);
+                        sched.finish_with_err(task.cid, e);
                     }
                 }
-            },
-            drop_snapshot_callback::<E>,
-        );
-
-        let f = |engine: &E| {
-            let snap_ctx = SnapContext {
-                pb_ctx: &ctx,
-                ..Default::default()
-            };
-            if let Err(e) = engine.async_snapshot(snap_ctx, cb) {
-                SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
-
-                info!("engine async_snapshot failed"; "err" => ?e);
-                self.finish_with_err(cid, e);
-            } else {
-                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
-            }
-        };
-
-        if let Some(engine) = self.engine.as_ref() {
-            f(engine)
-        } else {
-            // The program is currently in scheduler worker threads.
-            // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
-            unsafe { with_tls_engine(f) }
-        }
+            })
+            .unwrap();
     }
 
     /// Calls the callback with an error.
@@ -687,67 +660,58 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         // It won't release locks here until write finished.
     }
 
-    /// Delivers a command to a worker thread for processing.
-    fn process_by_worker(self, snapshot: E::Snap, task: Task) {
+    /// Process the task in the current thread.
+    async fn process(self, snapshot: E::Snap, task: Task) {
         if self.check_task_deadline_exceeded(&task) {
             return;
         }
 
-        let tag = task.cmd.tag();
         let resource_tag = ResourceMeteringTag::from_rpc_context(task.cmd.ctx());
-        self.get_sched_pool(task.cmd.priority())
-            .clone()
-            .pool
-            .spawn(
-                async move {
-                    fail_point!("scheduler_async_snapshot_finish");
-                    SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
+        async {
+            let tag = task.cmd.tag();
+            fail_point!("scheduler_async_snapshot_finish");
+            SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
-                    if self.check_task_deadline_exceeded(&task) {
-                        return;
-                    }
+            let timer = Instant::now_coarse();
 
-                    let timer = Instant::now_coarse();
-
-                    let region_id = task.cmd.ctx().get_region_id();
-                    let ts = task.cmd.ts();
-                    let mut statistics = Statistics::default();
-                    match &task.cmd {
-                        Command::Prewrite(_) | Command::PrewritePessimistic(_) => {
-                            tls_collect_query(region_id, QueryKind::Prewrite);
-                        }
-                        Command::AcquirePessimisticLock(_) => {
-                            tls_collect_query(region_id, QueryKind::AcquirePessimisticLock);
-                        }
-                        Command::Commit(_) => {
-                            tls_collect_query(region_id, QueryKind::Commit);
-                        }
-                        Command::Rollback(_) | Command::PessimisticRollback(_) => {
-                            tls_collect_query(region_id, QueryKind::Rollback);
-                        }
-                        _ => {}
-                    }
-
-                    if task.cmd.readonly() {
-                        self.process_read(snapshot, task, &mut statistics);
-                    } else {
-                        self.process_write(snapshot, task, &mut statistics).await;
-                    };
-                    tls_collect_scan_details(tag.get_str(), &statistics);
-                    let elapsed = timer.saturating_elapsed();
-                    slow_log!(
-                        elapsed,
-                        "[region {}] scheduler handle command: {}, ts: {}",
-                        region_id,
-                        tag,
-                        ts
-                    );
-
-                    tls_collect_read_duration(tag.get_str(), elapsed);
+            let region_id = task.cmd.ctx().get_region_id();
+            let ts = task.cmd.ts();
+            let mut statistics = Statistics::default();
+            match &task.cmd {
+                Command::Prewrite(_) | Command::PrewritePessimistic(_) => {
+                    tls_collect_query(region_id, QueryKind::Prewrite);
                 }
-                .in_resource_metering_tag(resource_tag),
-            )
-            .unwrap();
+                Command::AcquirePessimisticLock(_) => {
+                    tls_collect_query(region_id, QueryKind::AcquirePessimisticLock);
+                }
+                Command::Commit(_) => {
+                    tls_collect_query(region_id, QueryKind::Commit);
+                }
+                Command::Rollback(_) | Command::PessimisticRollback(_) => {
+                    tls_collect_query(region_id, QueryKind::Rollback);
+                }
+                _ => {}
+            }
+
+            if task.cmd.readonly() {
+                self.process_read(snapshot, task, &mut statistics);
+            } else {
+                self.process_write(snapshot, task, &mut statistics).await;
+            };
+            tls_collect_scan_details(tag.get_str(), &statistics);
+            let elapsed = timer.saturating_elapsed();
+            slow_log!(
+                elapsed,
+                "[region {}] scheduler handle command: {}, ts: {}",
+                region_id,
+                tag,
+                ts
+            );
+
+            tls_collect_read_duration(tag.get_str(), elapsed);
+        }
+        .in_resource_metering_tag(resource_tag)
+        .await;
     }
 
     /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
@@ -780,7 +744,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .load(Ordering::Relaxed);
         let pipelined = pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
 
-        let deadline = task.deadline;
+        let deadline = task.cmd.deadline();
         let write_result = {
             let context = WriteContext {
                 lock_mgr: &self.inner.lock_mgr,
@@ -931,46 +895,50 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                     .get(tag)
                                     .observe(rows as f64);
 
-                                if ok {
-                                    // consume the quota only when write succeeds, otherwise failed write requests may exhaust
+                                if !ok {
+                                    // Only consume the quota when write succeeds, otherwise failed write requests may exhaust
                                     // the quota and other write requests would be in long delay.
                                     if sched.inner.flow_controller.enabled() {
-                                        if sched.inner.flow_controller.is_unlimited() {
-                                            // no need to delay if unthrottled, just call consume to record write flow
-                                            let _ = sched.inner.flow_controller.consume(write_size);
-                                        } else {
-                                            // Control mutex is used to ensure there is only one request consuming the quota.
-                                            // The delay may exceed 1s, and the speed limit is changed every second.
-                                            // If the speed of next second is larger than the one of first second,
-                                            // without the mutex, the write flow can't throttled strictly.
-                                            let _guard = sched.control_mutex.lock().await;
-                                            let delay =
-                                                sched.inner.flow_controller.consume(write_size);
-                                            delay.await;
-                                        }
+                                        sched.inner.flow_controller.unconsume(write_size);
                                     }
                                 }
                             })
                             .unwrap()
                     });
 
-                    if self.inner.flow_controller.enabled()
-                        && !self.inner.flow_controller.is_unlimited()
-                    {
-                        let mut deadline_fut = GLOBAL_TIMER_HANDLE
-                            .delay(deadline.to_std_instant())
-                            .compat()
-                            .fuse();
-                        let start = Instant::now_coarse();
-                        // Wait for the delay. But don't wait beyond the deadline.
-                        let _guard = select! {
-                            _ = deadline_fut => {
-                                scheduler.finish_with_err(cid, StorageErrorInner::DeadlineExceeded);
-                                return;
-                            },
-                            guard = self.control_mutex.lock().fuse() => guard,
-                        };
-                        SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
+                    if self.inner.flow_controller.enabled() {
+                        if self.inner.flow_controller.is_unlimited() {
+                            // no need to delay if unthrottled, just call consume to record write flow
+                            let _ = self.inner.flow_controller.consume(write_size);
+                        } else {
+                            let start = Instant::now_coarse();
+                            // Control mutex is used to ensure there is only one request consuming the quota.
+                            // The delay may exceed 1s, and the speed limit is changed every second.
+                            // If the speed of next second is larger than the one of first second,
+                            // without the mutex, the write flow can't throttled strictly.
+                            let _guard = self.control_mutex.lock().await;
+                            let delay = self.inner.flow_controller.consume(write_size);
+                            let delay_end = Instant::now_coarse() + delay;
+                            while !self.inner.flow_controller.is_unlimited() {
+                                let now = Instant::now_coarse();
+                                if now >= delay_end {
+                                    break;
+                                }
+                                if now >= deadline.inner() {
+                                    scheduler
+                                        .finish_with_err(cid, StorageErrorInner::DeadlineExceeded);
+                                    self.inner.flow_controller.unconsume(write_size);
+                                    SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
+                                    return;
+                                }
+                                GLOBAL_TIMER_HANDLE
+                                    .delay(std::time::Instant::now() + Duration::from_millis(1))
+                                    .compat()
+                                    .await
+                                    .unwrap();
+                            }
+                            SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
+                        }
                     }
 
                     to_be_write.deadline = Some(deadline);
@@ -1007,7 +975,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// the task with a `DeadlineExceeded` error.
     #[inline]
     fn check_task_deadline_exceeded(&self, task: &Task) -> bool {
-        if let Err(e) = task.deadline.check() {
+        if let Err(e) = task.cmd.deadline().check() {
             self.finish_with_err(task.cid, e);
             true
         } else {
@@ -1294,10 +1262,8 @@ mod tests {
         let cmd: TypedCommand<TxnStatus> = req.into();
         let (cb, f) = paired_future_callback();
 
-        // Lock the control_mutex to simulate flow control.
         scheduler.inner.flow_controller.enable(true);
-        scheduler.inner.flow_controller.set_speed_limit(1e9);
-        let guard = block_on(scheduler.control_mutex.lock());
+        scheduler.inner.flow_controller.set_speed_limit(1.0);
         scheduler.run_cmd(cmd.cmd, StorageCallback::TxnStatus(cb));
         // The task waits for 200ms until it locks the control_mutex, but the execution
         // time limit is 100ms. Before the mutex is locked, it should return
@@ -1307,9 +1273,14 @@ mod tests {
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
+        // should unconsume if the request fails
+        assert_eq!(scheduler.inner.flow_controller.total_bytes_consumed(), 0);
 
-        drop(guard);
-        // A new request should not be blocked after releasing the lock.
+        // A new request should not be blocked without flow control.
+        scheduler
+            .inner
+            .flow_controller
+            .set_speed_limit(std::f64::INFINITY);
         let mut req = CheckTxnStatusRequest::default();
         req.mut_context().max_execution_duration_ms = 100;
         req.set_primary_key(b"a".to_vec());

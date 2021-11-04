@@ -34,7 +34,7 @@ use file_system::{
 use keys::{enc_end_key, enc_start_key};
 use tikv_util::time::{duration_to_sec, Instant, Limiter};
 use tikv_util::HandyRwLock;
-use tikv_util::{box_err, box_try, debug, error, info, map, warn};
+use tikv_util::{box_err, box_try, debug, error, info, warn};
 
 use crate::coprocessor::CoprocessorHost;
 use crate::store::metrics::{
@@ -1127,6 +1127,7 @@ impl SnapManager {
         Ok(())
     }
 
+    // [PerformanceCriticalPath]?? I/O involved API should be called in background thread
     // Return all snapshots which is idle not being used.
     pub fn list_idle_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
         // Use a lock to protect the directory when scanning.
@@ -1247,6 +1248,11 @@ impl SnapManager {
         let _lock = self.core.registry.rl();
         let base = &self.core.base;
         let s = Snapshot::new(base, key, is_sending, CheckPolicy::None, &self.core)?;
+        fail_point!(
+            "get_snapshot_for_gc",
+            key.region_id == 2 && key.idx == 1,
+            |_| { Err(box_err!("invalid cf number of snapshot meta")) }
+        );
         Ok(Box::new(s))
     }
 
@@ -1510,7 +1516,7 @@ impl SnapManagerBuilder {
         SnapManager {
             core: SnapManagerCore {
                 base: path.into(),
-                registry: Arc::new(RwLock::new(map![])),
+                registry: Default::default(),
                 limiter,
                 temp_sst_id: Arc::new(AtomicU64::new(0)),
                 encryption_key_manager: self.key_manager,
@@ -1527,7 +1533,7 @@ pub mod tests {
     use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, AtomicUsize};
-    use std::sync::{Arc, RwLock};
+    use std::sync::Arc;
 
     use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
     use encryption_export::data_key_manager_from_config;
@@ -1548,7 +1554,6 @@ pub mod tests {
 
     use protobuf::Message;
     use tempfile::{Builder, TempDir};
-    use tikv_util::map;
     use tikv_util::time::Limiter;
 
     use super::{
@@ -1694,7 +1699,7 @@ pub mod tests {
     fn create_manager_core(path: &str) -> SnapManagerCore {
         SnapManagerCore {
             base: path.to_owned(),
-            registry: Arc::new(RwLock::new(map![])),
+            registry: Default::default(),
             limiter: Limiter::new(f64::INFINITY),
             temp_sst_id: Arc::new(AtomicU64::new(0)),
             encryption_key_manager: None,

@@ -9,6 +9,7 @@ mod endpoint;
 mod errors;
 mod metrics;
 mod service;
+mod softlimit;
 mod writer;
 
 pub use endpoint::{backup_file_name, Endpoint, Task};

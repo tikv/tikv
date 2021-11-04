@@ -4,6 +4,7 @@
 mod cgroup;
 pub mod cpu_time;
 pub mod disk;
+pub mod inspector;
 
 // re-export some traits for ease of use
 use crate::config::{ReadableSize, KIB};
@@ -22,7 +23,7 @@ static MEMORY_USAGE_HIGH_WATER: AtomicU64 = AtomicU64::new(u64::MAX);
 
 #[cfg(target_os = "linux")]
 lazy_static! {
-    static ref SELF_CGROUP: cgroup::CGroupSys = cgroup::CGroupSys::new();
+    static ref SELF_CGROUP: cgroup::CGroupSys = cgroup::CGroupSys::new().unwrap_or_default();
 }
 
 pub struct SysQuota;
