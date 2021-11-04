@@ -861,8 +861,8 @@ impl DebugExecutor for DebugClient {
         let resp = self
             .get_store_info(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_store_info", e));
-        println!("store_id: {}", resp.get_store_id());
-        println!("api_version: {:?}", resp.get_api_version())
+        println!("store id: {}", resp.get_store_id());
+        println!("api version: {:?}", resp.get_api_version())
     }
 
     fn dump_cluster_info(&self) {
@@ -1092,7 +1092,7 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         let store_info = self.get_store_info();
         if let Ok(info) = store_info {
             println!("store id: {}", info.store_id);
-            println!("store id: {:?}", info.api_version);
+            println!("api version: {:?}", info.api_version);
         }
     }
 
