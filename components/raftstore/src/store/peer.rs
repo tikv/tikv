@@ -2184,13 +2184,6 @@ where
             "{} is applying snapshot when it is ready to handle committed entries",
             self.tag
         );
-        if !committed_entries.is_empty() {
-            // We must renew current_time because this value may be created a long time ago.
-            // If we do not renew it, this time may be smaller than propose_time of a command,
-            // which was proposed in another thread while this thread receives its AppendEntriesResponse
-            // and is ready to calculate its commit-log-duration.
-            ctx.current_time.replace(monotonic_raw_now());
-        }
         // Leader needs to update lease.
         let mut lease_to_be_updated = self.is_leader();
         for entry in committed_entries.iter().rev() {
@@ -2201,6 +2194,11 @@ where
                     .proposals
                     .find_propose_time(entry.get_term(), entry.get_index());
                 if let Some(propose_time) = propose_time {
+                    // We must renew current_time because this value may be created a long time ago.
+                    // If we do not renew it, this time may be smaller than propose_time of a command,
+                    // which was proposed in another thread while this thread receives its AppendEntriesResponse
+                    // and is ready to calculate its commit-log-duration.
+                    ctx.current_time.replace(monotonic_raw_now());
                     ctx.raft_metrics.commit_log.observe(duration_to_sec(
                         (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
                     ));
