@@ -585,15 +585,15 @@ impl DefaultCfConfig {
         enable_ttl: bool,
     ) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, region_info_accessor);
-        let f = Box::new(RangePropertiesCollectorFactory {
+        let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
-        });
+        };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         if enable_ttl {
             cf_opts.add_table_properties_collector_factory(
                 "tikv.ttl-properties-collector",
-                Box::new(TtlPropertiesCollectorFactory {}),
+                TtlPropertiesCollectorFactory {},
             );
             cf_opts
                 .set_compaction_filter_factory(
@@ -688,12 +688,14 @@ impl WriteCfConfig {
         // Create prefix bloom filter for memtable.
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
         // Collects user defined properties.
-        let f = Box::new(MvccPropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
-        let f = Box::new(RangePropertiesCollectorFactory {
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.mvcc-properties-collector",
+            MvccPropertiesCollectorFactory::default(),
+        );
+        let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
-        });
+        };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts
             .set_compaction_filter_factory(
@@ -772,10 +774,10 @@ impl LockCfConfig {
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
             .unwrap();
-        let f = Box::new(RangePropertiesCollectorFactory {
+        let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
-        });
+        };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
         cf_opts.set_titandb_options(&self.titan.build_opts());
