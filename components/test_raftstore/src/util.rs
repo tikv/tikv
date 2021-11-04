@@ -36,7 +36,7 @@ use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
 use rand::RngCore;
-use tempfile::{Builder, TempDir};
+use tempfile::TempDir;
 use tikv::config::*;
 use tikv::storage::point_key_range;
 use tikv_util::config::*;
@@ -612,7 +612,7 @@ pub fn create_test_engine(
     Option<Arc<DataKeyManager>>,
     TempDir,
 ) {
-    let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
+    let dir = test_util::temp_dir_in_mem("test_cluster");
     let key_manager =
         data_key_manager_from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()

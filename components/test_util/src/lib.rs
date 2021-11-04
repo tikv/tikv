@@ -93,3 +93,20 @@ pub fn alloc_port() -> u16 {
         }
     }
 }
+
+/// Gets a temporary path in memory.
+///
+/// The returned path will point to memory only when memory disk is available
+/// and specified.
+pub fn temp_dir_in_mem(prefix: impl Into<Option<&'static str>>) -> tempfile::TempDir {
+    let mut builder = tempfile::Builder::new();
+    if let Some(prefix) = prefix.into() {
+        builder.prefix(prefix);
+    }
+    if let Ok(dir) = env::var("TIKV_TEST_MEMORY_DISK_MOUNT_POINT") {
+        debug!("using memory disk"; "path" => %dir);
+        builder.tempdir_in(dir).unwrap()
+    } else {
+        builder.tempdir().unwrap()
+    }
+}
