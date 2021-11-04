@@ -535,7 +535,7 @@ pub fn test_rollback() {
 }
 
 fn test_query_num(query: Box<Query>, enable_ttl: bool) {
-    let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+    let (mut cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
         cluster.cfg.split.qps_threshold = 0;
         cluster.cfg.split.split_balance_score = 2.0;
@@ -546,6 +546,9 @@ fn test_query_num(query: Box<Query>, enable_ttl: bool) {
     });
 
     let k = b"key".to_vec();
+    // When a peer becomes leader, it can't read before committing to current term.
+    // Force a successful read to wait for the correct timing.
+    cluster.must_get(&k);
     let store_id = 1;
     if enable_ttl {
         raw_put(&cluster, &client, &ctx, store_id, k.clone());
