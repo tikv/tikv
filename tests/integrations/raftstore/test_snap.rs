@@ -441,7 +441,7 @@ fn test_server_snapshot_with_append() {
 
 #[test]
 fn test_inspected_snapshot() {
-    let _g = tikv_util::guarantee_on_physical_disk();
+    let _g = test_util::guarantee_on_physical_disk();
     let mut cluster = new_server_cluster(1, 3);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 8;
