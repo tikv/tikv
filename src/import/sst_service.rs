@@ -18,11 +18,7 @@ use grpcio::{
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::{errorpb, kvrpcpb::Context};
 
-#[cfg(feature = "prost-codec")]
-use kvproto::import_sstpb::write_request::*;
-#[cfg(feature = "protobuf-codec")]
 use kvproto::import_sstpb::RawWriteRequest_oneof_chunk as RawChunk;
-#[cfg(feature = "protobuf-codec")]
 use kvproto::import_sstpb::WriteRequest_oneof_chunk as Chunk;
 use kvproto::import_sstpb::*;
 

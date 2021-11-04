@@ -12,9 +12,6 @@ use pd_client::PdClient;
 use test_raftstore::*;
 use tikv_util::debug;
 
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::event::{Event as Event_oneof_event, LogType as EventLogType};
-#[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
 
 use crate::{new_event_feed, TestSuite, TestSuiteBuilder};

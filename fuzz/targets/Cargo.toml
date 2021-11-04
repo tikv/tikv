@@ -4,17 +4,6 @@ version = "0.0.1"
 publish = false
 edition = "2018"
 
-[features]
-default = ["protobuf-codec"]
-protobuf-codec = [
-  "tidb_query_datatype/protobuf-codec",
-  "tikv_util/protobuf-codec",
-]
-prost-codec = [
-  "tidb_query_datatype/prost-codec",
-  "tikv_util/prost-codec",
-]
-
 [lib]
 path = "mod.rs"
 
