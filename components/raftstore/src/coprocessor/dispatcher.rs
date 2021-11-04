@@ -9,11 +9,16 @@ use engine_traits::{CfName, KvEngine};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{ComputeHashRequest, RaftCmdRequest};
+use lazy_static::lazy_static;
 use raft::eraftpb;
 use tikv_util::box_try;
 
 use super::*;
 use crate::store::CasualRouter;
+
+lazy_static! {
+    static ref EMPTY_REGION: Region = Region::default();
+}
 
 struct Entry<T> {
     priority: u32,
@@ -506,7 +511,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
         for batch in &cmd_batches {
             for cmd in &batch.cmds {
-                self.post_apply(&batch.region, cmd);
+                self.post_apply(&EMPTY_REGION, cmd);
             }
         }
         for observer in &self.registry.cmd_observers {
@@ -732,7 +737,7 @@ mod tests {
         assert_all!(&[&ob.called], &[55]);
 
         let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
-        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        let mut cb = CmdBatch::new(&observe_info, &Region::default());
         cb.push(&observe_info, 0, Cmd::default());
         host.on_flush_applied_cmd_batch(cb.level, vec![cb], &PanicEngine);
         // `post_apply` + `on_flush_applied_cmd_batch` => 13 + 6 = 19
