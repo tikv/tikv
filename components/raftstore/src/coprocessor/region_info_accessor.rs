@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::fmt::{Display, Formatter, Result as FmtResult};
@@ -13,7 +14,6 @@ use super::{
 };
 use collections::HashMap;
 use engine_traits::KvEngine;
-use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raft::StateRole;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker};
@@ -67,7 +67,80 @@ impl RegionInfo {
 }
 
 type RegionsMap = HashMap<u64, RegionInfo>;
-type RegionRangesMap = BTreeMap<Vec<u8>, u64>;
+type RegionRangesMap = BTreeMap<RangeKey, u64>;
+
+// RangeKey is a wrapper used to unify the comparsion between region start key
+// and region end key. Region end key is special as empty stands for the infinite,
+// so we need to take special care for cases where the end key is empty.
+#[derive(Clone, Debug)]
+pub struct RangeKey {
+    key: Vec<u8>,
+    is_end_key: bool,
+}
+
+impl RangeKey {
+    pub fn from_start_key(key: Vec<u8>) -> Self {
+        Self {
+            key: key.to_vec(),
+            is_end_key: false,
+        }
+    }
+
+    pub fn from_end_key(key: Vec<u8>) -> Self {
+        Self {
+            key: key.to_vec(),
+            is_end_key: true,
+        }
+    }
+}
+
+impl PartialEq for RangeKey {
+    fn eq(&self, other: &Self) -> bool {
+        if self.key.is_empty() && other.key.is_empty() {
+            self.is_end_key == other.is_end_key
+        } else {
+            self.key.eq(&other.key)
+        }
+    }
+}
+
+impl Eq for RangeKey {}
+
+impl Ord for RangeKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.is_end_key && other.is_end_key {
+            if self.key.is_empty() && other.key.is_empty() {
+                Ordering::Equal
+            } else if self.key.is_empty() {
+                Ordering::Greater
+            } else if other.key.is_empty() {
+                Ordering::Less
+            } else {
+                self.key.cmp(&other.key)
+            }
+        } else if self.is_end_key && !other.is_end_key {
+            if self.key.is_empty() {
+                Ordering::Greater
+            } else {
+                self.key.cmp(&other.key)
+            }
+        } else if !self.is_end_key && other.is_end_key {
+            if other.key.is_empty() {
+                Ordering::Less
+            } else {
+                self.key.cmp(&other.key)
+            }
+        } else {
+            self.key.cmp(&other.key)
+        }
+    }
+}
+
+impl PartialOrd for RangeKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 pub type Callback<T> = Box<dyn FnOnce(T) + Send>;
 pub type SeekRegionCallback = Box<dyn FnOnce(&mut dyn Iterator<Item = &RegionInfo>) + Send>;
@@ -186,7 +259,7 @@ impl RegionCollector {
     }
 
     pub fn create_region(&mut self, region: Region, role: StateRole) {
-        let end_key = data_end_key(region.get_end_key());
+        let end_key = RangeKey::from_end_key(region.get_end_key().to_vec());
         let region_id = region.get_id();
 
         // Create new region
@@ -212,13 +285,13 @@ impl RegionCollector {
         if old_region.get_end_key() != region.get_end_key() {
             // The region's end_key has changed.
             // Remove the old entry in `self.region_ranges`.
-            let old_end_key = data_end_key(old_region.get_end_key());
+            let old_end_key = RangeKey::from_end_key(old_region.get_end_key().to_vec());
 
             let old_id = self.region_ranges.remove(&old_end_key).unwrap();
             assert_eq!(old_id, region.get_id());
 
             // Insert new entry to `region_ranges`.
-            let end_key = data_end_key(region.get_end_key());
+            let end_key = RangeKey::from_end_key(region.get_end_key().to_vec());
             assert!(
                 self.region_ranges
                     .insert(end_key, region.get_id())
@@ -262,7 +335,7 @@ impl RegionCollector {
             let removed_region = removed_region_info.region;
             assert_eq!(removed_region.get_id(), region.get_id());
 
-            let end_key = data_end_key(removed_region.get_end_key());
+            let end_key = RangeKey::from_end_key(removed_region.get_end_key().to_vec());
 
             let removed_id = self.region_ranges.remove(&end_key).unwrap();
             assert_eq!(removed_id, region.get_id());
@@ -323,10 +396,10 @@ impl RegionCollector {
 
         let mut stale_regions_in_range = vec![];
 
-        for (key, id) in self
-            .region_ranges
-            .range((Excluded(data_key(region.get_start_key())), Unbounded))
-        {
+        for (key, id) in self.region_ranges.range((
+            Excluded(RangeKey::from_start_key(region.get_start_key().to_vec())),
+            Unbounded,
+        )) {
             if *id == region.get_id() {
                 continue;
             }
@@ -363,10 +436,9 @@ impl RegionCollector {
     }
 
     pub fn handle_seek_region(&self, from_key: Vec<u8>, callback: SeekRegionCallback) {
-        let from_key = data_key(&from_key);
         let mut iter = self
             .region_ranges
-            .range((Excluded(from_key), Unbounded))
+            .range((Excluded(RangeKey::from_start_key(from_key)), Unbounded))
             .map(|(_, region_id)| &self.regions[region_id]);
         callback(&mut iter)
     }
@@ -381,12 +453,16 @@ impl RegionCollector {
         end_key: Vec<u8>,
         callback: Callback<Vec<Region>>,
     ) {
+        let end_key = RangeKey::from_end_key(end_key);
         let mut regions = vec![];
         for (_, region_id) in self
             .region_ranges
-            .range((Included(start_key), Included(end_key)))
+            .range((Excluded(RangeKey::from_start_key(start_key)), Unbounded))
         {
             let region_info = &self.regions[region_id];
+            if RangeKey::from_start_key(region_info.region.get_start_key().to_vec()) >= end_key {
+                break;
+            }
             regions.push(region_info.region.clone());
         }
         callback(regions);
@@ -654,7 +730,7 @@ mod tests {
     fn check_collection(c: &RegionCollector, regions: &[(Region, StateRole)]) {
         let region_ranges: Vec<_> = regions
             .iter()
-            .map(|(r, _)| (data_end_key(r.get_end_key()), r.get_id()))
+            .map(|(r, _)| (RangeKey::from_end_key(r.get_end_key().to_vec()), r.get_id()))
             .collect();
 
         let mut is_regions_equal = c.regions.len() == regions.len();
@@ -719,7 +795,7 @@ mod tests {
 
         assert_eq!(&c.regions[&region.get_id()].region, region);
         assert_eq!(
-            c.region_ranges[&data_end_key(region.get_end_key())],
+            c.region_ranges[&RangeKey::from_end_key(region.get_end_key().to_vec())],
             region.get_id()
         );
     }
@@ -738,11 +814,12 @@ mod tests {
         if let Some(r) = c.regions.get(&region.get_id()) {
             assert_eq!(r.region, *region);
             assert_eq!(
-                c.region_ranges[&data_end_key(region.get_end_key())],
+                c.region_ranges[&RangeKey::from_end_key(region.get_end_key().to_vec())],
                 region.get_id()
             );
         } else {
-            let another_region_id = c.region_ranges[&data_end_key(region.get_end_key())];
+            let another_region_id =
+                c.region_ranges[&RangeKey::from_end_key(region.get_end_key().to_vec())];
             let version = c.regions[&another_region_id]
                 .region
                 .get_region_epoch()
@@ -755,7 +832,7 @@ mod tests {
             if old_end_key.as_slice() != region.get_end_key() {
                 assert!(
                     c.region_ranges
-                        .get(&data_end_key(&old_end_key))
+                        .get(&RangeKey::from_end_key(old_end_key))
                         .map_or(true, |id| *id != region.get_id())
                 );
             }
@@ -774,7 +851,7 @@ mod tests {
         if let Some(end_key) = end_key {
             assert!(
                 c.region_ranges
-                    .get(&data_end_key(&end_key))
+                    .get(&RangeKey::from_end_key(end_key))
                     .map_or(true, |r| *r != id)
             );
         }
@@ -789,6 +866,28 @@ mod tests {
         if let Some(r) = c.regions.get(&region.get_id()) {
             assert_eq!(r.role, role);
         }
+    }
+
+    #[test]
+    fn test_range_key() {
+        let a = RangeKey::from_start_key(b"".to_vec());
+        let b = RangeKey::from_start_key(b"".to_vec());
+        let c = RangeKey::from_end_key(b"a".to_vec());
+        let d = RangeKey::from_start_key(b"a".to_vec());
+        let e = RangeKey::from_start_key(b"d".to_vec());
+        let f = RangeKey::from_end_key(b"f".to_vec());
+        let g = RangeKey::from_end_key(b"u".to_vec());
+        let h = RangeKey::from_end_key(b"".to_vec());
+
+        assert!(a == b);
+        assert!(a < c);
+        assert!(a != h);
+        assert!(c == d);
+        assert!(d < e);
+        assert!(e < f);
+        assert!(f < g);
+        assert!(g < h);
+        assert!(h > g);
     }
 
     #[test]

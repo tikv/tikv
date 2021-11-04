@@ -316,11 +316,10 @@ where
             fn next(&mut self) -> Option<Key> {
                 loop {
                     let region = self.regions.peek()?;
-                    let key = self.keys.peek()?;
-                    let data_key = keys::data_key(key.as_encoded());
-                    if data_key.as_slice() < region.get_start_key() {
+                    let key = self.keys.peek()?.as_encoded().as_slice();
+                    if key < region.get_start_key() {
                         self.keys.next();
-                    } else if data_key.as_slice() < region.get_end_key() {
+                    } else if region.get_end_key().is_empty() || key < region.get_end_key() {
                         return self.keys.next();
                     } else {
                         self.regions.next();
@@ -1415,11 +1414,11 @@ mod tests {
 
         let mut r1 = Region::default();
         r1.set_start_key(b"".to_vec());
-        r1.set_end_key(format!("zk{:02}", 10).into_bytes());
+        r1.set_end_key(format!("k{:02}", 10).into_bytes());
 
         let mut r2 = Region::default();
-        r2.set_start_key(format!("zk{:02}", 20).into_bytes());
-        r2.set_end_key(format!("zk{:02}", 30).into_bytes());
+        r2.set_start_key(format!("k{:02}", 20).into_bytes());
+        r2.set_end_key(format!("k{:02}", 30).into_bytes());
         r2.mut_peers().push(Peer::default());
         r2.mut_peers()[0].set_store_id(1);
 
