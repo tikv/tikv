@@ -117,10 +117,6 @@ impl<E: Engine> Endpoint<E> {
                 let end_key = txn_types::Key::from_raw_maybe_unbounded(range.get_end());
                 self.concurrency_manager
                     .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
-                        // TODO(youjiali1995): seems needn't do this.
-                        if req_ctx.access_locks.contains(lock.ts) {
-                            return Ok(());
-                        }
                         Lock::check_ts_conflict(
                             Cow::Borrowed(lock),
                             key,

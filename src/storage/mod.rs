@@ -455,7 +455,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     iter::once(&key),
                     start_ts,
                     &bypass_locks,
-                    &access_locks,
                     &concurrency_manager,
                     CMD,
                 )?;
@@ -576,7 +575,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         iter::once(&key),
                         start_ts,
                         &bypass_locks,
-                        &access_locks,
                         &concurrency_manager,
                         CMD,
                     ) {
@@ -729,7 +727,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     &keys,
                     start_ts,
                     &bypass_locks,
-                    &access_locks,
                     &concurrency_manager,
                     CMD,
                 )?;
@@ -853,10 +850,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now();
                     concurrency_manager
                         .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
-                            // TODO(youjiali1995): seems needn't do this.
-                            if access_locks.contains(lock.ts) {
-                                return Ok(());
-                            }
                             Lock::check_ts_conflict(
                                 Cow::Borrowed(lock),
                                 key,
@@ -2084,7 +2077,6 @@ fn prepare_snap_ctx<'a>(
     keys: impl IntoIterator<Item = &'a Key> + Clone,
     start_ts: TimeStamp,
     bypass_locks: &'a TsSet,
-    access_locks: &'a TsSet,
     concurrency_manager: &ConcurrencyManager,
     cmd: CommandKind,
 ) -> Result<SnapContext<'a>> {
@@ -2099,10 +2091,8 @@ fn prepare_snap_ctx<'a>(
         for key in keys.clone() {
             concurrency_manager
                 .read_key_check(key, |lock| {
-                    // TODO(youjiali1995): seems needn't do this.
-                    if access_locks.contains(lock.ts) {
-                        return Ok(());
-                    }
+                    // No need to check access_locks because they are committed which means they
+                    // can't be in memory lock table.
                     Lock::check_ts_conflict(Cow::Borrowed(lock), key, start_ts, bypass_locks)
                 })
                 .map_err(|e| {
@@ -6563,9 +6553,6 @@ mod tests {
         ctx.set_resolved_locks(vec![10]);
         assert!(block_on(storage.get(ctx.clone(), b"key".to_vec(), 100.into())).is_ok());
         ctx.take_resolved_locks();
-        ctx.set_committed_locks(vec![10]);
-        assert!(block_on(storage.get(ctx.clone(), b"key".to_vec(), 100.into())).is_ok());
-        ctx.take_committed_locks();
 
         // Test batch_get
         let batch_get = |ctx| {
@@ -6573,13 +6560,10 @@ mod tests {
         };
         let key_error = extract_key_error(&batch_get(ctx.clone()).unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");
-        // Ignore memory locks in resolved or committed locks.
+        // Ignore memory locks in resolved locks.
         ctx.set_resolved_locks(vec![10]);
         assert!(batch_get(ctx.clone()).is_ok());
         ctx.take_resolved_locks();
-        ctx.set_committed_locks(vec![10]);
-        assert!(batch_get(ctx.clone()).is_ok());
-        ctx.take_committed_locks();
 
         // Test scan
         let scan = |ctx| {
@@ -6600,9 +6584,6 @@ mod tests {
         ctx.set_resolved_locks(vec![10]);
         assert!(scan(ctx.clone()).is_ok());
         ctx.take_resolved_locks();
-        ctx.set_committed_locks(vec![10]);
-        assert!(scan(ctx.clone()).is_ok());
-        ctx.take_committed_locks();
 
         // Test batch_get_command
         let mut req1 = GetRequest::default();
@@ -6634,10 +6615,6 @@ mod tests {
         assert!(res[0].is_ok());
         assert!(res[1].is_ok());
         req2.mut_context().take_resolved_locks();
-        req2.mut_context().set_committed_locks(vec![10]);
-        let res = batch_get_command(req2.clone());
-        assert!(res[0].is_ok());
-        assert!(res[1].is_ok());
     }
 
     #[test]
