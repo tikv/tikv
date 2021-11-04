@@ -7,5 +7,3 @@ edition = "2018"
 proc-macro = true
 
 [dependencies]
-quote = "1"
-syn = { version = "1", features = ["full", "extra-traits"] }

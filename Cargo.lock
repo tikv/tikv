@@ -454,10 +454,6 @@ dependencies = [
 [[package]]
 name = "case_macros"
 version = "0.1.0"
-dependencies = [
- "quote",
- "syn",
-]
 
 [[package]]
 name = "cast"
