@@ -210,6 +210,12 @@ pub fn data_key(key: &[u8]) -> Vec<u8> {
     v
 }
 
+pub fn data_key_with_buffer(key: &[u8], buffer: &mut Vec<u8>) {
+    buffer.clear();
+    buffer.extend_from_slice(DATA_PREFIX_KEY);
+    buffer.extend_from_slice(key);
+}
+
 pub fn origin_key(key: &[u8]) -> &[u8] {
     assert!(
         validate_data_key(key),
