@@ -61,7 +61,7 @@ pub struct Runner<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> {
     tasks: Vec<Task>,
     engines: Engines<EK, ER>,
     gc_entries: Option<Sender<usize>>,
-    compact_log_interval: Duration,
+    compact_sync_interval: Duration,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
@@ -75,7 +75,7 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
             engines,
             tasks: vec![],
             gc_entries: None,
-            compact_log_interval,
+            compact_sync_interval: compact_log_interval,
         }
     }
 
@@ -168,7 +168,7 @@ where
     }
 
     fn get_interval(&self) -> Duration {
-        self.compact_log_interval
+        self.compact_sync_interval
     }
 }
 
@@ -199,7 +199,7 @@ mod tests {
             engines,
             ch: r,
             tasks: vec![],
-            compact_log_interval: Duration::from_secs(5),
+            compact_sync_interval: Duration::from_secs(5),
         };
 
         // generate raft logs

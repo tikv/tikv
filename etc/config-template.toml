@@ -358,7 +358,7 @@
 # raft-entry-max-size = "8MB"
 
 ## Interval to compact unnecessary Raft log.
-# raft-log-compact-interval = "5s"
+# raft-log-compact-sync-interval = "5s"
 
 ## Interval to GC unnecessary Raft log.
 # raft-log-gc-tick-interval = "5s"

@@ -61,7 +61,7 @@ pub struct Config {
     pub raft_entry_max_size: ReadableSize,
 
     // Interval to compact unnecessary raft log.
-    pub raft_log_compact_interval: ReadableDuration,
+    pub raft_log_compact_sync_interval: ReadableDuration,
     // Interval to gc unnecessary raft log.
     pub raft_log_gc_tick_interval: ReadableDuration,
     // A threshold to gc stale raft log, must >= 1.
@@ -245,7 +245,7 @@ impl Default for Config {
             raft_max_size_per_msg: ReadableSize::mb(1),
             raft_max_inflight_msgs: 256,
             raft_entry_max_size: ReadableSize::mb(8),
-            raft_log_compact_interval: ReadableDuration::secs(5),
+            raft_log_compact_sync_interval: ReadableDuration::secs(5),
             raft_log_gc_tick_interval: ReadableDuration::secs(5),
             raft_log_gc_threshold: 50,
             // Assume the average size of entries is 1k.
@@ -542,7 +542,7 @@ impl Config {
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_compact_interval"])
-            .set(self.raft_log_compact_interval.as_secs() as f64);
+            .set(self.raft_log_compact_sync_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_tick_interval"])
             .set(self.raft_log_gc_tick_interval.as_secs() as f64);

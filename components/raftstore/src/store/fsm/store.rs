@@ -1211,7 +1211,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let raftlog_gc_runner = RaftlogGcRunner::new(
             self.router(),
             engines.clone(),
-            cfg.value().raft_log_compact_interval.0,
+            cfg.value().raft_log_compact_sync_interval.0,
         );
         let raftlog_gc_scheduler = workers
             .background_worker
