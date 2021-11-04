@@ -650,6 +650,11 @@ where
         {
             return;
         }
+        fail_point!(
+            "propose_batch_raft_command",
+            !force && self.fsm.batch_req_builder.request.is_some(),
+            |_| {}
+        );
         if let Some((request, callback)) =
             self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics)
         {
@@ -2207,7 +2212,11 @@ where
     }
 
     fn on_transfer_leader_msg(&mut self, msg: &raft::eraftpb::Message, peer_disk_usage: DiskUsage) {
-        if let Some(peer) = self.fsm.peer.execute_transfer_leader(&mut self.ctx, msg, peer_disk_usage) {
+        if let Some(peer) =
+            self.fsm
+                .peer
+                .execute_transfer_leader(&mut self.ctx, msg, peer_disk_usage)
+        {
             if self.fsm.batch_req_builder.request.is_some()
                 && self.fsm.batch_req_builder.header_checked.unwrap_or(false)
             {
