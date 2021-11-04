@@ -504,14 +504,14 @@ pub(crate) fn load_data_by_lock<S: Snapshot, I: Iterator>(
                     let value = if cfg.desc {
                         near_reverse_load_data_by_write(
                             default_cursor,
-                            &current_user_key,
+                            current_user_key,
                             lock.ts,
                             statistics,
                         )
                     } else {
                         near_load_data_by_write(
                             default_cursor,
-                            &current_user_key,
+                            current_user_key,
                             lock.ts,
                             statistics,
                         )

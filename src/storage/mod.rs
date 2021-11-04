@@ -6636,7 +6636,7 @@ mod tests {
                     k1.clone(),
                     100.into(),
                 ),
-                expect_ok_callback(tx.clone(), 0),
+                expect_ok_callback(tx, 0),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -6656,7 +6656,7 @@ mod tests {
             block_on(storage.batch_get(ctx.clone(), vec![k1.clone(), k2.clone()], 110.into()))
                 .unwrap()
                 .0;
-        if &res[0].as_ref().unwrap().0 == &k1 {
+        if res[0].as_ref().unwrap().0 == k1 {
             assert_eq!(&res[0].as_ref().unwrap().1, &v1);
             assert_eq!(&res[1].as_ref().unwrap().1, &v2);
         } else {
