@@ -79,10 +79,10 @@ fn init_ctl_logger(level: &str) {
 }
 
 fn handle_engine_error(err: EngineError) -> ! {
-    error!("error while open kvdb: {}", err);
+    println!("error while open kvdb: {}", err);
     if let EngineError::Engine(msg) = err {
         if msg.starts_with(LOCK_FILE_ERROR) {
-            error!(
+            println!(
                 "LOCK file conflict indicates TiKV process is running. \
                 Do NOT delete the LOCK file and force the command to run. \
                 Doing so could cause data corruption."
