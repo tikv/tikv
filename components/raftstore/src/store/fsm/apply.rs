@@ -35,7 +35,7 @@ use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{PeerRole, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
-    RaftCmdRequest, RaftCmdResponse, Request, Response,
+    RaftCmdRequest, RaftCmdResponse, Request,
 };
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
@@ -1440,13 +1440,12 @@ where
         );
 
         let requests = req.get_requests();
-        let mut responses = Vec::with_capacity(requests.len());
 
         let mut ranges = vec![];
         let mut ssts = vec![];
         for req in requests {
             let cmd_type = req.get_cmd_type();
-            let mut resp = match cmd_type {
+            match cmd_type {
                 CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
                 CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
                 CmdType::DeleteRange => {
@@ -1470,10 +1469,6 @@ where
                     Err(box_err!("invalid cmd type, message maybe corrupted"))
                 }
             }?;
-
-            resp.set_cmd_type(cmd_type);
-
-            responses.push(resp);
         }
 
         let mut resp = RaftCmdResponse::default();
@@ -1481,7 +1476,6 @@ where
             let uuid = req.get_header().get_uuid().to_vec();
             resp.mut_header().set_uuid(uuid);
         }
-        resp.set_responses(responses.into());
 
         assert!(ranges.is_empty() || ssts.is_empty());
         let exec_res = if !ranges.is_empty() {
@@ -1511,12 +1505,11 @@ impl<EK> ApplyDelegate<EK>
 where
     EK: KvEngine,
 {
-    fn handle_put<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
+    fn handle_put<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<()> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
 
-        let resp = Response::default();
         let key = keys::data_key(key);
         self.metrics.size_diff_hint += key.len() as i64;
         self.metrics.size_diff_hint += value.len() as i64;
@@ -1549,10 +1542,10 @@ where
                 );
             });
         }
-        Ok(resp)
+        Ok(())
     }
 
-    fn handle_delete<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
+    fn handle_delete<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<()> {
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1560,7 +1553,6 @@ where
         let key = keys::data_key(key);
         // since size_diff_hint is not accurate, so we just skip calculate the value size.
         self.metrics.size_diff_hint -= key.len() as i64;
-        let resp = Response::default();
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
@@ -1591,7 +1583,7 @@ where
             self.metrics.delete_keys_hint += 1;
         }
 
-        Ok(resp)
+        Ok(())
     }
 
     fn handle_delete_range(
@@ -1600,7 +1592,7 @@ where
         req: &Request,
         ranges: &mut Vec<Range>,
         use_delete_range: bool,
-    ) -> Result<Response> {
+    ) -> Result<()> {
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
         let notify_only = req.get_delete_range().get_notify_only();
@@ -1619,7 +1611,6 @@ where
             return Err(Error::KeyNotInRegion(e_key.to_vec(), self.region.clone()));
         }
 
-        let resp = Response::default();
         let mut cf = req.get_delete_range().get_cf();
         if cf.is_empty() {
             cf = CF_DEFAULT;
@@ -1664,7 +1655,7 @@ where
         // TODO: Should this be executed when `notify_only` is set?
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
-        Ok(resp)
+        Ok(())
     }
 
     fn handle_ingest_sst<W: WriteBatch<EK>>(
@@ -1672,7 +1663,7 @@ where
         ctx: &mut ApplyContext<EK, W>,
         req: &Request,
         ssts: &mut Vec<SSTMetaInfo>,
-    ) -> Result<Response> {
+    ) -> Result<()> {
         let sst = req.get_ingest_sst().get_sst();
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
@@ -1697,7 +1688,7 @@ where
             }
         };
         ctx.pending_ssts.push(sst.to_owned());
-        Ok(Response::default())
+        Ok(())
     }
 }
 

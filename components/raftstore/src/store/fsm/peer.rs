@@ -131,7 +131,7 @@ where
     should_propose_size: u64,
     batch_req_size: u64,
     request: Option<RaftCmdRequest>,
-    callbacks: Vec<(Callback<E::Snapshot>, usize)>,
+    callbacks: Vec<Callback<E::Snapshot>>,
 }
 
 impl<EK, ER> Drop for PeerFsm<EK, ER>
@@ -367,7 +367,6 @@ where
     }
 
     fn add(&mut self, cmd: RaftCommand<E::Snapshot>, req_size: u32) {
-        let req_num = cmd.request.get_requests().len();
         let RaftCommand {
             mut request,
             callback,
@@ -381,7 +380,7 @@ where
         } else {
             self.request = Some(request);
         };
-        self.callbacks.push((callback, req_num));
+        self.callbacks.push(callback);
         self.batch_req_size += req_size as u64;
     }
 
@@ -406,7 +405,7 @@ where
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
-                let (cb, _) = self.callbacks.pop().unwrap();
+                let cb = self.callbacks.pop().unwrap();
                 return Some((req, cb));
             }
             metric.propose.batch += self.callbacks.len() - 1;
@@ -414,7 +413,7 @@ where
             let proposed_cbs: Vec<ExtCallback> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { proposed_cb, .. } = &mut cb.0 {
+                    if let Callback::Write { proposed_cb, .. } = cb {
                         proposed_cb.take()
                     } else {
                         None
@@ -433,7 +432,7 @@ where
             let committed_cbs: Vec<_> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { committed_cb, .. } = &mut cb.0 {
+                    if let Callback::Write { committed_cb, .. } = cb {
                         committed_cb.take()
                     } else {
                         None
@@ -453,7 +452,7 @@ where
             let times: SmallVec<[TiInstant; 4]> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { request_times, .. } = &mut cb.0 {
+                    if let Callback::Write { request_times, .. } = cb {
                         Some(request_times[0])
                     } else {
                         None
@@ -463,19 +462,10 @@ where
 
             let mut cb = Callback::write_ext(
                 Box::new(move |resp| {
-                    let mut last_index = 0;
-                    let has_error = resp.response.get_header().has_error();
-                    for (cb, req_num) in cbs {
-                        let next_index = last_index + req_num;
+                    for cb in cbs {
                         let mut cmd_resp = RaftCmdResponse::default();
                         cmd_resp.set_header(resp.response.get_header().clone());
-                        if !has_error {
-                            cmd_resp.set_responses(
-                                resp.response.get_responses()[last_index..next_index].into(),
-                            );
-                        }
                         cb.invoke_with_response(cmd_resp);
-                        last_index = next_index;
                     }
                 }),
                 proposed_cb,
