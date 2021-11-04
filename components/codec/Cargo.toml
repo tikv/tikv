@@ -4,15 +4,6 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
-[features]
-default = ["protobuf-codec"]
-protobuf-codec = [
-  "error_code/protobuf-codec",
-]
-prost-codec = [
-  "error_code/prost-codec",
-]
-
 [dependencies]
 byteorder = "1.2"
 error_code = { path = "../error_code", default-features = false }

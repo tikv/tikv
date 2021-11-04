@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use encryption::EncrypterReader;
 use engine_rocks::raw::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
@@ -9,7 +10,7 @@ use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWrite
 use external_storage_export::ExternalStorage;
 use file_system::Sha256Reader;
 use futures_util::io::AllowStdIo;
-use kvproto::brpb::File;
+use kvproto::brpb::{CipherInfo, File};
 use kvproto::metapb::Region;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;
@@ -77,15 +78,20 @@ impl Writer {
         cf: &'static str,
         limiter: Limiter,
         storage: &dyn ExternalStorage,
+        cipher: &CipherInfo,
     ) -> Result<File> {
         let (sst_info, sst_reader) = self.writer.finish_read()?;
         BACKUP_RANGE_SIZE_HISTOGRAM_VEC
             .with_label_values(&[cf])
             .observe(sst_info.file_size() as f64);
         let file_name = format!("{}_{}.sst", name, cf);
+        let (encrypter_reader, iv) =
+            EncrypterReader::new(sst_reader, cipher.cipher_type, &cipher.cipher_key)
+                .map_err(|e| Error::Other(box_err!("new encrypterReader error: {:?}", e)))?;
 
-        let (reader, hasher) = Sha256Reader::new(sst_reader)
+        let (reader, hasher) = Sha256Reader::new(encrypter_reader)
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
+
         storage.write(
             &file_name,
             Box::new(limiter.limit(AllowStdIo::new(reader))),
@@ -106,6 +112,7 @@ impl Writer {
         file.set_total_bytes(self.total_bytes);
         file.set_cf(cf.to_owned());
         file.set_size(sst_info.file_size());
+        file.set_cipher_iv(iv.as_slice().to_vec());
         Ok(file)
     }
 
@@ -122,6 +129,7 @@ pub struct BackupWriterBuilder {
     compression_type: Option<SstCompressionType>,
     compression_level: i32,
     sst_max_size: u64,
+    cipher: CipherInfo,
 }
 
 impl BackupWriterBuilder {
@@ -133,6 +141,7 @@ impl BackupWriterBuilder {
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
         sst_max_size: u64,
+        cipher: CipherInfo,
     ) -> BackupWriterBuilder {
         Self {
             store_id,
@@ -142,6 +151,7 @@ impl BackupWriterBuilder {
             compression_type,
             compression_level,
             sst_max_size,
+            cipher,
         }
     }
 
@@ -156,6 +166,7 @@ impl BackupWriterBuilder {
             self.compression_level,
             self.limiter.clone(),
             self.sst_max_size,
+            self.cipher.clone(),
         )
     }
 }
@@ -167,6 +178,7 @@ pub struct BackupWriter {
     write: Writer,
     limiter: Limiter,
     sst_max_size: u64,
+    cipher: CipherInfo,
 }
 
 impl BackupWriter {
@@ -178,6 +190,7 @@ impl BackupWriter {
         compression_level: i32,
         limiter: Limiter,
         sst_max_size: u64,
+        cipher: CipherInfo,
     ) -> Result<BackupWriter> {
         let default = RocksSstWriterBuilder::new()
             .set_in_memory(true)
@@ -200,6 +213,7 @@ impl BackupWriter {
             write: Writer::new(write),
             limiter,
             sst_max_size,
+            cipher,
         })
     }
 
@@ -245,6 +259,7 @@ impl BackupWriter {
                 CF_DEFAULT,
                 self.limiter.clone(),
                 storage,
+                &self.cipher,
             )?;
             files.push(default);
         }
@@ -255,6 +270,7 @@ impl BackupWriter {
                 CF_WRITE,
                 self.limiter.clone(),
                 storage,
+                &self.cipher,
             )?;
             files.push(write);
         }
@@ -279,6 +295,7 @@ pub struct BackupRawKVWriter {
     cf: CfName,
     writer: Writer,
     limiter: Limiter,
+    cipher: CipherInfo,
 }
 
 impl BackupRawKVWriter {
@@ -290,6 +307,7 @@ impl BackupRawKVWriter {
         limiter: Limiter,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
+        cipher: CipherInfo,
     ) -> Result<BackupRawKVWriter> {
         let writer = RocksSstWriterBuilder::new()
             .set_in_memory(true)
@@ -303,6 +321,7 @@ impl BackupRawKVWriter {
             cf,
             writer: Writer::new(writer),
             limiter,
+            cipher,
         })
     }
 
@@ -337,6 +356,7 @@ impl BackupRawKVWriter {
                 self.cf,
                 self.limiter.clone(),
                 storage,
+                &self.cipher,
             )?;
             files.push(file);
         }
@@ -351,6 +371,7 @@ impl BackupRawKVWriter {
 mod tests {
     use super::*;
     use engine_traits::Iterable;
+    use kvproto::encryptionpb;
     use raftstore::store::util::new_peer;
     use std::collections::BTreeMap;
     use std::f64::INFINITY;
@@ -410,7 +431,8 @@ mod tests {
             .unwrap();
         let db = rocks.get_rocksdb();
         let backend = external_storage_export::make_local_backend(temp.path());
-        let storage = external_storage_export::create_storage(&backend).unwrap();
+        let storage =
+            external_storage_export::create_storage(&backend, Default::default()).unwrap();
 
         // Test empty file.
         let mut r = kvproto::metapb::Region::default();
@@ -423,6 +445,11 @@ mod tests {
             0,
             Limiter::new(INFINITY),
             144 * 1024 * 1024,
+            {
+                let mut ci = CipherInfo::default();
+                ci.set_cipher_type(encryptionpb::EncryptionMethod::Plaintext);
+                ci
+            },
         )
         .unwrap();
         writer.write(vec![].into_iter(), false).unwrap();
@@ -436,6 +463,11 @@ mod tests {
             0,
             Limiter::new(INFINITY),
             144 * 1024 * 1024,
+            {
+                let mut ci = CipherInfo::default();
+                ci.set_cipher_type(encryptionpb::EncryptionMethod::Plaintext);
+                ci
+            },
         )
         .unwrap();
         writer
@@ -470,6 +502,11 @@ mod tests {
             0,
             Limiter::new(INFINITY),
             144 * 1024 * 1024,
+            {
+                let mut ci = CipherInfo::default();
+                ci.set_cipher_type(encryptionpb::EncryptionMethod::Plaintext);
+                ci
+            },
         )
         .unwrap();
         writer
