@@ -1625,7 +1625,7 @@ enum Cmd {
         #[structopt(subcommand)]
         cmd: FailCmd,
     },
-    /// Print the store id
+    /// Print the store id and api version
     Store {},
     /// Print the cluster id
     Cluster {},
