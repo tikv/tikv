@@ -3010,7 +3010,7 @@ where
         true
     }
 
-    fn ready_to_transfer_leader<T>(
+    pub fn ready_to_transfer_leader<T>(
         &self,
         ctx: &mut PollContext<EK, ER, T>,
         mut index: u64,
@@ -3543,35 +3543,7 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         msg: &eraftpb::Message,
         peer_disk_usage: DiskUsage,
-    ) -> Option<metapb::Peer> {
-        // log_term is set by original leader, represents the term last log is written
-        // in, which should be equal to the original leader's term.
-        if msg.get_log_term() != self.term() {
-            return None;
-        }
-
-        if self.is_leader() {
-            let from = match self.get_peer_from_cache(msg.get_from()) {
-                Some(p) => p,
-                None => return None,
-            };
-            return match self.ready_to_transfer_leader(ctx, msg.get_index(), &from) {
-                Some(reason) => {
-                    info!(
-                        "reject to transfer leader";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "to" => ?from,
-                        "reason" => reason,
-                        "index" => msg.get_index(),
-                        "last_index" => self.get_store().last_index(),
-                    );
-                    None
-                }
-                None => Some(from),
-            };
-        }
-
+    ) {
         #[allow(clippy::suspicious_operation_groupings)]
         if self.is_handling_snapshot()
             || self.has_pending_snapshot()
@@ -3588,7 +3560,7 @@ where
                 "peer_id" => self.peer.get_id(),
                 "from" => msg.get_from(),
             );
-            return None;
+            return;
         }
 
         let mut msg = eraftpb::Message::new();
@@ -3598,8 +3570,6 @@ where
         msg.set_index(self.get_store().applied_index());
         msg.set_log_term(self.term());
         self.raft_group.raft.msgs.push(msg);
-
-        None
     }
 
     /// Return true to if the transfer leader request is accepted.
@@ -3613,7 +3583,7 @@ where
     /// 2. execute_transfer_leader on follower
     ///     If follower passes all necessary checks, it will reply an
     ///     ACK with type MsgTransferLeader and its promised persistent index.
-    /// 3. execute_transfer_leader on leader:
+    /// 3. ready_to_transfer_leader on leader:
     ///     Leader checks if it's appropriate to transfer leadership. If it
     ///     does, it calls raft transfer_leader API to do the remaining work.
     ///
@@ -4000,6 +3970,18 @@ where
             return true;
         }
         false
+    }
+
+    /// Check if proposed callback can be called immediately.
+    pub fn check_for_proposed_cb(&mut self, cmd: &RaftCmdRequest) -> bool {
+        self.is_leader()
+            && self.pending_merge_state.is_none()
+            && self.raft_group.raft.lead_transferee.is_none()
+            && self.has_applied_to_current_term()
+            && self
+                .cmd_epoch_checker
+                .propose_check_epoch(&cmd, self.term())
+                .is_none()
     }
 }
 

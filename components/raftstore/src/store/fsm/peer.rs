@@ -66,11 +66,11 @@ use crate::store::util::{admin_cmd_epoch_lookup, is_learner, KeysInfoFormatter};
 use crate::store::worker::{
     ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
 };
+use crate::store::PdTask;
 use crate::store::{
     util, AbstractPeer, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTicks,
     RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
 };
-use crate::store::{PdTask, RequestInspector};
 use crate::{Error, Result};
 
 /// Limits the maximum number of regions returned by error.
@@ -673,17 +673,7 @@ where
         let cmd = self.fsm.batch_req_builder.request.take().unwrap();
         self.fsm.batch_req_builder.header_checked = Some(false);
         if let Ok(None) = self.pre_propose_raft_command(&cmd) {
-            let term = self.fsm.peer.term();
-            if self.fsm.peer.pending_merge_state.is_none()
-                && self.fsm.peer.raft_group.raft.lead_transferee.is_none()
-                && self.fsm.peer.has_applied_to_current_term()
-                && self
-                    .fsm
-                    .peer
-                    .cmd_epoch_checker
-                    .propose_check_epoch(&cmd, term)
-                    .is_none()
-            {
+            if self.fsm.peer.check_for_proposed_cb(&cmd) {
                 self.fsm.batch_req_builder.header_checked = Some(true);
                 for (cb, _) in &mut self.fsm.batch_req_builder.callbacks {
                     cb.invoke_proposed();
@@ -1610,7 +1600,7 @@ where
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
 
         let result = if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
-            self.on_transfer_leader_msg(msg.get_message(), peer_disk_usage);
+            self.on_transfer_leader_msg(&msg, peer_disk_usage);
             Ok(())
         } else {
             self.fsm.peer.step(self.ctx, msg.take_message())
@@ -2211,19 +2201,44 @@ where
         }
     }
 
-    fn on_transfer_leader_msg(&mut self, msg: &raft::eraftpb::Message, peer_disk_usage: DiskUsage) {
-        if let Some(peer) =
+    fn on_transfer_leader_msg(&mut self, msg: &RaftMessage, peer_disk_usage: DiskUsage) {
+        let raft_msg = msg.get_message();
+        // log_term is set by original leader, represents the term last log is written
+        // in, which should be equal to the original leader's term.
+        if raft_msg.get_log_term() != self.fsm.peer.term() {
+            return;
+        }
+        if self.fsm.peer.is_leader() {
+            match self.fsm.peer.ready_to_transfer_leader(
+                &mut self.ctx,
+                raft_msg.get_index(),
+                &msg.get_from_peer(),
+            ) {
+                Some(reason) => {
+                    info!(
+                        "reject to transfer leader";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "to" => ?msg.get_from_peer(),
+                        "reason" => reason,
+                        "index" => raft_msg.get_index(),
+                        "last_index" => self.fsm.peer.get_store().last_index(),
+                    );
+                }
+                None => {
+                    if self.fsm.batch_req_builder.request.is_some()
+                        && self.fsm.batch_req_builder.header_checked.unwrap_or(false)
+                    {
+                        self.propose_batch_raft_command(true);
+                    }
+
+                    self.fsm.peer.transfer_leader(&msg.get_from_peer());
+                }
+            }
+        } else {
             self.fsm
                 .peer
-                .execute_transfer_leader(&mut self.ctx, msg, peer_disk_usage)
-        {
-            if self.fsm.batch_req_builder.request.is_some()
-                && self.fsm.batch_req_builder.header_checked.unwrap_or(false)
-            {
-                self.propose_batch_raft_command(true);
-            }
-
-            self.fsm.peer.transfer_leader(&peer);
+                .execute_transfer_leader(&mut self.ctx, raft_msg, peer_disk_usage);
         }
     }
 
