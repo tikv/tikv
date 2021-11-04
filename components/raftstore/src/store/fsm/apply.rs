@@ -286,22 +286,6 @@ pub enum ApplyResult<S> {
     WaitMergeSource(Arc<AtomicU64>),
 }
 
-struct ExecContext {
-    apply_state: RaftApplyState,
-    index: u64,
-    term: u64,
-}
-
-impl ExecContext {
-    pub fn new(apply_state: RaftApplyState, index: u64, term: u64) -> ExecContext {
-        ExecContext {
-            apply_state,
-            index,
-            term,
-        }
-    }
-}
-
 // The applied command and their callback
 struct ApplyCallbackBatch<S>
 where
@@ -370,7 +354,8 @@ where
     engine: EK,
     applied_batch: ApplyCallbackBatch<EK::Snapshot>,
     apply_res: Vec<ApplyRes<EK::Snapshot>>,
-    exec_ctx: Option<ExecContext>,
+    exec_log_index: u64,
+    exec_log_term: u64,
 
     kv_wb: W,
     kv_wb_last_bytes: u64,
@@ -448,11 +433,12 @@ where
             kv_wb,
             applied_batch: ApplyCallbackBatch::new(),
             apply_res: vec![],
+            exec_log_index: 0,
+            exec_log_term: 0,
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
             committed_count: 0,
             sync_log_hint: false,
-            exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
             perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
@@ -1230,7 +1216,8 @@ where
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
-        ctx.exec_ctx = Some(self.new_ctx(index, term));
+        ctx.exec_log_index = index;
+        ctx.exec_log_term = term;
         ctx.kv_wb_mut().set_save_point();
         let mut origin_epoch = None;
         let (resp, exec_result) = match self.exec_raft_cmd(ctx, req) {
@@ -1264,10 +1251,7 @@ where
             return (resp, exec_result);
         }
 
-        let mut exec_ctx = ctx.exec_ctx.take().unwrap();
-        exec_ctx.apply_state.set_applied_index(index);
-
-        self.apply_state = exec_ctx.apply_state;
+        self.apply_state.set_applied_index(index);
         self.applied_index_term = term;
 
         if let ApplyResult::Res(ref exec_result) = exec_result {
@@ -1358,10 +1342,6 @@ where
             cmd.cb.take();
         }
     }
-
-    fn new_ctx(&self, index: u64, term: u64) -> ExecContext {
-        ExecContext::new(self.apply_state.clone(), index, term)
-    }
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -1397,8 +1377,8 @@ where
                 "execute admin command";
                 "region_id" => self.region_id(),
                 "peer_id" => self.id(),
-                "term" => ctx.exec_ctx.as_ref().unwrap().term,
-                "index" => ctx.exec_ctx.as_ref().unwrap().index,
+                "term" => ctx.exec_log_term,
+                "index" => ctx.exec_log_index,
                 "command" => ?request,
             );
         }
@@ -1408,7 +1388,7 @@ where
             AdminCmdType::ChangePeerV2 => self.exec_change_peer_v2(ctx, request),
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::BatchSplit => self.exec_batch_split(ctx, request),
-            AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
+            AdminCmdType::CompactLog => self.exec_compact_log(request),
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
             AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
@@ -1919,7 +1899,7 @@ where
         Ok((
             resp,
             ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
-                index: ctx.exec_ctx.as_ref().unwrap().index,
+                index: ctx.exec_log_index,
                 conf_change: Default::default(),
                 changes: vec![request.clone()],
                 region,
@@ -1963,7 +1943,7 @@ where
         Ok((
             resp,
             ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
-                index: ctx.exec_ctx.as_ref().unwrap().index,
+                index: ctx.exec_log_index,
                 conf_change: Default::default(),
                 changes,
                 region,
@@ -2398,8 +2378,7 @@ where
 
         let prepare_merge = req.get_prepare_merge();
         let index = prepare_merge.get_min_index();
-        let exec_ctx = ctx.exec_ctx.as_ref().unwrap();
-        let first_index = peer_storage::first_index(&exec_ctx.apply_state);
+        let first_index = peer_storage::first_index(&self.apply_state);
         if index < first_index {
             // We filter `CompactLog` command before.
             panic!(
@@ -2421,7 +2400,7 @@ where
         let mut merging_state = MergeState::default();
         merging_state.set_min_index(index);
         merging_state.set_target(prepare_merge.get_target().to_owned());
-        merging_state.set_commit(exec_ctx.index);
+        merging_state.set_commit(ctx.exec_log_index);
         write_peer_state(
             ctx.kv_wb_mut(),
             &region,
@@ -2519,8 +2498,8 @@ where
             "peer_id" => self.id(),
             "commit" => merge.get_commit(),
             "entries" => merge.get_entries().len(),
-            "term" => ctx.exec_ctx.as_ref().unwrap().term,
-            "index" => ctx.exec_ctx.as_ref().unwrap().index,
+            "term" => ctx.exec_log_term,
+            "index" => ctx.exec_log_index,
             "source_region" => ?source_region
         );
 
@@ -2585,7 +2564,7 @@ where
         Ok((
             resp,
             ApplyResult::Res(ExecResult::CommitMerge {
-                index: ctx.exec_ctx.as_ref().unwrap().index,
+                index: ctx.exec_log_index,
                 region,
                 source: source_region.to_owned(),
             }),
@@ -2635,17 +2614,15 @@ where
         ))
     }
 
-    fn exec_compact_log<W: WriteBatch<EK>>(
+    fn exec_compact_log(
         &mut self,
-        ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
 
         let compact_index = req.get_compact_log().get_compact_index();
         let resp = AdminResponse::default();
-        let apply_state = &mut ctx.exec_ctx.as_mut().unwrap().apply_state;
-        let first_index = peer_storage::first_index(apply_state);
+        let first_index = peer_storage::first_index(&self.apply_state);
         if compact_index <= first_index {
             debug!(
                 "compact index <= first index, no need to compact";
@@ -2682,14 +2659,19 @@ where
         }
 
         // compact failure is safe to be omitted, no need to assert.
-        compact_raft_log(&self.tag, apply_state, compact_index, compact_term)?;
+        compact_raft_log(
+            &self.tag,
+            &mut self.apply_state,
+            compact_index,
+            compact_term,
+        )?;
 
         PEER_ADMIN_CMD_COUNTER.compact.success.inc();
 
         Ok((
             resp,
             ApplyResult::Res(ExecResult::CompactLog {
-                state: apply_state.get_truncated_state().clone(),
+                state: self.apply_state.get_truncated_state().clone(),
                 first_index,
             }),
         ))
@@ -2705,7 +2687,7 @@ where
             resp,
             ApplyResult::Res(ExecResult::ComputeHash {
                 region: self.region.clone(),
-                index: ctx.exec_ctx.as_ref().unwrap().index,
+                index: ctx.exec_log_index,
                 context: req.get_compute_hash().get_context().to_vec(),
                 // This snapshot may be held for a long time, which may cause too many
                 // open files in rocksdb.
