@@ -94,6 +94,8 @@ pub fn alloc_port() -> u16 {
     }
 }
 
+static MEM_DISK: &str = "TIKV_TEST_MEMORY_DISK_MOUNT_POINT";
+
 /// Gets a temporary path in memory.
 ///
 /// The returned path will point to memory only when memory disk is available
@@ -103,10 +105,38 @@ pub fn temp_dir_in_mem(prefix: impl Into<Option<&'static str>>) -> tempfile::Tem
     if let Some(prefix) = prefix.into() {
         builder.prefix(prefix);
     }
-    if let Ok(dir) = env::var("TIKV_TEST_MEMORY_DISK_MOUNT_POINT") {
+    if let Ok(dir) = env::var(MEM_DISK) {
         debug!("using memory disk"; "path" => %dir);
         builder.tempdir_in(dir).unwrap()
     } else {
         builder.tempdir().unwrap()
     }
+}
+
+pub struct GuaranteeOnPhysicalDisk {
+    mem_disk: Option<String>,
+}
+
+impl Drop for GuaranteeOnPhysicalDisk {
+    fn drop(&mut self) {
+        if let Some(p) = self.mem_disk.take() {
+            env::set_var(MEM_DISK, p);
+        }
+    }
+}
+
+/// Memory disk is provided for CI. By default, all raftstore test cases
+/// are run on memory disk. But in some cases, testing IO stats from system
+/// for example, you may want to run cases on physical disk instead.
+///
+/// The correctness of this API depends on running test case one by one.
+pub fn guarantee_on_physical_disk() -> GuaranteeOnPhysicalDisk {
+    let mem_disk = match env::var(MEM_DISK) {
+        Ok(dir) => {
+            env::remove_var(MEM_DISK);
+            Some(dir)
+        }
+        _ => None,
+    };
+    GuaranteeOnPhysicalDisk { mem_disk }
 }
