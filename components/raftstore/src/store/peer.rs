@@ -3980,7 +3980,7 @@ where
             && self.has_applied_to_current_term()
             && self
                 .cmd_epoch_checker
-                .propose_check_epoch(&cmd, self.term())
+                .propose_check_epoch(cmd, self.term())
                 .is_none()
     }
 }

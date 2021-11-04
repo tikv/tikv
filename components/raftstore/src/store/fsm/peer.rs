@@ -2212,7 +2212,7 @@ where
             match self.fsm.peer.ready_to_transfer_leader(
                 &mut self.ctx,
                 raft_msg.get_index(),
-                &msg.get_from_peer(),
+                msg.get_from_peer(),
             ) {
                 Some(reason) => {
                     info!(
@@ -2232,7 +2232,7 @@ where
                         self.propose_batch_raft_command(true);
                     }
 
-                    self.fsm.peer.transfer_leader(&msg.get_from_peer());
+                    self.fsm.peer.transfer_leader(msg.get_from_peer());
                 }
             }
         } else {
