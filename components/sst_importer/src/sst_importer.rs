@@ -8,9 +8,6 @@ use std::sync::Arc;
 
 use futures::executor::ThreadPool;
 use kvproto::brpb::{CipherInfo, StorageBackend};
-#[cfg(feature = "prost-codec")]
-use kvproto::import_sstpb::pair::Op as PairOp;
-#[cfg(not(feature = "prost-codec"))]
 use kvproto::import_sstpb::*;
 
 use encryption::{encryption_method_to_db_encryption_method, DataKeyManager};

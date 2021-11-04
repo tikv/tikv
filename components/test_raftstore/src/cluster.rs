@@ -508,10 +508,19 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
-        let store_ids = match self.voter_store_ids_of_region(region_id) {
-            None => return None,
-            Some(ids) => ids,
-        };
+        let timer = Instant::now_coarse();
+        let timeout = Duration::from_secs(5);
+        let mut store_ids = None;
+        while timer.saturating_elapsed() < timeout {
+            match self.voter_store_ids_of_region(region_id) {
+                None => thread::sleep(Duration::from_millis(10)),
+                Some(ids) => {
+                    store_ids = Some(ids);
+                    break;
+                }
+            };
+        }
+        let store_ids = store_ids?;
         if let Some(l) = self.leaders.get(&region_id) {
             // leader may be stopped in some tests.
             if self.valid_leader_id(region_id, l.get_store_id()) {
@@ -530,7 +539,7 @@ impl<T: Simulator> Cluster<T> {
             .filter(|id| node_ids.contains(id))
             .cloned()
             .collect();
-        for _ in 0..500 {
+        while timer.saturating_elapsed() < timeout {
             for store_id in &alive_store_ids {
                 let l = match self.query_leader(*store_id, region_id, Duration::from_secs(1)) {
                     None => continue,
@@ -1318,7 +1327,9 @@ impl<T: Simulator> Cluster<T> {
                     assert_eq!(regions[0].get_end_key(), key.as_slice());
                     assert_eq!(regions[0].get_end_key(), regions[1].get_start_key());
                 });
-                self.split_region(region, split_key, Callback::write(check));
+                if self.leader_of_region(region.get_id()).is_some() {
+                    self.split_region(region, split_key, Callback::write(check));
+                }
             }
 
             if self.pd_client.check_split(region, split_key)
@@ -1499,6 +1510,57 @@ impl<T: Simulator> Cluster<T> {
     // it's so common that we provide an API for it
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
         self.add_send_filter(PartitionFilterFactory::new(s1, s2));
+    }
+
+    pub fn must_update_region_for_unsafe_recover(&mut self, node_id: u64, region: &metapb::Region) {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+        let mut try_cnt = 0;
+        loop {
+            if try_cnt % 50 == 0 {
+                // In case the message is ignored, re-send it every 50 tries.
+                router
+                    .force_send(
+                        region.get_id(),
+                        PeerMsg::UpdateRegionForUnsafeRecover(region.clone()),
+                    )
+                    .unwrap();
+            }
+            if let Ok(Some(current)) = block_on(self.pd_client.get_region_by_id(region.get_id())) {
+                if current.get_start_key() == region.get_start_key()
+                    && current.get_end_key() == region.get_end_key()
+                {
+                    return;
+                }
+            }
+            if try_cnt > 500 {
+                panic!("region {:?} is not updated", region);
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
+    }
+
+    pub fn must_recreate_region_for_unsafe_recover(
+        &mut self,
+        node_id: u64,
+        region: &metapb::Region,
+    ) {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+        let mut try_cnt = 0;
+        loop {
+            if try_cnt % 50 == 0 {
+                // In case the message is ignored, re-send it every 50 tries.
+                StoreRouter::send(&router, StoreMsg::CreatePeer(region.clone())).unwrap();
+            }
+            if let Ok(Some(_)) = block_on(self.pd_client.get_region_by_id(region.get_id())) {
+                return;
+            }
+            if try_cnt > 250 {
+                panic!("region {:?} is not created", region);
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
     }
 }
 
