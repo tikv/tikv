@@ -216,7 +216,7 @@ impl<E: Engine> Endpoint<E> {
                     );
                     let paging_size = match req.get_paging_size() {
                         0 => None,
-                        i => Some(i)
+                        i => Some(i),
                     };
                     dag::DagHandlerBuilder::new(
                         dag,

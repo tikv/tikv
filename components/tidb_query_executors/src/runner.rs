@@ -432,7 +432,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
             if drained || self.paging_size.map_or(false, |p| record_len > p as usize) {
                 self.out_most_executor
-                .collect_exec_stats(&mut self.exec_stats);
+                    .collect_exec_stats(&mut self.exec_stats);
 
                 let range = if self.paging_size.is_some() {
                     Some(self.out_most_executor.take_scanned_range())
@@ -544,7 +544,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         let mut result = self.out_most_executor.next_batch(batch_size);
 
-        let is_drained = result.is_drained?; 
+        let is_drained = result.is_drained?;
 
         if !result.logical_rows.is_empty() {
             assert_eq!(
