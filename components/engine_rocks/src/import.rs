@@ -70,8 +70,10 @@ mod tests {
 
     use super::*;
     use crate::RocksSstWriterBuilder;
+    use engine_traits::{
+        FlowControlFactorsExt, Mutable, SstWriter, SstWriterBuilder, WriteBatchExt,
+    };
     use engine_traits::{MiscExt, WriteBatch, ALL_CFS, CF_DEFAULT};
-    use engine_traits::{Mutable, SstWriter, SstWriterBuilder, WriteBatchExt};
 
     #[test]
     fn test_ingest_multiple_file() {
