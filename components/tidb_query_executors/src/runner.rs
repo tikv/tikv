@@ -156,7 +156,6 @@ pub fn build_executors<S: Storage + 'static>(
     ranges: Vec<KeyRange>,
     config: Arc<EvalConfig>,
     is_scanned_range_aware: bool,
-    page_size: Option<u64>,
 ) -> Result<Box<dyn BatchExecutor<StorageStats = S::Statistics>>> {
     let mut executor_descriptors = executor_descriptors.into_iter();
     let mut first_ed = executor_descriptors
@@ -358,7 +357,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             ranges,
             config.clone(),
             is_streaming || paging_size.is_some(), // For streaming request, executors will continue scan from range end where last scan is finished
-            paging_size,
         )?;
 
         let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
