@@ -259,6 +259,7 @@ fn must_prewrite_put_err_impl<E: Engine>(
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
     is_pessimistic_lock: bool,
+    is_retry_request: bool,
 ) -> Error {
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let for_update_ts = for_update_ts.into();
@@ -286,7 +287,7 @@ pub fn must_prewrite_put_err<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
 ) -> Error {
-    must_prewrite_put_err_impl(engine, key, value, pk, ts, TimeStamp::zero(), false)
+    must_prewrite_put_err_impl(engine, key, value, pk, ts, TimeStamp::zero(), false, false)
 }
 
 pub fn must_pessimistic_prewrite_put_err<E: Engine>(
@@ -306,6 +307,28 @@ pub fn must_pessimistic_prewrite_put_err<E: Engine>(
         ts,
         for_update_ts,
         is_pessimistic_lock,
+        false,
+    )
+}
+
+pub fn must_retry_pessimistic_prewrite_put_err<E: Engine>(
+    engine: &E,
+    key: &[u8],
+    value: &[u8],
+    pk: &[u8],
+    ts: impl Into<TimeStamp>,
+    for_update_ts: impl Into<TimeStamp>,
+    is_pessimistic_lock: bool,
+) -> Error {
+    must_prewrite_put_err_impl(
+        engine,
+        key,
+        value,
+        pk,
+        ts,
+        for_update_ts,
+        is_pessimistic_lock,
+        true,
     )
 }
 

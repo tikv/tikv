@@ -28,7 +28,8 @@ pub fn prewrite<S: Snapshot>(
     secondary_keys: &Option<Vec<Vec<u8>>>,
     is_pessimistic_lock: bool,
 ) -> Result<(TimeStamp, OldValue)> {
-    let mut mutation = PrewriteMutation::from_mutation(mutation, secondary_keys, txn_props)?;
+    let mut mutation =
+        PrewriteMutation::from_mutation(mutation, secondary_keys, is_pessimistic_lock, txn_props)?;
 
     fail_point!(
         if txn_props.is_pessimistic() {
@@ -227,6 +228,7 @@ struct PrewriteMutation<'a> {
     mutation_type: MutationType,
     secondary_keys: &'a Option<Vec<Vec<u8>>>,
     min_commit_ts: TimeStamp,
+    is_pessimistic_lock: bool,
 
     lock_type: Option<LockType>,
     lock_ttl: u64,
@@ -240,6 +242,7 @@ impl<'a> PrewriteMutation<'a> {
     fn from_mutation(
         mutation: Mutation,
         secondary_keys: &'a Option<Vec<Vec<u8>>>,
+        is_pessimistic_lock: bool,
         txn_props: &'a TransactionProperties<'a>,
     ) -> Result<PrewriteMutation<'a>> {
         let should_not_write = mutation.should_not_write();
@@ -260,6 +263,7 @@ impl<'a> PrewriteMutation<'a> {
             mutation_type,
             secondary_keys,
             min_commit_ts: txn_props.min_commit_ts,
+            is_pessimistic_lock,
 
             lock_type,
             lock_ttl: txn_props.lock_ttl,
@@ -438,7 +442,12 @@ impl<'a> PrewriteMutation<'a> {
     fn skip_constraint_check(&self) -> bool {
         match &self.txn_props.kind {
             TransactionKind::Optimistic(s) => *s,
-            TransactionKind::Pessimistic(_) => true,
+            TransactionKind::Pessimistic(_) => {
+                // For non-pessimistic-locked keys, do not skip constraint check when retrying.
+                // This intents to protect idempotency.
+                // Ref: https://github.com/tikv/tikv/issues/11187
+                self.is_pessimistic_lock || !self.txn_props.is_retry_request
+            }
         }
     }
 
@@ -1250,6 +1259,70 @@ pub mod tests {
         // Seek from 30, we should read commit_ts = 20 instead of 25.
         must_seek_write(&engine, b"k1", 30, 10, 20, WriteType::Put);
         must_seek_write(&engine, b"k2", 30, 10, 20, WriteType::Put);
+
+        // Write another version to the keys.
+        must_prewrite_put(&engine, b"k1", b"v11", b"k1", 35);
+        must_prewrite_put(&engine, b"k2", b"v22", b"k1", 35);
+        must_commit(&engine, b"k1", 35, 40);
+        must_commit(&engine, b"k2", 35, 40);
+
+        // A retrying non-pessimistic-lock prewrite request should not skip constraint checks.
+        // Here it should take no effect, even there's already a newer version
+        // after it. (No matter if it's async commit).
+        must_prewrite_put_impl(
+            &engine,
+            b"k2",
+            b"v2",
+            b"k1",
+            &Some(vec![]),
+            10.into(),
+            false,
+            100,
+            10.into(),
+            1,
+            15.into(),
+            TimeStamp::default(),
+            true,
+        );
+        must_unlocked(&engine, b"k2");
+        must_prewrite_put_impl(
+            &engine,
+            b"k2",
+            b"v2",
+            b"k1",
+            &None,
+            10.into(),
+            false,
+            100,
+            10.into(),
+            1,
+            15.into(),
+            TimeStamp::default(),
+            true,
+        );
+        must_unlocked(&engine, b"k2");
+        // Try a different txn start ts (which haven't been successfully committed before). There
+        // should be a write conflict.
+        let err = must_retry_pessimistic_prewrite_put_err(&engine, b"k2", b"v2", b"k1", 11, false);
+        assert!(matches!(err, Error(ErrorInner::WriteConflict { .. })));
+        must_unlocked(&engine, b"k2");
+        // However conflict still won't be checked if there's a non-retry request arriving.
+        must_prewrite_put_impl(
+            &engine,
+            b"k2",
+            b"v2",
+            b"k1",
+            &None,
+            10.into(),
+            false,
+            100,
+            10.into(),
+            1,
+            15.into(),
+            TimeStamp::default(),
+            false,
+        );
+        must_locked(&engine, b"k2", 10);
     }
 
     #[test]
