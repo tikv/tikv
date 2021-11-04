@@ -547,7 +547,7 @@ impl Config {
             .set(self.raft_entry_max_size.0 as f64);
 
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["raft_log_compact_interval"])
+            .with_label_values(&["raft_log_compact_sync_interval"])
             .set(self.raft_log_compact_sync_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_tick_interval"])
