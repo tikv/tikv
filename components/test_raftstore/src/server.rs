@@ -15,7 +15,7 @@ use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use kvproto::tikvpb::TikvClient;
-use tempfile::{Builder, TempDir};
+use tempfile::TempDir;
 use tokio::runtime::Builder as TokioBuilder;
 
 use super::*;
@@ -216,7 +216,7 @@ impl Simulator for ServerCluster {
         system: RaftBatchSystem<RocksEngine, RocksEngine>,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
-            let p = Builder::new().prefix("test_cluster").tempdir().unwrap();
+            let p = test_util::temp_dir_in_mem("test_cluster");
             (p.path().to_str().unwrap().to_owned(), Some(p))
         } else {
             let p = self.snap_paths[&node_id].path().to_str().unwrap();
