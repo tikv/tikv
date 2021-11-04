@@ -33,7 +33,7 @@ use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Instant};
-use tikv_util::{box_err, debug, info, thd_name, warn};
+use tikv_util::{box_err, debug, info, slow_log, thd_name, warn};
 
 const KV_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const KV_WB_DEFAULT_SIZE: usize = 16 * 1024;
@@ -153,7 +153,7 @@ where
     WriteTask(WriteTask<EK, ER>),
     LatencyInspect {
         send_time: Instant,
-        inspector: LatencyInspector,
+        inspector: Vec<LatencyInspector>,
     },
     Shutdown,
 }
@@ -342,7 +342,7 @@ where
     metrics: StoreWriteMetrics,
     message_metrics: RaftSendMessageMetrics,
     perf_context: EK::PerfContext,
-    pending_latency_inspect: Vec<(Instant, LatencyInspector)>,
+    pending_latency_inspect: Vec<(Instant, Vec<LatencyInspector>)>,
 }
 
 impl<EK, ER, N, T> Worker<EK, ER, N, T>
@@ -412,6 +412,7 @@ where
             }
 
             if self.batch.is_empty() {
+                self.clear_latency_inspect();
                 continue;
             }
 
@@ -424,11 +425,7 @@ where
 
             self.metrics.flush();
 
-            for (time, mut inspector) in std::mem::take(&mut self.pending_latency_inspect) {
-                inspector.record_store_process(time.saturating_elapsed());
-                inspector.finish();
-            }
-
+            self.clear_latency_inspect();
             // update config
             if let Some(incoming) = self.cfg_tracker.any_new() {
                 self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
@@ -472,10 +469,13 @@ where
     }
 
     fn write_to_db(&mut self) {
+        let timer = Instant::now();
+
         self.batch.before_write_to_db(&self.metrics);
 
         fail_point!("raft_before_save");
 
+        let mut write_kv_time = 0f64;
         if !self.batch.kv_wb.is_empty() {
             let raft_before_save_kv_on_store_3 = || {
                 fail_point!("raft_before_save_kv_on_store_3", self.store_id == 3, |_| {});
@@ -494,14 +494,15 @@ where
             if self.batch.kv_wb.data_size() > KV_WB_SHRINK_SIZE {
                 self.batch.kv_wb = self.engines.kv.write_batch_with_cap(KV_WB_DEFAULT_SIZE);
             }
-            STORE_WRITE_KVDB_DURATION_HISTOGRAM
-                .observe(duration_to_sec(now.saturating_elapsed()) as f64);
+            write_kv_time = duration_to_sec(now.saturating_elapsed());
+            STORE_WRITE_KVDB_DURATION_HISTOGRAM.observe(write_kv_time);
         }
 
         self.batch.after_write_to_kv_db(&self.metrics);
 
         fail_point!("raft_between_save");
 
+        let mut write_raft_time = 0f64;
         if !self.batch.raft_wb.is_empty() {
             let raft_before_save_on_store_1 = || {
                 fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
@@ -525,8 +526,8 @@ where
                     );
                 });
             self.perf_context.report_metrics();
-            STORE_WRITE_RAFTDB_DURATION_HISTOGRAM
-                .observe(duration_to_sec(now.saturating_elapsed()) as f64);
+            write_raft_time = duration_to_sec(now.saturating_elapsed());
+            STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);
         }
 
         fail_point!("raft_after_save");
@@ -535,7 +536,7 @@ where
 
         fail_point!("raft_before_follower_send");
 
-        let now = Instant::now();
+        let mut now = Instant::now();
         for task in &mut self.batch.tasks {
             for msg in task.messages.drain(..) {
                 let msg_type = msg.get_message().get_msg_type();
@@ -580,16 +581,42 @@ where
             self.message_metrics.flush();
         }
         let now2 = Instant::now();
-        STORE_WRITE_SEND_DURATION_HISTOGRAM
-            .observe(duration_to_sec(now2.saturating_duration_since(now)));
+        let send_time = duration_to_sec(now2.saturating_duration_since(now));
+        STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(send_time);
 
         for (region_id, (peer_id, ready_number)) in &self.batch.readies {
             self.notifier
                 .notify_persisted(*region_id, *peer_id, *ready_number);
         }
-        STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(duration_to_sec(now2.saturating_elapsed()));
+        now = Instant::now();
+        let callback_time = duration_to_sec(now.saturating_duration_since(now2));
+        STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(callback_time);
+        let total_cost = now.saturating_duration_since(timer);
+        slow_log!(
+            total_cost,
+            "[store {}] async write too slow, write_kv: {}s, write_raft: {}s, send: {}s, callback: {}s thread: {}",
+            self.store_id,
+            write_kv_time,
+            write_raft_time,
+            send_time,
+            callback_time,
+            self.tag
+        );
 
         self.batch.clear();
+    }
+
+    fn clear_latency_inspect(&mut self) {
+        if self.pending_latency_inspect.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        for (time, inspectors) in std::mem::take(&mut self.pending_latency_inspect) {
+            for mut inspector in inspectors {
+                inspector.record_store_write(now.saturating_duration_since(time));
+                inspector.finish();
+            }
+        }
     }
 }
 

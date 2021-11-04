@@ -931,7 +931,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                     SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
                                     return;
                                 }
-                                async_std::task::sleep(Duration::from_millis(1)).await;
+                                GLOBAL_TIMER_HANDLE
+                                    .delay(std::time::Instant::now() + Duration::from_millis(1))
+                                    .compat()
+                                    .await
+                                    .unwrap();
                             }
                             SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
                         }

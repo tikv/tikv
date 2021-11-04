@@ -174,8 +174,11 @@ where
     F: Future<Output = Result<(), String>> + Send + 'static,
 {
     let on_start = || {
-        let guard = pprof::ProfilerGuard::new(frequency)
-            .map_err(|e| format!("pprof::ProfileGuard::new fail: {}", e))?;
+        let guard = pprof::ProfilerGuardBuilder::default()
+            .frequency(frequency)
+            .blocklist(&["libc", "libgcc", "pthread"])
+            .build()
+            .map_err(|e| format!("pprof::ProfilerGuardBuilder::build fail: {}", e))?;
         Ok(guard)
     };
 

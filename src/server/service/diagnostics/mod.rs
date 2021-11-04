@@ -12,9 +12,6 @@ use grpcio::{
     Result as GrpcResult, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink,
     WriteFlags,
 };
-#[cfg(feature = "prost-codec")]
-use kvproto::diagnosticspb::search_log_request::Target as SearchLogRequestTarget;
-#[cfg(not(feature = "prost-codec"))]
 use kvproto::diagnosticspb::SearchLogRequestTarget;
 use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
