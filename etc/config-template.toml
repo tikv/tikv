@@ -375,7 +375,7 @@
 
 ## Old Raft logs could be reserved if `raft_log_gc_threshold` is not reached.
 ## GC them after ticks `raft_log_reserve_max_ticks` times.
-raft_log_reserve_max_ticks = 6
+# raft_log_reserve_max_ticks = 6
 
 ## Raft engine is a replaceable component. For some implementations, it's necessary to purge
 ## old log files to recycle disk space ASAP.

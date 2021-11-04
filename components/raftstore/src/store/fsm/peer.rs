@@ -3871,6 +3871,7 @@ where
         {
             // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
             self.fsm.skip_gc_raft_log_ticks += 1;
+            self.register_raft_gc_log_tick();
             return;
         } else {
             replicated_idx

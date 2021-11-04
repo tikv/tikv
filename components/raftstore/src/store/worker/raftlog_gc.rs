@@ -149,7 +149,6 @@ where
     fn run(&mut self, task: Task) {
         let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
         self.tasks.push(task);
-        self.flush();
     }
 
     fn shutdown(&mut self) {
