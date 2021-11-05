@@ -143,7 +143,10 @@ pub struct Config {
 
     #[config(hidden)]
     pub use_delete_range: bool,
+
+    #[config(skip)]
     pub generate_pool_size: usize,
+
     pub cleanup_import_sst_interval: ReadableDuration,
 
     /// Maximum size of every local read task batch.
