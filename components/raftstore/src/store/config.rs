@@ -143,7 +143,7 @@ pub struct Config {
 
     #[config(hidden)]
     pub use_delete_range: bool,
-
+    pub generate_pool_size: usize,
     pub cleanup_import_sst_interval: ReadableDuration,
 
     /// Maximum size of every local read task batch.
@@ -241,6 +241,7 @@ impl Default for Config {
             merge_max_log_gap: 10,
             merge_check_tick_interval: ReadableDuration::secs(2),
             use_delete_range: false,
+            generate_pool_size: 2,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
@@ -424,6 +425,9 @@ impl Config {
         if self.future_poll_size == 0 {
             return Err(box_err!("future-poll-size should be greater than 0."));
         }
+        if self.generate_pool_size == 0 {
+            return Err(box_err!("generate-pool-size should be greater than 0."));
+        }
         Ok(())
     }
 
@@ -597,6 +601,9 @@ impl Config {
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["generate_pool_size"])
+            .set(self.generate_pool_size as f64);
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["hibernate_regions"])
             .set((self.hibernate_regions as i32).into());
     }
@@ -765,6 +772,10 @@ mod tests {
 
         cfg = Config::new();
         cfg.future_poll_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.generate_pool_size = 0;
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();

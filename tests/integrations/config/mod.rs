@@ -193,6 +193,7 @@ fn test_serde_custom_tikv_config() {
         merge_max_log_gap: 3,
         merge_check_tick_interval: ReadableDuration::secs(11),
         use_delete_range: true,
+        generate_pool_size: 2,
         cleanup_import_sst_interval: ReadableDuration::minutes(12),
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
@@ -738,7 +739,7 @@ fn diff_config(lhs: &TiKvConfig, rhs: &TiKvConfig) {
     let lhs_str = format!("{:?}", lhs);
     let rhs_str = format!("{:?}", rhs);
 
-    fn find_index(l: impl Iterator<Item = (u8, u8)>) -> usize {
+    fn find_index(l: impl Iterator<Item=(u8, u8)>) -> usize {
         let it = l
             .enumerate()
             .take_while(|(_, (l, r))| l == r)
