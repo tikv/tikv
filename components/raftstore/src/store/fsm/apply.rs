@@ -33,6 +33,8 @@ use fail::fail_point;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{PeerRole, Region, RegionEpoch};
+#[cfg(any(test, feature = "testexport"))]
+use kvproto::raft_cmdpb::Response;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
     RaftCmdRequest, RaftCmdResponse, Request,
@@ -1459,6 +1461,8 @@ where
             let uuid = req.get_header().get_uuid().to_vec();
             resp.mut_header().set_uuid(uuid);
         }
+        #[cfg(any(test, feature = "testexport"))]
+        fill_responses_for_test(req, &mut resp);
 
         assert!(ranges.is_empty() || ssts.is_empty());
         let exec_res = if !ranges.is_empty() {
@@ -1481,6 +1485,24 @@ where
 
         Ok((resp, exec_res))
     }
+}
+
+#[cfg(any(test, feature = "testexport"))]
+fn fill_responses_for_test(cmd_req: &RaftCmdRequest, cmd_resp: &mut RaftCmdResponse) {
+    assert!(!cmd_req.has_admin_request());
+    let mut resps = Vec::with_capacity(cmd_req.get_requests().len());
+    for r in cmd_req.get_requests() {
+        let cmd_type = r.get_cmd_type();
+        match cmd_type {
+            CmdType::Put | CmdType::Delete | CmdType::DeleteRange | CmdType::IngestSst => {
+                let mut resp = Response::default();
+                resp.set_cmd_type(cmd_type);
+                resps.push(resp);
+            }
+            _ => {}
+        }
+    }
+    cmd_resp.set_responses(resps.into());
 }
 
 // Write commands related.
