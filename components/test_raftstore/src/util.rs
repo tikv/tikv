@@ -6,6 +6,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use crate::Config;
 use encryption_export::{
     data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
 };
@@ -606,13 +607,13 @@ pub fn create_test_engine(
     // TODO: pass it in for all cases.
     router: Option<RaftRouter<RocksEngine, RocksEngine>>,
     limiter: Option<Arc<IORateLimiter>>,
-    cfg: &TiKvConfig,
+    cfg: &Config,
 ) -> (
     Engines<RocksEngine, RocksEngine>,
     Option<Arc<DataKeyManager>>,
     TempDir,
 ) {
-    let dir = test_util::temp_dir_in_mem("test_cluster");
+    let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
     let key_manager =
         data_key_manager_from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
