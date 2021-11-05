@@ -429,7 +429,7 @@ impl Config {
             return Err(box_err!("future-poll-size should be greater than 0."));
         }
         if self.snap_generator_pool_size == 0 {
-            return Err(box_err!("generate-pool-size should be greater than 0."));
+            return Err(box_err!("snap-generator-pool-size should be greater than 0."));
         }
         Ok(())
     }
@@ -604,7 +604,7 @@ impl Config {
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["generate_pool_size"])
+            .with_label_values(&["snap_generator_pool_size"])
             .set(self.snap_generator_pool_size as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["hibernate_regions"])

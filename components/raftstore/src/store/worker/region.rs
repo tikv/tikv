@@ -198,7 +198,7 @@ impl PendingDeleteRanges {
     }
 
     /// Gets all stale ranges info.
-    pub fn stale_ranges(&self, oldest_sequence: u64) -> impl Iterator<Item = (u64, &[u8], &[u8])> {
+    pub fn stale_ranges(&self, oldest_sequence: u64) -> impl Iterator<Item=(u64, &[u8], &[u8])> {
         self.ranges
             .iter()
             .filter(move |&(_, info)| info.stale_sequence < oldest_sequence)
@@ -218,8 +218,8 @@ impl PendingDeleteRanges {
 
 #[derive(Clone)]
 struct SnapContext<EK, R>
-where
-    EK: KvEngine,
+    where
+        EK: KvEngine,
 {
     engine: EK,
     batch_size: usize,
@@ -231,9 +231,9 @@ where
 }
 
 impl<EK, R> SnapContext<EK, R>
-where
-    EK: KvEngine,
-    R: CasualRouter<EK>,
+    where
+        EK: KvEngine,
+        R: CasualRouter<EK>,
 {
     /// Generates the snapshot of the Region.
     fn generate_snap(
@@ -571,8 +571,8 @@ where
 }
 
 pub struct Runner<EK, R>
-where
-    EK: KvEngine,
+    where
+        EK: KvEngine,
 {
     pool: ThreadPool<TaskCell>,
     ctx: SnapContext<EK, R>,
@@ -584,22 +584,22 @@ where
 }
 
 impl<EK, R> Runner<EK, R>
-where
-    EK: KvEngine,
-    R: CasualRouter<EK>,
+    where
+        EK: KvEngine,
+        R: CasualRouter<EK>,
 {
     pub fn new(
         engine: EK,
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
-        generate_pool_size: usize,
+        snap_generator_pool_size: usize,
         coprocessor_host: CoprocessorHost<EK>,
         router: R,
     ) -> Runner<EK, R> {
         Runner {
             pool: Builder::new(thd_name!("snap-generator"))
-                .max_thread_count(generate_pool_size)
+                .max_thread_count(snap_generator_pool_size)
                 .build_future_pool(),
             ctx: SnapContext {
                 engine,
@@ -633,9 +633,9 @@ where
 }
 
 impl<EK, R> Runnable for Runner<EK, R>
-where
-    EK: KvEngine,
-    R: CasualRouter<EK> + Send + Clone + 'static,
+    where
+        EK: KvEngine,
+        R: CasualRouter<EK> + Send + Clone + 'static,
 {
     type Task = Task<EK::Snapshot>;
 
@@ -701,9 +701,9 @@ where
 }
 
 impl<EK, R> RunnableWithTimer for Runner<EK, R>
-where
-    EK: KvEngine,
-    R: CasualRouter<EK> + Send + Clone + 'static,
+    where
+        EK: KvEngine,
+        R: CasualRouter<EK> + Send + Clone + 'static,
 {
     fn on_timeout(&mut self) {
         self.handle_pending_applies();
@@ -913,7 +913,7 @@ mod tests {
             Some(kv_cfs_opts),
             &[1, 2, 3, 4, 5, 6],
         )
-        .unwrap();
+            .unwrap();
 
         for cf_name in engine.kv.cf_names() {
             for i in 0..6 {
