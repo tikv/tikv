@@ -739,7 +739,7 @@ fn diff_config(lhs: &TiKvConfig, rhs: &TiKvConfig) {
     let lhs_str = format!("{:?}", lhs);
     let rhs_str = format!("{:?}", rhs);
 
-    fn find_index(l: impl Iterator<Item=(u8, u8)>) -> usize {
+    fn find_index(l: impl Iterator<Item = (u8, u8)>) -> usize {
         let it = l
             .enumerate()
             .take_while(|(_, (l, r))| l == r)
