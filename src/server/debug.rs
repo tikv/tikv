@@ -807,9 +807,9 @@ impl<ER: RaftEngine> Debugger<ER> {
         let db = &self.engines.kv;
         db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
             .map_err(|e| box_err!(e))
-            .map(|ident| match ident {
-                Some(ident) => ident,
-                None => StoreIdent::default(),
+            .and_then(|ident| match ident {
+                Some(ident) => Ok(ident),
+                None => Err(Error::NotFound("No store ident key".to_owned())),
             })
     }
 
@@ -1478,27 +1478,24 @@ mod tests {
 
     impl Debugger<RocksEngine> {
         fn set_store_id(&self, store_id: u64) {
-            if let Ok(mut ident) = self.get_store_ident() {
-                ident.set_store_id(store_id);
-                let db = &self.engines.kv;
-                db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
-            }
+            let mut ident = self.get_store_ident().unwrap_or(StoreIdent::default());
+            ident.set_store_id(store_id);
+            let db = &self.engines.kv;
+            db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
         }
 
         fn set_cluster_id(&self, cluster_id: u64) {
-            if let Ok(mut ident) = self.get_store_ident() {
-                ident.set_cluster_id(cluster_id);
-                let db = &self.engines.kv;
-                db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
-            }
+            let mut ident = self.get_store_ident().unwrap_or(StoreIdent::default());
+            ident.set_cluster_id(cluster_id);
+            let db = &self.engines.kv;
+            db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
         }
 
         fn set_store_api_version(&self, api_version: ApiVersion) {
-            if let Ok(mut ident) = self.get_store_ident() {
-                ident.set_api_version(api_version);
-                let db = &self.engines.kv;
-                db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
-            }
+            let mut ident = self.get_store_ident().unwrap_or(StoreIdent::default());
+            ident.set_api_version(api_version);
+            let db = &self.engines.kv;
+            db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
         }
     }
 
