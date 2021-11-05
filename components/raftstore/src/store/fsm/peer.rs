@@ -642,6 +642,9 @@ where
     }
 
     fn propose_batch_raft_command(&mut self, force: bool) {
+        if self.fsm.batch_req_builder.request.is_none() {
+            return;
+        }
         if !force
             && self.ctx.cfg.cmd_batch_concurrent_ready_max_count != 0
             && self.fsm.peer.unpersisted_ready_len()
@@ -649,16 +652,13 @@ where
         {
             return;
         }
-        fail_point!(
-            "propose_batch_raft_command",
-            !force && self.fsm.batch_req_builder.request.is_some(),
-            |_| {}
-        );
-        if let Some((request, callback)) =
-            self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics)
-        {
-            self.propose_raft_command_internal(request, callback, DiskFullOpt::NotAllowedOnFull)
-        }
+        fail_point!("propose_batch_raft_command", !force, |_| {});
+        let (request, callback) = self
+            .fsm
+            .batch_req_builder
+            .build(&mut self.ctx.raft_metrics)
+            .unwrap();
+        self.propose_raft_command_internal(request, callback, DiskFullOpt::NotAllowedOnFull)
     }
 
     fn check_batch_cmd_and_proposed_cb(&mut self) {
@@ -3742,24 +3742,28 @@ where
         cb: Callback<EK::Snapshot>,
         diskfullopt: DiskFullOpt,
     ) {
-        if msg.has_admin_request()
-            && self.fsm.batch_req_builder.request.is_some()
-            && self.fsm.batch_req_builder.header_checked.unwrap_or(false)
-        {
-            let cmd_type = msg.get_admin_request().get_cmd_type();
-            let epoch_state = admin_cmd_epoch_lookup(cmd_type);
-            if epoch_state.change_ver {
-                if let Some((request, callback)) =
-                    self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics)
-                {
-                    self.propose_raft_command_internal(
-                        request,
-                        callback,
-                        DiskFullOpt::NotAllowedOnFull,
-                    );
-                }
+        if self.fsm.batch_req_builder.request.is_some() {
+            let propose_batch = if msg.has_admin_request() {
+                let cmd_type = msg.get_admin_request().get_cmd_type();
+                let epoch_state = admin_cmd_epoch_lookup(cmd_type);
+                epoch_state.change_ver
+            } else {
+                true
+            };
+            if propose_batch {
+                let (request, callback) = self
+                    .fsm
+                    .batch_req_builder
+                    .build(&mut self.ctx.raft_metrics)
+                    .unwrap();
+                self.propose_raft_command_internal(
+                    request,
+                    callback,
+                    DiskFullOpt::NotAllowedOnFull,
+                );
             }
         }
+
         self.propose_raft_command_internal(msg, cb, diskfullopt);
     }
 
