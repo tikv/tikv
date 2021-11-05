@@ -129,7 +129,10 @@ where
     F: FnOnce() + Send + 'static,
 {
     let (tx, rx) = oneshot::channel();
-    let dir = TempDir::new_in(store_path).map_err(|e| format!("create temp directory: {}", e))?;
+    let dir = tempfile::Builder::new()
+        .prefix("heap-")
+        .tempdir_in(store_path)
+        .map_err(|e| format!("create temp directory: {}", e))?;
     let dir_path = dir.path().to_str().unwrap().to_owned();
 
     let on_start = move || {
