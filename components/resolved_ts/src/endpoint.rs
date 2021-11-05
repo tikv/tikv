@@ -379,6 +379,7 @@ where
                 resolver_status,
                 ..
             } = observe_region;
+
             info!(
                 "deregister observe region";
                 "store_id" => ?self.store_meta.lock().unwrap().store_id,
@@ -446,6 +447,7 @@ where
                 warn!("resolved ts deregister region failed due to observe_id not match");
                 return;
             }
+
             info!(
                 "register region again";
                 "region_id" => region_id,
