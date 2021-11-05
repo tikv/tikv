@@ -429,7 +429,9 @@ impl Config {
             return Err(box_err!("future-poll-size should be greater than 0."));
         }
         if self.snap_generator_pool_size == 0 {
-            return Err(box_err!("snap-generator-pool-size should be greater than 0."));
+            return Err(box_err!(
+                "snap-generator-pool-size should be greater than 0."
+            ));
         }
         Ok(())
     }

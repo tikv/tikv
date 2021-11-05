@@ -198,7 +198,7 @@ impl PendingDeleteRanges {
     }
 
     /// Gets all stale ranges info.
-    pub fn stale_ranges(&self, oldest_sequence: u64) -> impl Iterator<Item=(u64, &[u8], &[u8])> {
+    pub fn stale_ranges(&self, oldest_sequence: u64) -> impl Iterator<Item = (u64, &[u8], &[u8])> {
         self.ranges
             .iter()
             .filter(move |&(_, info)| info.stale_sequence < oldest_sequence)
@@ -218,8 +218,8 @@ impl PendingDeleteRanges {
 
 #[derive(Clone)]
 struct SnapContext<EK, R>
-    where
-        EK: KvEngine,
+where
+    EK: KvEngine,
 {
     engine: EK,
     batch_size: usize,
@@ -231,9 +231,9 @@ struct SnapContext<EK, R>
 }
 
 impl<EK, R> SnapContext<EK, R>
-    where
-        EK: KvEngine,
-        R: CasualRouter<EK>,
+where
+    EK: KvEngine,
+    R: CasualRouter<EK>,
 {
     /// Generates the snapshot of the Region.
     fn generate_snap(
@@ -571,8 +571,8 @@ impl<EK, R> SnapContext<EK, R>
 }
 
 pub struct Runner<EK, R>
-    where
-        EK: KvEngine,
+where
+    EK: KvEngine,
 {
     pool: ThreadPool<TaskCell>,
     ctx: SnapContext<EK, R>,
@@ -584,9 +584,9 @@ pub struct Runner<EK, R>
 }
 
 impl<EK, R> Runner<EK, R>
-    where
-        EK: KvEngine,
-        R: CasualRouter<EK>,
+where
+    EK: KvEngine,
+    R: CasualRouter<EK>,
 {
     pub fn new(
         engine: EK,
@@ -633,9 +633,9 @@ impl<EK, R> Runner<EK, R>
 }
 
 impl<EK, R> Runnable for Runner<EK, R>
-    where
-        EK: KvEngine,
-        R: CasualRouter<EK> + Send + Clone + 'static,
+where
+    EK: KvEngine,
+    R: CasualRouter<EK> + Send + Clone + 'static,
 {
     type Task = Task<EK::Snapshot>;
 
@@ -701,9 +701,9 @@ impl<EK, R> Runnable for Runner<EK, R>
 }
 
 impl<EK, R> RunnableWithTimer for Runner<EK, R>
-    where
-        EK: KvEngine,
-        R: CasualRouter<EK> + Send + Clone + 'static,
+where
+    EK: KvEngine,
+    R: CasualRouter<EK> + Send + Clone + 'static,
 {
     fn on_timeout(&mut self) {
         self.handle_pending_applies();
@@ -913,7 +913,7 @@ mod tests {
             Some(kv_cfs_opts),
             &[1, 2, 3, 4, 5, 6],
         )
-            .unwrap();
+        .unwrap();
 
         for cf_name in engine.kv.cf_names() {
             for i in 0..6 {
