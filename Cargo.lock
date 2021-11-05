@@ -5170,7 +5170,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "5.3.0-alpha"
+version = "5.4.0-alpha"
 dependencies = [
  "anyhow",
  "async-stream",
