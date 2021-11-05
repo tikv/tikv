@@ -818,6 +818,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::many-single-char-names)]
     fn test_range_key() {
         let a = RangeKey::from_start_key(b"".to_vec());
         let b = RangeKey::from_start_key(b"".to_vec());
