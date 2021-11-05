@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use prometheus::IntGauge;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -198,6 +199,10 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
         self.stop();
         self.worker.stop()
     }
+
+    pub fn remote(&self) -> Remote<yatp::task::future::TaskCell> {
+        self.worker.remote.clone()
+    }
 }
 
 pub struct ReceiverWrapper<T: Display + Send> {
@@ -370,13 +375,13 @@ impl Worker {
         &self,
         name: S,
     ) -> LazyWorker<T> {
-        let (rx, receiver) = unbounded();
+        let (tx, rx) = unbounded();
         let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[&name.into()]);
         LazyWorker {
-            receiver: Some(receiver),
+            receiver: Some(rx),
             worker: self.clone(),
             scheduler: Scheduler::new(
-                rx,
+                tx,
                 self.counter.clone(),
                 self.pending_capacity,
                 metrics_pending_task_count.clone(),

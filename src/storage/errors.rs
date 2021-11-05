@@ -5,6 +5,7 @@ use std::error::Error as StdError;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 
+use kvproto::kvrpcpb::ApiVersion;
 use kvproto::{errorpb, kvrpcpb};
 use thiserror::Error;
 
@@ -13,7 +14,7 @@ use tikv_util::deadline::DeadlineError;
 use txn_types::{KvPair, TimeStamp};
 
 use crate::storage::{
-    kv::{self, Error as EngineError, ErrorInner as EngineErrorInner},
+    kv::{self, Error as KvError, ErrorInner as KvErrorInner},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     Result,
@@ -24,13 +25,17 @@ use crate::storage::{
 /// handling functionality in a single place instead of being spread out.
 pub enum ErrorInner {
     #[error("{0}")]
-    Engine(#[from] kv::Error),
+    Kv(#[from] kv::Error),
 
     #[error("{0}")]
     Txn(#[from] txn::Error),
 
+    #[error("{0}")]
+    Engine(#[from] engine_traits::Error),
+
     #[error("storage is closed.")]
     Closed,
+
     #[error("{0}")]
     Other(#[from] Box<dyn StdError + Send + Sync>),
 
@@ -49,11 +54,23 @@ pub enum ErrorInner {
     #[error("invalid cf name: {0}")]
     InvalidCf(String),
 
+    #[error("cf is deprecated in API V2, cf name: {0}")]
+    CfDeprecated(String),
+
     #[error("ttl is not enabled, but get put request with ttl")]
     TTLNotEnabled,
 
     #[error("Deadline is exceeded")]
     DeadlineExceeded,
+
+    #[error("The length of ttls does not equal to the length of pairs")]
+    TTLsLenNotEqualsToPairs,
+
+    #[error("Api version in request does not match with TiKV storage")]
+    ApiVersionNotMatched {
+        storage_api_version: ApiVersion,
+        req_api_version: ApiVersion,
+    },
 }
 
 impl From<DeadlineError> for ErrorInner {
@@ -85,8 +102,9 @@ impl<T: Into<ErrorInner>> From<T> for Error {
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self.0.as_ref() {
-            ErrorInner::Engine(e) => e.error_code(),
+            ErrorInner::Kv(e) => e.error_code(),
             ErrorInner::Txn(e) => e.error_code(),
+            ErrorInner::Engine(e) => e.error_code(),
             ErrorInner::Closed => error_code::storage::CLOSED,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
             ErrorInner::Io(_) => error_code::storage::IO,
@@ -94,8 +112,13 @@ impl ErrorCodeExt for Error {
             ErrorInner::GcWorkerTooBusy => error_code::storage::GC_WORKER_TOO_BUSY,
             ErrorInner::KeyTooLarge { .. } => error_code::storage::KEY_TOO_LARGE,
             ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
+            ErrorInner::CfDeprecated(_) => error_code::storage::CF_DEPRECATED,
             ErrorInner::TTLNotEnabled => error_code::storage::TTL_NOT_ENABLED,
             ErrorInner::DeadlineExceeded => error_code::storage::DEADLINE_EXCEEDED,
+            ErrorInner::TTLsLenNotEqualsToPairs => {
+                error_code::storage::TTLS_LEN_NOT_EQUALS_TO_PAIRS
+            }
+            ErrorInner::ApiVersionNotMatched { .. } => error_code::storage::API_VERSION_NOT_MATCHED,
         }
     }
 }
@@ -139,6 +162,7 @@ impl Display for ErrorHeaderKind {
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
+const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
 
 /// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf message.
 /// Returns `ErrorHeaderKind::Other` if no match found.
@@ -173,12 +197,12 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
     match *res {
         // TODO: use `Error::cause` instead.
-        Err(Error(box ErrorInner::Engine(EngineError(box EngineErrorInner::Request(ref e)))))
-        | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
-            box EngineErrorInner::Request(ref e),
+        Err(Error(box ErrorInner::Kv(KvError(box KvErrorInner::Request(ref e)))))
+        | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
+            box KvErrorInner::Request(ref e),
         ))))))
         | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(ref e))),
+            box MvccErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))),
         )))))) => Some(e.to_owned()),
         Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::MaxTimestampNotSynced {
             ..
@@ -210,7 +234,9 @@ pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
         }
         Err(Error(box ErrorInner::DeadlineExceeded)) => {
             let mut err = errorpb::Error::default();
-            err.set_message("Deadline is exceeded".to_string());
+            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+            server_is_busy_err.set_reason(DEADLINE_EXCEEDED.to_owned());
+            err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
         _ => None,
@@ -232,10 +258,10 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::KeyIsLocked(info),
         )))))
-        | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
-            box EngineErrorInner::KeyIsLocked(info),
+        | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
+            box KvErrorInner::KeyIsLocked(info),
         )))))
-        | Error(box ErrorInner::Engine(EngineError(box EngineErrorInner::KeyIsLocked(info)))) => {
+        | Error(box ErrorInner::Kv(KvError(box KvErrorInner::KeyIsLocked(info)))) => {
             key_error.set_locked(info.clone());
         }
         // failed in prewrite or pessimistic lock

@@ -11,7 +11,9 @@ define_error_codes!(
     GC_WORKER_TOO_BUSY => ("GcWorkerTooBusy", "", ""),
     KEY_TOO_LARGE => ("KeyTooLarge", "", ""),
     INVALID_CF => ("InvalidCF", "", ""),
+    CF_DEPRECATED => ("CFDeprecated", "", ""),
     TTL_NOT_ENABLED => ("TTLNotEnabled", "", ""),
+    TTLS_LEN_NOT_EQUALS_TO_PAIRS => ("TTLsLenNotEqualsToPairs", "", ""),
     PROTOBUF => ("Protobuf", "", ""),
     INVALID_TXN_TSO => ("INVALIDTXNTSO", "", ""),
     INVALID_REQ_RANGE => ("InvalidReqRange", "", ""),
@@ -20,6 +22,7 @@ define_error_codes!(
     KEY_IS_LOCKED => ("KeyIsLocked", "", ""),
     MAX_TIMESTAMP_NOT_SYNCED => ("MaxTimestampNotSynced", "", ""),
     DEADLINE_EXCEEDED => ("DeadlineExceeded", "", ""),
+    API_VERSION_NOT_MATCHED => ("ApiVersionNotMatched", "", ""),
 
     COMMITTED => ("Committed", "", ""),
     PESSIMISTIC_LOCK_ROLLED_BACK => ("PessimisticLockRolledBack", "", ""),

@@ -14,10 +14,7 @@ use std::sync::Arc;
 use tikv_util::time::Limiter;
 use tokio::runtime::{Builder, Runtime};
 
-#[cfg(feature = "prost-codec")]
-pub use kvproto::backup::storage_backend::Backend;
-#[cfg(feature = "protobuf-codec")]
-pub use kvproto::backup::StorageBackend_oneof_backend as Backend;
+pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 
 struct ExternalStorageClient {
     backend: Backend,

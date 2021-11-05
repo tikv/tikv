@@ -10,16 +10,16 @@ use grpcio::{
     ServerBuilder,
 };
 use kvproto::resource_usage_agent::{
-    create_resource_usage_agent, CpuTimeRecord, EmptyResponse, ResourceUsageAgent,
+    create_resource_usage_agent, EmptyResponse, ResourceUsageAgent, ResourceUsageRecord,
 };
 
 #[derive(Clone)]
-pub struct MockAgentServer {
-    tx: Sender<Vec<CpuTimeRecord>>,
+pub struct MockReceiverServer {
+    tx: Sender<Vec<ResourceUsageRecord>>,
 }
 
-impl MockAgentServer {
-    pub fn new(tx: Sender<Vec<CpuTimeRecord>>) -> Self {
+impl MockReceiverServer {
+    pub fn new(tx: Sender<Vec<ResourceUsageRecord>>) -> Self {
         Self { tx }
     }
 
@@ -35,18 +35,20 @@ impl MockAgentServer {
             .bind("127.0.0.1", port)
             .register_service(create_resource_usage_agent(self));
 
-        server.build().expect("failed to build mock agent server")
+        server
+            .build()
+            .expect("failed to build mock receiver server")
     }
 }
 
-impl ResourceUsageAgent for MockAgentServer {
-    fn report_cpu_time(
+impl ResourceUsageAgent for MockReceiverServer {
+    fn report(
         &mut self,
         ctx: RpcContext,
-        mut stream: RequestStream<CpuTimeRecord>,
+        mut stream: RequestStream<ResourceUsageRecord>,
         sink: ClientStreamingSink<EmptyResponse>,
     ) {
-        fail_point!("mock-agent");
+        fail_point!("mock-receiver");
         let tx = self.tx.clone();
         let f = async move {
             let mut res = vec![];

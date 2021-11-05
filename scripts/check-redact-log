@@ -7,12 +7,12 @@ function error_msg() {
 }
 
 if [[ "$(uname)" == "Darwin" ]] ; then
-   if grep -r -n --color=always --include '*.rs' --exclude hex.rs --exclude-dir target 'encode_upper' . | grep -v log_wrappers ; then
+   if grep -r -n --color=always --include '*.rs' --exclude hex.rs --exclude-dir tikv-ctl --exclude-dir target 'encode_upper' . | grep -v log_wrappers ; then
 	error_msg
 	exit 1
    fi
 else
-    if grep -r -n -P '(?<!hex_)encode_upper' -C 1 --color=always --include \*.rs --exclude hex.rs --exclude-dir target . ; then
+    if grep -r -n -P '(?<!hex_)encode_upper' -C 1 --color=always --include \*.rs --exclude hex.rs --exclude-dir tikv-ctl --exclude-dir target . ; then
 	error_msg
         exit 1
      fi

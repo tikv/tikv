@@ -6102,7 +6102,7 @@ mod tests {
                                 } else {
                                     max_val_str = "838:59:59";
                                 }
-                                let max_expect = Duration::parse(&mut ctx, &max_val_str, fsp);
+                                let max_expect = Duration::parse(&mut ctx, max_val_str, fsp);
                                 let log = format!(
                                     "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
                                     func_name,

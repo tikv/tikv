@@ -9,11 +9,12 @@ use std::u64;
 
 use rand::random;
 
-use kvproto::kvrpcpb::{Context, LockInfo};
+use kvproto::kvrpcpb::{ApiVersion, Context, LockInfo};
 
 use engine_traits::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
 use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
+use tikv::storage::key_prefix::{RAW_KEY_PREFIX, TXN_KEY_PREFIX};
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 use tikv::storage::Engine;
@@ -853,6 +854,88 @@ fn test_txn_store_write_conflict() {
     );
 }
 
+const TIDB_KEY_CASE: &[u8] = b"t_a";
+const TXN_KEY_CASE: &[u8] = &[TXN_KEY_PREFIX, 0, b'a'];
+const RAW_KEY_CASE: &[u8] = &[RAW_KEY_PREFIX, 0, b'a'];
+
+#[test]
+fn test_txn_store_txnkv_api_version() {
+    let test_data = vec![
+        // config api_version = V1|V1ttl, for backward compatible.
+        (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, true),
+        (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, true),
+        (ApiVersion::V1ttl, ApiVersion::V1, TXN_KEY_CASE, true),
+        // config api_version = V1, reject V2 request.
+        (ApiVersion::V1, ApiVersion::V2, TIDB_KEY_CASE, false),
+        // config api_version = V2.
+        // backward compatible for TiDB request, and TiDB request only.
+        (ApiVersion::V2, ApiVersion::V1, TIDB_KEY_CASE, true),
+        (ApiVersion::V2, ApiVersion::V1, TXN_KEY_CASE, false),
+        // V2 api validation.
+        (ApiVersion::V2, ApiVersion::V2, TXN_KEY_CASE, true),
+        (ApiVersion::V2, ApiVersion::V2, RAW_KEY_CASE, false),
+        (ApiVersion::V2, ApiVersion::V2, TIDB_KEY_CASE, false),
+    ];
+
+    for (config_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
+        let mut store = AssertionStorage::new(config_api_version);
+        store.ctx.set_api_version(req_api_version);
+
+        if is_legal {
+            store.get_none(key, 10);
+            store.put_ok(key, b"x", 5, 10);
+            store.get_none(key, 9);
+            store.get_ok(key, 10, b"x");
+
+            store.batch_get_ok(&[key, key, key], 10, vec![b"x", b"x", b"x"]);
+            store.batch_get_command_ok(&[key, key, key], 10, vec![b"x", b"x", b"x"]);
+        } else {
+            store.get_err(key, 10);
+            //TODO: store.put_err(key, b"x", 5, 10);
+            store.batch_get_err(&[key, key, key], 10);
+            store.batch_get_command_err(&[key, key, key], 10);
+        }
+    }
+}
+
+#[test]
+fn test_txn_store_rawkv_api_version() {
+    let test_data = vec![
+        // config api_version = V1|V1ttl, for backward compatible.
+        (ApiVersion::V1, ApiVersion::V1, RAW_KEY_CASE, true),
+        (ApiVersion::V1ttl, ApiVersion::V1, RAW_KEY_CASE, true),
+        // config api_version = V1, reject V2 request.
+        (ApiVersion::V1, ApiVersion::V2, RAW_KEY_CASE, false),
+        // config api_version = V2.
+        // backward compatible for TiDB request, and TiDB request only.
+        (ApiVersion::V2, ApiVersion::V1, RAW_KEY_CASE, false),
+        // V2 api validation.
+        (ApiVersion::V2, ApiVersion::V2, TXN_KEY_CASE, false),
+        (ApiVersion::V2, ApiVersion::V2, RAW_KEY_CASE, true),
+    ];
+
+    for (config_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
+        let mut store = AssertionStorage::new(config_api_version);
+        store.ctx.set_api_version(req_api_version);
+
+        if is_legal {
+            store.raw_get_ok("".to_string(), key.to_vec(), None);
+            store.raw_put_ok("".to_string(), key.to_vec(), b"value".to_vec());
+            store.raw_get_ok("".to_string(), key.to_vec(), Some(b"value".to_vec()));
+
+            store.raw_batch_get_ok(
+                "".to_string(),
+                vec![key.to_vec(), key.to_vec()],
+                vec![(key, b"value"), (key, b"value")],
+            );
+        } else {
+            store.raw_get_err("".to_string(), key.to_vec());
+            store.raw_put_err("".to_string(), key.to_vec(), b"value".to_vec());
+            store.raw_batch_get_err("".to_string(), vec![key.to_vec(), key.to_vec()]);
+        }
+    }
+}
+
 struct Oracle {
     ts: AtomicUsize,
 }
@@ -875,7 +958,7 @@ fn inc<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, key: &[u8]) -> Re
     let key_address = Key::from_raw(key);
     for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
-        let number: i32 = match store.get(Context::default(), &key_address, start_ts) {
+        let number: i32 = match store.get(Context::default(), key.to_vec(), start_ts) {
             Ok((Some(x), ..)) => String::from_utf8(x).unwrap().parse().unwrap(),
             Ok((None, ..)) => 0,
             Err(_) => {
@@ -955,10 +1038,11 @@ fn format_key(x: usize) -> Vec<u8> {
 fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -> bool {
     'retry: for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
-        let keys: Vec<Key> = (0..n).map(format_key).map(|x| Key::from_raw(&x)).collect();
+        let raw_keys: Vec<Vec<u8>> = (0..n).map(format_key).collect();
+        let keys: Vec<Key> = raw_keys.iter().map(|x| Key::from_raw(&x)).collect();
         let mut mutations = vec![];
-        for key in keys.iter().take(n) {
-            let number = match store.get(Context::default(), key, start_ts) {
+        for (k, raw_key) in raw_keys.into_iter().take(n).enumerate() {
+            let number = match store.get(Context::default(), raw_key, start_ts) {
                 Ok((Some(n), ..)) => String::from_utf8(n).unwrap().parse().unwrap(),
                 Ok((None, ..)) => 0,
                 Err(_) => {
@@ -967,7 +1051,10 @@ fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -
                 }
             };
             let next = number + 1;
-            mutations.push(Mutation::Put((key.clone(), next.to_string().into_bytes())));
+            mutations.push(Mutation::Put((
+                keys[k].clone(),
+                next.to_string().into_bytes(),
+            )));
         }
         if store
             .prewrite(Context::default(), mutations, b"k0".to_vec(), start_ts)

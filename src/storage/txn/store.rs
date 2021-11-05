@@ -445,7 +445,7 @@ impl<S: Snapshot> SnapshotStore<S> {
                     REQUEST_EXCEED_BOUND.inc();
                     return Err(Error::from(ErrorInner::InvalidReqRange {
                         start: Some(l.as_encoded().clone()),
-                        end: upper_bound.as_ref().map(|ref b| b.as_encoded().clone()),
+                        end: upper_bound.as_ref().map(|b| b.as_encoded().clone()),
                         lower_bound: Some(b.to_vec()),
                         upper_bound: self.snapshot.upper_bound().map(|b| b.to_vec()),
                     }));
@@ -457,7 +457,7 @@ impl<S: Snapshot> SnapshotStore<S> {
                 if !b.is_empty() && (u.as_encoded().as_slice() > b || u.as_encoded().is_empty()) {
                     REQUEST_EXCEED_BOUND.inc();
                     return Err(Error::from(ErrorInner::InvalidReqRange {
-                        start: lower_bound.as_ref().map(|ref b| b.as_encoded().clone()),
+                        start: lower_bound.as_ref().map(|b| b.as_encoded().clone()),
                         end: Some(u.as_encoded().clone()),
                         lower_bound: self.snapshot.lower_bound().map(|b| b.to_vec()),
                         upper_bound: Some(b.to_vec()),

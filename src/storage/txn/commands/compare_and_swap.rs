@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::kv::{Modify, WriteData};
 use crate::storage::lock_manager::LockManager;
 use crate::storage::raw;
@@ -68,7 +69,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
         };
         fail_point!("txn_commands_compare_and_swap");
         let rows = data.len();
-        let to_be_write = WriteData::from_modifies(data);
+        let mut to_be_write = WriteData::from_modifies(data);
+        to_be_write.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx,
             to_be_write,

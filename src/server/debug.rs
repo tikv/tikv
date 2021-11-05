@@ -7,7 +7,7 @@ use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::{error::Error as StdError, result};
 
 use kvproto::debugpb::{self, Db as DBType};
-use kvproto::metapb::Region;
+use kvproto::metapb::{PeerRole, Region};
 use kvproto::raft_serverpb::*;
 use protobuf::Message;
 use raft::eraftpb::Entry;
@@ -21,15 +21,13 @@ use engine_rocks::RocksMvccProperties;
 use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, RaftEngine,
-    RangePropertiesExt, SeekKey, TableProperties, TablePropertiesCollection, TablePropertiesExt,
-    WriteBatch, WriteOptions,
+    RangePropertiesExt, SeekKey, SyncMutable, WriteBatch, WriteOptions,
 };
 use engine_traits::{MvccProperties, Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::get_region_approximate_middle;
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
 use raftstore::store::{write_initial_apply_state, write_initial_raft_state, write_peer_state};
-use tikv_util::codec::bytes;
 use tikv_util::config::ReadableSize;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
@@ -138,7 +136,7 @@ impl<ER: RaftEngine> Debugger<ER> {
     }
 
     /// Get all regions holding region meta data from raft CF in KV storage.
-    pub fn get_all_meta_regions(&self) -> Result<Vec<u64>> {
+    pub fn get_all_regions_in_store(&self) -> Result<Vec<u64>> {
         let db = &self.engines.kv;
         let cf = CF_RAFT;
         let start_key = keys::REGION_META_MIN_KEY;
@@ -152,6 +150,7 @@ impl<ER: RaftEngine> Debugger<ER> {
             regions.push(id);
             Ok(true)
         }));
+        regions.sort_unstable();
         Ok(regions)
     }
 
@@ -492,7 +491,7 @@ impl<ER: RaftEngine> Debugger<ER> {
 
         let check_value = |value: &[u8]| -> Result<()> {
             let mut local_state = RegionLocalState::default();
-            box_try!(local_state.merge_from_bytes(&value));
+            box_try!(local_state.merge_from_bytes(value));
 
             match local_state.get_state() {
                 PeerState::Tombstone | PeerState::Applying => return Ok(()),
@@ -538,7 +537,7 @@ impl<ER: RaftEngine> Debugger<ER> {
 
         while box_try!(iter.valid()) {
             let (key, value) = (iter.key(), iter.value());
-            if let Ok((region_id, suffix)) = keys::decode_region_meta_key(&key) {
+            if let Ok((region_id, suffix)) = keys::decode_region_meta_key(key) {
                 if suffix != keys::REGION_STATE_SUFFIX {
                     box_try!(iter.next());
                     continue;
@@ -556,6 +555,7 @@ impl<ER: RaftEngine> Debugger<ER> {
         &self,
         store_ids: Vec<u64>,
         region_ids: Option<Vec<u64>>,
+        promote_learner: bool,
     ) -> Result<()> {
         let store_id = self.get_store_id()?;
         if store_ids.iter().any(|&s| s == store_id) {
@@ -583,6 +583,43 @@ impl<ER: RaftEngine> Debugger<ER> {
 
                 let region_id = region_state.get_region().get_id();
                 let old_peers = region_state.mut_region().take_peers();
+
+                if promote_learner {
+                    if new_peers
+                        .iter()
+                        .filter(|peer| peer.get_role() != PeerRole::Learner)
+                        .count()
+                        != 0
+                    {
+                        // no need to promote learner, do nothing
+                    } else if new_peers
+                        .iter()
+                        .filter(|peer| peer.get_role() == PeerRole::Learner)
+                        .count()
+                        > 1
+                    {
+                        error!(
+                            "failed to promote learner due to multiple learners, skip promote learner";
+                            "region_id" => region_id,
+                        )
+                    } else {
+                        for peer in &mut new_peers {
+                            match peer.get_role() {
+                                PeerRole::Voter
+                                | PeerRole::IncomingVoter
+                                | PeerRole::DemotingVoter => {}
+                                PeerRole::Learner => {
+                                    info!(
+                                        "promote learner";
+                                        "region_id" => region_id,
+                                        "peer_id" => peer.get_id(),
+                                    );
+                                    peer.set_role(PeerRole::Voter);
+                                }
+                            }
+                        }
+                    }
+                }
                 info!(
                     "peers changed";
                     "region_id" => region_id,
@@ -620,6 +657,73 @@ impl<ER: RaftEngine> Debugger<ER> {
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
         box_try!(wb.write_opt(&write_opts));
+        Ok(())
+    }
+
+    pub fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) -> Result<()> {
+        let kv = &self.engines.kv;
+        let raft = &self.engines.raft;
+
+        let region_ids = region_ids.unwrap_or(self.get_all_regions_in_store()?);
+        for region_id in region_ids {
+            let region_state = self.region_info(region_id)?;
+
+            // It's safe to unwrap region_local_state here, because get_all_regions_in_store()
+            // guarantees that the region state exists in kvdb.
+            if region_state.region_local_state.unwrap().state == PeerState::Tombstone {
+                continue;
+            }
+
+            let old_raft_local_state = region_state.raft_local_state.ok_or_else(|| {
+                Error::Other(format!("No RaftLocalState found for region {}", region_id).into())
+            })?;
+            let old_raft_apply_state = region_state.raft_apply_state.ok_or_else(|| {
+                Error::Other(format!("No RaftApplyState found for region {}", region_id).into())
+            })?;
+
+            let applied_index = old_raft_apply_state.applied_index;
+            let last_index = old_raft_local_state.last_index;
+
+            let new_raft_local_state = RaftLocalState {
+                last_index: applied_index,
+                ..old_raft_local_state.clone()
+            };
+            let new_raft_apply_state = RaftApplyState {
+                commit_index: applied_index,
+                ..old_raft_apply_state.clone()
+            };
+
+            info!(
+                "dropping unapplied raft log";
+                "region_id" => region_id,
+                "old_raft_local_state" => ?old_raft_local_state,
+                "new_raft_local_state" => ?new_raft_local_state,
+                "old_raft_apply_state" => ?old_raft_apply_state,
+                "new_raft_apply_state" => ?new_raft_apply_state,
+            );
+
+            // flush the changes
+            box_try!(kv.put_msg_cf(
+                CF_RAFT,
+                &keys::apply_state_key(region_id),
+                &new_raft_apply_state
+            ));
+            box_try!(raft.put_raft_state(region_id, &new_raft_local_state));
+            let deleted_logs = box_try!(raft.gc(region_id, applied_index + 1, last_index + 1));
+            raft.sync().unwrap();
+            kv.sync().unwrap();
+
+            info!(
+                "dropped unapplied raft log";
+                "region_id" => region_id,
+                "old_raft_local_state" => ?old_raft_local_state,
+                "new_raft_local_state" => ?new_raft_local_state,
+                "old_raft_apply_state" => ?old_raft_apply_state,
+                "new_raft_apply_state" => ?new_raft_apply_state,
+                "deleted logs" => deleted_logs,
+            );
+        }
+
         Ok(())
     }
 
@@ -750,16 +854,17 @@ impl<ER: RaftEngine> Debugger<ER> {
         let mut res = dump_mvcc_properties(self.engines.kv.as_inner(), &start, &end)?;
 
         let middle_key = match box_try!(get_region_approximate_middle(&self.engines.kv, region)) {
-            Some(data_key) => {
-                let mut key = keys::origin_key(&data_key);
-                box_try!(bytes::decode_bytes(&mut key, false))
-            }
+            Some(data_key) => keys::origin_key(&data_key).to_vec(),
             None => Vec::new(),
         };
 
-        // Middle key of the range.
         res.push((
-            "middle_key_by_approximate_size".to_owned(),
+            "region.start_key".to_owned(),
+            hex::encode(&region.start_key),
+        ));
+        res.push(("region.end_key".to_owned(), hex::encode(&region.end_key)));
+        res.push((
+            "region.middle_key_by_approximate_size".to_owned(),
             hex::encode(&middle_key),
         ));
 
@@ -778,13 +883,13 @@ impl<ER: RaftEngine> Debugger<ER> {
 fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
     let mut num_entries = 0; // number of Rocksdb K/V entries.
 
-    let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, &start, &end));
+    let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, start, end));
     let num_files = collection.len();
 
     let mut mvcc_properties = MvccProperties::new();
     for (_, v) in collection.iter() {
         num_entries += v.num_entries();
-        let mvcc = box_try!(RocksMvccProperties::decode(&v.user_collected_properties()));
+        let mvcc = box_try!(RocksMvccProperties::decode(v.user_collected_properties()));
         mvcc_properties.add(&mvcc);
     }
 
@@ -810,7 +915,7 @@ fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(S
         ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
     ]
     .iter()
-    .map(|(k, v)| ((*k).to_string(), v.to_string()))
+    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
     .collect();
 
     // Entries and delete marks of RocksDB.
@@ -832,7 +937,7 @@ fn recover_mvcc_for_range(
     read_only: bool,
     thread_index: usize,
 ) -> Result<()> {
-    let mut mvcc_checker = box_try!(MvccChecker::new(Arc::clone(&db), start_key, end_key));
+    let mut mvcc_checker = box_try!(MvccChecker::new(Arc::clone(db), start_key, end_key));
     mvcc_checker.thread_index = thread_index;
 
     let wb_limit: usize = 10240;
@@ -1221,7 +1326,7 @@ mod tests {
     use std::sync::Arc;
 
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
-    use kvproto::metapb::{Peer, Region};
+    use kvproto::metapb::{Peer, PeerRole, Region};
     use raft::eraftpb::EntryType;
     use tempfile::Builder;
 
@@ -1232,13 +1337,22 @@ mod tests {
     use engine_traits::{Mutable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
-    fn init_region_state(engine: &Arc<DB>, region_id: u64, stores: &[u64]) -> Region {
+    fn init_region_state(
+        engine: &Arc<DB>,
+        region_id: u64,
+        stores: &[u64],
+        mut learner: usize,
+    ) -> Region {
         let mut region = Region::default();
         region.set_id(region_id);
         for (i, &store_id) in stores.iter().enumerate() {
             let mut peer = Peer::default();
             peer.set_id(i as u64);
             peer.set_store_id(store_id);
+            if learner > 0 {
+                peer.set_role(PeerRole::Learner);
+                learner -= 1;
+            }
             region.mut_peers().push(peer);
         }
         let mut region_state = RegionLocalState::default();
@@ -1247,6 +1361,28 @@ mod tests {
         let key = keys::region_state_key(region_id);
         engine.c().put_msg_cf(CF_RAFT, &key, &region_state).unwrap();
         region
+    }
+
+    fn init_raft_state(
+        kv_engine: &RocksEngine,
+        raft_engine: &RocksEngine,
+        region_id: u64,
+        last_index: u64,
+        commit_index: u64,
+        applied_index: u64,
+    ) {
+        let apply_state_key = keys::apply_state_key(region_id);
+        let mut apply_state = RaftApplyState::default();
+        apply_state.set_applied_index(applied_index);
+        apply_state.set_commit_index(commit_index);
+        kv_engine
+            .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
+            .unwrap();
+
+        let raft_state_key = keys::raft_state_key(region_id);
+        let mut raft_state = RaftLocalState::default();
+        raft_state.set_last_index(last_index);
+        raft_engine.put_msg(&raft_state_key, &raft_state).unwrap();
     }
 
     fn get_region_state(engine: &Arc<DB>, region_id: u64) -> RegionLocalState {
@@ -1270,33 +1406,33 @@ mod tests {
         // For normal case.
         assert!(region_overlap(
             &new_region(b"a", b"z"),
-            &new_region(b"b", b"y")
+            &new_region(b"b", b"y"),
         ));
         assert!(region_overlap(
             &new_region(b"a", b"n"),
-            &new_region(b"m", b"z")
+            &new_region(b"m", b"z"),
         ));
         assert!(!region_overlap(
             &new_region(b"a", b"m"),
-            &new_region(b"n", b"z")
+            &new_region(b"n", b"z"),
         ));
 
         // For the first or last region.
         assert!(region_overlap(
             &new_region(b"m", b""),
-            &new_region(b"a", b"n")
+            &new_region(b"a", b"n"),
         ));
         assert!(region_overlap(
             &new_region(b"a", b"n"),
-            &new_region(b"m", b"")
+            &new_region(b"m", b""),
         ));
         assert!(region_overlap(
             &new_region(b"", b""),
-            &new_region(b"m", b"")
+            &new_region(b"m", b""),
         ));
         assert!(!region_overlap(
             &new_region(b"a", b"m"),
-            &new_region(b"n", b"")
+            &new_region(b"n", b""),
         ));
     }
 
@@ -1518,21 +1654,21 @@ mod tests {
         let engine = &debugger.engines.kv;
 
         // region 1 with peers at stores 11, 12, 13.
-        let region_1 = init_region_state(engine.as_inner(), 1, &[11, 12, 13]);
+        let region_1 = init_region_state(engine.as_inner(), 1, &[11, 12, 13], 0);
         // Got the target region from pd, which doesn't contains the store.
         let mut target_region_1 = region_1.clone();
         target_region_1.mut_peers().remove(0);
         target_region_1.mut_region_epoch().set_conf_ver(100);
 
         // region 2 with peers at stores 11, 12, 13.
-        let region_2 = init_region_state(engine.as_inner(), 2, &[11, 12, 13]);
+        let region_2 = init_region_state(engine.as_inner(), 2, &[11, 12, 13], 0);
         // Got the target region from pd, which has different peer_id.
         let mut target_region_2 = region_2.clone();
         target_region_2.mut_peers()[0].set_id(100);
         target_region_2.mut_region_epoch().set_conf_ver(100);
 
         // region 3 with peers at stores 21, 22, 23.
-        let region_3 = init_region_state(engine.as_inner(), 3, &[21, 22, 23]);
+        let region_3 = init_region_state(engine.as_inner(), 3, &[21, 22, 23], 0);
         // Got the target region from pd but the peers are not changed.
         let mut target_region_3 = region_3;
         target_region_3.mut_region_epoch().set_conf_ver(100);
@@ -1576,7 +1712,7 @@ mod tests {
         assert!(!errors.is_empty());
 
         // region 1 with peers at stores 11, 12, 13.
-        init_region_state(engine.as_inner(), 1, &[11, 12, 13]);
+        init_region_state(engine.as_inner(), 1, &[11, 12, 13], 0);
         let mut expected_state = get_region_state(engine.as_inner(), 1);
         expected_state.set_state(PeerState::Tombstone);
 
@@ -1606,14 +1742,23 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
+        let get_region_learner = |engine: &Arc<DB>, region_id: u64| {
+            get_region_state(engine, region_id)
+                .get_region()
+                .get_peers()
+                .iter()
+                .filter(|p| p.get_role() == PeerRole::Learner)
+                .count()
+        };
+
         // region 1 with peers at stores 11, 12, 13 and 14.
-        init_region_state(engine.as_inner(), 1, &[11, 12, 13, 14]);
+        init_region_state(engine.as_inner(), 1, &[11, 12, 13, 14], 0);
         // region 2 with peers at stores 21, 22 and 23.
-        init_region_state(engine.as_inner(), 2, &[21, 22, 23]);
+        init_region_state(engine.as_inner(), 2, &[21, 22, 23], 0);
 
         // Only remove specified stores from region 1.
         debugger
-            .remove_failed_stores(vec![13, 14, 21, 23], Some(vec![1]))
+            .remove_failed_stores(vec![13, 14, 21, 23], Some(vec![1]), false)
             .unwrap();
 
         // 13 and 14 should be removed from region 1.
@@ -1622,14 +1767,81 @@ mod tests {
         assert_eq!(get_region_stores(engine.as_inner(), 2), &[21, 22, 23]);
 
         // Remove specified stores from all regions.
-        debugger.remove_failed_stores(vec![11, 23], None).unwrap();
+        debugger
+            .remove_failed_stores(vec![11, 23], None, false)
+            .unwrap();
 
         assert_eq!(get_region_stores(engine.as_inner(), 1), &[12]);
         assert_eq!(get_region_stores(engine.as_inner(), 2), &[21, 22]);
 
         // Should fail when the store itself is in the failed list.
-        init_region_state(engine.as_inner(), 3, &[100, 31, 32, 33]);
-        debugger.remove_failed_stores(vec![100], None).unwrap_err();
+        init_region_state(engine.as_inner(), 3, &[100, 31, 32, 33], 0);
+        debugger
+            .remove_failed_stores(vec![100], None, false)
+            .unwrap_err();
+
+        // no learner, promote learner does nothing
+        init_region_state(engine.as_inner(), 4, &[41, 42, 43, 44], 0);
+        debugger.remove_failed_stores(vec![44], None, true).unwrap();
+        assert_eq!(get_region_stores(engine.as_inner(), 4), &[41, 42, 43]);
+        assert_eq!(get_region_learner(engine.as_inner(), 4), 0);
+
+        // promote learner
+        init_region_state(engine.as_inner(), 5, &[51, 52, 53, 54], 1);
+        debugger
+            .remove_failed_stores(vec![52, 53, 54], None, true)
+            .unwrap();
+        assert_eq!(get_region_stores(engine.as_inner(), 5), &[51]);
+        assert_eq!(get_region_learner(engine.as_inner(), 5), 0);
+
+        // no need to promote learner
+        init_region_state(engine.as_inner(), 6, &[61, 62, 63, 64], 1);
+        debugger.remove_failed_stores(vec![64], None, true).unwrap();
+        assert_eq!(get_region_stores(engine.as_inner(), 6), &[61, 62, 63]);
+        assert_eq!(get_region_learner(engine.as_inner(), 6), 1);
+    }
+
+    #[test]
+    fn test_drop_unapplied_raftlog() {
+        let debugger = new_debugger();
+        debugger.set_store_id(100);
+        let kv_engine = &debugger.engines.kv;
+        let raft_engine = &debugger.engines.raft;
+
+        init_region_state(kv_engine.as_inner(), 1, &[100, 101], 1);
+        init_region_state(kv_engine.as_inner(), 2, &[100, 103], 1);
+        init_raft_state(kv_engine, raft_engine, 1, 100, 90, 80);
+        init_raft_state(kv_engine, raft_engine, 2, 80, 80, 80);
+
+        let region_info_2_before = debugger.region_info(2).unwrap();
+
+        // Drop raftlog on all regions
+        debugger.drop_unapplied_raftlog(None).unwrap();
+
+        let region_info_1 = debugger.region_info(1).unwrap();
+        let region_info_2 = debugger.region_info(2).unwrap();
+
+        assert_eq!(
+            region_info_1.raft_local_state.as_ref().unwrap().last_index,
+            80
+        );
+        assert_eq!(
+            region_info_1
+                .raft_apply_state
+                .as_ref()
+                .unwrap()
+                .applied_index,
+            80
+        );
+        assert_eq!(
+            region_info_1
+                .raft_apply_state
+                .as_ref()
+                .unwrap()
+                .commit_index,
+            80
+        );
+        assert_eq!(region_info_2, region_info_2_before);
     }
 
     #[test]

@@ -7,12 +7,12 @@ use std::{
 };
 
 use external_storage_export::{
-    create_storage, make_cloud_backend, make_gcs_backend, make_local_backend, make_noop_backend,
-    make_s3_backend, ExternalStorage,
+    create_storage, make_cloud_backend, make_gcs_backend, make_hdfs_backend, make_local_backend,
+    make_noop_backend, make_s3_backend, ExternalStorage,
 };
 use futures_util::io::{copy, AllowStdIo};
 use ini::ini::Ini;
-use kvproto::backup::{Bucket, CloudDynamic, Gcs, StorageBackend, S3};
+use kvproto::brpb::{Bucket, CloudDynamic, Gcs, StorageBackend, S3};
 use structopt::clap::arg_enum;
 use structopt::StructOpt;
 use tokio::runtime::Runtime;
@@ -22,6 +22,7 @@ arg_enum! {
     enum StorageType {
         Noop,
         Local,
+        Hdfs,
         S3,
         GCS,
         Cloud,
@@ -43,7 +44,7 @@ pub struct Opt {
     name: String,
     /// Path to use for local storage.
     #[structopt(short, long)]
-    path: String,
+    path: Option<String>,
     /// Credential file path. For S3, use ~/.aws/credentials.
     #[structopt(short, long)]
     credential_file: Option<String>,
@@ -170,11 +171,13 @@ fn process() -> Result<()> {
     let storage: Box<dyn ExternalStorage> = create_storage(
         &(match opt.storage {
             StorageType::Noop => make_noop_backend(),
-            StorageType::Local => make_local_backend(Path::new(&opt.path)),
+            StorageType::Local => make_local_backend(Path::new(&opt.path.unwrap())),
+            StorageType::Hdfs => make_hdfs_backend(opt.path.unwrap()),
             StorageType::S3 => create_s3_storage(&opt)?,
             StorageType::GCS => create_gcs_storage(&opt)?,
             StorageType::Cloud => create_cloud_storage(&opt)?,
         }),
+        Default::default(),
     )?;
 
     match opt.command {

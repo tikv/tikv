@@ -27,6 +27,8 @@ macro_rules! match_template_collator {
                 Utf8Mb4GeneralCi => CollatorUtf8Mb4GeneralCi,
                 Utf8Mb4UnicodeCi => CollatorUtf8Mb4UnicodeCi,
                 Latin1Bin => CollatorLatin1Bin,
+                GbkBin => CollatorGbkBin,
+                GbkChineseCi => CollatorGbkChineseCi,
             ],
             $($tail)*
          }
@@ -156,7 +158,7 @@ where
 {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        C::sort_compare(&self.inner.as_ref(), &other.inner.as_ref()).unwrap()
+        C::sort_compare(self.inner.as_ref(), other.inner.as_ref()).unwrap()
             == std::cmp::Ordering::Equal
     }
 }
@@ -169,7 +171,7 @@ where
 {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        C::sort_compare(&self.inner.as_ref(), &other.inner.as_ref()).ok()
+        C::sort_compare(self.inner.as_ref(), other.inner.as_ref()).ok()
     }
 }
 
@@ -179,7 +181,7 @@ where
 {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
-        C::sort_compare(&self.inner.as_ref(), &other.inner.as_ref()).unwrap()
+        C::sort_compare(self.inner.as_ref(), other.inner.as_ref()).unwrap()
     }
 }
 

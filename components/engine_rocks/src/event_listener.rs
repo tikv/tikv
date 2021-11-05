@@ -87,6 +87,9 @@ impl rocksdb::EventListener for RocksEventListener {
         STORE_ENGINE_EVENT_COUNTER_VEC
             .with_label_values(&[&self.db_name, info.cf_name(), "ingestion"])
             .inc();
+        STORE_ENGINE_INGESTION_PICKED_LEVEL_VEC
+            .with_label_values(&[&self.db_name, info.cf_name()])
+            .observe(info.picked_level() as f64);
     }
 
     fn on_background_error(&self, reason: DBBackgroundErrorReason, result: Result<(), String>) {

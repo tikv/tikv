@@ -36,7 +36,7 @@ use engine_traits::{
 };
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp, KeyRange};
+use kvproto::kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange};
 use thiserror::Error;
 use tikv_util::{deadline::Deadline, escape};
 use txn_types::{Key, TimeStamp, TxnExtra, Value};
@@ -72,6 +72,12 @@ impl CbContext {
             term: None,
             txn_extra_op: TxnExtraOp::Noop,
         }
+    }
+}
+
+impl Default for CbContext {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -111,6 +117,7 @@ pub struct WriteData {
     pub modifies: Vec<Modify>,
     pub extra: TxnExtra,
     pub deadline: Option<Deadline>,
+    pub disk_full_opt: DiskFullOpt,
 }
 
 impl WriteData {
@@ -119,11 +126,28 @@ impl WriteData {
             modifies,
             extra,
             deadline: None,
+            disk_full_opt: DiskFullOpt::NotAllowedOnFull,
         }
     }
 
     pub fn from_modifies(modifies: Vec<Modify>) -> Self {
         Self::new(modifies, TxnExtra::default())
+    }
+
+    pub fn size(&self) -> usize {
+        let mut total = 0;
+        for m in &self.modifies {
+            total += m.size();
+        }
+        total
+    }
+
+    pub fn set_allowed_on_disk_almost_full(&mut self) {
+        self.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull
+    }
+
+    pub fn set_disk_full_opt(&mut self, level: DiskFullOpt) {
+        self.disk_full_opt = level
     }
 }
 
@@ -140,10 +164,7 @@ pub struct SnapContext<'a> {
 impl<'a> Default for SnapContext<'a> {
     fn default() -> Self {
         SnapContext {
-            #[cfg(feature = "protobuf-codec")]
             pb_ctx: Default::default(),
-            #[cfg(feature = "prost-codec")]
-            pb_ctx: Context::default_ref(),
             read_id: None,
             start_ts: Default::default(),
             key_ranges: Default::default(),
@@ -430,22 +451,34 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
     });
 }
 
-/// Get a snapshot of `engine`.
+/// Get a snapshot of `engine` for read.
 pub fn snapshot<E: Engine>(
     engine: &E,
     ctx: SnapContext<'_>,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
+    let fut = snapshot_for_write(engine, ctx);
+    async {
+        let (_, snap) = fut.await?;
+        snap
+    }
+}
+
+/// Get a snapshot and CbContext of `engine` for write.
+pub fn snapshot_for_write<E: Engine>(
+    engine: &E,
+    ctx: SnapContext<'_>,
+) -> impl std::future::Future<Output = Result<(CbContext, Result<E::Snap>)>> {
     let (callback, future) =
         tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
     let val = engine.async_snapshot(ctx, callback);
     // make engine not cross yield point
     async move {
         val?; // propagate error
-        let (_ctx, result) = future
+        let result = future
             .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))
             .await?;
         fail_point!("after-snapshot");
-        result
+        Ok(result)
     }
 }
 

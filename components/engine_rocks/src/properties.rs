@@ -6,10 +6,8 @@ use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
-use engine_traits::{
-    DecodeProperties, IndexHandle, IndexHandles, KvEngine, MvccProperties, Range, TableProperties,
-    TablePropertiesCollection,
-};
+use crate::decode_properties::{DecodeProperties, IndexHandle, IndexHandles};
+use engine_traits::{MvccProperties, Range};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
@@ -93,6 +91,12 @@ impl UserProperties {
 
     pub fn encode_handles(&mut self, name: &str, handles: &IndexHandles) {
         self.encode(name, handles.encode())
+    }
+}
+
+impl Default for UserProperties {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -398,12 +402,9 @@ impl Default for RangePropertiesCollectorFactory {
     }
 }
 
-impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(RangePropertiesCollector::new(
-            self.prop_size_index_distance,
-            self.prop_keys_index_distance,
-        ))
+impl TablePropertiesCollectorFactory<RangePropertiesCollector> for RangePropertiesCollectorFactory {
+    fn create_table_properties_collector(&mut self, _: u32) -> RangePropertiesCollector {
+        RangePropertiesCollector::new(self.prop_size_index_distance, self.prop_keys_index_distance)
     }
 }
 
@@ -518,21 +519,18 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
 #[derive(Default)]
 pub struct MvccPropertiesCollectorFactory {}
 
-impl TablePropertiesCollectorFactory for MvccPropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(MvccPropertiesCollector::new())
+impl TablePropertiesCollectorFactory<MvccPropertiesCollector> for MvccPropertiesCollectorFactory {
+    fn create_table_properties_collector(&mut self, _: u32) -> MvccPropertiesCollector {
+        MvccPropertiesCollector::new()
     }
 }
 
-pub fn get_range_entries_and_versions<E>(
-    engine: &E,
+pub fn get_range_entries_and_versions(
+    engine: &crate::RocksEngine,
     cf: &str,
     start: &[u8],
     end: &[u8],
-) -> Option<(u64, u64)>
-where
-    E: KvEngine,
-{
+) -> Option<(u64, u64)> {
     let range = Range::new(start, end);
     let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
         Ok(v) => v,
@@ -547,7 +545,7 @@ where
     let mut props = MvccProperties::new();
     let mut num_entries = 0;
     for (_, v) in collection.iter() {
-        let mvcc = match RocksMvccProperties::decode(&v.user_collected_properties()) {
+        let mvcc = match RocksMvccProperties::decode(v.user_collected_properties()) {
             Ok(v) => v,
             Err(_) => return None,
         };
@@ -742,8 +740,10 @@ mod tests {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let f = Box::new(MvccPropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.mvcc-properties-collector",
+            MvccPropertiesCollectorFactory::default(),
+        );
         let cfs_opts = LARGE_CFS
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))

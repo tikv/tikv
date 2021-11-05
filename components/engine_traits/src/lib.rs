@@ -290,14 +290,10 @@ mod snapshot;
 pub use crate::snapshot::*;
 mod sst;
 pub use crate::sst::*;
-mod table_properties;
-pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
 mod encryption;
 pub use crate::encryption::*;
-mod properties;
-pub use crate::properties::*;
 mod mvcc_properties;
 mod sst_partitioner;
 pub use crate::sst_partitioner::*;
@@ -308,6 +304,8 @@ mod ttl_properties;
 pub use crate::ttl_properties::*;
 mod perf_context;
 pub use crate::perf_context::*;
+mod flow_control_factors;
+pub use crate::flow_control_factors::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.

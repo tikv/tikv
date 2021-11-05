@@ -1,12 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use super::ttl::TTLSnapshot;
 
 use crate::storage::kv::{Cursor, Iterator, ScanMode, Snapshot};
 use crate::storage::Statistics;
 use crate::storage::{Error, Result};
 
-use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
+use engine_traits::{CfName, IterOptions, CF_DEFAULT, DATA_KEY_PREFIX_LEN};
 use kvproto::kvrpcpb::KeyRange;
 use std::time::Duration;
 use tikv_util::time::Instant;
@@ -162,7 +163,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
     ) -> Result<Vec<Result<KvPair>>> {
         let mut cursor = Cursor::new(self.snapshot.iter_cf(cf, option)?, ScanMode::Forward, false);
         let statistics = statistics.mut_cf_statistics(cf);
-        if !cursor.seek(&start_key, statistics)? {
+        if !cursor.seek(start_key, statistics)? {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
@@ -210,7 +211,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
             false,
         );
         let statistics = statistics.mut_cf_statistics(cf);
-        if !cursor.reverse_seek(&start_key, statistics)? {
+        if !cursor.reverse_seek(start_key, statistics)? {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
@@ -251,7 +252,7 @@ pub async fn raw_checksum_ranges<S: Snapshot>(
     for r in ranges {
         let mut opts = IterOptions::new(None, None, false);
         opts.set_upper_bound(r.get_end_key(), DATA_KEY_PREFIX_LEN);
-        let mut iter = snapshot.iter(opts)?;
+        let mut iter = snapshot.iter_cf(CF_DEFAULT, opts)?;
         iter.seek(&Key::from_encoded(r.get_start_key().to_vec()))?;
         while iter.valid()? {
             row_count += 1;

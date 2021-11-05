@@ -72,6 +72,8 @@ pub use compat::*;
 mod compact_listener;
 pub use compact_listener::*;
 
+pub mod decode_properties;
+pub use decode_properties::*;
 pub mod properties;
 pub use properties::*;
 
@@ -83,6 +85,9 @@ pub use rocks_metrics_defs::*;
 
 pub mod event_listener;
 pub use event_listener::*;
+
+pub mod flow_listener;
+pub use flow_listener::*;
 
 pub mod config;
 pub use config::*;
@@ -98,6 +103,9 @@ mod raft_engine;
 
 pub use rocksdb::set_perf_level;
 pub use rocksdb::PerfContext;
+
+pub mod flow_control_factors;
+pub use flow_control_factors::*;
 
 pub mod raw;
 

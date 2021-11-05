@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::cell::Cell;
 use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -39,6 +40,7 @@ use crate::store::fsm::store::StoreMeta;
 pub trait ReadExecutor<E: KvEngine> {
     fn get_engine(&self) -> &E;
     fn get_snapshot(&mut self, ts: Option<ThreadReadId>) -> Arc<E::Snapshot>;
+
     fn get_value(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
@@ -193,6 +195,12 @@ impl TrackVer {
 
     fn any_new(&self) -> bool {
         self.version.load(Ordering::Relaxed) > self.local_ver
+    }
+}
+
+impl Default for TrackVer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -603,7 +611,7 @@ where
             Ok(None) => self.redirect(RaftCommand::new(req, cb)),
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
-                if let Some(ref delegate) = self.delegates.get(&req.get_header().get_region_id()) {
+                if let Some(delegate) = self.delegates.get(&req.get_header().get_region_id()) {
                     cmd_resp::bind_term(&mut response, delegate.term);
                 }
                 cb.invoke_read(ReadResponse {

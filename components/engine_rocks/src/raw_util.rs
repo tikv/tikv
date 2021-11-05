@@ -56,7 +56,7 @@ fn adjust_dynamic_level_bytes(
     cf_descs: &[CColumnFamilyDescriptor],
     cf_options: &mut CFOptions<'_>,
 ) {
-    if let Some(ref cf_desc) = cf_descs
+    if let Some(cf_desc) = cf_descs
         .iter()
         .find(|cf_desc| cf_desc.name() == cf_options.cf)
     {

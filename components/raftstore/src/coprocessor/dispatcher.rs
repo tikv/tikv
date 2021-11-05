@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath] called by Fsm on_ready_compute_hash
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
@@ -505,7 +506,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
         for batch in &cmd_batches {
             for cmd in &batch.cmds {
-                self.post_apply(&batch.region, &cmd);
+                self.post_apply(&batch.region, cmd);
             }
         }
         for observer in &self.registry.cmd_observers {

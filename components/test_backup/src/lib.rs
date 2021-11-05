@@ -14,7 +14,7 @@ use collections::HashMap;
 use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use external_storage_export::make_local_backend;
-use kvproto::backup::*;
+use kvproto::brpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
 use rand::Rng;
@@ -76,13 +76,14 @@ impl TestSuite {
             let sim = cluster.sim.rl();
             let backup_endpoint = backup::Endpoint::new(
                 *id,
-                sim.storages[&id].clone(),
-                sim.region_info_accessors[&id].clone(),
+                sim.storages[id].clone(),
+                sim.region_info_accessors[id].clone(),
                 engines.kv.as_inner().clone(),
                 BackupConfig {
                     num_threads: 4,
                     batch_size: 8,
                     sst_max_size: ReadableSize(sst_max_size),
+                    ..Default::default()
                 },
                 sim.get_concurrency_manager(*id),
             );

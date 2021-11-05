@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::{
     borrow::Cow,
     fmt::{self, Debug, Display, Formatter},
@@ -30,7 +31,8 @@ use raftstore::{
     errors::Error as RaftServerError,
     router::{LocalReadRouter, RaftStoreRouter},
     store::{
-        Callback as StoreCallback, ReadIndexContext, ReadResponse, RegionSnapshot, WriteResponse,
+        Callback as StoreCallback, RaftCmdExtraOpts, ReadIndexContext, ReadResponse,
+        RegionSnapshot, WriteResponse,
     },
 };
 use tikv_util::codec::number::NumberEncoder;
@@ -104,18 +106,6 @@ impl From<Error> for kv::Error {
     }
 }
 
-/// `RaftKv` is a storage engine base on `RaftStore`.
-#[derive(Clone)]
-pub struct RaftKv<E, S>
-where
-    E: KvEngine,
-    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
-{
-    router: S,
-    engine: E,
-    txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
-}
-
 pub enum CmdRes<S>
 where
     S: Snapshot,
@@ -178,6 +168,18 @@ where
     } else {
         (cb_ctx, Ok(CmdRes::Resp(resps.into())))
     }
+}
+
+/// `RaftKv` is a storage engine base on `RaftStore`.
+#[derive(Clone)]
+pub struct RaftKv<E, S>
+where
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
+{
+    router: S,
+    engine: E,
+    txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
 }
 
 impl<E, S> RaftKv<E, S>
@@ -293,11 +295,12 @@ where
             proposed_cb,
             committed_cb,
         );
-        if let Some(deadline) = batch.deadline {
-            self.router.send_command_with_deadline(cmd, cb, deadline)?;
-        } else {
-            self.router.send_command(cmd, cb)?;
-        }
+        let extra_opts = RaftCmdExtraOpts {
+            deadline: batch.deadline,
+            disk_full_opt: batch.disk_full_opt,
+        };
+        self.router.send_command(cmd, cb, extra_opts)?;
+
         Ok(())
     }
 }

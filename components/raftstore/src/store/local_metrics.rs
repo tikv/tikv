@@ -1,7 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::local::LocalHistogram;
+// #[PerformanceCriticalPath]
 use std::sync::{Arc, Mutex};
+
+use prometheus::local::LocalHistogram;
+use raft::eraftpb::MessageType;
 
 use collections::HashSet;
 
@@ -93,8 +96,35 @@ pub struct RaftSendMessageMetrics {
 }
 
 impl RaftSendMessageMetrics {
+    pub fn add(&mut self, msg_type: MessageType, success: bool) {
+        let i = success as usize;
+        match msg_type {
+            MessageType::MsgAppend => self.append[i] += 1,
+            MessageType::MsgAppendResponse => self.append_resp[i] += 1,
+            MessageType::MsgRequestPreVote => self.prevote[i] += 1,
+            MessageType::MsgRequestPreVoteResponse => self.prevote_resp[i] += 1,
+            MessageType::MsgRequestVote => self.vote[i] += 1,
+            MessageType::MsgRequestVoteResponse => self.vote_resp[i] += 1,
+            MessageType::MsgSnapshot => self.snapshot[i] += 1,
+            MessageType::MsgHeartbeat => self.heartbeat[i] += 1,
+            MessageType::MsgHeartbeatResponse => self.heartbeat_resp[i] += 1,
+            MessageType::MsgTransferLeader => self.transfer_leader[i] += 1,
+            MessageType::MsgReadIndex => self.read_index[i] += 1,
+            MessageType::MsgReadIndexResp => self.read_index_resp[i] += 1,
+            MessageType::MsgTimeoutNow => self.timeout_now[i] += 1,
+            // We do not care about these message types for metrics.
+            // Explicitly declare them so when we add new message types we are forced to
+            // decide.
+            MessageType::MsgHup
+            | MessageType::MsgBeat
+            | MessageType::MsgPropose
+            | MessageType::MsgUnreachable
+            | MessageType::MsgSnapStatus
+            | MessageType::MsgCheckQuorum => {}
+        }
+    }
     /// Flushes all metrics
-    fn flush(&mut self) {
+    pub fn flush(&mut self) {
         // reset all buffered metrics once they have been added
         flush_send_status!(append, self);
         flush_send_status!(append_resp, self);
@@ -122,6 +152,7 @@ pub struct RaftMessageDropMetrics {
     pub region_tombstone_peer: u64,
     pub region_nonexistent: u64,
     pub applying_snap: u64,
+    pub disk_full: u64,
 }
 
 impl RaftMessageDropMetrics {
@@ -173,6 +204,12 @@ impl RaftMessageDropMetrics {
                 .applying_snap
                 .inc_by(self.applying_snap);
             self.applying_snap = 0;
+        }
+        if self.disk_full > 0 {
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .disk_full
+                .inc_by(self.disk_full);
+            self.disk_full = 0;
         }
     }
 }
@@ -342,21 +379,29 @@ impl RaftInvalidProposeMetrics {
 /// The buffered metrics counters for raft.
 #[derive(Clone)]
 pub struct RaftMetrics {
+    pub store_time: LocalHistogram,
     pub ready: RaftReadyMetrics,
     pub send_message: RaftSendMessageMetrics,
     pub message_dropped: RaftMessageDropMetrics,
     pub propose: RaftProposeMetrics,
     pub process_ready: LocalHistogram,
-    pub append_log: LocalHistogram,
     pub commit_log: LocalHistogram,
     pub check_leader: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
+    pub write_block_wait: LocalHistogram,
+    pub waterfall_metrics: bool,
+    pub wf_batch_wait: LocalHistogram,
+    pub wf_send_to_queue: LocalHistogram,
+    pub wf_persist_log: LocalHistogram,
+    pub wf_commit_log: LocalHistogram,
+    pub wf_commit_not_persist_log: LocalHistogram,
 }
 
-impl Default for RaftMetrics {
-    fn default() -> RaftMetrics {
-        RaftMetrics {
+impl RaftMetrics {
+    pub fn new(waterfall_metrics: bool) -> Self {
+        Self {
+            store_time: STORE_TIME_HISTOGRAM.local(),
             ready: Default::default(),
             send_message: Default::default(),
             message_dropped: Default::default(),
@@ -364,29 +409,70 @@ impl Default for RaftMetrics {
             process_ready: PEER_RAFT_PROCESS_DURATION
                 .with_label_values(&["ready"])
                 .local(),
-            append_log: PEER_APPEND_LOG_HISTOGRAM.local(),
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
             check_leader: CHECK_LEADER_DURATION_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
+            write_block_wait: STORE_WRITE_MSG_BLOCK_WAIT_DURATION_HISTOGRAM.local(),
+            waterfall_metrics,
+            wf_batch_wait: STORE_WF_BATCH_WAIT_DURATION_HISTOGRAM.local(),
+            wf_send_to_queue: STORE_WF_SEND_TO_QUEUE_DURATION_HISTOGRAM.local(),
+            wf_persist_log: STORE_WF_PERSIST_LOG_DURATION_HISTOGRAM.local(),
+            wf_commit_log: STORE_WF_COMMIT_LOG_DURATION_HISTOGRAM.local(),
+            wf_commit_not_persist_log: STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM.local(),
         }
     }
-}
 
-impl RaftMetrics {
     /// Flushs all metrics
     pub fn flush(&mut self) {
+        self.store_time.flush();
         self.ready.flush();
         self.send_message.flush();
         self.propose.flush();
         self.process_ready.flush();
-        self.append_log.flush();
         self.commit_log.flush();
         self.check_leader.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
+        self.write_block_wait.flush();
+        if self.waterfall_metrics {
+            self.wf_batch_wait.flush();
+            self.wf_send_to_queue.flush();
+            self.wf_persist_log.flush();
+            self.wf_commit_log.flush();
+            self.wf_commit_not_persist_log.flush();
+        }
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);
         missing.clear();
+    }
+}
+
+pub struct StoreWriteMetrics {
+    pub task_wait: LocalHistogram,
+    pub waterfall_metrics: bool,
+    pub wf_before_write: LocalHistogram,
+    pub wf_kvdb_end: LocalHistogram,
+    pub wf_write_end: LocalHistogram,
+}
+
+impl StoreWriteMetrics {
+    pub fn new(waterfall_metrics: bool) -> Self {
+        Self {
+            task_wait: STORE_WRITE_TASK_WAIT_DURATION_HISTOGRAM.local(),
+            waterfall_metrics,
+            wf_before_write: STORE_WF_BEFORE_WRITE_DURATION_HISTOGRAM.local(),
+            wf_kvdb_end: STORE_WF_WRITE_KVDB_END_DURATION_HISTOGRAM.local(),
+            wf_write_end: STORE_WF_WRITE_END_DURATION_HISTOGRAM.local(),
+        }
+    }
+
+    pub fn flush(&mut self) {
+        self.task_wait.flush();
+        if self.waterfall_metrics {
+            self.wf_before_write.flush();
+            self.wf_kvdb_end.flush();
+            self.wf_write_end.flush();
+        }
     }
 }

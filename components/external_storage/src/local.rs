@@ -55,11 +55,11 @@ const STORAGE_NAME: &str = "local";
 
 impl ExternalStorage for LocalStorage {
     fn name(&self) -> &'static str {
-        &STORAGE_NAME
+        STORAGE_NAME
     }
 
     fn url(&self) -> io::Result<url::Url> {
-        Ok(url_for(&self.base.as_path()))
+        Ok(url_for(self.base.as_path()))
     }
 
     fn write(

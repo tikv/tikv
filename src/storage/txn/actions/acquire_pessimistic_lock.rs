@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::mvcc::{
     metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
     ErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
@@ -63,7 +64,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 None => OldValue::None,
             })
         } else {
-            reader.get_old_value(&key, for_update_ts, prev_write_loaded, prev_write)
+            reader.get_old_value(key, for_update_ts, prev_write_loaded, prev_write)
         }
     }
 

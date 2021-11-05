@@ -72,7 +72,7 @@ mod tests {
             .c()
             .get_mvcc_properties_cf(CF_WRITE, safe_point, &start, &end);
         if let Some(props) = props.as_ref() {
-            assert_eq!(check_need_gc(safe_point, 1.0, &props), need_gc);
+            assert_eq!(check_need_gc(safe_point, 1.0, props), need_gc);
         }
         props
     }
@@ -91,7 +91,7 @@ mod tests {
 
     fn test_without_properties(path: &str, region: &Region) {
         let db = open_db(path, false);
-        let mut engine = RegionEngine::new(&db, &region);
+        let mut engine = RegionEngine::new(&db, region);
 
         // Put 2 keys.
         engine.put(&[1], 1, 1);
@@ -109,7 +109,7 @@ mod tests {
 
     fn test_with_properties(path: &str, region: &Region) {
         let db = open_db(path, true);
-        let mut engine = RegionEngine::new(&db, &region);
+        let mut engine = RegionEngine::new(&db, region);
 
         // Put 2 keys.
         engine.put(&[2], 3, 3);

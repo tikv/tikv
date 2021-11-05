@@ -44,7 +44,7 @@ fn generate_token(ast: DeriveInput) -> std::result::Result<TokenStream, Error> {
     let get_encoder_fn = get_encoder(&encoder_name, &encoder_lt);
     let typed_fn = typed(&fields, &creat_name)?;
     let encoder_struct = encoder(
-        &name,
+        name,
         &creat_name,
         &encoder_name,
         &encoder_lt,
@@ -272,7 +272,7 @@ fn typed(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<TokenS
 fn get_config_attrs(attrs: &[Attribute]) -> Result<(bool, bool, bool)> {
     let (mut skip, mut hidden, mut submodule) = (false, false, false);
     for attr in attrs {
-        if !is_attr("online_config", &attr) {
+        if !is_attr("online_config", attr) {
             continue;
         }
         match attr.parse_args::<Ident>()? {

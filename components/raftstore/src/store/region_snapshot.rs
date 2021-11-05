@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use engine_traits::{
     IterOptions, KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot,
 };
@@ -231,14 +232,14 @@ where
             set_panic_mark();
             panic!(
                 "failed to get value of key {} in region {}: {:?}",
-                log_wrappers::Value::key(&key),
+                log_wrappers::Value::key(key),
                 self.region.get_id(),
                 e,
             );
         } else {
             error!(
                 "failed to get value of key in cf";
-                "key" => log_wrappers::Value::key(&key),
+                "key" => log_wrappers::Value::key(key),
                 "region" => self.region.get_id(),
                 "cf" => cf,
                 "error" => ?e,

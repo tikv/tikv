@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::kv::{Modify, WriteData};
 use crate::storage::lock_manager::LockManager;
 use crate::storage::raw::ttl::convert_to_expire_ts;
@@ -9,7 +10,7 @@ use crate::storage::txn::commands::{
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
 use engine_traits::CfName;
-use txn_types::Mutation;
+use txn_types::RawMutation;
 
 command! {
     /// Run Put or Delete for keys which may be changed by `RawCompareAndSwap`.
@@ -19,8 +20,8 @@ command! {
         content => {
             /// The set of mutations to apply.
             cf: CfName,
-            mutations: Vec<Mutation>,
-            ttl: Option<u64>,
+            mutations: Vec<RawMutation>,
+            enable_ttl: bool,
         }
 }
 
@@ -33,14 +34,17 @@ impl CommandExt for RawAtomicStore {
         let mut bytes = 0;
         for m in &self.mutations {
             match *m {
-                Mutation::Put((ref key, ref value)) | Mutation::Insert((ref key, ref value)) => {
+                RawMutation::Put {
+                    ref key,
+                    ref value,
+                    ttl: _,
+                } => {
                     bytes += key.as_encoded().len();
                     bytes += value.len();
                 }
-                Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
+                RawMutation::Delete { ref key } => {
                     bytes += key.as_encoded().len();
                 }
-                Mutation::CheckNotExists(_) => (),
             }
         }
         bytes
@@ -52,23 +56,23 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
         let mut data = vec![];
         let rows = self.mutations.len();
         let (cf, mutations, ctx) = (self.cf, self.mutations, self.ctx);
-        let expire_ts = self.ttl.map(convert_to_expire_ts);
         for m in mutations {
             match m {
-                Mutation::Put((key, value)) => {
+                RawMutation::Put { key, value, ttl } => {
                     let mut m = Modify::Put(cf, key, value);
-                    if let Some(ts) = expire_ts {
-                        m.with_ttl(ts);
+                    if self.enable_ttl {
+                        let expire_ts = convert_to_expire_ts(ttl);
+                        m.with_ttl(expire_ts);
                     }
                     data.push(m);
                 }
-                Mutation::Delete(key) => {
+                RawMutation::Delete { key } => {
                     data.push(Modify::Delete(cf, key));
                 }
-                _ => panic!("Not support mutation type"),
             }
         }
-        let to_be_write = WriteData::from_modifies(data);
+        let mut to_be_write = WriteData::from_modifies(data);
+        to_be_write.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx,
             to_be_write,

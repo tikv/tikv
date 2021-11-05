@@ -17,6 +17,8 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 use std::{env, thread, u64};
 
+use nix::sys::wait::{wait, WaitStatus};
+use nix::unistd::{fork, ForkResult};
 use rand::rngs::ThreadRng;
 
 #[macro_use]
@@ -525,6 +527,21 @@ pub fn check_environment_variables() {
     }
 }
 
+/// Create a child process and wait to get its exit code.
+pub fn run_and_wait_child_process(child: impl Fn()) -> Result<i32, String> {
+    match unsafe { fork() } {
+        Ok(ForkResult::Parent { .. }) => match wait().unwrap() {
+            WaitStatus::Exited(_, status) => Ok(status),
+            v => Err(format!("{:?}", v)),
+        },
+        Ok(ForkResult::Child) => {
+            child();
+            std::process::exit(0);
+        }
+        Err(e) => Err(format!("Fork failed: {}", e)),
+    }
+}
+
 #[inline]
 pub fn is_zero_duration(d: &Duration) -> bool {
     d.as_secs() == 0 && d.subsec_nanos() == 0
@@ -554,8 +571,6 @@ mod tests {
     #[cfg(unix)]
     fn test_panic_hook() {
         use gag::BufferRedirect;
-        use nix::sys::wait::{wait, WaitStatus};
-        use nix::unistd::{fork, ForkResult};
         use slog::{self, Drain, OwnedKVList, Record};
 
         struct DelayDrain<D>(D);
@@ -575,20 +590,6 @@ mod tests {
             ) -> Result<Self::Ok, Self::Err> {
                 std::thread::sleep(Duration::from_millis(100));
                 self.0.log(record, values)
-            }
-        }
-
-        fn run_and_wait_child_process(child: impl Fn()) -> Result<i32, String> {
-            match fork() {
-                Ok(ForkResult::Parent { .. }) => match wait().unwrap() {
-                    WaitStatus::Exited(_, status) => Ok(status),
-                    v => Err(format!("{:?}", v)),
-                },
-                Ok(ForkResult::Child) => {
-                    child();
-                    std::process::exit(0);
-                }
-                Err(e) => Err(format!("Fork failed: {}", e)),
             }
         }
 

@@ -1,11 +1,11 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]: Tikv gRPC APIs implementation
 use std::sync::Arc;
 use tikv_util::time::{duration_to_ms, duration_to_sec, Instant};
 
 use super::batch::{BatcherBuilder, ReqBatcher};
 use crate::coprocessor::Endpoint;
-use crate::coprocessor_v2;
 use crate::server::gc_worker::GcWorker;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
@@ -22,6 +22,7 @@ use crate::storage::{
     lock_manager::LockManager,
     SecondaryLocksStatus, Storage, TxnStatus,
 };
+use crate::{coprocessor_v2, log_net_error};
 use crate::{forward_duplex, forward_unary};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
@@ -43,8 +44,9 @@ use raft::eraftpb::MessageType;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::memory::{MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
 use raftstore::store::CheckLeaderTask;
-use raftstore::store::{Callback, CasualMessage};
-use raftstore::{DiscardReason, Error as RaftStoreError};
+use raftstore::store::{Callback, CasualMessage, RaftCmdExtraOpts};
+use raftstore::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
+use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::sys::memory_usage_reaches_high_water;
@@ -140,13 +142,13 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
         ch: &T,
         msg: RaftMessage,
         reject: bool,
-    ) -> ServerResult<()> {
+    ) -> RaftStoreResult<()> {
         let to_store_id = msg.get_to_peer().get_store_id();
         if to_store_id != store_id {
-            return Err(Error::from(RaftStoreError::StoreNotMatch {
+            return Err(RaftStoreError::StoreNotMatch {
                 to_store_id,
                 my_store_id: store_id,
-            }));
+            });
         }
         if reject && msg.get_message().get_msg_type() == MessageType::MsgAppend {
             RAFT_APPEND_REJECTS.inc();
@@ -156,11 +158,9 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
             let _ = ch.send_casual_msg(id, m);
             return Ok(());
         }
-        match ch.send_raft_msg(msg) {
-            Ok(()) => Ok(()),
-            Err(RaftStoreError::RegionNotFound(_)) => Ok(()),
-            Err(e) => Err(Error::from(e)),
-        }
+        // `send_raft_msg` may return `RaftStoreError::RegionNotFound` or
+        // `RaftStoreError::Transport(DiscardReason::Full)`
+        ch.send_raft_msg(msg)
     }
 }
 
@@ -180,9 +180,8 @@ macro_rules! handle_request {
                 ServerResult::Ok(())
             }
             .map_err(|e| {
-                debug!("kv rpc failed";
-                    "request" => stringify!($fn_name),
-                    "err" => ?e
+                log_net_error!(e, "kv rpc failed";
+                    "request" => stringify!($fn_name)
                 );
                 GRPC_MSG_FAIL_COUNTER.$fn_name.inc();
             })
@@ -353,7 +352,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         let begin_instant = Instant::now_coarse();
         let future = future_copr(&self.copr, Some(ctx.peer()), req);
         let task = async move {
-            let resp = future.await?;
+            let resp = future.await?.consume();
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .coprocessor
@@ -361,9 +360,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "coprocessor",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "coprocessor"
             );
             GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
         })
@@ -389,9 +387,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "coprocessor_v2",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "coprocessor_v2"
             );
             GRPC_MSG_FAIL_COUNTER.raw_coprocessor.inc();
         })
@@ -429,9 +426,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "register_lock_observer",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "register_lock_observer"
             );
             GRPC_MSG_FAIL_COUNTER.register_lock_observer.inc();
         })
@@ -473,9 +469,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "check_lock_observer",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "check_lock_observer"
             );
             GRPC_MSG_FAIL_COUNTER.check_lock_observer.inc();
         })
@@ -511,9 +506,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "remove_lock_observer",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "remove_lock_observer"
             );
             GRPC_MSG_FAIL_COUNTER.remove_lock_observer.inc();
         })
@@ -556,9 +550,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "physical_scan_lock",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "physical_scan_lock"
             );
             GRPC_MSG_FAIL_COUNTER.physical_scan_lock.inc();
         })
@@ -605,9 +598,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "unsafe_destroy_range",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "unsafe_destroy_range"
             );
             GRPC_MSG_FAIL_COUNTER.unsafe_destroy_range.inc();
         })
@@ -642,7 +634,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
                     let _ = sink.close().await;
                 }
                 Err(e) => {
-                    debug!("kv rpc failed";
+                    info!("kv rpc failed";
                         "request" => "coprocessor_stream",
                         "err" => ?e
                     );
@@ -669,7 +661,13 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             while let Some(msg) = stream.try_next().await? {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
                 let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
-                Self::handle_raft_message(store_id, &ch, msg, reject)?;
+                if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
+                    Self::handle_raft_message(store_id, &ch, msg, reject)
+                {
+                    // Return an error here will break the connection, only do that for `StoreNotMatch` to
+                    // let tikv to resolve a correct address from PD
+                    return Err(Error::from(err));
+                }
             }
             Ok::<(), Error>(())
         };
@@ -709,7 +707,13 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
                 let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
                 for msg in batch_msg.take_msgs().into_iter() {
-                    Self::handle_raft_message(store_id, &ch, msg, reject)?;
+                    if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
+                        Self::handle_raft_message(store_id, &ch, msg, reject)
+                    {
+                        // Return an error here will break the connection, only do that for `StoreNotMatch` to
+                        // let tikv to resolve a correct address from PD
+                        return Err(Error::from(err));
+                    }
                 }
             }
             Ok::<(), Error>(())
@@ -718,6 +722,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         ctx.spawn(async move {
             let status = match res.await {
                 Err(e) => {
+                    fail_point!("on_batch_raft_stream_drop_by_err");
                     let msg = format!("{:?}", e);
                     error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
                     RpcStatus::with_message(RpcStatusCode::UNKNOWN, msg)
@@ -833,9 +838,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "split_region",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "split_region"
             );
             GRPC_MSG_FAIL_COUNTER.split_region.inc();
         })
@@ -880,7 +884,10 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
 
         // We must deal with all requests which acquire read-quorum in raftstore-thread,
         // so just send it as an command.
-        if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
+        if let Err(e) = self
+            .ch
+            .send_command(cmd, Callback::Read(cb), RaftCmdExtraOpts::default())
+        {
             // Retrun region error instead a gRPC error.
             let mut resp = ReadIndexResponse::default();
             resp.set_region_error(raftstore_error_to_region_error(e, region_id));
@@ -928,9 +935,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             ServerResult::Ok(())
         }
         .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "read_index",
-                "err" => ?e
+            log_net_error!(e, "kv rpc failed";
+                "request" => "read_index"
             );
             GRPC_MSG_FAIL_COUNTER.read_index.inc();
         })
@@ -987,19 +993,26 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         let response_retriever = BatchReceiver::new(
             rx,
             GRPC_MSG_MAX_BATCH_SIZE,
-            BatchCommandsResponse::default,
+            MeasuredBatchResponse::default,
             BatchRespCollector,
         );
 
-        let mut response_retriever = response_retriever
-            .inspect(|r| GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64))
-            .map(move |mut r| {
-                r.set_transport_layer_load(thread_load.load() as u64);
-                GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
-                    r,
-                    WriteFlags::default().buffer_hint(false),
-                ))
-            });
+        let mut response_retriever = response_retriever.map(move |item| {
+            for measure in item.measures {
+                let GrpcRequestDuration { label, begin } = measure;
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .get(label)
+                    .observe(begin.saturating_elapsed_secs());
+            }
+
+            let mut r = item.batch_resp;
+            GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64);
+            r.set_transport_layer_load(thread_load.load() as u64);
+            GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
+                r,
+                WriteFlags::default().buffer_hint(false),
+            ))
+        });
 
         let send_task = async move {
             sink.send_all(&mut response_retriever).await?;
@@ -1007,7 +1020,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             Ok(())
         }
         .map_err(|e: grpcio::Error| {
-            debug!("kv rpc failed";
+            info!("kv rpc failed";
                 "request" => "batch_commands",
                 "err" => ?e
             );
@@ -1132,23 +1145,22 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
     }
 }
 
-fn response_batch_commands_request<F>(
+fn response_batch_commands_request<F, T>(
     id: u64,
     resp: F,
-    tx: Sender<(u64, batch_commands_response::Response)>,
-    begin_instant: Instant,
-    label_enum: GrpcTypeKind,
+    tx: Sender<MeasuredSingleResponse>,
+    begin: Instant,
+    label: GrpcTypeKind,
 ) where
-    F: Future<Output = Result<batch_commands_response::Response, ()>> + Send + 'static,
+    MemoryTraceGuard<batch_commands_response::Response>: From<T>,
+    F: Future<Output = Result<T, ()>> + Send + 'static,
 {
     let task = async move {
         if let Ok(resp) = resp.await {
-            if let Err(e) = tx.send_and_notify((id, resp)) {
+            let measure = GrpcRequestDuration { begin, label };
+            let task = MeasuredSingleResponse::new(id, resp, measure);
+            if let Err(e) = tx.send_and_notify(task) {
                 error!("KvService response batch commands fail"; "err" => ?e);
-            } else {
-                GRPC_MSG_HISTOGRAM_STATIC
-                    .get(label_enum)
-                    .observe(begin_instant.saturating_elapsed_secs());
             }
         }
     };
@@ -1163,7 +1175,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     peer: &str,
     id: u64,
     req: batch_commands_request::Request,
-    tx: &Sender<(u64, batch_commands_response::Response)>,
+    tx: &Sender<MeasuredSingleResponse>,
 ) {
     // To simplify code and make the logic more clear.
     macro_rules! oneof {
@@ -1210,6 +1222,15 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get);
                     }
                 },
+                Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
+                    let begin_instant = Instant::now();
+                    let resp = future_copr(copr, Some(peer.to_string()), req)
+                        .map_ok(|resp| {
+                            resp.map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
+                        })
+                        .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::coprocessor);
+                },
                 $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
                     let begin_instant = Instant::now();
                     let resp = $future_fn($($arg,)* req)
@@ -1244,7 +1265,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         RawScan, future_raw_scan(storage), raw_scan;
         RawDeleteRange, future_raw_delete_range(storage), raw_delete_range;
         RawBatchScan, future_raw_batch_scan(storage), raw_batch_scan;
-        Coprocessor, future_copr(copr, Some(peer.to_string())), coprocessor;
         RawCoprocessor, future_raw_coprocessor(copr_v2, storage), coprocessor;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
@@ -1277,7 +1297,7 @@ fn future_get<E: Engine, L: LockManager>(
     let start = Instant::now();
     let v = storage.get(
         req.take_context(),
-        Key::from_raw(req.get_key()),
+        req.get_key().into(),
         req.get_version().into(),
     );
 
@@ -1353,9 +1373,12 @@ fn future_batch_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: BatchGetRequest,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
-    let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let start = Instant::now();
-    let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
+    let v = storage.batch_get(
+        req.take_context(),
+        req.get_keys().to_vec(),
+        req.get_version().into(),
+    );
 
     async move {
         let v = v.await;
@@ -1506,7 +1529,7 @@ fn future_raw_put<E: Engine, L: LockManager>(
             req.take_context(),
             req.take_cf(),
             vec![(req.take_key(), req.take_value())],
-            req.get_ttl(),
+            vec![req.get_ttl()],
             cb,
         )
     } else {
@@ -1540,6 +1563,19 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
     mut req: RawBatchPutRequest,
 ) -> impl Future<Output = ServerResult<RawBatchPutResponse>> {
     let cf = req.take_cf();
+    let pairs_len = req.get_pairs().len();
+    // The TTL for each key in seconds.
+    //
+    // In some TiKV of old versions, only one TTL can be provided and the TTL will be applied to all keys in
+    // the request. For compatibility reasons, if the length of `ttls` is exactly one, then the TTL will be applied
+    // to all keys. Otherwise, the length mismatch between `ttls` and `pairs` will return an error.
+    let ttls = if req.get_ttls().is_empty() {
+        vec![0; pairs_len]
+    } else if req.get_ttls().len() == 1 {
+        vec![req.get_ttls()[0]; pairs_len]
+    } else {
+        req.take_ttls()
+    };
     let pairs = req
         .take_pairs()
         .into_iter()
@@ -1549,9 +1585,9 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
     let (cb, f) = paired_future_callback();
     let for_atomic = req.get_for_cas();
     let res = if for_atomic {
-        storage.raw_batch_put_atomic(req.take_context(), cf, pairs, req.get_ttl(), cb)
+        storage.raw_batch_put_atomic(req.take_context(), cf, pairs, ttls, cb)
     } else {
-        storage.raw_batch_put(req.take_context(), cf, pairs, req.get_ttl(), cb)
+        storage.raw_batch_put(req.take_context(), cf, pairs, ttls, cb)
     };
 
     async move {
@@ -1807,7 +1843,7 @@ fn future_copr<E: Engine>(
     copr: &Endpoint<E>,
     peer: Option<String>,
     req: Request,
-) -> impl Future<Output = ServerResult<Response>> {
+) -> impl Future<Output = ServerResult<MemoryTraceGuard<Response>>> {
     let ret = copr.parse_and_handle_unary_request(req, peer);
     async move { Ok(ret.await) }
 }
@@ -1966,7 +2002,6 @@ txn_command_future!(future_mvcc_get_by_start_ts, MvccGetByStartTsRequest, MvccGe
     }
 });
 
-#[cfg(feature = "protobuf-codec")]
 pub mod batch_commands_response {
     pub type Response = kvproto::tikvpb::BatchCommandsResponseResponse;
 
@@ -1975,7 +2010,6 @@ pub mod batch_commands_response {
     }
 }
 
-#[cfg(feature = "protobuf-codec")]
 pub mod batch_commands_request {
     pub type Request = kvproto::tikvpb::BatchCommandsRequestRequest;
 
@@ -1984,23 +2018,61 @@ pub mod batch_commands_request {
     }
 }
 
-#[cfg(feature = "prost-codec")]
-pub use kvproto::tikvpb::batch_commands_request;
-#[cfg(feature = "prost-codec")]
-pub use kvproto::tikvpb::batch_commands_response;
 use protobuf::RepeatedField;
 
+/// To measure execute time for a given request.
+#[derive(Debug)]
+pub struct GrpcRequestDuration {
+    pub begin: Instant,
+    pub label: GrpcTypeKind,
+}
+impl GrpcRequestDuration {
+    pub fn new(begin: Instant, label: GrpcTypeKind) -> Self {
+        GrpcRequestDuration { begin, label }
+    }
+}
+
+/// A single response, will be collected into `MeasuredBatchResponse`.
+#[derive(Debug)]
+pub struct MeasuredSingleResponse {
+    pub id: u64,
+    pub resp: MemoryTraceGuard<batch_commands_response::Response>,
+    pub measure: GrpcRequestDuration,
+}
+impl MeasuredSingleResponse {
+    pub fn new<T>(id: u64, resp: T, measure: GrpcRequestDuration) -> Self
+    where
+        MemoryTraceGuard<batch_commands_response::Response>: From<T>,
+    {
+        let resp = resp.into();
+        MeasuredSingleResponse { id, resp, measure }
+    }
+}
+
+/// A batch response.
+pub struct MeasuredBatchResponse {
+    pub batch_resp: BatchCommandsResponse,
+    pub measures: Vec<GrpcRequestDuration>,
+}
+impl Default for MeasuredBatchResponse {
+    fn default() -> Self {
+        MeasuredBatchResponse {
+            batch_resp: Default::default(),
+            measures: Vec::with_capacity(GRPC_MSG_MAX_BATCH_SIZE),
+        }
+    }
+}
+
 struct BatchRespCollector;
-impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Response)>
-    for BatchRespCollector
-{
+impl BatchCollector<MeasuredBatchResponse, MeasuredSingleResponse> for BatchRespCollector {
     fn collect(
         &mut self,
-        v: &mut BatchCommandsResponse,
-        e: (u64, batch_commands_response::Response),
-    ) -> Option<(u64, batch_commands_response::Response)> {
-        v.mut_request_ids().push(e.0);
-        v.mut_responses().push(e.1);
+        v: &mut MeasuredBatchResponse,
+        mut e: MeasuredSingleResponse,
+    ) -> Option<MeasuredSingleResponse> {
+        v.batch_resp.mut_request_ids().push(e.id);
+        v.batch_resp.mut_responses().push(e.resp.consume());
+        v.measures.push(e.measure);
         None
     }
 }

@@ -3,12 +3,13 @@
 use std::io::Error as IoError;
 use std::{error, result};
 
+use crossbeam::channel::{RecvError, SendError};
 use engine_traits::Error as EngineTraitError;
-use kvproto::backup::Error as ErrorPb;
+use kvproto::brpb::Error as ErrorPb;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::KeyError;
 use thiserror::Error;
-use tikv::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
+use tikv::storage::kv::{Error as KvError, ErrorInner as EngineErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 
@@ -26,13 +27,13 @@ impl From<Error> for ErrorPb {
                 err.mut_cluster_id_error().set_current(current);
                 err.mut_cluster_id_error().set_request(request);
             }
-            Error::Engine(EngineError(box EngineErrorInner::Request(e)))
-            | Error::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
+            Error::Kv(KvError(box EngineErrorInner::Request(e)))
+            | Error::Txn(TxnError(box TxnErrorInner::Engine(KvError(
                 box EngineErrorInner::Request(e),
             ))))
-            | Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-                box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(e))),
-            )))) => {
+            | Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::Kv(
+                KvError(box EngineErrorInner::Request(e)),
+            ))))) => {
                 if e.has_not_leader() {
                     BACKUP_RANGE_ERROR_VEC
                         .with_label_values(&["not_leader"])
@@ -75,7 +76,7 @@ impl From<Error> for ErrorPb {
                 e.set_locked(info);
                 err.set_kv_error(e);
             }
-            timeout @ Error::Engine(EngineError(box EngineErrorInner::Timeout(_))) => {
+            timeout @ Error::Kv(KvError(box EngineErrorInner::Timeout(_))) => {
                 BACKUP_RANGE_ERROR_VEC.with_label_values(&["timeout"]).inc();
                 let mut busy = ServerIsBusy::default();
                 let reason = format!("{}", timeout);
@@ -104,7 +105,7 @@ pub enum Error {
     #[error("IO error {0}")]
     Io(#[from] IoError),
     #[error("Engine error {0}")]
-    Engine(#[from] EngineError),
+    Kv(#[from] KvError),
     #[error("Engine error {0}")]
     EngineTrait(#[from] EngineTraitError),
     #[error("Transaction error {0}")]
@@ -113,6 +114,10 @@ pub enum Error {
     ClusterID { current: u64, request: u64 },
     #[error("Invalid cf {cf}")]
     InvalidCf { cf: String },
+    #[error("Failed to recv message from channel: {0}")]
+    ChannelRecv(#[from] RecvError),
+    #[error("Failed to send message to channel: {0}")]
+    ChannelSend(#[from] SendError<()>),
 }
 
 macro_rules! impl_from {

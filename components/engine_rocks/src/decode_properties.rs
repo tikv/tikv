@@ -1,5 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Base types used by various rocks properties decoders
+
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::ops::{Deref, DerefMut};
@@ -80,5 +82,12 @@ pub trait DecodeProperties {
     fn decode_handles(&self, k: &str) -> Result<IndexHandles> {
         let buf = self.decode(k)?;
         IndexHandles::decode(buf)
+    }
+}
+
+impl DecodeProperties for rocksdb::UserCollectedProperties {
+    fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
+        self.get(k.as_bytes())
+            .ok_or(tikv_util::codec::Error::KeyNotFound)
     }
 }

@@ -2,7 +2,7 @@
 
 use collections::HashMap;
 use futures::executor::block_on;
-use kvproto::kvrpcpb::{Context, GetRequest, LockInfo};
+use kvproto::kvrpcpb::{ApiVersion, Context, GetRequest, LockInfo};
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::router::RaftStoreBlackHole;
 use std::sync::{atomic::AtomicU64, Arc};
@@ -14,6 +14,7 @@ use tikv::storage::{
     test_util::GetConsumer, txn::commands, Engine, PerfStatisticsDelta, PrewriteResult, Result,
     Statistics, Storage, TestEngineBuilder, TestStorageBuilder, TxnStatus,
 };
+use tikv_util::time::Instant;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 
 /// A builder to build a `SyncTestStorage`.
@@ -23,6 +24,7 @@ pub struct SyncTestStorageBuilder<E: Engine> {
     engine: E,
     config: Option<Config>,
     gc_config: Option<GcConfig>,
+    api_version: Option<ApiVersion>,
 }
 
 impl SyncTestStorageBuilder<RocksEngine> {
@@ -31,7 +33,14 @@ impl SyncTestStorageBuilder<RocksEngine> {
             engine: TestEngineBuilder::new().build().unwrap(),
             config: None,
             gc_config: None,
+            api_version: None,
         }
+    }
+}
+
+impl Default for SyncTestStorageBuilder<RocksEngine> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -41,6 +50,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
             engine,
             config: None,
             gc_config: None,
+            api_version: None,
         }
     }
 
@@ -54,15 +64,25 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         self
     }
 
+    pub fn api_version(mut self, api_version: ApiVersion) -> Self {
+        self.api_version = Some(api_version);
+        self
+    }
+
     pub fn build(mut self) -> Result<SyncTestStorage<E>> {
         let mut builder =
             TestStorageBuilder::from_engine_and_lock_mgr(self.engine.clone(), DummyLockManager {});
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
         }
+        if let Some(api_version) = self.api_version.take() {
+            builder = builder.set_api_version(api_version);
+        }
+        let (tx, _rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
             self.engine,
             RaftStoreBlackHole,
+            tx,
             self.gc_config.unwrap_or_default(),
             Default::default(),
         );
@@ -105,17 +125,17 @@ impl<E: Engine> SyncTestStorage<E> {
     pub fn get(
         &self,
         ctx: Context,
-        key: &Key,
+        raw_key: Vec<u8>,
         start_ts: impl Into<TimeStamp>,
     ) -> Result<(Option<Value>, Statistics, PerfStatisticsDelta)> {
-        block_on(self.store.get(ctx, key.to_owned(), start_ts.into()))
+        block_on(self.store.get(ctx, raw_key, start_ts.into()))
     }
 
     #[allow(dead_code)]
     pub fn batch_get(
         &self,
         ctx: Context,
-        keys: &[Key],
+        keys: &[Vec<u8>],
         start_ts: impl Into<TimeStamp>,
     ) -> Result<(Vec<Result<KvPair>>, Statistics, PerfStatisticsDelta)> {
         block_on(self.store.batch_get(ctx, keys.to_owned(), start_ts.into()))
@@ -142,7 +162,10 @@ impl<E: Engine> SyncTestStorage<E> {
             })
             .collect();
         let p = GetConsumer::new();
-        block_on(self.store.batch_get_command(requests, ids, p.clone()))?;
+        block_on(
+            self.store
+                .batch_get_command(requests, ids, p.clone(), Instant::now()),
+        )?;
         let mut values = vec![];
         for value in p.take_data().into_iter() {
             values.push(value?);
@@ -299,6 +322,15 @@ impl<E: Engine> SyncTestStorage<E> {
         block_on(self.store.raw_get(ctx, cf, key))
     }
 
+    pub fn raw_batch_get(
+        &self,
+        ctx: Context,
+        cf: String,
+        keys: Vec<Vec<u8>>,
+    ) -> Result<Vec<Result<KvPair>>> {
+        block_on(self.store.raw_batch_get(ctx, cf, keys))
+    }
+
     pub fn raw_put(&self, ctx: Context, cf: String, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
         wait_op!(|cb| self.store.raw_put(ctx, cf, key, value, 0, cb)).unwrap()
     }
@@ -361,9 +393,9 @@ impl<E: Engine> SyncTestStorage<E> {
         ctx: Context,
         cf: String,
         pairs: Vec<KvPair>,
-        ttl: u64,
+        ttls: Vec<u64>,
     ) -> Result<()> {
-        wait_op!(|cb| self.store.raw_batch_put_atomic(ctx, cf, pairs, ttl, cb)).unwrap()
+        wait_op!(|cb| self.store.raw_batch_put_atomic(ctx, cf, pairs, ttls, cb)).unwrap()
     }
 
     pub fn raw_batch_delete_atomic(

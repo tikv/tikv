@@ -5,10 +5,12 @@ use std::fmt::{self, Display, Formatter};
 use std::iter::Peekable;
 use std::mem;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
 
 use concurrency_manager::ConcurrencyManager;
+use engine_rocks::FlowInfo;
 use engine_traits::{
     DeleteStrategy, KvEngine, MiscExt, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK,
     CF_WRITE,
@@ -24,9 +26,7 @@ use raftstore::store::msg::StoreMsg;
 use raftstore::store::util::find_peer;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Instant, Limiter, SlowTimer};
-use tikv_util::worker::{
-    FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped,
-};
+use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler};
 use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
@@ -142,8 +142,8 @@ where
                 ..
             } => f
                 .debug_struct("Gc")
-                .field("start_key", &log_wrappers::Value::key(&start_key))
-                .field("end_key", &log_wrappers::Value::key(&end_key))
+                .field("start_key", &log_wrappers::Value::key(start_key))
+                .field("end_key", &log_wrappers::Value::key(end_key))
                 .field("safe_point", safe_point)
                 .finish(),
             GcTask::GcKeys { .. } => f.debug_struct("GcKeys").finish(),
@@ -178,6 +178,7 @@ where
     engine: E,
 
     raft_store_router: RR,
+    flow_info_sender: Sender<FlowInfo>,
 
     /// Used to limit the write flow of GC.
     limiter: Limiter,
@@ -196,6 +197,7 @@ where
     pub fn new(
         engine: E,
         raft_store_router: RR,
+        flow_info_sender: Sender<FlowInfo>,
         cfg_tracker: Tracker<GcConfig>,
         cfg: GcConfig,
     ) -> Self {
@@ -207,6 +209,7 @@ where
         Self {
             engine,
             raft_store_router,
+            flow_info_sender,
             limiter,
             cfg,
             cfg_tracker,
@@ -220,7 +223,7 @@ where
     fn need_gc(&self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> bool {
         let props = match self
             .engine
-            .get_mvcc_properties_cf(CF_WRITE, safe_point, &start_key, &end_key)
+            .get_mvcc_properties_cf(CF_WRITE, safe_point, start_key, end_key)
         {
             Some(c) => c,
             None => return true,
@@ -353,7 +356,7 @@ where
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
-            if let Err(e) = self.gc_key(safe_point, &key, &mut gc_info, &mut txn, &mut reader) {
+            if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn, &mut reader) {
                 error!(?e; "GC meets failure"; "key" => %key,);
                 // Switch to the next key if meets failure.
                 gc_info.is_completed = true;
@@ -393,6 +396,9 @@ where
             "start_key" => %start_key, "end_key" => %end_key
         );
 
+        self.flow_info_sender
+            .send(FlowInfo::BeforeUnsafeDestroyRange)
+            .unwrap();
         let local_storage = self.engine.kv_engine();
 
         // Convert keys to RocksDB layer form
@@ -457,6 +463,9 @@ where
             "unsafe destroy range finished cleaning up all";
             "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.saturating_elapsed(),
         );
+        self.flow_info_sender
+            .send(FlowInfo::AfterUnsafeDestroyRange)
+            .unwrap();
 
         self.raft_store_router
             .send_store_msg(StoreMsg::ClearRegionSizeInRange {
@@ -518,11 +527,13 @@ where
     }
 }
 
-impl<E, RR> FutureRunnable<GcTask<E::Local>> for GcRunner<E, RR>
+impl<E, RR> Runnable for GcRunner<E, RR>
 where
     E: Engine,
     RR: RaftStoreRouter<E::Local>,
 {
+    type Task = GcTask<E::Local>;
+
     #[inline]
     fn run(&mut self, task: GcTask<E::Local>) {
         let _io_type_guard = WithIOType::new(IOType::Gc);
@@ -640,14 +651,14 @@ where
 }
 
 /// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the `ScheduleError`.
-fn handle_gc_task_schedule_error(e: FutureWorkerStopped<GcTask<impl KvEngine>>) -> Result<()> {
+fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Result<()> {
     error!("failed to schedule gc task"; "err" => %e);
     Err(box_err!("failed to schedule gc task: {:?}", e))
 }
 
 /// Schedules a `GcTask` to the `GcRunner`.
 fn schedule_gc(
-    scheduler: &FutureScheduler<GcTask<impl KvEngine>>,
+    scheduler: &Scheduler<GcTask<impl KvEngine>>,
     region_id: u64,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
@@ -667,7 +678,7 @@ fn schedule_gc(
 
 /// Does GC synchronously.
 pub fn sync_gc(
-    scheduler: &FutureScheduler<GcTask<impl KvEngine>>,
+    scheduler: &Scheduler<GcTask<impl KvEngine>>,
     region_id: u64,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
@@ -692,6 +703,8 @@ where
 
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
     raft_store_router: RR,
+    /// Used to signal unsafe destroy range is executed.
+    flow_info_sender: Option<Sender<FlowInfo>>,
 
     config_manager: GcWorkerConfigManager,
 
@@ -701,8 +714,8 @@ where
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
     refs: Arc<AtomicUsize>,
-    worker: Arc<Mutex<FutureWorker<GcTask<E::Local>>>>,
-    worker_scheduler: FutureScheduler<GcTask<E::Local>>,
+    worker: Arc<Mutex<LazyWorker<GcTask<E::Local>>>>,
+    worker_scheduler: Scheduler<GcTask<E::Local>>,
 
     applied_lock_collector: Option<Arc<AppliedLockCollector>>,
 
@@ -722,6 +735,7 @@ where
         Self {
             engine: self.engine.clone(),
             raft_store_router: self.raft_store_router.clone(),
+            flow_info_sender: self.flow_info_sender.clone(),
             config_manager: self.config_manager.clone(),
             scheduled_tasks: self.scheduled_tasks.clone(),
             refs: self.refs.clone(),
@@ -762,18 +776,21 @@ where
     pub fn new(
         engine: E,
         raft_store_router: RR,
+        flow_info_sender: Sender<FlowInfo>,
         cfg: GcConfig,
         feature_gate: FeatureGate,
     ) -> GcWorker<E, RR> {
-        let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
-        let worker_scheduler = worker.lock().unwrap().scheduler();
+        let worker_builder = WorkerBuilder::new("gc-worker");
+        let worker = worker_builder.create().lazy_build("gc-worker");
+        let worker_scheduler = worker.scheduler();
         GcWorker {
             engine,
             raft_store_router,
+            flow_info_sender: Some(flow_info_sender),
             config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
             scheduled_tasks: Arc::new(AtomicUsize::new(0)),
             refs: Arc::new(AtomicUsize::new(1)),
-            worker,
+            worker: Arc::new(Mutex::new(worker)),
             worker_scheduler,
             applied_lock_collector: None,
             gc_manager_handle: Arc::new(Mutex::new(None)),
@@ -803,10 +820,11 @@ where
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
+
         let new_handle = GcManager::new(
             cfg,
             safe_point,
-            self.worker_scheduler.clone(),
+            self.scheduler(),
             self.config_manager.clone(),
             self.feature_gate.clone(),
         )
@@ -819,14 +837,12 @@ where
         let runner = GcRunner::new(
             self.engine.clone(),
             self.raft_store_router.clone(),
+            self.flow_info_sender.take().unwrap(),
             self.config_manager.0.clone().tracker("gc-woker".to_owned()),
             self.config_manager.value().clone(),
         );
-        self.worker
-            .lock()
-            .unwrap()
-            .start(runner)
-            .map_err(|e| box_err!("failed to start gc_worker, err: {:?}", e))
+        self.worker.lock().unwrap().start(runner);
+        Ok(())
     }
 
     pub fn start_observe_lock_apply(
@@ -849,15 +865,11 @@ where
             h.stop()?;
         }
         // Stop self.
-        if let Some(h) = self.worker.lock().unwrap().stop() {
-            if let Err(e) = h.join() {
-                return Err(box_err!("failed to join gc_worker handle, err: {:?}", e));
-            }
-        }
+        self.worker.lock().unwrap().stop();
         Ok(())
     }
 
-    pub fn scheduler(&self) -> FutureScheduler<GcTask<E::Local>> {
+    pub fn scheduler(&self) -> Scheduler<GcTask<E::Local>> {
         self.worker_scheduler.clone()
     }
 
@@ -982,7 +994,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::sync::mpsc::channel;
+    use std::sync::mpsc::{self, channel};
     use std::{thread, time::Duration};
 
     use crate::storage::kv::{
@@ -1147,7 +1159,9 @@ mod tests {
                 .unwrap();
         let gate = FeatureGate::default();
         gate.set_version("5.0.0").unwrap();
-        let mut gc_worker = GcWorker::new(engine, RaftStoreBlackHole, GcConfig::default(), gate);
+        let (tx, _rx) = mpsc::channel();
+        let mut gc_worker =
+            GcWorker::new(engine, RaftStoreBlackHole, tx, GcConfig::default(), gate);
         gc_worker.start().unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
@@ -1307,9 +1321,11 @@ mod tests {
         )
         .build()
         .unwrap();
+        let (tx, _rx) = mpsc::channel();
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
             RaftStoreBlackHole,
+            tx,
             GcConfig::default(),
             FeatureGate::default(),
         );
@@ -1385,11 +1401,13 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let prefixed_engine = PrefixedEngine(engine.clone());
 
+        let (tx, _rx) = mpsc::channel();
         let feature_gate = FeatureGate::default();
         feature_gate.set_version("5.0.0").unwrap();
         let mut gc_worker = GcWorker::new(
             prefixed_engine.clone(),
             RaftStoreBlackHole,
+            tx,
             GcConfig::default(),
             feature_gate,
         );

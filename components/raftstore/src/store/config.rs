@@ -163,6 +163,12 @@ pub struct Config {
     pub store_batch_system: BatchSystemConfig,
 
     #[online_config(skip)]
+    pub store_io_pool_size: usize,
+
+    #[online_config(skip)]
+    pub store_io_notify_capacity: usize,
+
+    #[online_config(skip)]
     pub future_poll_size: usize,
     #[online_config(skip)]
     pub hibernate_regions: bool,
@@ -172,21 +178,6 @@ pub struct Config {
     #[online_config(hidden)]
     pub apply_yield_duration: ReadableDuration,
 
-    // Deprecated! These configuration has been moved to Coprocessor.
-    // They are preserved for compatibility check.
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
-    #[online_config(skip)]
-    pub region_max_size: ReadableSize,
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
-    #[online_config(skip)]
-    pub region_split_size: ReadableSize,
-    // Deprecated! The time to clean stale peer safely can be decided based on RocksDB snapshot sequence number.
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
-    #[online_config(skip)]
-    pub clean_stale_peer_delay: ReadableDuration,
     #[serde(with = "engine_config::perf_level_serde")]
     #[online_config(skip)]
     pub perf_level: PerfLevel,
@@ -203,6 +194,43 @@ pub struct Config {
     // * system=16G, memory_usage_limit=12G, evict=2.4G
     // * system=32G, memory_usage_limit=24G, evict=4.8G
     pub evict_cache_on_memory_ratio: f64,
+
+    pub cmd_batch: bool,
+
+    /// When the count of concurrent ready exceeds this value, command will not be proposed
+    /// until the previous ready has been persisted.
+    /// If `cmd_batch` is 0, this config will have no effect.
+    /// If it is 0, it means no limit.
+    pub cmd_batch_concurrent_ready_max_count: usize,
+
+    /// When the size of raft db writebatch exceeds this value, write will be triggered.
+    pub raft_write_size_limit: ReadableSize,
+
+    pub waterfall_metrics: bool,
+
+    pub io_reschedule_concurrent_max_count: usize,
+    pub io_reschedule_hotpot_duration: ReadableDuration,
+
+    pub raft_msg_flush_interval_us: u64,
+
+    // Deprecated! These configuration has been moved to Coprocessor.
+    // They are preserved for compatibility check.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(skip)]
+    pub region_max_size: ReadableSize,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(skip)]
+    pub region_split_size: ReadableSize,
+    // Deprecated! The time to clean stale peer safely can be decided based on RocksDB snapshot sequence number.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(skip)]
+    pub clean_stale_peer_delay: ReadableDuration,
+
+    // Interval to inspect the latency of raftstore for slow store detection.
+    pub inspect_interval: ReadableDuration,
 }
 
 impl Default for Config {
@@ -263,17 +291,27 @@ impl Default for Config {
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
+            store_io_pool_size: 2,
+            store_io_notify_capacity: 40960,
             future_poll_size: 1,
             hibernate_regions: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
+            perf_level: PerfLevel::EnableTime,
+            evict_cache_on_memory_ratio: 0.2,
+            cmd_batch: true,
+            cmd_batch_concurrent_ready_max_count: 1,
+            raft_write_size_limit: ReadableSize::mb(1),
+            waterfall_metrics: false,
+            io_reschedule_concurrent_max_count: 4,
+            io_reschedule_hotpot_duration: ReadableDuration::secs(5),
+            raft_msg_flush_interval_us: 250,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
-            perf_level: PerfLevel::EnableTime,
-            evict_cache_on_memory_ratio: 0.2,
+            inspect_interval: ReadableDuration::millis(500),
         }
     }
 }
@@ -444,8 +482,16 @@ impl Config {
         } else {
             self.store_batch_system.max_batch_size = Some(1024);
         }
+        if self.store_io_pool_size == 0 {
+            return Err(box_err!("store-io-pool-size should be greater than 0"));
+        }
+        if self.store_io_notify_capacity == 0 {
+            return Err(box_err!(
+                "store-io-notify-capacity should be greater than 0"
+            ));
+        }
         if self.future_poll_size == 0 {
-            return Err(box_err!("future-poll-size should be greater than 0."));
+            return Err(box_err!("future-poll-size should be greater than 0"));
         }
 
         // Avoid hibernated peer being reported as down peer.
@@ -632,11 +678,38 @@ impl Config {
             .with_label_values(&["store_pool_size"])
             .set(self.store_batch_system.pool_size as f64);
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_io_pool_size"])
+            .set(self.store_io_pool_size as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_io_notify_capacity"])
+            .set(self.store_io_notify_capacity as f64);
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["hibernate_regions"])
             .set((self.hibernate_regions as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["cmd_batch"])
+            .set((self.cmd_batch as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["cmd_batch_concurrent_ready_max_count"])
+            .set(self.cmd_batch_concurrent_ready_max_count as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_write_size_limit"])
+            .set(self.raft_write_size_limit.0 as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["waterfall_metrics"])
+            .set((self.waterfall_metrics as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["io_reschedule_concurrent_max_count"])
+            .set(self.io_reschedule_concurrent_max_count as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["io_reschedule_hotpot_duration"])
+            .set(self.io_reschedule_hotpot_duration.as_secs() as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_msg_flush_interval_us"])
+            .set(self.raft_msg_flush_interval_us as f64);
     }
 
     fn write_change_into_metrics(change: ConfigChange) {

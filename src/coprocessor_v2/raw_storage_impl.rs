@@ -8,7 +8,7 @@ use std::ops::Range;
 use tikv_util::future::paired_future_callback;
 
 use crate::storage::errors::extract_kv_pairs;
-use crate::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
+use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use crate::storage::{self, lock_manager::LockManager, Engine, Storage};
 
 /// Implementation of the [`RawStorage`] trait.
@@ -97,10 +97,10 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
     async fn batch_put(&self, kv_pairs: Vec<KvPair>) -> PluginResult<()> {
         let ctx = self.context.clone();
         let cf = engine_traits::CF_DEFAULT.to_string();
-        let ttl = 0; // unlimited
+        let ttls = vec![0; kv_pairs.len()]; // unlimited
         let (cb, f) = paired_future_callback();
 
-        let res = self.storage.raw_batch_put(ctx, cf, kv_pairs, ttl, cb);
+        let res = self.storage.raw_batch_put(ctx, cf, kv_pairs, ttls, cb);
 
         match res {
             Err(e) => Err(e),
@@ -173,9 +173,9 @@ impl From<storage::errors::Error> for PluginErrorShim {
     fn from(error: storage::errors::Error) -> Self {
         let inner = match *error.0 {
             // Key not in region
-            storage::errors::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(
-                ref req_err,
-            ))) if req_err.has_key_not_in_region() => {
+            storage::errors::ErrorInner::Kv(KvError(box KvErrorInner::Request(ref req_err)))
+                if req_err.has_key_not_in_region() =>
+            {
                 let key_err = req_err.get_key_not_in_region();
                 PluginError::KeyNotInRegion {
                     key: key_err.get_key().to_owned(),
@@ -185,9 +185,9 @@ impl From<storage::errors::Error> for PluginErrorShim {
                 }
             }
             // Timeout
-            storage::errors::ErrorInner::Engine(EngineError(box EngineErrorInner::Timeout(
-                duration,
-            ))) => PluginError::Timeout(duration),
+            storage::errors::ErrorInner::Kv(KvError(box KvErrorInner::Timeout(duration))) => {
+                PluginError::Timeout(duration)
+            }
             // Other errors are passed as-is inside their `Result` so we get a `&Result` when using `Any::downcast_ref`.
             _ => PluginError::Other(Box::new(storage::Result::<()>::Err(error))),
         };

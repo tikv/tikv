@@ -81,7 +81,7 @@ fn test_scheduler_leader_change_twice() {
         Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
             box KvErrorInner::Request(ref e),
         ))))))
-        | Err(Error(box ErrorInner::Engine(KvError(box KvErrorInner::Request(ref e))))) => {
+        | Err(Error(box ErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))))) => {
             assert!(e.has_stale_command(), "{:?}", e);
         }
         res => {
@@ -511,6 +511,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
 ) {
     let on_handle_apply = "on_handle_apply";
 
+    let raw_key = key.to_vec();
     let start_ts = TimeStamp::from(start_ts);
 
     // Acquire the pessimistic lock if needed
@@ -603,8 +604,8 @@ fn test_async_apply_prewrite_impl<E: Engine>(
 
         // The memory lock is not released so reading will encounter the lock.
         thread::sleep(Duration::from_millis(300));
-        let err = block_on(storage.get(ctx.clone(), Key::from_raw(key), min_commit_ts.next()))
-            .unwrap_err();
+        let err =
+            block_on(storage.get(ctx.clone(), raw_key.clone(), min_commit_ts.next())).unwrap_err();
         expect_locked(err, key, start_ts);
 
         // Commit command will be blocked.
@@ -629,7 +630,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
         fail::remove(on_handle_apply);
         rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 
-        let got_value = block_on(storage.get(ctx, Key::from_raw(key), min_commit_ts.next()))
+        let got_value = block_on(storage.get(ctx, raw_key, min_commit_ts.next()))
             .unwrap()
             .0;
         assert_eq!(got_value.unwrap().as_slice(), value);
@@ -655,7 +656,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
             .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 
-        let got_value = block_on(storage.get(ctx, Key::from_raw(key), commit_ts.next()))
+        let got_value = block_on(storage.get(ctx, raw_key, commit_ts.next()))
             .unwrap()
             .0;
         assert_eq!(got_value.unwrap().as_slice(), value);
@@ -849,6 +850,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
 ) {
     let on_handle_apply = "on_handle_apply";
 
+    let raw_key = key.to_vec();
     let start_ts = TimeStamp::from(start_ts);
 
     if is_pessimistic {
@@ -925,13 +927,13 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
     assert!(res.one_pc_commit_ts > start_ts);
     let commit_ts = res.one_pc_commit_ts;
 
-    let err = block_on(storage.get(ctx.clone(), Key::from_raw(key), commit_ts.next())).unwrap_err();
+    let err = block_on(storage.get(ctx.clone(), raw_key.clone(), commit_ts.next())).unwrap_err();
     expect_locked(err, key, start_ts);
 
     fail::remove(on_handle_apply);
     // The key may need some time to be applied.
     for retry in 0.. {
-        let res = block_on(storage.get(ctx.clone(), Key::from_raw(key), commit_ts.next()));
+        let res = block_on(storage.get(ctx.clone(), raw_key.clone(), commit_ts.next()));
         match res {
             Ok(v) => {
                 assert_eq!(v.0.unwrap().as_slice(), value);
@@ -1131,6 +1133,77 @@ fn test_before_propose_deadline() {
     storage
         .sched_txn_command(
             commands::Rollback::new(vec![Key::from_raw(b"k")], 10.into(), ctx),
+            Box::new(move |res: storage::Result<_>| {
+                tx.send(res).unwrap();
+            }),
+        )
+        .unwrap();
+    assert!(matches!(
+        rx.recv().unwrap(),
+        Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+    ));
+}
+
+#[test]
+fn test_resolve_lock_deadline() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+
+    let engine = cluster.sim.read().unwrap().storages[&1].clone();
+    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+        engine,
+        DummyLockManager {},
+    )
+    .build()
+    .unwrap();
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(1);
+    ctx.set_region_epoch(cluster.get_region_epoch(1));
+    ctx.set_peer(cluster.leader_of_region(1).unwrap());
+
+    // One resolve lock batch is 256 keys. So we need to prewrite more than that.
+    let mutations = (1i32..300)
+        .map(|i| {
+            let data = i.to_le_bytes();
+            Mutation::Put((Key::from_raw(&data), data.to_vec()))
+        })
+        .collect();
+    let cmd = commands::Prewrite::new(
+        mutations,
+        1i32.to_le_bytes().to_vec(),
+        10.into(),
+        1,
+        false,
+        299,
+        15.into(),
+        20.into(),
+        None,
+        false,
+        ctx.clone(),
+    );
+    let (tx, rx) = channel();
+    storage
+        .sched_txn_command(
+            cmd,
+            Box::new(move |res: storage::Result<_>| {
+                tx.send(res).unwrap();
+            }),
+        )
+        .unwrap();
+    assert!(rx.recv().unwrap().is_ok());
+
+    // Resolve lock, this needs two rounds, two process_read and two process_write.
+    // So it needs more than 400ms. It will exceed the deadline.
+    ctx.max_execution_duration_ms = 300;
+    fail::cfg("txn_before_process_read", "sleep(100)").unwrap();
+    fail::cfg("txn_before_process_write", "sleep(100)").unwrap();
+    let (tx, rx) = channel();
+    let mut txn_status = HashMap::default();
+    txn_status.insert(TimeStamp::new(10), TimeStamp::new(0));
+    storage
+        .sched_txn_command(
+            commands::ResolveLockReadPhase::new(txn_status, None, ctx),
             Box::new(move |res: storage::Result<_>| {
                 tx.send(res).unwrap();
             }),

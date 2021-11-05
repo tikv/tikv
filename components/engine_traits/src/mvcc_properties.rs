@@ -38,6 +38,12 @@ impl MvccProperties {
     }
 }
 
+impl Default for MvccProperties {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub trait MvccPropertiesExt {
     fn get_mvcc_properties_cf(
         &self,
