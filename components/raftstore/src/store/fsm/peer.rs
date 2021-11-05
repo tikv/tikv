@@ -62,7 +62,7 @@ use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
 use crate::store::peer::{ConsistencyState, Peer, PersistSnapshotResult, StaleState};
 use crate::store::peer_storage::write_peer_state;
 use crate::store::transport::Transport;
-use crate::store::util::{admin_cmd_epoch_lookup, is_learner, KeysInfoFormatter};
+use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
     ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
 };
@@ -3736,7 +3736,7 @@ where
         }
     }
 
-    /// Propose batched raft commands(if any) first, then propose the given raft command. 
+    /// Propose batched raft commands(if any) first, then propose the given raft command.
     fn propose_raft_command(
         &mut self,
         msg: RaftCmdRequest,
@@ -3744,7 +3744,7 @@ where
         diskfullopt: DiskFullOpt,
     ) {
         if let Some((request, callback)) =
-            self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics) 
+            self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics)
         {
             self.propose_raft_command_internal(request, callback, DiskFullOpt::NotAllowedOnFull);
         }
@@ -3992,7 +3992,11 @@ where
         let peer = self.fsm.peer.peer.clone();
         let term = self.fsm.peer.get_index_term(compact_idx);
         let request = new_compact_log_request(region_id, peer, compact_idx, term);
-        self.propose_raft_command_internal(request, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
+        self.propose_raft_command_internal(
+            request,
+            Callback::None,
+            DiskFullOpt::AllowedOnAlmostFull,
+        );
 
         self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
