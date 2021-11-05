@@ -344,6 +344,22 @@ struct ApplyContext<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     /// happened before `WriteBatch::write` and after `SSTImporter::delete`. We shall make sure that
     /// this entry will never apply again at first, then we can delete the ssts files.
     delete_ssts: Vec<SSTMetaInfo>,
+<<<<<<< HEAD
+=======
+
+    /// The priority of this Handler.
+    priority: Priority,
+    /// Whether to yield high-latency operation to low-priority handler.
+    yield_high_latency_operation: bool,
+
+    /// The ssts waiting to be ingested in `write_to_db`.
+    pending_ssts: Vec<SSTMetaInfo>,
+
+    /// The pending inspector should be cleaned at the end of a write.
+    pending_latency_inspect: Vec<LatencyInspector>,
+    apply_wait: LocalHistogram,
+    apply_time: LocalHistogram,
+>>>>>>> 2c742a1b8... import: remove verify checksum in apply thread (#10950)
 }
 
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
@@ -1530,8 +1546,16 @@ impl ApplyDelegate {
             return Err(e);
         }
 
+<<<<<<< HEAD
         match importer.ingest(sst, engine) {
             Ok(meta_info) => ssts.push(meta_info),
+=======
+        match ctx.importer.validate(sst) {
+            Ok(meta_info) => {
+                ctx.pending_ssts.push(meta_info.clone());
+                ssts.push(meta_info)
+            }
+>>>>>>> 2c742a1b8... import: remove verify checksum in apply thread (#10950)
             Err(e) => {
                 // If this failed, it means that the file is corrupted or something
                 // is wrong with the engine, but we can do nothing about that.

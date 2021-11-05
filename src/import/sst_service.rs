@@ -98,6 +98,191 @@ where
         let p = sst_meta_to_path(meta)?;
         Ok(slots.remove(&p))
     }
+<<<<<<< HEAD
+=======
+
+    async fn async_snapshot(
+        router: Router,
+        header: RaftRequestHeader,
+    ) -> std::result::Result<SnapshotResult<E>, errorpb::Error> {
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::Snap);
+        let mut cmd = RaftCmdRequest::default();
+        cmd.set_header(header);
+        cmd.set_requests(vec![req].into());
+        let (cb, future) = paired_future_callback();
+        if let Err(e) = router.send_command(cmd, Callback::Read(cb), RaftCmdExtraOpts::default()) {
+            return Err(e.into());
+        }
+        let mut res = future.await.map_err(|_| {
+            let mut err = errorpb::Error::default();
+            let err_str = "too many sst files are ingesting";
+            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+            server_is_busy_err.set_reason(err_str.to_string());
+            err.set_message(err_str.to_string());
+            err.set_server_is_busy(server_is_busy_err);
+            err
+        })?;
+        let mut header = res.response.take_header();
+        if header.has_error() {
+            return Err(header.take_error());
+        }
+        Ok(SnapshotResult {
+            snapshot: res.snapshot.unwrap(),
+            term: header.get_current_term(),
+        })
+    }
+
+    fn check_write_stall(&self) -> Option<errorpb::Error> {
+        if self.importer.get_mode() == SwitchMode::Normal
+            && self
+                .engine
+                .ingest_maybe_slowdown_writes(CF_WRITE)
+                .expect("cf")
+        {
+            let mut errorpb = errorpb::Error::default();
+            let err = "too many sst files are ingesting";
+            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+            server_is_busy_err.set_reason(err.to_string());
+            errorpb.set_message(err.to_string());
+            errorpb.set_server_is_busy(server_is_busy_err);
+            return Some(errorpb);
+        }
+        None
+    }
+
+    fn ingest_files(
+        &self,
+        context: Context,
+        label: &'static str,
+        ssts: Vec<SstMeta>,
+    ) -> impl Future<Output = Result<IngestResponse>> {
+        let header = make_request_header(context);
+        let snapshot_res = Self::async_snapshot(self.router.clone(), header.clone());
+        let router = self.router.clone();
+        let importer = self.importer.clone();
+        async move {
+            let mut resp = IngestResponse::default();
+            let res = match snapshot_res.await {
+                Ok(snap) => snap,
+                Err(e) => {
+                    pb_error_inc(label, &e);
+                    resp.set_error(e);
+                    return Ok(resp);
+                }
+            };
+
+            fail_point!("import::sst_service::ingest");
+            // Make ingest command.
+            let mut cmd = RaftCmdRequest::default();
+            cmd.set_header(header);
+            cmd.mut_header().set_term(res.term);
+            for sst in ssts.iter() {
+                let mut ingest = Request::default();
+                ingest.set_cmd_type(CmdType::IngestSst);
+                ingest.mut_ingest_sst().set_sst(sst.clone());
+                cmd.mut_requests().push(ingest);
+            }
+
+            // Here we shall check whether the file has been ingested before. This operation
+            // must execute after geting a snapshot from raftstore to make sure that the
+            // current leader has applied to current term.
+            for sst in ssts.iter() {
+                if !importer.exist(sst) {
+                    warn!(
+                        "sst [{:?}] not exist. we may retry an operation that has already succeeded",
+                        sst
+                    );
+                    let mut errorpb = errorpb::Error::default();
+                    let err = "The file which would be ingested doest not exist.";
+                    let stale_err = errorpb::StaleCommand::default();
+                    errorpb.set_message(err.to_string());
+                    errorpb.set_stale_command(stale_err);
+                    resp.set_error(errorpb);
+                    return Ok(resp);
+                }
+            }
+
+            let (cb, future) = paired_future_callback();
+            if let Err(e) =
+                router.send_command(cmd, Callback::write(cb), RaftCmdExtraOpts::default())
+            {
+                resp.set_error(e.into());
+                return Ok(resp);
+            }
+
+            let mut res = future.await.map_err(Error::from)?;
+            let mut header = res.response.take_header();
+            if header.has_error() {
+                pb_error_inc(label, header.get_error());
+                resp.set_error(header.take_error());
+            }
+            Ok(resp)
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! impl_write {
+    ($fn:ident, $req_ty:ident, $resp_ty:ident, $chunk_ty:ident, $writer_fn:ident) => {
+        fn $fn(
+            &mut self,
+            _ctx: RpcContext<'_>,
+            stream: RequestStream<$req_ty>,
+            sink: ClientStreamingSink<$resp_ty>,
+        ) {
+            let import = self.importer.clone();
+            let engine = self.engine.clone();
+            let (rx, buf_driver) =
+                create_stream_with_buffer(stream, self.cfg.stream_channel_window);
+            let mut rx = rx.map_err(Error::from);
+
+            let timer = Instant::now_coarse();
+            let label = stringify!($fn);
+            let handle_task = async move {
+                let res = async move {
+                    let first_req = rx.try_next().await?;
+                    let meta = match first_req {
+                        Some(r) => match r.chunk {
+                            Some($chunk_ty::Meta(m)) => m,
+                            _ => return Err(Error::InvalidChunk),
+                        },
+                        _ => return Err(Error::InvalidChunk),
+                    };
+
+                    let writer = match import.$writer_fn(&engine, meta) {
+                        Ok(w) => w,
+                        Err(e) => {
+                            error!("build writer failed {:?}", e);
+                            return Err(Error::InvalidChunk);
+                        }
+                    };
+                    let writer = rx
+                        .try_fold(writer, |mut writer, req| async move {
+                            let batch = match req.chunk {
+                                Some($chunk_ty::Batch(b)) => b,
+                                _ => return Err(Error::InvalidChunk),
+                            };
+                            writer.write(batch)?;
+                            Ok(writer)
+                        })
+                        .await?;
+
+                    let metas = writer.finish()?;
+                    import.verify_checksum(&metas)?;
+                    let mut resp = $resp_ty::default();
+                    resp.set_metas(metas.into());
+                    Ok(resp)
+                }
+                .await;
+                crate::send_rpc_response!(res, sink, label, timer);
+            };
+
+            self.threads.spawn_ok(buf_driver);
+            self.threads.spawn_ok(handle_task);
+        }
+    };
+>>>>>>> 2c742a1b8... import: remove verify checksum in apply thread (#10950)
 }
 
 impl<Router> ImportSst for ImportSSTService<Router>

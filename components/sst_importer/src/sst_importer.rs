@@ -92,17 +92,33 @@ impl SSTImporter {
         }
     }
 
+<<<<<<< HEAD
     pub fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<SSTMetaInfo> {
         match self.dir.ingest(meta, engine, self.key_manager.clone()) {
             Ok(meta_info) => {
                 info!("ingest"; "meta" => ?meta_info);
                 Ok(meta_info)
+=======
+    pub fn validate(&self, meta: &SstMeta) -> Result<SSTMetaInfo> {
+        self.dir.validate(meta, self.key_manager.clone())
+    }
+
+    pub fn ingest<E: KvEngine>(&self, metas: &[SSTMetaInfo], engine: &E) -> Result<()> {
+        match self.dir.ingest(metas, engine, self.key_manager.clone()) {
+            Ok(..) => {
+                info!("ingest"; "metas" => ?metas);
+                Ok(())
+>>>>>>> 2c742a1b8... import: remove verify checksum in apply thread (#10950)
             }
             Err(e) => {
                 error!(%e; "ingest failed"; "meta" => ?meta, );
                 Err(e)
             }
         }
+    }
+
+    pub fn verify_checksum(&self, metas: &[SstMeta]) -> Result<()> {
+        self.dir.verify_checksum(metas, self.key_manager.clone())
     }
 
     pub fn exist(&self, meta: &SstMeta) -> bool {
@@ -1034,8 +1050,17 @@ mod tests {
             let mut f = dir.create(&meta, key_manager.clone()).unwrap();
             f.append(&data).unwrap();
             f.finish().unwrap();
+<<<<<<< HEAD
 
             dir.ingest(&meta, &db, key_manager.clone()).unwrap();
+=======
+            let info = SSTMetaInfo {
+                total_bytes: 0,
+                total_kvs: 0,
+                meta: meta.to_owned(),
+            };
+            dir.ingest(&[info], &db, key_manager.clone()).unwrap();
+>>>>>>> 2c742a1b8... import: remove verify checksum in apply thread (#10950)
             check_db_range(&db, range);
 
             ingested.push(meta);
@@ -1640,7 +1665,12 @@ mod tests {
 
             meta.set_length(0); // disable validation.
             meta.set_crc32(0);
+<<<<<<< HEAD
             let resp = importer.ingest(&meta, &db).unwrap();
+=======
+            let meta_info = importer.validate(&meta).unwrap();
+            let _ = importer.ingest(&[meta_info.clone()], &db).unwrap();
+>>>>>>> 2c742a1b8... import: remove verify checksum in apply thread (#10950)
             // key1 = "zt9102_r01", value1 = "abc", len = 13
             // key2 = "zt9102_r04", value2 = "xyz", len = 13
             // key3 = "zt9102_r07", value3 = "pqrst", len = 15
