@@ -429,8 +429,11 @@ mod tests {
 
     #[test]
     fn test_data_key() {
-        assert!(validate_data_key(&data_key(b"abc")));
         assert!(!validate_data_key(b"abc"));
+        assert!(validate_data_key(&data_key(b"abc")));
+        let mut buffer = vec![];
+        data_key_with_buffer(b"abc", &mut buffer);
+        assert_eq!(buffer, data_key(b"abc"));
 
         let mut region = Region::default();
         // uninitialised region should not be passed in `enc_start_key` and `enc_end_key`.

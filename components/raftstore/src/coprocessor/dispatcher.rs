@@ -9,16 +9,12 @@ use engine_traits::{CfName, KvEngine};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{ComputeHashRequest, RaftCmdRequest};
-use lazy_static::lazy_static;
+use protobuf::Message;
 use raft::eraftpb;
 use tikv_util::box_try;
 
 use super::*;
 use crate::store::CasualRouter;
-
-lazy_static! {
-    static ref EMPTY_REGION: Region = Region::default();
-}
 
 struct Entry<T> {
     priority: u32,
@@ -511,7 +507,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
         for batch in &cmd_batches {
             for cmd in &batch.cmds {
-                self.post_apply(&EMPTY_REGION, cmd);
+                self.post_apply(&Region::default_instance(), cmd);
             }
         }
         for observer in &self.registry.cmd_observers {
