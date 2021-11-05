@@ -2196,7 +2196,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#dcc1f836a2ae7a7ee71b6aed8cd4107e04a4b829"
+source = "git+https://github.com/tikv/rust-rocksdb.git#06aa625e21b0b2c632cc02b7d001e6d5671bbc38"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2215,7 +2215,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#dcc1f836a2ae7a7ee71b6aed8cd4107e04a4b829"
+source = "git+https://github.com/tikv/rust-rocksdb.git#06aa625e21b0b2c632cc02b7d001e6d5671bbc38"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3882,7 +3882,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#dcc1f836a2ae7a7ee71b6aed8cd4107e04a4b829"
+source = "git+https://github.com/tikv/rust-rocksdb.git#06aa625e21b0b2c632cc02b7d001e6d5671bbc38"
 dependencies = [
  "libc 0.2.106",
  "librocksdb_sys",
@@ -5174,7 +5174,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "5.3.0-alpha"
+version = "5.4.0-alpha"
 dependencies = [
  "anyhow",
  "async-stream",
