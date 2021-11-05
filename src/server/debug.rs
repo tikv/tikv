@@ -1316,8 +1316,8 @@ mod tests {
     use std::sync::Arc;
 
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
-    use kvproto::metapb::{Peer, PeerRole, Region};
     use kvproto::kvrpcpb::ApiVersion;
+    use kvproto::metapb::{Peer, PeerRole, Region};
     use raft::eraftpb::EntryType;
     use tempfile::Builder;
 
