@@ -141,7 +141,7 @@ where
     pub fn invoke_proposed(&mut self) {
         if let Callback::Write { proposed_cb, .. } = self {
             if let Some(cb) = proposed_cb.take() {
-                cb();
+                cb()
             }
         }
     }
