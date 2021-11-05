@@ -118,8 +118,8 @@ where
             cfg_controller,
             router,
             security_config,
-            _snap: PhantomData,
             store_path,
+            _snap: PhantomData,
         })
     }
 
@@ -168,7 +168,7 @@ where
             .into_stream();
         let (tx, rx) = oneshot::channel();
         let callback = move || tx.send(()).unwrap_or_default();
-        let res = Handle::current().spawn(activate_heap_profile(period, callback, store_path));
+        let res = Handle::current().spawn(activate_heap_profile(period, store_path, callback));
         if rx.await.is_ok() {
             let msg = "activate heap profile success";
             Ok(make_response(StatusCode::OK, msg))
@@ -671,6 +671,9 @@ where
                             (Method::GET, "/debug/pprof/heap_deactivate") => {
                                 Self::deactivate_heap_prof(req)
                             }
+                            // (Method::GET, "/debug/pprof/heap") => {
+                            //     Self::dump_heap_prof_to_resp(req).await
+                            // }
                             (Method::GET, "/config") => {
                                 Self::get_config(req, &cfg_controller).await
                             }
@@ -680,9 +683,6 @@ where
                             (Method::GET, "/debug/pprof/profile") => {
                                 Self::dump_cpu_prof_to_resp(req).await
                             }
-                            // (Method::GET, "/debug/pprof/heap") => {
-                            //     Self::dump_heap_prof_to_resp(req).await
-                            // }
                             (Method::GET, "/debug/fail_point") => {
                                 info!("debug fail point API start");
                                 fail_point!("debug_fail_point");

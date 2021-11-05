@@ -121,8 +121,8 @@ where
 /// `deactivate_heap_profile` can only be called after it's notified from `callback`.
 pub async fn activate_heap_profile<S, F>(
     dump_period: S,
-    callback: F,
     store_path: PathBuf,
+    callback: F,
 ) -> Result<(), String>
 where
     S: Stream<Item = Result<(), String>> + Send + Unpin + 'static,
@@ -381,7 +381,7 @@ mod tests {
         assert_eq!(block_on(res2).unwrap().unwrap_err(), expected);
 
         let (_tx2, rx2) = mpsc::channel(1);
-        let res2 = rt.spawn(activate_heap_profile(rx2, || {}, std::env::temp_dir()));
+        let res2 = rt.spawn(activate_heap_profile(rx2, std::env::temp_dir(), || {}));
         assert_eq!(block_on(res2).unwrap().unwrap_err(), expected);
 
         drop(tx1);
@@ -398,7 +398,7 @@ mod tests {
 
         // Test activated profiling can be stopped by canceling the period stream.
         let (tx, rx) = mpsc::channel(1);
-        let res = rt.spawn(activate_heap_profile(rx, || {}, std::env::temp_dir()));
+        let res = rt.spawn(activate_heap_profile(rx, std::env::temp_dir(), || {}));
         drop(tx);
         assert!(block_on(res).unwrap().is_ok());
 
@@ -410,8 +410,8 @@ mod tests {
         let (_tx, _rx) = mpsc::channel(1);
         let res = rt.spawn(activate_heap_profile(
             _rx,
-            on_activated,
             std::env::temp_dir(),
+            on_activated,
         ));
         assert!(check_activated());
         assert!(deactivate_heap_profile());
@@ -428,7 +428,7 @@ mod tests {
 
         // Test heap profiling can be stopped by sending an error.
         let (mut tx, rx) = mpsc::channel(1);
-        let res = rt.spawn(activate_heap_profile(rx, || {}, std::env::temp_dir()));
+        let res = rt.spawn(activate_heap_profile(rx, std::env::temp_dir(), || {}));
         block_on(tx.send(Err("test".to_string()))).unwrap();
         assert!(block_on(res).unwrap().is_err());
 
@@ -440,8 +440,8 @@ mod tests {
         let (_tx, _rx) = mpsc::channel(1);
         let res = rt.spawn(activate_heap_profile(
             _rx,
-            on_activated,
             std::env::temp_dir(),
+            on_activated,
         ));
         assert!(check_activated());
         assert!(deactivate_heap_profile());
