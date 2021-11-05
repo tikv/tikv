@@ -107,7 +107,7 @@ impl SSTImporter {
         self.dir.validate(meta, self.key_manager.clone())
     }
 
-    pub fn ingest<E: KvEngine>(&self, metas: &[SstMeta], engine: &E) -> Result<()> {
+    pub fn ingest<E: KvEngine>(&self, metas: &[SSTMetaInfo], engine: &E) -> Result<()> {
         match self.dir.ingest(metas, engine, self.key_manager.clone()) {
             Ok(..) => {
                 info!("ingest"; "metas" => ?metas);
@@ -118,6 +118,10 @@ impl SSTImporter {
                 Err(e)
             }
         }
+    }
+
+    pub fn verify_checksum(&self, metas: &[SstMeta]) -> Result<()> {
+        self.dir.verify_checksum(metas, self.key_manager.clone())
     }
 
     pub fn exist(&self, meta: &SstMeta) -> bool {
@@ -586,9 +590,12 @@ mod tests {
             let mut f = dir.create(&meta, key_manager.clone()).unwrap();
             f.append(&data).unwrap();
             f.finish().unwrap();
-
-            dir.ingest(&[meta.to_owned()], &db, key_manager.clone())
-                .unwrap();
+            let info = SSTMetaInfo {
+                total_bytes: 0,
+                total_kvs: 0,
+                meta: meta.to_owned(),
+            };
+            dir.ingest(&[info], &db, key_manager.clone()).unwrap();
             check_db_range(&db, range);
 
             ingested.push(meta);
@@ -1182,7 +1189,7 @@ mod tests {
             meta.set_length(0); // disable validation.
             meta.set_crc32(0);
             let meta_info = importer.validate(&meta).unwrap();
-            let _ = importer.ingest(&[meta], &db).unwrap();
+            let _ = importer.ingest(&[meta_info.clone()], &db).unwrap();
             // key1 = "zt9102_r01", value1 = "abc", len = 13
             // key2 = "zt9102_r04", value2 = "xyz", len = 13
             // key3 = "zt9102_r07", value3 = "pqrst", len = 15
