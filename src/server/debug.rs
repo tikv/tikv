@@ -1478,21 +1478,21 @@ mod tests {
 
     impl Debugger<RocksEngine> {
         fn set_store_id(&self, store_id: u64) {
-            let mut ident = self.get_store_ident().unwrap_or(StoreIdent::default());
+            let mut ident = self.get_store_ident().unwrap_or_default();
             ident.set_store_id(store_id);
             let db = &self.engines.kv;
             db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
         }
 
         fn set_cluster_id(&self, cluster_id: u64) {
-            let mut ident = self.get_store_ident().unwrap_or(StoreIdent::default());
+            let mut ident = self.get_store_ident().unwrap_or_default();
             ident.set_cluster_id(cluster_id);
             let db = &self.engines.kv;
             db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
         }
 
         fn set_store_api_version(&self, api_version: ApiVersion) {
-            let mut ident = self.get_store_ident().unwrap_or(StoreIdent::default());
+            let mut ident = self.get_store_ident().unwrap_or_default();
             ident.set_api_version(api_version);
             let db = &self.engines.kv;
             db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
