@@ -2,7 +2,6 @@
 
 use std::iter::FromIterator;
 use std::sync::Arc;
-use std::thread;
 
 use futures::executor::block_on;
 use kvproto::metapb;
@@ -20,13 +19,13 @@ fn test_unsafe_recover_update_region() {
     // Disable default max peer number check.
     pd_client.disable_default_operator();
 
-    let election_timeout = configure_for_lease_read(&mut cluster, None, None);
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+
+    configure_for_lease_read(&mut cluster, None, None);
     cluster.stop_node(nodes[1]);
     cluster.stop_node(nodes[2]);
-    // Wait for the leader lease to expire.
-    thread::sleep(election_timeout * 2);
+    cluster.must_wait_for_leader_expire(nodes[0], region.get_id());
 
-    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
     let mut update = metapb::Region::default();
     update.set_id(1);
     update.set_end_key(b"anykey2".to_vec());
@@ -54,13 +53,13 @@ fn test_unsafe_recover_create_region() {
     // Disable default max peer number check.
     pd_client.disable_default_operator();
 
-    let election_timeout = configure_for_lease_read(&mut cluster, None, None);
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+
+    configure_for_lease_read(&mut cluster, None, None);
     cluster.stop_node(nodes[1]);
     cluster.stop_node(nodes[2]);
-    // Wait for the leader lease to expire.
-    thread::sleep(election_timeout * 2);
+    cluster.must_wait_for_leader_expire(nodes[0], region.get_id());
 
-    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
     let mut update = metapb::Region::default();
     update.set_id(1);
     update.set_end_key(b"anykey".to_vec());
