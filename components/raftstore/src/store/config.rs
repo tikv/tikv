@@ -78,7 +78,12 @@ pub struct Config {
     pub raft_engine_purge_interval: ReadableDuration,
     // When a peer is not responding for this time, leader will not keep entry cache for it.
     pub raft_entry_cache_life_time: ReadableDuration,
+    // Deprecated! The configuration has no effect.
+    // They are preserved for compatibility check.
     // When a peer is newly added, reject transferring leader to the peer for a while.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(skip)]
     pub raft_reject_transfer_leader_duration: ReadableDuration,
 
     // Interval (ms) to check region whether need to be split or not.
@@ -565,9 +570,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_entry_cache_life_time"])
             .set(self.raft_entry_cache_life_time.as_secs() as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["raft_reject_transfer_leader_duration"])
-            .set(self.raft_reject_transfer_leader_duration.as_secs() as f64);
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["split_region_check_tick_interval"])
