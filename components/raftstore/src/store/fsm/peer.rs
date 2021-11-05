@@ -131,7 +131,7 @@ where
     should_propose_size: u64,
     batch_req_size: u64,
     has_proposed_cb: bool,
-    header_checked: Option<bool>,
+    propose_checked: Option<bool>,
     request: Option<RaftCmdRequest>,
     callbacks: Vec<(Callback<E::Snapshot>, usize)>,
 }
@@ -340,7 +340,7 @@ where
             should_propose_size: (cfg.raft_entry_max_size.0 as f64 * 0.4) as u64,
             batch_req_size: 0,
             has_proposed_cb: false,
-            header_checked: None,
+            propose_checked: None,
             request: None,
             callbacks: vec![],
         }
@@ -387,7 +387,7 @@ where
         };
         if callback.has_proposed_cb() {
             self.has_proposed_cb = true;
-            if self.header_checked.unwrap_or(false) {
+            if self.propose_checked.unwrap_or(false) {
                 callback.invoke_proposed();
             }
         }
@@ -416,7 +416,7 @@ where
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             self.has_proposed_cb = false;
-            self.header_checked = None;
+            self.propose_checked = None;
             if self.callbacks.len() == 1 {
                 let (cb, _) = self.callbacks.pop().unwrap();
                 return Some((req, cb));
@@ -664,15 +664,15 @@ where
     fn check_batch_cmd_and_proposed_cb(&mut self) {
         if self.fsm.batch_req_builder.request.is_none()
             || !self.fsm.batch_req_builder.has_proposed_cb
-            || self.fsm.batch_req_builder.header_checked.is_some()
+            || self.fsm.batch_req_builder.propose_checked.is_some()
         {
             return;
         }
         let cmd = self.fsm.batch_req_builder.request.take().unwrap();
-        self.fsm.batch_req_builder.header_checked = Some(false);
+        self.fsm.batch_req_builder.propose_checked = Some(false);
         if let Ok(None) = self.pre_propose_raft_command(&cmd) {
-            if self.fsm.peer.check_for_proposed_cb(&cmd) {
-                self.fsm.batch_req_builder.header_checked = Some(true);
+            if self.fsm.peer.will_likely_propose(&cmd) {
+                self.fsm.batch_req_builder.propose_checked = Some(true);
                 for (cb, _) in &mut self.fsm.batch_req_builder.callbacks {
                     cb.invoke_proposed();
                 }
@@ -2227,9 +2227,7 @@ where
                     );
                 }
                 None => {
-                    if self.fsm.batch_req_builder.request.is_some()
-                        && self.fsm.batch_req_builder.header_checked.unwrap_or(false)
-                    {
+                    if self.fsm.batch_req_builder.request.is_some() {
                         self.propose_batch_raft_command(true);
                     }
 

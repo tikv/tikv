@@ -564,7 +564,7 @@ where
     pub max_ts_sync_status: Arc<AtomicU64>,
 
     /// Check whether this proposal can be proposed based on its epoch.
-    pub cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
+    cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
 
     // disk full peer set.
     pub disk_full_peers: DiskFullPeers,
@@ -3972,8 +3972,8 @@ where
         false
     }
 
-    /// Check if proposed callback can be called immediately.
-    pub fn check_for_proposed_cb(&mut self, cmd: &RaftCmdRequest) -> bool {
+    /// Check if the command will be likely to pass all the check and propose.
+    pub fn will_likely_propose(&mut self, cmd: &RaftCmdRequest) -> bool {
         !self.pending_remove
             && self.is_leader()
             && self.pending_merge_state.is_none()
