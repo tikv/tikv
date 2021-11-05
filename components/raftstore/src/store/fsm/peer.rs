@@ -1061,7 +1061,7 @@ where
         let msg =
             new_read_index_request(region_id, region_epoch.clone(), self.fsm.peer.peer.clone());
         let apply_router = self.ctx.apply_router.clone();
-        self.propose_raft_command(
+        self.propose_raft_command_internal(
             msg,
             Callback::Read(Box::new(move |resp| {
                 // Return the error
@@ -1205,7 +1205,7 @@ where
             self.region().get_region_epoch().clone(),
             self.fsm.peer.peer.clone(),
         );
-        self.propose_raft_command(msg, cb, DiskFullOpt::NotAllowedOnFull);
+        self.propose_raft_command_internal(msg, cb, DiskFullOpt::NotAllowedOnFull);
     }
 
     fn on_role_changed(&mut self, role: Option<StateRole>) {
@@ -3736,37 +3736,24 @@ where
         }
     }
 
+    /// Propose batched raft commands(if any) first, then propose the given raft command. 
     fn propose_raft_command(
         &mut self,
         msg: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
         diskfullopt: DiskFullOpt,
     ) {
-        if self.fsm.batch_req_builder.request.is_some() {
-            let propose_batch = if msg.has_admin_request() {
-                let cmd_type = msg.get_admin_request().get_cmd_type();
-                let epoch_state = admin_cmd_epoch_lookup(cmd_type);
-                epoch_state.change_ver
-            } else {
-                true
-            };
-            if propose_batch {
-                let (request, callback) = self
-                    .fsm
-                    .batch_req_builder
-                    .build(&mut self.ctx.raft_metrics)
-                    .unwrap();
-                self.propose_raft_command_internal(
-                    request,
-                    callback,
-                    DiskFullOpt::NotAllowedOnFull,
-                );
-            }
+        if let Some((request, callback)) =
+            self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics) 
+        {
+            self.propose_raft_command_internal(request, callback, DiskFullOpt::NotAllowedOnFull);
         }
 
         self.propose_raft_command_internal(msg, cb, diskfullopt);
     }
 
+    /// Propose the raft command directly.
+    /// Note that this function introduces a reorder between this command and batched commands.
     fn propose_raft_command_internal(
         &mut self,
         mut msg: RaftCmdRequest,
@@ -4005,7 +3992,7 @@ where
         let peer = self.fsm.peer.peer.clone();
         let term = self.fsm.peer.get_index_term(compact_idx);
         let request = new_compact_log_request(region_id, peer, compact_idx, term);
-        self.propose_raft_command(request, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
+        self.propose_raft_command_internal(request, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
 
         self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
@@ -4444,7 +4431,7 @@ where
             self.fsm.peer.peer.clone(),
             &self.fsm.peer.consistency_state,
         );
-        self.propose_raft_command(req, Callback::None, DiskFullOpt::NotAllowedOnFull);
+        self.propose_raft_command_internal(req, Callback::None, DiskFullOpt::NotAllowedOnFull);
     }
 
     fn on_ingest_sst_result(&mut self, ssts: Vec<SSTMetaInfo>) {
