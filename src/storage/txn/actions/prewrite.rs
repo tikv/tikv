@@ -7,7 +7,7 @@ use crate::storage::{
             CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM, MVCC_CONFLICT_COUNTER,
             MVCC_DUPLICATE_CMD_COUNTER_VEC,
         },
-        Error, ErrorInner, Lock, LockType, MvccTxn, Result, SnapshotReader, TxnCommitRecord,
+        Error, ErrorInner, Lock, LockType, MvccTxn, Result, SnapshotReader,
     },
     txn::actions::check_data_constraint::check_data_constraint,
     txn::LockInfo,
@@ -76,38 +76,6 @@ pub fn prewrite<S: Snapshot>(
             TimeStamp::zero()
         };
         return Ok((min_commit_ts, OldValue::Unspecified));
-    }
-
-    // For keys that do not need pessimistic locks in a pessimistic async-commit transaction,
-    // we need to check the key has not been committed before if it is a retry request.
-    //
-    // It is to prevent the following case:
-    // The key was prewritten successfully before, but the response is lost. The client resends
-    // the same request after the transaction is resolved (to become committed). If we still
-    // write the lock, the client might commit these keys more than once.
-    //
-    // If the commit record is Rollback, it is still safe for us to write the Lock because the primary
-    // key of the transaction must also be rolled back, and this lock will be eventually rolled back.
-    // For simplicity, we don't handle this case specially, making it the same behavior as the Rollback
-    // record is collapsed.
-    if txn_props.is_pessimistic()
-        && !is_pessimistic_lock
-        && txn_props.is_retry_request
-        && matches!(txn_props.commit_kind, CommitKind::Async(..))
-    {
-        match reader.get_txn_commit_record(&mutation.key)? {
-            TxnCommitRecord::SingleRecord { commit_ts, write }
-                if write.write_type != WriteType::Rollback =>
-            {
-                info!("prewrited transaction has been committed";
-                    "start_ts" => txn_props.start_ts, "commit_ts" => commit_ts,
-                    "key" => ?mutation.key, "mutation_type" => ?mutation.mutation_type,
-                    "write_type" => ?write.write_type);
-                txn.clear();
-                return Ok((commit_ts, OldValue::Unspecified));
-            }
-            _ => {}
-        }
     }
 
     let old_value = if txn_props.need_old_value
@@ -1236,22 +1204,21 @@ pub mod tests {
         must_commit(&engine, b"k1", 10, 20);
         must_commit(&engine, b"k2", 10, 20);
 
-        // This is a resent prewrite
-        must_prewrite_put_impl(
+        // This is a re-sent prewrite. It should report a WriteConflict. In production, the caller
+        // will need to check if the current transaction is already committed before, in order to
+        // provide the idempotency.
+        let err = must_retry_pessimistic_prewrite_put_err(
             &engine,
             b"k2",
             b"v2",
             b"k1",
             &Some(vec![]),
-            10.into(),
+            10,
+            10,
             false,
-            100,
-            10.into(),
-            1,
-            15.into(),
-            TimeStamp::default(),
-            true,
+            0,
         );
+        assert!(matches!(err, Error(box ErrorInner::WriteConflict { .. })));
         // Commit repeatedly, these operations should have no effect.
         must_commit(&engine, b"k1", 10, 25);
         must_commit(&engine, b"k2", 10, 25);
@@ -1267,44 +1234,33 @@ pub mod tests {
         must_commit(&engine, b"k2", 35, 40);
 
         // A retrying non-pessimistic-lock prewrite request should not skip constraint checks.
-        // Here it should take no effect, even there's already a newer version
-        // after it. (No matter if it's async commit).
-        must_prewrite_put_impl(
+        // It reports a WriteConflict.
+        let err = must_retry_pessimistic_prewrite_put_err(
             &engine,
             b"k2",
             b"v2",
             b"k1",
             &Some(vec![]),
-            10.into(),
+            10,
+            10,
             false,
-            100,
-            10.into(),
-            1,
-            15.into(),
-            TimeStamp::default(),
-            true,
+            0,
         );
+        assert!(matches!(err, Error(box ErrorInner::WriteConflict { .. })));
         must_unlocked(&engine, b"k2");
-        must_prewrite_put_impl(
-            &engine,
-            b"k2",
-            b"v2",
-            b"k1",
-            &None,
-            10.into(),
-            false,
-            100,
-            10.into(),
-            1,
-            15.into(),
-            TimeStamp::default(),
-            true,
+
+        let err = must_retry_pessimistic_prewrite_put_err(
+            &engine, b"k2", b"v2", b"k1", &None, 10, 10, false, 0,
         );
+        assert!(matches!(err, Error(box ErrorInner::WriteConflict { .. })));
         must_unlocked(&engine, b"k2");
-        // Try a different txn start ts (which haven't been successfully committed before). There
-        // should be a write conflict.
-        let err = must_retry_pessimistic_prewrite_put_err(&engine, b"k2", b"v2", b"k1", 11, false);
-        assert!(matches!(err, Error(ErrorInner::WriteConflict { .. })));
+        // Committing still does nothing.
+        must_commit(&engine, b"k2", 10, 25);
+        // Try a different txn start ts (which haven't been successfully committed before).
+        let err = must_retry_pessimistic_prewrite_put_err(
+            &engine, b"k2", b"v2", b"k1", &None, 11, 11, false, 0,
+        );
+        assert!(matches!(err, Error(box ErrorInner::WriteConflict { .. })));
         must_unlocked(&engine, b"k2");
         // However conflict still won't be checked if there's a non-retry request arriving.
         must_prewrite_put_impl(
