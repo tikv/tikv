@@ -1201,6 +1201,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.cfg_controller.take().unwrap(),
                 Arc::new(self.config.security.clone()),
                 self.router.clone(),
+                self.store_path.clone(),
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
