@@ -72,7 +72,6 @@ use crate::storage::txn::flow_controller::FlowController;
 use crate::server::lock_manager::waiter_manager;
 use crate::storage::{
     config::Config,
-    key_prefix::KeyPrefixToCheck,
     kv::{with_tls_engine, Modify, WriteData},
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
@@ -370,7 +369,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ///   * Request of V1 from TiDB, for compatiblity.
     ///   * Request of V2 with legal prefix.
     /// See rfc https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md for detail.
-    fn check_api_version<T: KeyPrefixToCheck>(
+    fn check_api_version<T: std::convert::AsRef<[u8]>>(
         storage_api_version: ApiVersion,
         req_api_version: ApiVersion,
         cmd: CommandKind,
@@ -382,17 +381,20 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             }
             (ApiVersion::V2, ApiVersion::V1) if Self::is_txn_command(cmd) => {
                 // For compatibility, accept TiDB request only.
-                if keys.into_iter().all(|x| KeyPrefixToCheck::is_tidb_key(&x)) {
+                if keys
+                    .into_iter()
+                    .all(|x| key_prefix::is_tidb_key(x.as_ref()))
+                {
                     return Ok(());
                 }
             }
             (ApiVersion::V2, ApiVersion::V2) if Self::is_raw_command(cmd) => {
-                if keys.into_iter().all(|x| KeyPrefixToCheck::is_raw_key(&x)) {
+                if keys.into_iter().all(|x| key_prefix::is_raw_key(x.as_ref())) {
                     return Ok(());
                 }
             }
             (ApiVersion::V2, ApiVersion::V2) if Self::is_txn_command(cmd) => {
-                if keys.into_iter().all(|x| KeyPrefixToCheck::is_txn_key(&x)) {
+                if keys.into_iter().all(|x| key_prefix::is_txn_key(x.as_ref())) {
                     return Ok(());
                 }
             }
@@ -823,10 +825,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                let keys = Some(raw_start_key)
+                let raw_keys = Some(raw_start_key)
                     .into_iter()
                     .chain(raw_end_key.into_iter());
-                Self::check_api_version(api_version, ctx.api_version, CMD, keys)?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, raw_keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
@@ -976,8 +978,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                let keys = raw_start_key.into_iter().chain(raw_end_key.into_iter());
-                Self::check_api_version(api_version, ctx.api_version, CMD, keys)?;
+                let raw_keys = raw_start_key.into_iter().chain(raw_end_key.into_iter());
+                Self::check_api_version(api_version, ctx.api_version, CMD, raw_keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
