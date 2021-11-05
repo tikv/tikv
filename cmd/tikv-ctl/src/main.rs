@@ -12,10 +12,7 @@ use encryption_export::{
 use engine_rocks::get_env;
 use engine_rocks::raw_util::new_engine_opt;
 use engine_rocks::RocksEngine;
-use engine_traits::{
-    EncryptionKeyManager, Engines, Error as EngineError, RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
-};
+use engine_traits::{EncryptionKeyManager, Engines, Error as EngineError, RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use file_system::calc_crc32;
 use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
 use gag::BufferRedirect;
@@ -321,6 +318,13 @@ trait DebugExecutor {
             println!("\"to\" must be greater than \"from\"");
             process::exit(-1);
         }
+
+        cfs.iter().for_each(|cf| {
+            if !DATA_CFS.contains(cf) {
+                eprintln!("CF \"{}\" doesn't exist.", cf);
+                process::exit(-1);
+            }
+        });
 
         let point_query = to.is_empty() && limit == 0;
         if point_query {
