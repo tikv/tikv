@@ -7,7 +7,6 @@ use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::{error::Error as StdError, result};
 
 use kvproto::debugpb::{self, Db as DBType};
-use kvproto::kvrpcpb::ApiVersion;
 use kvproto::metapb::{PeerRole, Region};
 use kvproto::raft_serverpb::*;
 use protobuf::Message;
@@ -119,11 +118,6 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 pub struct Debugger<ER: RaftEngine> {
     engines: Engines<RocksEngine, ER>,
     cfg_controller: ConfigController,
-}
-
-pub struct DebugStoreInfo {
-    pub store_id: u64,
-    pub api_version: ApiVersion,
 }
 
 impl<ER: RaftEngine> Debugger<ER> {
@@ -332,7 +326,7 @@ impl<ER: RaftEngine> Debugger<ER> {
     /// Set regions to tombstone by manual, and apply other status(such as
     /// peers, version, and key range) from `region` which comes from PD normally.
     pub fn set_region_tombstone(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
-        let store_id = self.get_store_id()?;
+        let store_id = self.get_store_ident()?.get_store_id();
         let db = &self.engines.kv;
         let mut wb = db.write_batch();
 
@@ -505,7 +499,7 @@ impl<ER: RaftEngine> Debugger<ER> {
             }
 
             let region = local_state.get_region();
-            let store_id = self.get_store_id()?;
+            let store_id = self.get_store_ident()?.get_store_id();
 
             let peer_id = raftstore_util::find_peer(region, store_id)
                 .map(|peer| peer.get_id())
@@ -563,7 +557,7 @@ impl<ER: RaftEngine> Debugger<ER> {
         region_ids: Option<Vec<u64>>,
         promote_learner: bool,
     ) -> Result<()> {
-        let store_id = self.get_store_id()?;
+        let store_id = self.get_store_ident()?.get_store_id();
         if store_ids.iter().any(|&s| s == store_id) {
             let msg = format!("Store {} in the failed list", store_id);
             return Err(Error::Other(msg.into()));
@@ -809,36 +803,13 @@ impl<ER: RaftEngine> Debugger<ER> {
         Ok(())
     }
 
-    pub fn get_store_id(&self) -> Result<u64> {
+    pub fn get_store_ident(&self) -> Result<StoreIdent> {
         let db = &self.engines.kv;
         db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
             .map_err(|e| box_err!(e))
-            .and_then(|ident| match ident {
-                Some(ident) => Ok(ident.get_store_id()),
-                None => Err(Error::NotFound("No store ident key".to_owned())),
-            })
-    }
-
-    pub fn get_store_info(&self) -> Result<DebugStoreInfo> {
-        let db = &self.engines.kv;
-        db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
-            .map_err(|e| box_err!(e))
-            .and_then(|ident| match ident {
-                Some(ident) => Ok(DebugStoreInfo {
-                    store_id: ident.get_store_id(),
-                    api_version: ident.get_api_version(),
-                }),
-                None => Err(Error::NotFound("No store ident key".to_owned())),
-            })
-    }
-
-    pub fn get_cluster_id(&self) -> Result<u64> {
-        let db = &self.engines.kv;
-        db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
-            .map_err(|e| box_err!(e))
-            .and_then(|ident| match ident {
-                Some(ident) => Ok(ident.get_cluster_id()),
-                None => Err(Error::NotFound("No cluster ident key".to_owned())),
+            .map(|ident| match ident {
+                Some(ident) => ident,
+                None => StoreIdent::default(),
             })
     }
 
@@ -1346,6 +1317,7 @@ mod tests {
 
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use kvproto::metapb::{Peer, PeerRole, Region};
+    use kvproto::kvrpcpb::ApiVersion;
     use raft::eraftpb::EntryType;
     use tempfile::Builder;
 
@@ -1505,16 +1477,6 @@ mod tests {
     }
 
     impl Debugger<RocksEngine> {
-        fn get_store_ident(&self) -> Result<StoreIdent> {
-            let db = &self.engines.kv;
-            db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
-                .map_err(|e| box_err!(e))
-                .map(|ident| match ident {
-                    Some(ident) => ident,
-                    None => StoreIdent::default(),
-                })
-        }
-
         fn set_store_id(&self, store_id: u64) {
             if let Ok(mut ident) = self.get_store_ident() {
                 ident.set_store_id(store_id);
@@ -2235,15 +2197,27 @@ mod tests {
         debugger.set_store_id(store_id);
         debugger.set_cluster_id(cluster_id);
         debugger.set_store_api_version(ApiVersion::V2);
-        assert_eq!(store_id, debugger.get_store_id().expect("get store id"));
+        assert_eq!(
+            store_id,
+            debugger
+                .get_store_ident()
+                .expect("get store id")
+                .get_store_id()
+        );
         assert_eq!(
             cluster_id,
-            debugger.get_cluster_id().expect("get cluster id")
+            debugger
+                .get_store_ident()
+                .expect("get cluster id")
+                .get_cluster_id()
         );
 
         assert_eq!(
             ApiVersion::V2,
-            debugger.get_store_info().unwrap().api_version
+            debugger
+                .get_store_ident()
+                .expect("get api version")
+                .get_api_version()
         )
     }
 }

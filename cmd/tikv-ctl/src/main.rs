@@ -1034,7 +1034,7 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
             .alloc_id()
             .unwrap_or_else(|e| perror_and_exit("RpcClient::alloc_id", e));
 
-        let store_id = self.get_store_id().expect("get store id");
+        let store_id = self.get_store_ident().expect("get store id").store_id;
 
         region.set_id(new_region_id);
         let old_version = region.get_region_epoch().get_version();
@@ -1089,17 +1089,17 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     }
 
     fn dump_store_info(&self) {
-        let store_info = self.get_store_info();
-        if let Ok(info) = store_info {
-            println!("store id: {}", info.store_id);
-            println!("api version: {:?}", info.api_version);
+        let store_ident_info = self.get_store_ident();
+        if let Ok(ident) = store_ident_info {
+            println!("store id: {}", ident.get_store_id());
+            println!("api version: {:?}", ident.get_api_version());
         }
     }
 
     fn dump_cluster_info(&self) {
-        let cluster_id = self.get_cluster_id();
-        if let Ok(id) = cluster_id {
-            println!("cluster id: {}", id);
+        let store_ident_info = self.get_store_ident();
+        if let Ok(ident) = store_ident_info {
+            println!("cluster id: {}", ident.get_cluster_id());
         }
     }
 }
