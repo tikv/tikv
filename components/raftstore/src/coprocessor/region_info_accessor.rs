@@ -1,8 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::collections::Bound::{Excluded, Included, Unbounded};
+use std::collections::Bound::{Excluded, Unbounded};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::{mpsc, Mutex};
 use std::time::Duration;
@@ -72,73 +71,23 @@ type RegionRangesMap = BTreeMap<RangeKey, u64>;
 // RangeKey is a wrapper used to unify the comparsion between region start key
 // and region end key. Region end key is special as empty stands for the infinite,
 // so we need to take special care for cases where the end key is empty.
-#[derive(Clone, Debug)]
-pub struct RangeKey {
-    key: Vec<u8>,
-    is_end_key: bool,
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum RangeKey {
+    Finite(Vec<u8>),
+    Infinite,
 }
 
 impl RangeKey {
     pub fn from_start_key(key: Vec<u8>) -> Self {
-        Self {
-            key: key.to_vec(),
-            is_end_key: false,
-        }
+        RangeKey::Finite(key)
     }
 
     pub fn from_end_key(key: Vec<u8>) -> Self {
-        Self {
-            key: key.to_vec(),
-            is_end_key: true,
-        }
-    }
-}
-
-impl PartialEq for RangeKey {
-    fn eq(&self, other: &Self) -> bool {
-        if self.key.is_empty() && other.key.is_empty() {
-            self.is_end_key == other.is_end_key
+        if key.is_empty() {
+            RangeKey::Infinite
         } else {
-            self.key.eq(&other.key)
+            RangeKey::Finite(key)
         }
-    }
-}
-
-impl Eq for RangeKey {}
-
-impl Ord for RangeKey {
-    fn cmp(&self, other: &Self) -> Ordering {
-        if self.is_end_key && other.is_end_key {
-            if self.key.is_empty() && other.key.is_empty() {
-                Ordering::Equal
-            } else if self.key.is_empty() {
-                Ordering::Greater
-            } else if other.key.is_empty() {
-                Ordering::Less
-            } else {
-                self.key.cmp(&other.key)
-            }
-        } else if self.is_end_key && !other.is_end_key {
-            if self.key.is_empty() {
-                Ordering::Greater
-            } else {
-                self.key.cmp(&other.key)
-            }
-        } else if !self.is_end_key && other.is_end_key {
-            if other.key.is_empty() {
-                Ordering::Less
-            } else {
-                self.key.cmp(&other.key)
-            }
-        } else {
-            self.key.cmp(&other.key)
-        }
-    }
-}
-
-impl PartialOrd for RangeKey {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
     }
 }
 
