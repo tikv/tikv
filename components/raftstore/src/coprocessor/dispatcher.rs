@@ -507,7 +507,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
         for batch in &cmd_batches {
             for cmd in &batch.cmds {
-                self.post_apply(&Region::default_instance(), cmd);
+                self.post_apply(Region::default_instance(), cmd);
             }
         }
         for observer in &self.registry.cmd_observers {
