@@ -595,7 +595,6 @@ where
                             self.propose_batch_raft_command(true);
                         }
                     } else {
-                        self.propose_batch_raft_command(true);
                         self.propose_raft_command(
                             cmd.request,
                             cmd.callback,
@@ -666,7 +665,6 @@ where
         if self.fsm.batch_req_builder.request.is_none()
             || !self.fsm.batch_req_builder.has_proposed_cb
             || self.fsm.batch_req_builder.header_checked.is_some()
-            || self.fsm.peer.pending_remove
         {
             return;
         }

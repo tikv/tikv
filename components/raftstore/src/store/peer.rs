@@ -3974,7 +3974,8 @@ where
 
     /// Check if proposed callback can be called immediately.
     pub fn check_for_proposed_cb(&mut self, cmd: &RaftCmdRequest) -> bool {
-        self.is_leader()
+        !self.pending_remove
+            && self.is_leader()
             && self.pending_merge_state.is_none()
             && self.raft_group.raft.lead_transferee.is_none()
             && self.has_applied_to_current_term()
