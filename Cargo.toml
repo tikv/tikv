@@ -106,6 +106,7 @@ nom = { version = "5.1.0", default-features = false, features = ["std"] }
 notify = "4"
 num_cpus = "1"
 pd_client = { path = "components/pd_client", default-features = false }
+case_macros = {path = "components/case_macros"}
 pin-project = "1.0"
 pnet_datalink = "0.23"
 pprof = { version = "^0.6", default-features = false, features = ["flamegraph", "protobuf"] }
@@ -229,6 +230,7 @@ members = [
   "components/pd_client",
   "components/external_storage",
   "components/external_storage/export",
+  "components/case_macros",
   "components/cloud",
   "components/cloud/aws",
   "components/cloud/gcp",

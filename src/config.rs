@@ -3258,6 +3258,7 @@ mod tests {
     use crate::server::ttl::TTLCheckerTask;
     use crate::storage::config::StorageConfigManger;
     use crate::storage::txn::flow_controller::FlowController;
+    use case_macros::*;
     use engine_rocks::raw_util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
     use raft_log_engine::RecoveryMode;
@@ -3266,6 +3267,21 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+
+    #[test]
+    fn test_case_macro() {
+        let h = kebab_case!(HelloWorld);
+        assert_eq!(h, "hello-world");
+
+        let h = kebab_case!(WelcomeToMyHouse);
+        assert_eq!(h, "welcome-to-my-house");
+
+        let h = snake_case!(HelloWorld);
+        assert_eq!(h, "hello_world");
+
+        let h = snake_case!(WelcomeToMyHouse);
+        assert_eq!(h, "welcome_to_my_house");
+    }
 
     #[test]
     fn test_check_critical_cfg_with() {
