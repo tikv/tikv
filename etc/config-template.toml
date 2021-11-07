@@ -357,8 +357,11 @@
 ## When the number of Raft entries exceeds the max size, TiKV rejects to propose the entry.
 # raft-entry-max-size = "8MB"
 
+## Interval to compact unnecessary Raft log.
+# raft-log-compact-sync-interval = "2s"
+
 ## Interval to GC unnecessary Raft log.
-# raft-log-gc-tick-interval = "10s"
+# raft-log-gc-tick-interval = "3s"
 
 ## Threshold to GC stale Raft log, must be >= 1.
 # raft-log-gc-threshold = 50
@@ -369,6 +372,10 @@
 ## When the approximate size of Raft log entries exceeds this value, GC will be forced trigger.
 ## It's recommanded to set it to 3/4 of `region-split-size`.
 # raft-log-gc-size-limit = "72MB"
+
+## Old Raft logs could be reserved if `raft_log_gc_threshold` is not reached.
+## GC them after ticks `raft_log_reserve_max_ticks` times.
+# raft_log_reserve_max_ticks = 6
 
 ## Raft engine is a replaceable component. For some implementations, it's necessary to purge
 ## old log files to recycle disk space ASAP.
