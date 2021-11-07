@@ -3234,7 +3234,7 @@ where
         for cached_entries in apply.entries {
             let (mut e, sz) = cached_entries.take_entries();
             dangle_size += sz;
-            if entries.is_empty() {
+            if e.is_empty() {
                 let rid = self.delegate.region_id();
                 let StdRange { start, end } = cached_entries.range;
                 e = Vec::with_capacity((end - start) as usize);
@@ -3599,7 +3599,7 @@ where
 
                     if let Some(batch) = batch_apply.as_mut() {
                         if batch.try_batch(&mut apply) {
-                            return;
+                            continue;
                         } else {
                             self.handle_apply(apply_ctx, batch_apply.take().unwrap());
                             if let Some(ref mut state) = self.delegate.yield_state {
