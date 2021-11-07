@@ -309,8 +309,8 @@ impl<S: Snapshot> ApplyCallbackBatch<S> {
         }
     }
 
-    fn push_batch(&mut self, observe_info: &CmdObserveInfo, region: &Region) {
-        let cb = CmdBatch::new(observe_info, region);
+    fn push_batch(&mut self, observe_info: &CmdObserveInfo, region_id: u64) {
+        let cb = CmdBatch::new(observe_info, region_id);
         self.batch_max_level = cmp::max(self.batch_max_level, cb.level);
         self.cmd_batch.push(cb);
     }
@@ -464,7 +464,7 @@ where
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
         self.applied_batch
-            .push_batch(&delegate.observe_info, &delegate.region);
+            .push_batch(&delegate.observe_info, delegate.region.get_id());
     }
 
     /// Commits all changes have done for delegate. `persistent` indicates whether

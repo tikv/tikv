@@ -733,7 +733,7 @@ mod tests {
         assert_all!(&[&ob.called], &[55]);
 
         let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
-        let mut cb = CmdBatch::new(&observe_info, &Region::default());
+        let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, Cmd::default());
         host.on_flush_applied_cmd_batch(cb.level, vec![cb], &PanicEngine);
         // `post_apply` + `on_flush_applied_cmd_batch` => 13 + 6 = 19

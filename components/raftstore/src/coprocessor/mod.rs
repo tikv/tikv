@@ -281,12 +281,12 @@ pub struct CmdBatch {
 }
 
 impl CmdBatch {
-    pub fn new(observe_info: &CmdObserveInfo, region: &Region) -> CmdBatch {
+    pub fn new(observe_info: &CmdObserveInfo, region_id: u64) -> CmdBatch {
         CmdBatch {
             level: observe_info.observe_level(),
             cdc_id: observe_info.cdc_id.id,
             rts_id: observe_info.rts_id.id,
-            region_id: region.get_id(),
+            region_id,
             cmds: Vec::new(),
         }
     }
