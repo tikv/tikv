@@ -2251,8 +2251,7 @@ where
                 cbs,
             );
             apply.on_schedule(&ctx.raft_metrics);
-            self.mut_store()
-                .trace_cached_entries(apply.entries[0].clone());
+            self.mut_store().trace_cached_entries(apply.entries.clone());
             if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
                 // Compact all cached entries instead of half evict.
                 self.mut_store().evict_cache(false);

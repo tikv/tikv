@@ -47,7 +47,6 @@ use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
 };
 use raft_proto::ConfChangeI;
-use smallvec::{smallvec, SmallVec};
 use sst_importer::SSTImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::config::{Tracker, VersionTrack};
@@ -2843,7 +2842,7 @@ where
     pub peer_id: u64,
     pub region_id: u64,
     pub term: u64,
-    pub entries: SmallVec<[CachedEntries; 1]>,
+    pub entries: CachedEntries,
     pub cbs: Vec<Proposal<S>>,
 }
 
@@ -2860,7 +2859,7 @@ impl<S: Snapshot> Apply<S> {
             peer_id,
             region_id,
             term,
-            entries: smallvec![entries],
+            entries,
             cbs,
         }
     }
@@ -2879,17 +2878,6 @@ impl<S: Snapshot> Apply<S> {
                     *t = now.unwrap();
                 }
             }
-        }
-    }
-
-    fn try_batch(&mut self, other: &mut Apply<S>) -> bool {
-        assert_eq!(self.region_id, other.region_id);
-        if self.peer_id == other.peer_id && self.term == other.term {
-            self.entries.append(&mut other.entries);
-            self.cbs.append(&mut other.cbs);
-            true
-        } else {
-            false
         }
     }
 }
@@ -3224,34 +3212,23 @@ where
         fail_point!("on_handle_apply_2", self.delegate.id() == 2, |_| {});
         fail_point!("on_handle_apply", |_| {});
 
-        if self.delegate.pending_remove || self.delegate.stopped {
+        if apply.entries.range.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
 
-        let mut entries = Vec::new();
-
-        let mut dangle_size = 0;
-        for cached_entries in apply.entries {
-            let (mut e, sz) = cached_entries.take_entries();
-            dangle_size += sz;
-            if e.is_empty() {
-                let rid = self.delegate.region_id();
-                let StdRange { start, end } = cached_entries.range;
-                e = Vec::with_capacity((end - start) as usize);
-                self.delegate
-                    .raft_engine
-                    .fetch_entries_to(rid, start, end, None, &mut e)
-                    .unwrap();
-            }
-            if entries.is_empty() {
-                entries = e;
-            } else {
-                entries.extend(e);
-            }
-        }
+        let (mut entries, dangle_size) = apply.entries.take_entries();
         if dangle_size > 0 {
             MEMTRACE_ENTRY_CACHE.trace(TraceEvent::Sub(dangle_size));
             RAFT_ENTRIES_CACHES_GAUGE.sub(dangle_size as i64);
+        }
+        if entries.is_empty() {
+            let rid = self.delegate.region_id();
+            let StdRange { start, end } = apply.entries.range;
+            entries = Vec::with_capacity((end - start) as usize);
+            self.delegate
+                .raft_engine
+                .fetch_entries_to(rid, start, end, None, &mut entries)
+                .unwrap();
         }
 
         self.delegate.metrics = ApplyMetrics::default();
@@ -3273,10 +3250,6 @@ where
         }
 
         self.append_proposal(apply.cbs.drain(..));
-        // If there is any apply task, we change this fsm to normal-priority.
-        // When it meets a ingest-request or a delete-range request, it will change to
-        // low-priority.
-        self.delegate.priority = Priority::Normal;
         self.delegate
             .handle_raft_committed_entries(apply_ctx, entries.drain(..));
         fail_point!("post_handle_apply_1003", self.delegate.id() == 1003, |_| {});
@@ -3565,67 +3538,38 @@ where
         msgs: &mut Vec<Msg<EK>>,
     ) {
         let mut drainer = msgs.drain(..);
-        let mut batch_apply = None;
         loop {
-            let msg = match drainer.next() {
-                Some(m) => m,
-                None => {
-                    if let Some(apply) = batch_apply {
-                        self.handle_apply(apply_ctx, apply);
-                    }
-                    break;
-                }
-            };
-
-            if batch_apply.is_some() {
-                match &msg {
-                    Msg::Apply { .. } => (),
-                    _ => {
-                        self.handle_apply(apply_ctx, batch_apply.take().unwrap());
-                        if let Some(ref mut state) = self.delegate.yield_state {
-                            state.pending_msgs.push(msg);
-                            state.pending_msgs.extend(drainer);
-                            break;
-                        }
-                    }
-                }
-            }
-
-            match msg {
-                Msg::Apply { start, mut apply } => {
+            match drainer.next() {
+                Some(Msg::Apply { start, apply }) => {
                     apply_ctx
                         .apply_wait
                         .observe(start.saturating_elapsed_secs());
-
-                    if let Some(batch) = batch_apply.as_mut() {
-                        if batch.try_batch(&mut apply) {
-                            continue;
-                        } else {
-                            self.handle_apply(apply_ctx, batch_apply.take().unwrap());
-                            if let Some(ref mut state) = self.delegate.yield_state {
-                                state.pending_msgs.push(Msg::Apply { start, apply });
-                                state.pending_msgs.extend(drainer);
-                                break;
-                            }
-                        }
+                    // If there is any apply task, we change this fsm to normal-priority.
+                    // When it meets a ingest-request or a delete-range request, it will change to
+                    // low-priority.
+                    self.delegate.priority = Priority::Normal;
+                    self.handle_apply(apply_ctx, apply);
+                    if let Some(ref mut state) = self.delegate.yield_state {
+                        state.pending_msgs = drainer.collect();
+                        break;
                     }
-                    batch_apply = Some(apply);
                 }
-                Msg::Registration(reg) => self.handle_registration(reg),
-                Msg::Destroy(d) => self.handle_destroy(apply_ctx, d),
-                Msg::LogsUpToDate(cul) => self.logs_up_to_date_for_merge(apply_ctx, cul),
-                Msg::Noop => {}
-                Msg::Snapshot(snap_task) => self.handle_snapshot(apply_ctx, snap_task),
-                Msg::Change {
+                Some(Msg::Registration(reg)) => self.handle_registration(reg),
+                Some(Msg::Destroy(d)) => self.handle_destroy(apply_ctx, d),
+                Some(Msg::LogsUpToDate(cul)) => self.logs_up_to_date_for_merge(apply_ctx, cul),
+                Some(Msg::Noop) => {}
+                Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
+                Some(Msg::Change {
                     cmd,
                     region_epoch,
                     cb,
-                } => self.handle_change(apply_ctx, cmd, region_epoch, cb),
+                }) => self.handle_change(apply_ctx, cmd, region_epoch, cb),
                 #[cfg(any(test, feature = "testexport"))]
-                Msg::Validate(_, f) => {
+                Some(Msg::Validate(_, f)) => {
                     let delegate: *const u8 = unsafe { mem::transmute(&self.delegate) };
                     f(delegate)
                 }
+                None => break,
             }
         }
     }
