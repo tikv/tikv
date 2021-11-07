@@ -4,6 +4,7 @@ pub use self::test_utils::TEST_PROFILE_MUTEX;
 
 use std::fs::{File, Metadata};
 use std::io::Read;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::Command;
 use std::sync::Mutex as StdMutex;
@@ -118,13 +119,20 @@ where
 
 /// Activate heap profile and call `callback` if successfully.
 /// `deactivate_heap_profile` can only be called after it's notified from `callback`.
-pub async fn activate_heap_profile<S, F>(dump_period: S, callback: F) -> Result<(), String>
+pub async fn activate_heap_profile<S, F>(
+    dump_period: S,
+    store_path: PathBuf,
+    callback: F,
+) -> Result<(), String>
 where
     S: Stream<Item = Result<(), String>> + Send + Unpin + 'static,
     F: FnOnce() + Send + 'static,
 {
     let (tx, rx) = oneshot::channel();
-    let dir = TempDir::new().map_err(|e| format!("create temp directory: {}", e))?;
+    let dir = tempfile::Builder::new()
+        .prefix("heap-")
+        .tempdir_in(store_path)
+        .map_err(|e| format!("create temp directory: {}", e))?;
     let dir_path = dir.path().to_str().unwrap().to_owned();
 
     let on_start = move || {
@@ -174,8 +182,11 @@ where
     F: Future<Output = Result<(), String>> + Send + 'static,
 {
     let on_start = || {
-        let guard = pprof::ProfilerGuard::new(frequency)
-            .map_err(|e| format!("pprof::ProfileGuard::new fail: {}", e))?;
+        let guard = pprof::ProfilerGuardBuilder::default()
+            .frequency(frequency)
+            .blocklist(&["libc", "libgcc", "pthread"])
+            .build()
+            .map_err(|e| format!("pprof::ProfilerGuardBuilder::build fail: {}", e))?;
         Ok(guard)
     };
 
@@ -370,7 +381,7 @@ mod tests {
         assert_eq!(block_on(res2).unwrap().unwrap_err(), expected);
 
         let (_tx2, rx2) = mpsc::channel(1);
-        let res2 = rt.spawn(activate_heap_profile(rx2, || {}));
+        let res2 = rt.spawn(activate_heap_profile(rx2, std::env::temp_dir(), || {}));
         assert_eq!(block_on(res2).unwrap().unwrap_err(), expected);
 
         drop(tx1);
@@ -387,7 +398,7 @@ mod tests {
 
         // Test activated profiling can be stopped by canceling the period stream.
         let (tx, rx) = mpsc::channel(1);
-        let res = rt.spawn(activate_heap_profile(rx, || {}));
+        let res = rt.spawn(activate_heap_profile(rx, std::env::temp_dir(), || {}));
         drop(tx);
         assert!(block_on(res).unwrap().is_ok());
 
@@ -397,7 +408,11 @@ mod tests {
         let check_activated = move || rx.recv().is_err();
 
         let (_tx, _rx) = mpsc::channel(1);
-        let res = rt.spawn(activate_heap_profile(_rx, on_activated));
+        let res = rt.spawn(activate_heap_profile(
+            _rx,
+            std::env::temp_dir(),
+            on_activated,
+        ));
         assert!(check_activated());
         assert!(deactivate_heap_profile());
         assert!(block_on(res).unwrap().is_ok());
@@ -413,7 +428,7 @@ mod tests {
 
         // Test heap profiling can be stopped by sending an error.
         let (mut tx, rx) = mpsc::channel(1);
-        let res = rt.spawn(activate_heap_profile(rx, || {}));
+        let res = rt.spawn(activate_heap_profile(rx, std::env::temp_dir(), || {}));
         block_on(tx.send(Err("test".to_string()))).unwrap();
         assert!(block_on(res).unwrap().is_err());
 
@@ -423,7 +438,11 @@ mod tests {
         let check_activated = move || rx.recv().is_err();
 
         let (_tx, _rx) = mpsc::channel(1);
-        let res = rt.spawn(activate_heap_profile(_rx, on_activated));
+        let res = rt.spawn(activate_heap_profile(
+            _rx,
+            std::env::temp_dir(),
+            on_activated,
+        ));
         assert!(check_activated());
         assert!(deactivate_heap_profile());
         assert!(block_on(res).unwrap().is_ok());
