@@ -33,8 +33,6 @@ use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
 
-const GENERATE_POOL_SIZE: usize = 2;
-
 // used to periodically check whether we should delete a stale peer's range in region runner
 
 #[cfg(test)]
@@ -595,12 +593,13 @@ where
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
+        snap_generator_pool_size: usize,
         coprocessor_host: CoprocessorHost<EK>,
         router: R,
     ) -> Runner<EK, R> {
         Runner {
             pool: Builder::new(thd_name!("snap-generator"))
-                .max_thread_count(GENERATE_POOL_SIZE)
+                .max_thread_count(snap_generator_pool_size)
                 .build_future_pool(),
             ctx: SnapContext {
                 engine,
@@ -845,6 +844,7 @@ mod tests {
             mgr,
             0,
             false,
+            2,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
         );
@@ -943,6 +943,7 @@ mod tests {
             mgr,
             0,
             true,
+            2,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
         );
