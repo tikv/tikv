@@ -1,9 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use keys::data_end_key;
 use kvproto::metapb::Region;
 use raft::StateRole;
-use raftstore::coprocessor::{RegionInfo, RegionInfoAccessor};
+use raftstore::coprocessor::{RangeKey, RegionInfo, RegionInfoAccessor};
 use raftstore::store::util::{find_peer, new_peer};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
@@ -20,7 +19,10 @@ fn dump(c: &RegionInfoAccessor) -> Vec<(Region, StateRole)> {
     let mut res = Vec::new();
     for (end_key, id) in region_ranges {
         let RegionInfo { ref region, role } = regions[&id];
-        assert_eq!(end_key, data_end_key(region.get_end_key()));
+        assert_eq!(
+            end_key,
+            RangeKey::from_end_key(region.get_end_key().to_vec())
+        );
         assert_eq!(id, region.get_id());
         res.push((region.clone(), role));
     }
