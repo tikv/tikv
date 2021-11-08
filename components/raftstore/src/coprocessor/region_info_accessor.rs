@@ -396,6 +396,7 @@ impl RegionCollector {
         callback(self.regions.get(&region_id).cloned());
     }
 
+    // It returns the regions covered by [start_key, end_key]
     pub fn handle_get_regions_in_range(
         &self,
         start_key: Vec<u8>,
@@ -409,7 +410,7 @@ impl RegionCollector {
             .range((Excluded(RangeKey::from_start_key(start_key)), Unbounded))
         {
             let region_info = &self.regions[region_id];
-            if RangeKey::from_start_key(region_info.region.get_start_key().to_vec()) >= end_key {
+            if RangeKey::from_start_key(region_info.region.get_start_key().to_vec()) > end_key {
                 break;
             }
             regions.push(region_info.region.clone());

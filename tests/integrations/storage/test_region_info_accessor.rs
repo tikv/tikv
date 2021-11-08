@@ -159,9 +159,9 @@ fn test_region_collection_get_regions_in_range() {
         assert_eq!(result, regions);
 
         let result = engine.get_regions_in_range(b"k1", b"k3").unwrap();
-        assert_eq!(&result, &regions[1..2]);
+        assert_eq!(&result, &regions[1..3]);
 
-        let result = engine.get_regions_in_range(b"k3", b"k9").unwrap();
+        let result = engine.get_regions_in_range(b"k3", b"k8").unwrap();
         assert_eq!(&result, &regions[2..5]);
 
         let result = engine.get_regions_in_range(b"k6", b"k8").unwrap();
