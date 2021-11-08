@@ -270,45 +270,7 @@ macro_rules! numeric_enum_mod {
             use serde::{Serializer, Deserializer};
             use serde::de::{self, Unexpected, Visitor};
             use rocksdb::$enum;
-
-            fn to_kebab(enum_name: &str) -> String {
-                let mut snake = String::new();
-                for (i, ch) in enum_name.char_indices() {
-                    if i > 0 && ch.is_uppercase() {
-                        snake.push('_');
-                    }
-                    snake.push(ch.to_ascii_lowercase());
-                }
-                snake.replace('_', "-")
-            }
-
-            fn to_camel(enum_name: &str) -> String {
-                let mut camel = String::new();
-                let mut i = 0;
-
-                let char_vec: Vec<char> = enum_name.chars().collect();
-
-                while i < char_vec.len() {
-                    if (i == 0) {
-                        camel.push(char_vec.get(i).unwrap().to_ascii_uppercase());
-                    } else if char_vec.get(i).unwrap() == &'-' {
-                        i += 1;
-                        if (i == char_vec.len()) {
-                            // this is not a valid kabba value
-                            return camel;
-                        }
-                        camel.push(char_vec.get(i).unwrap().to_ascii_uppercase());
-                    } else {
-                        camel.push(*char_vec.get(i).unwrap());
-                    }
-                    i += 1;
-                }
-                camel
-            }
-
-            fn string_to_static_str(s: String) -> &'static str {
-                Box::leak(s.into_boxed_str())
-            }
+            use case_macros::*;
 
             impl From<super::$enum> for rocksdb::$enum {
                 fn from(m: super::$enum) -> Self {
@@ -322,7 +284,7 @@ macro_rules! numeric_enum_mod {
                 where S: Serializer
             {
                 serializer.serialize_str(match *mode {
-                   $( $enum::$variant => string_to_static_str(to_kebab(stringify!($variant))), )*
+                   $( $enum::$variant => kebab_case!($variant), )*
                 })
             }
 
@@ -350,9 +312,8 @@ macro_rules! numeric_enum_mod {
                     fn visit_str<E>(self, value: &str) -> Result<$enum, E>
                         where E: de::Error
                     {
-                        let camel_str = string_to_static_str(to_camel(value));
-                        match camel_str {
-                            $( stringify!($variant) => Ok($enum::from($enum::$variant)), )*
+                        match value {
+                            $(kebab_case!($variant) => Ok($enum::from($enum::$variant)), )*
                             _ => Err(E::invalid_value(Unexpected::Str(value), &self))
                         }
                     }
@@ -366,6 +327,7 @@ macro_rules! numeric_enum_mod {
                 use toml;
                 use rocksdb::$enum;
                 use serde::{Deserialize, Serialize};
+                use case_macros::*;
 
                 #[test]
                 fn test_serde() {
@@ -376,7 +338,7 @@ macro_rules! numeric_enum_mod {
                     }
 
                     let cases = vec![
-                        $(($enum::$variant, super::to_kebab(stringify!($variant))), )*
+                        $(($enum::$variant, kebab_case!($variant)), )*
                     ];
                     for (e, v) in cases {
                         let holder = EnumHolder { e };
