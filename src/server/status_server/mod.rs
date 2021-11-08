@@ -10,6 +10,7 @@ use self::profile::{
 use std::error::Error as StdError;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::str::{self, FromStr};
 use std::sync::Arc;
@@ -81,6 +82,7 @@ pub struct StatusServer<E, R> {
     cfg_controller: ConfigController,
     router: R,
     security_config: Arc<SecurityConfig>,
+    store_path: PathBuf,
     _snap: PhantomData<E>,
 }
 
@@ -95,6 +97,7 @@ where
         cfg_controller: ConfigController,
         security_config: Arc<SecurityConfig>,
         router: R,
+        store_path: PathBuf,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -115,6 +118,7 @@ where
             cfg_controller,
             router,
             security_config,
+            store_path,
             _snap: PhantomData,
         })
     }
@@ -140,7 +144,10 @@ where
         Ok(response)
     }
 
-    async fn activate_heap_prof(req: Request<Body>) -> hyper::Result<Response<Body>> {
+    async fn activate_heap_prof(
+        req: Request<Body>,
+        store_path: PathBuf,
+    ) -> hyper::Result<Response<Body>> {
         let query = req.uri().query().unwrap_or("");
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
 
@@ -161,7 +168,7 @@ where
             .into_stream();
         let (tx, rx) = oneshot::channel();
         let callback = move || tx.send(()).unwrap_or_default();
-        let res = Handle::current().spawn(activate_heap_profile(period, callback));
+        let res = Handle::current().spawn(activate_heap_profile(period, store_path, callback));
         if rx.await.is_ok() {
             let msg = "activate heap profile success";
             Ok(make_response(StatusCode::OK, msg))
@@ -609,12 +616,14 @@ where
         let security_config = self.security_config.clone();
         let cfg_controller = self.cfg_controller.clone();
         let router = self.router.clone();
+        let store_path = self.store_path.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
             let security_config = security_config.clone();
             let cfg_controller = cfg_controller.clone();
             let router = router.clone();
+            let store_path = store_path.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -622,6 +631,7 @@ where
                     let security_config = security_config.clone();
                     let cfg_controller = cfg_controller.clone();
                     let router = router.clone();
+                    let store_path = store_path.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -656,7 +666,7 @@ where
                             (Method::GET, "/status") => Ok(Response::default()),
                             (Method::GET, "/debug/pprof/heap_list") => Self::list_heap_prof(req),
                             (Method::GET, "/debug/pprof/heap_activate") => {
-                                Self::activate_heap_prof(req).await
+                                Self::activate_heap_prof(req, store_path).await
                             }
                             (Method::GET, "/debug/pprof/heap_deactivate") => {
                                 Self::deactivate_heap_prof(req)
@@ -995,6 +1005,7 @@ mod tests {
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
+            std::env::temp_dir(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1042,6 +1053,7 @@ mod tests {
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
+            std::env::temp_dir(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1086,6 +1098,7 @@ mod tests {
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
+            std::env::temp_dir(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1201,6 +1214,7 @@ mod tests {
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
+            std::env::temp_dir(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1279,6 +1293,7 @@ mod tests {
             ConfigController::default(),
             Arc::new(new_security_cfg(Some(allowed_cn))),
             MockRouter,
+            std::env::temp_dir(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1351,6 +1366,7 @@ mod tests {
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
+            std::env::temp_dir(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1380,6 +1396,7 @@ mod tests {
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
+            std::env::temp_dir(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1407,6 +1424,7 @@ mod tests {
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
+            std::env::temp_dir(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
