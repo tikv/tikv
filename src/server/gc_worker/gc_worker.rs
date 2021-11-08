@@ -35,12 +35,13 @@ use crate::storage::mvcc::{GcInfo, MvccReader, MvccTxn};
 use crate::storage::txn::Error as TxnError;
 
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
-use super::config::{GcConfig, GcWorkerConfigManager};
-use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
-use super::{
-    check_need_gc, Callback, CompactionFilterInitializer, Error, ErrorInner, Result,
+use super::compaction_filter::{
+    CompactionFilterInitializer, GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED,
     GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
 };
+use super::config::{GcConfig, GcWorkerConfigManager};
+use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
+use super::{check_need_gc, Callback, Error, ErrorInner, Result};
 use crate::storage::txn::gc;
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
@@ -356,6 +357,7 @@ where
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
+            GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc();
             if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn, &mut reader) {
                 error!(?e; "GC meets failure"; "key" => %key,);
                 // Switch to the next key if meets failure.
