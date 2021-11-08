@@ -69,8 +69,7 @@ impl<'a> EncryptedFile<'a> {
         let mut tmp_file = OpenOptions::new()
             .create(true)
             .write(true)
-            .open(&tmp_path)
-            .unwrap_or_else(|_| panic!("EncryptedFile::write {}", &tmp_path.to_str().unwrap()));
+            .open(&tmp_path)?;
 
         // Encrypt the content.
         let encrypted_content = master_key

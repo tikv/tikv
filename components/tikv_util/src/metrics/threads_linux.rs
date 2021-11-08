@@ -692,8 +692,8 @@ mod tests {
                     let mut cpu_usages = thread_info.get_cpu_usages();
                     let cpu_usage = cpu_usages.entry(stat.command).or_insert(0);
                     assert!(*cpu_usage < 110); // Consider the error of statistics
-                    if *cpu_usage < 80 {
-                        panic!("the load must be heavy than 0.8, but got {}", *cpu_usage);
+                    if *cpu_usage < 50 {
+                        panic!("the load must be heavy than 0.5, but got {}", *cpu_usage);
                     }
 
                     tx.send(()).unwrap();

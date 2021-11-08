@@ -406,7 +406,7 @@ where
     yield_high_latency_operation: bool,
 
     /// The ssts waiting to be ingested in `write_to_db`.
-    pending_ssts: Vec<SstMeta>,
+    pending_ssts: Vec<SSTMetaInfo>,
 
     /// The pending inspector should be cleaned at the end of a write.
     pending_latency_inspect: Vec<LatencyInspector>,
@@ -1035,9 +1035,11 @@ where
         apply_ctx: &mut ApplyContext<EK, W>,
         entry: &Entry,
     ) -> ApplyResult<EK::Snapshot> {
-        fail_point!("yield_apply_1000", self.region_id() == 1000, |_| {
-            ApplyResult::Yield
-        });
+        fail_point!(
+            "yield_apply_first_region",
+            self.region.get_start_key().is_empty() && !self.region.get_end_key().is_empty(),
+            |_| ApplyResult::Yield
+        );
 
         let index = entry.get_index();
         let term = entry.get_term();
@@ -1689,14 +1691,16 @@ where
         }
 
         match ctx.importer.validate(sst) {
-            Ok(meta_info) => ssts.push(meta_info),
+            Ok(meta_info) => {
+                ctx.pending_ssts.push(meta_info.clone());
+                ssts.push(meta_info)
+            }
             Err(e) => {
                 // If this failed, it means that the file is corrupted or something
                 // is wrong with the engine, but we can do nothing about that.
                 panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
             }
         };
-        ctx.pending_ssts.push(sst.to_owned());
         Ok(Response::default())
     }
 }
