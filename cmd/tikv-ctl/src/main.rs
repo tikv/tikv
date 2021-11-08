@@ -12,7 +12,10 @@ use encryption_export::{
 use engine_rocks::get_env;
 use engine_rocks::raw_util::new_engine_opt;
 use engine_rocks::RocksEngine;
-use engine_traits::{EncryptionKeyManager, Engines, Error as EngineError, RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
+use engine_traits::{
+    EncryptionKeyManager, Engines, Error as EngineError, RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK,
+    CF_WRITE, DATA_CFS,
+};
 use file_system::calc_crc32;
 use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
 use gag::BufferRedirect;
