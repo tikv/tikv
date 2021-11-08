@@ -399,6 +399,8 @@ where
     pending_latency_inspect: Vec<LatencyInspector>,
     apply_wait: LocalHistogram,
     apply_time: LocalHistogram,
+
+    key_buffer: Vec<u8>,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -453,6 +455,7 @@ where
             pending_latency_inspect: vec![],
             apply_wait: APPLY_TASK_WAIT_TIME_HISTOGRAM.local(),
             apply_time: APPLY_TIME_HISTOGRAM.local(),
+            key_buffer: Vec::with_capacity(1024),
         }
     }
 
@@ -885,8 +888,6 @@ where
     raft_engine: Box<dyn RaftEngineReadOnly>,
 
     trace: ApplyMemoryTrace,
-
-    key_buffer: Vec<u8>,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -918,7 +919,6 @@ where
             priority: Priority::Normal,
             raft_engine: reg.raft_engine,
             trace: ApplyMemoryTrace::default(),
-            key_buffer: Vec::with_capacity(1024),
         }
     }
 
@@ -1433,8 +1433,8 @@ where
         for req in requests {
             let cmd_type = req.get_cmd_type();
             match cmd_type {
-                CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
-                CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
+                CmdType::Put => self.handle_put(ctx, req),
+                CmdType::Delete => self.handle_delete(ctx, req),
                 CmdType::DeleteRange => {
                     self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
                 }
@@ -1512,13 +1512,17 @@ impl<EK> ApplyDelegate<EK>
 where
     EK: KvEngine,
 {
-    fn handle_put<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<()> {
+    fn handle_put<W: WriteBatch<EK>>(
+        &mut self,
+        ctx: &mut ApplyContext<EK, W>,
+        req: &Request,
+    ) -> Result<()> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
 
-        keys::data_key_with_buffer(key, &mut self.key_buffer);
-        let key = self.key_buffer.as_slice();
+        keys::data_key_with_buffer(key, &mut ctx.key_buffer);
+        let key = ctx.key_buffer.as_slice();
 
         self.metrics.size_diff_hint += key.len() as i64;
         self.metrics.size_diff_hint += value.len() as i64;
@@ -1530,7 +1534,7 @@ where
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
             }
             // TODO: check whether cf exists or not.
-            wb.put_cf(cf, key, value).unwrap_or_else(|e| {
+            ctx.kv_wb.put_cf(cf, key, value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}) to cf {}: {:?}",
                     self.tag,
@@ -1541,7 +1545,7 @@ where
                 )
             });
         } else {
-            wb.put(key, value).unwrap_or_else(|e| {
+            ctx.kv_wb.put(key, value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
@@ -1554,20 +1558,24 @@ where
         Ok(())
     }
 
-    fn handle_delete<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<()> {
+    fn handle_delete<W: WriteBatch<EK>>(
+        &mut self,
+        ctx: &mut ApplyContext<EK, W>,
+        req: &Request,
+    ) -> Result<()> {
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
 
-        keys::data_key_with_buffer(key, &mut self.key_buffer);
-        let key = self.key_buffer.as_slice();
+        keys::data_key_with_buffer(key, &mut ctx.key_buffer);
+        let key = ctx.key_buffer.as_slice();
 
         // since size_diff_hint is not accurate, so we just skip calculate the value size.
         self.metrics.size_diff_hint -= key.len() as i64;
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
-            wb.delete_cf(cf, key).unwrap_or_else(|e| {
+            ctx.kv_wb.delete_cf(cf, key).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
@@ -1583,7 +1591,7 @@ where
                 self.metrics.delete_keys_hint += 1;
             }
         } else {
-            wb.delete(key).unwrap_or_else(|e| {
+            ctx.kv_wb.delete(key).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
