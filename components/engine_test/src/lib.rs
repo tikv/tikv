@@ -405,14 +405,16 @@ pub mod ctor {
             cf_opts: &ColumnFamilyOptions,
         ) {
             if !cf_opts.get_no_range_properties() {
-                let f = Box::new(RangePropertiesCollectorFactory::default());
-                rocks_cf_opts
-                    .add_table_properties_collector_factory("tikv.range-properties-collector", f);
+                rocks_cf_opts.add_table_properties_collector_factory(
+                    "tikv.range-properties-collector",
+                    RangePropertiesCollectorFactory::default(),
+                );
             }
             if !cf_opts.get_no_table_properties() {
-                let f = Box::new(MvccPropertiesCollectorFactory::default());
-                rocks_cf_opts
-                    .add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+                rocks_cf_opts.add_table_properties_collector_factory(
+                    "tikv.mvcc-properties-collector",
+                    MvccPropertiesCollectorFactory::default(),
+                );
             }
         }
 

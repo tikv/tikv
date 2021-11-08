@@ -185,8 +185,6 @@ fn test_node_merge_with_slow_learner() {
 }
 
 /// Test whether merge will be aborted if prerequisites is not met.
-// FIXME(nrc) failing on CI only
-#[cfg(feature = "protobuf-codec")]
 #[test]
 fn test_node_merge_prerequisites_check() {
     let mut cluster = new_node_cluster(0, 3);
@@ -919,6 +917,9 @@ fn test_merge_cascade_merge_isolated() {
     cluster.must_transfer_leader(r2.get_id(), r2_on_store2);
     let r3_on_store1 = find_peer(&r3, 1).unwrap().to_owned();
     cluster.must_transfer_leader(r3.get_id(), r3_on_store1);
+
+    // Wait will all followers respond their progress.
+    thread::sleep(Duration::from_millis(100));
 
     cluster.add_send_filter(IsolationFilterFactory::new(3));
 
