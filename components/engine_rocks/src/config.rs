@@ -262,58 +262,62 @@ impl From<BlobRunMode> for DBTitanDBBlobRunMode {
     }
 }
 
-macro_rules! numeric_enum_mod {
+macro_rules! impl_enum_with_mirror_type_mod {
     ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
         pub mod $name {
             use std::fmt;
 
             use serde::{Serializer, Deserializer};
             use serde::de::{self, Unexpected, Visitor};
-            use rocksdb::$enum;
+            use rocksdb::$enum as T;
             use case_macros::*;
 
-            impl From<super::$enum> for rocksdb::$enum {
-                fn from(m: super::$enum) -> Self {
+            enum $enum {
+                $($variant = $value, )*
+            }
+
+            impl From<$enum> for T {
+                fn from(m: $enum) -> Self {
                     match m {
-                        $( super::$enum::$variant => rocksdb::$enum::$variant, )*
+                        $( $enum::$variant => T::$variant, )*
                     }
                 }
             }
 
-            pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
+            pub fn serialize<S>(mode: &T, serializer: S) -> Result<S::Ok, S::Error>
                 where S: Serializer
             {
                 serializer.serialize_str(match *mode {
-                   $( $enum::$variant => kebab_case!($variant), )*
+                   $( T::$variant => kebab_case!($variant), )*
                 })
             }
 
-            pub fn deserialize<'de, D>(deserializer: D) -> Result<$enum, D::Error>
+            pub fn deserialize<'de, D>(deserializer: D) -> Result<T, D::Error>
                 where D: Deserializer<'de>
             {
                 struct EnumVisitor;
 
                 impl<'de> Visitor<'de> for EnumVisitor {
-                    type Value = $enum;
+                    type Value = T;
 
                     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                         write!(formatter, concat!("valid ", stringify!($enum)))
                     }
 
-                    fn visit_i64<E>(self, value: i64) -> Result<$enum, E>
+                    fn visit_i64<E>(self, value: i64) -> Result<T, E>
                         where E: de::Error
                     {
                         match value {
-                            $( $value => Ok($enum::$variant), )*
+                            $( $value => Ok(T::$variant), )*
                             _ => Err(E::invalid_value(Unexpected::Signed(value), &self))
                         }
                     }
 
-                    fn visit_str<E>(self, value: &str) -> Result<$enum, E>
+                    fn visit_str<E>(self, value: &str) -> Result<T, E>
                         where E: de::Error
                     {
                         match value {
-                            $(kebab_case!($variant) => Ok($enum::from($enum::$variant)), )*
+                            $(kebab_case!($variant) => Ok(T::from($enum::$variant)), )*
                             _ => Err(E::invalid_value(Unexpected::Str(value), &self))
                         }
                     }
@@ -354,81 +358,34 @@ macro_rules! numeric_enum_mod {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CompactionPriority {
-    ByCompensatedSize = 0,
-    OldestLargestSeqFirst = 1,
-    OldestSmallestSeqFirst = 2,
-    MinOverlappingRatio = 3,
-}
-
-numeric_enum_mod! {compaction_pri_serde CompactionPriority {
+impl_enum_with_mirror_type_mod! {compaction_pri_serde CompactionPriority {
     ByCompensatedSize = 0,
     OldestLargestSeqFirst = 1,
     OldestSmallestSeqFirst = 2,
     MinOverlappingRatio = 3,
 }}
 
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum DBRateLimiterMode {
-    ReadOnly = 1,
-    WriteOnly = 2,
-    AllIo = 3,
-}
-
-numeric_enum_mod! {rate_limiter_mode_serde DBRateLimiterMode {
+impl_enum_with_mirror_type_mod! {rate_limiter_mode_serde DBRateLimiterMode {
     ReadOnly = 1,
     WriteOnly = 2,
     AllIo = 3,
 }}
 
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum DBCompactionStyle {
-    Level = 0,
-    Universal = 1,
-    Fifo = 2,
-    None = 3,
-}
-
-numeric_enum_mod! {compaction_style_serde DBCompactionStyle {
+impl_enum_with_mirror_type_mod! {compaction_style_serde DBCompactionStyle {
     Level = 0,
     Universal = 1,
     Fifo = 2,
     None = 3,
 }}
 
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum DBRecoveryMode {
-    TolerateCorruptedTailRecords = 0,
-    AbsoluteConsistency = 1,
-    PointInTime = 2,
-    SkipAnyCorruptedRecords = 3,
-}
-
-numeric_enum_mod! {recovery_mode_serde DBRecoveryMode {
+impl_enum_with_mirror_type_mod! {recovery_mode_serde DBRecoveryMode {
     TolerateCorruptedTailRecords = 0,
     AbsoluteConsistency = 1,
     PointInTime = 2,
     SkipAnyCorruptedRecords = 3,
 }}
 
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum PerfLevel {
-    Uninitialized,
-    Disable,
-    EnableCount,
-    EnableTimeExceptForMutex,
-    EnableTimeAndCPUTimeExceptForMutex,
-    EnableTime,
-    OutOfBounds,
-}
-
-numeric_enum_mod! {perf_level_serde PerfLevel {
+impl_enum_with_mirror_type_mod! {perf_level_serde PerfLevel {
     Uninitialized = 0,
     Disable = 1,
     EnableCount = 2,
