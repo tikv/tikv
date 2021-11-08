@@ -7,7 +7,7 @@ use engine_traits::{
     CfName, SstPartitioner, SstPartitionerContext, SstPartitionerFactory, SstPartitionerRequest,
     SstPartitionerResult, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
-use keys::data_end_key;
+use keys::{data_end_key, origin_key};
 use lazy_static::lazy_static;
 use tikv_util::warn;
 
@@ -91,10 +91,10 @@ pub struct CompactionGuardGenerator<P: RegionInfoProvider> {
 
 impl<P: RegionInfoProvider> CompactionGuardGenerator<P> {
     fn initialize(&mut self) {
-        self.use_guard = match self
-            .provider
-            .get_regions_in_range(&self.smallest_key, &self.largest_key)
-        {
+        self.use_guard = match self.provider.get_regions_in_range(
+            origin_key(&self.smallest_key),
+            origin_key(&self.largest_key),
+        ) {
             Ok(regions) => {
                 // The regions returned from region_info_provider should have been sorted,
                 // but we sort it again just in case.
