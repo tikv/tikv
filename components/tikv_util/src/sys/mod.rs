@@ -4,6 +4,7 @@
 mod cgroup;
 pub mod cpu_time;
 pub mod disk;
+pub mod inspector;
 
 // re-export some traits for ease of use
 use crate::config::{ReadableSize, KIB};
