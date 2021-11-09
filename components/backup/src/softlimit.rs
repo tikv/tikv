@@ -36,9 +36,8 @@ impl SoftLimit {
         Ok(())
     }
 
-    async fn grant_tokens(&self, n: usize) -> Result<()> {
+    async fn grant_tokens(&self, n: usize) {
         self.0.semaphore.add_permits(n);
-        Ok(())
     }
 
     /// Shrinks the tasks can be executed concurrently by n
@@ -52,10 +51,9 @@ impl SoftLimit {
 
     /// Grows the tasks can be executed concurrently by n
     #[cfg(test)]
-    pub async fn grow(&self, n: usize) -> Result<()> {
+    pub async fn grow(&self, n: usize) {
         self.0.cap.fetch_add(n, Ordering::SeqCst);
-        self.grant_tokens(n).await?;
-        Ok(())
+        self.grant_tokens(n).await;
     }
 
     /// resize the tasks available concurrently.
@@ -66,7 +64,7 @@ impl SoftLimit {
                 self.take_tokens(current - target).await?;
             }
             CmpOrder::Less => {
-                self.grant_tokens(target - current).await?;
+                self.grant_tokens(target - current).await;
             }
             _ => {}
         }
@@ -250,7 +248,7 @@ mod softlimit_test {
     ) {
         should_finish_in(d, name, async move {
             while !f() {
-                time::sleep(d.div_f32(50.0)).await;
+                time::sleep(d / 50).await;
             }
         })
         .await
@@ -299,7 +297,7 @@ mod softlimit_test {
         )
         .await;
 
-        limit_cloned.grow(1).await.unwrap();
+        limit_cloned.grow(1).await;
         let working_cloned = working.clone();
         should_satisfy_in(
             Duration::from_secs(10),
@@ -309,7 +307,7 @@ mod softlimit_test {
         .await;
 
         let working_cloned = working.clone();
-        limit_cloned.grow(2).await.unwrap();
+        limit_cloned.grow(2).await;
         should_satisfy_in(
             Duration::from_secs(10),
             "waiting for worker grow to 4",

@@ -648,11 +648,13 @@ impl ControlThreadPool {
         if self.size >= new_size && self.size - new_size <= 10 {
             return;
         }
+        // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
+        //   adapt it.
         let workers = Arc::new(
             create_tokio_runtime(new_size, "bkwkr")
                 .expect("failed to create tokio runtime for backup worker."),
         );
-        let _ = self.workers.replace(workers);
+        self.workers = Some(workers);
         self.size = new_size;
         BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64);
     }
@@ -686,7 +688,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
     ) -> Endpoint<E, R> {
         let size = config.num_threads;
         let config_manager = ConfigManager(Arc::new(RwLock::new(config)));
-        let pool = RefCell::new(ControlThreadPool::new());
+        let mut pool = ControlThreadPool::new();
         // It is pretty tricky to use the interface ControlThreadPool provides to create a worker
         // for the SoftLimitKeeper. Possible chooses:
         // 0. adjust_with(1) here. Use a separated runtime for softlimit keeper.
@@ -694,14 +696,14 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         // 2. adjust_with(num_threads) here. we can spawn one less thread at normal cases.
         //   ...But would leak num_threads after modify num_threads.
         // Maybe we need to find a better way to control the resource backup uses.
-        pool.borrow_mut().adjust_with(size);
+        pool.adjust_with(size);
         let softlimit = SoftLimitKeeper::new(config_manager.clone());
-        pool.borrow().spawn(softlimit.clone().run());
+        pool.spawn(softlimit.clone().run());
         Endpoint {
             store_id,
             engine,
             region_info,
-            pool,
+            pool: RefCell::new(pool),
             db,
             softlimit,
             config_manager,
