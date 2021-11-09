@@ -120,46 +120,33 @@ fn new_ctx(resp: &RaftCmdResponse) -> CbContext {
     cb_ctx
 }
 
-fn check_raft_cmd_response(resp: &mut RaftCmdResponse, req_cnt: usize) -> Result<()> {
+fn check_raft_cmd_response(resp: &mut RaftCmdResponse) -> Result<()> {
     if resp.get_header().has_error() {
         return Err(Error::RequestFailed(resp.take_header().take_error()));
-    }
-    if req_cnt != resp.get_responses().len() {
-        return Err(Error::InvalidResponse(format!(
-            "responses count {} is not equal to requests count {}",
-            resp.get_responses().len(),
-            req_cnt
-        )));
     }
 
     Ok(())
 }
 
-fn on_write_result<S>(
-    mut write_resp: WriteResponse,
-    req_cnt: usize,
-) -> (CbContext, Result<CmdRes<S>>)
+fn on_write_result<S>(mut write_resp: WriteResponse) -> (CbContext, Result<CmdRes<S>>)
 where
     S: Snapshot,
 {
     let cb_ctx = new_ctx(&write_resp.response);
-    if let Err(e) = check_raft_cmd_response(&mut write_resp.response, req_cnt) {
+    if let Err(e) = check_raft_cmd_response(&mut write_resp.response) {
         return (cb_ctx, Err(e));
     }
     let resps = write_resp.response.take_responses();
     (cb_ctx, Ok(CmdRes::Resp(resps.into())))
 }
 
-fn on_read_result<S>(
-    mut read_resp: ReadResponse<S>,
-    req_cnt: usize,
-) -> (CbContext, Result<CmdRes<S>>)
+fn on_read_result<S>(mut read_resp: ReadResponse<S>) -> (CbContext, Result<CmdRes<S>>)
 where
     S: Snapshot,
 {
     let mut cb_ctx = new_ctx(&read_resp.response);
     cb_ctx.txn_extra_op = read_resp.txn_extra_op;
-    if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
+    if let Err(e) = check_raft_cmd_response(&mut read_resp.response) {
         return (cb_ctx, Err(e));
     }
     let resps = read_resp.response.take_responses();
@@ -236,7 +223,7 @@ where
                 ctx.read_id,
                 cmd,
                 StoreCallback::Read(Box::new(move |resp| {
-                    let (cb_ctx, res) = on_read_result(resp, 1);
+                    let (cb_ctx, res) = on_read_result(resp);
                     cb((cb_ctx, res.map_err(Error::into)));
                 })),
             )
@@ -271,7 +258,6 @@ where
 
         let reqs = modifies_to_requests(batch.modifies);
         let txn_extra = batch.extra;
-        let len = reqs.len();
         let mut header = self.new_request_header(ctx);
         if txn_extra.one_pc {
             header.set_flags(WriteBatchFlags::ONE_PC.bits());
@@ -289,7 +275,7 @@ where
 
         let cb = StoreCallback::write_ext(
             Box::new(move |resp| {
-                let (cb_ctx, res) = on_write_result(resp, len);
+                let (cb_ctx, res) = on_write_result(resp);
                 write_cb((cb_ctx, res.map_err(Error::into)));
             }),
             proposed_cb,

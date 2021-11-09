@@ -13,10 +13,7 @@ use engine_traits::FileEncryptionInfo;
 #[cfg(feature = "cloud-gcp")]
 pub use gcp::{Config as GCSConfig, GCSStorage};
 
-#[cfg(feature = "prost-codec")]
-pub use kvproto::brpb::storage_backend::Backend;
 use kvproto::brpb::CloudDynamic;
-#[cfg(feature = "protobuf-codec")]
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 #[cfg(any(feature = "cloud-gcp", feature = "cloud-aws"))]
 use kvproto::brpb::{Gcs, S3};
@@ -193,97 +190,43 @@ fn create_backend_inner(
 #[cfg(feature = "cloud-aws")]
 // Creates a S3 `StorageBackend`
 pub fn make_s3_backend(config: S3) -> StorageBackend {
-    #[cfg(feature = "prost-codec")]
-    {
-        StorageBackend {
-            backend: Some(Backend::S3(config)),
-        }
-    }
-    #[cfg(feature = "protobuf-codec")]
-    {
-        let mut backend = StorageBackend::default();
-        backend.set_s3(config);
-        backend
-    }
+    let mut backend = StorageBackend::default();
+    backend.set_s3(config);
+    backend
 }
 
 pub fn make_local_backend(path: &Path) -> StorageBackend {
     let path = path.display().to_string();
-    #[cfg(feature = "prost-codec")]
-    {
-        StorageBackend {
-            backend: Some(Backend::Local(Local { path })),
-        }
-    }
-    #[cfg(feature = "protobuf-codec")]
-    {
-        let mut backend = StorageBackend::default();
-        backend.mut_local().set_path(path);
-        backend
-    }
+    let mut backend = StorageBackend::default();
+    backend.mut_local().set_path(path);
+    backend
 }
 
 pub fn make_hdfs_backend(remote: String) -> StorageBackend {
-    #[cfg(feature = "prost-codec")]
-    {
-        StorageBackend {
-            backend: Some(Backend::Hdfs(HDFS { remote })),
-        }
-    }
-    #[cfg(feature = "protobuf-codec")]
-    {
-        let mut backend = StorageBackend::default();
-        backend.mut_hdfs().set_remote(remote);
-        backend
-    }
+    let mut backend = StorageBackend::default();
+    backend.mut_hdfs().set_remote(remote);
+    backend
 }
 
 /// Creates a noop `StorageBackend`.
 pub fn make_noop_backend() -> StorageBackend {
     let noop = Noop::default();
-    #[cfg(feature = "prost-codec")]
-    {
-        StorageBackend {
-            backend: Some(Backend::Noop(noop)),
-        }
-    }
-    #[cfg(feature = "protobuf-codec")]
-    {
-        let mut backend = StorageBackend::default();
-        backend.set_noop(noop);
-        backend
-    }
+    let mut backend = StorageBackend::default();
+    backend.set_noop(noop);
+    backend
 }
 
 #[cfg(feature = "cloud-gcp")]
 pub fn make_gcs_backend(config: Gcs) -> StorageBackend {
-    #[cfg(feature = "prost-codec")]
-    {
-        StorageBackend {
-            backend: Some(Backend::Gcs(config)),
-        }
-    }
-    #[cfg(feature = "protobuf-codec")]
-    {
-        let mut backend = StorageBackend::default();
-        backend.set_gcs(config);
-        backend
-    }
+    let mut backend = StorageBackend::default();
+    backend.set_gcs(config);
+    backend
 }
 
 pub fn make_cloud_backend(config: CloudDynamic) -> StorageBackend {
-    #[cfg(feature = "prost-codec")]
-    {
-        StorageBackend {
-            backend: Some(Backend::CloudDynamic(config)),
-        }
-    }
-    #[cfg(feature = "protobuf-codec")]
-    {
-        let mut backend = StorageBackend::default();
-        backend.set_cloud_dynamic(config);
-        backend
-    }
+    let mut backend = StorageBackend::default();
+    backend.set_cloud_dynamic(config);
+    backend
 }
 
 #[cfg(test)]

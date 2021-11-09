@@ -18,11 +18,7 @@ use grpcio::{
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::{errorpb, kvrpcpb::Context};
 
-#[cfg(feature = "prost-codec")]
-use kvproto::import_sstpb::write_request::*;
-#[cfg(feature = "protobuf-codec")]
 use kvproto::import_sstpb::RawWriteRequest_oneof_chunk as RawChunk;
-#[cfg(feature = "protobuf-codec")]
 use kvproto::import_sstpb::WriteRequest_oneof_chunk as Chunk;
 use kvproto::import_sstpb::*;
 
@@ -276,11 +272,11 @@ macro_rules! impl_write {
                         })
                         .await?;
 
-                    writer.finish().map(|metas| {
-                        let mut resp = $resp_ty::default();
-                        resp.set_metas(metas.into());
-                        resp
-                    })
+                    let metas = writer.finish()?;
+                    import.verify_checksum(&metas)?;
+                    let mut resp = $resp_ty::default();
+                    resp.set_metas(metas.into());
+                    Ok(resp)
                 }
                 .await;
                 crate::send_rpc_response!(res, sink, label, timer);

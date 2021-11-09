@@ -20,7 +20,7 @@ use tikv::storage::{RocksEngine, Storage, TestEngineBuilder, TestStorageBuilder}
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::LazyWorker;
 use tokio::runtime::{self, Runtime};
-use txn_types::{Key, TimeStamp};
+use txn_types::TimeStamp;
 
 pub struct TestSuite {
     receiver_server: Option<Server>,
@@ -171,7 +171,7 @@ impl TestSuite {
                         t.extend_from_slice(tag.as_bytes());
                         t
                     });
-                    storage.get(ctx, Key::from_raw(b""), TimeStamp::new(0))
+                    storage.get(ctx, b"".to_vec(), TimeStamp::new(0))
                 }))
                 .fuse();
 

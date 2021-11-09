@@ -140,6 +140,7 @@ raft-max-election-timeout-ticks = 20
 raft-max-size-per-msg = "12MB"
 raft-max-inflight-msgs = 123
 raft-entry-max-size = "12MB"
+raft-log-compact-sync-interval = "12s"
 raft-log-gc-tick-interval = "12s"
 raft-log-gc-threshold = 12
 raft-log-gc-count-limit = 12
@@ -147,7 +148,6 @@ raft-log-gc-size-limit = "1KB"
 raft-log-reserve-max-ticks = 100
 raft-engine-purge-interval = "20m"
 raft-entry-cache-life-time = "12s"
-raft-reject-transfer-leader-duration = "3s"
 split-region-check-tick-interval = "12s"
 region-split-check-diff = "20MB"
 region-compact-check-interval = "12s"
@@ -200,6 +200,7 @@ waterfall-metrics = true
 io-reschedule-concurrent-max-count = 1234
 io-reschedule-hotpot-duration = "4321s"
 inspect-interval = "444ms"
+raft-msg-flush-interval-us = 2333
 
 [coprocessor]
 split-region-on-table = false

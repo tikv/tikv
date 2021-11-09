@@ -13,7 +13,6 @@ use tokio::sync::Semaphore;
 
 use kvproto::kvrpcpb::{self, IsolationLevel};
 use kvproto::{coprocessor as coppb, errorpb};
-#[cfg(feature = "protobuf-codec")]
 use protobuf::CodedInputStream;
 use protobuf::Message;
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
@@ -56,8 +55,6 @@ pub struct Endpoint<E: Engine> {
     perf_level: PerfLevel,
 
     /// The recursion limit when parsing Coprocessor Protobuf requests.
-    ///
-    /// Note that this limit is ignored if we are using Prost.
     recursion_limit: u32,
 
     batch_row_limit: usize,
@@ -148,45 +145,6 @@ impl<E: Engine> Endpoint<E> {
         peer: Option<String>,
         is_streaming: bool,
     ) -> Result<(RequestHandlerBuilder<E::Snap>, ReqContext)> {
-        // This `Parser` is here because rust-proto supports customising its
-        // recursion limit and Prost does not. Therefore we end up doing things
-        // a bit differently for the two codecs.
-        #[cfg(feature = "protobuf-codec")]
-        struct Parser<'a> {
-            input: CodedInputStream<'a>,
-        }
-
-        #[cfg(feature = "protobuf-codec")]
-        impl<'a> Parser<'a> {
-            fn new(data: &'a [u8], recursion_limit: u32) -> Parser<'a> {
-                let mut input = CodedInputStream::from_bytes(data);
-                input.set_recursion_limit(recursion_limit);
-                Parser { input }
-            }
-
-            fn merge_to(&mut self, target: &mut impl Message) -> Result<()> {
-                box_try!(target.merge_from(&mut self.input));
-                Ok(())
-            }
-        }
-
-        #[cfg(feature = "prost-codec")]
-        struct Parser<'a> {
-            input: &'a [u8],
-        }
-
-        #[cfg(feature = "prost-codec")]
-        impl<'a> Parser<'a> {
-            fn new(input: &'a [u8], _: u32) -> Parser<'a> {
-                Parser { input }
-            }
-
-            fn merge_to(&self, target: &mut impl Message) -> Result<()> {
-                box_try!(target.merge_from_bytes(&self.input));
-                Ok(())
-            }
-        }
-
         fail_point!("coprocessor_parse_request", |_| Err(box_err!(
             "unsupported tp (failpoint)"
         )));
@@ -203,16 +161,15 @@ impl<E: Engine> Endpoint<E> {
             None
         };
 
-        // Prost and rust-proto require different mutability.
-        #[allow(unused_mut)]
-        let mut parser = Parser::new(&data, self.recursion_limit);
+        let mut input = CodedInputStream::from_bytes(&data);
+        input.set_recursion_limit(self.recursion_limit);
         let req_ctx: ReqContext;
         let builder: RequestHandlerBuilder<E::Snap>;
 
         match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut dag = DagRequest::default();
-                parser.merge_to(&mut dag)?;
+                box_try!(dag.merge_from(&mut input));
                 let mut table_scan = false;
                 let mut is_desc_scan = false;
                 if let Some(scan) = dag.get_executors().iter().next() {
@@ -272,7 +229,7 @@ impl<E: Engine> Endpoint<E> {
             }
             REQ_TYPE_ANALYZE => {
                 let mut analyze = AnalyzeReq::default();
-                parser.merge_to(&mut analyze)?;
+                box_try!(analyze.merge_from(&mut input));
                 if start_ts == 0 {
                     start_ts = analyze.get_start_ts_fallback();
                 }
@@ -310,7 +267,7 @@ impl<E: Engine> Endpoint<E> {
             }
             REQ_TYPE_CHECKSUM => {
                 let mut checksum = ChecksumRequest::default();
-                parser.merge_to(&mut checksum)?;
+                box_try!(checksum.merge_from(&mut input));
                 let table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
                 if start_ts == 0 {
                     start_ts = checksum.get_start_ts_fallback();
@@ -895,8 +852,6 @@ mod tests {
 
         let req = {
             let mut expr = Expr::default();
-            // The recursion limit in Prost and rust-protobuf (by default) is 100 (for rust-protobuf,
-            // that limit is set to 1000 as a configuration default).
             for _ in 0..101 {
                 let mut e = Expr::default();
                 e.mut_children().push(expr);

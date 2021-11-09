@@ -30,15 +30,16 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let r1 = cluster.run_conf_change();
 
+    let first_value = vec![0; 10240];
     // at least 4m data
-    for i in 0..2 * 1024 {
-        let key = format!("{:01024}", i);
-        let value = format!("{:01024}", i);
-        cluster.must_put(key.as_bytes(), value.as_bytes());
+    for i in 0..400 {
+        let key = format!("{:03}", i);
+        cluster.must_put(key.as_bytes(), &first_value);
     }
+    let first_key: &[u8] = b"000";
 
     let engine_2 = cluster.get_engine(2);
-    must_get_none(&engine_2, &format!("{:01024}", 0).into_bytes());
+    must_get_none(&engine_2, first_key);
     // add peer (2,2) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 2));
 
@@ -48,9 +49,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, key, value);
 
     // now snapshot must be applied on peer 2;
-    let key = format!("{:01024}", 0);
-    let value = format!("{:01024}", 0);
-    must_get_equal(&engine_2, key.as_bytes(), value.as_bytes());
+    must_get_equal(&engine_2, first_key, &first_value);
     let stale = Arc::new(AtomicBool::new(false));
     cluster.sim.wl().add_recv_filter(
         3,
@@ -60,16 +59,15 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
         )),
     );
     pd_client.must_add_peer(r1, new_peer(3, 3));
-    let mut i = 2 * 1024;
+    let mut i = 400;
     loop {
         i += 1;
-        let key = format!("{:01024}", i);
-        let value = format!("{:01024}", i);
-        cluster.must_put(key.as_bytes(), value.as_bytes());
+        let key = format!("{:03}", i);
+        cluster.must_put(key.as_bytes(), &first_value);
         if stale.load(Ordering::Relaxed) {
             break;
         }
-        if i > 10 * 1024 {
+        if i > 1000 {
             panic!("snapshot should be sent twice after {} kvs", i);
         }
     }
@@ -78,13 +76,6 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_3, b"k3", b"v3");
 
     // TODO: add more tests.
-}
-
-#[test]
-fn test_node_huge_snapshot() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_huge_snapshot(&mut cluster);
 }
 
 #[test]
@@ -451,6 +442,7 @@ fn test_server_snapshot_with_append() {
 #[test]
 fn test_inspected_snapshot() {
     let mut cluster = new_server_cluster(1, 3);
+    cluster.cfg.prefer_mem = false;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 8;
     cluster.cfg.raft_store.merge_max_log_gap = 3;

@@ -87,13 +87,6 @@ pub enum Error {
     #[error("Protobuf {0}")]
     Protobuf(#[from] ProtobufError),
 
-    #[cfg(feature = "prost-codec")]
-    #[error("DecodeError {0}")]
-    ProstDecode(#[from] prost::DecodeError),
-
-    #[cfg(feature = "prost-codec")]
-    ProstEncode(#[from] prost::EncodeError),
-
     #[error("Codec {0}")]
     Codec(#[from] codec::Error),
 
@@ -290,10 +283,6 @@ impl ErrorCodeExt for Error {
             Error::Snapshot(e) => e.error_code(),
             Error::SstImporter(e) => e.error_code(),
             Error::Encryption(e) => e.error_code(),
-            #[cfg(feature = "prost-codec")]
-            Error::ProstDecode(_) => error_code::raftstore::PROTOBUF,
-            #[cfg(feature = "prost-codec")]
-            Error::ProstEncode(_) => error_code::raftstore::PROTOBUF,
             Error::DataIsNotReady { .. } => error_code::raftstore::DATA_IS_NOT_READY,
             Error::DeadlineExceeded => error_code::raftstore::DEADLINE_EXCEEDED,
 

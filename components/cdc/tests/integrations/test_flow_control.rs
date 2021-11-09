@@ -7,13 +7,7 @@ use crate::{new_event_feed, TestSuiteBuilder};
 use futures::executor::block_on;
 use futures::SinkExt;
 use grpcio::WriteFlags;
-#[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    event::{row::OpType as EventRowOpType, Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataEvent,
-};
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use test_raftstore::*;
