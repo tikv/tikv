@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::fsm::{Fsm, FsmScheduler, Priority};
 use crate::mailbox::BasicMailbox;
 use crate::router::Router;
-use crossbeam::channel::{self, SendError};
+use crossbeam::channel::{self, tick, SendError};
 use file_system::{set_io_type, IOType};
 use std::borrow::Cow;
 use std::sync::atomic::AtomicUsize;
@@ -20,6 +20,8 @@ use std::time::Duration;
 use tikv_util::mpsc;
 use tikv_util::time::Instant;
 use tikv_util::{debug, error, info, safe_panic, thd_name, warn};
+
+const BEFORE_PAUSE_MICRO_TIME: u64 = 500;
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 enum FsmTypes<N, C> {
@@ -273,9 +275,18 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         }
 
         if batch.is_empty() {
-            self.handler.pause();
-            if let Ok(fsm) = self.fsm_receiver.recv() {
-                return batch.push(fsm);
+            channel::select! {
+                recv(self.fsm_receiver) -> msg => {
+                    if let Ok(fsm) = msg {
+                        return batch.push(fsm);
+                    }
+                }
+                recv(tick(Duration::from_micros(BEFORE_PAUSE_MICRO_TIME))) -> _ => {
+                    self.handler.pause();
+                    if let Ok(fsm) = self.fsm_receiver.recv() {
+                        return batch.push(fsm);
+                    }
+                }
             }
         }
         !batch.is_empty()
