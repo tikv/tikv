@@ -276,19 +276,7 @@ fn must_prewrite_put_err_impl<E: Engine>(
     props.is_retry_request = is_retry_request;
     props.commit_kind = commit_kind;
 
-    prewrite(
-        &mut txn,
-<<<<<<< HEAD
-        &default_txn_props(ts, pk, for_update_ts),
-=======
-        &mut reader,
-        &props,
->>>>>>> 6be941ab8... txn: Check constraint when retrying prewrite of non-pessimistic-locked keys in pessimistic transactions (#11264)
-        mutation,
-        &None,
-        is_pessimistic_lock,
-    )
-    .unwrap_err()
+    prewrite(&mut txn, &props, mutation, &None, is_pessimistic_lock).unwrap_err()
 }
 
 pub fn must_prewrite_put_err<E: Engine>(
