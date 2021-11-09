@@ -1255,7 +1255,7 @@ impl Initializer {
         let mut scanner = ScannerBuilder::new(snap, current)
             .fill_cache(false)
             .range(None, None)
-            .hint_min_ts(Some(self.checkpoint_ts))
+            // .hint_min_ts(Some(self.checkpoint_ts))
             .build_delta_scanner(self.checkpoint_ts, self.txn_extra_op)
             .unwrap();
         let conn_id = self.conn_id;
