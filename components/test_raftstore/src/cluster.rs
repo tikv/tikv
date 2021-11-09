@@ -17,6 +17,7 @@ use kvproto::raft_serverpb::{
 use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
 
+use crate::Config;
 use collections::{HashMap, HashSet};
 use encryption_export::DataKeyManager;
 use engine_rocks::raw::DB;
@@ -32,7 +33,6 @@ use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRoute
 use raftstore::store::transport::CasualRouter;
 use raftstore::store::*;
 use raftstore::{Error, Result};
-use tikv::config::TiKvConfig;
 use tikv::server::Result as ServerResult;
 use tikv_util::thread_group::GroupProperties;
 use tikv_util::time::Instant;
@@ -55,7 +55,7 @@ pub trait Simulator {
     fn run_node(
         &mut self,
         node_id: u64,
-        cfg: TiKvConfig,
+        cfg: Config,
         engines: Engines<RocksEngine, RocksEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
@@ -136,7 +136,7 @@ pub trait Simulator {
 }
 
 pub struct Cluster<T: Simulator> {
-    pub cfg: TiKvConfig,
+    pub cfg: Config,
     leaders: HashMap<u64, metapb::Peer>,
     pub count: usize,
 
@@ -164,7 +164,10 @@ impl<T: Simulator> Cluster<T> {
     ) -> Cluster<T> {
         // TODO: In the future, maybe it's better to test both case where `use_delete_range` is true and false
         Cluster {
-            cfg: new_tikv_config(id),
+            cfg: Config {
+                tikv: new_tikv_config(id),
+                prefer_mem: true,
+            },
             leaders: HashMap::default(),
             count,
             paths: vec![],
