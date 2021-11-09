@@ -56,41 +56,6 @@ pub fn prewrite<S: Snapshot>(
         return Ok((ts, OldValue::Unspecified));
     }
 
-<<<<<<< HEAD
-    // For keys that do not need pessimistic locks in a pessimistic async-commit transaction,
-    // we need to check the key has not been committed before if it is a retry request.
-    //
-    // It is to prevent the following case:
-    // The key was prewritten successfully before, but the response is lost. The client resends
-    // the same request after the transaction is resolved (to become committed). If we still
-    // write the lock, the client might commit these keys more than once.
-    //
-    // If the commit record is Rollback, it is still safe for us to write the Lock because the primary
-    // key of the transaction must also be rolled back, and this lock will be eventually rolled back.
-    // For simplicity, we don't handle this case specially, making it the same behavior as the Rollback
-    // record is collapsed.
-    if txn_props.is_pessimistic()
-        && !is_pessimistic_lock
-        && txn_props.is_retry_request
-        && matches!(txn_props.commit_kind, CommitKind::Async(..))
-    {
-        match reader.get_txn_commit_record(&mutation.key)? {
-            TxnCommitRecord::SingleRecord { commit_ts, write }
-                if write.write_type != WriteType::Rollback =>
-            {
-                info!("prewrited transaction has been committed";
-                        "start_ts" => txn_props.start_ts, "commit_ts" => commit_ts,
-                        "key" => ?mutation.key, "mutation_type" => ?mutation.mutation_type,
-                        "write_type" => ?write.write_type);
-                txn.clear();
-                return Ok((commit_ts, OldValue::Unspecified));
-            }
-            _ => {}
-        }
-    }
-
-=======
->>>>>>> 6be941ab8... txn: Check constraint when retrying prewrite of non-pessimistic-locked keys in pessimistic transactions (#11264)
     // Note that the `prev_write` may have invalid GC fence.
     let prev_write = if !mutation.skip_constraint_check() {
         mutation.check_for_newer_version(reader)?
