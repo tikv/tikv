@@ -434,6 +434,8 @@ mod tests {
         let mut buffer = vec![];
         data_key_with_buffer(b"abc", &mut buffer);
         assert_eq!(buffer, data_key(b"abc"));
+        data_key_with_buffer(b"cde", &mut buffer);
+        assert_eq!(buffer, data_key(b"cde"));
 
         let mut region = Region::default();
         // uninitialised region should not be passed in `enc_start_key` and `enc_end_key`.
