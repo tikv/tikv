@@ -67,7 +67,7 @@ pub struct BatchExecutorsRunner<SS> {
     /// 2. chunk: result is encoded column by column using chunk format.
     encode_type: EncodeType,
 
-    /// Whether is a paging request
+    /// If it's a paging request, paging_size indicates to the required size for current page.
     paging_size: Option<u64>,
 }
 
