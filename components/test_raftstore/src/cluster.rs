@@ -968,14 +968,8 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) {
-        match self.batch_put(key, vec![new_put_cf_cmd(cf, key, value)]) {
-            Ok(resp) => {
-                assert_eq!(resp.get_responses().len(), 1);
-                assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
-            }
-            Err(e) => {
-                panic!("has error: {:?}", e);
-            }
+        if let Err(e) = self.batch_put(key, vec![new_put_cf_cmd(cf, key, value)]) {
+            panic!("has error: {:?}", e);
         }
     }
 
@@ -1011,8 +1005,6 @@ impl<T: Simulator> Cluster<T> {
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Delete);
     }
 
     pub fn must_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
@@ -1025,8 +1017,6 @@ impl<T: Simulator> Cluster<T> {
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::DeleteRange);
     }
 
     pub fn must_notify_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
@@ -1036,8 +1026,6 @@ impl<T: Simulator> Cluster<T> {
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::DeleteRange);
     }
 
     pub fn must_flush_cf(&mut self, cf: &str, sync: bool) {
