@@ -97,6 +97,9 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
     }
 
     fn flush(&mut self) {
+        if self.tasks.is_empty() {
+            return;
+        }
         // Sync wal of kv_db to make sure the data before apply_index has been persisted to disk.
         if self.tasks.is_empty() {
             return;
