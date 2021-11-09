@@ -765,6 +765,9 @@ fn do_div_mod_impl(
         let dest = &mut res.word_buf[idx_to..idx_to + src.len()];
         dest.copy_from_slice(src);
     }
+    if res.is_zero() {
+        res.negative = false
+    }
     Some(res)
 }
 
