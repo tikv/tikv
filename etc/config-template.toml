@@ -497,11 +497,11 @@
 # create-if-missing = true
 
 ## RocksDB Write-Ahead Logs (WAL) recovery mode.
-## 0 : TolerateCorruptedTailRecords, tolerate incomplete record in trailing data on all logs;
-## 1 : AbsoluteConsistency, We don't expect to find any corruption in the WAL;
-## 2 : PointInTimeRecovery, Recover to point-in-time consistency;
-## 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
-# wal-recovery-mode = 2
+## "tolerate-corrupted-tail-records", tolerate incomplete record in trailing data on all logs;
+## "absolute-consistency", We don't expect to find any corruption in the WAL;
+## "point-in-time-recovery", We don't expect to find'Recover to point-in-time consistency;
+## "skip-any-corrupted-records", Recovery after a disaster;
+# wal-recovery-mode = "point-in-time-recovery"
 
 ## KV RocksDB WAL directory.
 ## This config specifies the absolute directory path for WAL.
@@ -558,14 +558,14 @@
 ## 2. rate-limiter-refill-period controls how often IO tokens are refilled. Smaller value will flatten
 ##    IO bursts while introducing more CPU overhead.
 ## 3. rate-limiter-mode indicates which types of operations count against the limit.
-##    1 : ReadOnly
-##    2 : WriteOnly
-##    3 : AllIo
+##    "read-only"
+##    "write-only"
+##    "all-io"
 ## 4. rate-limiter-auto_tuned enables dynamic adjustment of rate limit within the range
 ##    [10MB/s, rate_bytes_per_sec], according to the recent demand for background I/O.
 # rate-bytes-per-sec = "10GB"
 # rate-limiter-refill-period = "100ms"
-# rate-limiter-mode = 2
+# rate-limiter-mode = "all-io"
 # rate-limiter-auto-tuned = true
 
 ## Enable or disable the pipelined write.
@@ -717,11 +717,11 @@
 # max-compaction-bytes = "2GB"
 
 ## There are four different compaction priorities.
-## 0 : ByCompensatedSize
-## 1 : OldestLargestSeqFirst
-## 2 : OldestSmallestSeqFirst
-## 3 : MinOverlappingRatio
-# compaction-pri = 3
+## "by-compensated-size"
+## "oldest-largest-seq-first"
+## "oldest-smallest-seq-first"
+## "min-overlapping-ratio"
+# compaction-pri = "min-overlapping-ratio"
 
 ## Indicating if we'd put index/filter blocks to the block cache.
 ## If not specified, each "table reader" object will pre-load index/filter block during table
@@ -840,7 +840,7 @@
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
-# compaction-pri = 3
+# compaction-pri = "min-overlapping-ratio"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
@@ -861,7 +861,7 @@
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
-# compaction-pri = 0
+# compaction-pri = "by-compensated-size"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
@@ -918,7 +918,7 @@
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
-# compaction-pri = 0
+# compaction-pri = "by-compensated-size"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true
