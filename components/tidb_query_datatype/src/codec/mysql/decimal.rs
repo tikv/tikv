@@ -3501,8 +3501,20 @@ mod tests {
                 Some("-0.000000000000000000000000000000000000000000000000000000000000000"),
                 Some("-0.000000000000000000000000000000000000000000004078816115216077"),
             ),
-            (DEFAULT_DIV_FRAC_INCR, "-125", "489466941506", Some("0"), Some("0")),
-            (DEFAULT_DIV_FRAC_INCR, "-56", "489466941506", Some("0"), Some("0")),
+            (
+                DEFAULT_DIV_FRAC_INCR,
+                "-125",
+                "489466941506",
+                Some("0"),
+                Some("0"),
+            ),
+            (
+                DEFAULT_DIV_FRAC_INCR,
+                "-56",
+                "489466941506",
+                Some("0"),
+                Some("0"),
+            ),
         ];
 
         for (frac_incr, lhs_str, rhs_str, div_exp, rem_exp) in cases {
