@@ -1686,11 +1686,15 @@ pub mod tests {
             }
         };
 
-        let test = |key_prefix: &[u8], assertion_level| {
+        let test = |key_prefix: &[u8], assertion_level, prepare: &dyn for<'a> Fn(&'a [u8])| {
             let k1 = [key_prefix, b"k1"].concat();
             let k2 = [key_prefix, b"k2"].concat();
             let k3 = [key_prefix, b"k3"].concat();
             let k4 = [key_prefix, b"k4"].concat();
+
+            for k in &[&k1, &k2, &k3, &k4] {
+                prepare(k.as_slice());
+            }
 
             // Assertion passes (optimistic).
             prewrite_put(
@@ -1844,8 +1848,40 @@ pub mod tests {
             must_rollback(&engine, &k3, 40, true);
         };
 
-        test(b"a", AssertionLevel::Off);
-        test(b"b", AssertionLevel::Fast);
-        test(b"c", AssertionLevel::Strict);
+        let prepare_rollback = |k: &'_ _| must_rollback(&engine, k, 3, true);
+        let prepare_lock_record = |k: &'_ _| {
+            must_prewrite_lock(&engine, k, k, 3);
+            must_commit(&engine, k, 3, 5);
+        };
+        let prepare_delete = |k: &'_ _| {
+            must_prewrite_put(&engine, k, b"deleted-value", k, 3);
+            must_commit(&engine, k, 3, 5);
+            must_prewrite_delete(&engine, k, k, 7);
+            must_commit(&engine, k, 7, 9);
+        };
+        let prepare_gc_fence = |k: &'_ _| {
+            must_prewrite_put(&engine, k, b"deleted-value", k, 3);
+            must_commit(&engine, k, 3, 5);
+            must_cleanup_with_gc_fence(&engine, k, 5, 0, 7, true);
+        };
+
+        // Test multiple cases without recreating the engine. So use a increasing key prefix to
+        // avoid each case interfering each other.
+        let mut key_prefix = b'a';
+
+        let mut test_all_levels = |prepare| {
+            test(&[key_prefix], AssertionLevel::Off, prepare);
+            key_prefix += 1;
+            test(&[key_prefix], AssertionLevel::Fast, prepare);
+            key_prefix += 1;
+            test(&[key_prefix], AssertionLevel::Strict, prepare);
+            key_prefix += 1;
+        };
+
+        test_all_levels(&|_| ());
+        test_all_levels(&prepare_rollback);
+        test_all_levels(&prepare_lock_record);
+        test_all_levels(&prepare_delete);
+        test_all_levels(&prepare_gc_fence);
     }
 }
