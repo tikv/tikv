@@ -91,6 +91,9 @@ pub struct CompactionGuardGenerator<P: RegionInfoProvider> {
 
 impl<P: RegionInfoProvider> CompactionGuardGenerator<P> {
     fn initialize(&mut self) {
+        // The range may include non-data keys which are not included in any region,
+        // such as `STORE_IDENT_KEY`, `REGION_RAFT_KEY` and `REGION_META_KEY`,
+        // so check them and get covered regions only for the range of data keys.
         let res = match (
             self.smallest_key.starts_with(keys::DATA_PREFIX_KEY),
             self.largest_key.starts_with(keys::DATA_PREFIX_KEY),
