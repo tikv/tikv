@@ -501,7 +501,7 @@ where
             .into_iter()
             .filter_map(|batch| {
                 if !batch.is_empty() {
-                    if let Some(observe_region) = self.regions.get_mut(&batch.region.get_id()) {
+                    if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
                         let observe_id = batch.rts_id;
                         let region_id = observe_region.meta.id;
                         if observe_region.handle.id == observe_id {
@@ -517,7 +517,7 @@ where
                             });
                         } else {
                             debug!("resolved ts CmdBatch discarded";
-                                "region_id" => batch.region.get_id(),
+                                "region_id" => batch.region_id,
                                 "observe_id" => ?batch.rts_id,
                                 "current" => ?observe_region.handle.id,
                             );
