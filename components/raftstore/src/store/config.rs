@@ -489,6 +489,16 @@ impl Config {
         } else {
             self.store_batch_system.max_batch_size = Some(1024);
         }
+        if let Some(d) = self.store_batch_system.before_pause_wait_us {
+            if d > 1000 {
+                return Err(box_err!(
+                    "store-before-pause-wait-us should be less than or equal to 1000"
+                ));
+            }
+        } else {
+            self.store_batch_system.before_pause_wait_us =
+                Some(std::cmp::min(self.raft_msg_flush_interval_us, 1000));
+        }
         if self.store_io_pool_size == 0 {
             return Err(box_err!("store-io-pool-size should be greater than 0"));
         }
@@ -897,5 +907,19 @@ mod tests {
         cfg.peer_stale_state_check_interval = ReadableDuration::minutes(5);
         assert!(cfg.validate().is_ok());
         assert_eq!(cfg.max_peer_down_duration, ReadableDuration::minutes(10));
+
+        cfg = Config::new();
+        cfg.store_batch_system.before_pause_wait_us = Some(1500);
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_msg_flush_interval_us = 888;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.store_batch_system.before_pause_wait_us, Some(888));
+
+        cfg = Config::new();
+        cfg.raft_msg_flush_interval_us = 1888;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.store_batch_system.before_pause_wait_us, Some(1000));
     }
 }
