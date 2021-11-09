@@ -21,7 +21,7 @@ use tikv_util::mpsc;
 use tikv_util::time::Instant;
 use tikv_util::{debug, error, info, safe_panic, thd_name, warn};
 
-const BEFORE_PAUSE_MICRO_TIME: u64 = 500;
+const BEFORE_PAUSE_MICRO_TIME: u64 = 250;
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 enum FsmTypes<N, C> {
