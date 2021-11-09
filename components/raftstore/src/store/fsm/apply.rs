@@ -1024,9 +1024,11 @@ where
         apply_ctx: &mut ApplyContext<EK, W>,
         entry: &Entry,
     ) -> ApplyResult<EK::Snapshot> {
-        fail_point!("yield_apply_1000", self.region_id() == 1000, |_| {
-            ApplyResult::Yield
-        });
+        fail_point!(
+            "yield_apply_first_region",
+            self.region.get_start_key().is_empty() && !self.region.get_end_key().is_empty(),
+            |_| ApplyResult::Yield
+        );
 
         let index = entry.get_index();
         let term = entry.get_term();
