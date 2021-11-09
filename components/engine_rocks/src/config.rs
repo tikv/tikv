@@ -262,62 +262,50 @@ impl From<BlobRunMode> for DBTitanDBBlobRunMode {
     }
 }
 
-macro_rules! impl_enum_with_mirror_type_mod {
+macro_rules! rocksdb_enum_mod {
     ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
         pub mod $name {
             use std::fmt;
 
             use serde::{Serializer, Deserializer};
             use serde::de::{self, Unexpected, Visitor};
-            use rocksdb::$enum as T;
+            use rocksdb::$enum;
             use case_macros::*;
 
-            enum $enum {
-                $($variant = $value, )*
-            }
-
-            impl From<$enum> for T {
-                fn from(m: $enum) -> Self {
-                    match m {
-                        $( $enum::$variant => T::$variant, )*
-                    }
-                }
-            }
-
-            pub fn serialize<S>(mode: &T, serializer: S) -> Result<S::Ok, S::Error>
+            pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
                 where S: Serializer
             {
                 serializer.serialize_str(match *mode {
-                   $( T::$variant => kebab_case!($variant), )*
+                   $( $enum::$variant => kebab_case!($variant), )*
                 })
             }
 
-            pub fn deserialize<'de, D>(deserializer: D) -> Result<T, D::Error>
+            pub fn deserialize<'de, D>(deserializer: D) -> Result<$enum, D::Error>
                 where D: Deserializer<'de>
             {
                 struct EnumVisitor;
 
                 impl<'de> Visitor<'de> for EnumVisitor {
-                    type Value = T;
+                    type Value = $enum;
 
                     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                         write!(formatter, concat!("valid ", stringify!($enum)))
                     }
 
-                    fn visit_i64<E>(self, value: i64) -> Result<T, E>
+                    fn visit_i64<E>(self, value: i64) -> Result<$enum, E>
                         where E: de::Error
                     {
                         match value {
-                            $( $value => Ok(T::$variant), )*
+                            $( $value => Ok($enum::$variant), )*
                             _ => Err(E::invalid_value(Unexpected::Signed(value), &self))
                         }
                     }
 
-                    fn visit_str<E>(self, value: &str) -> Result<T, E>
+                    fn visit_str<E>(self, value: &str) -> Result<$enum, E>
                         where E: de::Error
                     {
                         match value {
-                            $(kebab_case!($variant) => Ok(T::from($enum::$variant)), )*
+                            $(kebab_case!($variant) => Ok($enum::$variant), )*
                             _ => Err(E::invalid_value(Unexpected::Str(value), &self))
                         }
                     }
@@ -358,34 +346,34 @@ macro_rules! impl_enum_with_mirror_type_mod {
     }
 }
 
-impl_enum_with_mirror_type_mod! {compaction_pri_serde CompactionPriority {
+rocksdb_enum_mod! {compaction_pri_serde CompactionPriority {
     ByCompensatedSize = 0,
     OldestLargestSeqFirst = 1,
     OldestSmallestSeqFirst = 2,
     MinOverlappingRatio = 3,
 }}
 
-impl_enum_with_mirror_type_mod! {rate_limiter_mode_serde DBRateLimiterMode {
+rocksdb_enum_mod! {rate_limiter_mode_serde DBRateLimiterMode {
     ReadOnly = 1,
     WriteOnly = 2,
     AllIo = 3,
 }}
 
-impl_enum_with_mirror_type_mod! {compaction_style_serde DBCompactionStyle {
+rocksdb_enum_mod! {compaction_style_serde DBCompactionStyle {
     Level = 0,
     Universal = 1,
     Fifo = 2,
     None = 3,
 }}
 
-impl_enum_with_mirror_type_mod! {recovery_mode_serde DBRecoveryMode {
+rocksdb_enum_mod! {recovery_mode_serde DBRecoveryMode {
     TolerateCorruptedTailRecords = 0,
     AbsoluteConsistency = 1,
     PointInTime = 2,
     SkipAnyCorruptedRecords = 3,
 }}
 
-impl_enum_with_mirror_type_mod! {perf_level_serde PerfLevel {
+rocksdb_enum_mod! {perf_level_serde PerfLevel {
     Uninitialized = 0,
     Disable = 1,
     EnableCount = 2,

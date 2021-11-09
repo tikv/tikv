@@ -4320,36 +4320,39 @@ mod tests {
     }
 
     #[test]
-    fn test_normal_compaction_style() {
+    fn test_compaction_style() {
         let normal_string_config = r#"
             compaction-style = "universal"
         "#;
-
         let config: DefaultCfConfig = toml::from_str(normal_string_config).unwrap();
         assert_eq!(config.compaction_style, DBCompactionStyle::Universal);
 
+        // Test backward compatibility with numeric value
         let normal_string_config = r#"
             compaction-style = 1
         "#;
         let config: DefaultCfConfig = toml::from_str(normal_string_config).unwrap();
         assert_eq!(config.compaction_style, DBCompactionStyle::Universal);
-    }
+        assert!(
+            toml::to_string(&config)
+                .unwrap()
+                .contains("compaction-style = \"universal\"")
+        );
 
-    #[test]
-    #[should_panic]
-    fn test_bad_compaction_style1() {
         let bad_string_config = r#"
             compaction-style = "level1"
         "#;
-        let _: DefaultCfConfig = toml::from_str(bad_string_config).unwrap();
-    }
+        let r = panic_hook::recover_safe(|| {
+            let _: DefaultCfConfig = toml::from_str(bad_string_config).unwrap();
+        });
+        assert!(r.is_err());
 
-    #[test]
-    #[should_panic]
-    fn test_bad_compaction_style2() {
         let bad_string_config = r#"
             compaction-style = 4
         "#;
-        let _: DefaultCfConfig = toml::from_str(bad_string_config).unwrap();
+        let r = panic_hook::recover_safe(|| {
+            let _: DefaultCfConfig = toml::from_str(bad_string_config).unwrap();
+        });
+        assert!(r.is_err());
     }
 }
