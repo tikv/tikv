@@ -3215,7 +3215,6 @@ checksum = "ab8809e0c18450a2db0f236d2a44ec0b4c1412d0eb936233579f0990faa5d5cd"
 dependencies = [
  "bitflags",
  "byteorder",
- "chrono",
  "flate2",
  "hex 0.4.2",
  "lazy_static",
