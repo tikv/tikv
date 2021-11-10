@@ -72,6 +72,7 @@ pub struct HandleMetrics {
     pub begin: usize,
     pub control: usize,
     pub normal: usize,
+    pub pause: usize,
 }
 
 pub struct Handler {
@@ -122,6 +123,11 @@ impl PollHandler<Runner, Runner> for Handler {
         let mut c = self.metrics.lock().unwrap();
         *c += self.local;
         self.local = HandleMetrics::default();
+    }
+
+    fn pause(&mut self) {
+        let mut c = self.metrics.lock().unwrap();
+        c.pause += 1;
     }
 }
 

@@ -695,6 +695,9 @@ impl Config {
             .with_label_values(&["store_pool_size"])
             .set(self.store_batch_system.pool_size as f64);
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_before_pause_wait_us"])
+            .set(self.store_batch_system.before_pause_wait_us.unwrap() as f64);
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_io_pool_size"])
             .set(self.store_io_pool_size as f64);
         CONFIG_RAFTSTORE_GAUGE
