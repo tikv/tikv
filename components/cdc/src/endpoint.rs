@@ -13,12 +13,6 @@ use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use grpcio::{ChannelBuilder, Environment};
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    event::Event as Event_oneof_event, ChangeDataRequest,
-    DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event, ResolvedTs,
-};
-#[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::{
     ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
     DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event, Event_oneof_event,
@@ -637,7 +631,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
         fail_point!("cdc_before_handle_multi_batch", |_| {});
         for batch in multi {
-            let region_id = batch.region.get_id();
+            let region_id = batch.region_id;
             let mut deregister = None;
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                 if delegate.has_failed() {
@@ -1593,8 +1587,6 @@ mod tests {
     use futures::executor::block_on;
     use futures::StreamExt;
     use kvproto::cdcpb::Header;
-    #[cfg(feature = "prost-codec")]
-    use kvproto::cdcpb::{event::Event as Event_oneof_event, Header};
     use kvproto::errorpb::Error as ErrorHeader;
     use raftstore::coprocessor::ObserveHandle;
     use raftstore::errors::Error as RaftStoreError;
