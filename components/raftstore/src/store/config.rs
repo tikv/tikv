@@ -218,7 +218,7 @@ pub struct Config {
     pub io_reschedule_concurrent_max_count: usize,
     pub io_reschedule_hotpot_duration: ReadableDuration,
 
-    pub raft_msg_flush_interval_us: u64,
+    pub raft_msg_flush_interval: ReadableDuration,
 
     // Deprecated! These configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -313,7 +313,7 @@ impl Default for Config {
             waterfall_metrics: false,
             io_reschedule_concurrent_max_count: 4,
             io_reschedule_hotpot_duration: ReadableDuration::secs(5),
-            raft_msg_flush_interval_us: 250,
+            raft_msg_flush_interval: ReadableDuration::micros(250),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -489,8 +489,10 @@ impl Config {
         } else {
             self.store_batch_system.max_batch_size = Some(1024);
         }
-        self.store_batch_system.before_pause_wait_us =
-            Some(std::cmp::min(self.raft_msg_flush_interval_us, 1000));
+        self.store_batch_system.before_pause_wait = Some(std::cmp::min(
+            self.raft_msg_flush_interval.0,
+            Duration::from_millis(1),
+        ));
         if self.store_io_pool_size == 0 {
             return Err(box_err!("store-io-pool-size should be greater than 0"));
         }
@@ -717,8 +719,8 @@ impl Config {
             .with_label_values(&["io_reschedule_hotpot_duration"])
             .set(self.io_reschedule_hotpot_duration.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["raft_msg_flush_interval_us"])
-            .set(self.raft_msg_flush_interval_us as f64);
+            .with_label_values(&["raft_msg_flush_interval"])
+            .set(self.raft_msg_flush_interval.as_secs() as f64);
     }
 
     fn write_change_into_metrics(change: ConfigChange) {
@@ -901,13 +903,19 @@ mod tests {
         assert_eq!(cfg.max_peer_down_duration, ReadableDuration::minutes(10));
 
         cfg = Config::new();
-        cfg.raft_msg_flush_interval_us = 888;
+        cfg.raft_msg_flush_interval = ReadableDuration::micros(888);
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.store_batch_system.before_pause_wait_us, Some(888));
+        assert_eq!(
+            cfg.store_batch_system.before_pause_wait,
+            Some(Duration::from_micros(888))
+        );
 
         cfg = Config::new();
-        cfg.raft_msg_flush_interval_us = 1888;
+        cfg.raft_msg_flush_interval = ReadableDuration::micros(1888);
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.store_batch_system.before_pause_wait_us, Some(1000));
+        assert_eq!(
+            cfg.store_batch_system.before_pause_wait,
+            Some(Duration::from_millis(1))
+        );
     }
 }
