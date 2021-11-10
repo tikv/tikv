@@ -184,15 +184,7 @@ impl Collector for ThreadsCollector {
                         .voluntary_ctxt_switches
                         .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                         .unwrap();
-<<<<<<< HEAD
-                    let voluntary_past = voluntary_total.get();
-                    let voluntary_delta = voluntary_ctxt_switches as i64 - voluntary_past;
-                    if voluntary_delta > 0 {
-                        voluntary_total.inc_by(voluntary_delta);
-                    }
-=======
                     voluntary_total.set(voluntary_ctxt_switches as i64);
->>>>>>> 9843264fb... Fix label leaking of thread metrics (#11196)
 
                     // Thread nonvoluntary context switches.
                     let nonvoluntary_ctxt_switches = status.nonvoluntary_ctxt_switches;
@@ -200,15 +192,7 @@ impl Collector for ThreadsCollector {
                         .nonvoluntary_ctxt_switches
                         .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                         .unwrap();
-<<<<<<< HEAD
-                    let nonvoluntary_past = nonvoluntary_total.get();
-                    let nonvoluntary_delta = nonvoluntary_ctxt_switches as i64 - nonvoluntary_past;
-                    if nonvoluntary_delta > 0 {
-                        nonvoluntary_total.inc_by(nonvoluntary_delta);
-                    }
-=======
                     nonvoluntary_total.set(nonvoluntary_ctxt_switches as i64);
->>>>>>> 9843264fb... Fix label leaking of thread metrics (#11196)
                 }
             }
         }
