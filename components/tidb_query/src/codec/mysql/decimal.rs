@@ -772,6 +772,9 @@ fn do_div_mod_impl(
         let dest = &mut res.word_buf[idx_to..idx_to + src.len()];
         dest.copy_from_slice(src);
     }
+    if res.is_zero() {
+        res.negative = false
+    }
     Some(res)
 }
 
@@ -3499,8 +3502,27 @@ mod tests {
                 0,
                 "-0.000000000000000000000000000000000000000000004078816115216077",
                 "770994069125765500000000000000000000000000000",
+<<<<<<< HEAD:components/tidb_query/src/codec/mysql/decimal.rs
                 Some("-0.000000000000000000000000000000000000000000000000000000000000000"),
                 Some("-0.000000000000000000000000000000000000000000004078816115216077")
+=======
+                Some("0.000000000000000000000000000000000000000000000000000000000000000"),
+                Some("-0.000000000000000000000000000000000000000000004078816115216077"),
+>>>>>>> 186efc7e2... copr: fix neg sign when decimal divide to zero (#11302):components/tidb_query_datatype/src/codec/mysql/decimal.rs
+            ),
+            (
+                DEFAULT_DIV_FRAC_INCR,
+                "-125",
+                "489466941506",
+                Some("0.000000000"),
+                Some("-125"),
+            ),
+            (
+                DEFAULT_DIV_FRAC_INCR,
+                "-56",
+                "489466941506",
+                Some("0.000000000"),
+                Some("-56"),
             ),
         ];
 
