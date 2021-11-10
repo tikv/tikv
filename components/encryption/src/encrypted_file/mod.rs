@@ -12,6 +12,7 @@ use tikv_util::time::Instant;
 use crate::master_key::*;
 use crate::metrics::*;
 use crate::Result;
+use slog_global::error;
 
 mod header;
 pub use header::*;
@@ -69,7 +70,15 @@ impl<'a> EncryptedFile<'a> {
         let mut tmp_file = OpenOptions::new()
             .create(true)
             .write(true)
-            .open(&tmp_path)?;
+            .open(&tmp_path)
+            .map_err(|e| {
+                error!(
+                    "EncryptedFile::write open failed";
+                    "path" => %tmp_path.display(),
+                    "error" => %e,
+                );
+                e
+            })?;
 
         // Encrypt the content.
         let encrypted_content = master_key
