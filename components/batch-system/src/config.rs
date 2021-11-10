@@ -24,7 +24,7 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             max_batch_size: None,
-            pool_size: 2,
+            pool_size: 4,
             reschedule_duration: ReadableDuration::secs(5),
             low_priority_pool_size: 1,
         }
