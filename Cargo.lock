@@ -195,6 +195,7 @@ dependencies = [
  "rusoto_sts",
  "slog",
  "slog-global",
+ "thiserror",
  "tikv_util",
  "tokio",
  "url",
@@ -222,7 +223,6 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crc64fast",
- "crossbeam",
  "encryption",
  "engine_rocks",
  "engine_traits",
@@ -255,6 +255,8 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
+ "tokio",
+ "tokio-stream",
  "txn_types",
  "yatp",
 ]
@@ -450,6 +452,10 @@ dependencies = [
  "serde_derive",
  "serde_json",
 ]
+
+[[package]]
+name = "case_macros"
+version = "0.1.0"
 
 [[package]]
 name = "cast"
@@ -1212,6 +1218,7 @@ name = "external_storage"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bytes 1.0.1",
  "encryption",
  "engine_traits",
@@ -1249,6 +1256,7 @@ name = "external_storage_export"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "aws",
  "cloud",
  "encryption",
@@ -1644,6 +1652,7 @@ dependencies = [
 name = "gcp"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "cloud",
  "futures-util",
  "http",
@@ -2192,7 +2201,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#46cf7a082196f7dcedf9d0ed797b2d28c9570745"
+source = "git+https://github.com/tikv/rust-rocksdb.git#06aa625e21b0b2c632cc02b7d001e6d5671bbc38"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2211,7 +2220,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#46cf7a082196f7dcedf9d0ed797b2d28c9570745"
+source = "git+https://github.com/tikv/rust-rocksdb.git#06aa625e21b0b2c632cc02b7d001e6d5671bbc38"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3206,7 +3215,6 @@ checksum = "ab8809e0c18450a2db0f236d2a44ec0b4c1412d0eb936233579f0990faa5d5cd"
 dependencies = [
  "bitflags",
  "byteorder",
- "chrono",
  "flate2",
  "hex 0.4.2",
  "lazy_static",
@@ -3878,7 +3886,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#46cf7a082196f7dcedf9d0ed797b2d28c9570745"
+source = "git+https://github.com/tikv/rust-rocksdb.git#06aa625e21b0b2c632cc02b7d001e6d5671bbc38"
 dependencies = [
  "libc 0.2.106",
  "librocksdb_sys",
@@ -5170,7 +5178,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "5.3.0-alpha"
+version = "5.4.0-alpha"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5178,6 +5186,7 @@ dependencies = [
  "backtrace",
  "batch-system",
  "byteorder",
+ "case_macros",
  "chrono",
  "codec",
  "collections",
@@ -5589,6 +5598,17 @@ dependencies = [
  "futures 0.3.15",
  "openssl",
  "pin-project",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-stream"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50145484efff8818b5ccd256697f36863f587da82cf8b409c53adf1e840798e3"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
  "tokio",
 ]
 
