@@ -1453,6 +1453,10 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
 #[cfg(test)]
 mod tests {
     use collections::HashSet;
+<<<<<<< HEAD
+=======
+    use engine_rocks::RocksEngine;
+>>>>>>> 3fe6ec216... remove hint_min_ts for cdc incremental scanner (#11314)
     use engine_traits::DATA_CFS;
     use futures::executor::block_on;
     use futures::StreamExt;
