@@ -147,12 +147,10 @@ fn test_serde_custom_tikv_config() {
     apply_batch_system.max_batch_size = Some(22);
     apply_batch_system.pool_size = 4;
     apply_batch_system.reschedule_duration = ReadableDuration::secs(3);
-    apply_batch_system.before_pause_wait_us = Some(321);
     let mut store_batch_system = BatchSystemConfig::default();
     store_batch_system.max_batch_size = Some(21);
     store_batch_system.pool_size = 3;
     store_batch_system.reschedule_duration = ReadableDuration::secs(2);
-    store_batch_system.before_pause_wait_us = Some(123);
     value.raft_store = RaftstoreConfig {
         prevote: false,
         raftdb_path: "/var".to_owned(),

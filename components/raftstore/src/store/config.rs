@@ -901,10 +901,6 @@ mod tests {
         assert_eq!(cfg.max_peer_down_duration, ReadableDuration::minutes(10));
 
         cfg = Config::new();
-        cfg.store_batch_system.before_pause_wait_us = Some(1500);
-        assert!(cfg.validate().is_err());
-
-        cfg = Config::new();
         cfg.raft_msg_flush_interval_us = 888;
         assert!(cfg.validate().is_ok());
         assert_eq!(cfg.store_batch_system.before_pause_wait_us, Some(888));
