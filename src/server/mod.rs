@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub(crate) mod metrics;
+pub mod metrics;
 mod raft_client;
 
 pub mod config;

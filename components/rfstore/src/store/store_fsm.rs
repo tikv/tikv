@@ -1,27 +1,200 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::Config;
-use crate::RaftRouter;
+use crate::{RaftRouter, RaftStoreRouter};
+use concurrency_manager::ConcurrencyManager;
+use fail::fail_point;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
-use kvproto::pdpb::QueryStats;
-use kvproto::pdpb::StoreStats;
+use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
-use raftstore::coprocessor::CoprocessorHost;
+use pd_client::PdClient;
+use raftstore::coprocessor::split_observer::SplitObserver;
+use raftstore::coprocessor::{BoxAdminObserver, CoprocessorHost};
 use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+use tikv_util::config::VersionTrack;
+use tikv_util::mpsc::{Receiver, Sender};
+use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::RingQueue;
+use time::Timespec;
 
 use super::*;
+use crate::{Error, Result};
 
-pub(crate) fn create_raft_batch_system(conf: &Config) -> (RaftRouter, RaftBatchSystem) {
-    todo!()
+pub const PENDING_MSG_CAP: usize = 100;
+
+struct Workers {
+    pd_worker: FutureWorker<PdTask>,
+    region_worker: Worker,
+    region_apply_worker: Worker,
+    coprocessor_host: CoprocessorHost<kvengine::Engine>,
 }
 
-pub struct RaftBatchSystem {}
+pub struct RaftBatchSystem {
+    router: RaftRouter,
 
-pub struct StoreInfo<E> {
-    pub engine: E,
+    // Change to some after spawn.
+    ctx: Option<GlobalContext>,
+    workers: Option<Workers>,
+
+    // Change to none after spawn.
+    peer_receiver: Option<Receiver<PeerMsg>>,
+    store_fsm: Option<StoreFSM>,
+}
+
+impl RaftBatchSystem {
+    pub fn new(engines: &Engines) -> Self {
+        let (store_sender, store_receiver) =
+            engines.meta_change_channel.lock().unwrap().take().unwrap();
+        let (peer_sender, peer_receiver) = tikv_util::mpsc::unbounded();
+        let router = RaftRouter::new(peer_sender, store_sender);
+        Self {
+            router,
+            ctx: None,
+            workers: None,
+            peer_receiver: Some(peer_receiver),
+            store_fsm: Some(StoreFSM::new(store_receiver)),
+        }
+    }
+
+    pub fn router(&self) -> RaftRouter {
+        self.router.clone()
+    }
+
+    // TODO: reduce arguments
+    pub fn spawn<C: PdClient + 'static>(
+        &mut self,
+        meta: metapb::Store,
+        cfg: Arc<VersionTrack<Config>>,
+        mut engines: Engines,
+        trans: Box<dyn Transport>,
+        pd_client: Arc<C>,
+        pd_worker: FutureWorker<PdTask>,
+        store_meta: Arc<Mutex<StoreMeta>>,
+        mut coprocessor_host: CoprocessorHost<kvengine::Engine>,
+        concurrency_manager: ConcurrencyManager,
+    ) -> Result<()> {
+        assert!(self.workers.is_none());
+        // TODO: we can get cluster meta regularly too later.
+
+        // TODO load coprocessors from configuration
+        coprocessor_host
+            .registry
+            .register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
+
+        let mut workers = Workers {
+            pd_worker,
+            region_worker: Worker::new("region-worker"),
+            region_apply_worker: Worker::new("region-apply-worker"),
+            coprocessor_host: coprocessor_host.clone(),
+        };
+
+        let region_apply_runner = RegionApplyRunner::new(engines.kv.clone(), self.router());
+        let region_apply_scheduler = workers
+            .region_apply_worker
+            .start_with_timer("region-apply-worker", region_apply_runner);
+
+        let region_runner =
+            RegionRunner::new(engines.kv.clone(), self.router(), region_apply_scheduler);
+        let region_scheduler = workers
+            .region_worker
+            .start_with_timer("snapshot-worker", region_runner);
+
+        let ctx = GlobalContext {
+            cfg,
+            engines,
+            store: meta.clone(),
+            store_meta,
+            router: self.router.clone(),
+            trans,
+            pd_scheduler: workers.pd_worker.scheduler(),
+            region_scheduler,
+            coprocessor_host,
+        };
+
+        let mut region_peers = self.load_peers()?;
+        let mut region_ids = Vec::with_capacity(region_peers.len());
+        for peer in region_peers.drain(..) {
+            region_ids.push(peer.peer.region_id);
+            self.router.register(peer)
+        }
+        let store_id = ctx.store.get_id();
+        let pd_runner = PdRunner::new(
+            store_id,
+            pd_client,
+            self.router.clone(),
+            workers.pd_worker.scheduler(),
+            ctx.cfg.value().pd_store_heartbeat_tick_interval.into(),
+            concurrency_manager,
+        );
+        workers.pd_worker.start(pd_runner)?;
+        self.workers = Some(workers);
+        self.ctx = Some(ctx);
+        let peer_receiver = self.peer_receiver.take().unwrap();
+        let (mut rw, apply_recevier) = RaftWorker::new(
+            self.ctx.clone().unwrap(),
+            peer_receiver,
+            self.router.clone(),
+        );
+        std::thread::spawn(move || {
+            rw.run();
+        });
+        let mut aw = ApplyWorker::new(
+            self.ctx.clone().unwrap(),
+            apply_recevier,
+            self.router.clone(),
+        );
+        let peer_handle = std::thread::spawn(move || {
+            aw.run();
+        });
+
+        let store_fsm = self.store_fsm.take().unwrap();
+        let mut sw = StoreWorker::new(store_fsm, self.ctx.clone().unwrap());
+        let store_handle = std::thread::spawn(move || {
+            sw.run();
+        });
+
+        self.router.send_store(StoreMsg::Start {
+            store: self.ctx.as_ref().unwrap().store.clone(),
+        });
+        for region_id in region_ids {
+            self.router
+                .send(region_id, PeerMsg::new(region_id, PeerMsgPayload::Start));
+        }
+        Ok(())
+    }
+
+    pub fn shutdown(&mut self) {
+        if self.workers.is_none() {
+            return;
+        }
+        todo!(); // stop the raft and apply worker.
+        let mut workers = self.workers.take().unwrap();
+        // Wait all workers finish.
+        let handle = workers.pd_worker.stop();
+        fail_point!("after_shutdown_apply");
+
+        if let Some(h) = handle {
+            h.join().unwrap();
+        }
+        workers.coprocessor_host.shutdown();
+        workers.region_worker.stop();
+        workers.region_apply_worker.stop();
+    }
+
+    /// load_peers loads peers in this store. It scans the kv engine, loads all regions
+    /// and their peers from it, and schedules snapshot worker if necessary.
+    /// WARN: This store should not be used before initialized.
+    fn load_peers(&self) -> Result<Vec<PeerFSM>> {
+        todo!()
+    }
+}
+
+pub struct StoreInfo {
+    pub engine: kvengine::Engine,
     pub capacity: u64,
 }
 
@@ -56,6 +229,8 @@ pub struct StoreMeta {
     /// source_region_id -> need_atomic
     /// Used for reminding the source peer to switch to ready in `atomic_snap_regions`.
     pub destroyed_region_for_snap: HashMap<u64, bool>,
+    /// region_id -> `RegionReadProgress`
+    pub region_read_progress: RegionReadProgressRegistry,
 }
 
 impl StoreMeta {
@@ -72,6 +247,7 @@ impl StoreMeta {
             targets_map: HashMap::default(),
             atomic_snap_regions: HashMap::default(),
             destroyed_region_for_snap: HashMap::default(),
+            region_read_progress: RegionReadProgressRegistry::new(),
         }
     }
 
@@ -92,4 +268,124 @@ impl StoreMeta {
     }
 }
 
-pub(crate) struct StoreFSM {}
+#[derive(Clone)]
+pub(crate) struct GlobalContext {
+    pub(crate) cfg: Arc<VersionTrack<Config>>,
+    pub(crate) engines: Engines,
+    pub(crate) store: metapb::Store,
+    pub(crate) store_meta: Arc<Mutex<StoreMeta>>,
+    pub(crate) router: RaftRouter,
+    pub(crate) trans: Box<dyn Transport>,
+    pub(crate) pd_scheduler: FutureScheduler<PdTask>,
+    pub(crate) region_scheduler: Scheduler<RegionTask>,
+    pub(crate) coprocessor_host: CoprocessorHost<kvengine::Engine>,
+}
+
+pub(crate) struct RaftContext {
+    pub(crate) global: GlobalContext,
+    pub(crate) apply_msgs: ApplyMsgs,
+    pub(crate) ready_res: Vec<ReadyICPair>,
+    pub(crate) raft_wb: rfengine::WriteBatch,
+    pub(crate) pending_count: usize,
+    pub(crate) local_stats: StoreStats,
+}
+
+#[derive(Default)]
+pub(crate) struct StoreStats {
+    engine_total_bytes_written: u64,
+    engine_total_keys_written: u64,
+    is_busy: bool,
+}
+
+impl RaftContext {
+    pub(crate) fn new(global: GlobalContext) -> Self {
+        Self {
+            global,
+            apply_msgs: ApplyMsgs { msgs: vec![] },
+            ready_res: vec![],
+            raft_wb: rfengine::WriteBatch::new(),
+            pending_count: 0,
+            local_stats: Default::default(),
+        }
+    }
+
+    pub(crate) fn flush_local_stats(&mut self) {
+        todo!()
+    }
+}
+
+pub(crate) struct StoreFSM {
+    pub(crate) id: u64,
+    pub(crate) start_time: Option<Timespec>,
+    pub(crate) receiver: Receiver<StoreMsg>,
+}
+
+impl StoreFSM {
+    pub fn new(receiver: Receiver<StoreMsg>) -> Self {
+        Self {
+            id: 0,
+            start_time: None,
+            receiver,
+        }
+    }
+}
+
+pub(crate) struct StoreMsgHandler {
+    store: StoreFSM,
+    ctx: GlobalContext,
+}
+
+impl StoreMsgHandler {
+    pub(crate) fn new(store: StoreFSM, ctx: GlobalContext) -> StoreMsgHandler {
+        Self { store, ctx }
+    }
+
+    pub(crate) fn handle_msg(&self, msg: StoreMsg) {
+        match msg {
+            StoreMsg::Tick(store_tick) => self.on_tick(store_tick),
+            StoreMsg::Start { store } => self.start(store),
+            StoreMsg::StoreUnreachable { store_id } => self.on_store_unreachable(store_id),
+            StoreMsg::RaftMessage(raft_msg) => self.on_raft_message(raft_msg),
+            StoreMsg::GenerateEngineChangeSet(_) => self.on_generate_engine_meta_change(msg),
+        }
+    }
+
+    pub(crate) fn on_tick(&self, tick: StoreTick) {
+        match tick {
+            STORE_TICK_PD_HEARTBEAT => {
+                self.on_pd_heartbeat_tick();
+            }
+            STORE_TICK_CONSISTENCY_CHECK => {
+                self.on_consistency_check_tick();
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn on_pd_heartbeat_tick(&self) {
+        todo!()
+    }
+
+    pub(crate) fn on_consistency_check_tick(&self) {
+        todo!()
+    }
+
+    pub(crate) fn start(&self, store: metapb::Store) {
+        todo!()
+    }
+
+    pub(crate) fn on_store_unreachable(&self, store_id: u64) {
+        todo!()
+    }
+
+    pub(crate) fn on_raft_message(&self, msg: Box<RaftMessage>) {
+        todo!()
+    }
+
+    pub(crate) fn on_generate_engine_meta_change(&self, msg: StoreMsg) {
+        // GenerateEngineMetaChange message is first sent to store handler to find a region id for this change,
+        // Once we got the region ID, we send it to the router to create a raft log then propose this log, replicate to
+        // followers.
+        todo!()
+    }
+}

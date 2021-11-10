@@ -23,6 +23,7 @@ futures = { version = "0.3", features = ["thread-pool"] }
 crossbeam = "0.8"
 crossbeam-epoch = "0.9.5"
 dashmap = "4.0"
+dyn-clone = "1.0"
 fslock = "0.1.7"
 moka = "0.5.1"
 farmhash = "1.1.5"

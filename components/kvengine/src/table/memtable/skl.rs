@@ -654,6 +654,8 @@ pub struct SKIterator {
     reversed: bool,
 }
 
+unsafe impl Send for SKIterator {}
+
 #[allow(dead_code)]
 impl SKIterator {
     fn load_node(&mut self) {

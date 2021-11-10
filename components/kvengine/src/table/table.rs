@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::dfs;
 
-pub trait Iterator {
+pub trait Iterator: Send {
     // next returns the next entry with different key on the latest version.
     // If old version is needed, call next_version.
     fn next(&mut self);
@@ -67,6 +67,8 @@ pub struct Value {
     val_len: u32,
     pub version: u64,
 }
+
+unsafe impl Send for Value {}
 
 impl Value {
     pub(crate) fn new() -> Self {

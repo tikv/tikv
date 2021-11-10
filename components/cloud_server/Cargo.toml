@@ -14,7 +14,7 @@ snmalloc = ["tikv/snmalloc"]
 portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
-failpoints = ["tikv/failpoints"]
+failpoints = ["fail/failpoints"]
 bcc-iosnoop = ["tikv/bcc-iosnoop"]
 cloud-aws = [ "encryption_export/cloud-aws" ]
 cloud-gcp = [ "encryption_export/cloud-gcp" ]
@@ -84,22 +84,29 @@ encryption_export = { path = "../encryption/export", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
+fail = "0.4"
 file_system = { path = "../file_system", default-features = false }
 fs2 = "0.4"
 futures = "0.3"
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 grpcio = { version = "0.9", default-features = false, features = ["openssl-vendored"] }
+grpcio-health = { version = "0.9", default-features = false }
 hex = "0.4"
+hyper = { version = "0.14", features = ["full"] }
 keys = { path = "../keys", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 #kvproto = { path = "/Users/evan/gorepo/src/github.com/pingcap/kvproto", default-features = false }
 kvengine = { path = "../kvengine", default-features = false }
+lazy_static = "1.3"
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../log_wrappers" }
 nix = "0.11"
+online_config = { path = "../online_config" }
+openssl = "0.10"
 pd_client = { path = "../pd_client", default-features = false }
 prometheus = { version = "0.12", features = ["nightly"] }
+prometheus-static-metric = "0.5"
 promptly = "0.3.0"
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
@@ -108,19 +115,28 @@ raftstore = { path = "../raftstore", default-features = false }
 rfengine = { path = "../rfengine", default-features = false }
 rfstore = { path = "../rfstore", default-features = false }
 rand = "0.8"
-resolved_ts = { path = "../../components/resolved_ts", default-features = false }
+regex = "1.3"
+resolved_ts = { path = "../resolved_ts", default-features = false }
+seahash = "4.1.0"
 security = { path = "../security", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_derive = "1.0"
+serde_ignored = "0.1"
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv = { path = "../..", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
+thiserror = "1.0"
+tokio-timer = "0.2"
 toml = "0.5"
 txn_types = { path = "../txn_types", default-features = false }
+uuid = { version = "0.8.1", features = ["serde", "v4"] }
 vlog = "0.1.4"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 resource_metering = { path = "../resource_metering" }
+paste = "1.0"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"

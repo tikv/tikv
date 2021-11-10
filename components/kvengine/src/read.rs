@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use core::slice::{self};
+use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
@@ -8,6 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use crossbeam::atomic::AtomicCell;
 use slog_global::info;
 
 use crate::shard::{L0Tables, MemTables};
@@ -41,7 +43,6 @@ pub struct SnapAccess {
     shard: Arc<Shard>,
     managed_ts: u64,
     write_sequence: u64,
-    hints: [RefCell<memtable::Hint>; NUM_CFS],
     splitting: Option<Arc<SplitContext>>,
     mem_tbls: Arc<MemTables>,
     l0_tbls: Arc<L0Tables>,
@@ -58,11 +59,6 @@ impl Debug for SnapAccess {
 impl SnapAccess {
     pub fn new(shard: &Arc<Shard>) -> Self {
         let shard = shard.clone();
-        let hints = [
-            RefCell::new(memtable::Hint::new()),
-            RefCell::new(memtable::Hint::new()),
-            RefCell::new(memtable::Hint::new()),
-        ];
         let mut splitting = None;
         let g = &epoch::pin();
         if shard.is_splitting() {
@@ -80,7 +76,6 @@ impl SnapAccess {
             shard,
             write_sequence,
             managed_ts: 0,
-            hints,
             mem_tbls,
             l0_tbls,
             splitting,
@@ -132,12 +127,7 @@ impl SnapAccess {
         }
         for i in 0..self.mem_tbls.tbls.len() {
             let tbl = self.mem_tbls.tbls[i].get_cf(cf);
-            let v: table::Value;
-            if i == 0 {
-                v = tbl.get_with_hint(key, version, &mut self.hints[cf].try_borrow_mut().unwrap());
-            } else {
-                v = tbl.get(key, version);
-            }
+            let v = tbl.get(key, version);
             if v.is_valid() {
                 return v;
             }
@@ -232,7 +222,6 @@ pub struct Iterator {
 }
 
 impl Iterator {
-
     pub fn valid(&self) -> bool {
         self.val.is_valid()
     }
@@ -312,5 +301,9 @@ impl Iterator {
 
     pub fn set_all_versions(&mut self, all_versions: bool) {
         self.all_versions = all_versions;
+    }
+
+    pub fn is_reverse(&self) -> bool {
+        return self.reversed;
     }
 }

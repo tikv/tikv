@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::coprocessor;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig};
+use raftstore::coprocessor;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tikv_util::config::{ReadableDuration, ReadableSize};
@@ -47,11 +47,25 @@ pub struct Config {
 
     // The lease provided by a successfully proposed and applied entry.
     pub raft_store_max_leader_lease: ReadableDuration,
+
+    // Interval to gc unnecessary raft log (ms).
+    pub raft_log_gc_tick_interval: ReadableDuration,
+
+    // Interval (ms) to check region whether need to be split or not.
+    pub split_region_check_tick_interval: ReadableDuration,
+
+    pub pd_heartbeat_tick_interval: ReadableDuration,
+
+    pub pd_store_heartbeat_tick_interval: ReadableDuration,
+
+    pub consistency_check_interval: ReadableDuration,
+
+    pub channel_capacity: usize,
 }
 
 impl Default for Config {
     fn default() -> Config {
-        let split_size = ReadableSize::mb(coprocessor::SPLIT_SIZE_MB);
+        let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
             prevote: true,
             raft_base_tick_interval: ReadableDuration::secs(1),
@@ -67,6 +81,14 @@ impl Default for Config {
             abnormal_leader_missing_duration: ReadableDuration::minutes(10),
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
             raft_store_max_leader_lease: ReadableDuration::secs(9),
+            raft_log_gc_tick_interval: ReadableDuration::secs(10),
+            split_region_check_tick_interval: ReadableDuration::secs(10),
+            pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
+            pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
+            // Disable consistency check by default as it will hurt performance.
+            // We should turn on this only in our tests.
+            consistency_check_interval: ReadableDuration::secs(0),
+            channel_capacity: 40960,
         }
     }
 }
@@ -82,5 +104,9 @@ impl Config {
 
     pub fn raft_heartbeat_interval(&self) -> Duration {
         self.raft_base_tick_interval.0 * self.raft_heartbeat_ticks as u32
+    }
+
+    pub fn from_old(old: &raftstore::store::Config) -> Self {
+        todo!()
     }
 }

@@ -5,6 +5,7 @@ use crate::errors::*;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use time::Timespec;
 
+#[derive(Debug)]
 pub(crate) struct Proposal {
     pub(crate) is_conf_change: bool,
     pub(crate) index: u64,
@@ -17,10 +18,12 @@ pub(crate) struct Proposal {
 }
 
 pub(crate) struct ApplyMsgs {
-    pub(crate) msgs: Vec<PeerMsg>,
+    pub(crate) msgs: Vec<ApplyMsg>,
 }
 
-pub(crate) struct ApplyBatch {}
+pub(crate) struct ApplyBatch {
+    pub(crate) msgs: Vec<ApplyMsg>,
+}
 
 pub(crate) struct Applier {}
 
@@ -38,7 +41,7 @@ pub fn is_conf_change_cmd(msg: &RaftCmdRequest) -> bool {
     req.has_change_peer() || req.has_change_peer_v2()
 }
 
-pub fn notify_stale_req(term: u64, cb: Callback) {
-    let resp = cmd_resp::err_resp(Error::StaleCommand, term);
-    cb.invoke_with_response(resp);
-}
+#[derive(Clone)]
+pub(crate) struct ApplyRouter {}
+
+pub(crate) const APPLY_STATE_KEY: &'static str = "apply_state";

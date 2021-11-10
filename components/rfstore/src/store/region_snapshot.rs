@@ -54,12 +54,22 @@ impl RegionSnapshot {
         self.snap.get_write_sequence()
     }
 
-    pub fn iter(&self, iter_opt: IterOptions) -> RegionIterator {
-        RegionIterator::new(self.snap.clone(), iter_opt)
+    pub fn iter(&self, iter_opt: IterOptions, reverse: bool) -> RegionIterator {
+        RegionIterator::new(self.snap.clone(), iter_opt, reverse)
     }
 
-    pub fn iter_cf(&self, cf: &str, iter_opt: IterOptions) -> Result<RegionIterator> {
-        Ok(RegionIterator::new_cf(self.snap.clone(), iter_opt, cf))
+    pub fn iter_cf(
+        &self,
+        cf: &str,
+        iter_opt: IterOptions,
+        reverse: bool,
+    ) -> Result<RegionIterator> {
+        Ok(RegionIterator::new_cf(
+            self.snap.clone(),
+            iter_opt,
+            cf,
+            reverse,
+        ))
     }
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
@@ -71,7 +81,7 @@ impl RegionSnapshot {
         let start = KeyBuilder::from_slice(start_key, 0, 0);
         let end = KeyBuilder::from_slice(end_key, 0, 0);
         let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
-        self.scan_impl(self.iter(iter_opt), start_key, f)
+        self.scan_impl(self.iter(iter_opt, false), start_key, f)
     }
 
     // like `scan`, only on a specific column family.
@@ -89,7 +99,7 @@ impl RegionSnapshot {
         let start = KeyBuilder::from_slice(start_key, 0, 0);
         let end = KeyBuilder::from_slice(end_key, 0, 0);
         let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
-        self.scan_impl(self.iter_cf(cf, iter_opt)?, start_key, f)
+        self.scan_impl(self.iter_cf(cf, iter_opt, false)?, start_key, f)
     }
 
     fn scan_impl<F>(&self, mut it: RegionIterator, start_key: &[u8], mut f: F) -> Result<()>
@@ -174,17 +184,21 @@ impl RegionSnapshot {
 /// iterate in the region. It behaves as if underlying
 /// db only contains one region.
 pub struct RegionIterator {
-    cf: usize,
     iter: kvengine::read::Iterator,
 }
 
 // we use engine::rocks's style iterator, doesn't need to impl std iterator.
 impl RegionIterator {
-    pub fn new(snap: Arc<SnapAccess>, mut iter_opt: IterOptions) -> RegionIterator {
-        Self::new_cf(snap, iter_opt, "write")
+    pub fn new(snap: Arc<SnapAccess>, mut iter_opt: IterOptions, reverse: bool) -> RegionIterator {
+        Self::new_cf(snap, iter_opt, "write", reverse)
     }
 
-    pub fn new_cf(snap: Arc<SnapAccess>, mut iter_opt: IterOptions, cf: &str) -> RegionIterator {
+    pub fn new_cf(
+        snap: Arc<SnapAccess>,
+        mut iter_opt: IterOptions,
+        cf: &str,
+        reverse: bool,
+    ) -> RegionIterator {
         let cf_num = match cf {
             "write" => 0,
             "lock" => 1,
@@ -192,8 +206,7 @@ impl RegionIterator {
             _ => 0,
         };
         RegionIterator {
-            cf: cf_num,
-            iter: snap.new_iterator(cf_num, false, false),
+            iter: snap.new_iterator(cf_num, reverse, false),
         }
     }
 
@@ -220,6 +233,10 @@ impl RegionIterator {
     #[inline]
     pub fn item(&self) -> kvengine::Item {
         self.iter.item()
+    }
+
+    pub fn is_reverse(&self) -> bool {
+        self.iter.is_reverse()
     }
 }
 

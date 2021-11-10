@@ -2,9 +2,9 @@
 
 use crate::{dfs::InMemFS, *};
 use bytes::{Buf, Bytes};
-use crossbeam::channel::{self, Sender};
 use crossbeam_epoch as epoch;
 use kvenginepb as pb;
+use kvenginepb::ChangeSet;
 use protobuf::RepeatedField;
 use std::{
     ops::Deref,
@@ -13,6 +13,7 @@ use std::{
     time::Duration,
     vec,
 };
+use tikv_util::mpsc;
 
 macro_rules! unwrap_or_return {
     ( $e:expr, $m:expr ) => {
@@ -29,24 +30,26 @@ macro_rules! unwrap_or_return {
 #[test]
 fn test_engine() {
     init_logger();
-    let (listener_tx, listener_rx) = channel::bounded(256);
+    let (listener_tx, listener_rx) = mpsc::bounded(256);
     let tester = EngineTester::new();
-
-    let engine = Engine::open(
+    let meta_change_listener = Box::new(TestMetaChangeListener {
+        sender: listener_tx,
+    });
+    let mut engine = Engine::open(
         tester.fs.clone(),
         tester.opts.clone(),
         tester.clone(),
         tester.clone(),
         tester.core.clone(),
-        listener_tx,
+        meta_change_listener,
     )
     .unwrap();
     {
         let shard = engine.get_shard(1).unwrap();
         store_bool(&shard.active, true);
     }
-    let (applier_tx, applier_rx) = channel::bounded(256);
-    let (meta_tx, meta_rx) = channel::bounded(256);
+    let (applier_tx, applier_rx) = mpsc::bounded(256);
+    let (meta_tx, meta_rx) = mpsc::bounded(256);
     let meta_listener = MetaListener::new(listener_rx, applier_tx.clone());
     thread::spawn(move || {
         meta_listener.run();
@@ -74,6 +77,19 @@ fn test_engine() {
     load_data(engine.opts.clone(), begin, end, 0, 10, applier_tx.clone());
     check_get(begin, end, cf, val_repeat, &keys, &engine);
     check_iterater(begin, end, cf, val_repeat, &engine);
+}
+
+#[derive(Clone)]
+struct TestMetaChangeListener {
+    sender: mpsc::Sender<ChangeSet>,
+}
+
+impl MetaChangeListener for TestMetaChangeListener {
+    fn on_change_set(&self, cs: ChangeSet) {
+        println!("on meta change listener");
+        info!("on meta change listener");
+        self.sender.send(cs).unwrap();
+    }
 }
 
 #[derive(Clone)]
@@ -146,15 +162,12 @@ impl IDAllocator for EngineTesterCore {
 }
 
 struct MetaListener {
-    meta_rx: channel::Receiver<pb::ChangeSet>,
-    applier_tx: channel::Sender<ApplyTask>,
+    meta_rx: mpsc::Receiver<pb::ChangeSet>,
+    applier_tx: mpsc::Sender<ApplyTask>,
 }
 
 impl MetaListener {
-    fn new(
-        meta_rx: channel::Receiver<pb::ChangeSet>,
-        applier_tx: channel::Sender<ApplyTask>,
-    ) -> Self {
+    fn new(meta_rx: mpsc::Receiver<pb::ChangeSet>, applier_tx: mpsc::Sender<ApplyTask>) -> Self {
         Self {
             meta_rx,
             applier_tx,
@@ -165,7 +178,7 @@ impl MetaListener {
         loop {
             let cs = unwrap_or_return!(self.meta_rx.recv(), "meta_listener_a");
             info!("meta_listener got cs {:?}", &cs);
-            let (tx, rx) = channel::bounded(1);
+            let (tx, rx) = mpsc::bounded(1);
             let task = ApplyTask::new_cs(cs, tx);
             self.applier_tx.send(task).unwrap();
             info!("meta_listener sent cs");
@@ -177,15 +190,15 @@ impl MetaListener {
 
 struct Applier {
     engine: Engine,
-    task_rx: channel::Receiver<ApplyTask>,
-    meta_tx: channel::Sender<pb::ChangeSet>,
+    task_rx: mpsc::Receiver<ApplyTask>,
+    meta_tx: mpsc::Sender<pb::ChangeSet>,
 }
 
 impl Applier {
     fn new(
         engine: Engine,
-        task_rx: channel::Receiver<ApplyTask>,
-        meta_tx: channel::Sender<pb::ChangeSet>,
+        task_rx: mpsc::Receiver<ApplyTask>,
+        meta_tx: mpsc::Sender<pb::ChangeSet>,
     ) -> Self {
         Self {
             engine,
@@ -233,11 +246,11 @@ impl Applier {
 struct ApplyTask {
     wb: Option<WriteBatch>,
     cs: Option<pb::ChangeSet>,
-    result_tx: channel::Sender<Result<()>>,
+    result_tx: mpsc::Sender<Result<()>>,
 }
 
 impl ApplyTask {
-    fn new_cs(cs: pb::ChangeSet, result_tx: channel::Sender<Result<()>>) -> Self {
+    fn new_cs(cs: pb::ChangeSet, result_tx: mpsc::Sender<Result<()>>) -> Self {
         Self {
             wb: None,
             cs: Some(cs),
@@ -245,7 +258,7 @@ impl ApplyTask {
         }
     }
 
-    fn new_wb(wb: WriteBatch, result_tx: channel::Sender<Result<()>>) -> Self {
+    fn new_wb(wb: WriteBatch, result_tx: mpsc::Sender<Result<()>>) -> Self {
         Self {
             wb: Some(wb),
             cs: None,
@@ -256,11 +269,11 @@ impl ApplyTask {
 
 struct MetaApplier {
     engine: Engine,
-    meta_rx: channel::Receiver<pb::ChangeSet>,
+    meta_rx: mpsc::Receiver<pb::ChangeSet>,
 }
 
 impl MetaApplier {
-    fn new(engine: Engine, meta_rx: channel::Receiver<pb::ChangeSet>) -> Self {
+    fn new(engine: Engine, meta_rx: mpsc::Receiver<pb::ChangeSet>) -> Self {
         Self { engine, meta_rx }
     }
 
@@ -276,14 +289,14 @@ impl MetaApplier {
 
 struct Splitter {
     engine: Engine,
-    apply_sender: channel::Sender<ApplyTask>,
+    apply_sender: mpsc::Sender<ApplyTask>,
     keys: Vec<Vec<u8>>,
     shard_ver: u64,
     new_id: u64,
 }
 
 impl Splitter {
-    fn new(engine: Engine, keys: Vec<Vec<u8>>, apply_sender: channel::Sender<ApplyTask>) -> Self {
+    fn new(engine: Engine, keys: Vec<Vec<u8>>, apply_sender: mpsc::Sender<ApplyTask>) -> Self {
         Self {
             engine,
             keys,
@@ -306,7 +319,7 @@ impl Splitter {
     }
 
     fn send_task(&mut self, cs: pb::ChangeSet) {
-        let (tx, rx) = channel::bounded(1);
+        let (tx, rx) = mpsc::bounded(1);
         let task = ApplyTask {
             cs: Some(cs),
             wb: None,
@@ -418,7 +431,7 @@ fn load_data(
     end: usize,
     cf: usize,
     val_repeat: usize,
-    tx: Sender<ApplyTask>,
+    tx: mpsc::Sender<ApplyTask>,
 ) {
     let mut wb = WriteBatch::new(1, opts.cfs.clone());
     for i in begin..end {
@@ -437,8 +450,8 @@ fn load_data(
     }
 }
 
-fn write_data(wb: WriteBatch, applier_tx: &Sender<ApplyTask>) {
-    let (result_tx, result_rx) = channel::bounded(1);
+fn write_data(wb: WriteBatch, applier_tx: &mpsc::Sender<ApplyTask>) {
+    let (result_tx, result_rx) = mpsc::bounded(1);
     let task = ApplyTask::new_wb(wb, result_tx);
     applier_tx.send(task).unwrap();
     result_rx.recv().unwrap().unwrap();

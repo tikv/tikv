@@ -10,6 +10,7 @@ use std::sync::Arc;
 use super::keys::raft_state_key;
 use super::*;
 use bytes::Buf;
+use engine_traits::{Mutable, RaftLogBatch};
 use futures::channel::mpsc::UnboundedSender;
 use kvenginepb::Snapshot;
 use kvproto::metapb::Region;
@@ -17,6 +18,17 @@ use kvproto::raft_serverpb::RaftLocalState;
 use raft_proto::eraftpb;
 use rfengine;
 use tokio::sync::mpsc;
+
+// When we create a region peer, we should initialize its log term/index > 0,
+// so that we can force the follower peer to sync the snapshot first.
+pub const RAFT_INIT_LOG_TERM: u64 = 5;
+pub const RAFT_INIT_LOG_INDEX: u64 = 5;
+const MAX_SNAP_TRY_CNT: usize = 5;
+
+/// The initial region epoch version.
+pub const INIT_EPOCH_VER: u64 = 1;
+/// The initial region epoch conf_version.
+pub const INIT_EPOCH_CONF_VER: u64 = 1;
 
 pub const JOB_STATUS_PENDING: usize = 0;
 pub const JOB_STATUS_RUNNING: usize = 1;
@@ -61,11 +73,6 @@ impl PartialEq for SnapState {
         }
     }
 }
-
-// When we create a region peer, we should initialize its log term/index > 0,
-// so that we can force the follower peer to sync the snapshot first.
-pub(crate) const RAFT_INIT_LOG_TERM: u64 = 5;
-pub(crate) const RAFT_INIT_LOG_INDEX: u64 = 5;
 
 // compact_raft_log discards all log entries prior to compact_index. We must guarantee
 // that the compact_index is not greater than applied index.
@@ -339,6 +346,25 @@ pub fn clear_meta(
     region: &metapb::Region,
 ) {
     todo!()
+}
+
+// When we bootstrap the region we must call this to initialize region local state first.
+pub fn write_initial_raft_state(raft_wb: &mut rfengine::WriteBatch, region_id: u64) -> Result<()> {
+    let mut raft_state = RaftLocalState {
+        last_index: RAFT_INIT_LOG_INDEX,
+        ..Default::default()
+    };
+    raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
+    raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
+    raft_wb.put_raft_state(region_id, &raft_state)?;
+    Ok(())
+}
+
+// When we bootstrap the region or handling split new region, we must
+// call this to initialize region apply state first.
+pub fn write_initial_apply_state(kv_wb: &mut kvengine::WriteBatch) {
+    let mut apply_state_bin = RaftApplyState::default().marshal();
+    kv_wb.set_property(APPLY_STATE_KEY, apply_state_bin.chunk());
 }
 
 pub fn write_peer_state(

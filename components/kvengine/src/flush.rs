@@ -3,9 +3,9 @@
 use crate::table::{memtable, sstable};
 use crate::*;
 use bytes::BytesMut;
-use crossbeam::channel;
 use kvenginepb as pb;
 use slog_global::info;
+use tikv_util::mpsc;
 
 pub(crate) struct FlushTask {
     pub(crate) shard_id: u64,
@@ -15,7 +15,7 @@ pub(crate) struct FlushTask {
     pub(crate) next_mem_tbl_size: u64,
 }
 
-pub(crate) type FlushResultRx = channel::Receiver<FlushResult>;
+pub(crate) type FlushResultRx = mpsc::Receiver<FlushResult>;
 
 pub(crate) struct FlushResult {
     pub(crate) change_set: pb::ChangeSet,
@@ -26,8 +26,8 @@ pub(crate) struct FlushResult {
 impl Engine {
     pub(crate) fn run_flush_worker(
         &self,
-        rx: channel::Receiver<FlushTask>,
-        result_tx: channel::Sender<FlushResultRx>,
+        rx: mpsc::Receiver<FlushTask>,
+        result_tx: mpsc::Sender<FlushResultRx>,
     ) {
         loop {
             if let Ok(task) = rx.recv() {
@@ -42,7 +42,7 @@ impl Engine {
     }
 
     pub(crate) fn flush_mem_table(&self, task: FlushTask) -> FlushResultRx {
-        let (res_tx, res_rx) = channel::bounded(1);
+        let (res_tx, res_rx) = mpsc::bounded(1);
         let mut cs = new_change_set(task.shard_id, task.shard_ver, task.split_stage);
         cs.set_flush(pb::Flush::new());
         cs.mut_flush().set_properties(task.mem_tbl.get_properties());
@@ -123,7 +123,7 @@ impl Engine {
         res_rx
     }
 
-    pub(crate) fn run_flush_result(&self, rx: channel::Receiver<FlushResultRx>) {
+    pub(crate) fn run_flush_result(&self, rx: mpsc::Receiver<FlushResultRx>) {
         loop {
             if let Ok(result) = rx.recv() {
                 let result = result.recv().unwrap();
@@ -131,13 +131,13 @@ impl Engine {
                     // TODO: handle DFS error by queue the failed operation and retry.
                     panic!("{:?}", err);
                 }
-                self.meta_sender.send(result.change_set).unwrap();
+                self.meta_change_listener.on_change_set(result.change_set);
                 let task = result.task;
                 if task.next_mem_tbl_size > 0 {
                     let mut change_size =
                         new_change_set(task.shard_id, task.shard_ver, task.split_stage);
                     change_size.set_next_mem_table_size(task.next_mem_tbl_size);
-                    self.meta_sender.send(change_size).unwrap();
+                    self.meta_change_listener.on_change_set(change_size);
                 }
             }
         }

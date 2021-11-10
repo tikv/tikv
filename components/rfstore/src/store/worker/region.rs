@@ -1,6 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::RaftRouter;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::{self, Display, Formatter};
+use tikv_util::mpsc::{Receiver, Sender};
+use tikv_util::time::Duration;
+use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 
 /// Region related task
 #[derive(Debug)]
@@ -49,5 +54,78 @@ impl Display for Task {
                 log_wrappers::Value::key(&end_key)
             ),
         }
+    }
+}
+
+struct ChangeSetKey {
+    region_id: u64,
+    version: u64,
+}
+
+pub struct Runner {
+    kv: kvengine::Engine,
+    router: RaftRouter,
+    rejects: HashMap<ChangeSetKey, kvenginepb::ChangeSet>,
+    apply_scheduler: Scheduler<Task>,
+}
+
+impl Runner {
+    pub fn new(
+        kv: kvengine::Engine,
+        router: RaftRouter,
+        apply_scheduler: Scheduler<Task>,
+    ) -> (Self) {
+        Self {
+            kv,
+            router,
+            rejects: HashMap::new(),
+            apply_scheduler,
+        }
+    }
+}
+
+impl Runnable for Runner {
+    type Task = Task;
+
+    fn run(&mut self, task: Task) {
+        todo!()
+    }
+}
+
+impl RunnableWithTimer for Runner {
+    fn on_timeout(&mut self) {
+        todo!()
+    }
+
+    fn get_interval(&self) -> Duration {
+        todo!()
+    }
+}
+
+pub struct ApplyRunner {
+    kv: kvengine::Engine,
+    router: RaftRouter,
+}
+
+impl ApplyRunner {
+    pub fn new(kv: kvengine::Engine, router: RaftRouter) -> Self {
+        Self { kv, router }
+    }
+}
+
+impl Runnable for ApplyRunner {
+    type Task = Task;
+    fn run(&mut self, task: Task) {
+        todo!()
+    }
+}
+
+impl RunnableWithTimer for ApplyRunner {
+    fn on_timeout(&mut self) {
+        todo!()
+    }
+
+    fn get_interval(&self) -> Duration {
+        todo!()
     }
 }

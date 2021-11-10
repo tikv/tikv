@@ -5,7 +5,7 @@ use kvproto::pdpb::CheckPolicy;
 use online_config::ConfigChange;
 use std::fmt::{self, Display, Formatter};
 
-use crate::coprocessor::Config;
+use raftstore::coprocessor::Config;
 
 pub enum Task {
     SplitCheckTask {

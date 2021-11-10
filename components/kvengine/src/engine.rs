@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use bytes::Bytes;
-use crossbeam::channel;
 use crossbeam_epoch as epoch;
 use dashmap::DashMap;
 use fslock;
@@ -14,6 +13,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
+use tikv_util::mpsc;
 
 use crate::meta::ShardMeta;
 use crate::table::sstable::{BlockCacheKey, L0Table, SSTable};
@@ -22,7 +22,7 @@ use crate::*;
 #[derive(Clone)]
 pub struct Engine {
     pub core: Arc<EngineCore>,
-    pub(crate) meta_sender: channel::Sender<kvenginepb::ChangeSet>,
+    pub(crate) meta_change_listener: Box<dyn MetaChangeListener>,
 }
 
 impl Deref for Engine {
@@ -49,7 +49,7 @@ impl Engine {
         meta_iter: impl MetaIterator,
         recoverer: impl RecoverHandler,
         id_allocator: Arc<dyn IDAllocator>,
-        meta_sender: channel::Sender<kvenginepb::ChangeSet>,
+        meta_change_listener: Box<dyn MetaChangeListener>,
     ) -> Result<Engine> {
         info!("Open Engine");
         check_options(&opts)?;
@@ -63,8 +63,8 @@ impl Engine {
             max_capacity = 512
         }
         let cache: SegmentedCache<BlockCacheKey, Bytes> = SegmentedCache::new(max_capacity, 64);
-        let (flush_tx, flush_rx) = channel::bounded(opts.num_mem_tables);
-        let (flush_result_tx, flush_result_rx) = channel::bounded(opts.num_mem_tables);
+        let (flush_tx, flush_rx) = mpsc::bounded(opts.num_mem_tables);
+        let (flush_result_tx, flush_result_rx) = mpsc::bounded(opts.num_mem_tables);
         let core = EngineCore {
             shards: DashMap::new(),
             opts: opts.clone(),
@@ -77,7 +77,7 @@ impl Engine {
         };
         let en = Engine {
             core: Arc::new(core),
-            meta_sender,
+            meta_change_listener,
         };
         let metas = en.read_meta(meta_iter)?;
         en.load_shards(metas, recoverer)?;
@@ -120,7 +120,7 @@ impl Engine {
 pub struct EngineCore {
     pub(crate) shards: DashMap<u64, Arc<Shard>>,
     pub opts: Arc<Options>,
-    pub(crate) flush_tx: channel::Sender<FlushTask>,
+    pub(crate) flush_tx: mpsc::Sender<FlushTask>,
     pub(crate) fs: Arc<dyn dfs::DFS>,
     pub(crate) cache: SegmentedCache<BlockCacheKey, Bytes>,
     pub(crate) comp_client: CompactionClient,
@@ -193,7 +193,7 @@ impl EngineCore {
         None
     }
 
-    pub fn remove_shard(&mut self, shard_id: u64, remove_file: bool) -> bool {
+    pub fn remove_shard(&self, shard_id: u64, remove_file: bool) -> bool {
         let g = epoch::pin();
         let x = self.shards.remove(&shard_id);
         if let Some((_, ptr)) = x {
@@ -203,6 +203,14 @@ impl EngineCore {
             return true;
         }
         false
+    }
+
+    pub fn size(&self) -> u64 {
+        self.shards
+            .iter()
+            .map(|x| x.value().estimated_size.load(Ordering::Relaxed) + 1)
+            .reduce(|x, y| x + y)
+            .unwrap_or(0)
     }
 }
 

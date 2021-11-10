@@ -16,8 +16,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tikv_util::deadline::Deadline;
 use tikv_util::error;
+use tikv_util::mpsc::{Receiver, Sender};
 use tikv_util::time::ThreadReadId;
-use tokio::sync::mpsc;
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter: StoreRouter + ProposalRouter + CasualRouter + Send + Clone {
@@ -164,22 +164,49 @@ impl LocalReadRouter for ServerRaftStoreRouter {
 }
 
 #[derive(Clone)]
+pub struct RaftStoreBlackHole;
+
+impl CasualRouter for RaftStoreBlackHole {
+    fn send(&self, _: u64, _: CasualMessage) -> RaftStoreResult<()> {
+        Ok(())
+    }
+}
+
+impl ProposalRouter for RaftStoreBlackHole {
+    fn send(&self, _: RaftCommand) -> RaftStoreResult<()> {
+        Ok(())
+    }
+}
+
+impl StoreRouter for RaftStoreBlackHole {
+    fn send(&self, _: StoreMsg) {}
+}
+
+impl RaftStoreRouter for RaftStoreBlackHole {
+    /// Sends RaftMessage to local store.
+    fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
+        Ok(())
+    }
+
+    /// Sends a significant message. We should guarantee that the message can't be dropped.
+    fn significant_send(&self, _: u64, _: SignificantMsg) -> RaftStoreResult<()> {
+        Ok(())
+    }
+
+    fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg) {}
+}
+
+#[derive(Clone)]
 pub struct RaftRouter {
-    pub(crate) store_sender: mpsc::Sender<StoreMsg>,
-    pub(crate) store_fsm: Arc<StoreFSM>,
+    pub(crate) store_sender: Sender<StoreMsg>,
     pub(crate) peers: Arc<dashmap::DashMap<u64, PeerState>>,
-    pub(crate) peer_sender: mpsc::Sender<PeerMsg>,
+    pub(crate) peer_sender: Sender<PeerMsg>,
 }
 
 impl RaftRouter {
-    pub(crate) fn new(
-        peer_sender: mpsc::Sender<PeerMsg>,
-        store_sender: mpsc::Sender<StoreMsg>,
-        store_fsm: StoreFSM,
-    ) -> Self {
+    pub(crate) fn new(peer_sender: Sender<PeerMsg>, store_sender: Sender<StoreMsg>) -> Self {
         Self {
             store_sender,
-            store_fsm: Arc::new(store_fsm),
             peers: Arc::new(dashmap::DashMap::new()),
             peer_sender,
         }
@@ -233,9 +260,7 @@ impl RaftStoreRouter for RaftRouter {
     }
 
     fn broadcast_normal(&self, mut msg_gen: impl FnMut() -> PeerMsg) {
-        for entry in self.peers.iter() {
-            self.send(*entry.key(), msg_gen()).unwrap()
-        }
+        panic!("not supported")
     }
 }
 

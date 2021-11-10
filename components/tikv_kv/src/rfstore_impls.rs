@@ -48,14 +48,14 @@ impl EngineSnapshot for RegionSnapshot {
         fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
             "injected error for iter"
         )));
-        Ok(RegionSnapshot::iter(self, iter_opt))
+        Ok(RegionSnapshot::iter(self, iter_opt, false))
     }
 
     fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> kv::Result<Self::Iter> {
         fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(
             "injected error for iter_cf"
         )));
-        RegionSnapshot::iter_cf(self, cf, iter_opt).map_err(kv::Error::from)
+        RegionSnapshot::iter_cf(self, cf, iter_opt, false).map_err(kv::Error::from)
     }
 
     #[inline]
@@ -70,7 +70,7 @@ impl EngineSnapshot for RegionSnapshot {
 
     #[inline]
     fn get_data_version(&self) -> Option<u64> {
-        self.get_apply_index().ok()
+        Some(self.get_apply_index())
     }
 
     fn is_max_ts_synced(&self) -> bool {
@@ -83,41 +83,47 @@ impl EngineSnapshot for RegionSnapshot {
 
 impl EngineIterator for RegionIterator {
     fn next(&mut self) -> kv::Result<bool> {
-        RegionIterator::next(self).map_err(KvError::from)
+        assert!(!self.is_reverse());
+        Ok(RegionIterator::next(self))
     }
 
     fn prev(&mut self) -> kv::Result<bool> {
-        RegionIterator::prev(self).map_err(KvError::from)
+        assert!(self.is_reverse());
+        Ok(RegionIterator::next(self))
     }
 
     fn seek(&mut self, key: &Key) -> kv::Result<bool> {
         fail_point!("raftkv_iter_seek", |_| Err(box_err!(
             "injected error for iter_seek"
         )));
-        RegionIterator::seek(self, key.as_encoded()).map_err(From::from)
+        assert!(!self.is_reverse());
+        Ok(RegionIterator::seek(self, key.as_encoded()))
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> kv::Result<bool> {
         fail_point!("raftkv_iter_seek_for_prev", |_| Err(box_err!(
             "injected error for iter_seek_for_prev"
         )));
-        RegionIterator::seek_for_prev(self, key.as_encoded()).map_err(From::from)
+        assert!(self.is_reverse());
+        Ok(RegionIterator::seek(self, key.as_encoded()))
     }
 
     fn seek_to_first(&mut self) -> kv::Result<bool> {
-        RegionIterator::seek_to_first(self).map_err(KvError::from)
+        assert!(!self.is_reverse());
+        Ok(self.rewind())
     }
 
     fn seek_to_last(&mut self) -> kv::Result<bool> {
-        RegionIterator::seek_to_last(self).map_err(KvError::from)
+        assert!(self.is_reverse());
+        Ok(self.rewind())
     }
 
     fn valid(&self) -> kv::Result<bool> {
-        RegionIterator::valid(self).map_err(KvError::from)
+        Ok(self.item().is_valid())
     }
 
     fn validate_key(&self, key: &Key) -> kv::Result<()> {
-        self.should_seekable(key.as_encoded()).map_err(From::from)
+        Ok(())
     }
 
     fn key(&self) -> &[u8] {
@@ -125,6 +131,6 @@ impl EngineIterator for RegionIterator {
     }
 
     fn value(&self) -> &[u8] {
-        RegionIterator::value(self)
+        panic!("not supported")
     }
 }

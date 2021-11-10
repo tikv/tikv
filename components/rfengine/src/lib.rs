@@ -3,13 +3,13 @@
 pub mod engine;
 pub mod iterator;
 pub mod load;
+pub mod traits;
 pub mod worker;
 pub mod writer;
-pub mod traits;
 
 pub use engine::*;
 pub use iterator::*;
 pub use load::*;
+pub use traits::*;
 pub use worker::*;
 pub use writer::*;
-pub use traits::*;

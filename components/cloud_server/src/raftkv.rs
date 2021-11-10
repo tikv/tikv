@@ -26,20 +26,21 @@ use kvproto::{
 use raftstore::coprocessor::{
     dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
 };
-use rfstore::store::ReadResponse;
-use rfstore::{LocalReadRouter, RaftRouter, RaftStoreRouter, ServerRaftStoreRouter};
-use tikv::server::service::batch_commands_response::Response;
+use rfstore::store::{
+    Callback as StoreCallback, ReadIndexContext, ReadResponse, RegionSnapshot, WriteResponse,
+};
+use rfstore::{
+    Error as RaftServerError, LocalReadRouter, RaftRouter, RaftStoreRouter, ServerRaftStoreRouter,
+};
+use tikv::server::metrics::*;
+use tikv::storage::kv::{
+    self, write_modifies, Callback, CbContext, Engine, Error as KvError,
+    ErrorInner as KvErrorInner, ExtCallback, Modify, SnapContext, WriteData,
+};
+use tikv::storage::{self};
 use tikv_util::codec::number::NumberEncoder;
 use tikv_util::time::Instant;
 use txn_types::{Key, TimeStamp, TxnExtraScheduler, WriteBatchFlags};
-
-use super::metrics::*;
-use crate::storage::{self, kv};
-use tikv::storage::kv::{
-    write_modifies, Callback, CbContext, Engine, Error as KvError, ErrorInner as KvErrorInner,
-    ExtCallback, Modify, SnapContext, WriteData,
-};
-use tikv::storage::{self, kv};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -111,7 +112,7 @@ pub struct RaftKv {
 
 pub enum CmdRes {
     Resp(Vec<Response>),
-    Snap(RegionSnapshot<S>),
+    Snap(RegionSnapshot),
 }
 
 fn new_ctx(resp: &RaftCmdResponse) -> CbContext {
@@ -135,13 +136,7 @@ fn check_raft_cmd_response(resp: &mut RaftCmdResponse, req_cnt: usize) -> Result
     Ok(())
 }
 
-fn on_write_result<S>(
-    mut write_resp: WriteResponse,
-    req_cnt: usize,
-) -> (CbContext, Result<CmdRes<S>>)
-where
-    S: Snapshot,
-{
+fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext, Result<CmdRes>) {
     let cb_ctx = new_ctx(&write_resp.response);
     if let Err(e) = check_raft_cmd_response(&mut write_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
@@ -150,10 +145,7 @@ where
     (cb_ctx, Ok(CmdRes::Resp(resps.into())))
 }
 
-fn on_read_result(mut read_resp: ReadResponse, req_cnt: usize) -> (CbContext, Result<CmdRes>)
-where
-    S: Snapshot,
-{
+fn on_read_result(mut read_resp: ReadResponse, req_cnt: usize) -> (CbContext, Result<CmdRes>) {
     let mut cb_ctx = new_ctx(&read_resp.response);
     cb_ctx.txn_extra_op = read_resp.txn_extra_op;
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
@@ -198,7 +190,7 @@ impl RaftKv {
         &self,
         ctx: SnapContext<'_>,
         req: Request,
-        cb: Callback<CmdRes<E::Snapshot>>,
+        cb: Callback<CmdRes>,
     ) -> Result<()> {
         let mut header = self.new_request_header(&*ctx.pb_ctx);
         if ctx.pb_ctx.get_stale_read() && !ctx.start_ts.is_zero() {
@@ -228,7 +220,7 @@ impl RaftKv {
         &self,
         ctx: &Context,
         batch: WriteData,
-        write_cb: Callback<CmdRes<E::Snapshot>>,
+        write_cb: Callback<CmdRes>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
@@ -292,11 +284,7 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
     ))
 }
 
-impl Display for RaftKv
-where
-    E: KvEngine,
-    S: RaftStoreRouter + LocalReadRouter + 'static,
-{
+impl Display for RaftKv {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
@@ -309,10 +297,10 @@ impl Debug for RaftKv {
 }
 
 impl Engine for RaftKv {
-    type Snap = RegionSnapshot<E::Snapshot>;
-    type Local = E;
+    type Snap = RegionSnapshot;
+    type Local = kvengine::Engine;
 
-    fn kv_engine(&self) -> E {
+    fn kv_engine(&self) -> kvengine::Engine {
         self.engine.clone()
     }
 
@@ -322,7 +310,7 @@ impl Engine for RaftKv {
         region.set_end_key(end_key.to_owned());
         // Use a fake peer to avoid panic.
         region.mut_peers().push(Default::default());
-        Ok(RegionSnapshot::from_raw(self.engine.clone(), region))
+        Ok(RegionSnapshot::from_raw(&self.engine, &region))
     }
 
     fn modify_on_kv_engine(&self, mut modifies: Vec<Modify>) -> kv::Result<()> {
@@ -456,10 +444,6 @@ impl Engine for RaftKv {
         })
     }
 
-    fn release_snapshot(&self) {
-        self.router.release_snapshot_cache();
-    }
-
     fn get_mvcc_properties_cf(
         &self,
         cf: CfName,
@@ -467,10 +451,7 @@ impl Engine for RaftKv {
         start: &[u8],
         end: &[u8],
     ) -> Option<MvccProperties> {
-        let start = keys::data_key(start);
-        let end = keys::data_end_key(end);
-        self.engine
-            .get_mvcc_properties_cf(cf, safe_point, &start, &end)
+        todo!()
     }
 }
 

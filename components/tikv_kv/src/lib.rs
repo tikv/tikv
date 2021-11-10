@@ -23,9 +23,9 @@ pub mod metrics;
 mod mock_engine;
 mod perf_context;
 mod raftstore_impls;
+mod rfstore_impls;
 mod rocksdb_engine;
 mod stats;
-mod rfstore_impls;
 
 use std::cell::UnsafeCell;
 use std::num::NonZeroU64;

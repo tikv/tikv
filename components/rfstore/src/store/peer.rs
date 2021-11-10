@@ -105,7 +105,7 @@ impl ReadIndexQueue {
         let mut uncommitted = self.reads.split_off(self.ready_cnt);
         for mut read in uncommitted.drain(..) {
             for pair in read.cmds.drain(..) {
-                notify_stale_req(term, &pair.callback)
+                notify_stale_req(term, pair.callback)
             }
         }
     }
@@ -115,11 +115,11 @@ impl ReadIndexQueue {
     }
 }
 
-pub(crate) fn notify_stale_req(term: u64, cb: &Callback) {
+pub(crate) fn notify_stale_req(term: u64, cb: Callback) {
     todo!()
 }
 
-pub(crate) fn notify_req_region_removed(region_id: u64, cb: &Callback) {
+pub(crate) fn notify_req_region_removed(region_id: u64, cb: Callback) {
     todo!()
 }
 
@@ -178,7 +178,7 @@ impl ProposalQueue {
                     );
                 }
             } else {
-                apply::notify_stale_req(current_term, p.cb);
+                notify_stale_req(current_term, p.cb);
             }
         }
         None
@@ -400,8 +400,7 @@ impl Peer {
     /// Register self to apply_scheduler so that the peer is then usable.
     /// Also trigger `RegionChangeEvent::Create` here.
     pub fn activate<T>(&self, msgs: &mut ApplyMsgs) {
-        let payload = PeerMsgPayload::ApplyRegistration(MsgRegistration::new(&self));
-        let msg = PeerMsg::new(self.region_id, payload);
+        let msg = ApplyMsg::Registration(MsgRegistration::new(&self));
         msgs.msgs.push(msg);
     }
 
@@ -474,7 +473,7 @@ impl Peer {
         self.pending_reads.clear_all(Some(region.get_id()));
 
         for Proposal { cb, .. } in self.proposals.queue.drain(..) {
-            notify_req_region_removed(region.get_id(), &cb);
+            notify_req_region_removed(region.get_id(), cb);
         }
         info!(
             "peer destroy itself";

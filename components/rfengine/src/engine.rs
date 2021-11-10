@@ -23,7 +23,7 @@ use crate::*;
 
 #[derive(Clone)]
 pub struct RFEngine {
-    pub(crate) dir: PathBuf,
+    pub dir: PathBuf,
     pub(crate) writer: Arc<Mutex<WALWriter>>,
 
     pub(crate) entries_map: Arc<RwLock<HashMap<u64, RegionRaftLogs>>>,
@@ -428,7 +428,10 @@ mod tests {
         engine.stop_worker();
         for _ in 0..1 {
             let engine = RFEngine::open(tmp_dir.path(), wal_size).unwrap();
-            assert_eq!(old_states.read().unwrap().len(), engine.states.read().unwrap().len());
+            assert_eq!(
+                old_states.read().unwrap().len(),
+                engine.states.read().unwrap().len()
+            );
             engine.iterate_all_states(false, |region_id, key, _| {
                 let state_key = StateKey::new(region_id, key);
                 assert!(old_states.read().unwrap().contains_key(&state_key));

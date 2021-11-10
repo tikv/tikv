@@ -469,7 +469,7 @@ impl Engine {
     pub(crate) fn handle_compact_response(&self, comp: pb::Compaction, shard: &Shard) {
         let mut cs = new_change_set(shard.id, shard.ver, shard.get_split_stage());
         cs.set_compaction(comp);
-        self.meta_sender.send(cs).unwrap();
+        self.meta_change_listener.on_change_set(cs);
     }
 }
 

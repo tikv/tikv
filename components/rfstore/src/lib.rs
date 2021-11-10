@@ -2,7 +2,6 @@
 
 #![feature(vecdeque_binary_search)]
 
-pub mod coprocessor;
 pub mod errors;
 pub mod router;
 pub mod store;

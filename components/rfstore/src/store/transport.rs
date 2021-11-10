@@ -3,18 +3,21 @@
 use crate::store::{Callback, CasualMessage, PeerMsg, PeerMsgPayload, RaftCommand, StoreMsg};
 use crate::{DiscardReason, Error, RaftRouter, Result};
 use crossbeam::channel::SendError;
+use dyn_clone::DynClone;
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::raft_serverpb::RaftMessage;
 use std::sync::mpsc;
 
 /// Transports messages between different Raft peers.
-pub trait Transport: Send + Clone {
+pub trait Transport: Send + DynClone {
     fn send(&mut self, msg: RaftMessage) -> Result<()>;
 
     fn need_flush(&self) -> bool;
 
     fn flush(&mut self);
 }
+
+dyn_clone::clone_trait_object!(Transport);
 
 /// Routes message to target region.
 ///

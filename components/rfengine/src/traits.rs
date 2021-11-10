@@ -2,10 +2,10 @@
 
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::{RFEngine, WriteBatch};
 use engine_traits::{Error, RaftEngine, RaftEngineReadOnly, RaftLogBatch, Result};
 use kvproto::raft_serverpb::RaftLocalState;
-use raft::eraftpb::{Entry};
-use crate::{RFEngine, WriteBatch};
+use raft::eraftpb::Entry;
 
 impl RaftEngineReadOnly for RFEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {

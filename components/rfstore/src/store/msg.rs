@@ -5,12 +5,12 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::store::RegionSnapshot;
+use crate::store::{Proposal, RegionSnapshot, StoreTick};
 use bytes::Bytes;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::RegionEpoch;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
-use kvproto::{metapb, raft_cmdpb, raft_serverpb as rspb};
+use kvproto::{metapb, pdpb, raft_cmdpb, raft_serverpb as rspb};
+use raft_proto::eraftpb;
 use raftstore::store::util::KeysInfoFormatter;
 use tikv_util::deadline::Deadline;
 use tikv_util::escape;
@@ -19,8 +19,8 @@ use super::{rlog, Peer, RaftApplyState};
 
 #[derive(Debug)]
 pub struct PeerMsg {
-    region_id: u64,
-    payload: PeerMsgPayload,
+    pub region_id: u64,
+    pub(crate) payload: PeerMsgPayload,
 }
 
 impl PeerMsg {
@@ -47,16 +47,36 @@ pub(crate) enum PeerMsgPayload {
     Tick,
     Start,
     ApplyRes,
-    ApplyRegistration(MsgRegistration),
     CasualMessage(CasualMessage),
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg),
+    /// Ask region to report a heartbeat to PD.
+    HeartbeatPd,
+}
+
+#[derive(Debug)]
+pub(crate) enum ApplyMsg {
+    Apply {
+        region_id: u64,
+        term: u64,
+        entries: Vec<eraftpb::Entry>,
+        soft_state: Option<raft::SoftState>,
+    },
+    Proposal {
+        region_id: u64,
+        peer_id: u64,
+        props: Vec<Proposal>,
+    },
+    Registration(MsgRegistration),
+    Destroy {
+        region_id: u64,
+    },
 }
 
 pub enum StoreMsg {
-    Tick,
-    Start,
+    Tick(StoreTick),
+    Start { store: metapb::Store },
     StoreUnreachable { store_id: u64 },
     RaftMessage(Box<rspb::RaftMessage>),
     GenerateEngineChangeSet(Box<kvenginepb::ChangeSet>),
@@ -166,6 +186,22 @@ pub enum Callback {
 }
 
 impl Callback {
+    pub fn write(cb: WriteCallback) -> Self {
+        Self::write_ext(cb, None, None)
+    }
+
+    pub fn write_ext(
+        cb: WriteCallback,
+        proposed_cb: Option<ExtCallback>,
+        committed_cb: Option<ExtCallback>,
+    ) -> Self {
+        Callback::Write {
+            cb,
+            proposed_cb,
+            committed_cb,
+        }
+    }
+
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
         match self {
             Callback::None => (),
@@ -206,20 +242,6 @@ impl fmt::Debug for Callback {
     }
 }
 
-type PeerTick = i32;
-
-const PEER_TICK_RAFT: PeerTick = 0;
-const PEER_TICK_RAFTLOG_GC: PeerTick = 1;
-const PEER_TICK_SPLIT_REGION_CHECK: PeerTick = 2;
-const PEER_TICK_PD_HEARTBEAT: PeerTick = 3;
-const PEER_TICK_CHECK_MERGE: PeerTick = 4;
-const PEER_TICK_PEER_STALE_STATE: PeerTick = 5;
-
-type StoreTick = i32;
-
-const STORE_TICK_PD_HEARTBEAT: StoreTick = 0;
-const STORE_TICK_CONSISTENT_CHECK: StoreTick = 1;
-
 /// Some significant messages sent to raftstore. Raftstore will dispatch these messages to Raft
 /// groups to update some important internal status.
 #[derive(Debug)]
@@ -245,12 +267,19 @@ pub enum SignificantMsg {
 pub enum CasualMessage {
     /// Split the target region into several partitions.
     SplitRegion {
-        region_epoch: RegionEpoch,
+        region_epoch: metapb::RegionEpoch,
         // It's an encoded key.
         // TODO: support meta key.
         split_keys: Vec<Vec<u8>>,
         callback: Callback,
         source: Cow<'static, str>,
+    },
+
+    /// Half split the target region.
+    HalfSplitRegion {
+        region_epoch: metapb::RegionEpoch,
+        policy: pdpb::CheckPolicy,
+        source: &'static str,
     },
 
     /// Hash result of ComputeHash command.
@@ -314,6 +343,9 @@ impl fmt::Debug for CasualMessage {
                 KeysInfoFormatter(split_keys.iter()),
                 source,
             ),
+            CasualMessage::HalfSplitRegion { source, .. } => {
+                write!(fmt, "Half Split from {}", source)
+            }
             CasualMessage::RegionApproximateSize { size } => {
                 write!(fmt, "Region's approximate size [size: {:?}]", size)
             }

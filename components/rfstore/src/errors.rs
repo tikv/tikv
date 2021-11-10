@@ -1,10 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::coprocessor::Error as CopError;
 use crate::store::{PeerMsg, PeerMsgPayload};
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, metapb};
 use protobuf::ProtobufError;
+use raftstore::coprocessor::Error as CopError;
 use std::error::Error as StdError;
 use std::{io, net};
 use thiserror::Error;
@@ -92,6 +92,9 @@ pub enum Error {
     #[error("RFEngine {0}")]
     RFEngineError(rfengine::Error),
 
+    #[error("KVEngine {0}")]
+    KVEngineError(kvengine::Error),
+
     #[error("Timeout {0}")]
     Timeout(String),
 
@@ -120,6 +123,12 @@ pub enum Error {
 impl From<rfengine::Error> for Error {
     fn from(e: rfengine::Error) -> Self {
         Error::RFEngineError(e)
+    }
+}
+
+impl From<kvengine::Error> for Error {
+    fn from(e: kvengine::Error) -> Self {
+        Error::KVEngineError(e)
     }
 }
 
@@ -248,6 +257,17 @@ impl ErrorCodeExt for Error {
                 rfengine::Error::ParseError => error_code::raftstore::UNKNOWN,
                 rfengine::Error::Checksum => error_code::raftstore::UNKNOWN,
                 rfengine::Error::Open(_) => error_code::raftstore::UNKNOWN,
+            },
+            Error::KVEngineError(e) => match e {
+                kvengine::Error::KeyNotFound => error_code::raftstore::UNKNOWN,
+                kvengine::Error::ShardNotFound => error_code::raftstore::UNKNOWN,
+                kvengine::Error::ShardNotMatch => error_code::raftstore::UNKNOWN,
+                kvengine::Error::WrongSplitStage => error_code::raftstore::UNKNOWN,
+                kvengine::Error::ErrAllocID(_) => error_code::raftstore::UNKNOWN,
+                kvengine::Error::ErrOpen(_) => error_code::raftstore::UNKNOWN,
+                kvengine::Error::TableError(_) => error_code::raftstore::UNKNOWN,
+                kvengine::Error::DFSError(_) => error_code::raftstore::UNKNOWN,
+                kvengine::Error::Io(_) => error_code::raftstore::IO,
             },
             Error::Raft(e) => e.error_code(),
             Error::Timeout(_) => error_code::raftstore::TIMEOUT,

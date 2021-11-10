@@ -10,6 +10,7 @@ const REGION_META_KEY_BYTE: u8 = 2;
 pub(crate) const STORE_IDENT_KEY: &'static [u8] = &[3];
 pub(crate) const PREPARE_BOOTSTRAP_KEY: &'static [u8] = &[4];
 pub(crate) const KV_ENGINE_META_KEY: &'static [u8] = &[5];
+pub(crate) const EMPTY_KEY: &'static [u8] = &[];
 pub(crate) const RAW_INITIAL_START_KEY: Bytes = Bytes::from_static(&[2]);
 pub(crate) const RAW_INITIAL_END_KEY: Bytes =
     Bytes::from_static(&[255, 255, 255, 255, 255, 255, 255, 255]);
@@ -36,7 +37,7 @@ pub(crate) fn parse_region_state_key(key: &[u8]) -> (u64, u64) {
 }
 
 // Get the `start_key` of current region in raw form.
-pub(crate) fn raw_start_key(region: metapb::Region) -> Bytes {
+pub(crate) fn raw_start_key(region: &metapb::Region) -> Bytes {
     // only initialized region's start_key can be encoded, otherwise there must be bugs
     // somewhere.
     if region.start_key.is_empty() {
@@ -49,7 +50,7 @@ pub(crate) fn raw_start_key(region: metapb::Region) -> Bytes {
 }
 
 // Get the `end_key` of current region in raw form.
-pub(crate) fn raw_end_key(region: metapb::Region) -> Bytes {
+pub(crate) fn raw_end_key(region: &metapb::Region) -> Bytes {
     // only initialized region's end_key can be encoded, otherwise there must be bugs
     // somewhere.
     if region.end_key.is_empty() {

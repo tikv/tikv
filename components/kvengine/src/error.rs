@@ -4,16 +4,25 @@ use crate::{dfs, table};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("key not found")]
     KeyNotFound,
+    #[error("shard not found")]
     ShardNotFound,
+    #[error("key not match")]
     ShardNotMatch,
+    #[error("wrong split stage")]
     WrongSplitStage,
+    #[error("alloc id error {0}")]
     ErrAllocID(String),
+    #[error("open error {0}")]
     ErrOpen(String),
+    #[error("table error {0}")]
     TableError(table::Error),
+    #[error("dfs error {0}")]
     DFSError(dfs::Error),
+    #[error("IO error {0}")]
     Io(std::io::Error),
 }
 

@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use dyn_clone::DynClone;
 use std::ops::Range;
 use std::path::PathBuf;
 
@@ -106,3 +107,9 @@ pub trait MetaIterator {
     where
         F: FnMut(kvenginepb::ChangeSet);
 }
+
+pub trait MetaChangeListener: DynClone + Sync + Send {
+    fn on_change_set(&self, cs: kvenginepb::ChangeSet);
+}
+
+dyn_clone::clone_trait_object!(MetaChangeListener);
