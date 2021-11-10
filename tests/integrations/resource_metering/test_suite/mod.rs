@@ -52,7 +52,8 @@ impl TestSuite {
         let scheduler = reporter.scheduler();
 
         let (mut tikv_cfg, dir) = TiKvConfig::with_tmp().unwrap();
-        tikv_cfg.resource_metering.report_receiver_interval = ReadableDuration::secs(5);
+        tikv_cfg.resource_metering.report_receiver_interval = ReadableDuration::millis(500);
+        tikv_cfg.resource_metering.precision = ReadableDuration::millis(100);
 
         let resource_metering_cfg = tikv_cfg.resource_metering.clone();
         let cfg_controller = ConfigController::new(tikv_cfg);
@@ -120,9 +121,18 @@ impl TestSuite {
 
     pub fn cfg_report_receiver_interval(&self, interval: impl Into<String>) {
         let interval = interval.into();
+        let prev_interval = self
+            .cfg_controller
+            .get_current()
+            .resource_metering
+            .report_receiver_interval
+            .0;
         self.cfg_controller
             .update_config("resource-metering.report-receiver-interval", &interval)
             .unwrap();
+
+        // wait for applying config
+        std::thread::sleep(prev_interval);
     }
 
     pub fn cfg_max_resource_groups(&self, max_resource_groups: u64) {
@@ -221,13 +231,13 @@ impl TestSuite {
     }
 
     pub fn reset(&mut self) {
+        self.cancel_workload();
         self.cfg_enabled(false);
         self.cfg_receiver_address("");
-        self.cancel_workload();
-        self.flush_receiver();
-        self.cfg_precision("1s");
-        self.cfg_report_receiver_interval("5s");
+        self.cfg_precision("100ms");
+        self.cfg_report_receiver_interval("500ms");
         self.cfg_max_resource_groups(5000);
+        self.flush_receiver();
         self.shutdown_receiver();
     }
 }

@@ -9,7 +9,7 @@ use std::time::Duration;
 use rand::prelude::SliceRandom;
 use test_util::alloc_port;
 
-const ONE_SEC: Duration = Duration::from_secs(1);
+const ERROR_DELAY: Duration = Duration::from_millis(100);
 
 pub fn case_enable(test_suite: &mut TestSuite) {
     test_suite.reset();
@@ -23,7 +23,7 @@ pub fn case_enable(test_suite: &mut TestSuite) {
     // | Address | Enabled |
     // |   x     |    o    |
     test_suite.cfg_enabled(true);
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
+    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ERROR_DELAY);
     assert!(test_suite.fetch_reported_cpu_time().is_empty());
 
     // Workload
@@ -33,7 +33,7 @@ pub fn case_enable(test_suite: &mut TestSuite) {
     // | Address | Enabled |
     // |   o     |    o    |
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
+    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ERROR_DELAY);
     test_suite.flush_receiver();
     assert!(test_suite.fetch_reported_cpu_time().is_empty());
 
@@ -43,7 +43,7 @@ pub fn case_enable(test_suite: &mut TestSuite) {
 
     // | Address | Enabled |
     // |   o     |    o    |
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
+    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ERROR_DELAY);
     let res = test_suite.fetch_reported_cpu_time();
     assert_eq!(res.len(), 2);
     assert!(res.contains_key("req-1"));
@@ -53,14 +53,14 @@ pub fn case_enable(test_suite: &mut TestSuite) {
     // |   x     |    o    |
     test_suite.cfg_receiver_address("");
     test_suite.flush_receiver();
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
+    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ERROR_DELAY);
     assert!(test_suite.fetch_reported_cpu_time().is_empty());
 
     // | Address | Enabled |
     // |   o     |    x    |
     test_suite.cfg_enabled(false);
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
+    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ERROR_DELAY);
     assert!(test_suite.fetch_reported_cpu_time().is_empty());
 }
 
@@ -76,27 +76,27 @@ pub fn case_report_interval(test_suite: &mut TestSuite) {
     test_suite.setup_workload(vec!["req-1", "req-2"]);
 
     // | Report Interval |
-    // |       15s       |
-    test_suite.cfg_report_receiver_interval("15s");
+    // |       2s        |
+    test_suite.cfg_report_receiver_interval("2s");
     test_suite.flush_receiver();
 
-    sleep(Duration::from_secs(5));
+    let interval = test_suite.get_current_cfg().report_receiver_interval.0;
+    sleep(interval / 4);
     assert!(test_suite.fetch_reported_cpu_time().is_empty());
-    sleep(Duration::from_secs(5));
+    sleep(interval / 4);
     assert!(test_suite.fetch_reported_cpu_time().is_empty());
-    sleep(Duration::from_secs(10));
+    sleep(interval / 2 + ERROR_DELAY);
     let res = test_suite.fetch_reported_cpu_time();
     assert_eq!(res.len(), 2);
     assert!(res.contains_key("req-1"));
     assert!(res.contains_key("req-2"));
 
     // | Report Interval |
-    // |       5s        |
-    test_suite.cfg_report_receiver_interval("5s");
-    sleep(Duration::from_secs(10));
+    // |      500ms      |
+    test_suite.cfg_report_receiver_interval("500ms");
     test_suite.flush_receiver();
 
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
+    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ERROR_DELAY);
     let res = test_suite.fetch_reported_cpu_time();
     assert_eq!(res.len(), 2);
     assert!(res.contains_key("req-1"));
@@ -109,6 +109,8 @@ pub fn case_max_resource_groups(test_suite: &mut TestSuite) {
     test_suite.start_receiver_at(port);
     test_suite.cfg_enabled(true);
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
+    test_suite.cfg_report_receiver_interval("2s");
+    test_suite.cfg_precision("500ms");
 
     // Workload
     // [req-{1..3} * 10, req-{4..5} * 1]
@@ -123,7 +125,7 @@ pub fn case_max_resource_groups(test_suite: &mut TestSuite) {
 
     // | Max Resource Groups |
     // |       5000          |
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
+    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ERROR_DELAY);
     let res = test_suite.fetch_reported_cpu_time();
     assert_eq!(res.len(), 5);
     assert!(res.contains_key("req-1"));
@@ -136,7 +138,7 @@ pub fn case_max_resource_groups(test_suite: &mut TestSuite) {
     // |        3            |
     test_suite.cfg_max_resource_groups(3);
     test_suite.flush_receiver();
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
+    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ERROR_DELAY);
     let res = test_suite.fetch_reported_cpu_time();
     assert_eq!(res.len(), 4);
     assert!(res.contains_key("req-1"));
@@ -149,7 +151,7 @@ pub fn case_precision(test_suite: &mut TestSuite) {
     test_suite.reset();
     let port = alloc_port();
     test_suite.start_receiver_at(port);
-    test_suite.cfg_report_receiver_interval("10s");
+    test_suite.cfg_report_receiver_interval("5s");
     test_suite.cfg_enabled(true);
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
 
@@ -159,7 +161,8 @@ pub fn case_precision(test_suite: &mut TestSuite) {
 
     // | Precision |
     // |    1s     |
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
+    test_suite.cfg_precision("1s");
+    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ERROR_DELAY);
     let res = test_suite.fetch_reported_cpu_time();
     let (secs, _) = res.get("req-1").unwrap();
     for (l, r) in secs.iter().zip({
@@ -172,10 +175,10 @@ pub fn case_precision(test_suite: &mut TestSuite) {
     }
 
     // | Precision |
-    // |    3s     |
-    test_suite.cfg_precision("3s");
+    // |    2s     |
+    test_suite.cfg_precision("2s");
     test_suite.flush_receiver();
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
+    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ERROR_DELAY);
     let res = test_suite.fetch_reported_cpu_time();
     let (secs, _) = res.get("req-1").unwrap();
     for (l, r) in secs.iter().zip({
@@ -184,6 +187,6 @@ pub fn case_precision(test_suite: &mut TestSuite) {
         next_secs
     }) {
         let diff = r - l;
-        assert!(2 <= diff && diff <= 4);
+        assert!(1 <= diff && diff <= 3);
     }
 }
