@@ -10,6 +10,7 @@ mod linux {
     use super::*;
 
     #[test]
+    #[ignore = "the case is too slow, ref #11229"]
     fn test_resource_metering() {
         let mut ts = test_suite::TestSuite::new();
 
