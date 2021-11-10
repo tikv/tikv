@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
+async-trait = "0.1"
 http = "0.2.0"
 hyper = "0.14"
 hyper-tls = "0.5"
