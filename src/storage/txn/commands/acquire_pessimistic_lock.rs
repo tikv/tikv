@@ -89,6 +89,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         let mut res = if self.return_values {
             Ok(PessimisticLockRes::Values(vec![]))
         } else if self.check_existence {
+            // If return_value is set, the existence status is implicitly included in the result.
+            // So check_existence only need to be explicitly handled if `return_values` is not set.
             Ok(PessimisticLockRes::Existence(vec![]))
         } else {
             Ok(PessimisticLockRes::Empty)
@@ -127,10 +129,14 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         }
 
         // Some values are read, update max_ts
-        if let Ok(PessimisticLockRes::Values(values)) = &res {
-            if !values.is_empty() {
+        match &res {
+            Ok(PessimisticLockRes::Values(values)) if !values.is_empty() => {
                 txn.concurrency_manager.update_max_ts(self.for_update_ts);
             }
+            Ok(PessimisticLockRes::Existence(values)) if !values.is_empty() => {
+                txn.concurrency_manager.update_max_ts(self.for_update_ts);
+            }
+            _ => (),
         }
 
         // no conflict

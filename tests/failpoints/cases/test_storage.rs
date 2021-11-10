@@ -239,6 +239,7 @@ fn test_pipelined_pessimistic_lock() {
                     10,
                     10,
                     true,
+                    false,
                 ),
                 Box::new(move |res| {
                     res.unwrap_err();
@@ -264,7 +265,7 @@ fn test_pipelined_pessimistic_lock() {
     fail::cfg(scheduler_async_write_finish_fp, "pause").unwrap();
     storage
         .sched_txn_command(
-            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, true),
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, true, false),
             expect_pessimistic_lock_res_callback(
                 tx.clone(),
                 PessimisticLockRes::Values(vec![None]),
@@ -306,7 +307,7 @@ fn test_pipelined_pessimistic_lock() {
     fail::cfg(rockskv_async_write_fp, "return()").unwrap();
     storage
         .sched_txn_command(
-            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 30, 30, true),
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 30, 30, true, false),
             expect_fail_callback(tx.clone(), 0, |_| ()),
         )
         .unwrap();
@@ -318,7 +319,13 @@ fn test_pipelined_pessimistic_lock() {
     for blocked in &[false, true] {
         storage
             .sched_txn_command(
-                new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 40, 40, true),
+                new_acquire_pessimistic_lock_command(
+                    vec![(key.clone(), false)],
+                    40,
+                    40,
+                    true,
+                    false,
+                ),
                 expect_pessimistic_lock_res_callback(
                     tx.clone(),
                     PessimisticLockRes::Values(vec![Some(val.clone())]),
@@ -341,7 +348,7 @@ fn test_pipelined_pessimistic_lock() {
     fail::cfg(scheduler_async_write_finish_fp, "pause").unwrap();
     storage
         .sched_txn_command(
-            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 50, 50, true),
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 50, 50, true, false),
             expect_pessimistic_lock_res_callback(
                 tx.clone(),
                 PessimisticLockRes::Values(vec![Some(val.clone())]),
@@ -362,6 +369,7 @@ fn test_pipelined_pessimistic_lock() {
                 60,
                 60,
                 true,
+                false,
             ),
             expect_pessimistic_lock_res_callback(
                 tx,
