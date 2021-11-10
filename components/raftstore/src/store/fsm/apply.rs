@@ -4979,7 +4979,9 @@ mod tests {
         assert!(engine.get_value(&dk_k3).unwrap().is_none());
 
         // The region was rescheduled from normal-priority handler to
-        // low-priority handler.
+        // low-priority handler, so the first apple_res.exec_res should be empty.
+        let apply_res = fetch_apply_res(&rx);
+        assert!(apply_res.exec_res.is_empty());
         // The entry should be applied now.
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 3);
@@ -5052,6 +5054,10 @@ mod tests {
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().has_error());
 
+        // The region was rescheduled to normal-priority handler because of
+        // nomral put command, so the first apple_res.exec_res should be empty.
+        let apply_res = fetch_apply_res(&rx);
+        assert!(apply_res.exec_res.is_empty());
         // The region was rescheduled low-priority becasuee of ingest command,
         // only put entry has been applied;
         let apply_res = fetch_apply_res(&rx);
@@ -5083,6 +5089,8 @@ mod tests {
             capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
         let index = write_batch_max_keys + 11;
+        // The region was rescheduled to normal-priority handler. Discard the first apply_res.
+        fetch_apply_res(&rx);
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index as u64);
         assert_eq!(obs.pre_query_count.load(Ordering::SeqCst), index);
@@ -5257,7 +5265,6 @@ mod tests {
             let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
             assert!(!resp.get_header().has_error(), "{:?}", resp);
         }
-        fetch_apply_res(&rx);
 
         // Verify the engine keys.
         for i in 1..keys_count {
