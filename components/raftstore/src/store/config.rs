@@ -489,16 +489,8 @@ impl Config {
         } else {
             self.store_batch_system.max_batch_size = Some(1024);
         }
-        if let Some(d) = self.store_batch_system.before_pause_wait_us {
-            if d > 1000 {
-                return Err(box_err!(
-                    "store-before-pause-wait-us should be less than or equal to 1000"
-                ));
-            }
-        } else {
-            self.store_batch_system.before_pause_wait_us =
-                Some(std::cmp::min(self.raft_msg_flush_interval_us, 1000));
-        }
+        self.store_batch_system.before_pause_wait_us =
+            Some(std::cmp::min(self.raft_msg_flush_interval_us, 1000));
         if self.store_io_pool_size == 0 {
             return Err(box_err!("store-io-pool-size should be greater than 0"));
         }
@@ -694,9 +686,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_pool_size"])
             .set(self.store_batch_system.pool_size as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["store_before_pause_wait_us"])
-            .set(self.store_batch_system.before_pause_wait_us.unwrap() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_io_pool_size"])
             .set(self.store_io_pool_size as f64);
