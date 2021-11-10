@@ -1193,7 +1193,10 @@ impl Initializer {
         let current = TimeStamp::max();
         let mut scanner = ScannerBuilder::new(snap, current, false)
             .range(None, None)
+<<<<<<< HEAD
             .fill_cache(false)
+=======
+>>>>>>> 3fe6ec216... remove hint_min_ts for cdc incremental scanner (#11314)
             .build_delta_scanner(self.checkpoint_ts, self.txn_extra_op)
             .unwrap();
         let conn_id = self.conn_id;
@@ -1461,6 +1464,10 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
 #[cfg(test)]
 mod tests {
     use collections::HashSet;
+<<<<<<< HEAD
+=======
+    use engine_rocks::RocksEngine;
+>>>>>>> 3fe6ec216... remove hint_min_ts for cdc incremental scanner (#11314)
     use engine_traits::DATA_CFS;
     use futures::executor::block_on;
     use futures::StreamExt;
