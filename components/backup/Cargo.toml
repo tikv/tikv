@@ -62,8 +62,10 @@ tikv_util = { path = "../tikv_util", default-features = false }
 collections = { path = "../collections" }
 txn_types = { path = "../txn_types", default-features = false }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
-crossbeam = "0.8"
+tokio = { version = "1.5", features = ["rt-multi-thread"] }
+tokio-stream = "0.1"
 
 [dev-dependencies]
 rand = "0.8"
 tempfile = "3.0"
+tokio = { version = "1.5", features = ["time", "macros"] }
