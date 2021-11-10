@@ -2,7 +2,7 @@
 
 use batch_system::test_runner::*;
 use batch_system::*;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
@@ -113,6 +113,7 @@ fn test_before_pause_wait() {
     let (router, mut system) = batch_system::create_system(&cfg, control_tx, control_fsm);
     let builder = Builder::new();
     let metrics = builder.metrics.clone();
+    let pause_counter = builder.pause_counter.clone();
     system.spawn("test".to_owned(), builder);
     let mut expected_metrics = HandleMetrics::default();
     assert_eq!(*metrics.lock().unwrap(), expected_metrics);
@@ -150,6 +151,6 @@ fn test_before_pause_wait() {
     expected_metrics.control = 1;
     expected_metrics.normal = 1;
     expected_metrics.begin = 2;
-    expected_metrics.pause = 3;
     assert_eq!(*metrics.lock().unwrap(), expected_metrics);
+    assert_eq!(pause_counter.load(Ordering::SeqCst), 3);
 }
