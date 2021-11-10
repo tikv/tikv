@@ -355,7 +355,6 @@ where
     engine: EK,
     applied_batch: ApplyCallbackBatch<EK::Snapshot>,
     apply_res: Vec<ApplyRes<EK::Snapshot>>,
-    exec_res: VecDeque<ExecResult<EK::Snapshot>>,
     exec_log_index: u64,
     exec_log_term: u64,
 
@@ -437,7 +436,6 @@ where
             kv_wb,
             applied_batch: ApplyCallbackBatch::new(),
             apply_res: vec![],
-            exec_res: VecDeque::new(),
             exec_log_index: 0,
             exec_log_term: 0,
             kv_wb_last_bytes: 0,
@@ -475,26 +473,14 @@ where
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
+        if delegate.last_flush_applied_index < delegate.apply_state.get_applied_index() {
+            delegate.write_apply_state(self.kv_wb_mut());
+        }
         self.commit_opt(delegate, true);
     }
 
     fn commit_opt(&mut self, delegate: &mut ApplyDelegate<EK>, persistent: bool) {
-        let has_unflushed_data =
-            delegate.last_flush_applied_index != delegate.apply_state.get_applied_index();
-        if !delegate.pending_remove && has_unflushed_data {
-            delegate.write_apply_state(self.kv_wb_mut());
-        }
         delegate.update_metrics(self);
-        // If has unflushed data, push a new ApplyRes
-        if has_unflushed_data {
-            self.apply_res.push(ApplyRes {
-                region_id: delegate.region_id(),
-                apply_state: delegate.apply_state.clone(),
-                exec_res: std::mem::take(&mut self.exec_res),
-                metrics: delegate.metrics.clone(),
-                applied_index_term: delegate.applied_index_term,
-            });
-        }
         if persistent {
             self.write_to_db();
             self.prepare_for(delegate);
@@ -571,18 +557,28 @@ where
             }
             cb.invoke_with_response(resp);
         }
-        if !self.apply_res.is_empty() {
-            let apply_res = mem::take(&mut self.apply_res);
-            self.notifier.notify(apply_res);
-        }
         self.apply_time.flush();
         self.apply_wait.flush();
         need_sync
     }
 
     /// Finishes `Apply`s for the delegate.
-    pub fn finish_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
+    pub fn finish_for(
+        &mut self,
+        delegate: &mut ApplyDelegate<EK>,
+        results: VecDeque<ExecResult<EK::Snapshot>>,
+    ) {
+        if !delegate.pending_remove {
+            delegate.write_apply_state(self.kv_wb_mut());
+        }
         self.commit_opt(delegate, false);
+        self.apply_res.push(ApplyRes {
+            region_id: delegate.region_id(),
+            apply_state: delegate.apply_state.clone(),
+            exec_res: results,
+            metrics: delegate.metrics.clone(),
+            applied_index_term: delegate.applied_index_term,
+        });
     }
 
     pub fn delta_bytes(&self) -> u64 {
@@ -618,6 +614,11 @@ where
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
         let is_synced = self.write_to_db();
+
+        if !self.apply_res.is_empty() {
+            let apply_res = mem::take(&mut self.apply_res);
+            self.notifier.notify(apply_res);
+        }
 
         let elapsed = t.saturating_elapsed();
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(elapsed) as f64);
@@ -937,12 +938,12 @@ where
         if committed_entries_drainer.len() == 0 {
             return;
         }
-        assert!(apply_ctx.exec_res.is_empty());
         apply_ctx.prepare_for(self);
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
         apply_ctx.committed_count += committed_entries_drainer.len();
+        let mut results = VecDeque::new();
         while let Some(entry) = committed_entries_drainer.next() {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
@@ -971,7 +972,7 @@ where
 
             match res {
                 ApplyResult::None => {}
-                ApplyResult::Res(res) => apply_ctx.exec_res.push_back(res),
+                ApplyResult::Res(res) => results.push_back(res),
                 ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => {
                     // Both cancel and merge will yield current processing.
                     apply_ctx.committed_count -= committed_entries_drainer.len() + 1;
@@ -980,7 +981,7 @@ where
                     // Note that current entry is skipped when yield.
                     pending_entries.push(entry);
                     pending_entries.extend(committed_entries_drainer);
-                    apply_ctx.finish_for(self);
+                    apply_ctx.finish_for(self, results);
                     self.yield_state = Some(YieldState {
                         pending_entries,
                         pending_msgs: Vec::default(),
@@ -993,7 +994,7 @@ where
                 }
             }
         }
-        apply_ctx.finish_for(self);
+        apply_ctx.finish_for(self, results);
 
         if self.pending_remove {
             self.destroy(apply_ctx);
