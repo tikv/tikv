@@ -127,11 +127,11 @@ pub struct BatchRaftCmdRequestBuilder<E>
 where
     E: KvEngine,
 {
-    can_batch_limit: u64,
-    should_propose_size: u64,
     batch_req_size: u64,
+    has_proposed_cb: bool,
+    propose_checked: Option<bool>,
     request: Option<RaftCmdRequest>,
-    callbacks: Vec<(Callback<E::Snapshot>, usize)>,
+    callbacks: Vec<Callback<E::Snapshot>>,
 }
 
 impl<EK, ER> Drop for PeerFsm<EK, ER>
@@ -225,7 +225,7 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
-                batch_req_builder: BatchRaftCmdRequestBuilder::new(cfg),
+                batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
             }),
@@ -268,7 +268,7 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
-                batch_req_builder: BatchRaftCmdRequestBuilder::new(cfg),
+                batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
             }),
@@ -332,21 +332,23 @@ impl<E> BatchRaftCmdRequestBuilder<E>
 where
     E: KvEngine,
 {
-    fn new(cfg: &Config) -> BatchRaftCmdRequestBuilder<E> {
+    fn new() -> BatchRaftCmdRequestBuilder<E> {
         BatchRaftCmdRequestBuilder {
-            can_batch_limit: (cfg.raft_entry_max_size.0 as f64 * 0.2) as u64,
-            should_propose_size: (cfg.raft_entry_max_size.0 as f64 * 0.4) as u64,
             batch_req_size: 0,
+            has_proposed_cb: false,
+            propose_checked: None,
             request: None,
             callbacks: vec![],
         }
     }
 
-    fn can_batch(&self, req: &RaftCmdRequest, req_size: u32) -> bool {
+    fn can_batch(&self, cfg: &Config, req: &RaftCmdRequest, req_size: u32) -> bool {
         // No batch request whose size exceed 20% of raft_entry_max_size,
         // so total size of request in batch_raft_request would not exceed
         // (40% + 20%) of raft_entry_max_size
-        if req.get_requests().is_empty() || req_size as u64 > self.can_batch_limit {
+        if req.get_requests().is_empty()
+            || req_size as u64 > (cfg.raft_entry_max_size.0 as f64 * 0.2) as u64
+        {
             return false;
         }
         for r in req.get_requests() {
@@ -367,10 +369,9 @@ where
     }
 
     fn add(&mut self, cmd: RaftCommand<E::Snapshot>, req_size: u32) {
-        let req_num = cmd.request.get_requests().len();
         let RaftCommand {
             mut request,
-            callback,
+            mut callback,
             ..
         } = cmd;
         if let Some(batch_req) = self.request.as_mut() {
@@ -381,15 +382,21 @@ where
         } else {
             self.request = Some(request);
         };
-        self.callbacks.push((callback, req_num));
+        if callback.has_proposed_cb() {
+            self.has_proposed_cb = true;
+            if self.propose_checked.unwrap_or(false) {
+                callback.invoke_proposed();
+            }
+        }
+        self.callbacks.push(callback);
         self.batch_req_size += req_size as u64;
     }
 
-    fn should_finish(&self) -> bool {
+    fn should_finish(&self, cfg: &Config) -> bool {
         if let Some(batch_req) = self.request.as_ref() {
             // Limit the size of batch request so that it will not exceed raft_entry_max_size after
             // adding header.
-            if self.batch_req_size > self.should_propose_size {
+            if self.batch_req_size > (cfg.raft_entry_max_size.0 as f64 * 0.4) as u64 {
                 return true;
             }
             if batch_req.get_requests().len() > <E as WriteBatchExt>::WRITE_BATCH_MAX_KEYS {
@@ -405,8 +412,10 @@ where
     ) -> Option<(RaftCmdRequest, Callback<E::Snapshot>)> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
+            self.has_proposed_cb = false;
+            self.propose_checked = None;
             if self.callbacks.len() == 1 {
-                let (cb, _) = self.callbacks.pop().unwrap();
+                let cb = self.callbacks.pop().unwrap();
                 return Some((req, cb));
             }
             metric.propose.batch += self.callbacks.len() - 1;
@@ -414,7 +423,7 @@ where
             let proposed_cbs: Vec<ExtCallback> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { proposed_cb, .. } = &mut cb.0 {
+                    if let Callback::Write { proposed_cb, .. } = cb {
                         proposed_cb.take()
                     } else {
                         None
@@ -433,7 +442,7 @@ where
             let committed_cbs: Vec<_> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { committed_cb, .. } = &mut cb.0 {
+                    if let Callback::Write { committed_cb, .. } = cb {
                         committed_cb.take()
                     } else {
                         None
@@ -453,7 +462,7 @@ where
             let times: SmallVec<[TiInstant; 4]> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { request_times, .. } = &mut cb.0 {
+                    if let Callback::Write { request_times, .. } = cb {
                         Some(request_times[0])
                     } else {
                         None
@@ -463,19 +472,10 @@ where
 
             let mut cb = Callback::write_ext(
                 Box::new(move |resp| {
-                    let mut last_index = 0;
-                    let has_error = resp.response.get_header().has_error();
-                    for (cb, req_num) in cbs {
-                        let next_index = last_index + req_num;
+                    for cb in cbs {
                         let mut cmd_resp = RaftCmdResponse::default();
                         cmd_resp.set_header(resp.response.get_header().clone());
-                        if !has_error {
-                            cmd_resp.set_responses(
-                                resp.response.get_responses()[last_index..next_index].into(),
-                            );
-                        }
                         cb.invoke_with_response(cmd_resp);
-                        last_index = next_index;
                     }
                 }),
                 proposed_cb,
@@ -570,7 +570,7 @@ where
 
                     let req_size = cmd.request.compute_size();
                     if self.ctx.cfg.cmd_batch
-                        && self.fsm.batch_req_builder.can_batch(&cmd.request, req_size)
+                        && self.fsm.batch_req_builder.can_batch(&self.ctx.cfg, &cmd.request, req_size)
                         // Avoid to merge requests with different `DiskFullOpt`s into one,
                         // so that normal writes can be rejected when proposing if the
                         // store's disk is full.
@@ -579,11 +579,10 @@ where
                             || cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull)
                     {
                         self.fsm.batch_req_builder.add(cmd, req_size);
-                        if self.fsm.batch_req_builder.should_finish() {
+                        if self.fsm.batch_req_builder.should_finish(&self.ctx.cfg) {
                             self.propose_batch_raft_command(true);
                         }
                     } else {
-                        self.propose_batch_raft_command(true);
                         self.propose_raft_command(
                             cmd.request,
                             cmd.callback,
@@ -626,10 +625,14 @@ where
         }
         // Propose batch request which may be still waiting for more raft-command
         self.propose_batch_raft_command(false);
+        self.check_batch_cmd_and_proposed_cb();
         self.collect_ready();
     }
 
     fn propose_batch_raft_command(&mut self, force: bool) {
+        if self.fsm.batch_req_builder.request.is_none() {
+            return;
+        }
         if !force
             && self.ctx.cfg.cmd_batch_concurrent_ready_max_count != 0
             && self.fsm.peer.unpersisted_ready_len()
@@ -637,11 +640,33 @@ where
         {
             return;
         }
-        if let Some((request, callback)) =
-            self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics)
+        fail_point!("propose_batch_raft_command", !force, |_| {});
+        let (request, callback) = self
+            .fsm
+            .batch_req_builder
+            .build(&mut self.ctx.raft_metrics)
+            .unwrap();
+        self.propose_raft_command_internal(request, callback, DiskFullOpt::NotAllowedOnFull)
+    }
+
+    fn check_batch_cmd_and_proposed_cb(&mut self) {
+        if self.fsm.batch_req_builder.request.is_none()
+            || !self.fsm.batch_req_builder.has_proposed_cb
+            || self.fsm.batch_req_builder.propose_checked.is_some()
         {
-            self.propose_raft_command(request, callback, DiskFullOpt::NotAllowedOnFull)
+            return;
         }
+        let cmd = self.fsm.batch_req_builder.request.take().unwrap();
+        self.fsm.batch_req_builder.propose_checked = Some(false);
+        if let Ok(None) = self.pre_propose_raft_command(&cmd) {
+            if self.fsm.peer.will_likely_propose(&cmd) {
+                self.fsm.batch_req_builder.propose_checked = Some(true);
+                for cb in &mut self.fsm.batch_req_builder.callbacks {
+                    cb.invoke_proposed();
+                }
+            }
+        }
+        self.fsm.batch_req_builder.request = Some(cmd);
     }
 
     fn on_update_replication_mode(&mut self) {
@@ -1024,7 +1049,7 @@ where
         let msg =
             new_read_index_request(region_id, region_epoch.clone(), self.fsm.peer.peer.clone());
         let apply_router = self.ctx.apply_router.clone();
-        self.propose_raft_command(
+        self.propose_raft_command_internal(
             msg,
             Callback::Read(Box::new(move |resp| {
                 // Return the error
@@ -1168,7 +1193,7 @@ where
             self.region().get_region_epoch().clone(),
             self.fsm.peer.peer.clone(),
         );
-        self.propose_raft_command(msg, cb, DiskFullOpt::NotAllowedOnFull);
+        self.propose_raft_command_internal(msg, cb, DiskFullOpt::NotAllowedOnFull);
     }
 
     fn on_role_changed(&mut self, role: Option<StateRole>) {
@@ -1179,6 +1204,7 @@ where
                 self.register_split_region_check_tick();
                 self.fsm.peer.heartbeat_pd(self.ctx);
                 self.register_pd_heartbeat_tick();
+                self.register_raft_gc_log_tick();
             }
         }
     }
@@ -1560,10 +1586,13 @@ where
         let from_peer_id = msg.get_from_peer().get_id();
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
 
-        let result = self
-            .fsm
-            .peer
-            .step(self.ctx, msg.take_message(), peer_disk_usage);
+        let result = if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
+            self.on_transfer_leader_msg(msg.get_message(), peer_disk_usage);
+            Ok(())
+        } else {
+            self.fsm.peer.step(self.ctx, msg.take_message())
+        };
+
         stepped.set(result.is_ok());
 
         if is_snapshot {
@@ -2156,6 +2185,48 @@ where
                     }),
                 )
                 .unwrap();
+        }
+    }
+
+    fn on_transfer_leader_msg(&mut self, msg: &eraftpb::Message, peer_disk_usage: DiskUsage) {
+        // log_term is set by original leader, represents the term last log is written
+        // in, which should be equal to the original leader's term.
+        if msg.get_log_term() != self.fsm.peer.term() {
+            return;
+        }
+        if self.fsm.peer.is_leader() {
+            let from = match self.fsm.peer.get_peer_from_cache(msg.get_from()) {
+                Some(p) => p,
+                None => return,
+            };
+            match self
+                .fsm
+                .peer
+                .ready_to_transfer_leader(&mut self.ctx, msg.get_index(), &from)
+            {
+                Some(reason) => {
+                    info!(
+                        "reject to transfer leader";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "to" => ?from,
+                        "reason" => reason,
+                        "index" => msg.get_index(),
+                        "last_index" => self.fsm.peer.get_store().last_index(),
+                    );
+                }
+                None => {
+                    if self.fsm.batch_req_builder.request.is_some() {
+                        self.propose_batch_raft_command(true);
+                    }
+
+                    self.fsm.peer.transfer_leader(&from);
+                }
+            }
+        } else {
+            self.fsm
+                .peer
+                .execute_transfer_leader(&mut self.ctx, msg, peer_disk_usage);
         }
     }
 
@@ -3652,7 +3723,25 @@ where
         }
     }
 
+    /// Propose batched raft commands(if any) first, then propose the given raft command.
     fn propose_raft_command(
+        &mut self,
+        msg: RaftCmdRequest,
+        cb: Callback<EK::Snapshot>,
+        diskfullopt: DiskFullOpt,
+    ) {
+        if let Some((request, callback)) =
+            self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics)
+        {
+            self.propose_raft_command_internal(request, callback, DiskFullOpt::NotAllowedOnFull);
+        }
+
+        self.propose_raft_command_internal(msg, cb, diskfullopt);
+    }
+
+    /// Propose the raft command directly.
+    /// Note that this function introduces a reorder between this command and batched commands.
+    fn propose_raft_command_internal(
         &mut self,
         mut msg: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
@@ -3776,19 +3865,17 @@ where
 
     #[allow(clippy::if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, force_compact: bool) {
+        if !self.fsm.peer.is_leader() {
+            // `compact_cache_to` is called when apply, there is no need to call `compact_to` here,
+            // snapshot generating has already been cancelled when the role becomes follower.
+            return;
+        }
         if !self.fsm.peer.get_store().is_cache_empty() || !self.ctx.cfg.hibernate_regions {
             self.register_raft_gc_log_tick();
         }
         fail_point!("on_raft_log_gc_tick_1", self.fsm.peer_id() == 1, |_| {});
         fail_point!("on_raft_gc_log_tick", |_| {});
         debug_assert!(!self.fsm.stopped);
-
-        // The most simple case: compact log and cache to applied index directly.
-        let applied_idx = self.fsm.peer.get_store().applied_index();
-        if !self.fsm.peer.is_leader() {
-            self.fsm.peer.mut_store().compact_to(applied_idx + 1);
-            return;
-        }
 
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the
         // last few seconds. That happens probably because another TiKV is down. In this case if we
@@ -3811,6 +3898,7 @@ where
         //              first_index                         replicated_index
         // `alive_cache_idx` is the smallest `replicated_index` of healthy up nodes.
         // `alive_cache_idx` is only used to gc cache.
+        let applied_idx = self.fsm.peer.get_store().applied_index();
         let truncated_idx = self.fsm.peer.get_store().truncated_index();
         let last_idx = self.fsm.peer.get_store().last_index();
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
@@ -3890,7 +3978,11 @@ where
         let peer = self.fsm.peer.peer.clone();
         let term = self.fsm.peer.get_index_term(compact_idx);
         let request = new_compact_log_request(region_id, peer, compact_idx, term);
-        self.propose_raft_command(request, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
+        self.propose_raft_command_internal(
+            request,
+            Callback::None,
+            DiskFullOpt::AllowedOnAlmostFull,
+        );
 
         self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
@@ -4329,7 +4421,7 @@ where
             self.fsm.peer.peer.clone(),
             &self.fsm.peer.consistency_state,
         );
-        self.propose_raft_command(req, Callback::None, DiskFullOpt::NotAllowedOnFull);
+        self.propose_raft_command_internal(req, Callback::None, DiskFullOpt::NotAllowedOnFull);
     }
 
     fn on_ingest_sst_result(&mut self, ssts: Vec<SSTMetaInfo>) {
@@ -4662,17 +4754,17 @@ mod tests {
     fn test_batch_raft_cmd_request_builder() {
         let mut cfg = Config::default();
         cfg.raft_entry_max_size = ReadableSize(1000);
-        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new(&cfg);
+        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new();
         let mut q = Request::default();
         let mut metric = RaftMetrics::new(true);
 
         let mut req = RaftCmdRequest::default();
         req.set_admin_request(AdminRequest::default());
-        assert!(!builder.can_batch(&req, 0));
+        assert!(!builder.can_batch(&cfg, &req, 0));
 
         let mut req = RaftCmdRequest::default();
         req.set_status_request(StatusRequest::default());
-        assert!(!builder.can_batch(&req, 0));
+        assert!(!builder.can_batch(&cfg, &req, 0));
 
         let mut req = RaftCmdRequest::default();
         let mut put = PutRequest::default();
@@ -4683,7 +4775,7 @@ mod tests {
         req.mut_requests().push(q.clone());
         let _ = q.take_put();
         let req_size = req.compute_size();
-        assert!(builder.can_batch(&req, req_size));
+        assert!(builder.can_batch(&cfg, &req, req_size));
 
         let mut req = RaftCmdRequest::default();
         q.set_cmd_type(CmdType::Snap);
@@ -4695,7 +4787,7 @@ mod tests {
         q.set_put(put);
         req.mut_requests().push(q.clone());
         let req_size = req.compute_size();
-        assert!(!builder.can_batch(&req, req_size));
+        assert!(!builder.can_batch(&cfg, &req, req_size));
 
         let mut req = RaftCmdRequest::default();
         let mut put = PutRequest::default();
@@ -4705,7 +4797,7 @@ mod tests {
         q.set_put(put);
         req.mut_requests().push(q.clone());
         let req_size = req.compute_size();
-        assert!(!builder.can_batch(&req, req_size));
+        assert!(!builder.can_batch(&cfg, &req, req_size));
 
         // Check batch callback
         let mut req = RaftCmdRequest::default();
