@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::fsm::{Fsm, FsmScheduler, Priority};
 use crate::mailbox::BasicMailbox;
 use crate::router::Router;
-use crossbeam::channel::{self, tick, SendError};
+use crossbeam::channel::{self, after, SendError};
 use file_system::{set_io_type, IOType};
 use std::borrow::Cow;
 use std::sync::atomic::AtomicUsize;
@@ -281,7 +281,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                             return batch.push(fsm);
                         }
                     }
-                    recv(tick(Duration::from_micros(d))) -> _ => {
+                    recv(after(Duration::from_micros(d))) -> _ => {
                         self.handler.pause();
                         if let Ok(fsm) = self.fsm_receiver.recv() {
                             return batch.push(fsm);

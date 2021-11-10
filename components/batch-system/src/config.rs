@@ -12,7 +12,7 @@ pub struct Config {
     pub reschedule_duration: ReadableDuration,
     pub low_priority_pool_size: usize,
     #[doc(hidden)]
-    #[serde(skip_serializing)]
+    #[serde(skip)]
     pub before_pause_wait_us: Option<u64>,
 }
 
