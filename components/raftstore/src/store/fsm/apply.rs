@@ -2871,9 +2871,11 @@ impl<S: Snapshot> Apply<S> {
 
     fn try_batch(&mut self, other: &mut Apply<S>) -> bool {
         assert_eq!(self.region_id, other.region_id);
-        if self.peer_id == other.peer_id && self.term == other.term {
+        if self.peer_id == other.peer_id {
             self.entries.append(&mut other.entries);
             self.cbs.append(&mut other.cbs);
+            assert!(other.term >= self.term);
+            self.term = other.term;
             true
         } else {
             false

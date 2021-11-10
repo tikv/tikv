@@ -2169,6 +2169,9 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         committed_entries: Vec<Entry>,
     ) {
+        if committed_entries.is_empty() {
+            return;
+        }
         fail_point!(
             "before_leader_handle_committed_entries",
             self.is_leader(),
