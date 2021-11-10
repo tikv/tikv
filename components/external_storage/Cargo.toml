@@ -9,11 +9,9 @@ cloud-storage-dylib = [
   "ffi-support",
   "libloading",
   "protobuf",
-  "tokio-util",
 ]
 cloud-storage-grpc = [
   "grpcio",
-  "tokio-util",
 ]
 failpoints = ["fail/failpoints"]
 
@@ -43,12 +41,14 @@ tikv_alloc = { path = "../tikv_alloc" }
 engine_traits = { path = "../engine_traits" }
 encryption = { path = "../encryption" }
 tikv_util = { path = "../tikv_util", default-features = false }
-tokio = { version = "1.5", features = ["time"] }
-tokio-util = { version = "0.6", features = ["compat"], optional = true }
+tokio = { version = "1.5", features = ["time", "fs", "process"] }
+tokio-util = { version = "0.6", features = ["compat"] }
 url = "2.0"
+async-trait = "0.1"
 
 [dev-dependencies]
 structopt = "0.3"
+tokio = { version = "1.5", features = ["macros"] }
 tempfile = "3.1"
 rust-ini = "0.14.0"
 matches = "0.1.8"
