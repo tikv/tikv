@@ -1219,9 +1219,22 @@ impl<T: 'static + RaftStoreRouter> RunnableWithTimer<Task, ()> for Endpoint<T> {
 
 #[cfg(test)]
 mod tests {
+<<<<<<< HEAD
     use engine_traits::DATA_CFS;
     use futures03::executor::block_on;
     use futures03::StreamExt;
+=======
+    use std::collections::BTreeMap;
+    use std::fmt::Display;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender};
+
+    use collections::HashSet;
+    use engine_rocks::RocksEngine;
+    use engine_traits::DATA_CFS;
+    use futures::executor::block_on;
+    use futures::StreamExt;
+>>>>>>> 3fe6ec216... remove hint_min_ts for cdc incremental scanner (#11314)
     use kvproto::cdcpb::Header;
     #[cfg(feature = "prost-codec")]
     use kvproto::cdcpb::{event::Event as Event_oneof_event, Header};
@@ -1239,7 +1252,11 @@ mod tests {
     use test_raftstore::MockRaftStoreRouter;
     use test_raftstore::TestPdClient;
     use tikv::storage::kv::Engine;
+<<<<<<< HEAD
     use tikv::storage::mvcc::tests::*;
+=======
+    use tikv::storage::txn::tests::{must_acquire_pessimistic_lock, must_prewrite_put};
+>>>>>>> 3fe6ec216... remove hint_min_ts for cdc incremental scanner (#11314)
     use tikv::storage::TestEngineBuilder;
     use tikv_util::collections::HashSet;
     use tikv_util::config::{ReadableDuration, ReadableSize};
