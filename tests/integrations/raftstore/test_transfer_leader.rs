@@ -79,9 +79,10 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
         false,
     );
 
+    // without multi targets
     for id in 1..4 {
         // select a new leader to transfer
-        pd_client.transfer_leader(region.get_id(), new_peer(id, id));
+        pd_client.transfer_leader(region.get_id(), new_peer(id, id), vec![]);
 
         for _ in 0..100 {
             // reset leader and wait transfer successfully.
@@ -101,6 +102,46 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
 
         assert_eq!(cluster.leader_of_region(1), Some(new_peer(id, id)));
         req.mut_header().set_peer(new_peer(id, id));
+        debug!("requesting {:?}", req);
+        let resp = cluster
+            .call_command(req.clone(), Duration::from_secs(5))
+            .unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v");
+    }
+
+    // with multi targets
+    for id in 1..4 {
+        // select multi target leaders to transfer
+        // set `peer` 0 to make sure the new leader must come from `peers`
+        pd_client.transfer_leader(
+            region.get_id(),
+            new_peer(0, 0),
+            vec![new_peer(id, id), new_peer((id % 3) + 1, (id % 3) + 1)],
+        );
+
+        for _ in 0..100 {
+            // reset leader and wait transfer successfully.
+            cluster.reset_leader_of_region(1);
+
+            sleep_ms(20);
+
+            if let Some(leader) = cluster.leader_of_region(1) {
+                if leader.get_id() == id || leader.get_id() == (id % 3) + 1 {
+                    // make sure new leader apply an entry on its term
+                    // so we can use its local reader safely
+                    cluster.must_put(b"k1", b"v1");
+                    break;
+                }
+            }
+        }
+
+        assert!(
+            cluster.leader_of_region(1) == Some(new_peer(id, id))
+                || cluster.leader_of_region(1) == Some(new_peer((id % 3) + 1, (id % 3) + 1))
+        );
+        let leader_id = cluster.leader_of_region(1).unwrap().id;
+        req.mut_header().set_peer(new_peer(leader_id, leader_id));
         debug!("requesting {:?}", req);
         let resp = cluster
             .call_command(req.clone(), Duration::from_secs(5))

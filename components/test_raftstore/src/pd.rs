@@ -95,6 +95,7 @@ enum Operator {
     },
     TransferLeader {
         peer: metapb::Peer,
+        peers: Vec<metapb::Peer>,
         policy: SchedulePolicy,
     },
     MergeRegion {
@@ -147,7 +148,11 @@ impl Operator {
             Operator::RemovePeer { ref peer, .. } => {
                 new_pd_change_peer(ConfChangeType::RemoveNode, peer.clone())
             }
-            Operator::TransferLeader { ref peer, .. } => new_pd_transfer_leader(peer.clone()),
+            Operator::TransferLeader {
+                ref peer,
+                ref peers,
+                ..
+            } => new_pd_transfer_leader(peer.clone(), peers.clone()),
             Operator::MergeRegion {
                 target_region_id, ..
             } => {
@@ -239,8 +244,15 @@ impl Operator {
             } => region.get_peers().iter().all(|p| p != peer) || !policy.schedule(),
             Operator::TransferLeader {
                 ref peer,
+                ref peers,
                 ref mut policy,
-            } => leader == peer || !policy.schedule(),
+            } => {
+                leader == peer
+                    || peers
+                        .iter()
+                        .fold(false, |finished, peer| finished | (leader == peer))
+                    || !policy.schedule()
+            }
             Operator::MergeRegion {
                 source_region_id,
                 ref mut policy,
@@ -914,9 +926,10 @@ impl TestPdClient {
         self.cluster.wl().add_region(region)
     }
 
-    pub fn transfer_leader(&self, region_id: u64, peer: metapb::Peer) {
+    pub fn transfer_leader(&self, region_id: u64, peer: metapb::Peer, peers: Vec<metapb::Peer>) {
         let op = Operator::TransferLeader {
             peer,
+            peers,
             policy: SchedulePolicy::TillSuccess,
         };
         self.schedule_operator(region_id, op);
