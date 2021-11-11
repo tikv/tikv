@@ -72,6 +72,7 @@ tikv_util = { path = "../../tikv_util" }
 tokio = { version = "1.5", features = ["time", "rt", "net"], optional = true }
 tokio-util = { version = "0.6", features = ["compat"], optional = true }
 url = "2.0"
+async-trait = "0.1"
 
 [dev-dependencies]
 matches = "0.1.8"
