@@ -10,18 +10,17 @@ use engine_traits::{IterOptions, ReadOptions};
 use kvproto::kvrpcpb::ApiVersion;
 use txn_types::{Key, Value};
 
-// TODO: remove this
 #[derive(Clone)]
 pub struct RawEncodeSnapshot<S: Snapshot> {
-    s: S,
+    snap: S,
     current_ts: u64,
     api_version: ApiVersion,
 }
 
 impl<S: Snapshot> RawEncodeSnapshot<S> {
-    pub fn from_snapshot(s: S, api_version: ApiVersion) -> Self {
+    pub fn from_snapshot(snap: S, api_version: ApiVersion) -> Self {
         RawEncodeSnapshot {
-            s,
+            snap,
             current_ts: ttl_current_ts(),
             api_version,
         }
@@ -52,7 +51,7 @@ impl<S: Snapshot> RawEncodeSnapshot<S> {
     ) -> Result<Option<u64>> {
         stats.data.flow_stats.read_keys = 1;
         stats.data.flow_stats.read_bytes = key.as_encoded().len();
-        if let Some(v) = self.s.get_cf(cf, key)? {
+        if let Some(v) = self.snap.get_cf(cf, key)? {
             stats.data.flow_stats.read_bytes += v.len();
             let raw_value = RawValue::from_bytes(&v, self.api_version)?;
             return match raw_value.expire_ts {
@@ -69,20 +68,20 @@ impl<S: Snapshot> Snapshot for RawEncodeSnapshot<S> {
     type Iter = RawEncodeIterator<S::Iter>;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
-        self.map_value(self.s.get(key))
+        self.map_value(self.snap.get(key))
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
-        self.map_value(self.s.get_cf(cf, key))
+        self.map_value(self.snap.get_cf(cf, key))
     }
 
     fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>> {
-        self.map_value(self.s.get_cf_opt(opts, cf, key))
+        self.map_value(self.snap.get_cf_opt(opts, cf, key))
     }
 
     fn iter(&self, iter_opt: IterOptions) -> Result<Self::Iter> {
         Ok(RawEncodeIterator::new(
-            self.s.iter(iter_opt)?,
+            self.snap.iter(iter_opt)?,
             self.current_ts,
             self.api_version,
         ))
@@ -90,7 +89,7 @@ impl<S: Snapshot> Snapshot for RawEncodeSnapshot<S> {
 
     fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
         Ok(RawEncodeIterator::new(
-            self.s.iter_cf(cf, iter_opt)?,
+            self.snap.iter_cf(cf, iter_opt)?,
             self.current_ts,
             self.api_version,
         ))
@@ -98,35 +97,35 @@ impl<S: Snapshot> Snapshot for RawEncodeSnapshot<S> {
 
     #[inline]
     fn lower_bound(&self) -> Option<&[u8]> {
-        self.s.lower_bound()
+        self.snap.lower_bound()
     }
 
     #[inline]
     fn upper_bound(&self) -> Option<&[u8]> {
-        self.s.upper_bound()
+        self.snap.upper_bound()
     }
 
     #[inline]
     fn get_data_version(&self) -> Option<u64> {
-        self.s.get_data_version()
+        self.snap.get_data_version()
     }
 
     fn is_max_ts_synced(&self) -> bool {
-        self.s.is_max_ts_synced()
+        self.snap.is_max_ts_synced()
     }
 }
 
 pub struct RawEncodeIterator<I: Iterator> {
-    i: I,
+    inner: I,
     current_ts: u64,
     skip_ttl: usize,
     api_version: ApiVersion,
 }
 
 impl<I: Iterator> RawEncodeIterator<I> {
-    fn new(i: I, current_ts: u64, api_version: ApiVersion) -> Self {
+    fn new(inner: I, current_ts: u64, api_version: ApiVersion) -> Self {
         RawEncodeIterator {
-            i,
+            inner,
             current_ts,
             skip_ttl: 0,
             api_version,
@@ -140,7 +139,7 @@ impl<I: Iterator> RawEncodeIterator<I> {
             }
 
             if *res.as_ref().unwrap() {
-                let raw_value = RawValue::from_bytes(self.i.value(), self.api_version)?;
+                let raw_value = RawValue::from_bytes(self.inner.value(), self.api_version)?;
                 if raw_value
                     .expire_ts
                     .map(|expire_ts| expire_ts <= self.current_ts)
@@ -148,9 +147,9 @@ impl<I: Iterator> RawEncodeIterator<I> {
                 {
                     self.skip_ttl += 1;
                     res = if forward {
-                        self.i.next()
+                        self.inner.next()
                     } else {
-                        self.i.prev()
+                        self.inner.prev()
                     };
                     continue;
                 }
@@ -171,49 +170,49 @@ impl<I: Iterator> Drop for RawEncodeIterator<I> {
 
 impl<I: Iterator> Iterator for RawEncodeIterator<I> {
     fn next(&mut self) -> Result<bool> {
-        let res = self.i.next();
+        let res = self.inner.next();
         self.find_valid_value(res, true)
     }
 
     fn prev(&mut self) -> Result<bool> {
-        let res = self.i.prev();
+        let res = self.inner.prev();
         self.find_valid_value(res, false)
     }
 
     fn seek(&mut self, key: &Key) -> Result<bool> {
-        let res = self.i.seek(key);
+        let res = self.inner.seek(key);
         self.find_valid_value(res, true)
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
-        let res = self.i.seek_for_prev(key);
+        let res = self.inner.seek_for_prev(key);
         self.find_valid_value(res, false)
     }
 
     fn seek_to_first(&mut self) -> Result<bool> {
-        let res = self.i.seek_to_first();
+        let res = self.inner.seek_to_first();
         self.find_valid_value(res, true)
     }
 
     fn seek_to_last(&mut self) -> Result<bool> {
-        let res = self.i.seek_to_last();
+        let res = self.inner.seek_to_last();
         self.find_valid_value(res, false)
     }
 
     fn valid(&self) -> Result<bool> {
-        self.i.valid()
+        self.inner.valid()
     }
 
     fn validate_key(&self, key: &Key) -> Result<()> {
-        self.i.validate_key(key)
+        self.inner.validate_key(key)
     }
 
     fn key(&self) -> &[u8] {
-        self.i.key()
+        self.inner.key()
     }
 
     fn value(&self) -> &[u8] {
-        RawValue::from_bytes(self.i.value(), self.api_version)
+        RawValue::from_bytes(self.inner.value(), self.api_version)
             .unwrap()
             .user_value
     }

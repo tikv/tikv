@@ -124,7 +124,7 @@ mod tests {
             Key::from_encoded(key.to_vec()),
             None,
             b"v2".to_vec(),
-            0,
+            1,
             api_version,
             Context::default(),
         );
@@ -137,7 +137,7 @@ mod tests {
             Key::from_encoded(key.to_vec()),
             Some(b"v1".to_vec()),
             b"v3".to_vec(),
-            0,
+            2,
             api_version,
             Context::default(),
         );

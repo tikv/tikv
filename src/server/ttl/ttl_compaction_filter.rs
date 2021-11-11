@@ -68,13 +68,13 @@ impl CompactionFilter for TTLCompactionFilter {
             return CompactionFilterDecision::Keep;
         }
         // Only consider raw keys.
-        let origin_key = &key[keys::DATA_PREFIX_KEY.len()..];
         match self.api_version {
             // TTL is not enabled in V1.
             ApiVersion::V1 => unreachable!(),
             // In V1TTL, txnkv is disabled, so all data keys are raw keys.
             ApiVersion::V1ttl => (),
             ApiVersion::V2 => {
+                let origin_key = &key[keys::DATA_PREFIX_KEY.len()..];
                 if !key_prefix::is_raw_key(origin_key) {
                     return CompactionFilterDecision::Keep;
                 }

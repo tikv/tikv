@@ -74,13 +74,13 @@ impl TablePropertiesCollector for TtlPropertiesCollector {
             return;
         }
         // Only consider raw keys.
-        let origin_key = &key[keys::DATA_PREFIX_KEY.len()..];
         match self.api_version {
             // TTL is not enabled in V1.
             ApiVersion::V1 => unreachable!(),
             // In V1TTL, txnkv is disabled, so all data keys are raw keys.
             ApiVersion::V1ttl => (),
             ApiVersion::V2 => {
+                let origin_key = &key[keys::DATA_PREFIX_KEY.len()..];
                 if !key_prefix::is_raw_key(origin_key) {
                     return;
                 }
@@ -142,6 +142,7 @@ mod tests {
         test_ttl_properties_impl(ApiVersion::V1ttl);
         test_ttl_properties_impl(ApiVersion::V2);
     }
+
     fn test_ttl_properties_impl(api_version: ApiVersion) {
         let get_properties = |case: &[(&'static str, u64)]| -> Result<TtlProperties> {
             let mut collector = TtlPropertiesCollector {
@@ -179,7 +180,8 @@ mod tests {
         let props = get_properties(&case1).unwrap();
         assert_eq!(props.max_expire_ts, u64::MAX);
         match api_version {
-            ApiVersion::V1 | ApiVersion::V1ttl => assert_eq!(props.min_expire_ts, 1),
+            ApiVersion::V1 => unreachable!(),
+            ApiVersion::V1ttl => assert_eq!(props.min_expire_ts, 1),
             // expire_ts = 0 is no longer a special case in API V2
             ApiVersion::V2 => assert_eq!(props.min_expire_ts, 0),
         }
