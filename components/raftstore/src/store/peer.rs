@@ -300,7 +300,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
     ///
     /// Returns None if passing the epoch check, otherwise returns a index which is the last
     /// admin cmd index conflicted with this proposal.
-    pub fn propose_check_epoch(&mut self, req: &RaftCmdRequest, term: u64) -> Option<u64> {
+    fn propose_check_epoch(&mut self, req: &RaftCmdRequest, term: u64) -> Option<u64> {
         self.maybe_update_term(term);
         let (check_ver, check_conf_ver) = if !req.has_admin_request() {
             (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
@@ -312,7 +312,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
         self.last_conflict_index(check_ver, check_conf_ver)
     }
 
-    pub fn post_propose(&mut self, cmd_type: AdminCmdType, index: u64, term: u64) {
+    fn post_propose(&mut self, cmd_type: AdminCmdType, index: u64, term: u64) {
         self.maybe_update_term(term);
         let epoch_state = admin_cmd_epoch_lookup(cmd_type);
         assert!(
@@ -344,7 +344,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
     ///
     /// Note that the cmd of this type must change epoch otherwise it can not be
     /// recorded to `proposed_admin_cmd`.
-    pub fn last_cmd_index(&mut self, cmd_type: AdminCmdType) -> Option<u64> {
+    fn last_cmd_index(&mut self, cmd_type: AdminCmdType) -> Option<u64> {
         self.proposed_admin_cmd
             .iter()
             .rev()
@@ -352,7 +352,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             .map(|cmd| cmd.index)
     }
 
-    pub fn advance_apply(&mut self, index: u64, term: u64, region: &metapb::Region) {
+    fn advance_apply(&mut self, index: u64, term: u64, region: &metapb::Region) {
         self.maybe_update_term(term);
         while !self.proposed_admin_cmd.is_empty() {
             let cmd = self.proposed_admin_cmd.front_mut().unwrap();
@@ -376,7 +376,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
         }
     }
 
-    pub fn attach_to_conflict_cmd(&mut self, index: u64, cb: Callback<S>) {
+    fn attach_to_conflict_cmd(&mut self, index: u64, cb: Callback<S>) {
         if let Some(cmd) = self
             .proposed_admin_cmd
             .iter_mut()
@@ -1247,7 +1247,6 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         mut m: eraftpb::Message,
-        peer_disk_usage: DiskUsage,
     ) -> Result<()> {
         fail_point!(
             "step_message_3_1",
@@ -1291,9 +1290,6 @@ where
                 }
                 self.should_wake_up = state == LeaseState::Expired;
             }
-        } else if msg_type == MessageType::MsgTransferLeader {
-            self.execute_transfer_leader(ctx, &m, peer_disk_usage);
-            return Ok(());
         }
 
         let from_id = m.get_from();
@@ -2184,13 +2180,6 @@ where
             "{} is applying snapshot when it is ready to handle committed entries",
             self.tag
         );
-        if !committed_entries.is_empty() {
-            // We must renew current_time because this value may be created a long time ago.
-            // If we do not renew it, this time may be smaller than propose_time of a command,
-            // which was proposed in another thread while this thread receives its AppendEntriesResponse
-            // and is ready to calculate its commit-log-duration.
-            ctx.current_time.replace(monotonic_raw_now());
-        }
         // Leader needs to update lease.
         let mut lease_to_be_updated = self.is_leader();
         for entry in committed_entries.iter().rev() {
@@ -2201,6 +2190,11 @@ where
                     .proposals
                     .find_propose_time(entry.get_term(), entry.get_index());
                 if let Some(propose_time) = propose_time {
+                    // We must renew current_time because this value may be created a long time ago.
+                    // If we do not renew it, this time may be smaller than propose_time of a command,
+                    // which was proposed in another thread while this thread receives its AppendEntriesResponse
+                    // and is ready to calculate its commit-log-duration.
+                    ctx.current_time.replace(monotonic_raw_now());
                     ctx.raft_metrics.commit_log.observe(duration_to_sec(
                         (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
                     ));
@@ -2975,7 +2969,7 @@ where
         Ok(prs)
     }
 
-    fn transfer_leader(&mut self, peer: &metapb::Peer) {
+    pub fn transfer_leader(&mut self, peer: &metapb::Peer) {
         info!(
             "transfer leader";
             "region_id" => self.region_id,
@@ -2984,6 +2978,7 @@ where
         );
 
         self.raft_group.transfer_leader(peer.get_id());
+        self.should_wake_up = true;
     }
 
     fn pre_transfer_leader(&mut self, peer: &metapb::Peer) -> bool {
@@ -3013,7 +3008,7 @@ where
         true
     }
 
-    fn ready_to_transfer_leader<T>(
+    pub fn ready_to_transfer_leader<T>(
         &self,
         ctx: &mut PollContext<EK, ER, T>,
         mut index: u64,
@@ -3541,43 +3536,12 @@ where
         Ok(Either::Left(propose_index))
     }
 
-    fn execute_transfer_leader<T>(
+    pub fn execute_transfer_leader<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         msg: &eraftpb::Message,
         peer_disk_usage: DiskUsage,
     ) {
-        // log_term is set by original leader, represents the term last log is written
-        // in, which should be equal to the original leader's term.
-        if msg.get_log_term() != self.term() {
-            return;
-        }
-
-        if self.is_leader() {
-            let from = match self.get_peer_from_cache(msg.get_from()) {
-                Some(p) => p,
-                None => return,
-            };
-            match self.ready_to_transfer_leader(ctx, msg.get_index(), &from) {
-                Some(reason) => {
-                    info!(
-                        "reject to transfer leader";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "to" => ?from,
-                        "reason" => reason,
-                        "index" => msg.get_index(),
-                        "last_index" => self.get_store().last_index(),
-                    );
-                }
-                None => {
-                    self.transfer_leader(&from);
-                    self.should_wake_up = true;
-                }
-            }
-            return;
-        }
-
         #[allow(clippy::suspicious_operation_groupings)]
         if self.is_handling_snapshot()
             || self.has_pending_snapshot()
@@ -3617,7 +3581,7 @@ where
     /// 2. execute_transfer_leader on follower
     ///     If follower passes all necessary checks, it will reply an
     ///     ACK with type MsgTransferLeader and its promised persistent index.
-    /// 3. execute_transfer_leader on leader:
+    /// 3. ready_to_transfer_leader on leader:
     ///     Leader checks if it's appropriate to transfer leadership. If it
     ///     does, it calls raft transfer_leader API to do the remaining work.
     ///
@@ -4004,6 +3968,19 @@ where
             return true;
         }
         false
+    }
+
+    /// Check if the command will be likely to pass all the check and propose.
+    pub fn will_likely_propose(&mut self, cmd: &RaftCmdRequest) -> bool {
+        !self.pending_remove
+            && self.is_leader()
+            && self.pending_merge_state.is_none()
+            && self.raft_group.raft.lead_transferee.is_none()
+            && self.has_applied_to_current_term()
+            && self
+                .cmd_epoch_checker
+                .propose_check_epoch(cmd, self.term())
+                .is_none()
     }
 }
 
