@@ -275,9 +275,7 @@ macro_rules! rocksdb_enum_mod {
             pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
                 where S: Serializer
             {
-                serializer.serialize_str(match *mode {
-                   $( $enum::$variant => kebab_case!($variant), )*
-                })
+                serializer.serialize_i64(*mode as i64)
             }
 
             pub fn deserialize<'de, D>(deserializer: D) -> Result<$enum, D::Error>
@@ -319,7 +317,6 @@ macro_rules! rocksdb_enum_mod {
                 use toml;
                 use rocksdb::$enum;
                 use serde::{Deserialize, Serialize};
-                use case_macros::*;
 
                 #[test]
                 fn test_serde() {
@@ -330,12 +327,12 @@ macro_rules! rocksdb_enum_mod {
                     }
 
                     let cases = vec![
-                        $(($enum::$variant, kebab_case!($variant)), )*
+                        $(($enum::$variant, $value), )*
                     ];
                     for (e, v) in cases {
                         let holder = EnumHolder { e };
                         let res = toml::to_string(&holder).unwrap();
-                        let exp = format!("e = \"{}\"\n", v);
+                        let exp = format!("e = {}\n", v);
                         assert_eq!(res, exp);
                         let h: EnumHolder = toml::from_str(&exp).unwrap();
                         assert!(h == holder);

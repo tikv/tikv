@@ -4322,21 +4322,21 @@ mod tests {
     #[test]
     fn test_compaction_style() {
         let normal_string_config = r#"
-            compaction-style = "universal"
+            compaction-style = 1
         "#;
         let config: DefaultCfConfig = toml::from_str(normal_string_config).unwrap();
         assert_eq!(config.compaction_style, DBCompactionStyle::Universal);
 
         // Test backward compatibility with numeric value
         let normal_string_config = r#"
-            compaction-style = 1
+            compaction-style = "universal"
         "#;
         let config: DefaultCfConfig = toml::from_str(normal_string_config).unwrap();
         assert_eq!(config.compaction_style, DBCompactionStyle::Universal);
         assert!(
             toml::to_string(&config)
                 .unwrap()
-                .contains("compaction-style = \"universal\"")
+                .contains("compaction-style = 1")
         );
 
         let bad_string_config = r#"
