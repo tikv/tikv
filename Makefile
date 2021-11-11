@@ -84,10 +84,6 @@ ifeq ($(FAIL_POINT),1)
 ENABLE_FEATURES += failpoints
 endif
 
-ifeq ($(BCC_IOSNOOP),1)
-ENABLE_FEATURES += bcc-iosnoop
-endif
-
 # Set the storage engines used for testing
 ifneq ($(NO_DEFAULT_TEST_ENGINES),1)
 ENABLE_FEATURES += test-engines-rocksdb

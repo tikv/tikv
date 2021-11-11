@@ -1047,10 +1047,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_io_utility(&mut self) -> BytesFetcher {
-        let io_snooper_on = self.config.enable_io_snoop
-            && file_system::init_io_snooper()
-                .map_err(|e| error_unknown!(%e; "failed to init io snooper"))
-                .is_ok();
+        let io_snooper_on = false;
+
         let limiter = Arc::new(
             self.config
                 .storage
