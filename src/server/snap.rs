@@ -273,7 +273,7 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
         }
         let context_key = context.key.clone();
         snap_mgr.register(context.key.clone(), SnapEntry::Receiving);
-
+        defer!(snap_mgr.deregister(&context_key, &SnapEntry::Receiving));
         while let Some(item) = stream.next().await {
             let mut chunk = item?;
             let data = chunk.take_data();
@@ -290,7 +290,6 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
         }
 
         let res = context.finish(raft_router);
-        snap_mgr.deregister(&context_key, &SnapEntry::Receiving);
         res
     };
 
