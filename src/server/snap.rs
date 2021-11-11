@@ -288,7 +288,6 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
                 return Err(e);
             }
         }
-
         let res = context.finish(raft_router);
         res
     };
