@@ -195,6 +195,7 @@ dependencies = [
  "rusoto_sts",
  "slog",
  "slog-global",
+ "thiserror",
  "tikv_util",
  "tokio",
  "url",
@@ -222,7 +223,6 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crc64fast",
- "crossbeam",
  "encryption",
  "engine_rocks",
  "engine_traits",
@@ -255,6 +255,8 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
+ "tokio",
+ "tokio-stream",
  "txn_types",
  "yatp",
 ]
@@ -1217,6 +1219,7 @@ name = "external_storage"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bytes 1.0.1",
  "encryption",
  "engine_traits",
@@ -1254,6 +1257,7 @@ name = "external_storage_export"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "aws",
  "cloud",
  "encryption",
@@ -1649,6 +1653,7 @@ dependencies = [
 name = "gcp"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "cloud",
  "futures-util",
  "http",
@@ -2132,7 +2137,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#3c7bd947cf9bb0be346131e1c4097a69b3465b8f"
+source = "git+https://github.com/pingcap/kvproto.git#4b56b856fcfcb5e505b3d79d4941d7b4fc803235"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3211,7 +3216,6 @@ checksum = "ab8809e0c18450a2db0f236d2a44ec0b4c1412d0eb936233579f0990faa5d5cd"
 dependencies = [
  "bitflags",
  "byteorder",
- "chrono",
  "flate2",
  "hex 0.4.2",
  "lazy_static",
@@ -5595,6 +5599,17 @@ dependencies = [
  "futures 0.3.15",
  "openssl",
  "pin-project",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-stream"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50145484efff8818b5ccd256697f36863f587da82cf8b409c53adf1e840798e3"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
  "tokio",
 ]
 
