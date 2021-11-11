@@ -14,7 +14,6 @@ use kvproto::kvrpcpb::{ApiVersion, Context, LockInfo};
 use engine_traits::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
 use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
-use tikv::storage::key_prefix::{RAW_KEY_PREFIX, TXN_KEY_PREFIX};
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 use tikv::storage::Engine;
@@ -855,8 +854,8 @@ fn test_txn_store_write_conflict() {
 }
 
 const TIDB_KEY_CASE: &[u8] = b"t_a";
-const TXN_KEY_CASE: &[u8] = &[TXN_KEY_PREFIX, 0, b'a'];
-const RAW_KEY_CASE: &[u8] = &[RAW_KEY_PREFIX, 0, b'a'];
+const TXN_KEY_CASE: &[u8] = b"t\0a";
+const RAW_KEY_CASE: &[u8] = b"r\0a";
 
 #[test]
 fn test_txn_store_txnkv_api_version() {
