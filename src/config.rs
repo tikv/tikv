@@ -4327,7 +4327,7 @@ mod tests {
         let config: DefaultCfConfig = toml::from_str(normal_string_config).unwrap();
         assert_eq!(config.compaction_style, DBCompactionStyle::Universal);
 
-        // Test backward compatibility with numeric value
+        // Test if we support string value
         let normal_string_config = r#"
             compaction-style = "universal"
         "#;
