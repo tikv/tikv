@@ -920,6 +920,9 @@ fn test_merge_cascade_merge_isolated() {
     let r3_on_store1 = find_peer(&r3, 1).unwrap().to_owned();
     cluster.must_transfer_leader(r3.get_id(), r3_on_store1);
 
+    // Wait will all followers respond their progress.
+    thread::sleep(Duration::from_millis(100));
+
     cluster.add_send_filter(IsolationFilterFactory::new(3));
 
     // r1, r3 both merge to r2
