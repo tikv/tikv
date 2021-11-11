@@ -715,6 +715,22 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         self.config_manager.clone()
     }
 
+    fn get_hdfs_config(&self) -> BackendConfig {
+        BackendConfig {
+            hdfs_config: HdfsConfig {
+                hadoop_home: self.config_manager.0.read().unwrap().hadoop.home.clone(),
+                linux_user: self
+                    .config_manager
+                    .0
+                    .read()
+                    .unwrap()
+                    .hadoop
+                    .linux_user
+                    .clone(),
+            },
+        }
+    }
+
     fn spawn_backup_worker(
         &self,
         prs: Arc<Mutex<Progress<R>>>,
@@ -732,19 +748,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let batch_size = self.config_manager.0.read().unwrap().batch_size;
         let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
         let limit = self.softlimit.limit();
-        let config = BackendConfig {
-            hdfs_config: HdfsConfig {
-                hadoop_home: self.config_manager.0.read().unwrap().hadoop.home.clone(),
-                linux_user: self
-                    .config_manager
-                    .0
-                    .read()
-                    .unwrap()
-                    .hadoop
-                    .linux_user
-                    .clone(),
-            },
-        };
 
         self.pool.borrow_mut().spawn(async move {
             let _with_io_type = WithIOType::new(IOType::Export);
@@ -917,7 +920,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             is_raw_kv,
             request.cf,
         )));
-        let backend = match create_storage(&request.backend) {
+        let backend = match create_storage(&request.backend, self.get_hdfs_config()) {
             Ok(backend) => backend,
             Err(err) => {
                 error_unknown!(?err; "backup create storage failed");
