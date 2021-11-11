@@ -8,13 +8,14 @@ use std::{
 
 use external_storage_export::{
     create_storage, make_cloud_backend, make_gcs_backend, make_hdfs_backend, make_local_backend,
-    make_noop_backend, make_s3_backend, ExternalStorage,
+    make_noop_backend, make_s3_backend, ExternalStorage, UnpinReader,
 };
 use futures_util::io::{copy, AllowStdIo};
 use ini::ini::Ini;
 use kvproto::brpb::{Bucket, CloudDynamic, Gcs, StorageBackend, S3};
 use structopt::clap::arg_enum;
 use structopt::StructOpt;
+use tikv_util::stream::block_on_external_io;
 use tokio::runtime::Runtime;
 
 arg_enum! {
@@ -184,7 +185,11 @@ fn process() -> Result<()> {
         Command::Save => {
             let file = File::open(&opt.file)?;
             let file_size = file.metadata()?.len();
-            storage.write(&opt.name, Box::new(AllowStdIo::new(file)), file_size)?;
+            block_on_external_io(storage.write(
+                &opt.name,
+                UnpinReader(Box::new(AllowStdIo::new(file))),
+                file_size,
+            ))?;
         }
         Command::Load => {
             let reader = storage.read(&opt.name);

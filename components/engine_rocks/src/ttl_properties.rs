@@ -123,12 +123,12 @@ pub struct TtlPropertiesCollectorFactory {
     pub api_version: ApiVersion,
 }
 
-impl TablePropertiesCollectorFactory for TtlPropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(TtlPropertiesCollector {
+impl TablePropertiesCollectorFactory<TtlPropertiesCollector> for TtlPropertiesCollectorFactory {
+    fn create_table_properties_collector(&mut self, _: u32) -> TtlPropertiesCollector {
+        TtlPropertiesCollector {
             api_version: self.api_version,
             prop: Default::default(),
-        })
+        }
     }
 }
 

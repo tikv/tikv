@@ -60,7 +60,9 @@ pub struct Config {
     // When the entry exceed the max size, reject to propose it.
     pub raft_entry_max_size: ReadableSize,
 
-    // Interval to gc unnecessary raft log (ms).
+    // Interval to compact unnecessary raft log.
+    pub raft_log_compact_sync_interval: ReadableDuration,
+    // Interval to gc unnecessary raft log.
     pub raft_log_gc_tick_interval: ReadableDuration,
     // A threshold to gc stale raft log, must >= 1.
     pub raft_log_gc_threshold: u64,
@@ -78,7 +80,12 @@ pub struct Config {
     pub raft_engine_purge_interval: ReadableDuration,
     // When a peer is not responding for this time, leader will not keep entry cache for it.
     pub raft_entry_cache_life_time: ReadableDuration,
+    // Deprecated! The configuration has no effect.
+    // They are preserved for compatibility check.
     // When a peer is newly added, reject transferring leader to the peer for a while.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(skip)]
     pub raft_reject_transfer_leader_duration: ReadableDuration,
 
     // Interval (ms) to check region whether need to be split or not.
@@ -211,6 +218,8 @@ pub struct Config {
     pub io_reschedule_concurrent_max_count: usize,
     pub io_reschedule_hotpot_duration: ReadableDuration,
 
+    pub raft_msg_flush_interval_us: u64,
+
     // Deprecated! These configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
@@ -246,7 +255,8 @@ impl Default for Config {
             raft_max_size_per_msg: ReadableSize::mb(1),
             raft_max_inflight_msgs: 256,
             raft_entry_max_size: ReadableSize::mb(8),
-            raft_log_gc_tick_interval: ReadableDuration::secs(10),
+            raft_log_compact_sync_interval: ReadableDuration::secs(2),
+            raft_log_gc_tick_interval: ReadableDuration::secs(3),
             raft_log_gc_threshold: 50,
             // Assume the average size of entries is 1k.
             raft_log_gc_count_limit: split_size * 3 / 4 / ReadableSize::kb(1),
@@ -289,7 +299,7 @@ impl Default for Config {
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
-            store_io_pool_size: 2,
+            store_io_pool_size: 1,
             store_io_notify_capacity: 40960,
             future_poll_size: 1,
             hibernate_regions: true,
@@ -303,6 +313,7 @@ impl Default for Config {
             waterfall_metrics: false,
             io_reschedule_concurrent_max_count: 4,
             io_reschedule_hotpot_duration: ReadableDuration::secs(5),
+            raft_msg_flush_interval_us: 250,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -369,7 +380,6 @@ impl Config {
                 self.raft_log_gc_threshold
             ));
         }
-
         if self.raft_log_gc_size_limit.0 == 0 {
             return Err(box_err!("raft log gc size limit should large than 0."));
         }
@@ -479,6 +489,8 @@ impl Config {
         } else {
             self.store_batch_system.max_batch_size = Some(1024);
         }
+        self.store_batch_system.before_pause_wait_us =
+            Some(std::cmp::min(self.raft_msg_flush_interval_us, 1000));
         if self.store_io_pool_size == 0 {
             return Err(box_err!("store-io-pool-size should be greater than 0"));
         }
@@ -542,6 +554,9 @@ impl Config {
             .set(self.raft_entry_max_size.0 as f64);
 
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_log_compact_sync_interval"])
+            .set(self.raft_log_compact_sync_interval.as_secs() as f64);
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_tick_interval"])
             .set(self.raft_log_gc_tick_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
@@ -562,9 +577,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_entry_cache_life_time"])
             .set(self.raft_entry_cache_life_time.as_secs() as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["raft_reject_transfer_leader_duration"])
-            .set(self.raft_reject_transfer_leader_duration.as_secs() as f64);
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["split_region_check_tick_interval"])
@@ -704,6 +716,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["io_reschedule_hotpot_duration"])
             .set(self.io_reschedule_hotpot_duration.as_secs() as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_msg_flush_interval_us"])
+            .set(self.raft_msg_flush_interval_us as f64);
     }
 
     fn write_change_into_metrics(change: ConfigChange) {
@@ -884,5 +899,15 @@ mod tests {
         cfg.peer_stale_state_check_interval = ReadableDuration::minutes(5);
         assert!(cfg.validate().is_ok());
         assert_eq!(cfg.max_peer_down_duration, ReadableDuration::minutes(10));
+
+        cfg = Config::new();
+        cfg.raft_msg_flush_interval_us = 888;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.store_batch_system.before_pause_wait_us, Some(888));
+
+        cfg = Config::new();
+        cfg.raft_msg_flush_interval_us = 1888;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.store_batch_system.before_pause_wait_us, Some(1000));
     }
 }

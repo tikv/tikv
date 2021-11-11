@@ -45,63 +45,12 @@ path = "benches/channel/mod.rs"
 test = true
 
 [features]
-default = ["failpoints", "testexport", "protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
+default = ["failpoints", "testexport", "test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
 cloud-aws = [ "external_storage_export/cloud-aws" ]
 cloud-gcp = [ "external_storage_export/cloud-gcp" ]
 testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]
-protobuf-codec = [
-  "protobuf/bytes",
-  "batch-system/protobuf-codec",
-  "cdc/protobuf-codec",
-  "encryption/protobuf-codec",
-  "error_code/protobuf-codec",
-  "grpcio/protobuf-codec",
-  "kvproto/protobuf-codec",
-  "pd_client/protobuf-codec",
-  "raft/protobuf-codec",
-  "raftstore/protobuf-codec",
-  "sst_importer/protobuf-codec",
-  "test_coprocessor/protobuf-codec",
-  "test_raftstore/protobuf-codec",
-  "test_storage/protobuf-codec",
-  "tikv/protobuf-codec",
-  "tidb_query_aggr/protobuf-codec",
-  "tidb_query_common/protobuf-codec",
-  "tidb_query_datatype/protobuf-codec",
-  "tidb_query_executors/protobuf-codec",
-  "tidb_query_expr/protobuf-codec",
-  "tikv_util/protobuf-codec",
-  "tipb/protobuf-codec",
-  "txn_types/protobuf-codec",
-  "grpcio-health/protobuf-codec",
-]
-prost-codec = [
-  "batch-system/prost-codec",
-  "cdc/prost-codec",
-  "encryption/prost-codec",
-  "error_code/prost-codec",
-  "grpcio/prost-codec",
-  "kvproto/prost-codec",
-  "pd_client/prost-codec",
-  "raft/prost-codec",
-  "raftstore/prost-codec",
-  "sst_importer/prost-codec",
-  "test_coprocessor/prost-codec",
-  "test_raftstore/prost-codec",
-  "test_storage/prost-codec",
-  "tikv/prost-codec",
-  "tidb_query_aggr/prost-codec",
-  "tidb_query_common/prost-codec",
-  "tidb_query_datatype/prost-codec",
-  "tidb_query_executors/prost-codec",
-  "tidb_query_expr/prost-codec",
-  "tikv_util/prost-codec",
-  "tipb/prost-codec",
-  "txn_types/prost-codec",
-  "grpcio-health/prost-codec",
-]
 test-engines-rocksdb = [
   "raftstore/test-engines-rocksdb",
 ]
@@ -124,15 +73,15 @@ online_config = { path = "../components/online_config", default-features = false
 encryption = { path = "../components/encryption", default-features = false }
 cdc = { path = "../components/cdc", default-features = false }
 futures = "0.3"
-grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 grpcio-health = { version = "0.9", default-features = false }
 log_wrappers = { path = "../components/log_wrappers" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 paste = "1.0"
 pd_client = { path = "../components/pd_client", default-features = false }
-protobuf = "2.8"
+protobuf = { version = "2.8", features = ["bytes"] }
 more-asserts = "0.2"
-raft = { version = "0.6.0-alpha", default-features = false }
+raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
 raftstore = { path = "../components/raftstore", default-features = false }
 rand = "0.8.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -148,7 +97,7 @@ tikv_util = { path = "../components/tikv_util", default-features = false }
 error_code = { path = "../components/error_code", default-features = false }
 collections = { path = "../components/collections" }
 file_system = { path = "../components/file_system" }
-tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
+tipb = { git = "https://github.com/pingcap/tipb.git" }
 toml = "0.5"
 txn_types = { path = "../components/txn_types", default-features = false }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }

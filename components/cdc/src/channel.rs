@@ -108,16 +108,8 @@ impl fmt::Debug for CdcEvent {
                 let mut d = f.debug_struct("Event");
                 d.field("region_id", &e.region_id);
                 d.field("request_id", &e.request_id);
-                #[cfg(not(feature = "prost-codec"))]
                 if e.has_entries() {
                     d.field("entries count", &e.get_entries().get_entries().len());
-                }
-                #[cfg(feature = "prost-codec")]
-                if e.event.is_some() {
-                    use kvproto::cdcpb::event;
-                    if let Some(event::Event::Entries(ref es)) = e.event.as_ref() {
-                        d.field("entries count", &es.entries.len());
-                    }
                 }
                 d.finish()
             }
@@ -463,12 +455,7 @@ mod tests {
     use std::time::Duration;
 
     use futures::executor::block_on;
-    #[cfg(feature = "prost-codec")]
-    use kvproto::cdcpb::event::{
-        Entries as EventEntries, Event as Event_oneof_event, Row as EventRow,
-    };
     use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
-    #[cfg(not(feature = "prost-codec"))]
     use kvproto::cdcpb::{EventEntries, EventRow, Event_oneof_event};
 
     use super::*;

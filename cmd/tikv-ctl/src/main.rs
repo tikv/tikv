@@ -861,7 +861,8 @@ impl DebugExecutor for DebugClient {
         let resp = self
             .get_store_info(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_store_info", e));
-        println!("{}", resp.get_store_id())
+        println!("store id: {}", resp.get_store_id());
+        println!("api version: {:?}", resp.get_api_version())
     }
 
     fn dump_cluster_info(&self) {
@@ -1033,7 +1034,7 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
             .alloc_id()
             .unwrap_or_else(|e| perror_and_exit("RpcClient::alloc_id", e));
 
-        let store_id = self.get_store_id().expect("get store id");
+        let store_id = self.get_store_ident().expect("get store id").store_id;
 
         region.set_id(new_region_id);
         let old_version = region.get_region_epoch().get_version();
@@ -1088,16 +1089,17 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     }
 
     fn dump_store_info(&self) {
-        let store_id = self.get_store_id();
-        if let Ok(id) = store_id {
-            println!("store id: {}", id);
+        let store_ident_info = self.get_store_ident();
+        if let Ok(ident) = store_ident_info {
+            println!("store id: {}", ident.get_store_id());
+            println!("api version: {:?}", ident.get_api_version());
         }
     }
 
     fn dump_cluster_info(&self) {
-        let cluster_id = self.get_cluster_id();
-        if let Ok(id) = cluster_id {
-            println!("cluster id: {}", id);
+        let store_ident_info = self.get_store_ident();
+        if let Ok(ident) = store_ident_info {
+            println!("cluster id: {}", ident.get_cluster_id());
         }
     }
 }
@@ -1623,7 +1625,7 @@ enum Cmd {
         #[structopt(subcommand)]
         cmd: FailCmd,
     },
-    /// Print the store id
+    /// Print the store id and api version
     Store {},
     /// Print the cluster id
     Cluster {},

@@ -35,7 +35,7 @@ use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{PeerRole, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
-    RaftCmdRequest, RaftCmdResponse, Request, Response,
+    RaftCmdRequest, RaftCmdResponse, Request,
 };
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
@@ -286,22 +286,6 @@ pub enum ApplyResult<S> {
     WaitMergeSource(Arc<AtomicU64>),
 }
 
-struct ExecContext {
-    apply_state: RaftApplyState,
-    index: u64,
-    term: u64,
-}
-
-impl ExecContext {
-    pub fn new(apply_state: RaftApplyState, index: u64, term: u64) -> ExecContext {
-        ExecContext {
-            apply_state,
-            index,
-            term,
-        }
-    }
-}
-
 // The applied command and their callback
 struct ApplyCallbackBatch<S>
 where
@@ -322,8 +306,8 @@ impl<S: Snapshot> ApplyCallbackBatch<S> {
         }
     }
 
-    fn push_batch(&mut self, observe_info: &CmdObserveInfo, region: Region) {
-        let cb = CmdBatch::new(observe_info, region);
+    fn push_batch(&mut self, observe_info: &CmdObserveInfo, region_id: u64) {
+        let cb = CmdBatch::new(observe_info, region_id);
         self.batch_max_level = cmp::max(self.batch_max_level, cb.level);
         self.cmd_batch.push(cb);
     }
@@ -370,7 +354,8 @@ where
     engine: EK,
     applied_batch: ApplyCallbackBatch<EK::Snapshot>,
     apply_res: Vec<ApplyRes<EK::Snapshot>>,
-    exec_ctx: Option<ExecContext>,
+    exec_log_index: u64,
+    exec_log_term: u64,
 
     kv_wb: W,
     kv_wb_last_bytes: u64,
@@ -406,12 +391,14 @@ where
     yield_high_latency_operation: bool,
 
     /// The ssts waiting to be ingested in `write_to_db`.
-    pending_ssts: Vec<SstMeta>,
+    pending_ssts: Vec<SSTMetaInfo>,
 
     /// The pending inspector should be cleaned at the end of a write.
     pending_latency_inspect: Vec<LatencyInspector>,
     apply_wait: LocalHistogram,
     apply_time: LocalHistogram,
+
+    key_buffer: Vec<u8>,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -448,11 +435,12 @@ where
             kv_wb,
             applied_batch: ApplyCallbackBatch::new(),
             apply_res: vec![],
+            exec_log_index: 0,
+            exec_log_term: 0,
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
             committed_count: 0,
             sync_log_hint: false,
-            exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
             perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
@@ -465,6 +453,7 @@ where
             pending_latency_inspect: vec![],
             apply_wait: APPLY_TASK_WAIT_TIME_HISTOGRAM.local(),
             apply_time: APPLY_TIME_HISTOGRAM.local(),
+            key_buffer: Vec::with_capacity(1024),
         }
     }
 
@@ -475,7 +464,7 @@ where
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
         self.applied_batch
-            .push_batch(&delegate.observe_info, delegate.region.clone());
+            .push_batch(&delegate.observe_info, delegate.region.get_id());
     }
 
     /// Commits all changes have done for delegate. `persistent` indicates whether
@@ -1035,9 +1024,11 @@ where
         apply_ctx: &mut ApplyContext<EK, W>,
         entry: &Entry,
     ) -> ApplyResult<EK::Snapshot> {
-        fail_point!("yield_apply_1000", self.region_id() == 1000, |_| {
-            ApplyResult::Yield
-        });
+        fail_point!(
+            "yield_apply_first_region",
+            self.region.get_start_key().is_empty() && !self.region.get_end_key().is_empty(),
+            |_| ApplyResult::Yield
+        );
 
         let index = entry.get_index();
         let term = entry.get_term();
@@ -1227,9 +1218,12 @@ where
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
-        ctx.exec_ctx = Some(self.new_ctx(index, term));
+        ctx.exec_log_index = index;
+        ctx.exec_log_term = term;
         ctx.kv_wb_mut().set_save_point();
         let mut origin_epoch = None;
+        // Remember if the raft cmd fails to be applied, it must have no side effects.
+        // E.g. `RaftApplyState` must not be changed.
         let (resp, exec_result) = match self.exec_raft_cmd(ctx, req) {
             Ok(a) => {
                 ctx.kv_wb_mut().pop_save_point().unwrap();
@@ -1261,10 +1255,7 @@ where
             return (resp, exec_result);
         }
 
-        let mut exec_ctx = ctx.exec_ctx.take().unwrap();
-        exec_ctx.apply_state.set_applied_index(index);
-
-        self.apply_state = exec_ctx.apply_state;
+        self.apply_state.set_applied_index(index);
         self.applied_index_term = term;
 
         if let ApplyResult::Res(ref exec_result) = exec_result {
@@ -1355,10 +1346,6 @@ where
             cmd.cb.take();
         }
     }
-
-    fn new_ctx(&self, index: u64, term: u64) -> ExecContext {
-        ExecContext::new(self.apply_state.clone(), index, term)
-    }
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -1394,8 +1381,8 @@ where
                 "execute admin command";
                 "region_id" => self.region_id(),
                 "peer_id" => self.id(),
-                "term" => ctx.exec_ctx.as_ref().unwrap().term,
-                "index" => ctx.exec_ctx.as_ref().unwrap().index,
+                "term" => ctx.exec_log_term,
+                "index" => ctx.exec_log_index,
                 "command" => ?request,
             );
         }
@@ -1405,7 +1392,7 @@ where
             AdminCmdType::ChangePeerV2 => self.exec_change_peer_v2(ctx, request),
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::BatchSplit => self.exec_batch_split(ctx, request),
-            AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
+            AdminCmdType::CompactLog => self.exec_compact_log(request),
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
             AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
@@ -1440,15 +1427,14 @@ where
         );
 
         let requests = req.get_requests();
-        let mut responses = Vec::with_capacity(requests.len());
 
         let mut ranges = vec![];
         let mut ssts = vec![];
         for req in requests {
             let cmd_type = req.get_cmd_type();
-            let mut resp = match cmd_type {
-                CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
-                CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
+            match cmd_type {
+                CmdType::Put => self.handle_put(ctx, req),
+                CmdType::Delete => self.handle_delete(ctx, req),
                 CmdType::DeleteRange => {
                     self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
                 }
@@ -1470,10 +1456,6 @@ where
                     Err(box_err!("invalid cmd type, message maybe corrupted"))
                 }
             }?;
-
-            resp.set_cmd_type(cmd_type);
-
-            responses.push(resp);
         }
 
         let mut resp = RaftCmdResponse::default();
@@ -1481,7 +1463,6 @@ where
             let uuid = req.get_header().get_uuid().to_vec();
             resp.mut_header().set_uuid(uuid);
         }
-        resp.set_responses(responses.into());
 
         assert!(ranges.is_empty() || ssts.is_empty());
         let exec_res = if !ranges.is_empty() {
@@ -1511,13 +1492,18 @@ impl<EK> ApplyDelegate<EK>
 where
     EK: KvEngine,
 {
-    fn handle_put<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
+    fn handle_put<W: WriteBatch<EK>>(
+        &mut self,
+        ctx: &mut ApplyContext<EK, W>,
+        req: &Request,
+    ) -> Result<()> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
 
-        let resp = Response::default();
-        let key = keys::data_key(key);
+        keys::data_key_with_buffer(key, &mut ctx.key_buffer);
+        let key = ctx.key_buffer.as_slice();
+
         self.metrics.size_diff_hint += key.len() as i64;
         self.metrics.size_diff_hint += value.len() as i64;
         if !req.get_put().get_cf().is_empty() {
@@ -1528,47 +1514,52 @@ where
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
             }
             // TODO: check whether cf exists or not.
-            wb.put_cf(cf, &key, value).unwrap_or_else(|e| {
+            ctx.kv_wb.put_cf(cf, key, value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}) to cf {}: {:?}",
                     self.tag,
-                    log_wrappers::Value::key(&key),
+                    log_wrappers::Value::key(key),
                     log_wrappers::Value::value(value),
                     cf,
                     e
                 )
             });
         } else {
-            wb.put(&key, value).unwrap_or_else(|e| {
+            ctx.kv_wb.put(key, value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
-                    log_wrappers::Value::key(&key),
+                    log_wrappers::Value::key(key),
                     log_wrappers::Value::value(value),
                     e
                 );
             });
         }
-        Ok(resp)
+        Ok(())
     }
 
-    fn handle_delete<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
+    fn handle_delete<W: WriteBatch<EK>>(
+        &mut self,
+        ctx: &mut ApplyContext<EK, W>,
+        req: &Request,
+    ) -> Result<()> {
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
 
-        let key = keys::data_key(key);
+        keys::data_key_with_buffer(key, &mut ctx.key_buffer);
+        let key = ctx.key_buffer.as_slice();
+
         // since size_diff_hint is not accurate, so we just skip calculate the value size.
         self.metrics.size_diff_hint -= key.len() as i64;
-        let resp = Response::default();
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
-            wb.delete_cf(cf, &key).unwrap_or_else(|e| {
+            ctx.kv_wb.delete_cf(cf, key).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
-                    log_wrappers::Value::key(&key),
+                    log_wrappers::Value::key(key),
                     e
                 )
             });
@@ -1580,18 +1571,18 @@ where
                 self.metrics.delete_keys_hint += 1;
             }
         } else {
-            wb.delete(&key).unwrap_or_else(|e| {
+            ctx.kv_wb.delete(key).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
-                    log_wrappers::Value::key(&key),
+                    log_wrappers::Value::key(key),
                     e
                 )
             });
             self.metrics.delete_keys_hint += 1;
         }
 
-        Ok(resp)
+        Ok(())
     }
 
     fn handle_delete_range(
@@ -1600,7 +1591,7 @@ where
         req: &Request,
         ranges: &mut Vec<Range>,
         use_delete_range: bool,
-    ) -> Result<Response> {
+    ) -> Result<()> {
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
         let notify_only = req.get_delete_range().get_notify_only();
@@ -1619,7 +1610,6 @@ where
             return Err(Error::KeyNotInRegion(e_key.to_vec(), self.region.clone()));
         }
 
-        let resp = Response::default();
         let mut cf = req.get_delete_range().get_cf();
         if cf.is_empty() {
             cf = CF_DEFAULT;
@@ -1664,7 +1654,7 @@ where
         // TODO: Should this be executed when `notify_only` is set?
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
-        Ok(resp)
+        Ok(())
     }
 
     fn handle_ingest_sst<W: WriteBatch<EK>>(
@@ -1672,7 +1662,7 @@ where
         ctx: &mut ApplyContext<EK, W>,
         req: &Request,
         ssts: &mut Vec<SSTMetaInfo>,
-    ) -> Result<Response> {
+    ) -> Result<()> {
         let sst = req.get_ingest_sst().get_sst();
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
@@ -1689,15 +1679,18 @@ where
         }
 
         match ctx.importer.validate(sst) {
-            Ok(meta_info) => ssts.push(meta_info),
+            Ok(meta_info) => {
+                ctx.pending_ssts.push(meta_info.clone());
+                ssts.push(meta_info)
+            }
             Err(e) => {
                 // If this failed, it means that the file is corrupted or something
                 // is wrong with the engine, but we can do nothing about that.
                 panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
             }
         };
-        ctx.pending_ssts.push(sst.to_owned());
-        Ok(Response::default())
+
+        Ok(())
     }
 }
 
@@ -1921,7 +1914,7 @@ where
         Ok((
             resp,
             ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
-                index: ctx.exec_ctx.as_ref().unwrap().index,
+                index: ctx.exec_log_index,
                 conf_change: Default::default(),
                 changes: vec![request.clone()],
                 region,
@@ -1965,7 +1958,7 @@ where
         Ok((
             resp,
             ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
-                index: ctx.exec_ctx.as_ref().unwrap().index,
+                index: ctx.exec_log_index,
                 conf_change: Default::default(),
                 changes,
                 region,
@@ -2400,8 +2393,7 @@ where
 
         let prepare_merge = req.get_prepare_merge();
         let index = prepare_merge.get_min_index();
-        let exec_ctx = ctx.exec_ctx.as_ref().unwrap();
-        let first_index = peer_storage::first_index(&exec_ctx.apply_state);
+        let first_index = peer_storage::first_index(&self.apply_state);
         if index < first_index {
             // We filter `CompactLog` command before.
             panic!(
@@ -2423,7 +2415,7 @@ where
         let mut merging_state = MergeState::default();
         merging_state.set_min_index(index);
         merging_state.set_target(prepare_merge.get_target().to_owned());
-        merging_state.set_commit(exec_ctx.index);
+        merging_state.set_commit(ctx.exec_log_index);
         write_peer_state(
             ctx.kv_wb_mut(),
             &region,
@@ -2521,8 +2513,8 @@ where
             "peer_id" => self.id(),
             "commit" => merge.get_commit(),
             "entries" => merge.get_entries().len(),
-            "term" => ctx.exec_ctx.as_ref().unwrap().term,
-            "index" => ctx.exec_ctx.as_ref().unwrap().index,
+            "term" => ctx.exec_log_term,
+            "index" => ctx.exec_log_index,
             "source_region" => ?source_region
         );
 
@@ -2587,7 +2579,7 @@ where
         Ok((
             resp,
             ApplyResult::Res(ExecResult::CommitMerge {
-                index: ctx.exec_ctx.as_ref().unwrap().index,
+                index: ctx.exec_log_index,
                 region,
                 source: source_region.to_owned(),
             }),
@@ -2637,17 +2629,15 @@ where
         ))
     }
 
-    fn exec_compact_log<W: WriteBatch<EK>>(
+    fn exec_compact_log(
         &mut self,
-        ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
 
         let compact_index = req.get_compact_log().get_compact_index();
         let resp = AdminResponse::default();
-        let apply_state = &mut ctx.exec_ctx.as_mut().unwrap().apply_state;
-        let first_index = peer_storage::first_index(apply_state);
+        let first_index = peer_storage::first_index(&self.apply_state);
         if compact_index <= first_index {
             debug!(
                 "compact index <= first index, no need to compact";
@@ -2684,14 +2674,19 @@ where
         }
 
         // compact failure is safe to be omitted, no need to assert.
-        compact_raft_log(&self.tag, apply_state, compact_index, compact_term)?;
+        compact_raft_log(
+            &self.tag,
+            &mut self.apply_state,
+            compact_index,
+            compact_term,
+        )?;
 
         PEER_ADMIN_CMD_COUNTER.compact.success.inc();
 
         Ok((
             resp,
             ApplyResult::Res(ExecResult::CompactLog {
-                state: apply_state.get_truncated_state().clone(),
+                state: self.apply_state.get_truncated_state().clone(),
                 first_index,
             }),
         ))
@@ -2707,7 +2702,7 @@ where
             resp,
             ApplyResult::Res(ExecResult::ComputeHash {
                 region: self.region.clone(),
-                index: ctx.exec_ctx.as_ref().unwrap().index,
+                index: ctx.exec_log_index,
                 context: req.get_compute_hash().get_context().to_vec(),
                 // This snapshot may be held for a long time, which may cause too many
                 // open files in rocksdb.
@@ -4770,7 +4765,6 @@ mod tests {
         );
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        assert_eq!(resp.get_responses().len(), 3);
         let dk_k1 = keys::data_key(b"k1");
         let dk_k2 = keys::data_key(b"k2");
         let dk_k3 = keys::data_key(b"k3");
@@ -5339,7 +5333,6 @@ mod tests {
         fetch_apply_res(&rx);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        assert_eq!(resp.get_responses().len(), 1);
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(cmd_batch.cdc_id, observe_handle.id);
         assert_eq!(cmd_batch.rts_id, observe_handle.id);

@@ -513,6 +513,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
 ) {
     let on_handle_apply = "on_handle_apply";
 
+    let raw_key = key.to_vec();
     let start_ts = TimeStamp::from(start_ts);
 
     // Acquire the pessimistic lock if needed
@@ -605,8 +606,8 @@ fn test_async_apply_prewrite_impl<E: Engine>(
 
         // The memory lock is not released so reading will encounter the lock.
         thread::sleep(Duration::from_millis(300));
-        let err = block_on(storage.get(ctx.clone(), Key::from_raw(key), min_commit_ts.next()))
-            .unwrap_err();
+        let err =
+            block_on(storage.get(ctx.clone(), raw_key.clone(), min_commit_ts.next())).unwrap_err();
         expect_locked(err, key, start_ts);
 
         // Commit command will be blocked.
@@ -631,7 +632,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
         fail::remove(on_handle_apply);
         rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 
-        let got_value = block_on(storage.get(ctx, Key::from_raw(key), min_commit_ts.next()))
+        let got_value = block_on(storage.get(ctx, raw_key, min_commit_ts.next()))
             .unwrap()
             .0;
         assert_eq!(got_value.unwrap().as_slice(), value);
@@ -657,7 +658,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
             .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 
-        let got_value = block_on(storage.get(ctx, Key::from_raw(key), commit_ts.next()))
+        let got_value = block_on(storage.get(ctx, raw_key, commit_ts.next()))
             .unwrap()
             .0;
         assert_eq!(got_value.unwrap().as_slice(), value);
@@ -853,6 +854,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
 ) {
     let on_handle_apply = "on_handle_apply";
 
+    let raw_key = key.to_vec();
     let start_ts = TimeStamp::from(start_ts);
 
     if is_pessimistic {
@@ -929,13 +931,13 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
     assert!(res.one_pc_commit_ts > start_ts);
     let commit_ts = res.one_pc_commit_ts;
 
-    let err = block_on(storage.get(ctx.clone(), Key::from_raw(key), commit_ts.next())).unwrap_err();
+    let err = block_on(storage.get(ctx.clone(), raw_key.clone(), commit_ts.next())).unwrap_err();
     expect_locked(err, key, start_ts);
 
     fail::remove(on_handle_apply);
     // The key may need some time to be applied.
     for retry in 0.. {
-        let res = block_on(storage.get(ctx.clone(), Key::from_raw(key), commit_ts.next()));
+        let res = block_on(storage.get(ctx.clone(), raw_key.clone(), commit_ts.next()));
         match res {
             Ok(v) => {
                 assert_eq!(v.0.unwrap().as_slice(), value);

@@ -6,6 +6,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use crate::Config;
 use encryption_export::{
     data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
 };
@@ -36,7 +37,7 @@ use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
 use rand::RngCore;
-use tempfile::{Builder, TempDir};
+use tempfile::TempDir;
 use tikv::config::*;
 use tikv::storage::point_key_range;
 use tikv_util::config::*;
@@ -606,13 +607,13 @@ pub fn create_test_engine(
     // TODO: pass it in for all cases.
     router: Option<RaftRouter<RocksEngine, RocksEngine>>,
     limiter: Option<Arc<IORateLimiter>>,
-    cfg: &TiKvConfig,
+    cfg: &Config,
 ) -> (
     Engines<RocksEngine, RocksEngine>,
     Option<Arc<DataKeyManager>>,
     TempDir,
 ) {
-    let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
+    let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
     let key_manager =
         data_key_manager_from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
@@ -707,10 +708,6 @@ pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
 pub fn ignore_merge_target_integrity<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.dev_assert = false;
     cluster.pd_client.ignore_merge_target_integrity();
-}
-
-pub fn configure_for_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.raft_reject_transfer_leader_duration = ReadableDuration::secs(1);
 }
 
 pub fn configure_for_lease_read<T: Simulator>(

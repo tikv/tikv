@@ -248,9 +248,9 @@ lazy_static! {
         ).unwrap();
     pub static ref STORE_WRITE_RAFTDB_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
-            "tikv_raftstore_store_write_raftdb_duration_seconds",
-            "Bucketed histogram of store write raft db duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            "tikv_raftstore_append_log_duration_seconds",
+            "Bucketed histogram of peer appending log duration.",
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
     pub static ref STORE_WRITE_SEND_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
@@ -345,12 +345,6 @@ lazy_static! {
     pub static ref PEER_ADMIN_CMD_COUNTER: AdminCmdVec =
         auto_flush_from!(PEER_ADMIN_CMD_COUNTER_VEC, AdminCmdVec);
 
-    pub static ref PEER_APPEND_LOG_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_append_log_duration_seconds",
-            "Bucketed histogram of peer appending log duration",
-            exponential_buckets(0.0005, 2.0, 20).unwrap()
-        ).unwrap();
     pub static ref CHECK_LEADER_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_resolved_ts_check_leader_duration_seconds",

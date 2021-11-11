@@ -163,6 +163,7 @@ fn test_serde_custom_tikv_config() {
         raft_max_size_per_msg: ReadableSize::mb(12),
         raft_max_inflight_msgs: 123,
         raft_entry_max_size: ReadableSize::mb(12),
+        raft_log_compact_sync_interval: ReadableDuration::secs(12),
         raft_log_gc_tick_interval: ReadableDuration::secs(12),
         raft_log_gc_threshold: 12,
         raft_log_gc_count_limit: 12,
@@ -221,6 +222,7 @@ fn test_serde_custom_tikv_config() {
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
+        raft_msg_flush_interval_us: 2333,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

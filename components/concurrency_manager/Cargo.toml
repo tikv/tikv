@@ -4,15 +4,6 @@ name = "concurrency_manager"
 publish = false
 version = "0.0.1"
 
-[features]
-default = ["protobuf-codec"]
-protobuf-codec = [
-  "txn_types/protobuf-codec",
-]
-prost-codec = [
-  "txn_types/prost-codec",
-]
-
 [dependencies]
 parking_lot = "0.11"
 tokio = { version = "1.5", features = ["macros", "sync", "time"] }
