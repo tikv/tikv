@@ -2840,10 +2840,9 @@ impl<S: Snapshot> Apply<S> {
         peer_id: u64,
         region_id: u64,
         term: u64,
-        entries: Vec<Entry>,
+        entries: CachedEntries,
         cbs: Vec<Proposal<S>>,
     ) -> Apply<S> {
-        let entries = CachedEntries::new(entries);
         Apply {
             peer_id,
             region_id,
@@ -3222,21 +3221,21 @@ where
 
         let mut dangle_size = 0;
         for cached_entries in apply.entries {
-            let (mut e, sz) = cached_entries.take_entries();
+            let (e, sz) = cached_entries.take_entries();
             dangle_size += sz;
             if e.is_empty() {
                 let rid = self.delegate.region_id();
                 let StdRange { start, end } = cached_entries.range;
-                e = Vec::with_capacity((end - start) as usize);
                 self.delegate
                     .raft_engine
-                    .fetch_entries_to(rid, start, end, None, &mut e)
+                    .fetch_entries_to(rid, start, end, None, &mut entries)
                     .unwrap();
-            }
-            if entries.is_empty() {
-                entries = e;
             } else {
-                entries.extend(e);
+                if entries.is_empty() {
+                    entries = e;
+                } else {
+                    entries.extend(e);
+                }
             }
         }
         if dangle_size > 0 {
