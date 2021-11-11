@@ -128,15 +128,6 @@ impl std::ops::Sub for IOBytes {
     }
 }
 
-impl std::ops::AddAssign for IOBytes {
-    fn add_assign(&mut self, other: Self) {
-        *self = Self {
-            read: self.read.saturating_add(other.read),
-            write: self.write.saturating_add(other.write),
-        }
-    }
-}
-
 #[repr(u32)]
 #[derive(Debug, Clone, PartialEq, Eq, Copy, EnumCount)]
 pub enum IOPriority {

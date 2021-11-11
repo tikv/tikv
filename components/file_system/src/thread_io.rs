@@ -1,12 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::IOBytes;
-use crate::IOType;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -17,14 +17,16 @@ use nix::unistd::Pid;
 use strum::EnumCount;
 use thread_local::ThreadLocal;
 
+use crate::IOBytes;
+use crate::IOType;
+
 lazy_static! {
-    static ref THREAD_IO_SENTINEL_VEC: Mutex<ThreadLocal<Arc<Mutex<ThreadIOSentinel>>>> =
-        Mutex::new(ThreadLocal::new());
+    static ref THREAD_IO_SENTINEL_VEC: ThreadLocal<Arc<ThreadIOSentinel>> = ThreadLocal::new();
 }
 
 thread_local! {
-    static THREAD_IO_SENTINEL: Arc<Mutex<ThreadIOSentinel>> = THREAD_IO_SENTINEL_VEC.lock().unwrap().get_or(||
-        Arc::new(Mutex::new(ThreadIOSentinel::current_default()))
+    static THREAD_IO_SENTINEL: Arc<ThreadIOSentinel> = THREAD_IO_SENTINEL_VEC.get_or(||
+        Arc::new(ThreadIOSentinel::current_default())
     ).clone();
 }
 
@@ -39,62 +41,58 @@ struct ThreadID {
 }
 
 struct BytesBuffer {
-    current_io_type: IOType,
-    total_io_bytes: [IOBytes; IOType::COUNT],
-    last_io_bytes: IOBytes,
+    io_type: Mutex<IOType>,
+    total_bytes: [AtomicIOBytes; IOType::COUNT],
+    last_bytes: AtomicIOBytes,
+}
+
+struct AtomicIOBytes {
+    read: AtomicU64,
+    write: AtomicU64,
 }
 
 pub fn fetch_all_thread_io_bytes() {
-    THREAD_IO_SENTINEL_VEC
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|sentinel| {
-            sentinel
-                .try_lock()
-                .map(|mut sentinel| fetch_locked_sentinel(&mut sentinel))
-                .is_err()
-        })
-        .for_each(|sentinel| {
-            let mut sentinel = sentinel.lock().unwrap();
-
-            fetch_locked_sentinel(&mut sentinel);
-        });
+    THREAD_IO_SENTINEL_VEC.iter().for_each(|sentinel| {
+        fetch_sentinel(sentinel, false, None);
+    });
 }
 
-fn fetch_locked_sentinel(sentinel: &mut MutexGuard<ThreadIOSentinel>) {
+fn fetch_sentinel(sentinel: &ThreadIOSentinel, enforce: bool, new_io_type: Option<IOType>) {
     let io_bytes = fetch_exact_thread_io_bytes(&sentinel.id);
 
-    let io_type = sentinel.bytes.current_io_type;
-    let last_io_bytes = sentinel.bytes.last_io_bytes;
-    sentinel.bytes.total_io_bytes[io_type as usize] += io_bytes - last_io_bytes;
-    sentinel.bytes.last_io_bytes = io_bytes;
+    let mut io_type = {
+        if enforce {
+            sentinel.bytes.io_type.lock().unwrap()
+        } else {
+            match sentinel.bytes.io_type.try_lock() {
+                Ok(io_type) => io_type,
+                Err(_) => return,
+            }
+        }
+    };
+    let last_io_bytes = sentinel.bytes.last_bytes.load(Ordering::Relaxed);
+
+    sentinel.bytes.total_bytes[*io_type as usize]
+        .fetch_add(io_bytes - last_io_bytes, Ordering::Relaxed);
+    sentinel.bytes.last_bytes.store(io_bytes, Ordering::Relaxed);
+    if let Some(new_io_type) = new_io_type {
+        *io_type = new_io_type;
+    }
 }
 
 pub fn set_io_type(new_io_type: IOType) {
     THREAD_IO_SENTINEL.with(|sentinel| {
-        let mut sentinel = sentinel.lock().unwrap();
-
-        fetch_locked_sentinel(&mut sentinel);
-
-        sentinel.bytes.current_io_type = new_io_type;
+        fetch_sentinel(sentinel, true, Some(new_io_type));
     })
 }
 
 pub fn get_io_type() -> IOType {
-    THREAD_IO_SENTINEL.with(|sentinel| {
-        let sentinel = sentinel.lock().unwrap();
-
-        sentinel.bytes.current_io_type
-    })
+    THREAD_IO_SENTINEL.with(|sentinel| *sentinel.bytes.io_type.lock().unwrap())
 }
 
 pub(crate) fn fetch_buffered_thread_io_bytes(io_type: IOType) -> IOBytes {
-    THREAD_IO_SENTINEL.with(|sentinel| {
-        let sentinel = sentinel.lock().unwrap();
-
-        sentinel.bytes.total_io_bytes[io_type as usize]
-    })
+    THREAD_IO_SENTINEL
+        .with(|sentinel| sentinel.bytes.total_bytes[io_type as usize].load(Ordering::Relaxed))
 }
 
 pub(crate) fn fetch_thread_io_bytes(_io_type: IOType) -> IOBytes {
@@ -136,9 +134,9 @@ impl ThreadID {
 impl Default for BytesBuffer {
     fn default() -> BytesBuffer {
         BytesBuffer {
-            current_io_type: IOType::Other,
-            total_io_bytes: [IOBytes::default(); IOType::COUNT],
-            last_io_bytes: IOBytes::default(),
+            io_type: Mutex::new(IOType::Other),
+            total_bytes: Default::default(),
+            last_bytes: AtomicIOBytes::default(),
         }
     }
 }
@@ -166,6 +164,34 @@ impl IOBytes {
         }
 
         io_bytes
+    }
+}
+
+impl Default for AtomicIOBytes {
+    fn default() -> Self {
+        let bytes = IOBytes::default();
+
+        AtomicIOBytes {
+            read: AtomicU64::new(bytes.read),
+            write: AtomicU64::new(bytes.write),
+        }
+    }
+}
+
+impl AtomicIOBytes {
+    fn load(&self, order: Ordering) -> IOBytes {
+        IOBytes {
+            read: self.read.load(order),
+            write: self.write.load(order),
+        }
+    }
+    fn store(&self, val: IOBytes, order: Ordering) {
+        self.read.store(val.read, order);
+        self.write.store(val.write, order);
+    }
+    fn fetch_add(&self, other: IOBytes, order: Ordering) {
+        self.read.fetch_add(other.read, order);
+        self.write.fetch_add(other.write, order);
     }
 }
 
