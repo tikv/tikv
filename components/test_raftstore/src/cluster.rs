@@ -1503,6 +1503,23 @@ impl<T: Simulator> Cluster<T> {
         self.add_send_filter(PartitionFilterFactory::new(s1, s2));
     }
 
+    pub fn must_wait_for_leader_expire(&self, node_id: u64, region_id: u64) {
+        let timer = Instant::now_coarse();
+        while timer.saturating_elapsed() < Duration::from_secs(5) {
+            if self
+                .query_leader(node_id, region_id, Duration::from_secs(1))
+                .is_none()
+            {
+                return;
+            }
+            sleep_ms(100);
+        }
+        panic!(
+            "region {}'s replica in store {} still has a valid leader after 5 secs",
+            region_id, node_id
+        );
+    }
+
     pub fn must_update_region_for_unsafe_recover(&mut self, node_id: u64, region: &metapb::Region) {
         let router = self.sim.rl().get_router(node_id).unwrap();
         let mut try_cnt = 0;
