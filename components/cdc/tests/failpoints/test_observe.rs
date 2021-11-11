@@ -3,9 +3,6 @@ use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 use futures::executor::block_on;
 use futures::sink::SinkExt;
 use grpcio::WriteFlags;
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::event::{Event as Event_oneof_event, LogType as EventLogType};
-#[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::RaftMessage;

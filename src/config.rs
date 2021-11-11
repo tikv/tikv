@@ -585,15 +585,15 @@ impl DefaultCfConfig {
         enable_ttl: bool,
     ) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, region_info_accessor);
-        let f = Box::new(RangePropertiesCollectorFactory {
+        let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
-        });
+        };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         if enable_ttl {
             cf_opts.add_table_properties_collector_factory(
                 "tikv.ttl-properties-collector",
-                Box::new(TtlPropertiesCollectorFactory {}),
+                TtlPropertiesCollectorFactory {},
             );
             cf_opts
                 .set_compaction_filter_factory(
@@ -688,12 +688,14 @@ impl WriteCfConfig {
         // Create prefix bloom filter for memtable.
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
         // Collects user defined properties.
-        let f = Box::new(MvccPropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
-        let f = Box::new(RangePropertiesCollectorFactory {
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.mvcc-properties-collector",
+            MvccPropertiesCollectorFactory::default(),
+        );
+        let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
-        });
+        };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts
             .set_compaction_filter_factory(
@@ -772,10 +774,10 @@ impl LockCfConfig {
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
             .unwrap();
-        let f = Box::new(RangePropertiesCollectorFactory {
+        let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
-        });
+        };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
         cf_opts.set_titandb_options(&self.titan.build_opts());
@@ -2178,6 +2180,14 @@ mod readpool_tests {
     }
 }
 
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct HadoopConfig {
+    pub home: String,
+    pub linux_user: String,
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -2185,6 +2195,11 @@ pub struct BackupConfig {
     pub num_threads: usize,
     pub batch_size: usize,
     pub sst_max_size: ReadableSize,
+    pub enable_auto_tune: bool,
+    pub auto_tune_remain_threads: usize,
+    pub auto_tune_refresh_interval: ReadableDuration,
+    #[online_config(submodule)]
+    pub hadoop: HadoopConfig,
 }
 
 impl BackupConfig {
@@ -2208,6 +2223,10 @@ impl Default for BackupConfig {
             num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
             batch_size: 8,
             sst_max_size: default_coprocessor.region_max_size,
+            enable_auto_tune: false,
+            auto_tune_remain_threads: 2,
+            auto_tune_refresh_interval: ReadableDuration::secs(60),
+            hadoop: Default::default(),
         }
     }
 }
@@ -3179,7 +3198,7 @@ impl ConfigController {
         for (name, change) in diff.into_iter() {
             match change {
                 ConfigValue::Module(change) => {
-                    // update a submodule's config only if changes had been sucessfully
+                    // update a submodule's config only if changes had been successfully
                     // dispatched to corresponding config manager, to avoid dispatch change twice
                     if let Some(mgr) = inner.config_mgrs.get_mut(&Module::from(name.as_str())) {
                         if let Err(e) = mgr.dispatch(change.clone()) {
@@ -3239,6 +3258,7 @@ mod tests {
     use crate::server::ttl::TTLCheckerTask;
     use crate::storage::config::StorageConfigManger;
     use crate::storage::txn::flow_controller::FlowController;
+    use case_macros::*;
     use engine_rocks::raw_util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
     use raft_log_engine::RecoveryMode;
@@ -3247,6 +3267,21 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+
+    #[test]
+    fn test_case_macro() {
+        let h = kebab_case!(HelloWorld);
+        assert_eq!(h, "hello-world");
+
+        let h = kebab_case!(WelcomeToMyHouse);
+        assert_eq!(h, "welcome-to-my-house");
+
+        let h = snake_case!(HelloWorld);
+        assert_eq!(h, "hello_world");
+
+        let h = snake_case!(WelcomeToMyHouse);
+        assert_eq!(h, "welcome_to_my_house");
+    }
 
     #[test]
     fn test_check_critical_cfg_with() {

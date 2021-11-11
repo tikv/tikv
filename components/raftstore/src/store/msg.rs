@@ -130,6 +130,14 @@ where
         }
     }
 
+    pub fn has_proposed_cb(&mut self) -> bool {
+        if let Callback::Write { proposed_cb, .. } = self {
+            proposed_cb.is_some()
+        } else {
+            false
+        }
+    }
+
     pub fn invoke_proposed(&mut self) {
         if let Callback::Write { proposed_cb, .. } = self {
             if let Some(cb) = proposed_cb.take() {
@@ -505,6 +513,7 @@ pub enum PeerMsg<EK: KvEngine> {
     /// Asks region to change replication mode.
     UpdateReplicationMode,
     Destroy(u64),
+    UpdateRegionForUnsafeRecover(metapb::Region),
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
@@ -533,6 +542,9 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
             PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
+            PeerMsg::UpdateRegionForUnsafeRecover(region) => {
+                write!(fmt, "Update Region {} to {:?}", region.get_id(), region)
+            }
         }
     }
 }
@@ -576,6 +588,8 @@ where
     /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
+
+    CreatePeer(metapb::Region),
 }
 
 impl<EK> fmt::Debug for StoreMsg<EK>
@@ -604,6 +618,7 @@ where
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
+            StoreMsg::CreatePeer(_) => write!(fmt, "CreatePeer"),
         }
     }
 }
