@@ -10,7 +10,8 @@
 //! [`kv`](kv) is an abstraction layer over persistent storage.
 //!
 //! Other responsibilities of this module are managing latches (see [`latch`](txn::latch)), deadlock
-//! and wait handling (see [`lock_manager`](lock_manager)), scheduling command execution (see
+//! and wait handling (see [`lock_manager`](lock_manager)), sche
+//! duling command execution (see
 //! [`txn::scheduler`](txn::scheduler)), and handling commands from the raw and versioned APIs (in
 //! the [`Storage`](Storage) struct).
 //!
@@ -81,6 +82,7 @@ use crate::storage::{
 use concurrency_manager::ConcurrencyManager;
 
 use engine_traits::{
+    key_prefix,
     raw_value::{ttl_to_expire_ts, RawValue},
     CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };

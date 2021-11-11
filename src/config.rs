@@ -594,7 +594,7 @@ impl DefaultCfConfig {
         if let ApiVersion::V1ttl | ApiVersion::V2 = api_version {
             cf_opts.add_table_properties_collector_factory(
                 "tikv.ttl-properties-collector",
-                TtlPropertiesCollectorFactory {api_version},
+                TtlPropertiesCollectorFactory { api_version },
             );
             cf_opts
                 .set_compaction_filter_factory(

@@ -5,15 +5,68 @@ use kvproto::kvrpcpb::ApiVersion;
 use tikv_util::codec;
 use tikv_util::codec::number::{self, NumberEncoder};
 
+pub fn ttl_current_ts() -> u64 {
+    fail_point!("ttl_current_ts", |r| r.map_or(2, |e| e.parse().unwrap()));
+    tikv_util::time::UnixSecs::now().into_inner()
+}
+
+pub fn ttl_to_expire_ts(ttl: u64) -> Option<u64> {
+    if ttl == 0 {
+        None
+    } else {
+        Some(ttl.saturating_add(ttl_current_ts()))
+    }
+}
+
 bitflags::bitflags! {
     struct ValueMeta: u8 {
         const EXPIRE_TS = 0b00000001;
     }
 }
 
-/// An raw key and it's metadata.
-/// TODO: Describe the raw value encode in API V1 and API V2.
-#[derive(Debug, Clone, Copy)]
+/// A raw kv value and it's metadata.
+///
+/// ### ApiVersion::V1
+///
+/// This is the plain user value.
+///
+/// ### ApiVersion::V1ttl
+///
+/// 8 bytes representing the unix timestamp in seconds for expiring time will be append
+/// to the value of all RawKV kv pairs.
+///
+/// ```text
+/// ------------------------------------------------------------
+/// | User value     | Expire Ts                               |
+/// ------------------------------------------------------------
+/// | 0x12 0x34 0x56 | 0x00 0x00 0x00 0x00 0x00 0x00 0xff 0xff |
+/// ------------------------------------------------------------
+/// ```
+///
+/// ### ApiVersion::V2
+///
+/// The last byte in the raw value must be a meta flag. For example:
+///
+/// ```text
+/// --------------------------------------
+/// | User value     | Meta flags        |
+/// --------------------------------------
+/// | 0x12 0x34 0x56 | 0x00 (0b00000000) |
+/// --------------------------------------
+/// ```
+///
+/// As shown in the example below, the least significant bit of the meta flag
+/// indicates whether the value contains 8 bytes expire ts at the very left to the
+/// meta flags.
+///
+/// ```text
+/// --------------------------------------------------------------------------------
+/// | User value     | Expire Ts                               | Meta flags        |
+/// --------------------------------------------------------------------------------
+/// | 0x12 0x34 0x56 | 0x00 0x00 0x00 0x00 0x00 0x00 0xff 0xff | 0x01 (0b00000001) |
+/// --------------------------------------------------------------------------------
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RawValue<T: AsRef<[u8]>> {
     /// The user value.
     pub user_value: T,
@@ -142,17 +195,83 @@ impl RawValue<Vec<u8>> {
     }
 }
 
-pub fn ttl_current_ts() -> u64 {
-    fail_point!("ttl_current_ts", |r| r.map_or(2, |e| e.parse().unwrap()));
-    tikv_util::time::UnixSecs::now().into_inner()
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-pub fn ttl_to_expire_ts(ttl: u64) -> Option<u64> {
-    if ttl == 0 {
-        None
-    } else {
-        Some(ttl.saturating_add(ttl_current_ts()))
+    #[test]
+    fn test_no_ttl() {
+        // (user_value, encoded_bytes_V1, encoded_bytes_V1ttl, encoded_bytes_V2)
+        let cases = vec![
+            (&b""[..], &b""[..], &[0, 0, 0, 0, 0, 0, 0, 0][..], &[0][..]),
+            (
+                &b"a"[..],
+                &b"a"[..],
+                &[b'a', 0, 0, 0, 0, 0, 0, 0, 0][..],
+                &[b'a', 0][..],
+            ),
+        ];
+        for case in &cases {
+            assert_encode_decode_identity(case.0, None, case.1, ApiVersion::V1);
+        }
+        for case in &cases {
+            assert_encode_decode_identity(case.0, None, case.2, ApiVersion::V1ttl);
+        }
+        for case in &cases {
+            assert_encode_decode_identity(case.0, None, case.3, ApiVersion::V2);
+        }
+    }
+
+    #[test]
+    fn test_ttl() {
+        // (user_value, expire_ts, encoded_bytes_V1ttl, encoded_bytes_V2)
+        let cases = vec![
+            (
+                &b""[..],
+                2,
+                &[0, 0, 0, 0, 0, 0, 0, 2][..],
+                &[0, 0, 0, 0, 0, 0, 0, 2, 1][..],
+            ),
+            (
+                &b"a"[..],
+                2,
+                &[b'a', 0, 0, 0, 0, 0, 0, 0, 2][..],
+                &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 1][..],
+            ),
+        ];
+
+        for case in &cases {
+            assert_encode_decode_identity(case.0, Some(case.1), case.2, ApiVersion::V1ttl);
+        }
+        for case in &cases {
+            assert_encode_decode_identity(case.0, Some(case.1), case.3, ApiVersion::V2);
+        }
+    }
+
+    fn assert_encode_decode_identity(
+        user_value: &[u8],
+        expire_ts: Option<u64>,
+        encoded_bytes: &[u8],
+        api_version: ApiVersion,
+    ) {
+        let raw_value = RawValue {
+            user_value,
+            expire_ts,
+        };
+        assert_eq!(&raw_value.to_bytes(api_version), encoded_bytes);
+        assert_eq!(
+            RawValue::from_bytes(encoded_bytes, api_version).unwrap(),
+            raw_value
+        );
+
+        let raw_value = RawValue {
+            user_value: user_value.to_vec(),
+            expire_ts,
+        };
+        assert_eq!(raw_value.clone().to_bytes(api_version), encoded_bytes);
+        assert_eq!(
+            RawValue::from_owned_bytes(encoded_bytes.to_vec(), api_version).unwrap(),
+            raw_value
+        );
     }
 }
-
-// TODO: Add test
