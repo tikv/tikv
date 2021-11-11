@@ -720,7 +720,7 @@ impl Config {
             .set(self.io_reschedule_hotpot_duration.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_msg_flush_interval"])
-            .set(self.raft_msg_flush_interval.as_secs() as f64);
+            .set(self.raft_msg_flush_interval.as_micros() as f64);
     }
 
     fn write_change_into_metrics(change: ConfigChange) {
