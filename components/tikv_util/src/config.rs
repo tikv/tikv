@@ -46,7 +46,8 @@ pub const PIB: u64 = TIB * BINARY_DATA_MAGNITUDE;
 const TIME_MAGNITUDE_1: u64 = 1000;
 const TIME_MAGNITUDE_2: u64 = 60;
 const TIME_MAGNITUDE_3: u64 = 24;
-const MS: u64 = UNIT;
+const US: u64 = UNIT;
+const MS: u64 = US * TIME_MAGNITUDE_1;
 const SECOND: u64 = MS * TIME_MAGNITUDE_1;
 const MINUTE: u64 = SECOND * TIME_MAGNITUDE_2;
 const HOUR: u64 = MINUTE * TIME_MAGNITUDE_2;
@@ -361,15 +362,18 @@ impl FromStr for ReadableDuration {
         if !dur_str.is_ascii() {
             return Err(format!("unexpect ascii string: {}", dur_str));
         }
-        let err_msg = "valid duration, only d, h, m, s, ms are supported.".to_owned();
+        let err_msg = "valid duration, only d, h, m, s, ms, us are supported.".to_owned();
         let mut left = dur_str.as_bytes();
         let mut last_unit = DAY + 1;
         let mut dur = 0f64;
-        while let Some(idx) = left.iter().position(|c| b"dhms".contains(c)) {
+        while let Some(idx) = left.iter().position(|c| b"dhmsu".contains(c)) {
             let (first, second) = left.split_at(idx);
             let unit = if second.starts_with(b"ms") {
                 left = &left[idx + 2..];
                 MS
+            } else if second.starts_with(b"us") {
+                left = &left[idx + 2..];
+                US
             } else {
                 let u = match second[0] {
                     b'd' => DAY,
@@ -382,7 +386,7 @@ impl FromStr for ReadableDuration {
                 u
             };
             if unit >= last_unit {
-                return Err("d, h, m, s, ms should occur in given order.".to_owned());
+                return Err("d, h, m, s, ms, us should occur in given order.".to_owned());
             }
             // do we need to check 12h360m?
             let number_str = unsafe { str::from_utf8_unchecked(first) };
@@ -399,18 +403,22 @@ impl FromStr for ReadableDuration {
             return Err("duration should be positive.".to_owned());
         }
         let secs = dur as u64 / SECOND as u64;
-        let millis = (dur as u64 % SECOND as u64) as u32 * 1_000_000;
-        Ok(ReadableDuration(Duration::new(secs, millis)))
+        let micros = (dur as u64 % SECOND as u64) as u32 * 1_000;
+        Ok(ReadableDuration(Duration::new(secs, micros)))
     }
 }
 
 impl ReadableDuration {
-    pub const fn secs(secs: u64) -> ReadableDuration {
-        ReadableDuration(Duration::from_secs(secs))
+    pub const fn micros(micros: u64) -> ReadableDuration {
+        ReadableDuration(Duration::from_micros(micros))
     }
 
     pub const fn millis(millis: u64) -> ReadableDuration {
         ReadableDuration(Duration::from_millis(millis))
+    }
+
+    pub const fn secs(secs: u64) -> ReadableDuration {
+        ReadableDuration(Duration::from_secs(secs))
     }
 
     pub const fn minutes(minutes: u64) -> ReadableDuration {
@@ -429,8 +437,16 @@ impl ReadableDuration {
         self.0.as_secs()
     }
 
+    pub fn as_secs_f64(&self) -> f64 {
+        self.0.as_secs_f64()
+    }
+
     pub fn as_millis(&self) -> u64 {
         crate::time::duration_to_ms(self.0)
+    }
+
+    pub fn as_micros(&self) -> u64 {
+        crate::time::duration_to_us(self.0)
     }
 
     pub fn is_zero(&self) -> bool {
@@ -441,7 +457,7 @@ impl ReadableDuration {
 impl fmt::Display for ReadableDuration {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut dur = crate::time::duration_to_ms(self.0);
+        let mut dur = crate::time::duration_to_us(self.0);
         let mut written = false;
         if dur >= DAY {
             written = true;
@@ -463,9 +479,14 @@ impl fmt::Display for ReadableDuration {
             write!(f, "{}s", dur / SECOND)?;
             dur %= SECOND;
         }
+        if dur >= MS {
+            written = true;
+            write!(f, "{}ms", dur / MS)?;
+            dur %= MS;
+        }
         if dur > 0 {
             written = true;
-            write!(f, "{}ms", dur)?;
+            write!(f, "{}us", dur)?;
         }
         if !written {
             write!(f, "0s")?;
@@ -1428,14 +1449,20 @@ mod tests {
 
     #[test]
     fn test_duration_construction() {
-        let mut dur = ReadableDuration::secs(1);
-        assert_eq!(dur.0, Duration::new(1, 0));
-        assert_eq!(dur.as_secs(), 1);
-        assert_eq!(dur.as_millis(), 1000);
+        let mut dur = ReadableDuration::micros(2_010_010);
+        assert_eq!(dur.0, Duration::new(2, 10_010_000));
+        assert_eq!(dur.as_secs(), 2);
+        assert!((dur.as_secs_f64() - 2.010_010).abs() < f64::EPSILON);
+        assert_eq!(dur.as_millis(), 2_010);
         dur = ReadableDuration::millis(1001);
         assert_eq!(dur.0, Duration::new(1, 1_000_000));
         assert_eq!(dur.as_secs(), 1);
+        assert!((dur.as_secs_f64() - 1.001).abs() < f64::EPSILON);
         assert_eq!(dur.as_millis(), 1001);
+        dur = ReadableDuration::secs(1);
+        assert_eq!(dur.0, Duration::new(1, 0));
+        assert_eq!(dur.as_secs(), 1);
+        assert_eq!(dur.as_millis(), 1000);
         dur = ReadableDuration::minutes(2);
         assert_eq!(dur.0, Duration::new(2 * 60, 0));
         assert_eq!(dur.as_secs(), 120);
@@ -1455,20 +1482,21 @@ mod tests {
 
         let legal_cases = vec![
             (0, 0, "0s"),
-            (0, 1, "1ms"),
+            (0, 1_000, "1ms"),
+            (0, 1, "1us"),
             (2, 0, "2s"),
             (24 * 3600, 0, "1d"),
-            (2 * 24 * 3600, 10, "2d10ms"),
+            (2 * 24 * 3600, 10_020, "2d10ms20us"),
             (4 * 60, 0, "4m"),
             (5 * 3600, 0, "5h"),
             (3600 + 2 * 60, 0, "1h2m"),
             (5 * 24 * 3600 + 3600 + 2 * 60, 0, "5d1h2m"),
-            (3600 + 2, 5, "1h2s5ms"),
-            (3 * 24 * 3600 + 7 * 3600 + 2, 5, "3d7h2s5ms"),
+            (3600 + 2, 5_600, "1h2s5ms600us"),
+            (3 * 24 * 3600 + 7 * 3600 + 2, 5_004, "3d7h2s5ms4us"),
         ];
-        for (secs, ms, exp) in legal_cases {
+        for (secs, us, exp) in legal_cases {
             let d = DurHolder {
-                d: ReadableDuration(Duration::new(secs, ms * 1_000_000)),
+                d: ReadableDuration(Duration::new(secs, us * 1_000)),
             };
             let res_str = toml::to_string(&d).unwrap();
             let exp_str = format!("d = {:?}\n", exp);
