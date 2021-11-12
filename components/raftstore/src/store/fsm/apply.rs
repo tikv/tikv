@@ -2842,21 +2842,19 @@ impl<S: Snapshot> Apply<S> {
         peer_id: u64,
         region_id: u64,
         term: u64,
-        entries: CachedEntries,
+        entries: Vec<Entry>,
         cbs: Vec<Proposal<S>>,
     ) -> Apply<S> {
         let mut entries_size = 0;
-        {
-            let guard = entries.entries.lock().unwrap();
-            for e in &guard.0 {
-                entries_size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
-            }
+        for e in &entries {
+            entries_size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
         }
+        let cached_entries = CachedEntries::new(entries);
         Apply {
             peer_id,
             region_id,
             term,
-            entries: smallvec![entries],
+            entries: smallvec![cached_entries],
             entries_size,
             cbs,
         }
@@ -4438,8 +4436,7 @@ mod tests {
         entries: Vec<Entry>,
         cbs: Vec<Proposal<S>>,
     ) -> Apply<S> {
-        let e = CachedEntries::new(entries);
-        Apply::new(peer_id, region_id, term, e, cbs)
+        Apply::new(peer_id, region_id, term, entries, cbs)
     }
 
     #[test]

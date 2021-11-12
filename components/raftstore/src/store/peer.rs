@@ -52,7 +52,6 @@ use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal};
 use crate::store::hibernate_state::GroupState;
 use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
 use crate::store::msg::RaftCommand;
-use crate::store::peer_storage::CachedEntries;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{
@@ -2247,10 +2246,16 @@ where
             } else {
                 vec![]
             };
-            let entries = CachedEntries::new(committed_entries);
-            self.mut_store().trace_cached_entries(entries.clone());
-            let mut apply = Apply::new(self.peer_id(), self.region_id, self.term(), entries, cbs);
+            let mut apply = Apply::new(
+                self.peer_id(),
+                self.region_id,
+                self.term(),
+                committed_entries,
+                cbs,
+            );
             apply.on_schedule(&ctx.raft_metrics);
+            self.mut_store()
+                .trace_cached_entries(apply.entries[0].clone());
             if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
                 // Compact all cached entries instead of half evict.
                 self.mut_store().evict_cache(false);
