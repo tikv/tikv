@@ -164,10 +164,10 @@ pub fn send_snap(
 
     let send_task = async move {
         let mut sink = sink.sink_map_err(Error::from);
-        defer!(drop(deregister));
-        defer!(drop(client));
         sink.send_all(&mut chunks).await?;
         sink.close().await?;
+        drop(deregister);
+        drop(client);
         let recv_result = receiver.map_err(Error::from).await;
         send_timer.observe_duration();
         match recv_result {
