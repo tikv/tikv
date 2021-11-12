@@ -5270,11 +5270,17 @@ mod tests {
             let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
             assert!(!resp.get_header().has_error(), "{:?}", resp);
         }
-        fetch_apply_res(&rx);
         for _ in 0..2 {
             let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
             assert!(!resp.get_header().has_error(), "{:?}", resp);
         }
+        let mut res = fetch_apply_res(&rx);
+        // There may be one or two ApplyRes which depends on whether these two apply msgs
+        // are batched together.
+        if res.apply_state.get_applied_index() == 3 {
+            res = fetch_apply_res(&rx);
+        }
+        assert_eq!(res.apply_state.get_applied_index(), 5);
 
         // Verify the engine keys.
         for i in 1..keys_count {
