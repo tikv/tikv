@@ -136,6 +136,7 @@ pub fn send_snap(
 
     let s = box_try!(mgr.get_snapshot_for_sending(&key));
     if !s.exists() {
+        drop(deregister);
         return Err(box_err!("missing snap file: {:?}", s.path()));
     }
     let total_size = s.total_size()?;
@@ -163,12 +164,12 @@ pub fn send_snap(
 
     let send_task = async move {
         let mut sink = sink.sink_map_err(Error::from);
+        defer!(drop(deregister));
+        defer!(drop(client));
         sink.send_all(&mut chunks).await?;
         sink.close().await?;
         let recv_result = receiver.map_err(Error::from).await;
         send_timer.observe_duration();
-        drop(deregister);
-        drop(client);
         match recv_result {
             Ok(_) => {
                 fail_point!("snapshot_delete_after_send");
