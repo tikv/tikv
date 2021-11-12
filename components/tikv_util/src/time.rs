@@ -17,7 +17,7 @@ pub use std::time::Duration;
 #[inline]
 pub fn duration_to_ms(d: Duration) -> u64 {
     let nanos = u64::from(d.subsec_nanos());
-    // Most of case, we can't have so large Duration, so here just panic if overflow now.
+    // If Duration is too large, the result may be overflow.
     d.as_secs() * 1_000 + (nanos / 1_000_000)
 }
 
@@ -25,7 +25,6 @@ pub fn duration_to_ms(d: Duration) -> u64 {
 #[inline]
 pub fn duration_to_sec(d: Duration) -> f64 {
     let nanos = f64::from(d.subsec_nanos());
-    // Most of case, we can't have so large Duration, so here just panic if overflow now.
     d.as_secs() as f64 + (nanos / 1_000_000_000.0)
 }
 
@@ -33,7 +32,7 @@ pub fn duration_to_sec(d: Duration) -> f64 {
 #[inline]
 pub fn duration_to_us(d: Duration) -> u64 {
     let nanos = u64::from(d.subsec_nanos());
-    // Most of case, we can't have so large Duration, so here just panic if overflow now.
+    // If Duration is too large, the result may be overflow.
     d.as_secs() * 1_000_000 + (nanos / 1_000)
 }
 
@@ -41,7 +40,7 @@ pub fn duration_to_us(d: Duration) -> u64 {
 #[inline]
 pub fn duration_to_ns(d: Duration) -> u64 {
     let nanos = u64::from(d.subsec_nanos());
-    // Most of case, we can't have so large Duration, so here just panic if overflow now.
+    // If Duration is too large, the result may be overflow.
     d.as_secs() * 1_000_000_000 + nanos
 }
 
