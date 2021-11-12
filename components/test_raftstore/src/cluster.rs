@@ -17,6 +17,7 @@ use kvproto::raft_serverpb::{
 use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
 
+use crate::Config;
 use collections::{HashMap, HashSet};
 use encryption_export::DataKeyManager;
 use engine_rocks::raw::DB;
@@ -32,7 +33,6 @@ use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRoute
 use raftstore::store::transport::CasualRouter;
 use raftstore::store::*;
 use raftstore::{Error, Result};
-use tikv::config::TiKvConfig;
 use tikv::server::Result as ServerResult;
 use tikv_util::thread_group::GroupProperties;
 use tikv_util::time::Instant;
@@ -55,7 +55,7 @@ pub trait Simulator {
     fn run_node(
         &mut self,
         node_id: u64,
-        cfg: TiKvConfig,
+        cfg: Config,
         engines: Engines<RocksEngine, RocksEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
@@ -136,7 +136,7 @@ pub trait Simulator {
 }
 
 pub struct Cluster<T: Simulator> {
-    pub cfg: TiKvConfig,
+    pub cfg: Config,
     leaders: HashMap<u64, metapb::Peer>,
     pub count: usize,
 
@@ -164,7 +164,10 @@ impl<T: Simulator> Cluster<T> {
     ) -> Cluster<T> {
         // TODO: In the future, maybe it's better to test both case where `use_delete_range` is true and false
         Cluster {
-            cfg: new_tikv_config(id),
+            cfg: Config {
+                tikv: new_tikv_config(id),
+                prefer_mem: true,
+            },
             leaders: HashMap::default(),
             count,
             paths: vec![],
@@ -977,14 +980,8 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) {
-        match self.batch_put(key, vec![new_put_cf_cmd(cf, key, value)]) {
-            Ok(resp) => {
-                assert_eq!(resp.get_responses().len(), 1);
-                assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
-            }
-            Err(e) => {
-                panic!("has error: {:?}", e);
-            }
+        if let Err(e) = self.batch_put(key, vec![new_put_cf_cmd(cf, key, value)]) {
+            panic!("has error: {:?}", e);
         }
     }
 
@@ -1020,8 +1017,6 @@ impl<T: Simulator> Cluster<T> {
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Delete);
     }
 
     pub fn must_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
@@ -1034,8 +1029,6 @@ impl<T: Simulator> Cluster<T> {
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::DeleteRange);
     }
 
     pub fn must_notify_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
@@ -1045,8 +1038,6 @@ impl<T: Simulator> Cluster<T> {
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::DeleteRange);
     }
 
     pub fn must_flush_cf(&mut self, cf: &str, sync: bool) {
@@ -1510,6 +1501,23 @@ impl<T: Simulator> Cluster<T> {
     // it's so common that we provide an API for it
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
         self.add_send_filter(PartitionFilterFactory::new(s1, s2));
+    }
+
+    pub fn must_wait_for_leader_expire(&self, node_id: u64, region_id: u64) {
+        let timer = Instant::now_coarse();
+        while timer.saturating_elapsed() < Duration::from_secs(5) {
+            if self
+                .query_leader(node_id, region_id, Duration::from_secs(1))
+                .is_none()
+            {
+                return;
+            }
+            sleep_ms(100);
+        }
+        panic!(
+            "region {}'s replica in store {} still has a valid leader after 5 secs",
+            region_id, node_id
+        );
     }
 
     pub fn must_update_region_for_unsafe_recover(&mut self, node_id: u64, region: &metapb::Region) {
