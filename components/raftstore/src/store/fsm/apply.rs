@@ -83,6 +83,7 @@ use super::metrics::*;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
+const MAX_APPLY_BATCH_SIZE: usize = 64 * 1024 * 1024;
 
 pub struct PendingCmd<S>
 where
@@ -2832,6 +2833,7 @@ where
     pub region_id: u64,
     pub term: u64,
     pub entries: SmallVec<[CachedEntries; 1]>,
+    pub entries_size: usize,
     pub cbs: Vec<Proposal<S>>,
 }
 
@@ -2843,11 +2845,19 @@ impl<S: Snapshot> Apply<S> {
         entries: CachedEntries,
         cbs: Vec<Proposal<S>>,
     ) -> Apply<S> {
+        let mut entries_size = 0;
+        {
+            let guard = entries.entries.lock().unwrap();
+            for e in &guard.0 {
+                entries_size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
+            }
+        }
         Apply {
             peer_id,
             region_id,
             term,
             entries: smallvec![entries],
+            entries_size,
             cbs,
         }
     }
@@ -2871,11 +2881,14 @@ impl<S: Snapshot> Apply<S> {
 
     fn try_batch(&mut self, other: &mut Apply<S>) -> bool {
         assert_eq!(self.region_id, other.region_id);
-        if self.peer_id == other.peer_id {
+        if self.peer_id == other.peer_id
+            && self.entries_size + other.entries_size <= MAX_APPLY_BATCH_SIZE
+        {
             self.entries.append(&mut other.entries);
             self.cbs.append(&mut other.cbs);
             assert!(other.term >= self.term);
             self.term = other.term;
+            self.entries_size += other.entries_size;
             true
         } else {
             false
@@ -4425,7 +4438,8 @@ mod tests {
         entries: Vec<Entry>,
         cbs: Vec<Proposal<S>>,
     ) -> Apply<S> {
-        Apply::new(peer_id, region_id, term, entries, cbs)
+        let e = CachedEntries::new(entries);
+        Apply::new(peer_id, region_id, term, e, cbs)
     }
 
     #[test]
