@@ -11,6 +11,7 @@ use rand::random;
 
 use kvproto::kvrpcpb::{ApiVersion, Context, LockInfo};
 
+use engine_traits::key_prefix;
 use engine_traits::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
 use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
@@ -853,50 +854,49 @@ fn test_txn_store_write_conflict() {
     );
 }
 
-// const TIDB_KEY_CASE: &[u8] = b"t_a";
-const TXN_KEY_CASE: &[u8] = b"t\0a";
-const RAW_KEY_CASE: &[u8] = b"r\0a";
+const TIDB_KEY_CASE: &[u8] = b"t_a";
+const TXN_KEY_CASE: &[u8] = &[key_prefix::TXN_KEY_PREFIX, 0, b'a'];
+const RAW_KEY_CASE: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'a'];
 
-// FIXME: WIP
-// #[test]
-// fn test_txn_store_txnkv_api_version() {
-//     let test_data = vec![
-//         // config api_version = V1|V1ttl, for backward compatible.
-//         (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, true),
-//         (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, true),
-//         (ApiVersion::V1ttl, ApiVersion::V1, TXN_KEY_CASE, true),
-//         // config api_version = V1, reject V2 request.
-//         (ApiVersion::V1, ApiVersion::V2, TIDB_KEY_CASE, false),
-//         // config api_version = V2.
-//         // backward compatible for TiDB request, and TiDB request only.
-//         (ApiVersion::V2, ApiVersion::V1, TIDB_KEY_CASE, true),
-//         (ApiVersion::V2, ApiVersion::V1, TXN_KEY_CASE, false),
-//         // V2 api validation.
-//         (ApiVersion::V2, ApiVersion::V2, TXN_KEY_CASE, true),
-//         (ApiVersion::V2, ApiVersion::V2, RAW_KEY_CASE, false),
-//         (ApiVersion::V2, ApiVersion::V2, TIDB_KEY_CASE, false),
-//     ];
+#[test]
+fn test_txn_store_txnkv_api_version() {
+    let test_data = vec![
+        // config api_version = V1|V1ttl, for backward compatible.
+        (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, true),
+        (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, true),
+        (ApiVersion::V1ttl, ApiVersion::V1, TXN_KEY_CASE, true),
+        // config api_version = V1, reject V2 request.
+        (ApiVersion::V1, ApiVersion::V2, TIDB_KEY_CASE, false),
+        // config api_version = V2.
+        // backward compatible for TiDB request, and TiDB request only.
+        (ApiVersion::V2, ApiVersion::V1, TIDB_KEY_CASE, true),
+        (ApiVersion::V2, ApiVersion::V1, TXN_KEY_CASE, false),
+        // V2 api validation.
+        (ApiVersion::V2, ApiVersion::V2, TXN_KEY_CASE, true),
+        (ApiVersion::V2, ApiVersion::V2, RAW_KEY_CASE, false),
+        (ApiVersion::V2, ApiVersion::V2, TIDB_KEY_CASE, false),
+    ];
 
-//     for (stoarge_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
-//         let mut store = AssertionStorage::new(stoarge_api_version);
-//         store.ctx.set_api_version(req_api_version);
+    for (stoarge_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
+        let mut store = AssertionStorage::new(stoarge_api_version);
+        store.ctx.set_api_version(req_api_version);
 
-//         if is_legal {
-//             store.get_none(key, 10);
-//             store.put_ok(key, b"x", 5, 10);
-//             store.get_none(key, 9);
-//             store.get_ok(key, 10, b"x");
+        if is_legal {
+            store.get_none(key, 10);
+            store.put_ok(key, b"x", 5, 10);
+            store.get_none(key, 9);
+            store.get_ok(key, 10, b"x");
 
-//             store.batch_get_ok(&[key, key, key], 10, vec![b"x", b"x", b"x"]);
-//             store.batch_get_command_ok(&[key, key, key], 10, vec![b"x", b"x", b"x"]);
-//         } else {
-//             store.get_err(key, 10);
-//             //TODO: store.put_err(key, b"x", 5, 10);
-//             store.batch_get_err(&[key, key, key], 10);
-//             store.batch_get_command_err(&[key, key, key], 10);
-//         }
-//     }
-// }
+            store.batch_get_ok(&[key, key, key], 10, vec![b"x", b"x", b"x"]);
+            store.batch_get_command_ok(&[key, key, key], 10, vec![b"x", b"x", b"x"]);
+        } else {
+            store.get_err(key, 10);
+            //TODO: store.put_err(key, b"x", 5, 10);
+            store.batch_get_err(&[key, key, key], 10);
+            store.batch_get_command_err(&[key, key, key], 10);
+        }
+    }
+}
 
 #[test]
 fn test_txn_store_rawkv_api_version() {
