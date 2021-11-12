@@ -136,7 +136,6 @@ pub fn send_snap(
 
     let s = box_try!(mgr.get_snapshot_for_sending(&key));
     if !s.exists() {
-        drop(deregister);
         return Err(box_err!("missing snap file: {:?}", s.path()));
     }
     let total_size = s.total_size()?;
@@ -170,8 +169,6 @@ pub fn send_snap(
         send_timer.observe_duration();
         drop(deregister);
         drop(client);
-        let recv_result = receiver.map_err(Error::from).await;
-        send_timer.observe_duration();
         match recv_result {
             Ok(_) => {
                 fail_point!("snapshot_delete_after_send");
