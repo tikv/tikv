@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use online_config::ConfigValue;
-pub use rocksdb::PerfLevel;
 use rocksdb::{DBCompressionType, DBInfoLogLevel, DBTitanDBBlobRunMode};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -263,7 +262,7 @@ impl From<BlobRunMode> for DBTitanDBBlobRunMode {
     }
 }
 
-macro_rules! numeric_enum_mod {
+macro_rules! rocksdb_enum_mod {
     ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
         pub mod $name {
             use std::fmt;
@@ -271,6 +270,7 @@ macro_rules! numeric_enum_mod {
             use serde::{Serializer, Deserializer};
             use serde::de::{self, Unexpected, Visitor};
             use rocksdb::$enum;
+            use case_macros::*;
 
             pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
                 where S: Serializer
@@ -298,9 +298,18 @@ macro_rules! numeric_enum_mod {
                             _ => Err(E::invalid_value(Unexpected::Signed(value), &self))
                         }
                     }
+
+                    fn visit_str<E>(self, value: &str) -> Result<$enum, E>
+                        where E: de::Error
+                    {
+                        match value {
+                            $(kebab_case!($variant) => Ok($enum::$variant), )*
+                            _ => Err(E::invalid_value(Unexpected::Str(value), &self))
+                        }
+                    }
                 }
 
-                deserializer.deserialize_i64(EnumVisitor)
+                deserializer.deserialize_any(EnumVisitor)
             }
 
             #[cfg(test)]
@@ -334,32 +343,34 @@ macro_rules! numeric_enum_mod {
     }
 }
 
-numeric_enum_mod! {compaction_pri_serde CompactionPriority {
+rocksdb_enum_mod! {compaction_pri_serde CompactionPriority {
     ByCompensatedSize = 0,
     OldestLargestSeqFirst = 1,
     OldestSmallestSeqFirst = 2,
     MinOverlappingRatio = 3,
 }}
 
-numeric_enum_mod! {rate_limiter_mode_serde DBRateLimiterMode {
+rocksdb_enum_mod! {rate_limiter_mode_serde DBRateLimiterMode {
     ReadOnly = 1,
     WriteOnly = 2,
     AllIo = 3,
 }}
 
-numeric_enum_mod! {compaction_style_serde DBCompactionStyle {
+rocksdb_enum_mod! {compaction_style_serde DBCompactionStyle {
     Level = 0,
     Universal = 1,
+    Fifo = 2,
+    None = 3,
 }}
 
-numeric_enum_mod! {recovery_mode_serde DBRecoveryMode {
+rocksdb_enum_mod! {recovery_mode_serde DBRecoveryMode {
     TolerateCorruptedTailRecords = 0,
     AbsoluteConsistency = 1,
     PointInTime = 2,
     SkipAnyCorruptedRecords = 3,
 }}
 
-numeric_enum_mod! {perf_level_serde PerfLevel {
+rocksdb_enum_mod! {perf_level_serde PerfLevel {
     Uninitialized = 0,
     Disable = 1,
     EnableCount = 2,
