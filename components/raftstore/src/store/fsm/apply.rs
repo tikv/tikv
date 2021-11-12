@@ -2879,9 +2879,8 @@ impl<S: Snapshot> Apply<S> {
 
     fn try_batch(&mut self, other: &mut Apply<S>) -> bool {
         assert_eq!(self.region_id, other.region_id);
-        if self.peer_id == other.peer_id
-            && self.entries_size + other.entries_size <= MAX_APPLY_BATCH_SIZE
-        {
+        assert_eq!(self.peer_id, other.peer_id);
+        if self.entries_size + other.entries_size <= MAX_APPLY_BATCH_SIZE {
             self.entries.append(&mut other.entries);
             self.cbs.append(&mut other.cbs);
             assert!(other.term >= self.term);
