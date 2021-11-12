@@ -853,7 +853,7 @@ fn test_txn_store_write_conflict() {
     );
 }
 
-const TIDB_KEY_CASE: &[u8] = b"t_a";
+// const TIDB_KEY_CASE: &[u8] = b"t_a";
 const TXN_KEY_CASE: &[u8] = b"t\0a";
 const RAW_KEY_CASE: &[u8] = b"r\0a";
 
