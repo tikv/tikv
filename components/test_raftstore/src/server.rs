@@ -15,10 +15,11 @@ use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use kvproto::tikvpb::TikvClient;
-use tempfile::{Builder, TempDir};
+use tempfile::TempDir;
 use tokio::runtime::Builder as TokioBuilder;
 
 use super::*;
+use crate::Config;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
@@ -57,10 +58,7 @@ use tikv::server::{
 };
 use tikv::storage;
 use tikv::storage::txn::flow_controller::FlowController;
-use tikv::{
-    config::{ConfigController, TiKvConfig},
-    server::raftkv::ReplicaReadLockChecker,
-};
+use tikv::{config::ConfigController, server::raftkv::ReplicaReadLockChecker};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker};
@@ -208,7 +206,7 @@ impl Simulator for ServerCluster {
     fn run_node(
         &mut self,
         node_id: u64,
-        mut cfg: TiKvConfig,
+        mut cfg: Config,
         engines: Engines<RocksEngine, RocksEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
@@ -216,7 +214,7 @@ impl Simulator for ServerCluster {
         system: RaftBatchSystem<RocksEngine, RocksEngine>,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
-            let p = Builder::new().prefix("test_cluster").tempdir().unwrap();
+            let p = test_util::temp_dir("test_cluster", cfg.prefer_mem);
             (p.path().to_str().unwrap().to_owned(), Some(p))
         } else {
             let p = self.snap_paths[&node_id].path().to_str().unwrap();
@@ -445,12 +443,12 @@ impl Simulator for ServerCluster {
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
-        let pessimistic_txn_cfg = cfg.pessimistic_txn;
+        let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
 
         let split_check_runner =
             SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
-        let split_config_manager = SplitConfigManager(Arc::new(VersionTrack::new(cfg.split)));
+        let split_config_manager = SplitConfigManager(Arc::new(VersionTrack::new(cfg.tikv.split)));
         let auto_split_controller = AutoSplitController::new(split_config_manager);
         node.start(
             engines,

@@ -585,15 +585,15 @@ impl DefaultCfConfig {
         enable_ttl: bool,
     ) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, region_info_accessor);
-        let f = Box::new(RangePropertiesCollectorFactory {
+        let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
-        });
+        };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         if enable_ttl {
             cf_opts.add_table_properties_collector_factory(
                 "tikv.ttl-properties-collector",
-                Box::new(TtlPropertiesCollectorFactory {}),
+                TtlPropertiesCollectorFactory {},
             );
             cf_opts
                 .set_compaction_filter_factory(
@@ -688,12 +688,14 @@ impl WriteCfConfig {
         // Create prefix bloom filter for memtable.
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
         // Collects user defined properties.
-        let f = Box::new(MvccPropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
-        let f = Box::new(RangePropertiesCollectorFactory {
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.mvcc-properties-collector",
+            MvccPropertiesCollectorFactory::default(),
+        );
+        let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
-        });
+        };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts
             .set_compaction_filter_factory(
@@ -772,10 +774,10 @@ impl LockCfConfig {
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
             .unwrap();
-        let f = Box::new(RangePropertiesCollectorFactory {
+        let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
-        });
+        };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
         cf_opts.set_titandb_options(&self.titan.build_opts());
@@ -3256,6 +3258,7 @@ mod tests {
     use crate::server::ttl::TTLCheckerTask;
     use crate::storage::config::StorageConfigManger;
     use crate::storage::txn::flow_controller::FlowController;
+    use case_macros::*;
     use engine_rocks::raw_util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
     use raft_log_engine::RecoveryMode;
@@ -3264,6 +3267,21 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+
+    #[test]
+    fn test_case_macro() {
+        let h = kebab_case!(HelloWorld);
+        assert_eq!(h, "hello-world");
+
+        let h = kebab_case!(WelcomeToMyHouse);
+        assert_eq!(h, "welcome-to-my-house");
+
+        let h = snake_case!(HelloWorld);
+        assert_eq!(h, "hello_world");
+
+        let h = snake_case!(WelcomeToMyHouse);
+        assert_eq!(h, "welcome_to_my_house");
+    }
 
     #[test]
     fn test_check_critical_cfg_with() {
@@ -4299,5 +4317,42 @@ mod tests {
         for (name, module) in cases {
             assert_eq!(Module::from(name), module);
         }
+    }
+
+    #[test]
+    fn test_compaction_style() {
+        let normal_string_config = r#"
+            compaction-style = 1
+        "#;
+        let config: DefaultCfConfig = toml::from_str(normal_string_config).unwrap();
+        assert_eq!(config.compaction_style, DBCompactionStyle::Universal);
+
+        // Test if we support string value
+        let normal_string_config = r#"
+            compaction-style = "universal"
+        "#;
+        let config: DefaultCfConfig = toml::from_str(normal_string_config).unwrap();
+        assert_eq!(config.compaction_style, DBCompactionStyle::Universal);
+        assert!(
+            toml::to_string(&config)
+                .unwrap()
+                .contains("compaction-style = 1")
+        );
+
+        let bad_string_config = r#"
+            compaction-style = "level1"
+        "#;
+        let r = panic_hook::recover_safe(|| {
+            let _: DefaultCfConfig = toml::from_str(bad_string_config).unwrap();
+        });
+        assert!(r.is_err());
+
+        let bad_string_config = r#"
+            compaction-style = 4
+        "#;
+        let r = panic_hook::recover_safe(|| {
+            let _: DefaultCfConfig = toml::from_str(bad_string_config).unwrap();
+        });
+        assert!(r.is_err());
     }
 }

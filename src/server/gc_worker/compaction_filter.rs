@@ -92,6 +92,12 @@ lazy_static! {
         "Compaction filter orphan versions for default CF",
         &["tag"]
     ).unwrap();
+
+    pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED: IntCounter = register_int_counter!(
+        "tikv_gc_compaction_filter_mvcc_deletion_handled",
+        "MVCC deletion from compaction filter handled"
+    )
+    .unwrap();
 }
 
 pub trait CompactionFilterInitializer<EK>

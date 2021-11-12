@@ -1154,7 +1154,7 @@ fn test_empty_commands() {
             }
         }
     });
-    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
 #[test]
