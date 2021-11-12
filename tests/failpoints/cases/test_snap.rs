@@ -540,3 +540,44 @@ fn test_snapshot_gc_after_failed() {
     fail::cfg("get_snapshot_for_gc", "off").unwrap();
     cluster.sim.wl().clear_recv_filters(3);
 }
+#[test]
+fn test_sending_fail_with_net_error() {
+    let mut cluster = new_server_cluster(1, 2);
+    configure_for_snapshot(&mut cluster);
+
+    let on_send_store_fp = "receiving_snapshot_net_error";
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+    cluster.run_conf_change();
+
+    cluster.must_put(b"k1", b"v1");
+
+    let ready_notify = Arc::default();
+    let (notify_tx, notify_rx) = mpsc::channel();
+    cluster.sim.write().unwrap().add_send_filter(
+        1,
+        Box::new(MessageTypeNotifier::new(
+            MessageType::MsgSnapshot,
+            notify_tx,
+            Arc::clone(&ready_notify),
+        )),
+    );
+
+    // store2 will not receive any data from stream
+    fail::cfg(on_send_store_fp, "return()").unwrap();
+    pd_client.add_peer(1, new_learner_peer(2, 2));
+
+    // We are ready to recv notify.
+    ready_notify.store(true, Ordering::SeqCst);
+    notify_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+
+    let engine2 = cluster.get_engine(2);
+    must_get_none(&engine2, b"k1");
+
+    // If snapshot status is reported correctly, sending snapshot should be retried.
+    notify_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(cluster.get_snap_mgr(1).stats().sending_count, 0);
+    assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
+}
