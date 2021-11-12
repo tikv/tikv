@@ -3,12 +3,14 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use futures::compat::Future01CompatExt;
+use futures::future::select_all;
+use futures::FutureExt;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo};
+use kvproto::kvrpcpb::{CheckLeaderRequest, CheckLeaderResponse, LeaderInfo};
 use kvproto::metapb::{Peer, PeerRole};
 use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
@@ -100,7 +102,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
                 }
             }
 
-            let regions = Self::region_resolved_ts_store(
+            let regions = region_resolved_ts_store(
                 regions,
                 store_meta,
                 region_read_progress,
@@ -135,62 +137,66 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
         };
         self.worker.spawn(fut);
     }
+}
 
-    // Confirms leadership of region peer before trying to advance resolved ts.
-    // This function broadcasts a special message to all stores, get the leader id of them to confirm whether
-    // current peer has a quorum which accept its leadership.
-    async fn region_resolved_ts_store(
-        regions: Vec<u64>,
-        store_meta: Arc<Mutex<StoreMeta>>,
-        region_read_progress: RegionReadProgressRegistry,
-        pd_client: Arc<dyn PdClient>,
-        security_mgr: Arc<SecurityManager>,
-        env: Arc<Environment>,
-        cdc_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
-        min_ts: TimeStamp,
-    ) -> Vec<u64> {
-        #[cfg(feature = "failpoint")]
-        (|| fail_point!("before_sync_replica_read_state", |_| regions))();
+// Confirms leadership of region peer before trying to advance resolved ts.
+// This function broadcasts a special message to all stores, get the leader id of them to confirm whether
+// current peer has a quorum which accept its leadership.
+pub async fn region_resolved_ts_store(
+    regions: Vec<u64>,
+    store_meta: Arc<Mutex<StoreMeta>>,
+    region_read_progress: RegionReadProgressRegistry,
+    pd_client: Arc<dyn PdClient>,
+    security_mgr: Arc<SecurityManager>,
+    env: Arc<Environment>,
+    tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
+    min_ts: TimeStamp,
+) -> Vec<u64> {
+    #[cfg(feature = "failpoint")]
+    (|| fail_point!("before_sync_replica_read_state", |_| regions))();
 
-        let store_id = match store_meta.lock().unwrap().store_id {
-            Some(id) => id,
-            None => return vec![],
-        };
+    let store_id = match store_meta.lock().unwrap().store_id {
+        Some(id) => id,
+        None => return vec![],
+    };
 
-        // store_id -> leaders info, record the request to each stores
-        let mut store_map: HashMap<u64, Vec<LeaderInfo>> = HashMap::default();
-        // region_id -> region, cache the information of regions
-        let mut region_map: HashMap<u64, Vec<Peer>> = HashMap::default();
-        // region_id -> peers id, record the responses
-        let mut resp_map: HashMap<u64, Vec<u64>> = HashMap::default();
-        // region_id -> `(Vec<Peer>, LeaderInfo)`
-        let info_map = region_read_progress.dump_leader_infos(&regions);
+    // store_id -> leaders info, record the request to each stores
+    let mut store_map: HashMap<u64, Vec<LeaderInfo>> = HashMap::default();
+    // region_id -> region, cache the information of regions
+    let mut region_map: HashMap<u64, Vec<Peer>> = HashMap::default();
+    // region_id -> peers id, record the responses
+    let mut resp_map: HashMap<u64, Vec<u64>> = HashMap::default();
+    // region_id -> `(Vec<Peer>, LeaderInfo)`
+    let info_map = region_read_progress.dump_leader_infos(&regions);
 
-        for (region_id, (peer_list, leader_info)) in info_map {
-            let leader_id = leader_info.get_peer_id();
-            // Check if the leader in this store
-            if find_store_id(&peer_list, leader_id) != Some(store_id) {
+    for (region_id, (peer_list, leader_info)) in info_map {
+        let leader_id = leader_info.get_peer_id();
+        // Check if the leader in this store
+        if find_store_id(&peer_list, leader_id) != Some(store_id) {
+            continue;
+        }
+        for peer in &peer_list {
+            if peer.store_id == store_id && peer.id == leader_id {
+                resp_map.entry(region_id).or_default().push(store_id);
                 continue;
             }
-            for peer in &peer_list {
-                if peer.store_id == store_id && peer.id == leader_id {
-                    resp_map.entry(region_id).or_default().push(store_id);
-                    continue;
-                }
-                store_map
-                    .entry(peer.store_id)
-                    .or_default()
-                    .push(leader_info.clone());
-            }
-            region_map.insert(region_id, peer_list);
+            store_map
+                .entry(peer.store_id)
+                .or_default()
+                .push(leader_info.clone());
         }
-        // Approximate `LeaderInfo` size
-        let leader_info_size = store_map
-            .values()
-            .next()
-            .map_or(0, |regions| regions[0].compute_size());
-        let stores = store_map.into_iter().map(|(store_id, regions)| {
-            let cdc_clients = cdc_clients.clone();
+        region_map.insert(region_id, peer_list);
+    }
+    // Approximate `LeaderInfo` size
+    let leader_info_size = store_map
+        .values()
+        .next()
+        .map_or(0, |regions| regions[0].compute_size());
+    let store_count = store_map.len();
+    let mut stores: Vec<_> = store_map
+        .into_iter()
+        .map(|(store_id, regions)| {
+            let tikv_clients = tikv_clients.clone();
             let env = env.clone();
             let pd_client = pd_client.clone();
             let security_mgr = security_mgr.clone();
@@ -198,66 +204,70 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
             CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
             CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
             async move {
-                if cdc_clients.lock().unwrap().get(&store_id).is_none() {
-                    let store = box_try!(pd_client.get_store_async(store_id).await);
-                    let cb = ChannelBuilder::new(env.clone());
-                    let channel = security_mgr.connect(cb, &store.address);
-                    cdc_clients
-                        .lock()
-                        .unwrap()
-                        .insert(store_id, TikvClient::new(channel));
-                }
-                let client = cdc_clients.lock().unwrap().get(&store_id).unwrap().clone();
-                let mut req = CheckLeaderRequest::default();
-                req.set_regions(regions.into());
-                req.set_ts(min_ts.into_inner());
-                let res = box_try!(
-                    tokio::time::timeout(
-                        Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS),
-                        box_try!(client.check_leader_async(&req))
-                    )
-                    .await
-                );
-                let resp = box_try!(res);
-                Result::Ok((store_id, resp))
+                send_check_leader_request(
+                    store_id,
+                    regions,
+                    pd_client,
+                    security_mgr,
+                    env,
+                    tikv_clients,
+                    min_ts,
+                )
+                .await
             }
-        });
-        let resps = futures::future::join_all(stores).await;
-        resps
-            .into_iter()
-            .filter_map(|resp| match resp {
-                Ok(resp) => Some(resp),
-                Err(e) => {
-                    debug!("resolved-ts check leader error"; "err" =>?e);
-                    None
-                }
-            })
-            .map(|(store_id, resp)| {
-                resp.regions
-                    .into_iter()
-                    .map(move |region_id| (store_id, region_id))
-            })
-            .flatten()
-            .for_each(|(store_id, region_id)| {
+            .boxed()
+        })
+        .collect();
+    let mut valid_regions = HashSet::default();
+    for _ in 0..store_count {
+        let (res, _, remains) = select_all(stores).await;
+        stores = remains;
+        if let Ok((store_id, resp)) = res {
+            for region_id in resp.regions {
                 resp_map.entry(region_id).or_default().push(store_id);
-            });
-        resp_map
-            .into_iter()
-            .filter_map(|(region_id, stores)| {
-                if region_has_quorum(&region_map[&region_id], &stores) {
-                    Some(region_id)
-                } else {
-                    debug!(
-                        "resolved-ts cannot get quorum for resolved ts";
-                        "region_id" => region_id,
-                        "stores" => ?stores,
-                        "region" => ?&region_map[&region_id]
-                    );
-                    None
+                if region_has_quorum(&region_map[&region_id], &resp_map[&region_id]) {
+                    valid_regions.insert(region_id);
                 }
-            })
-            .collect()
+            }
+        }
+        if valid_regions.len() == regions.len() {
+            break;
+        }
     }
+    valid_regions.into_iter().collect()
+}
+
+async fn send_check_leader_request(
+    store_id: u64,
+    regions: Vec<LeaderInfo>,
+    pd_client: Arc<dyn PdClient>,
+    security_mgr: Arc<SecurityManager>,
+    env: Arc<Environment>,
+    tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
+    min_ts: TimeStamp,
+) -> Result<(u64, CheckLeaderResponse)> {
+    if tikv_clients.lock().unwrap().get(&store_id).is_none() {
+        let store = box_try!(pd_client.get_store_async(store_id).await);
+        let cb = ChannelBuilder::new(env.clone());
+        let channel = security_mgr.connect(cb, &store.address);
+        tikv_clients
+            .lock()
+            .unwrap()
+            .insert(store_id, TikvClient::new(channel));
+    }
+    let client = tikv_clients.lock().unwrap().get(&store_id).unwrap().clone();
+    let mut req = CheckLeaderRequest::default();
+    req.set_regions(regions.into());
+    req.set_ts(min_ts.into_inner());
+    let res = box_try!(
+        tokio::time::timeout(
+            Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS),
+            box_try!(client.check_leader_async(&req))
+        )
+        .await
+    );
+    let resp = box_try!(res);
+    Result::Ok((store_id, resp))
 }
 
 fn region_has_quorum(peers: &[Peer], stores: &[u64]) -> bool {
