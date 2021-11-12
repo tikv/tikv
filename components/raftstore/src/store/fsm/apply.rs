@@ -3240,12 +3240,10 @@ where
                     .raft_engine
                     .fetch_entries_to(rid, start, end, None, &mut entries)
                     .unwrap();
+            } else if entries.is_empty() {
+                entries = e;
             } else {
-                if entries.is_empty() {
-                    entries = e;
-                } else {
-                    entries.extend(e);
-                }
+                entries.extend(e);
             }
         }
         if dangle_size > 0 {
