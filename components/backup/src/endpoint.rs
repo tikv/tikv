@@ -3,10 +3,10 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::f64::INFINITY;
+use std::fmt;
 use std::sync::atomic::*;
-use std::sync::*;
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{fmt, thread};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::DB;
@@ -15,11 +15,13 @@ use external_storage::{BackendConfig, HdfsConfig};
 use external_storage_export::{create_storage, ExternalStorage};
 use file_system::{IOType, WithIOType};
 use futures::channel::mpsc::*;
+use futures::Future;
 use kvproto::brpb::*;
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
 use online_config::OnlineConfig;
+
 use raft::StateRole;
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
@@ -32,16 +34,14 @@ use tikv::storage::txn::{
 use tikv::storage::Statistics;
 use tikv_util::time::{Instant, Limiter};
 use tikv_util::worker::Runnable;
-use tikv_util::{
-    box_err, debug, defer, error, error_unknown, impl_display_as_debug, info, thd_name, warn,
-};
+use tikv_util::{box_err, debug, error, error_unknown, impl_display_as_debug, info, warn};
+use tokio::io::Result as TokioResult;
+use tokio::runtime::Runtime;
 use txn_types::{Key, Lock, TimeStamp};
-use yatp::task::callback::{Handle, TaskCell};
-use yatp::ThreadPool;
 
 use crate::metrics::*;
 use crate::softlimit::{SoftLimit, SoftLimitByCpu};
-use crate::writer::BackupWriterBuilder;
+use crate::writer::{BackupWriterBuilder, CfNameWrap};
 use crate::Error;
 use crate::*;
 
@@ -153,10 +153,10 @@ pub struct BackupRange {
 
 impl BackupRange {
     /// Get entries from the scanner and save them to storage
-    fn backup<E: Engine>(
+    async fn backup<E: Engine>(
         &self,
         writer_builder: BackupWriterBuilder,
-        engine: &E,
+        engine: E,
         concurrency_manager: ConcurrencyManager,
         backup_ts: TimeStamp,
         begin_ts: TimeStamp,
@@ -261,7 +261,7 @@ impl BackupRange {
                         },
                     )
                 };
-                match writer.save(&storage.storage) {
+                match writer.save(&storage.storage).await {
                     Ok(mut split_files) => {
                         for file in split_files.iter_mut() {
                             file.set_start_key(last_key.clone());
@@ -298,7 +298,7 @@ impl BackupRange {
 
         drop(snap_store);
         if writer.need_flush_keys() {
-            match writer.save(&storage.storage) {
+            match writer.save(&storage.storage).await {
                 Ok(mut split_files) => {
                     cur_key = self
                         .end_key
@@ -382,13 +382,13 @@ impl BackupRange {
         Ok(statistics)
     }
 
-    fn backup_raw_kv_to_file<E: Engine>(
+    async fn backup_raw_kv_to_file<E: Engine>(
         &self,
-        engine: &E,
+        engine: E,
         db: Arc<DB>,
         storage: &LimitedStorage,
         file_name: String,
-        cf: CfName,
+        cf: CfNameWrap,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
         cipher: CipherInfo,
@@ -408,12 +408,12 @@ impl BackupRange {
                 return Err(e);
             }
         };
-        let stat = match self.backup_raw(&mut writer, engine) {
+        let stat = match self.backup_raw(&mut writer, &engine) {
             Ok(s) => s,
             Err(e) => return Err(e),
         };
         // Save sst files to storage.
-        match writer.save(&storage.storage) {
+        match writer.save(&storage.storage).await {
             Ok(files) => Ok((files, stat)),
             Err(e) => {
                 error_unknown!(?e; "backup save file failed");
@@ -440,50 +440,49 @@ impl ConfigManager {
     }
 }
 
+#[derive(Clone)]
 struct SoftLimitKeeper {
     limit: SoftLimit,
+    config: ConfigManager,
 }
 
 impl SoftLimitKeeper {
-    fn run(config: ConfigManager) -> Self {
-        let BackupConfig {
-            num_threads,
-            auto_tune_remain_threads,
-            ..
-        } = *config.0.read().unwrap();
-        let mut cpu_quota = SoftLimitByCpu::with_remain(auto_tune_remain_threads);
+    fn new(config: ConfigManager) -> Self {
+        let BackupConfig { num_threads, .. } = *config.0.read().unwrap();
         let limit = SoftLimit::new(num_threads);
         BACKUP_SOFTLIMIT_GAUGE.set(limit.current_cap() as _);
-        let limit_cloned = limit.clone();
-        thread::Builder::new()
-            .name("backup.softlimit_keeper".to_owned())
-            .spawn(move || {
-                loop {
-                    let BackupConfig {
-                        enable_auto_tune,
-                        auto_tune_refresh_interval: auto_tune_refresh_gap,
-                        num_threads,
-                        auto_tune_remain_threads,
-                        ..
-                    } = *config.0.read().unwrap();
-                    cpu_quota.set_remain(auto_tune_remain_threads);
-                    if !enable_auto_tune {
-                        if let Err(e) = limit_cloned.resize(num_threads) {
-                            error!("failed to resize the soft limit to num-threads, backup may be restricted unexpectly.";
-                                "current_limit" => %limit_cloned.current_cap(),
-                                "error" => %e
-                            );
-                        }
-                    } else if let Err(e) = cpu_quota.exec_over_with_exclude(&limit_cloned, |s| s.contains("bkwkr")) {
-                        error!("error during appling the soft limit for backup."; "err" => %e);
-                    }
-                    BACKUP_SOFTLIMIT_GAUGE.set(limit_cloned.current_cap() as _);
-                    thread::sleep(auto_tune_refresh_gap.0);
+        Self { limit, config }
+    }
+
+    /// run the soft limit keeper at background.
+    async fn run(self) {
+        let mut cpu_quota =
+            SoftLimitByCpu::with_remain(self.config.0.read().unwrap().auto_tune_remain_threads);
+        loop {
+            let BackupConfig {
+                enable_auto_tune,
+                auto_tune_refresh_interval,
+                num_threads,
+                auto_tune_remain_threads,
+                ..
+            } = *self.config.0.read().unwrap();
+            cpu_quota.set_remain(auto_tune_remain_threads);
+            if !enable_auto_tune {
+                if let Err(e) = self.limit.resize(num_threads).await {
+                    error!("failed to resize the soft limit to num-threads, backup may be restricted unexpectly.";
+                        "current_limit" => %self.limit.current_cap(),
+                        "error" => %e
+                    );
                 }
-            })
-            // should never fail.
-            .unwrap();
-        Self { limit }
+            } else if let Err(e) = cpu_quota
+                .exec_over_with_exclude(&self.limit, |s| s.contains("bkwkr"))
+                .await
+            {
+                error!("error during appling the soft limit for backup."; "err" => %e);
+            }
+            BACKUP_SOFTLIMIT_GAUGE.set(self.limit.current_cap() as _);
+            tokio::time::sleep(auto_tune_refresh_interval.0).await;
+        }
     }
 
     fn limit(&self) -> SoftLimit {
@@ -615,7 +614,7 @@ impl<R: RegionInfoProvider> Progress<R> {
 
 struct ControlThreadPool {
     size: usize,
-    workers: Option<Arc<ThreadPool<TaskCell>>>,
+    workers: Option<Arc<Runtime>>,
 }
 
 impl ControlThreadPool {
@@ -626,14 +625,14 @@ impl ControlThreadPool {
         }
     }
 
-    fn spawn<F>(&mut self, func: F)
+    fn spawn<F>(&self, func: F)
     where
-        F: FnOnce() + Send + 'static,
+        F: Future<Output = ()> + Send + 'static,
     {
         let workers = self.workers.as_ref().unwrap();
         let w = workers.clone();
-        workers.spawn(move |_: &mut Handle<'_>| {
-            func();
+        workers.spawn(async move {
+            func.await;
             // Debug service requires jobs in the old thread pool continue to run even after
             // the pool is recreated. So the pool needs to be ref counted and dropped after
             // task has finished.
@@ -649,15 +648,33 @@ impl ControlThreadPool {
         if self.size >= new_size && self.size - new_size <= 10 {
             return;
         }
+        // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
+        //   adapt it.
         let workers = Arc::new(
-            yatp::Builder::new(thd_name!("bkwkr"))
-                .max_thread_count(new_size)
-                .build_callback_pool(),
+            create_tokio_runtime(new_size, "bkwkr")
+                .expect("failed to create tokio runtime for backup worker."),
         );
-        let _ = self.workers.replace(workers);
+        self.workers = Some(workers);
         self.size = new_size;
         BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64);
     }
+}
+
+/// Create a standard tokio runtime
+/// (which allows io and time reactor, involve thread memory accessor),
+fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .thread_name(thread_name)
+        .enable_io()
+        .enable_time()
+        .on_thread_start(|| {
+            tikv_alloc::add_thread_memory_accessor();
+        })
+        .on_thread_stop(|| {
+            tikv_alloc::remove_thread_memory_accessor();
+        })
+        .worker_threads(thread_count)
+        .build()
 }
 
 impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
@@ -669,13 +686,24 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         config: BackupConfig,
         concurrency_manager: ConcurrencyManager,
     ) -> Endpoint<E, R> {
+        let size = config.num_threads;
         let config_manager = ConfigManager(Arc::new(RwLock::new(config)));
-        let softlimit = SoftLimitKeeper::run(config_manager.clone());
+        let mut pool = ControlThreadPool::new();
+        // It is pretty tricky to use the interface ControlThreadPool provides to create a worker
+        // for the SoftLimitKeeper. Possible chooses:
+        // 0. adjust_with(1) here. Use a separated runtime for softlimit keeper.
+        // 1. create a separated thread and make it run SoftLimitKeeper, the same as current but need more code.
+        // 2. adjust_with(num_threads) here. we can spawn one less thread at normal cases.
+        //   ...But would leak num_threads after modify num_threads.
+        // Maybe we need to find a better way to control the resource backup uses.
+        pool.adjust_with(size);
+        let softlimit = SoftLimitKeeper::new(config_manager.clone());
+        pool.spawn(softlimit.clone().run());
         Endpoint {
             store_id,
             engine,
             region_info,
-            pool: RefCell::new(ControlThreadPool::new()),
+            pool: RefCell::new(pool),
             db,
             softlimit,
             config_manager,
@@ -702,6 +730,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let concurrency_manager = self.concurrency_manager.clone();
         let batch_size = self.config_manager.0.read().unwrap().batch_size;
         let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
+        let limit = self.softlimit.limit();
         let config = BackendConfig {
             hdfs_config: HdfsConfig {
                 hadoop_home: self.config_manager.0.read().unwrap().hadoop.home.clone(),
@@ -716,13 +745,8 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             },
         };
 
-        let limit = self.softlimit.limit();
-        self.pool.borrow_mut().spawn(move || {
-            tikv_alloc::add_thread_memory_accessor();
+        self.pool.borrow_mut().spawn(async move {
             let _with_io_type = WithIOType::new(IOType::Export);
-            defer!({
-                tikv_alloc::remove_thread_memory_accessor();
-            });
 
             // Check if we can open external storage.
             let backend = match create_storage(&request.backend, config) {
@@ -748,6 +772,15 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     // Release lock as soon as possible.
                     // It is critical to speed up backup, otherwise workers are
                     // blocked by each other.
+                    //
+                    // If we use [tokio::sync::Mutex] here, until we give back the control flow to the scheduler
+                    // or tasks waiting for the lock won't be waked up due to the characteristic of the runtime...
+                    //
+                    // The worst case is when using `noop` backend:
+                    // the task seems never yielding and in fact the backup would executing sequentially.
+                    //
+                    // Anyway, even tokio itself doesn't recommend to use it unless the lock guard needs to be `Send`.
+                    // (See https://tokio.rs/tokio/tutorial/shared-state)
                     let mut progress = prs.lock().unwrap();
                     let batch = progress.forward(batch_size);
                     if batch.is_empty() {
@@ -757,9 +790,10 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 };
 
                 for brange in batch {
-                    let guard = limit.guard();
+                    let engine = engine.clone();
+                    let guard = limit.guard().await;
                     if let Err(e) = guard {
-                        warn!("failed to retrieve limit guard."; "err" => %e);
+                        warn!("failed to retrieve limit guard, omitting."; "err" => %e);
                     }
                     if request.cancel.load(Ordering::SeqCst) {
                         warn!("backup task has canceled"; "range" => ?brange);
@@ -779,17 +813,20 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     let ct = to_sst_compression_type(request.compression_type);
 
                     let (res, start_key, end_key) = if is_raw_kv {
-                        (
-                            brange.backup_raw_kv_to_file(
-                                &engine,
+                        let result = brange
+                            .backup_raw_kv_to_file(
+                                engine,
                                 db.clone(),
                                 &storage,
                                 name,
-                                cf,
+                                cf.into(),
                                 ct,
                                 request.compression_level,
                                 request.cipher.clone(),
-                            ),
+                            )
+                            .await;
+                        (
+                            result,
                             brange.start_key.map_or_else(Vec::new, |k| k.into_encoded()),
                             brange.end_key.map_or_else(Vec::new, |k| k.into_encoded()),
                         )
@@ -804,15 +841,18 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                             sst_max_size,
                             request.cipher.clone(),
                         );
-                        (
-                            brange.backup(
+                        let result = brange
+                            .backup(
                                 writer_builder,
-                                &engine,
+                                engine,
                                 concurrency_manager.clone(),
                                 backup_ts,
                                 start_ts,
                                 &storage,
-                            ),
+                            )
+                            .await;
+                        (
+                            result,
                             brange
                                 .start_key
                                 .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
@@ -1006,10 +1046,12 @@ pub mod tests {
     use raftstore::coprocessor::SeekRegionCallback;
     use raftstore::store::util::new_peer;
     use rand::Rng;
+    use std::sync::Mutex;
     use tempfile::TempDir;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::config::ReadableSize;
+    use tokio::time;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use super::*;
@@ -1128,8 +1170,8 @@ pub mod tests {
 
         for i in 0..8 {
             let ctr = counter.clone();
-            pool.spawn(move || {
-                sleep(Duration::from_millis(100));
+            pool.spawn(async move {
+                time::sleep(Duration::from_millis(100)).await;
                 ctr.fetch_or(1 << i, Ordering::SeqCst);
             });
         }
@@ -1139,8 +1181,8 @@ pub mod tests {
 
         for i in 8..16 {
             let ctr = counter.clone();
-            pool.spawn(move || {
-                sleep(Duration::from_millis(100));
+            pool.spawn(async move {
+                time::sleep(Duration::from_millis(100)).await;
                 ctr.fetch_or(1 << i, Ordering::SeqCst);
             });
         }

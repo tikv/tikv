@@ -860,10 +860,14 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn pause(&mut self) {
+        let now = TiInstant::now();
         if self.poll_ctx.trans.need_flush() {
+            self.last_flush_msg_time = now;
             self.poll_ctx.trans.flush();
         }
         if self.need_flush_events {
+            self.last_flush_time = now;
+            self.need_flush_events = false;
             self.flush_events();
         }
     }
