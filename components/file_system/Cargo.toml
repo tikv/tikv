@@ -5,14 +5,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec"]
 bcc-iosnoop = ["bcc"]
-protobuf-codec = [
-  "tikv_util/protobuf-codec",
-]
-prost-codec = [
-  "tikv_util/prost-codec",
-]
 
 [dependencies]
 collections = { path = "../collections" }

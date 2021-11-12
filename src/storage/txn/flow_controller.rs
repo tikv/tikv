@@ -9,7 +9,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
-use std::{mem, u64};
+use std::u64;
 
 use collections::HashMap;
 use engine_rocks::FlowInfo;
@@ -67,7 +67,7 @@ pub struct FlowController {
     discard_ratio: Arc<AtomicU32>,
     limiter: Arc<Limiter>,
     enabled: Arc<AtomicBool>,
-    tx: SyncSender<Msg>,
+    tx: Option<SyncSender<Msg>>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -84,7 +84,7 @@ impl Drop for FlowController {
             return;
         }
 
-        if let Err(e) = self.tx.send(Msg::Close) {
+        if let Some(Err(e)) = self.tx.as_ref().map(|tx| tx.send(Msg::Close)) {
             error!("send quit message for flow controller failed"; "err" => ?e);
             return;
         }
@@ -99,14 +99,11 @@ impl Drop for FlowController {
 impl FlowController {
     // only for test
     pub fn empty() -> Self {
-        let (tx, rx) = mpsc::sync_channel(2);
-        mem::forget(rx);
-
         Self {
             discard_ratio: Arc::new(AtomicU32::new(0)),
             limiter: Arc::new(Limiter::new(f64::INFINITY)),
             enabled: Arc::new(AtomicBool::new(false)),
-            tx,
+            tx: None,
             handle: None,
         }
     }
@@ -136,7 +133,7 @@ impl FlowController {
             discard_ratio,
             limiter,
             enabled: Arc::new(AtomicBool::new(config.enable)),
-            tx,
+            tx: Some(tx),
             handle: Some(checker.start(rx, flow_info_receiver)),
         }
     }
@@ -167,10 +164,12 @@ impl FlowController {
 
     pub fn enable(&self, enable: bool) {
         self.enabled.store(enable, Ordering::Relaxed);
-        if enable {
-            self.tx.send(Msg::Enable).unwrap();
-        } else {
-            self.tx.send(Msg::Disable).unwrap();
+        if let Some(tx) = &self.tx {
+            if enable {
+                tx.send(Msg::Enable).unwrap();
+            } else {
+                tx.send(Msg::Disable).unwrap();
+            }
         }
     }
 
@@ -595,8 +594,11 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         }
 
         // calculate foreground write flow
-        let rate = self.limiter.total_bytes_consumed() as f64
-            / self.last_record_time.saturating_elapsed_secs();
+        let dur = self.last_record_time.saturating_elapsed_secs();
+        if dur < f64::EPSILON {
+            return;
+        }
+        let rate = self.limiter.total_bytes_consumed() as f64 / dur;
         // don't record those write rate of 0.
         // For closed loop system, if all the requests are delayed(assume > 1s),
         // then in the next second, the write rate would be 0. But it doesn't
@@ -990,6 +992,12 @@ mod tests {
         let flow_controller = FlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
 
         assert_eq!(flow_controller.consume(2000), Duration::ZERO);
+        loop {
+            if flow_controller.total_bytes_consumed() == 0 {
+                break;
+            }
+            std::thread::sleep(TICK_DURATION);
+        }
 
         // exceeds the threshold on start
         stub.0.num_memtable_files.store(8, Ordering::Relaxed);
@@ -1024,7 +1032,8 @@ mod tests {
         // not throttle once the number of memtables falls below the threshold
         stub.0.num_memtable_files.store(1, Ordering::Relaxed);
         tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
-        std::thread::sleep(Duration::from_millis(10));
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
         assert_eq!(flow_controller.should_drop(), false);
         assert_eq!(flow_controller.is_unlimited(), true);
     }
@@ -1036,6 +1045,12 @@ mod tests {
         let flow_controller = FlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
 
         assert_eq!(flow_controller.consume(2000), Duration::ZERO);
+        loop {
+            if flow_controller.total_bytes_consumed() == 0 {
+                break;
+            }
+            std::thread::sleep(TICK_DURATION);
+        }
 
         // exceeds the threshold
         stub.0.num_l0_files.store(30, Ordering::Relaxed);

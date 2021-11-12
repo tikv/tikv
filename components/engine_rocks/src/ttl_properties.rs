@@ -105,9 +105,9 @@ impl TablePropertiesCollector for TtlPropertiesCollector {
 
 pub struct TtlPropertiesCollectorFactory {}
 
-impl TablePropertiesCollectorFactory for TtlPropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(TtlPropertiesCollector::default())
+impl TablePropertiesCollectorFactory<TtlPropertiesCollector> for TtlPropertiesCollectorFactory {
+    fn create_table_properties_collector(&mut self, _: u32) -> TtlPropertiesCollector {
+        TtlPropertiesCollector::default()
     }
 }
 
