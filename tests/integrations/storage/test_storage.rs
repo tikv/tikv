@@ -11,8 +11,7 @@ use rand::random;
 
 use kvproto::kvrpcpb::{ApiVersion, Context, LockInfo};
 
-use engine_traits::key_prefix;
-use engine_traits::{CF_DEFAULT, CF_LOCK};
+use engine_traits::{key_prefix, CF_DEFAULT, CF_LOCK};
 use test_storage::*;
 use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
