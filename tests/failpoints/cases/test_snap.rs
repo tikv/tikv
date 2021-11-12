@@ -615,6 +615,7 @@ fn test_sending_fail_with_net_error() {
     let engine2 = cluster.get_engine(2);
     must_get_none(&engine2, b"k1");
 
-    assert_eq!(cluster.get_snap_mgr(1).stats().sending_count, 0);
-    assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
+    let mgr = cluster.sim.rl();
+    assert_eq!(mgr.get_snap_mgr(1).stats().sending_count, 0);
+    assert_eq!(mgr.get_snap_mgr(2).stats().receiving_count, 0);
 }
