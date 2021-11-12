@@ -1732,7 +1732,7 @@ pub fn write_peer_state<T: Mutable>(
 pub struct CachedEntries {
     pub range: Range<u64>,
     // Entries and dangle size for them. `dangle` means not in entry cache.
-    pub entries: Arc<Mutex<(Vec<Entry>, usize)>>,
+    entries: Arc<Mutex<(Vec<Entry>, usize)>>,
 }
 
 impl CachedEntries {
