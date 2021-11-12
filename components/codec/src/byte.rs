@@ -367,7 +367,9 @@ impl MemComparableByteCodec {
                     // is faster than checking pad bytes one by one, since it will compare multiple
                     // bytes at once.
                     let base_padding_ptr = dest_ptr.sub(padding_size);
-                    // Force a compile time check to ensure safety. The check will be optimized away.
+                    // Force a compile time check to ensure safety. The check will be optimized away
+                    // if PADDING's size is larger than MEMCMP_GROUP_SIZE, because it's checked
+                    // aboved that padding_size <= MEMCMP_GROUP_SIZE.
                     let expected_padding_ptr = T::PADDING[..padding_size].as_ptr();
                     let cmp_result = libc::memcmp(
                         base_padding_ptr as *const libc::c_void,
