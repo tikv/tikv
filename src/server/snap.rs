@@ -166,6 +166,8 @@ pub fn send_snap(
         let mut sink = sink.sink_map_err(Error::from);
         sink.send_all(&mut chunks).await?;
         sink.close().await?;
+        let recv_result = receiver.map_err(Error::from).await;
+        send_timer.observe_duration();
         drop(deregister);
         drop(client);
         let recv_result = receiver.map_err(Error::from).await;
