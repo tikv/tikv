@@ -562,7 +562,7 @@ fn test_sending_fail_with_net_error() {
         )),
     );
 
-    // store2 will not receive any data from stream
+    // store2 will return err when receive data
     fail::cfg("receiving_snapshot_net_error", "return()").unwrap();
     pd_client.add_peer(1, new_learner_peer(2, 2));
 
