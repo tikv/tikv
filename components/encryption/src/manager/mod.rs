@@ -691,14 +691,12 @@ impl DataKeyManager {
 
 impl Drop for DataKeyManager {
     fn drop(&mut self) {
-        self.rotate_terminal
-            .send(())
-            .expect("DataKeyManager drop send");
-        self.background_worker
-            .take()
-            .expect("DataKeyManager worker take")
-            .join()
-            .expect("DataKeyManager worker join");
+        if let Err(e) = self.rotate_terminal.send(()) {
+            info!("failed to terminate background rotation, are we shutting down?"; "err" => %e);
+        }
+        if let Some(Err(e)) = self.background_worker.take().map(|w| w.join()) {
+            info!("failed to join background rotation, are we shutting down?"; "err" => ?e);
+        }
     }
 }
 

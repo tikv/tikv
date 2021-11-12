@@ -13,19 +13,17 @@ use engine_traits::FileEncryptionInfo;
 #[cfg(feature = "cloud-gcp")]
 pub use gcp::{Config as GCSConfig, GCSStorage};
 
-#[cfg(feature = "prost-codec")]
-pub use kvproto::brpb::storage_backend::Backend;
 use kvproto::brpb::CloudDynamic;
-#[cfg(feature = "protobuf-codec")]
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 #[cfg(any(feature = "cloud-gcp", feature = "cloud-aws"))]
 use kvproto::brpb::{Gcs, S3};
 
 #[cfg(feature = "cloud-storage-dylib")]
 use crate::dylib;
+use async_trait::async_trait;
 #[cfg(any(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
 use cloud::blob::BlobConfig;
-use cloud::blob::BlobStorage;
+use cloud::blob::{BlobStorage, PutResource};
 use encryption::DataKeyManager;
 #[cfg(feature = "cloud-storage-dylib")]
 use external_storage::dylib_client;
@@ -33,7 +31,7 @@ use external_storage::dylib_client;
 use external_storage::grpc_client;
 use external_storage::{encrypt_wrap_reader, record_storage_create, BackendConfig, HdfsStorage};
 pub use external_storage::{
-    read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage,
+    read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage, UnpinReader,
 };
 use futures_io::AsyncRead;
 use kvproto::brpb::{Noop, StorageBackend};
@@ -192,97 +190,43 @@ fn create_backend_inner(
 #[cfg(feature = "cloud-aws")]
 // Creates a S3 `StorageBackend`
 pub fn make_s3_backend(config: S3) -> StorageBackend {
-    #[cfg(feature = "prost-codec")]
-    {
-        StorageBackend {
-            backend: Some(Backend::S3(config)),
-        }
-    }
-    #[cfg(feature = "protobuf-codec")]
-    {
-        let mut backend = StorageBackend::default();
-        backend.set_s3(config);
-        backend
-    }
+    let mut backend = StorageBackend::default();
+    backend.set_s3(config);
+    backend
 }
 
 pub fn make_local_backend(path: &Path) -> StorageBackend {
     let path = path.display().to_string();
-    #[cfg(feature = "prost-codec")]
-    {
-        StorageBackend {
-            backend: Some(Backend::Local(Local { path })),
-        }
-    }
-    #[cfg(feature = "protobuf-codec")]
-    {
-        let mut backend = StorageBackend::default();
-        backend.mut_local().set_path(path);
-        backend
-    }
+    let mut backend = StorageBackend::default();
+    backend.mut_local().set_path(path);
+    backend
 }
 
 pub fn make_hdfs_backend(remote: String) -> StorageBackend {
-    #[cfg(feature = "prost-codec")]
-    {
-        StorageBackend {
-            backend: Some(Backend::Hdfs(HDFS { remote })),
-        }
-    }
-    #[cfg(feature = "protobuf-codec")]
-    {
-        let mut backend = StorageBackend::default();
-        backend.mut_hdfs().set_remote(remote);
-        backend
-    }
+    let mut backend = StorageBackend::default();
+    backend.mut_hdfs().set_remote(remote);
+    backend
 }
 
 /// Creates a noop `StorageBackend`.
 pub fn make_noop_backend() -> StorageBackend {
     let noop = Noop::default();
-    #[cfg(feature = "prost-codec")]
-    {
-        StorageBackend {
-            backend: Some(Backend::Noop(noop)),
-        }
-    }
-    #[cfg(feature = "protobuf-codec")]
-    {
-        let mut backend = StorageBackend::default();
-        backend.set_noop(noop);
-        backend
-    }
+    let mut backend = StorageBackend::default();
+    backend.set_noop(noop);
+    backend
 }
 
 #[cfg(feature = "cloud-gcp")]
 pub fn make_gcs_backend(config: Gcs) -> StorageBackend {
-    #[cfg(feature = "prost-codec")]
-    {
-        StorageBackend {
-            backend: Some(Backend::Gcs(config)),
-        }
-    }
-    #[cfg(feature = "protobuf-codec")]
-    {
-        let mut backend = StorageBackend::default();
-        backend.set_gcs(config);
-        backend
-    }
+    let mut backend = StorageBackend::default();
+    backend.set_gcs(config);
+    backend
 }
 
 pub fn make_cloud_backend(config: CloudDynamic) -> StorageBackend {
-    #[cfg(feature = "prost-codec")]
-    {
-        StorageBackend {
-            backend: Some(Backend::CloudDynamic(config)),
-        }
-    }
-    #[cfg(feature = "protobuf-codec")]
-    {
-        let mut backend = StorageBackend::default();
-        backend.set_cloud_dynamic(config);
-        backend
-    }
+    let mut backend = StorageBackend::default();
+    backend.set_cloud_dynamic(config);
+    backend
 }
 
 #[cfg(test)]
@@ -333,6 +277,7 @@ pub struct EncryptedExternalStorage {
     pub storage: Box<dyn ExternalStorage>,
 }
 
+#[async_trait]
 impl ExternalStorage for EncryptedExternalStorage {
     fn name(&self) -> &'static str {
         self.storage.name()
@@ -340,13 +285,8 @@ impl ExternalStorage for EncryptedExternalStorage {
     fn url(&self) -> io::Result<url::Url> {
         self.storage.url()
     }
-    fn write(
-        &self,
-        name: &str,
-        reader: Box<dyn AsyncRead + Send + Unpin>,
-        content_length: u64,
-    ) -> io::Result<()> {
-        self.storage.write(name, reader, content_length)
+    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
+        self.storage.write(name, reader, content_length).await
     }
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
         self.storage.read(name)
@@ -375,6 +315,7 @@ impl ExternalStorage for EncryptedExternalStorage {
     }
 }
 
+#[async_trait]
 impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
     fn name(&self) -> &'static str {
         (**self).config().name()
@@ -382,13 +323,10 @@ impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
     fn url(&self) -> io::Result<url::Url> {
         (**self).config().url()
     }
-    fn write(
-        &self,
-        name: &str,
-        reader: Box<dyn AsyncRead + Send + Unpin>,
-        content_length: u64,
-    ) -> io::Result<()> {
-        (**self).put(name, reader, content_length)
+    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
+        (**self)
+            .put(name, PutResource(reader.0), content_length)
+            .await
     }
 
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
