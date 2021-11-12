@@ -35,12 +35,13 @@ use crate::storage::mvcc::{GcInfo, MvccReader, MvccTxn};
 use crate::storage::txn::Error as TxnError;
 
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
-use super::config::{GcConfig, GcWorkerConfigManager};
-use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
-use super::{
-    check_need_gc, Callback, CompactionFilterInitializer, Error, ErrorInner, Result,
+use super::compaction_filter::{
+    CompactionFilterInitializer, GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED,
     GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
 };
+use super::config::{GcConfig, GcWorkerConfigManager};
+use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
+use super::{check_need_gc, Callback, Error, ErrorInner, Result};
 use crate::storage::txn::gc;
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
@@ -316,11 +317,10 @@ where
             fn next(&mut self) -> Option<Key> {
                 loop {
                     let region = self.regions.peek()?;
-                    let key = self.keys.peek()?;
-                    let data_key = keys::data_key(key.as_encoded());
-                    if data_key.as_slice() < region.get_start_key() {
+                    let key = self.keys.peek()?.as_encoded().as_slice();
+                    if key < region.get_start_key() {
                         self.keys.next();
-                    } else if data_key.as_slice() < region.get_end_key() {
+                    } else if region.get_end_key().is_empty() || key < region.get_end_key() {
                         return self.keys.next();
                     } else {
                         self.regions.next();
@@ -341,6 +341,7 @@ where
                         .into_iter()
                         .filter(move |r| find_peer(r, store_id).is_some())
                         .peekable();
+
                     let keys = keys.into_iter().peekable();
                     return Ok(Box::new(KeysInRegions { keys, regions }));
                 }
@@ -356,6 +357,7 @@ where
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
+            GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc();
             if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn, &mut reader) {
                 error!(?e; "GC meets failure"; "key" => %key,);
                 // Switch to the next key if meets failure.
@@ -1010,7 +1012,9 @@ mod tests {
     use futures::executor::block_on;
     use kvproto::kvrpcpb::Op;
     use kvproto::metapb::Peer;
-    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use raft::StateRole;
+    use raftstore::coprocessor::region_info_accessor::RegionInfoAccessor;
+    use raftstore::coprocessor::RegionChangeEvent;
     use raftstore::router::RaftStoreBlackHole;
     use raftstore::store::RegionSnapshot;
     use tikv_util::codec::number::NumberEncoder;
@@ -1414,22 +1418,36 @@ mod tests {
         gc_worker.start().unwrap();
 
         let mut r1 = Region::default();
+        r1.set_id(1);
+        r1.mut_region_epoch().set_version(1);
         r1.set_start_key(b"".to_vec());
-        r1.set_end_key(format!("zk{:02}", 10).into_bytes());
+        r1.set_end_key(format!("k{:02}", 10).into_bytes());
 
         let mut r2 = Region::default();
-        r2.set_start_key(format!("zk{:02}", 20).into_bytes());
-        r2.set_end_key(format!("zk{:02}", 30).into_bytes());
+        r2.set_id(2);
+        r2.mut_region_epoch().set_version(1);
+        r2.set_start_key(format!("k{:02}", 20).into_bytes());
+        r2.set_end_key(format!("k{:02}", 30).into_bytes());
         r2.mut_peers().push(Peer::default());
         r2.mut_peers()[0].set_store_id(1);
 
-        let regions = vec![r1, r2];
+        let mut r3 = Region::default();
+        r3.set_id(3);
+        r3.mut_region_epoch().set_version(1);
+        r3.set_start_key(format!("k{:02}", 30).into_bytes());
+        r3.set_end_key(b"".to_vec());
+        r3.mut_peers().push(Peer::default());
+        r3.mut_peers()[0].set_store_id(1);
 
         let sp_provider = MockSafePointProvider(200);
-        let ri_provider = MockRegionInfoProvider::new(regions);
+        let mut host = CoprocessorHost::<RocksEngine>::default();
+        let ri_provider = RegionInfoAccessor::new(&mut host);
         let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
         let safe_point = Arc::new(AtomicU64::new(0));
         gc_worker.start_auto_gc(auto_gc_cfg, safe_point).unwrap();
+        host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
+        host.on_region_changed(&r2, RegionChangeEvent::Create, StateRole::Leader);
+        host.on_region_changed(&r3, RegionChangeEvent::Create, StateRole::Leader);
 
         let db = engine.kv_engine().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
@@ -1465,7 +1483,7 @@ mod tests {
             let suffix = Key::from_raw(&k).append_ts(152.into());
             raw_k.extend_from_slice(suffix.as_encoded());
 
-            if !(20..30).contains(&i) {
+            if !(20..100).contains(&i) {
                 // MVCC-DELETIONs can't be cleaned because region info checks can't pass.
                 assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
             } else {

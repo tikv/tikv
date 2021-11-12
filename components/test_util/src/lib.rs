@@ -93,3 +93,23 @@ pub fn alloc_port() -> u16 {
         }
     }
 }
+
+static MEM_DISK: &str = "TIKV_TEST_MEMORY_DISK_MOUNT_POINT";
+
+/// Gets a temporary path. The directory will be removed when dropped.
+///
+/// The returned path will point to memory only when memory disk is available
+/// and specified.
+pub fn temp_dir(prefix: impl Into<Option<&'static str>>, prefer_mem: bool) -> tempfile::TempDir {
+    let mut builder = tempfile::Builder::new();
+    if let Some(prefix) = prefix.into() {
+        builder.prefix(prefix);
+    }
+    match env::var(MEM_DISK) {
+        Ok(dir) if prefer_mem => {
+            debug!("using memory disk"; "path" => %dir);
+            builder.tempdir_in(dir).unwrap()
+        }
+        _ => builder.tempdir().unwrap(),
+    }
+}
