@@ -865,7 +865,8 @@ fn test_txn_store_txnkv_api_version() {
         // config api_version = V1|V1ttl, for backward compatible.
         (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, true),
         (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, true),
-        (ApiVersion::V1ttl, ApiVersion::V1, TXN_KEY_CASE, true),
+        // storage api_version = V1ttl, allow RawKV request only.
+        (ApiVersion::V1ttl, ApiVersion::V1, TXN_KEY_CASE, false),
         // config api_version = V1, reject V2 request.
         (ApiVersion::V1, ApiVersion::V2, TIDB_KEY_CASE, false),
         // config api_version = V2.
@@ -879,7 +880,11 @@ fn test_txn_store_txnkv_api_version() {
     ];
 
     for (config_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
-        let mut store = AssertionStorage::new(config_api_version, false);
+        let enable_ttl = match config_api_version {
+            ApiVersion::V1ttl => true,
+            ApiVersion::V1 | ApiVersion::V2 => false,
+        };
+        let mut store = AssertionStorage::new(config_api_version, enable_ttl);
         store.ctx.set_api_version(req_api_version);
 
         if is_legal {

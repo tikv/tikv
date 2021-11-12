@@ -369,14 +369,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ///   * Request of V1 from TiDB, for compatiblity.
     ///   * Request of V2 with legal prefix.
     /// See rfc https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md for detail.
-    fn check_api_version<T: std::convert::AsRef<[u8]>>(
+    fn check_api_version(
         storage_api_version: ApiVersion,
         req_api_version: ApiVersion,
         cmd: CommandKind,
-        keys: impl IntoIterator<Item = T>,
+        keys: impl IntoIterator<Item = impl std::convert::AsRef<[u8]>>,
     ) -> Result<()> {
         match (storage_api_version, req_api_version) {
-            (ApiVersion::V1 | ApiVersion::V1ttl, ApiVersion::V1) => {
+            (ApiVersion::V1, ApiVersion::V1) => {
+                return Ok(());
+            }
+            (ApiVersion::V1ttl, ApiVersion::V1) if Self::is_raw_command(cmd) => {
+                // storage api_version = V1ttl, allow RawKV request only.
                 return Ok(());
             }
             (ApiVersion::V2, ApiVersion::V1) if Self::is_txn_command(cmd) => {
@@ -1379,7 +1383,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version(api_version, ctx.api_version, CMD, keys.iter())?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, &keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1613,7 +1617,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             self.api_version,
             ctx.api_version,
             CommandKind::raw_batch_delete,
-            keys.iter(),
+            &keys,
         )?;
 
         let cf = Self::rawkv_cf(self.api_version, &cf)?;
@@ -2036,7 +2040,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             self.api_version,
             ctx.api_version,
             CommandKind::raw_atomic_store,
-            keys.iter(),
+            &keys,
         )?;
 
         let cf = Self::rawkv_cf(self.api_version, &cf)?;
@@ -7263,12 +7267,20 @@ mod tests {
                 vec![RAW_KEY_CASE],
                 true,
             ),
+            // storage api_version = V1ttl, allow RawKV request only.
             (
                 ApiVersion::V1ttl,
                 ApiVersion::V1,
                 CommandKind::raw_get,
                 vec![RAW_KEY_CASE],
                 true,
+            ),
+            (
+                ApiVersion::V1ttl,
+                ApiVersion::V1,
+                CommandKind::get,
+                vec![TIDB_KEY_CASE],
+                false,
             ),
             // storage api_version = V1, reject V2 request.
             (
