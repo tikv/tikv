@@ -412,12 +412,15 @@ where
         false
     }
 
-    fn build(&mut self, metric: &mut RaftMetrics) -> Option<RaftCommand<E::Snapshot>> {
+    fn build(
+        &mut self,
+        metric: &mut RaftMetrics,
+    ) -> Option<(RaftCmdRequest, Callback<E::Snapshot>)> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
                 let cb = self.callbacks.pop().unwrap();
-                return Some(RaftCommand::new(req, cb));
+                return Some((req, cb));
             }
             metric.propose.batch += self.callbacks.len() - 1;
             let mut cbs = std::mem::take(&mut self.callbacks);
@@ -487,7 +490,7 @@ where
                 *request_times = times;
             }
 
-            return Some(RaftCommand::new(req, cb));
+            return Some((req, cb));
         }
         None
     }
@@ -631,8 +634,10 @@ where
     }
 
     fn propose_batch_raft_command(&mut self) {
-        if let Some(cmd) = self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics) {
-            self.propose_raft_command(cmd.request, cmd.callback, DiskFullOpt::NotAllowedOnFull)
+        if let Some((request, callback)) =
+            self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics)
+        {
+            self.propose_raft_command(request, callback, DiskFullOpt::NotAllowedOnFull)
         }
     }
 
@@ -4714,17 +4719,17 @@ mod tests {
             let cmd = RaftCommand::new(req.clone(), cb);
             builder.add(cmd, 100);
         }
-        let mut cmd = builder.build(&mut metric).unwrap();
-        cmd.callback.invoke_proposed();
+        let (request, mut callback) = builder.build(&mut metric).unwrap();
+        callback.invoke_proposed();
         for flag in proposed_cbs_flags {
             assert!(flag.load(Ordering::Acquire));
         }
-        cmd.callback.invoke_committed();
+        callback.invoke_committed();
         for flag in committed_cbs_flags {
             assert!(flag.load(Ordering::Acquire));
         }
-        assert_eq!(10, cmd.request.get_requests().len());
-        cmd.callback.invoke_with_response(response);
+        assert_eq!(10, request.get_requests().len());
+        callback.invoke_with_response(response);
         for flag in cbs_flags {
             assert!(flag.load(Ordering::Acquire));
         }
