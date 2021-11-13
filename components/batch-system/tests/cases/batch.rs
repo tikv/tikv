@@ -109,7 +109,7 @@ fn test_before_pause_wait() {
     // Use one thread for counting pause easily
     cfg.pool_size = 1;
     cfg.low_priority_pool_size = 0;
-    cfg.before_pause_wait = Some(Duration::from_millis(1));
+    cfg.before_pause_wait_us = Some(1000);
     let (router, mut system) = batch_system::create_system(&cfg, control_tx, control_fsm);
     let builder = Builder::new();
     let metrics = builder.metrics.clone();

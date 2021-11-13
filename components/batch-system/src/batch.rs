@@ -254,7 +254,7 @@ struct Poller<N: Fsm, C: Fsm, Handler> {
     handler: Handler,
     max_batch_size: usize,
     reschedule_duration: Duration,
-    before_pause_wait: Option<Duration>,
+    before_pause_wait_us: Option<u64>,
 }
 
 enum ReschedulePolicy {
@@ -274,14 +274,14 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         }
 
         if batch.is_empty() {
-            if let Some(d) = self.before_pause_wait {
+            if let Some(d) = self.before_pause_wait_us {
                 channel::select! {
                     recv(self.fsm_receiver) -> msg => {
                         if let Ok(fsm) = msg {
                             return batch.push(fsm);
                         }
                     }
-                    recv(after(d)) -> _ => {
+                    recv(after(Duration::from_micros(d))) -> _ => {
                         self.handler.pause();
                         if let Ok(fsm) = self.fsm_receiver.recv() {
                             return batch.push(fsm);
@@ -403,7 +403,7 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     workers: Vec<JoinHandle<()>>,
     reschedule_duration: Duration,
     low_priority_pool_size: usize,
-    before_pause_wait: Option<Duration>,
+    before_pause_wait_us: Option<u64>,
 }
 
 impl<N, C> BatchSystem<N, C>
@@ -431,7 +431,7 @@ where
             handler,
             max_batch_size: self.max_batch_size,
             reschedule_duration: self.reschedule_duration,
-            before_pause_wait: self.before_pause_wait,
+            before_pause_wait_us: self.before_pause_wait_us,
         };
         let props = tikv_util::thread_group::current_properties();
         let t = thread::Builder::new()
@@ -524,7 +524,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
         reschedule_duration: cfg.reschedule_duration.0,
         workers: vec![],
         low_priority_pool_size: cfg.low_priority_pool_size,
-        before_pause_wait: cfg.before_pause_wait,
+        before_pause_wait_us: cfg.before_pause_wait_us,
     };
     (router, system)
 }

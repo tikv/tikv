@@ -794,7 +794,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         let now = TiInstant::now();
         if self.poll_ctx.trans.need_flush()
             && now.saturating_duration_since(self.last_flush_msg_time)
-                >= self.poll_ctx.cfg.raft_msg_flush_interval.0
+                >= Duration::from_micros(self.poll_ctx.cfg.raft_msg_flush_interval_us)
         {
             self.last_flush_msg_time = now;
             self.poll_ctx.trans.flush();
