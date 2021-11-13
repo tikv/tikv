@@ -324,7 +324,7 @@ where
     }
 }
 
-struct Worker<EK, ER, N, T>
+pub struct Worker<EK, ER, N, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -352,7 +352,7 @@ where
     N: Notifier,
     T: Transport,
 {
-    fn new(
+    pub fn new(
         store_id: u64,
         tag: String,
         engines: Engines<EK, ER>,
@@ -456,7 +456,7 @@ where
                 self.metrics
                     .task_wait
                     .observe(duration_to_sec(task.send_time.saturating_elapsed()));
-                self.batch.add_write_task(task);
+                self.handle_write_task(task);
             }
             WriteMsg::LatencyInspect {
                 send_time,
@@ -468,7 +468,15 @@ where
         false
     }
 
-    fn write_to_db(&mut self) {
+    pub fn handle_write_task(&mut self, task: WriteTask<EK, ER>) {
+        self.batch.add_write_task(task);
+    }
+
+    pub fn write_to_db(&mut self) {
+        if self.batch.is_empty() {
+            return;
+        }
+
         let timer = Instant::now();
 
         self.batch.before_write_to_db(&self.metrics);

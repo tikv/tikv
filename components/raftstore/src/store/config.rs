@@ -493,9 +493,6 @@ impl Config {
             self.raft_msg_flush_interval.0,
             Duration::from_millis(1),
         ));
-        if self.store_io_pool_size == 0 {
-            return Err(box_err!("store-io-pool-size should be greater than 0"));
-        }
         if self.store_io_notify_capacity == 0 {
             return Err(box_err!(
                 "store-io-notify-capacity should be greater than 0"

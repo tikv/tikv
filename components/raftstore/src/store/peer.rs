@@ -2066,11 +2066,15 @@ where
                     task.request_times = request_times;
                 }
 
-                self.write_router.send_write_msg(
-                    ctx,
-                    self.unpersisted_readies.back().map(|r| r.number),
-                    WriteMsg::WriteTask(task),
-                );
+                if let Some(write_worker) = &mut ctx.sync_write_worker {
+                    write_worker.handle_write_task(task);
+                } else {
+                    self.write_router.send_write_msg(
+                        ctx,
+                        self.unpersisted_readies.back().map(|r| r.number),
+                        WriteMsg::WriteTask(task),
+                    );
+                }
 
                 self.unpersisted_readies.push_back(UnpersistedReady {
                     number: ready_number,
@@ -2343,8 +2347,10 @@ where
             }
         }
 
-        self.write_router
-            .check_new_persisted(ctx, self.persisted_number);
+        if ctx.sync_write_worker.is_none() {
+            self.write_router
+                .check_new_persisted(ctx, self.persisted_number);
+        }
 
         if !self.pending_remove {
             // If `pending_remove` is true, no need to call `on_persist_ready` to

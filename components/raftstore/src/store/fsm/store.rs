@@ -14,7 +14,7 @@ use std::{mem, u64};
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
 };
-use crossbeam::channel::{Sender, TryRecvError, TrySendError};
+use crossbeam::channel::{unbounded, Sender, TryRecvError, TrySendError};
 use engine_traits::{Engines, KvEngine, Mutable, PerfContextKind, WriteBatch, WriteBatchExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use fail::fail_point;
@@ -53,7 +53,7 @@ use tikv_util::{
 use crate::bytes_capacity;
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
-use crate::store::async_io::write::{StoreWriters, WriteMsg};
+use crate::store::async_io::write::{StoreWriters, Worker as WriteWorker, WriteMsg};
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
@@ -402,6 +402,7 @@ where
     /// Only contains items which is not `DiskUsage::Normal`.
     pub store_disk_usages: HashMap<u64, DiskUsage>,
     pub write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
+    pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
     pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
 }
@@ -806,6 +807,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             // the id of slow store in tests.
             fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
 
+            if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
+                write_worker.write_to_db();
+            }
+
             if !self.poll_ctx.store_stat.is_busy {
                 let election_timeout = Duration::from_millis(
                     self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
@@ -847,14 +852,20 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             for inspector in &mut self.poll_ctx.pending_latency_inspect {
                 inspector.record_store_process(dur);
             }
-            let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
-            if let Err(err) =
-                self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
-                    send_time: now,
-                    inspector: std::mem::take(&mut self.poll_ctx.pending_latency_inspect),
-                })
-            {
-                warn!("send latency inspecting to write workers failed"; "err" => ?err);
+            if self.poll_ctx.sync_write_worker.is_some() {
+                for inspector in &mut self.poll_ctx.pending_latency_inspect {
+                    inspector.record_store_write(dur);
+                }
+            } else {
+                let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
+                if let Err(err) =
+                    self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
+                        send_time: now,
+                        inspector: std::mem::take(&mut self.poll_ctx.pending_latency_inspect),
+                    })
+                {
+                    warn!("send latency inspecting to write workers failed"; "err" => ?err);
+                }
             }
         }
     }
@@ -1075,6 +1086,20 @@ where
     type Handler = RaftPoller<EK, ER, T>;
 
     fn build(&mut self, _: Priority) -> RaftPoller<EK, ER, T> {
+        let (_, rx) = unbounded();
+        let sync_write_worker = if self.write_senders.is_empty() {
+            Some(WriteWorker::new(
+                self.store.get_id(),
+                "sync-writer".to_string(),
+                self.engines.clone(),
+                rx,
+                self.router.clone(),
+                self.trans.clone(),
+                &self.cfg,
+            ))
+        } else {
+            None
+        };
         let mut ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
@@ -1112,6 +1137,7 @@ where
             self_disk_usage: DiskUsage::Normal,
             store_disk_usages: Default::default(),
             write_senders: self.write_senders.clone(),
+            sync_write_worker,
             io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
             pending_latency_inspect: vec![],
         };
