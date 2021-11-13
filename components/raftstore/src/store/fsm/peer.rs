@@ -127,6 +127,8 @@ pub struct BatchRaftCmdRequestBuilder<E>
 where
     E: KvEngine,
 {
+    can_batch_limit: u64,
+    should_propose_size: u64,
     batch_req_size: u64,
     has_proposed_cb: bool,
     propose_checked: Option<bool>,
@@ -225,7 +227,7 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
-                batch_req_builder: BatchRaftCmdRequestBuilder::new(),
+                batch_req_builder: BatchRaftCmdRequestBuilder::new(cfg),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
             }),
@@ -268,7 +270,7 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
-                batch_req_builder: BatchRaftCmdRequestBuilder::new(),
+                batch_req_builder: BatchRaftCmdRequestBuilder::new(cfg),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
             }),
@@ -332,8 +334,10 @@ impl<E> BatchRaftCmdRequestBuilder<E>
 where
     E: KvEngine,
 {
-    fn new() -> BatchRaftCmdRequestBuilder<E> {
+    fn new(cfg: &Config) -> BatchRaftCmdRequestBuilder<E> {
         BatchRaftCmdRequestBuilder {
+            can_batch_limit: (cfg.raft_entry_max_size.0 as f64 * 0.2) as u64,
+            should_propose_size: (cfg.raft_entry_max_size.0 as f64 * 0.4) as u64,
             batch_req_size: 0,
             has_proposed_cb: false,
             propose_checked: None,
@@ -342,13 +346,11 @@ where
         }
     }
 
-    fn can_batch(&self, cfg: &Config, req: &RaftCmdRequest, req_size: u32) -> bool {
+    fn can_batch(&self, req: &RaftCmdRequest, req_size: u32) -> bool {
         // No batch request whose size exceed 20% of raft_entry_max_size,
         // so total size of request in batch_raft_request would not exceed
         // (40% + 20%) of raft_entry_max_size
-        if req.get_requests().is_empty()
-            || req_size as u64 > (cfg.raft_entry_max_size.0 as f64 * 0.2) as u64
-        {
+        if req.get_requests().is_empty() || req_size as u64 > self.can_batch_limit {
             return false;
         }
         for r in req.get_requests() {
@@ -392,11 +394,11 @@ where
         self.batch_req_size += req_size as u64;
     }
 
-    fn should_finish(&self, cfg: &Config) -> bool {
+    fn should_finish(&self) -> bool {
         if let Some(batch_req) = self.request.as_ref() {
             // Limit the size of batch request so that it will not exceed raft_entry_max_size after
             // adding header.
-            if self.batch_req_size > (cfg.raft_entry_max_size.0 as f64 * 0.4) as u64 {
+            if self.batch_req_size > self.should_propose_size {
                 return true;
             }
             if batch_req.get_requests().len() > <E as WriteBatchExt>::WRITE_BATCH_MAX_KEYS {
@@ -570,7 +572,7 @@ where
 
                     let req_size = cmd.request.compute_size();
                     if self.ctx.cfg.cmd_batch
-                        && self.fsm.batch_req_builder.can_batch(&self.ctx.cfg, &cmd.request, req_size)
+                        && self.fsm.batch_req_builder.can_batch(&cmd.request, req_size)
                         // Avoid to merge requests with different `DiskFullOpt`s into one,
                         // so that normal writes can be rejected when proposing if the
                         // store's disk is full.
@@ -579,7 +581,7 @@ where
                             || cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull)
                     {
                         self.fsm.batch_req_builder.add(cmd, req_size);
-                        if self.fsm.batch_req_builder.should_finish(&self.ctx.cfg) {
+                        if self.fsm.batch_req_builder.should_finish() {
                             self.propose_batch_raft_command(true);
                         }
                     } else {
@@ -4754,17 +4756,17 @@ mod tests {
     fn test_batch_raft_cmd_request_builder() {
         let mut cfg = Config::default();
         cfg.raft_entry_max_size = ReadableSize(1000);
-        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new();
+        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new(&cfg);
         let mut q = Request::default();
         let mut metric = RaftMetrics::new(true);
 
         let mut req = RaftCmdRequest::default();
         req.set_admin_request(AdminRequest::default());
-        assert!(!builder.can_batch(&cfg, &req, 0));
+        assert!(!builder.can_batch(&req, 0));
 
         let mut req = RaftCmdRequest::default();
         req.set_status_request(StatusRequest::default());
-        assert!(!builder.can_batch(&cfg, &req, 0));
+        assert!(!builder.can_batch(&req, 0));
 
         let mut req = RaftCmdRequest::default();
         let mut put = PutRequest::default();
@@ -4775,7 +4777,7 @@ mod tests {
         req.mut_requests().push(q.clone());
         let _ = q.take_put();
         let req_size = req.compute_size();
-        assert!(builder.can_batch(&cfg, &req, req_size));
+        assert!(builder.can_batch(&req, req_size));
 
         let mut req = RaftCmdRequest::default();
         q.set_cmd_type(CmdType::Snap);
@@ -4787,7 +4789,7 @@ mod tests {
         q.set_put(put);
         req.mut_requests().push(q.clone());
         let req_size = req.compute_size();
-        assert!(!builder.can_batch(&cfg, &req, req_size));
+        assert!(!builder.can_batch(&req, req_size));
 
         let mut req = RaftCmdRequest::default();
         let mut put = PutRequest::default();
@@ -4797,7 +4799,7 @@ mod tests {
         q.set_put(put);
         req.mut_requests().push(q.clone());
         let req_size = req.compute_size();
-        assert!(!builder.can_batch(&cfg, &req, req_size));
+        assert!(!builder.can_batch(&req, req_size));
 
         // Check batch callback
         let mut req = RaftCmdRequest::default();

@@ -299,7 +299,7 @@ impl Default for Config {
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
-            store_io_pool_size: 1,
+            store_io_pool_size: 2,
             store_io_notify_capacity: 40960,
             future_poll_size: 1,
             hibernate_regions: true,
@@ -489,8 +489,6 @@ impl Config {
         } else {
             self.store_batch_system.max_batch_size = Some(1024);
         }
-        self.store_batch_system.before_pause_wait_us =
-            Some(std::cmp::min(self.raft_msg_flush_interval_us, 1000));
         if self.store_io_pool_size == 0 {
             return Err(box_err!("store-io-pool-size should be greater than 0"));
         }
@@ -899,15 +897,5 @@ mod tests {
         cfg.peer_stale_state_check_interval = ReadableDuration::minutes(5);
         assert!(cfg.validate().is_ok());
         assert_eq!(cfg.max_peer_down_duration, ReadableDuration::minutes(10));
-
-        cfg = Config::new();
-        cfg.raft_msg_flush_interval_us = 888;
-        assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.store_batch_system.before_pause_wait_us, Some(888));
-
-        cfg = Config::new();
-        cfg.raft_msg_flush_interval_us = 1888;
-        assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.store_batch_system.before_pause_wait_us, Some(1000));
     }
 }
