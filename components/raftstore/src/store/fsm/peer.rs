@@ -33,7 +33,7 @@ use kvproto::raft_serverpb::{
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, MessageType};
-use raft::{self, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
+use raft::{self, Progress, ReadState, Ready, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
@@ -59,7 +59,7 @@ use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
 use crate::store::peer::{ConsistencyState, Peer, StaleState};
-use crate::store::peer_storage::{ApplySnapResult, InvokeContext, write_peer_state};
+use crate::store::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext};
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
@@ -381,7 +381,6 @@ where
 
     fn add(&mut self, cmd: RaftCommand<E::Snapshot>, req_size: u32) {
         let RaftCommand {
-            send_time,
             mut request,
             callback,
             ..
@@ -394,7 +393,7 @@ where
         } else {
             self.request = Some(request);
         };
-        self.callbacks.push((callback, req_num, send_time));
+        self.callbacks.push(callback);
         self.batch_req_size += req_size;
     }
 
@@ -417,7 +416,7 @@ where
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
                 let cb = self.callbacks.pop().unwrap();
-                return Some((req, cb));
+                return Some(RaftCommand::new(req, cb));
             }
             metric.propose.batch += self.callbacks.len() - 1;
             let mut cbs = std::mem::take(&mut self.callbacks);
@@ -460,7 +459,6 @@ where
                 }))
             };
 
-            let now = TiInstant::now();
             let times: SmallVec<[TiInstant; 4]> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
@@ -3616,6 +3614,18 @@ where
         cb: Callback<EK::Snapshot>,
         diskfullopt: DiskFullOpt,
     ) {
+        if self.ctx.raft_metrics.waterfall_metrics {
+            if let Some(request_times) = cb.get_request_times() {
+                let now = TiInstant::now();
+                for t in request_times {
+                    self.ctx
+                        .raft_metrics
+                        .batch_wait
+                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
+                }
+            }
+        }
+
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);

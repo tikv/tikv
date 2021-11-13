@@ -36,7 +36,7 @@ use time::{self, Timespec};
 
 use collections::HashMap;
 use engine_traits::CompactedEvent;
-use engine_traits::{RaftEngine, RaftLogBatch, WriteOptions};
+use engine_traits::{RaftEngine, RaftLogBatch};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::{FeatureGate, PdClient};
 use sst_importer::SSTImporter;
