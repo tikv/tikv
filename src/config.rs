@@ -3196,7 +3196,7 @@ impl ConfigController {
         for (name, change) in diff.into_iter() {
             match change {
                 ConfigValue::Module(change) => {
-                    // update a submodule's config only if changes had been successfully
+                    // update a submodule's config only if changes had been sucessfully
                     // dispatched to corresponding config manager, to avoid dispatch change twice
                     if let Some(mgr) = inner.config_mgrs.get_mut(&Module::from(name.as_str())) {
                         if let Err(e) = mgr.dispatch(change.clone()) {
