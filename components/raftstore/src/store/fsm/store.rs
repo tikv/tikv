@@ -1086,8 +1086,8 @@ where
     type Handler = RaftPoller<EK, ER, T>;
 
     fn build(&mut self, _: Priority) -> RaftPoller<EK, ER, T> {
-        let (_, rx) = unbounded();
         let sync_write_worker = if self.write_senders.is_empty() {
+            let (_, rx) = unbounded();
             Some(WriteWorker::new(
                 self.store.get_id(),
                 "sync-writer".to_string(),
