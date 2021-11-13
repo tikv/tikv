@@ -54,6 +54,7 @@ use crate::bytes_capacity;
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::store::async_io::write::{StoreWriters, WriteMsg};
+use crate::store::async_io::write_router::WriteRouter;
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
@@ -170,7 +171,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    pub router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>,
+    pub router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK, ER>>,
 }
 
 impl<EK, ER> Clone for RaftRouter<EK, ER>
@@ -190,9 +191,9 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    type Target = BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>;
+    type Target = BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK, ER>>;
 
-    fn deref(&self) -> &BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>> {
+    fn deref(&self) -> &BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK, ER>> {
         &self.router
     }
 }
@@ -403,7 +404,6 @@ where
     pub store_disk_usages: HashMap<u64, DiskUsage>,
     pub write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
     pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
-    pub pending_latency_inspect: Vec<util::LatencyInspector>,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -505,19 +505,23 @@ struct Store {
     last_unreachable_report: HashMap<u64, Instant>,
 }
 
-pub struct StoreFsm<EK>
+pub struct StoreFsm<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     store: Store,
+    // used for inspecting latency.
+    write_router: WriteRouter<EK, ER>,
     receiver: Receiver<StoreMsg<EK>>,
 }
 
-impl<EK> StoreFsm<EK>
+impl<EK, ER> StoreFsm<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
-    pub fn new(cfg: &Config) -> (LooseBoundedSender<StoreMsg<EK>>, Box<StoreFsm<EK>>) {
+    pub fn new(cfg: &Config) -> (LooseBoundedSender<StoreMsg<EK>>, Box<StoreFsm<EK, ER>>) {
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         let fsm = Box::new(StoreFsm {
             store: Store {
@@ -528,15 +532,17 @@ where
                 consistency_check_time: HashMap::default(),
                 last_unreachable_report: HashMap::default(),
             },
+            write_router: WriteRouter::new("store".to_string()),
             receiver: rx,
         });
         (tx, fsm)
     }
 }
 
-impl<EK> Fsm for StoreFsm<EK>
+impl<EK, ER> Fsm for StoreFsm<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     type Message = StoreMsg<EK>;
 
@@ -547,7 +553,7 @@ where
 }
 
 struct StoreFsmDelegate<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'static> {
-    fsm: &'a mut StoreFsm<EK>,
+    fsm: &'a mut StoreFsm<EK, ER>,
     ctx: &'a mut PollContext<EK, ER, T>,
 }
 
@@ -608,7 +614,14 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     mut inspector,
                 } => {
                     inspector.record_store_wait(send_time.saturating_elapsed());
-                    self.ctx.pending_latency_inspect.push(inspector);
+                    self.fsm.write_router.send_write_msg(
+                        self.ctx,
+                        None,
+                        WriteMsg::LatencyInspect {
+                            send_time: TiInstant::now(),
+                            inspector,
+                        },
+                    );
                 }
                 StoreMsg::CreatePeer(region) => self.on_create_peer(region),
             }
@@ -708,7 +721,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, StoreFsm<EK>>
+impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, StoreFsm<EK, ER>>
     for RaftPoller<EK, ER, T>
 {
     fn begin(&mut self, _batch_size: usize) {
@@ -742,7 +755,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         }
     }
 
-    fn handle_control(&mut self, store: &mut StoreFsm<EK>) -> Option<usize> {
+    fn handle_control(&mut self, store: &mut StoreFsm<EK, ER>) -> Option<usize> {
         let mut expected_msg_count = None;
         while self.store_msg_buf.len() < self.messages_per_tick {
             match store.receiver.try_recv() {
@@ -826,19 +839,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             .observe(duration_to_sec(self.timer.saturating_elapsed()) as f64);
         self.poll_ctx.raft_metrics.flush();
         self.poll_ctx.store_stat.flush();
-
-        for mut inspector in std::mem::take(&mut self.poll_ctx.pending_latency_inspect) {
-            inspector.record_store_process(self.timer.saturating_elapsed());
-            let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
-            if let Err(err) =
-                self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
-                    send_time: TiInstant::now(),
-                    inspector,
-                })
-            {
-                warn!("send latency inspecting to write workers failed"; "err" => ?err);
-            }
-        }
 
         for peer in peers {
             peer.update_memory_trace(&mut self.trace_event);
@@ -1046,7 +1046,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
     }
 }
 
-impl<EK, ER, T> HandlerBuilder<PeerFsm<EK, ER>, StoreFsm<EK>> for RaftPollerBuilder<EK, ER, T>
+impl<EK, ER, T> HandlerBuilder<PeerFsm<EK, ER>, StoreFsm<EK, ER>> for RaftPollerBuilder<EK, ER, T>
 where
     EK: KvEngine + 'static,
     ER: RaftEngine + 'static,
@@ -1093,7 +1093,6 @@ where
             store_disk_usages: Default::default(),
             write_senders: self.write_senders.clone(),
             io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
-            pending_latency_inspect: vec![],
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1125,7 +1124,7 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
 }
 
 pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
-    system: BatchSystem<PeerFsm<EK, ER>, StoreFsm<EK>>,
+    system: BatchSystem<PeerFsm<EK, ER>, StoreFsm<EK, ER>>,
     apply_router: ApplyRouter<EK>,
     apply_system: ApplyBatchSystem<EK>,
     router: RaftRouter<EK, ER>,
