@@ -78,6 +78,7 @@ impl RaftLogBatchTrait for RaftLogBatch {
             .map_err(transfer_error)
     }
 
+    #[inline]
     fn persist_size(&self) -> usize {
         self.0.approximate_size()
     }
@@ -86,8 +87,8 @@ impl RaftLogBatchTrait for RaftLogBatch {
         self.0.is_empty()
     }
 
-    fn merge(&mut self, src: Self) {
-        self.0.merge(src.0);
+    fn merge(&mut self, _: Self) {
+        panic!("merge is not implemented for raft engine");
     }
 }
 

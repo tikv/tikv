@@ -216,13 +216,11 @@ fn test_serde_custom_tikv_config() {
         perf_level: PerfLevel::Disable,
         evict_cache_on_memory_ratio: 0.8,
         cmd_batch: false,
-        cmd_batch_concurrent_ready_max_count: 123,
         raft_write_size_limit: ReadableSize::mb(34),
         waterfall_metrics: true,
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
-        raft_msg_flush_interval: ReadableDuration::micros(2333),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

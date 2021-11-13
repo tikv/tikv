@@ -204,21 +204,13 @@ pub struct Config {
 
     pub cmd_batch: bool,
 
-    /// When the count of concurrent ready exceeds this value, command will not be proposed
-    /// until the previous ready has been persisted.
-    /// If `cmd_batch` is 0, this config will have no effect.
-    /// If it is 0, it means no limit.
-    pub cmd_batch_concurrent_ready_max_count: usize,
-
-    /// When the size of raft db writebatch exceeds this value, write will be triggered.
+    // When the size of raft db writebatch exceeds this value, write will be triggered.
     pub raft_write_size_limit: ReadableSize,
 
     pub waterfall_metrics: bool,
 
     pub io_reschedule_concurrent_max_count: usize,
     pub io_reschedule_hotpot_duration: ReadableDuration,
-
-    pub raft_msg_flush_interval: ReadableDuration,
 
     // Deprecated! These configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -299,7 +291,7 @@ impl Default for Config {
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
-            store_io_pool_size: 1,
+            store_io_pool_size: 2,
             store_io_notify_capacity: 40960,
             future_poll_size: 1,
             hibernate_regions: true,
@@ -308,12 +300,10 @@ impl Default for Config {
             perf_level: PerfLevel::EnableTime,
             evict_cache_on_memory_ratio: 0.2,
             cmd_batch: true,
-            cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
             waterfall_metrics: false,
             io_reschedule_concurrent_max_count: 4,
             io_reschedule_hotpot_duration: ReadableDuration::secs(5),
-            raft_msg_flush_interval: ReadableDuration::micros(250),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -489,20 +479,8 @@ impl Config {
         } else {
             self.store_batch_system.max_batch_size = Some(1024);
         }
-        self.store_batch_system.before_pause_wait = Some(std::cmp::min(
-            self.raft_msg_flush_interval.0,
-            Duration::from_millis(1),
-        ));
-        if self.store_io_pool_size == 0 {
-            return Err(box_err!("store-io-pool-size should be greater than 0"));
-        }
-        if self.store_io_notify_capacity == 0 {
-            return Err(box_err!(
-                "store-io-notify-capacity should be greater than 0"
-            ));
-        }
         if self.future_poll_size == 0 {
-            return Err(box_err!("future-poll-size should be greater than 0"));
+            return Err(box_err!("future-poll-size should be greater than 0."));
         }
 
         // Avoid hibernated peer being reported as down peer.
@@ -532,7 +510,7 @@ impl Config {
             .set(self.capacity.0 as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_base_tick_interval"])
-            .set(self.raft_base_tick_interval.as_secs_f64());
+            .set(self.raft_base_tick_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_heartbeat_ticks"])
             .set(self.raft_heartbeat_ticks as f64);
@@ -557,10 +535,10 @@ impl Config {
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_compact_sync_interval"])
-            .set(self.raft_log_compact_sync_interval.as_secs_f64());
+            .set(self.raft_log_compact_sync_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_tick_interval"])
-            .set(self.raft_log_gc_tick_interval.as_secs_f64());
+            .set(self.raft_log_gc_tick_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_threshold"])
             .set(self.raft_log_gc_threshold as f64);
@@ -575,20 +553,20 @@ impl Config {
             .set(self.raft_log_reserve_max_ticks as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_engine_purge_interval"])
-            .set(self.raft_engine_purge_interval.as_secs_f64());
+            .set(self.raft_engine_purge_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_entry_cache_life_time"])
-            .set(self.raft_entry_cache_life_time.as_secs_f64());
+            .set(self.raft_entry_cache_life_time.as_secs() as f64);
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["split_region_check_tick_interval"])
-            .set(self.split_region_check_tick_interval.as_secs_f64());
+            .set(self.split_region_check_tick_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_split_check_diff"])
             .set(self.region_split_check_diff.0 as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_compact_check_interval"])
-            .set(self.region_compact_check_interval.as_secs_f64());
+            .set(self.region_compact_check_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_compact_check_step"])
             .set(self.region_compact_check_step as f64);
@@ -600,19 +578,19 @@ impl Config {
             .set(self.region_compact_tombstones_percent as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["pd_heartbeat_tick_interval"])
-            .set(self.pd_heartbeat_tick_interval.as_secs_f64());
+            .set(self.pd_heartbeat_tick_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["pd_store_heartbeat_tick_interval"])
-            .set(self.pd_store_heartbeat_tick_interval.as_secs_f64());
+            .set(self.pd_store_heartbeat_tick_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["snap_mgr_gc_tick_interval"])
-            .set(self.snap_mgr_gc_tick_interval.as_secs_f64());
+            .set(self.snap_mgr_gc_tick_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["snap_gc_timeout"])
-            .set(self.snap_gc_timeout.as_secs_f64());
+            .set(self.snap_gc_timeout.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["lock_cf_compact_interval"])
-            .set(self.lock_cf_compact_interval.as_secs_f64());
+            .set(self.lock_cf_compact_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["lock_cf_compact_bytes_threshold"])
             .set(self.lock_cf_compact_bytes_threshold.0 as f64);
@@ -626,16 +604,16 @@ impl Config {
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["max_peer_down_duration"])
-            .set(self.max_peer_down_duration.as_secs_f64());
+            .set(self.max_peer_down_duration.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["max_leader_missing_duration"])
-            .set(self.max_leader_missing_duration.as_secs_f64());
+            .set(self.max_leader_missing_duration.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["abnormal_leader_missing_duration"])
-            .set(self.abnormal_leader_missing_duration.as_secs_f64());
+            .set(self.abnormal_leader_missing_duration.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["peer_stale_state_check_interval"])
-            .set(self.peer_stale_state_check_interval.as_secs_f64());
+            .set(self.peer_stale_state_check_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["leader_transfer_max_log_lag"])
             .set(self.leader_transfer_max_log_lag as f64);
@@ -646,13 +624,13 @@ impl Config {
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["consistency_check_interval_seconds"])
-            .set(self.consistency_check_interval.as_secs_f64());
+            .set(self.consistency_check_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["report_region_flow_interval"])
-            .set(self.report_region_flow_interval.as_secs_f64());
+            .set(self.report_region_flow_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_store_max_leader_lease"])
-            .set(self.raft_store_max_leader_lease.as_secs_f64());
+            .set(self.raft_store_max_leader_lease.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["right_derive_when_split"])
             .set((self.right_derive_when_split as i32).into());
@@ -665,13 +643,13 @@ impl Config {
             .set(self.merge_max_log_gap as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["merge_check_tick_interval"])
-            .set(self.merge_check_tick_interval.as_secs_f64());
+            .set(self.merge_check_tick_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["use_delete_range"])
             .set((self.use_delete_range as i32).into());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["cleanup_import_sst_interval"])
-            .set(self.cleanup_import_sst_interval.as_secs_f64());
+            .set(self.cleanup_import_sst_interval.as_secs() as f64);
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["local_read_batch_size"])
@@ -690,10 +668,10 @@ impl Config {
             .set(self.store_batch_system.pool_size as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_io_pool_size"])
-            .set(self.store_io_pool_size as f64);
+            .set((self.store_io_pool_size as i32).into());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_io_notify_capacity"])
-            .set(self.store_io_notify_capacity as f64);
+            .set((self.store_io_notify_capacity as i32).into());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
@@ -704,9 +682,6 @@ impl Config {
             .with_label_values(&["cmd_batch"])
             .set((self.cmd_batch as i32).into());
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["cmd_batch_concurrent_ready_max_count"])
-            .set(self.cmd_batch_concurrent_ready_max_count as f64);
-        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_write_size_limit"])
             .set(self.raft_write_size_limit.0 as f64);
         CONFIG_RAFTSTORE_GAUGE
@@ -714,13 +689,10 @@ impl Config {
             .set((self.waterfall_metrics as i32).into());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["io_reschedule_concurrent_max_count"])
-            .set(self.io_reschedule_concurrent_max_count as f64);
+            .set((self.io_reschedule_concurrent_max_count as i32).into());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["io_reschedule_hotpot_duration"])
-            .set(self.io_reschedule_hotpot_duration.as_secs_f64());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["raft_msg_flush_interval"])
-            .set(self.raft_msg_flush_interval.as_secs_f64());
+            .set(self.io_reschedule_hotpot_duration.as_secs() as f64);
     }
 
     fn write_change_into_metrics(change: ConfigChange) {
@@ -901,21 +873,5 @@ mod tests {
         cfg.peer_stale_state_check_interval = ReadableDuration::minutes(5);
         assert!(cfg.validate().is_ok());
         assert_eq!(cfg.max_peer_down_duration, ReadableDuration::minutes(10));
-
-        cfg = Config::new();
-        cfg.raft_msg_flush_interval = ReadableDuration::micros(888);
-        assert!(cfg.validate().is_ok());
-        assert_eq!(
-            cfg.store_batch_system.before_pause_wait,
-            Some(Duration::from_micros(888))
-        );
-
-        cfg = Config::new();
-        cfg.raft_msg_flush_interval = ReadableDuration::micros(1888);
-        assert!(cfg.validate().is_ok());
-        assert_eq!(
-            cfg.store_batch_system.before_pause_wait,
-            Some(Duration::from_millis(1))
-        );
     }
 }
