@@ -349,6 +349,45 @@ impl RaftInvalidProposeMetrics {
         }
     }
 }
+
+#[derive(Clone)]
+pub struct RaftLogGcSkippedMetrics {
+    pub reserve_log: u64,
+    pub threshold_limit: u64,
+    pub compact_idx_too_small: u64,
+}
+
+impl Default for RaftLogGcSkippedMetrics {
+    fn default() -> RaftLogGcSkippedMetrics {
+        RaftLogGcSkippedMetrics {
+            reserve_log: 0,
+            threshold_limit: 0,
+            compact_idx_too_small: 0,
+        }
+    }
+}
+
+impl RaftLogGcSkippedMetrics {
+    fn flush(&mut self) {
+        if self.reserve_log > 0 {
+            RAFT_LOG_GC_SKIPPED.reserve_log.inc_by(self.reserve_log);
+            self.reserve_log = 0;
+        }
+        if self.threshold_limit > 0 {
+            RAFT_LOG_GC_SKIPPED
+                .threshold_limit
+                .inc_by(self.threshold_limit);
+            self.threshold_limit = 0;
+        }
+        if self.compact_idx_too_small > 0 {
+            RAFT_LOG_GC_SKIPPED
+                .compact_idx_too_small
+                .inc_by(self.compact_idx_too_small);
+            self.compact_idx_too_small = 0;
+        }
+    }
+}
+
 /// The buffered metrics counters for raft.
 #[derive(Clone)]
 pub struct RaftMetrics {
@@ -362,6 +401,7 @@ pub struct RaftMetrics {
     pub check_leader: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
+    pub raft_log_gc_skipped: RaftLogGcSkippedMetrics,
 }
 
 impl Default for RaftMetrics {
@@ -379,6 +419,7 @@ impl Default for RaftMetrics {
             check_leader: CHECK_LEADER_DURATION_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
+            raft_log_gc_skipped: RaftLogGcSkippedMetrics::default(),
         }
     }
 }
@@ -395,6 +436,7 @@ impl RaftMetrics {
         self.check_leader.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
+        self.raft_log_gc_skipped.flush();
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);
         missing.clear();
