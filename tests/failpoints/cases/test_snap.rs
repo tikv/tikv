@@ -605,11 +605,11 @@ fn test_sending_fail_with_net_error() {
         )),
     );
 
-    // store2 will return err when receive data
+    // store2 will return err when receive data.
     fail::cfg("receiving_snapshot_net_error", "return()").unwrap();
     pd_client.add_peer(1, new_learner_peer(2, 2));
 
-    // We are ready to recv notify.
+    // ready to recv notify.
     ready_notify.store(true, Ordering::SeqCst);
     notify_rx.recv_timeout(Duration::from_secs(3)).unwrap();
     let engine2 = cluster.get_engine(2);
