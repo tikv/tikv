@@ -132,7 +132,7 @@ lazy_static! {
     pub static ref RAFT_LOG_GC_PURGE_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_raftstore_raft_log_gc_purge_duration_secs",
         "Bucketed histogram of purge duration of raft log gc.",
-        exponential_buckets(0.0001, 2.0, 20).unwrap()
+        exponential_buckets(0.000001, 2.0, 30).unwrap()
     )
     .unwrap();
     pub static ref RAFT_LOG_GC_SEEK_OPERATIONS: IntCounter = register_int_counter!(
