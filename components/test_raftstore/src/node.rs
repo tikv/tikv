@@ -327,6 +327,7 @@ impl Simulator for NodeCluster {
             .unwrap()
             .to_owned()
     }
+
     fn get_snap_mgr(&self, node_id: u64) -> &SnapManager {
         self.snap_mgrs.get(&node_id).unwrap()
     }
