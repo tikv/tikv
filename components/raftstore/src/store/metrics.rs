@@ -533,4 +533,10 @@ lazy_static! {
         "Number of peers in hibernated state.",
         &["state"],
     ).unwrap();
+
+    pub static ref RAFT_LOG_GC_SKIPPED: IntCounter = register_int_counter!(
+        "tikv_raftstore_raft_log_gc_skipped",
+        "Total number of skipped raft log gc."
+    )
+    .unwrap();
 }
