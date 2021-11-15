@@ -665,4 +665,10 @@ lazy_static! {
 
     pub static ref STORE_SLOW_SCORE_GAUGE: Gauge =
     register_gauge!("tikv_raftstore_slow_score", "Slow score of the store.").unwrap();
+
+    pub static ref RAFT_LOG_GC_SKIPPED: IntCounter = register_int_counter!(
+        "tikv_raftstore_raft_log_gc_skipped",
+        "Total number of skipped raft log gc."
+    )
+    .unwrap();
 }

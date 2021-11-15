@@ -3957,6 +3957,7 @@ where
         } else if replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold
             && self.fsm.skip_gc_raft_log_ticks < self.ctx.cfg.raft_log_reserve_max_ticks
         {
+            RAFT_LOG_GC_SKIPPED.inc();
             // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
             self.fsm.skip_gc_raft_log_ticks += 1;
             self.register_raft_gc_log_tick();
