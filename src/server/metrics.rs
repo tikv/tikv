@@ -222,6 +222,13 @@ lazy_static! {
             exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
         )
         .unwrap();
+    pub static ref ADDRESS_RESOLVE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_server_address_resolve_duration_secs",
+            "Duration of resolving store address",
+            exponential_buckets(0.0001, 2.0, 20).unwrap()
+        )
+        .unwrap();
 }
 
 lazy_static! {
