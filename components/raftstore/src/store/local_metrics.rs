@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::sync::{Arc, Mutex};
 
-use prometheus::local::LocalHistogram;
+use prometheus::local::{LocalHistogram, LocalIntCounterVec};
 use raft::eraftpb::MessageType;
 
 use collections::HashSet;
@@ -396,6 +396,7 @@ pub struct RaftMetrics {
     pub wf_persist_log: LocalHistogram,
     pub wf_commit_log: LocalHistogram,
     pub wf_commit_not_persist_log: LocalHistogram,
+    pub raft_log_gc_skipped: LocalIntCounterVec,
 }
 
 impl RaftMetrics {
@@ -420,6 +421,7 @@ impl RaftMetrics {
             wf_persist_log: STORE_WF_PERSIST_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_log: STORE_WF_COMMIT_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_not_persist_log: STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM.local(),
+            raft_log_gc_skipped: RAFT_LOG_GC_SKIPPED.local(),
         }
     }
 
@@ -435,6 +437,7 @@ impl RaftMetrics {
         self.message_dropped.flush();
         self.invalid_proposal.flush();
         self.write_block_wait.flush();
+        self.raft_log_gc_skipped.flush();
         if self.waterfall_metrics {
             self.wf_batch_wait.flush();
             self.wf_send_to_queue.flush();

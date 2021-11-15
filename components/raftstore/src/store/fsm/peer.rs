@@ -3953,14 +3953,18 @@ where
             // |------------- entries needs to be compacted ----------|
             // [entries...][the entry at `compact_idx`][the last entry][new compaction entry]
             //             |-------------------- entries will be left ----------------------|
-            RAFT_LOG_GC_SKIPPED
+            self.ctx
+                .raft_metrics
+                .raft_log_gc_skipped
                 .with_label_values(&["reserve_log"])
                 .inc();
             return;
         } else if replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold
             && self.fsm.skip_gc_raft_log_ticks < self.ctx.cfg.raft_log_reserve_max_ticks
         {
-            RAFT_LOG_GC_SKIPPED
+            self.ctx
+                .raft_metrics
+                .raft_log_gc_skipped
                 .with_label_values(&["threshold_limit"])
                 .inc();
             // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
@@ -3975,7 +3979,9 @@ where
         compact_idx -= 1;
         if compact_idx < first_idx {
             // In case compact_idx == first_idx before subtraction.
-            RAFT_LOG_GC_SKIPPED
+            self.ctx
+                .raft_metrics
+                .raft_log_gc_skipped
                 .with_label_values(&["compact_idx_too_small"])
                 .inc();
             return;
