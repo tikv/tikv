@@ -129,7 +129,7 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
                         Ok(n) => {
                             debug!("gc log entries"; "region_id" => region_id, "entry_count" => n);
                             self.report_collected(n);
-                            RAFT_LOG_GC_DELETED_KEYS.inc_by(n as u64);
+                            RAFT_LOG_GC_DELETED_KEYS_HISTOGRAM.observe(n as f64);
                         }
                     }
                     RAFT_LOG_GC_WRITE_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
