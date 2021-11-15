@@ -8,10 +8,11 @@ use thiserror::Error;
 
 use engine_traits::{Engines, KvEngine, RaftEngine};
 use file_system::{IOType, WithIOType};
-use tikv_util::time::Duration;
+use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use tikv_util::{box_try, debug, error, warn};
 
+use crate::store::worker::metrics::*;
 use crate::store::{CasualMessage, CasualRouter};
 
 pub enum Task {
@@ -98,11 +99,14 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
 
     fn flush(&mut self) {
         // Sync wal of kv_db to make sure the data before apply_index has been persisted to disk.
+        let start = Instant::now();
         self.engines.kv.sync().unwrap_or_else(|e| {
             panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
         });
+        RAFT_LOG_GC_KV_SYNC_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
         let tasks = std::mem::take(&mut self.tasks);
         for t in tasks {
+            let start = Instant::now();
             match t {
                 Task::Gc {
                     region_id,
@@ -110,16 +114,22 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
                     end_idx,
                 } => {
                     debug!("gc raft log"; "region_id" => region_id, "end_index" => end_idx);
+                    if start_idx == 0 {
+                        RAFT_LOG_GC_SEEK_OPERATIONS.inc();
+                    }
                     match self.gc_raft_log(region_id, start_idx, end_idx) {
                         Err(e) => {
                             error!("failed to gc"; "region_id" => region_id, "err" => %e);
                             self.report_collected(0);
+                            RAFT_LOG_GC_FAILED.inc();
                         }
                         Ok(n) => {
                             debug!("gc log entries"; "region_id" => region_id, "entry_count" => n);
                             self.report_collected(n);
+                            RAFT_LOG_GC_DELETED_KEYS_HISTOGRAM.observe(n as f64);
                         }
                     }
+                    RAFT_LOG_GC_WRITE_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
                 }
                 Task::Purge => {
                     let regions = match self.engines.raft.purge_expired_files() {
@@ -132,6 +142,7 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
                     for region_id in regions {
                         let _ = self.ch.send(region_id, CasualMessage::ForceCompactRaftLogs);
                     }
+                    RAFT_LOG_GC_PURGE_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
                 }
             }
         }
