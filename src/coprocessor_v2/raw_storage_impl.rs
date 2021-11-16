@@ -267,7 +267,8 @@ mod test {
             .unwrap();
         assert_eq!(
             r,
-            keys.clone().into_iter()
+            keys.clone()
+                .into_iter()
                 .take(2)
                 .zip(values.clone())
                 .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
@@ -276,7 +277,8 @@ mod test {
         // Batch get (one non-existent)
         let r = raw_storage
             .batch_get(
-                keys.clone().into_iter()
+                keys.clone()
+                    .into_iter()
                     .take(1)
                     .chain(non_existing_key.clone())
                     .collect(),
@@ -285,7 +287,8 @@ mod test {
             .unwrap();
         assert_eq!(
             r,
-            keys.clone().into_iter()
+            keys.clone()
+                .into_iter()
                 .take(1)
                 .zip(values.clone())
                 .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
@@ -298,7 +301,8 @@ mod test {
         // Batch delete (one non-existent)
         raw_storage
             .batch_delete(
-                keys.clone().into_iter()
+                keys.clone()
+                    .into_iter()
                     .take(2)
                     .chain(non_existing_key.clone())
                     .collect(),
