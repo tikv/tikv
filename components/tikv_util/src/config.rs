@@ -609,86 +609,6 @@ fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     try_canonicalize_normalized_path(&normalize(path.as_ref()))
 }
 
-/// Normalizes the path and canonicalizes its longest physically existing sub-path.
-fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
-    match path.as_ref().canonicalize() {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_fallback(path),
-        other => other,
-    }
-}
-
-pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
-    canonicalize_sub_path(path, "")
-}
-
-pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
-    let path = Path::new(path);
-    let mut path = canonicalize_imp(path)?;
-    if !sub_path.is_empty() {
-        path = path.join(Path::new(sub_path));
-    }
-    if path.exists() && path.is_file() {
-        return Err(format!("{}/{} is not a directory!", path.display(), sub_path).into());
-    }
-    Ok(format!("{}", path.display()))
-}
-
-pub fn canonicalize_log_dir(path: &str, filename: &str) -> Result<String, Box<dyn Error>> {
-    let mut path = canonicalize_imp(Path::new(path))?;
-    if path.is_file() {
-        return Ok(format!("{}", path.display()));
-    }
-    if !filename.is_empty() {
-        path = path.join(Path::new(filename));
-    }
-    if path.is_dir() {
-        return Err(format!("{} is a directory!", path.display()).into());
-    }
-    Ok(format!("{}", path.display()))
-}
-
-pub fn ensure_dir_exist(path: &str) -> Result<(), Box<dyn Error>> {
-    if !path.is_empty() {
-        let p = Path::new(path);
-        if !p.exists() {
-            fs::create_dir_all(p)?;
-        }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
-    use std::mem;
-
-    unsafe {
-        let mut fd_limit = mem::zeroed();
-        let mut err = libc::getrlimit(libc::RLIMIT_NOFILE, &mut fd_limit);
-        if err != 0 {
-            return Err(ConfigError::Limit("check_max_open_fds failed".to_owned()));
-        }
-        if fd_limit.rlim_cur >= expect {
-            return Ok(());
-        }
-
-        let prev_limit = fd_limit.rlim_cur;
-        fd_limit.rlim_cur = expect;
-        if fd_limit.rlim_max < expect {
-            // If the process is not started by privileged user, this will fail.
-            fd_limit.rlim_max = expect;
-        }
-        err = libc::setrlimit(libc::RLIMIT_NOFILE, &fd_limit);
-        if err == 0 {
-            return Ok(());
-        }
-        Err(ConfigError::Limit(format!(
-            "the maximum number of open file descriptors is too \
-             small, got {}, expect greater or equal to {}",
-            prev_limit, expect
-        )))
-    }
-}
-
 #[macro_export]
 macro_rules! numeric_enum_serializing_mod {
     ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
@@ -768,6 +688,86 @@ macro_rules! numeric_enum_serializing_mod {
                 }
             }
         }
+    }
+}
+
+/// Normalizes the path and canonicalizes its longest physically existing sub-path.
+fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
+    match path.as_ref().canonicalize() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_fallback(path),
+        other => other,
+    }
+}
+
+pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
+    canonicalize_sub_path(path, "")
+}
+
+pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
+    let path = Path::new(path);
+    let mut path = canonicalize_imp(path)?;
+    if !sub_path.is_empty() {
+        path = path.join(Path::new(sub_path));
+    }
+    if path.exists() && path.is_file() {
+        return Err(format!("{}/{} is not a directory!", path.display(), sub_path).into());
+    }
+    Ok(format!("{}", path.display()))
+}
+
+pub fn canonicalize_log_dir(path: &str, filename: &str) -> Result<String, Box<dyn Error>> {
+    let mut path = canonicalize_imp(Path::new(path))?;
+    if path.is_file() {
+        return Ok(format!("{}", path.display()));
+    }
+    if !filename.is_empty() {
+        path = path.join(Path::new(filename));
+    }
+    if path.is_dir() {
+        return Err(format!("{} is a directory!", path.display()).into());
+    }
+    Ok(format!("{}", path.display()))
+}
+
+pub fn ensure_dir_exist(path: &str) -> Result<(), Box<dyn Error>> {
+    if !path.is_empty() {
+        let p = Path::new(path);
+        if !p.exists() {
+            fs::create_dir_all(p)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
+    use std::mem;
+
+    unsafe {
+        let mut fd_limit = mem::zeroed();
+        let mut err = libc::getrlimit(libc::RLIMIT_NOFILE, &mut fd_limit);
+        if err != 0 {
+            return Err(ConfigError::Limit("check_max_open_fds failed".to_owned()));
+        }
+        if fd_limit.rlim_cur >= expect {
+            return Ok(());
+        }
+
+        let prev_limit = fd_limit.rlim_cur;
+        fd_limit.rlim_cur = expect;
+        if fd_limit.rlim_max < expect {
+            // If the process is not started by privileged user, this will fail.
+            fd_limit.rlim_max = expect;
+        }
+        err = libc::setrlimit(libc::RLIMIT_NOFILE, &fd_limit);
+        if err == 0 {
+            return Ok(());
+        }
+        Err(ConfigError::Limit(format!(
+            "the maximum number of open file descriptors is too \
+             small, got {}, expect greater or equal to {}",
+            prev_limit, expect
+        )))
     }
 }
 
