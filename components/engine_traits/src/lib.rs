@@ -253,11 +253,11 @@
 //!   Likewise `engine_rocks` can temporarily call code from inside `engine`.
 #![feature(min_specialization)]
 
-#[allow(unused_extern_crates)]
-extern crate tikv_alloc;
 #[cfg(test)]
 extern crate serde_derive;
 extern crate slog_global;
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
 #[macro_use(fail_point)]
 extern crate fail;
 
