@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::perf_context::PerfLevel;
+pub use crate::perf_context::PerfLevel;
 use tikv_util::numeric_enum_serializing_mod;
 
 numeric_enum_serializing_mod! {perf_level_serde PerfLevel {
