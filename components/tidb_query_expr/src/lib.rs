@@ -707,6 +707,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::DurationDurationTimeDiff => duration_duration_time_diff_fn_meta(),
         ScalarFuncSig::StringDurationTimeDiff => string_duration_time_diff_fn_meta(),
         ScalarFuncSig::StringStringTimeDiff => string_string_time_diff_fn_meta(),
+        ScalarFuncSig::DurationStringTimeDiff => duration_string_time_diff_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
