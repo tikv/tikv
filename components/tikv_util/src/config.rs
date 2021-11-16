@@ -689,6 +689,88 @@ pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
     }
 }
 
+#[macro_export]
+macro_rules! rocksdb_enum_mod {
+    ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
+        pub mod $name {
+            use std::fmt;
+
+            use serde::{Serializer, Deserializer};
+            use serde::de::{self, Unexpected, Visitor};
+            use crate::$enum;
+            use case_macros::*;
+
+            pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
+                where S: Serializer
+            {
+                serializer.serialize_i64(*mode as i64)
+            }
+
+            pub fn deserialize<'de, D>(deserializer: D) -> Result<$enum, D::Error>
+                where D: Deserializer<'de>
+            {
+                struct EnumVisitor;
+
+                impl<'de> Visitor<'de> for EnumVisitor {
+                    type Value = $enum;
+
+                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                        write!(formatter, concat!("valid ", stringify!($enum)))
+                    }
+
+                    fn visit_i64<E>(self, value: i64) -> Result<$enum, E>
+                        where E: de::Error
+                    {
+                        match value {
+                            $( $value => Ok($enum::$variant), )*
+                            _ => Err(E::invalid_value(Unexpected::Signed(value), &self))
+                        }
+                    }
+
+                    fn visit_str<E>(self, value: &str) -> Result<$enum, E>
+                        where E: de::Error
+                    {
+                        match value {
+                            $(kebab_case!($variant) => Ok($enum::$variant), )*
+                            _ => Err(E::invalid_value(Unexpected::Str(value), &self))
+                        }
+                    }
+                }
+
+                deserializer.deserialize_any(EnumVisitor)
+            }
+
+            #[cfg(test)]
+            mod tests {
+                use toml;
+                use crate::$enum;
+                use serde::{Deserialize, Serialize};
+
+                #[test]
+                fn test_serde() {
+                    #[derive(Serialize, Deserialize, PartialEq)]
+                    struct EnumHolder {
+                        #[serde(with = "super")]
+                        e: $enum,
+                    }
+
+                    let cases = vec![
+                        $(($enum::$variant, $value), )*
+                    ];
+                    for (e, v) in cases {
+                        let holder = EnumHolder { e };
+                        let res = toml::to_string(&holder).unwrap();
+                        let exp = format!("e = {}\n", v);
+                        assert_eq!(res, exp);
+                        let h: EnumHolder = toml::from_str(&exp).unwrap();
+                        assert!(h == holder);
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(not(unix))]
 pub fn check_max_open_fds(_: u64) -> Result<(), ConfigError> {
     Ok(())
