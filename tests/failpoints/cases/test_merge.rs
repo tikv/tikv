@@ -777,7 +777,6 @@ fn test_node_merge_cascade_merge_with_apply_yield() {
     let r3 = pd_client.get_region(b"k9").unwrap();
 
     pd_client.must_merge(r2.get_id(), r1.get_id());
-    assert_eq!(r1.get_id(), 1000);
     let yield_apply_first_region_fp = "yield_apply_first_region";
     fail::cfg(yield_apply_first_region_fp, "80%3*return()").unwrap();
 

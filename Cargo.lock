@@ -1109,6 +1109,7 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
+ "case_macros",
  "collections",
  "encryption",
  "engine_traits",
