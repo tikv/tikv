@@ -1,5 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::BorrowMut;
+use std::cell::RefCell;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -28,11 +30,13 @@ thread_local! {
     static THREAD_IO_SENTINEL: Arc<ThreadIOSentinel> = THREAD_IO_SENTINEL_VEC.get_or(||
         Arc::new(ThreadIOSentinel::current_default())
     ).clone();
+
+    static THREAD_IO_PRIVATE: RefCell<ThreadIOPrivate> = RefCell::new(ThreadIOPrivate::default())
 }
 
 struct ThreadIOSentinel {
     id: ThreadID,
-    bytes: BytesBuffer,
+    bytes: [AtomicIOBytes; IOType::COUNT],
 }
 
 struct ThreadID {
@@ -40,10 +44,9 @@ struct ThreadID {
     tid: Pid,
 }
 
-struct BytesBuffer {
-    io_type: Mutex<IOType>,
-    total_bytes: [AtomicIOBytes; IOType::COUNT],
-    last_bytes: AtomicIOBytes,
+struct ThreadIOPrivate {
+    io_type: IOType,
+    last_bytes: IOBytes,
 }
 
 struct AtomicIOBytes {
@@ -53,46 +56,37 @@ struct AtomicIOBytes {
 
 pub fn fetch_all_thread_io_bytes() {
     THREAD_IO_SENTINEL_VEC.iter().for_each(|sentinel| {
-        fetch_sentinel(sentinel, false, None);
+        fetch_sentinel(sentinel, None);
     });
 }
 
-fn fetch_sentinel(sentinel: &ThreadIOSentinel, enforce: bool, new_io_type: Option<IOType>) {
+fn fetch_sentinel(sentinel: &ThreadIOSentinel, new_io_type: Option<IOType>) {
     let io_bytes = fetch_exact_thread_io_bytes(&sentinel.id);
 
-    let mut io_type = {
-        if enforce {
-            sentinel.bytes.io_type.lock().unwrap()
-        } else {
-            match sentinel.bytes.io_type.try_lock() {
-                Ok(io_type) => io_type,
-                Err(_) => return,
-            }
-        }
-    };
-    let last_io_bytes = sentinel.bytes.last_bytes.load(Ordering::Relaxed);
+    THREAD_IO_PRIVATE.with(|private| {
+        let io_type = private.borrow().io_type;
+        let last_io_bytes = private.borrow().last_bytes;
 
-    sentinel.bytes.total_bytes[*io_type as usize]
-        .fetch_add(io_bytes - last_io_bytes, Ordering::Relaxed);
-    sentinel.bytes.last_bytes.store(io_bytes, Ordering::Relaxed);
-    if let Some(new_io_type) = new_io_type {
-        *io_type = new_io_type;
-    }
+        sentinel.bytes[io_type as usize].fetch_add(io_bytes - last_io_bytes, Ordering::Relaxed);
+        private.borrow_mut().last_bytes = io_bytes;
+        if let Some(new_io_type) = new_io_type {
+            private.borrow_mut().io_type = new_io_type;
+        }
+    })
 }
 
 pub fn set_io_type(new_io_type: IOType) {
     THREAD_IO_SENTINEL.with(|sentinel| {
-        fetch_sentinel(sentinel, true, Some(new_io_type));
+        fetch_sentinel(sentinel, Some(new_io_type));
     })
 }
 
 pub fn get_io_type() -> IOType {
-    THREAD_IO_SENTINEL.with(|sentinel| *sentinel.bytes.io_type.lock().unwrap())
+    THREAD_IO_PRIVATE.with(|private| private.borrow().io_type)
 }
 
 pub(crate) fn fetch_buffered_thread_io_bytes(io_type: IOType) -> IOBytes {
-    THREAD_IO_SENTINEL
-        .with(|sentinel| sentinel.bytes.total_bytes[io_type as usize].load(Ordering::Relaxed))
+    THREAD_IO_SENTINEL.with(|sentinel| sentinel.bytes[io_type as usize].load(Ordering::Relaxed))
 }
 
 pub(crate) fn fetch_thread_io_bytes(_io_type: IOType) -> IOBytes {
@@ -117,7 +111,7 @@ impl ThreadIOSentinel {
     fn current_default() -> ThreadIOSentinel {
         ThreadIOSentinel {
             id: ThreadID::current(),
-            bytes: BytesBuffer::default(),
+            bytes: Default::default(),
         }
     }
 }
@@ -131,12 +125,11 @@ impl ThreadID {
     }
 }
 
-impl Default for BytesBuffer {
-    fn default() -> BytesBuffer {
-        BytesBuffer {
-            io_type: Mutex::new(IOType::Other),
-            total_bytes: Default::default(),
-            last_bytes: AtomicIOBytes::default(),
+impl Default for ThreadIOPrivate {
+    fn default() -> ThreadIOPrivate {
+        ThreadIOPrivate {
+            io_type: IOType::Other,
+            last_bytes: IOBytes::default(),
         }
     }
 }
