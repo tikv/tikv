@@ -212,7 +212,7 @@ mod test {
 
         let raw_storage = RawStorageImpl::new(ctx, &storage);
 
-        let key = vec![0];
+        let key = b"r\0k1".to_vec();
         let val1 = vec![42];
         let val2 = vec![43];
 
@@ -245,29 +245,29 @@ mod test {
 
         let raw_storage = RawStorageImpl::new(ctx, &storage);
 
-        let keys = vec![0, 8, 16].into_iter().map(|k| vec![k]);
+        let keys = vec![b"r\0k1".to_vec(), b"r\0k4".to_vec(), b"r\0k8".to_vec()];
         let values = vec![42, 99, 128].into_iter().map(|v| vec![v]);
         let non_existing_key = std::iter::once(vec![33]);
 
         let full_scan = Range {
-            start: vec![u8::MIN],
-            end: vec![u8::MAX],
+            start: b"r\x00".to_vec(),
+            end: b"r\x01".to_vec(),
         };
 
         // Batch put
         raw_storage
-            .batch_put(keys.clone().zip(values.clone()).collect())
+            .batch_put(keys.clone().into_iter().zip(values.clone()).collect())
             .await
             .unwrap();
 
         // Batch get
         let r = raw_storage
-            .batch_get(keys.clone().take(2).collect())
+            .batch_get(keys.clone().into_iter().take(2).collect())
             .await
             .unwrap();
         assert_eq!(
             r,
-            keys.clone()
+            keys.clone().into_iter()
                 .take(2)
                 .zip(values.clone())
                 .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
@@ -276,7 +276,7 @@ mod test {
         // Batch get (one non-existent)
         let r = raw_storage
             .batch_get(
-                keys.clone()
+                keys.clone().into_iter()
                     .take(1)
                     .chain(non_existing_key.clone())
                     .collect(),
@@ -285,7 +285,7 @@ mod test {
             .unwrap();
         assert_eq!(
             r,
-            keys.clone()
+            keys.clone().into_iter()
                 .take(1)
                 .zip(values.clone())
                 .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
@@ -298,7 +298,7 @@ mod test {
         // Batch delete (one non-existent)
         raw_storage
             .batch_delete(
-                keys.clone()
+                keys.clone().into_iter()
                     .take(2)
                     .chain(non_existing_key.clone())
                     .collect(),
@@ -310,7 +310,7 @@ mod test {
 
         // Batch put (one overwrite)
         raw_storage
-            .batch_put(keys.clone().zip(values.clone()).collect())
+            .batch_put(keys.clone().into_iter().zip(values.clone()).collect())
             .await
             .unwrap();
         let r = raw_storage.scan(full_scan.clone()).await.unwrap();
