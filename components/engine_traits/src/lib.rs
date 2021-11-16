@@ -306,6 +306,8 @@ mod perf_context;
 pub use crate::perf_context::*;
 mod flow_control_factors;
 pub use crate::flow_control_factors::*;
+mod table_properties;
+pub use crate::table_properties::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
