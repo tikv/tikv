@@ -690,14 +690,14 @@ pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
 }
 
 #[macro_export]
-macro_rules! rocksdb_enum_mod {
+macro_rules! numeric_enum_serializing_mod {
     ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
         pub mod $name {
             use std::fmt;
 
             use serde::{Serializer, Deserializer};
             use serde::de::{self, Unexpected, Visitor};
-            use crate::$enum;
+            use super::$enum;
             use case_macros::*;
 
             pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
@@ -743,7 +743,7 @@ macro_rules! rocksdb_enum_mod {
             #[cfg(test)]
             mod tests {
                 use toml;
-                use crate::$enum;
+                use super::$enum;
                 use serde::{Deserialize, Serialize};
 
                 #[test]

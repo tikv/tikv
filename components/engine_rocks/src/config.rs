@@ -5,9 +5,9 @@ use rocksdb::{DBCompressionType, DBInfoLogLevel, DBTitanDBBlobRunMode};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-pub use rocksdb::{CompactionPriority, DBCompactionStyle, DBRateLimiterMode, DBRecoveryMode};
+use rocksdb::{CompactionPriority, DBCompactionStyle, DBRateLimiterMode, DBRecoveryMode};
 
-use tikv_util::rocksdb_enum_mod;
+use tikv_util::numeric_enum_serializing_mod;
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -266,27 +266,27 @@ impl From<BlobRunMode> for DBTitanDBBlobRunMode {
     }
 }
 
-rocksdb_enum_mod! {compaction_pri_serde CompactionPriority {
+numeric_enum_serializing_mod! {compaction_pri_serde CompactionPriority {
     ByCompensatedSize = 0,
     OldestLargestSeqFirst = 1,
     OldestSmallestSeqFirst = 2,
     MinOverlappingRatio = 3,
 }}
 
-rocksdb_enum_mod! {rate_limiter_mode_serde DBRateLimiterMode {
+numeric_enum_serializing_mod! {rate_limiter_mode_serde DBRateLimiterMode {
     ReadOnly = 1,
     WriteOnly = 2,
     AllIo = 3,
 }}
 
-rocksdb_enum_mod! {compaction_style_serde DBCompactionStyle {
+numeric_enum_serializing_mod! {compaction_style_serde DBCompactionStyle {
     Level = 0,
     Universal = 1,
     Fifo = 2,
     None = 3,
 }}
 
-rocksdb_enum_mod! {recovery_mode_serde DBRecoveryMode {
+numeric_enum_serializing_mod! {recovery_mode_serde DBRecoveryMode {
     TolerateCorruptedTailRecords = 0,
     AbsoluteConsistency = 1,
     PointInTime = 2,

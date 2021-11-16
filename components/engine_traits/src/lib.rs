@@ -256,7 +256,6 @@
 #[cfg(test)]
 extern crate serde_derive;
 extern crate slog_global;
-#[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 #[macro_use(fail_point)]
 extern crate fail;
