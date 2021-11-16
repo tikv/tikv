@@ -421,6 +421,7 @@ mod tests {
             "9223372036854771712",
             "21474836480",
             "18446744073709551610",
+            "-18446744073709551610",
         ];
         let expects = vec![
             -1,
@@ -428,6 +429,7 @@ mod tests {
             9223372036854771712,
             21474836480,
             9223372036854775807,
+            -9223372036854775808,
         ];
         for (content, expect) in contents.into_iter().zip(expects) {
             let limit = parse_memory_max(content);
