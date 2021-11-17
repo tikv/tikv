@@ -16,6 +16,7 @@ use crate::store::worker::metrics::*;
 use crate::store::{CasualMessage, CasualRouter};
 
 const MAX_GC_REGION_BATCH: usize = 512;
+const MAX_REGION_NORMAL_GC_LOG_NUBER: u64 = 10240;
 
 pub enum Task {
     Gc {
@@ -116,6 +117,10 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
                     debug!("gc raft log"; "region_id" => region_id, "end_index" => end_idx);
                     if start_idx == 0 {
                         RAFT_LOG_GC_SEEK_OPERATIONS.inc();
+                    } else if end_idx > start_idx + MAX_REGION_NORMAL_GC_LOG_NUBER {
+                        warn!("gc raft log with a large range"; "region_id" => region_id,
+                            "start_index" => start_idx,
+                            "end_index" => end_idx);
                     }
                     groups.push((region_id, start_idx, end_idx));
                 }
