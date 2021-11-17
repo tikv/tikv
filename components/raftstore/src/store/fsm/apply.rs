@@ -2887,15 +2887,18 @@ impl<S: Snapshot> Apply<S> {
         assert_eq!(self.region_id, other.region_id);
         assert_eq!(self.peer_id, other.peer_id);
         if self.entries_size + other.entries_size <= MAX_APPLY_BATCH_SIZE {
-            self.entries.append(&mut other.entries);
-            self.cbs.append(&mut other.cbs);
             assert!(other.term >= self.term);
             self.term = other.term;
+
             assert!(other.commit_index >= self.commit_index);
             self.commit_index = other.commit_index;
             assert!(other.commit_term >= self.commit_term);
             self.commit_term = other.commit_term;
+
+            self.entries.append(&mut other.entries);
             self.entries_size += other.entries_size;
+
+            self.cbs.append(&mut other.cbs);
             true
         } else {
             false
