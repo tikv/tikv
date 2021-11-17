@@ -15,6 +15,8 @@ use tikv_util::{box_try, debug, error, warn};
 use crate::store::worker::metrics::*;
 use crate::store::{CasualMessage, CasualRouter};
 
+const MAX_GC_REGION_BATCH: usize = 256;
+
 pub enum Task {
     Gc {
         region_id: u64,
@@ -161,6 +163,9 @@ where
     fn run(&mut self, task: Task) {
         let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
         self.tasks.push(task);
+        if self.tasks.len() > MAX_GC_REGION_BATCH {
+            self.flush();
+        }
     }
 
     fn shutdown(&mut self) {
