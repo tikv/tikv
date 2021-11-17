@@ -7212,6 +7212,8 @@ mod tests {
 
     #[test]
     fn test_check_api_version() {
+        use error_code::storage::*;
+
         const TIDB_KEY_CASE: &[u8] = b"t_a";
         const TXN_KEY_CASE: &[u8] = &[key_prefix::TXN_KEY_PREFIX, 0, b'a'];
         const RAW_KEY_CASE: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'a'];
@@ -7223,21 +7225,21 @@ mod tests {
                 ApiVersion::V1,                    // request api_version
                 CommandKind::get,                  // command kind
                 vec![TIDB_KEY_CASE, RAW_KEY_CASE], // keys
-                true,                              // is_legal
+                None,                              // is_legal
             ),
             (
                 ApiVersion::V1,
                 ApiVersion::V1,
                 CommandKind::raw_get,
                 vec![RAW_KEY_CASE],
-                true,
+                None,
             ),
             (
                 ApiVersion::V1ttl,
                 ApiVersion::V1,
                 CommandKind::raw_get,
                 vec![RAW_KEY_CASE],
-                true,
+                None,
             ),
             // storage api_version = V1, reject V2 request.
             (
@@ -7245,7 +7247,7 @@ mod tests {
                 ApiVersion::V2,
                 CommandKind::get,
                 vec![TIDB_KEY_CASE],
-                false,
+                Some(API_VERSION_NOT_MATCHED),
             ),
             // storage api_version = V2.
             // backward compatible for TiDB request, and TiDB request only.
@@ -7254,21 +7256,21 @@ mod tests {
                 ApiVersion::V1,
                 CommandKind::get,
                 vec![TIDB_KEY_CASE, TIDB_KEY_CASE],
-                true,
+                None,
             ),
             (
                 ApiVersion::V2,
                 ApiVersion::V1,
                 CommandKind::raw_get,
                 vec![TIDB_KEY_CASE, TIDB_KEY_CASE],
-                false,
+                Some(API_VERSION_NOT_MATCHED),
             ),
             (
                 ApiVersion::V2,
                 ApiVersion::V1,
                 CommandKind::get,
                 vec![TIDB_KEY_CASE, TXN_KEY_CASE],
-                false,
+                Some(INVALID_KEY_PREFIX),
             ),
             // V2 api validation.
             (
@@ -7276,39 +7278,39 @@ mod tests {
                 ApiVersion::V2,
                 CommandKind::get,
                 vec![TXN_KEY_CASE],
-                true,
+                None,
             ),
             (
                 ApiVersion::V2,
                 ApiVersion::V2,
                 CommandKind::raw_get,
                 vec![RAW_KEY_CASE, RAW_KEY_CASE],
-                true,
+                None,
             ),
             (
                 ApiVersion::V2,
                 ApiVersion::V2,
                 CommandKind::get,
                 vec![RAW_KEY_CASE, TXN_KEY_CASE],
-                false,
+                Some(INVALID_KEY_PREFIX),
             ),
             (
                 ApiVersion::V2,
                 ApiVersion::V2,
                 CommandKind::raw_get,
                 vec![RAW_KEY_CASE, TXN_KEY_CASE],
-                false,
+                Some(INVALID_KEY_PREFIX),
             ),
             (
                 ApiVersion::V2,
                 ApiVersion::V2,
                 CommandKind::get,
                 vec![TIDB_KEY_CASE],
-                false,
+                Some(INVALID_KEY_PREFIX),
             ),
         ];
 
-        for (i, &(storage_api_version, req_api_version, cmd, ref keys, is_legal)) in
+        for (i, &(storage_api_version, req_api_version, cmd, ref keys, err)) in
             test_data.iter().enumerate()
         {
             let res = Storage::<RocksEngine, DummyLockManager>::check_api_version(
@@ -7317,16 +7319,11 @@ mod tests {
                 cmd,
                 keys.clone(),
             );
-            if is_legal {
-                assert!(res.is_ok(), "case {}", i);
-            } else {
+            if let Some(err) = err {
                 assert!(res.is_err(), "case {}", i);
-                assert_eq!(
-                    res.unwrap_err().error_code(),
-                    error_code::storage::API_VERSION_NOT_MATCHED,
-                    "case {}",
-                    i
-                );
+                assert_eq!(res.unwrap_err().error_code(), err, "case {}", i);
+            } else {
+                assert!(res.is_ok(), "case {}", i);
             }
         }
     }
