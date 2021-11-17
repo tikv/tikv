@@ -43,11 +43,12 @@ pub mod impl_time;
 
 pub use self::types::*;
 
-use tidb_query_datatype::{Collation, FieldTypeAccessor, FieldTypeFlag};
+use tidb_query_datatype::{Charset, Collation, FieldTypeAccessor, FieldTypeFlag};
 use tipb::{Expr, FieldType, ScalarFuncSig};
 
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::match_template_charset;
 use tidb_query_datatype::match_template_collator;
 
 use self::impl_arithmetic::*;
@@ -64,6 +65,25 @@ use self::impl_op::*;
 use self::impl_other::*;
 use self::impl_string::*;
 use self::impl_time::*;
+
+fn map_to_binary_fn_sig(expr: &Expr) -> Result<RpnFnMeta> {
+    let children = expr.get_children();
+    let ret_field_type = children[0].get_field_type();
+    Ok(match_template_charset! {
+        TT, match Charset::from_name(ret_field_type.get_charset()).map_err(tidb_query_datatype::codec::Error::from)? {
+            Charset::TT => to_binary_fn_meta::<TT>(),
+        }
+    })
+}
+
+fn map_from_binary_fn_sig(expr: &Expr) -> Result<RpnFnMeta> {
+    let ret_field_type = expr.get_field_type();
+    Ok(match_template_charset! {
+        TT, match Charset::from_name(ret_field_type.get_charset()).map_err(tidb_query_datatype::codec::Error::from)? {
+            Charset::TT => from_binary_fn_meta::<TT>(),
+        }
+    })
+}
 
 fn map_string_compare_sig<Cmp: CmpOp>(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
     Ok(match_template_collator! {
@@ -373,6 +393,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CastJsonAsTime |
         ScalarFuncSig::CastJsonAsDuration |
         ScalarFuncSig::CastJsonAsJson => map_cast_func(expr)?,
+        ScalarFuncSig::ToBinary => map_to_binary_fn_sig(expr)?,
+        ScalarFuncSig::FromBinary => map_from_binary_fn_sig(expr)?,
+
         // impl_compare
         ScalarFuncSig::LtInt => map_int_sig(value, children, compare_mapper::<CmpOpLT>)?,
         ScalarFuncSig::LtReal => compare_fn_meta::<BasicComparer<Real, CmpOpLT>>(),

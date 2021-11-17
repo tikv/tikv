@@ -1027,11 +1027,11 @@ checksum = "bb1f6b1ce1c140482ea30ddd3335fc0024ac7ee112895426e0a629a6c20adfe3"
 
 [[package]]
 name = "encoding_rs"
-version = "0.8.24"
+version = "0.8.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a51b8cf747471cb9499b6d59e59b0444f4c90eba8968c4e44874e92b5b64ace2"
+checksum = "a74ea89a0a1b98f6332de42c95baff457ada66d1cb4030f9ff151b2041a1c746"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
 ]
 
 [[package]]
@@ -5088,6 +5088,7 @@ dependencies = [
  "chrono-tz",
  "codec",
  "collections",
+ "encoding_rs",
  "error_code",
  "hex 0.4.2",
  "kvproto",
@@ -5522,7 +5523,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#ec68283c17354fe66f3ab3288ad135c095178182"
+source = "git+https://github.com/pingcap/tipb.git#e9b045a0bdf83bd96827751ad7b3c82b1f1bb334"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
