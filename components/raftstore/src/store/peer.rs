@@ -1836,6 +1836,7 @@ where
 
                     // Snapshot has been persisted.
                     self.last_applying_idx = self.get_store().truncated_index();
+                    self.last_compacted_idx = self.last_applying_idx + 1;
                     self.raft_group.advance_apply_to(self.last_applying_idx);
                     self.cmd_epoch_checker.advance_apply(
                         self.last_applying_idx,
