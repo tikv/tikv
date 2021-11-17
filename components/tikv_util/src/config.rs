@@ -623,7 +623,9 @@ macro_rules! numeric_enum_serializing_mod {
             pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
                 where S: Serializer
             {
-                serializer.serialize_i64(*mode as i64)
+                match mode {
+                    $( $enum::$variant => serializer.serialize_i64($value as i64), )*
+                }
             }
 
             pub fn deserialize<'de, D>(deserializer: D) -> Result<$enum, D::Error>
