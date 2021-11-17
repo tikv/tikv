@@ -107,7 +107,7 @@ impl RocksEngine {
         if from >= to {
             return Ok(0);
         }
-        if from == 0 || (to - from) as usize > Self::WRITE_BATCH_MAX_KEYS * 2 {
+        if from == 0 {
             let start_key = keys::raft_log_key(raft_group_id, 0);
             let prefix = keys::raft_log_prefix(raft_group_id);
             match self.seek(&start_key)? {
@@ -217,7 +217,7 @@ impl RaftEngine for RocksEngine {
     }
 
     fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize> {
-        let mut raft_wb = self.write_batch_with_cap(4 * 1024);
+        let mut raft_wb = self.write_batch_with_cap(1024);
         let total = self.gc_impl(raft_group_id, from, to, &mut raft_wb)?;
         // TODO: disable WAL here.
         if !WriteBatch::is_empty(&raft_wb) {
