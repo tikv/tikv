@@ -715,23 +715,8 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         self.config_manager.clone()
     }
 
-    fn spawn_backup_worker(
-        &self,
-        prs: Arc<Mutex<Progress<R>>>,
-        request: Request,
-        tx: UnboundedSender<BackupResponse>,
-    ) {
-        let start_ts = request.start_ts;
-        let end_ts = request.end_ts;
-        let backup_ts = request.end_ts;
-        let engine = self.engine.clone();
-        let db = self.db.clone();
-        let store_id = self.store_id;
-        let concurrency_manager = self.concurrency_manager.clone();
-        let batch_size = self.config_manager.0.read().unwrap().batch_size;
-        let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
-        let limit = self.softlimit.limit();
-        let config = BackendConfig {
+    fn get_hdfs_config(&self) -> BackendConfig {
+        BackendConfig {
             hdfs_config: HdfsConfig {
                 hadoop_home: self.config_manager.0.read().unwrap().hadoop.home.clone(),
                 linux_user: self
@@ -743,28 +728,32 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     .linux_user
                     .clone(),
             },
-        };
+        }
+    }
+
+    fn spawn_backup_worker(
+        &self,
+        prs: Arc<Mutex<Progress<R>>>,
+        request: Request,
+        tx: UnboundedSender<BackupResponse>,
+        backend: Arc<dyn ExternalStorage>,
+    ) {
+        let start_ts = request.start_ts;
+        let end_ts = request.end_ts;
+        let backup_ts = request.end_ts;
+        let engine = self.engine.clone();
+        let db = self.db.clone();
+        let store_id = self.store_id;
+        let concurrency_manager = self.concurrency_manager.clone();
+        let batch_size = self.config_manager.0.read().unwrap().batch_size;
+        let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
+        let limit = self.softlimit.limit();
 
         self.pool.borrow_mut().spawn(async move {
             let _with_io_type = WithIOType::new(IOType::Export);
-
-            // Check if we can open external storage.
-            let backend = match create_storage(&request.backend, config) {
-                Ok(backend) => backend,
-                Err(err) => {
-                    error_unknown!(?err; "backup create storage failed");
-                    let mut response = BackupResponse::default();
-                    response.set_error(crate::Error::Io(err).into());
-                    if let Err(err) = tx.unbounded_send(response) {
-                        error_unknown!(?err; "backup failed to send response");
-                    }
-                    return;
-                }
-            };
-
             let storage = LimitedStorage {
                 limiter: request.limiter,
-                storage: Arc::new(backend),
+                storage: backend,
             };
 
             loop {
@@ -931,10 +920,23 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             is_raw_kv,
             request.cf,
         )));
+        let backend = match create_storage(&request.backend, self.get_hdfs_config()) {
+            Ok(backend) => backend,
+            Err(err) => {
+                error_unknown!(?err; "backup create storage failed");
+                let mut response = BackupResponse::default();
+                response.set_error(crate::Error::Io(err).into());
+                if let Err(err) = resp.unbounded_send(response) {
+                    error_unknown!(?err; "backup failed to send response");
+                }
+                return;
+            }
+        };
+        let backend = Arc::<dyn ExternalStorage>::from(backend);
         let concurrency = self.config_manager.0.read().unwrap().num_threads;
         self.pool.borrow_mut().adjust_with(concurrency);
         for _ in 0..concurrency {
-            self.spawn_backup_worker(prs.clone(), request.clone(), resp.clone());
+            self.spawn_backup_worker(prs.clone(), request.clone(), resp.clone(), backend.clone());
         }
     }
 }
