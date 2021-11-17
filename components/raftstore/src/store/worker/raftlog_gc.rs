@@ -237,7 +237,7 @@ mod tests {
         for (task, expected_collectd, not_exist_range, exist_range) in tbls {
             runner.run(task);
             runner.flush();
-            let res = rx.recv_timeout(Duration::from_secs(11)).unwrap();
+            let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
             assert_eq!(res, expected_collectd);
             raft_log_must_not_exist(&raft_db, 1, not_exist_range.0, not_exist_range.1);
             raft_log_must_exist(&raft_db, 1, exist_range.0, exist_range.1);
