@@ -105,9 +105,6 @@ impl RocksEngine {
         to: u64,
         raft_wb: &mut RocksWriteBatch,
     ) -> Result<usize> {
-        if from >= to {
-            return Ok(0);
-        }
         if from == 0 {
             let start_key = keys::raft_log_key(raft_group_id, 0);
             let prefix = keys::raft_log_prefix(raft_group_id);
@@ -116,6 +113,9 @@ impl RocksEngine {
                 // No need to gc.
                 _ => return Ok(0),
             }
+        }
+        if from >= to {
+            return Ok(0);
         }
 
         for idx in from..to {
