@@ -185,7 +185,10 @@ impl From<storage::errors::Error> for PluginErrorShim {
                 PluginError::Timeout(duration)
             }
             // Other errors are passed as-is inside their `Result` so we get a `&Result` when using `Any::downcast_ref`.
-            _ => PluginError::Other(Box::new(storage::Result::<()>::Err(error))),
+            _ => PluginError::Other(
+                format!("{}", &error),
+                Box::new(storage::Result::<()>::Err(error)),
+            ),
         };
         PluginErrorShim(inner)
     }
@@ -208,7 +211,10 @@ mod test {
         let storage = TestStorageBuilder::new(DummyLockManager, ApiVersion::V2)
             .build()
             .unwrap();
-        let ctx = Context::new();
+        let ctx = Context {
+            api_version: ApiVersion::V2,
+            ..Default::default()
+        };
 
         let raw_storage = RawStorageImpl::new(ctx, &storage);
 
@@ -241,13 +247,16 @@ mod test {
         let storage = TestStorageBuilder::new(DummyLockManager, ApiVersion::V2)
             .build()
             .unwrap();
-        let ctx = Context::new();
+        let ctx = Context {
+            api_version: ApiVersion::V2,
+            ..Default::default()
+        };
 
         let raw_storage = RawStorageImpl::new(ctx, &storage);
 
         let keys = vec![b"r\0k1".to_vec(), b"r\0k4".to_vec(), b"r\0k8".to_vec()];
         let values = vec![42, 99, 128].into_iter().map(|v| vec![v]);
-        let non_existing_key = std::iter::once(vec![33]);
+        let non_existing_key = vec![b"r\0k3".to_vec()];
 
         let full_scan = Range {
             start: b"r\x00".to_vec(),
