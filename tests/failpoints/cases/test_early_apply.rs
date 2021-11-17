@@ -86,7 +86,7 @@ fn test_multi_early_apply() {
 ///     1. memory limitation of fetching committed entries
 ///     2. batching apply msg
 /// Now the commit state uses the minimum of persist index and commit index from the peer
-/// to fix this issue. 
+/// to fix this issue.
 /// For simplicity, this test uses region merge to ensure that the apply state will be written
 /// to kv db before crash.
 #[test]
