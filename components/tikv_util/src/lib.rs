@@ -568,7 +568,6 @@ mod tests {
     use tempfile::Builder;
 
     #[test]
-    #[cfg(unix)]
     fn test_panic_hook() {
         use gag::BufferRedirect;
         use slog::{self, Drain, OwnedKVList, Record};
