@@ -15,7 +15,7 @@ use tikv_util::{box_try, debug, error, warn};
 use crate::store::worker::metrics::*;
 use crate::store::{CasualMessage, CasualRouter};
 
-const MAX_GC_REGION_BATCH: usize = 256;
+const MAX_GC_REGION_BATCH: usize = 512;
 const COMPACT_LOG_INTERVAL: Duration = Duration::from_secs(60);
 
 pub enum Task {
