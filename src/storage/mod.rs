@@ -98,7 +98,7 @@ use std::{
     iter,
     sync::{atomic, Arc},
 };
-use tikv_util::time::{Instant, ThreadReadId};
+use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -411,7 +411,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         raw_key: Vec<u8>,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<(Option<Value>, Statistics, PerfStatisticsDelta)>> {
+    ) -> impl Future<
+        Output = Result<(
+            Option<Value>,
+            Statistics,
+            PerfStatisticsDelta,
+            KvGetLatencyStats,
+        )>,
+    > {
+        let stage_begin_ts = Instant::now();
         let key: Key = Key::from_raw(&raw_key);
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
@@ -460,6 +468,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
+                    let stage_snap_recv_ts = Instant::now();
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
@@ -491,7 +500,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.saturating_elapsed_secs());
 
-                    Ok((result?, statistics, delta))
+                    let stage_finished_ts = Instant::now();
+                    let wait_wall_time =
+                        stage_snap_recv_ts.saturating_duration_since(stage_begin_ts);
+                    let process_wall_time =
+                        stage_finished_ts.saturating_duration_since(stage_snap_recv_ts);
+                    let latency_stats = KvGetLatencyStats {
+                        wait_wall_time_ms: duration_to_ms(wait_wall_time),
+                        process_wall_time_ms: duration_to_ms(process_wall_time),
+                    };
+                    Ok((result?, statistics, delta, latency_stats))
                 }
             }
             .in_resource_metering_tag(resource_tag),
@@ -676,7 +694,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         raw_keys: Vec<Vec<u8>>,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, Statistics, PerfStatisticsDelta)>> {
+    ) -> impl Future<
+        Output = Result<(
+            Vec<Result<KvPair>>,
+            Statistics,
+            PerfStatisticsDelta,
+            KvGetLatencyStats,
+        )>,
+    > {
+        let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -726,6 +752,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
+                    let stage_snap_recv_ts = Instant::now();
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
@@ -770,7 +797,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.saturating_elapsed_secs());
 
-                    Ok((result?, statistics, delta))
+                    let stage_finished_ts = Instant::now();
+                    let wait_wall_time =
+                        stage_snap_recv_ts.saturating_duration_since(stage_begin_ts);
+                    let process_wall_time =
+                        stage_finished_ts.saturating_duration_since(stage_snap_recv_ts);
+                    let latency_stats = KvGetLatencyStats {
+                        wait_wall_time_ms: duration_to_ms(wait_wall_time),
+                        process_wall_time_ms: duration_to_ms(process_wall_time),
+                    };
+                    Ok((result?, statistics, delta, latency_stats))
                 }
             }
             .in_resource_metering_tag(resource_tag),
@@ -2411,6 +2447,18 @@ pub mod test_util {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
     }
+}
+
+// ------> Begin ------> Scheduled ------> SnapshotReceived ------> Finished ------>
+// |----- schedule_wait_time -----|
+//                                |-- snapshot_wait_time --|
+// |------------------- wait_wall_time --------------------|
+//                                                         |-- process_wall_time --|
+// |------------------------------ kv_read_wall_time ------------------------------|
+#[derive(Debug, Default)]
+pub struct KvGetLatencyStats {
+    pub wait_wall_time_ms: u64,
+    pub process_wall_time_ms: u64,
 }
 
 #[cfg(test)]
