@@ -59,6 +59,14 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     /// Generally, `from` can be passed in `0`.
     fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize>;
 
+    fn batch_gc(&self, groups: Vec<(u64, u64, u64)>) -> Result<usize> {
+        let mut total = 0;
+        for (group, from, to) in groups {
+            total += self.gc(group, from, to)?;
+        }
+        Ok(total)
+    }
+
     /// Purge expired logs files and return a set of Raft group ids
     /// which needs to be compacted ASAP.
     fn purge_expired_files(&self) -> Result<Vec<u64>>;

@@ -78,13 +78,8 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
     }
 
     /// Does the GC job and returns the count of logs collected.
-    fn gc_raft_log(
-        &mut self,
-        region_id: u64,
-        start_idx: u64,
-        end_idx: u64,
-    ) -> Result<usize, Error> {
-        let deleted = box_try!(self.engines.raft.gc(region_id, start_idx, end_idx));
+    fn gc_raft_log(&mut self, regions: Vec<(u64, u64, u64)>) -> Result<usize, Error> {
+        let deleted = box_try!(self.engines.raft.batch_gc(regions));
         Ok(deleted)
     }
 
@@ -102,8 +97,8 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
         });
         RAFT_LOG_GC_KV_SYNC_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
         let tasks = std::mem::take(&mut self.tasks);
+        let mut groups = Vec::with_capacity(tasks.len());
         for t in tasks {
-            let start = Instant::now();
             match t {
                 Task::Gc {
                     region_id,
@@ -114,21 +109,10 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
                     if start_idx == 0 {
                         RAFT_LOG_GC_SEEK_OPERATIONS.inc();
                     }
-                    match self.gc_raft_log(region_id, start_idx, end_idx) {
-                        Err(e) => {
-                            error!("failed to gc"; "region_id" => region_id, "err" => %e);
-                            self.report_collected(0);
-                            RAFT_LOG_GC_FAILED.inc();
-                        }
-                        Ok(n) => {
-                            debug!("gc log entries"; "region_id" => region_id, "entry_count" => n);
-                            self.report_collected(n);
-                            RAFT_LOG_GC_DELETED_KEYS_HISTOGRAM.observe(n as f64);
-                        }
-                    }
-                    RAFT_LOG_GC_WRITE_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
+                    groups.push((region_id, start_idx, end_idx));
                 }
                 Task::Purge => {
+                    let start = Instant::now();
                     let regions = match self.engines.raft.purge_expired_files() {
                         Ok(regions) => regions,
                         Err(e) => {
@@ -143,6 +127,20 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
                 }
             }
         }
+        let start = Instant::now();
+        match self.gc_raft_log(groups) {
+            Err(e) => {
+                error!("failed to gc"; "err" => %e);
+                self.report_collected(0);
+                RAFT_LOG_GC_FAILED.inc();
+            }
+            Ok(n) => {
+                debug!("gc log entries";  "entry_count" => n);
+                self.report_collected(n);
+                RAFT_LOG_GC_DELETED_KEYS_HISTOGRAM.observe(n as f64);
+            }
+        }
+        RAFT_LOG_GC_WRITE_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
     }
 }
 
