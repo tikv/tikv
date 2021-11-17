@@ -7,7 +7,7 @@ use time::Duration as TimeDuration;
 
 use crate::{coprocessor, Result};
 use batch_system::Config as BatchSystemConfig;
-use engine_traits::config as engine_config;
+use engine_traits::perf_level_serde;
 use engine_traits::PerfLevel;
 use lazy_static::lazy_static;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig};
@@ -185,7 +185,7 @@ pub struct Config {
     #[online_config(hidden)]
     pub apply_yield_duration: ReadableDuration,
 
-    #[serde(with = "engine_config::perf_level_serde")]
+    #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub perf_level: PerfLevel,
 

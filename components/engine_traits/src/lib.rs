@@ -337,7 +337,5 @@ pub mod compaction_job;
 pub mod util;
 pub use compaction_job::*;
 
-pub mod config;
-
 // FIXME: This should live somewhere else
 pub const DATA_KEY_PREFIX_LEN: usize = 1;

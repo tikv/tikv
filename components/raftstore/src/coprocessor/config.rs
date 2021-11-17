@@ -3,7 +3,8 @@
 use super::Result;
 use crate::store::SplitCheckTask;
 
-use engine_traits::{config as engine_config, PerfLevel};
+use engine_traits::perf_level_serde;
+use engine_traits::PerfLevel;
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use serde::{Deserialize, Serialize};
 
@@ -39,7 +40,7 @@ pub struct Config {
     #[online_config(skip)]
     pub consistency_check_method: ConsistencyCheckMethod,
 
-    #[serde(with = "engine_config::perf_level_serde")]
+    #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub perf_level: PerfLevel,
 }
