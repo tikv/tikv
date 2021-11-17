@@ -134,9 +134,11 @@ where
 {
     type Task = Task;
     fn run(&mut self, task: Task) {
+        let start = Instant::now();
         let store_id = task.store_id;
         let resp = self.resolve(store_id);
-        (task.cb)(resp)
+        (task.cb)(resp);
+        ADDRESS_RESOLVE_HISTOGRAM.observe(start.saturating_elapsed_secs());
     }
 }
 
