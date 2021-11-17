@@ -7225,7 +7225,7 @@ mod tests {
                 ApiVersion::V1,                    // request api_version
                 CommandKind::get,                  // command kind
                 vec![TIDB_KEY_CASE, RAW_KEY_CASE], // keys
-                None,                              // is_legal
+                None,                              // expected error code
             ),
             (
                 ApiVersion::V1,
