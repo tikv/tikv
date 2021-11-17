@@ -10,7 +10,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine};
 use file_system::{IOType, WithIOType};
 use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{Runnable, RunnableWithTimer};
-use tikv_util::{box_try, debug, error, warn};
+use tikv_util::{box_try, debug, error, info, warn};
 
 use crate::store::worker::metrics::*;
 use crate::store::{CasualMessage, CasualRouter};
@@ -110,7 +110,7 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
                     if start_idx == 0 {
                         RAFT_LOG_GC_SEEK_OPERATIONS.inc();
                     } else if end_idx > start_idx + MAX_REGION_NORMAL_GC_LOG_NUMBER {
-                        warn!("gc raft log with a large range"; "region_id" => region_id,
+                        info!("gc raft log with a large range"; "region_id" => region_id,
                             "start_index" => start_idx,
                             "end_index" => end_idx);
                     }
