@@ -41,13 +41,13 @@ impl MemComparableByteCodec {
     /// Gets the length of the first encoded byte sequence in the given buffer, which is encoded in
     /// the ascending memory-comparable format.
     pub fn get_first_encoded_len(encoded: &[u8]) -> usize {
-        Self::get_first_encoded_len_internal::<AscendingMemComparableCodecHelper>(encoded)
+        Self::get_first_encoded_len_internal::<Ascending>(encoded)
     }
 
     /// Gets the length of the first encoded byte sequence in the given buffer, which is encoded in
     /// the descending memory-comparable format.
     pub fn get_first_encoded_len_desc(encoded: &[u8]) -> usize {
-        Self::get_first_encoded_len_internal::<DescendingMemComparableCodecHelper>(encoded)
+        Self::get_first_encoded_len_internal::<Descending>(encoded)
     }
 
     /// Encodes all bytes in the `src` into `dest` in ascending memory-comparable format.
@@ -214,12 +214,11 @@ impl MemComparableByteCodec {
     ///
     /// When there is an error, `dest` may contain partially written data.
     pub fn try_decode_first(src: &[u8], dest: &mut [u8]) -> Result<(usize, usize)> {
-        Self::try_decode_first_internal(
+        Self::try_decode_first_internal::<Ascending>(
             src.as_ptr(),
             src.len(),
             dest.as_mut_ptr(),
             dest.len(),
-            AscendingMemComparableCodecHelper,
         )
     }
 
@@ -249,12 +248,11 @@ impl MemComparableByteCodec {
     ///
     /// When there is an error, `dest` may contain partially written data.
     pub fn try_decode_first_desc(src: &[u8], dest: &mut [u8]) -> Result<(usize, usize)> {
-        let (read_bytes, written_bytes) = Self::try_decode_first_internal(
+        let (read_bytes, written_bytes) = Self::try_decode_first_internal::<Descending>(
             src.as_ptr(),
             src.len(),
             dest.as_mut_ptr(),
             dest.len(),
-            DescendingMemComparableCodecHelper,
         )?;
         Self::flip_bytes_in_place(dest, written_bytes);
         Ok((read_bytes, written_bytes))
@@ -279,12 +277,11 @@ impl MemComparableByteCodec {
     ///
     /// When there is an error, `dest` may contain partially written data.
     pub fn try_decode_first_in_place(buffer: &mut [u8]) -> Result<(usize, usize)> {
-        Self::try_decode_first_internal(
+        Self::try_decode_first_internal::<Ascending>(
             buffer.as_ptr(),
             buffer.len(),
             buffer.as_mut_ptr(),
             buffer.len(),
-            AscendingMemComparableCodecHelper,
         )
     }
 
@@ -307,12 +304,11 @@ impl MemComparableByteCodec {
     ///
     /// When there is an error, `dest` may contain partially written data.
     pub fn try_decode_first_in_place_desc(buffer: &mut [u8]) -> Result<(usize, usize)> {
-        let (read_bytes, written_bytes) = Self::try_decode_first_internal(
+        let (read_bytes, written_bytes) = Self::try_decode_first_internal::<Descending>(
             buffer.as_ptr(),
             buffer.len(),
             buffer.as_mut_ptr(),
             buffer.len(),
-            DescendingMemComparableCodecHelper,
         )?;
         Self::flip_bytes_in_place(buffer, written_bytes);
         Ok((read_bytes, written_bytes))
@@ -336,7 +332,6 @@ impl MemComparableByteCodec {
         src_len: usize,
         mut dest_ptr: *mut u8,
         dest_len: usize,
-        _helper: T,
     ) -> Result<(usize, usize)> {
         assert!(dest_len >= src_len);
 
@@ -372,7 +367,10 @@ impl MemComparableByteCodec {
                     // is faster than checking pad bytes one by one, since it will compare multiple
                     // bytes at once.
                     let base_padding_ptr = dest_ptr.sub(padding_size);
-                    let expected_padding_ptr = T::get_raw_padding_ptr();
+                    // Force a compile time check to ensure safety. The check will be optimized away
+                    // if PADDING's size is larger than MEMCMP_GROUP_SIZE, because it's checked
+                    // aboved that padding_size <= MEMCMP_GROUP_SIZE.
+                    let expected_padding_ptr = T::PADDING[..padding_size].as_ptr();
                     let cmp_result = libc::memcmp(
                         base_padding_ptr as *const libc::c_void,
                         expected_padding_ptr as *const libc::c_void,
@@ -398,40 +396,27 @@ trait MemComparableCodecHelper {
 
     /// Given a raw padding size byte, interprets the padding size according to correct order.
     fn parse_padding_size(raw_marker: u8) -> usize;
-
-    /// Returns a pointer to the raw padding bytes in 8 bytes for current ordering.
-    fn get_raw_padding_ptr() -> *const u8;
 }
 
-struct AscendingMemComparableCodecHelper;
+struct Ascending;
 
-struct DescendingMemComparableCodecHelper;
+struct Descending;
 
-impl MemComparableCodecHelper for AscendingMemComparableCodecHelper {
+impl MemComparableCodecHelper for Ascending {
     const PADDING: [u8; MEMCMP_GROUP_SIZE] = [MEMCMP_PAD_BYTE; MEMCMP_GROUP_SIZE];
 
     #[inline]
     fn parse_padding_size(raw_marker: u8) -> usize {
         (!raw_marker) as usize
     }
-
-    #[inline]
-    fn get_raw_padding_ptr() -> *const u8 {
-        Self::PADDING.as_ptr()
-    }
 }
 
-impl MemComparableCodecHelper for DescendingMemComparableCodecHelper {
+impl MemComparableCodecHelper for Descending {
     const PADDING: [u8; MEMCMP_GROUP_SIZE] = [!MEMCMP_PAD_BYTE; MEMCMP_GROUP_SIZE];
 
     #[inline]
     fn parse_padding_size(raw_marker: u8) -> usize {
         raw_marker as usize
-    }
-
-    #[inline]
-    fn get_raw_padding_ptr() -> *const u8 {
-        Self::PADDING.as_ptr()
     }
 }
 
