@@ -82,7 +82,7 @@ use crate::storage::{
 use concurrency_manager::ConcurrencyManager;
 
 use engine_traits::{
-    key_prefix,
+    key_prefix::{self, KeyPrefix},
     raw_value::{ttl_to_expire_ts, RawValue},
     CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
@@ -375,32 +375,46 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cmd: CommandKind,
         keys: impl IntoIterator<Item = &'a [u8]>,
     ) -> Result<()> {
+        let make_invalid_key_prefix_err = |key| {
+            Err(Error::from(ErrorInner::InvalidKeyPrefix {
+                cmd,
+                key_prefix: KeyPrefix::parse(key).0,
+                key: log_wrappers::hex_encode_upper(key),
+            }))
+        };
+
         match (storage_api_version, req_api_version) {
-            (ApiVersion::V1 | ApiVersion::V1ttl, ApiVersion::V1) => {
-                return Ok(());
-            }
+            (ApiVersion::V1 | ApiVersion::V1ttl, ApiVersion::V1) => {}
             (ApiVersion::V2, ApiVersion::V1) if Self::is_txn_command(cmd) => {
                 // For compatibility, accept TiDB request only.
-                if keys.into_iter().all(key_prefix::is_tidb_key) {
-                    return Ok(());
+                for key in keys {
+                    if !key_prefix::is_tidb_key(key) {
+                        return make_invalid_key_prefix_err(key);
+                    }
                 }
             }
             (ApiVersion::V2, ApiVersion::V2) if Self::is_raw_command(cmd) => {
-                if keys.into_iter().all(key_prefix::is_raw_key) {
-                    return Ok(());
+                for key in keys {
+                    if !key_prefix::is_raw_key(key) {
+                        return make_invalid_key_prefix_err(key);
+                    }
                 }
             }
             (ApiVersion::V2, ApiVersion::V2) if Self::is_txn_command(cmd) => {
-                if keys.into_iter().all(key_prefix::is_txn_key) {
-                    return Ok(());
+                for key in keys {
+                    if !key_prefix::is_txn_key(key) {
+                        return make_invalid_key_prefix_err(key);
+                    }
                 }
             }
-            _ => {}
+            _ => {
+                return Err(Error::from(ErrorInner::ApiVersionNotMatched {
+                    storage_api_version,
+                    req_api_version,
+                }));
+            }
         }
-        Err(Error::from(ErrorInner::ApiVersionNotMatched {
-            storage_api_version,
-            req_api_version,
-        }))
+        Ok(())
     }
 
     /// Get value of the given key from a snapshot.
@@ -4049,20 +4063,29 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
+        let req_api_version = if api_version == ApiVersion::V1ttl {
+            ApiVersion::V1
+        } else {
+            api_version
+        };
+        let ctx = Context {
+            api_version: req_api_version,
+            ..Default::default()
+        };
 
         let test_data = vec![
-            (b"a".to_vec(), b"aa".to_vec()),
-            (b"b".to_vec(), b"bb".to_vec()),
-            (b"c".to_vec(), b"cc".to_vec()),
-            (b"d".to_vec(), b"dd".to_vec()),
-            (b"e".to_vec(), b"ee".to_vec()),
+            (b"r\0a".to_vec(), b"aa".to_vec()),
+            (b"r\0b".to_vec(), b"bb".to_vec()),
+            (b"r\0c".to_vec(), b"cc".to_vec()),
+            (b"r\0d".to_vec(), b"dd".to_vec()),
+            (b"r\0e".to_vec(), b"ee".to_vec()),
         ];
 
         // Write key-value pairs one by one
         for &(ref key, ref value) in &test_data {
             storage
                 .raw_put(
-                    Context::default(),
+                    ctx.clone(),
                     "".to_string(),
                     key.clone(),
                     value.clone(),
@@ -4107,19 +4130,28 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
+        let req_api_version = if api_version == ApiVersion::V1ttl {
+            ApiVersion::V1
+        } else {
+            api_version
+        };
+        let ctx = Context {
+            api_version: req_api_version,
+            ..Default::default()
+        };
 
         let test_data = vec![
-            (b"a".to_vec(), b"aa".to_vec()),
-            (b"b".to_vec(), b"bb".to_vec()),
-            (b"c".to_vec(), b"cc".to_vec()),
-            (b"d".to_vec(), b"dd".to_vec()),
-            (b"e".to_vec(), b"ee".to_vec()),
+            (b"r\0a".to_vec(), b"aa".to_vec()),
+            (b"r\0b".to_vec(), b"bb".to_vec()),
+            (b"r\0c".to_vec(), b"cc".to_vec()),
+            (b"r\0d".to_vec(), b"dd".to_vec()),
+            (b"r\0e".to_vec(), b"ee".to_vec()),
         ];
 
         // Write key-value pairs in batch
         storage
             .raw_batch_put(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
                 test_data.clone(),
                 vec![0; test_data.len()],
@@ -4136,15 +4168,15 @@ mod tests {
             .collect();
         expect_multi_values(
             results,
-            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)).unwrap(),
+            block_on(storage.raw_batch_get(ctx.clone(), "".to_string(), keys)).unwrap(),
         );
 
         // Delete ["b", "d"]
         storage
             .raw_batch_delete(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
-                vec![b"b".to_vec(), b"d".to_vec()],
+                vec![b"r\0b".to_vec(), b"r\0d".to_vec()],
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -4153,29 +4185,29 @@ mod tests {
         // Assert "b" and "d" are gone
         expect_value(
             b"aa".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"a".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0a".to_vec())).unwrap(),
         );
         expect_none(
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"b".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0b".to_vec())).unwrap(),
         );
         expect_value(
             b"cc".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"c".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0c".to_vec())).unwrap(),
         );
         expect_none(
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0d".to_vec())).unwrap(),
         );
         expect_value(
             b"ee".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"e".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0e".to_vec())).unwrap(),
         );
 
         // Delete ["a", "c", "e"]
         storage
             .raw_batch_delete(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
-                vec![b"a".to_vec(), b"c".to_vec(), b"e".to_vec()],
+                vec![b"r\0a".to_vec(), b"r\0c".to_vec(), b"r\0e".to_vec()],
                 expect_ok_callback(tx, 2),
             )
             .unwrap();
@@ -4183,7 +4215,7 @@ mod tests {
 
         // Assert no key remains
         for (k, _) in test_data {
-            expect_none(block_on(storage.raw_get(Context::default(), "".to_string(), k)).unwrap());
+            expect_none(block_on(storage.raw_get(ctx.clone(), "".to_string(), k)).unwrap());
         }
     }
 
