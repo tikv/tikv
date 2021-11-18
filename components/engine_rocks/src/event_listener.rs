@@ -9,6 +9,9 @@ use rocksdb::{
 };
 use tikv_util::set_panic_mark;
 
+// Message for RocksDB status subcode kNoSpace.
+const NO_SPACE_ERROR: &str = "IO error: No space left on device";
+
 pub struct RocksEventListener {
     db_name: String,
 }
@@ -98,7 +101,7 @@ impl rocksdb::EventListener for RocksEventListener {
             if matches!(
                 reason,
                 DBBackgroundErrorReason::Flush | DBBackgroundErrorReason::Compaction
-            ) && err.contains("No space left")
+            ) && err.starts_with(NO_SPACE_ERROR)
             {
                 // Ignoring NoSpace error and let RocksDB automatically recovers.
                 return;
