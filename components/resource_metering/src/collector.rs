@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use lazy_static::lazy_static;
+use tikv_util::warn;
 use tikv_util::worker::Scheduler;
 
 /// `Collector` is used to connect [Recorder] and [Reporter].
@@ -44,8 +45,12 @@ pub struct CollectorImpl {
 
 impl Collector for CollectorImpl {
     fn collect(&self, records: Arc<RawRecords>) {
-        if self.scheduler.schedule(Task::Records(records)).is_err() {
-            IGNORED_DATA_COUNTER.with_label_values(&["collect"]).inc();
+        let record_cnt = records.records.len();
+        if let Err(err) = self.scheduler.schedule(Task::Records(records)) {
+            IGNORED_DATA_COUNTER
+                .with_label_values(&["collect"])
+                .inc_by(record_cnt as _);
+            warn!("failed to collect records"; "error" => ?err);
         }
     }
 }
