@@ -788,7 +788,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn end(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
-        for peer in peers {
+        for peer in peers.iter_mut() {
             peer.update_memory_trace(&mut self.trace_event);
         }
 
@@ -808,7 +808,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
 
             if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
-                write_worker.write_to_db();
+                write_worker.write_to_db(false);
+
+                for peer in peers.iter_mut() {
+                    PeerFsmDelegate::new(peer, &mut self.poll_ctx).post_raft_ready_append();
+                }
             }
 
             if !self.poll_ctx.store_stat.is_busy {

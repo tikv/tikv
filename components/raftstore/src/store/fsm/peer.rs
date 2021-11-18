@@ -624,8 +624,12 @@ where
             }
         }
         // Propose batch request which may be still waiting for more raft-command
-        self.propose_batch_raft_command(false);
-        self.check_batch_cmd_and_proposed_cb();
+        if self.ctx.sync_write_worker.is_some() {
+            self.propose_batch_raft_command(true);
+        } else {
+            self.propose_batch_raft_command(false);
+            self.check_batch_cmd_and_proposed_cb();
+        }
         self.collect_ready();
     }
 
@@ -1159,6 +1163,17 @@ where
             if !self.fsm.peer.has_unpersisted_ready() {
                 self.destroy_peer(mbt);
             }
+        }
+    }
+
+    pub fn post_raft_ready_append(&mut self) {
+        if let Some(persist_snap_res) = self.fsm.peer.on_advance_ready(self.ctx) {
+            self.on_ready_persist_snapshot(persist_snap_res);
+            if self.fsm.peer.pending_merge_state.is_some() {
+                // After applying a snapshot, merge is rollbacked implicitly.
+                self.on_ready_rollback_merge(0, None);
+            }
+            self.register_raft_base_tick();
         }
     }
 

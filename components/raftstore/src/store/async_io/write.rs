@@ -421,7 +421,7 @@ where
 
             STORE_WRITE_TRIGGER_SIZE_HISTOGRAM.observe(self.batch.get_raft_size() as f64);
 
-            self.write_to_db();
+            self.write_to_db(true);
 
             self.metrics.flush();
 
@@ -472,7 +472,7 @@ where
         self.batch.add_write_task(task);
     }
 
-    pub fn write_to_db(&mut self) {
+    pub fn write_to_db(&mut self, notify: bool) {
         if self.batch.is_empty() {
             return;
         }
@@ -592,13 +592,17 @@ where
         let send_time = duration_to_sec(now2.saturating_duration_since(now));
         STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(send_time);
 
-        for (region_id, (peer_id, ready_number)) in &self.batch.readies {
-            self.notifier
-                .notify_persisted(*region_id, *peer_id, *ready_number);
+        let mut callback_time = 0f64;
+        if notify {
+            for (region_id, (peer_id, ready_number)) in &self.batch.readies {
+                self.notifier
+                    .notify_persisted(*region_id, *peer_id, *ready_number);
+            }
+            now = Instant::now();
+            callback_time = duration_to_sec(now.saturating_duration_since(now2));
+            STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(callback_time);
         }
-        now = Instant::now();
-        let callback_time = duration_to_sec(now.saturating_duration_since(now2));
-        STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(callback_time);
+
         let total_cost = now.saturating_duration_since(timer);
         slow_log!(
             total_cost,
