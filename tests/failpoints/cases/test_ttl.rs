@@ -1,14 +1,21 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::mpsc::channel;
+
 use engine_rocks::raw::CompactOptions;
 use engine_rocks::util::get_cf_handle;
 use engine_traits::raw_value::RawValue;
 use engine_traits::{IterOptions, MiscExt, Peekable, SyncMutable, CF_DEFAULT};
-use kvproto::kvrpcpb::ApiVersion;
+use futures::executor::block_on;
+use kvproto::kvrpcpb::{ApiVersion, Context};
 use tikv::config::DbConfig;
 use tikv::server::ttl::check_ttl_and_compact_files;
 use tikv::storage::kv::{SnapContext, TestEngineBuilder};
-use tikv::storage::{Engine, Iterator, RawEncodeSnapshot, Snapshot, Statistics};
+use tikv::storage::lock_manager::DummyLockManager;
+use tikv::storage::test_util::{expect_ok_callback, expect_value};
+use tikv::storage::{
+    Engine, Iterator, RawEncodeSnapshot, Snapshot, Statistics, TestStorageBuilder,
+};
 use txn_types::Key;
 
 #[test]
@@ -357,4 +364,71 @@ fn test_ttl_iterator_impl(api_version: ApiVersion) {
     assert_eq!(iter.valid().unwrap(), true);
     assert_eq!(iter.key(), b"r\0key1");
     assert_eq!(iter.value(), b"value1");
+}
+
+#[test]
+fn test_stoarge_raw_batch_put_ttl() {
+    test_stoarge_raw_batch_put_ttl_impl(ApiVersion::V1ttl);
+    test_stoarge_raw_batch_put_ttl_impl(ApiVersion::V2);
+}
+
+fn test_stoarge_raw_batch_put_ttl_impl(api_version: ApiVersion) {
+    fail::cfg("ttl_current_ts", "return(100)").unwrap();
+
+    let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+        .build()
+        .unwrap();
+    let (tx, rx) = channel();
+    let req_api_version = if api_version == ApiVersion::V1ttl {
+        ApiVersion::V1
+    } else {
+        api_version
+    };
+    let ctx = Context {
+        api_version: req_api_version,
+        ..Default::default()
+    };
+
+    let test_data = vec![
+        (b"r\0a".to_vec(), b"aa".to_vec(), 10),
+        (b"r\0b".to_vec(), b"bb".to_vec(), 20),
+        (b"r\0c".to_vec(), b"cc".to_vec(), 30),
+        (b"r\0d".to_vec(), b"dd".to_vec(), 0),
+        (b"r\0e".to_vec(), b"ee".to_vec(), 40),
+    ];
+
+    let kvpairs = test_data
+        .clone()
+        .into_iter()
+        .map(|(key, value, _)| (key, value))
+        .collect();
+    let ttls = test_data
+        .clone()
+        .into_iter()
+        .map(|(_, _, ttl)| ttl)
+        .collect();
+    // Write key-value pairs in a batch
+    storage
+        .raw_batch_put(
+            ctx.clone(),
+            "".to_string(),
+            kvpairs,
+            ttls,
+            expect_ok_callback(tx, 0),
+        )
+        .unwrap();
+    rx.recv().unwrap();
+
+    // Verify pairs one by one
+    for (key, val, _) in &test_data {
+        expect_value(
+            val.to_vec(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap(),
+        );
+    }
+    // Verify ttl one by one
+    for (key, _, ttl) in test_data {
+        let res = block_on(storage.raw_get_key_ttl(ctx.clone(), "".to_string(), key)).unwrap();
+        assert_eq!(res, Some(ttl));
+    }
 }

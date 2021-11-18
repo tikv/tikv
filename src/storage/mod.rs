@@ -3842,20 +3842,29 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
+        let req_api_version = if api_version == ApiVersion::V1ttl {
+            ApiVersion::V1
+        } else {
+            api_version
+        };
+        let ctx = Context {
+            api_version: req_api_version,
+            ..Default::default()
+        };
 
         let test_data = [
-            (b"a", b"001"),
-            (b"b", b"002"),
-            (b"c", b"003"),
-            (b"d", b"004"),
-            (b"e", b"005"),
+            (b"r\0a", b"001"),
+            (b"r\0b", b"002"),
+            (b"r\0c", b"003"),
+            (b"r\0d", b"004"),
+            (b"r\0e", b"005"),
         ];
 
         // Write some key-value pairs to the db
         for kv in &test_data {
             storage
                 .raw_put(
-                    Context::default(),
+                    ctx.clone(),
                     "".to_string(),
                     kv.0.to_vec(),
                     kv.1.to_vec(),
@@ -3867,16 +3876,16 @@ mod tests {
 
         expect_value(
             b"004".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0d".to_vec())).unwrap(),
         );
 
         // Delete ["d", "e")
         storage
             .raw_delete_range(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
-                b"d".to_vec(),
-                b"e".to_vec(),
+                b"r\0d".to_vec(),
+                b"r\0e".to_vec(),
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -3885,23 +3894,23 @@ mod tests {
         // Assert key "d" has gone
         expect_value(
             b"003".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"c".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0c".to_vec())).unwrap(),
         );
         expect_none(
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0d".to_vec())).unwrap(),
         );
         expect_value(
             b"005".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"e".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0e".to_vec())).unwrap(),
         );
 
         // Delete ["aa", "ab")
         storage
             .raw_delete_range(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
-                b"aa".to_vec(),
-                b"ab".to_vec(),
+                b"r\0aa".to_vec(),
+                b"r\0ab".to_vec(),
                 expect_ok_callback(tx.clone(), 2),
             )
             .unwrap();
@@ -3910,20 +3919,20 @@ mod tests {
         // Assert nothing happened
         expect_value(
             b"001".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"a".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0a".to_vec())).unwrap(),
         );
         expect_value(
             b"002".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"b".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0b".to_vec())).unwrap(),
         );
 
         // Delete all
         storage
             .raw_delete_range(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
-                b"a".to_vec(),
-                b"z".to_vec(),
+                b"r\0a".to_vec(),
+                b"r\0z".to_vec(),
                 expect_ok_callback(tx, 3),
             )
             .unwrap();
@@ -3932,8 +3941,7 @@ mod tests {
         // Assert now no key remains
         for kv in &test_data {
             expect_none(
-                block_on(storage.raw_get(Context::default(), "".to_string(), kv.0.to_vec()))
-                    .unwrap(),
+                block_on(storage.raw_get(ctx.clone(), "".to_string(), kv.0.to_vec())).unwrap(),
             );
         }
 
@@ -3952,13 +3960,22 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
+        let req_api_version = if api_version == ApiVersion::V1ttl {
+            ApiVersion::V1
+        } else {
+            api_version
+        };
+        let ctx = Context {
+            api_version: req_api_version,
+            ..Default::default()
+        };
 
         let test_data = vec![
-            (b"a".to_vec(), b"aa".to_vec(), 10),
-            (b"b".to_vec(), b"bb".to_vec(), 20),
-            (b"c".to_vec(), b"cc".to_vec(), 30),
-            (b"d".to_vec(), b"dd".to_vec(), 0),
-            (b"e".to_vec(), b"ee".to_vec(), 40),
+            (b"r\0a".to_vec(), b"aa".to_vec(), 10),
+            (b"r\0b".to_vec(), b"bb".to_vec(), 20),
+            (b"r\0c".to_vec(), b"cc".to_vec(), 30),
+            (b"r\0d".to_vec(), b"dd".to_vec(), 0),
+            (b"r\0e".to_vec(), b"ee".to_vec(), 40),
         ];
 
         let kvpairs = test_data
@@ -3978,7 +3995,7 @@ mod tests {
         // Write key-value pairs in a batch
         storage
             .raw_batch_put(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
                 kvpairs,
                 ttls,
@@ -3991,18 +4008,8 @@ mod tests {
         for (key, val, _) in &test_data {
             expect_value(
                 val.to_vec(),
-                block_on(storage.raw_get(Context::default(), "".to_string(), key.to_vec()))
-                    .unwrap(),
+                block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap(),
             );
-        }
-        if let ApiVersion::V1ttl | ApiVersion::V2 = api_version {
-            // Verify ttl one by one
-            for (key, _, ttl) in test_data {
-                let res =
-                    block_on(storage.raw_get_key_ttl(Context::default(), "".to_string(), key))
-                        .unwrap();
-                assert_eq!(res, Some(ttl));
-            }
         }
     }
 
@@ -4018,20 +4025,29 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
+        let req_api_version = if api_version == ApiVersion::V1ttl {
+            ApiVersion::V1
+        } else {
+            api_version
+        };
+        let ctx = Context {
+            api_version: req_api_version,
+            ..Default::default()
+        };
 
         let test_data = vec![
-            (b"a".to_vec(), b"aa".to_vec()),
-            (b"b".to_vec(), b"bb".to_vec()),
-            (b"c".to_vec(), b"cc".to_vec()),
-            (b"d".to_vec(), b"dd".to_vec()),
-            (b"e".to_vec(), b"ee".to_vec()),
+            (b"r\0a".to_vec(), b"aa".to_vec()),
+            (b"r\0b".to_vec(), b"bb".to_vec()),
+            (b"r\0c".to_vec(), b"cc".to_vec()),
+            (b"r\0d".to_vec(), b"dd".to_vec()),
+            (b"r\0e".to_vec(), b"ee".to_vec()),
         ];
 
         // Write key-value pairs one by one
         for &(ref key, ref value) in &test_data {
             storage
                 .raw_put(
-                    Context::default(),
+                    ctx.clone(),
                     "".to_string(),
                     key.clone(),
                     value.clone(),
@@ -4047,7 +4063,7 @@ mod tests {
         let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
         expect_multi_values(
             results,
-            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)).unwrap(),
+            block_on(storage.raw_batch_get(ctx, "".to_string(), keys)).unwrap(),
         );
     }
 
@@ -4231,6 +4247,15 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
+        let req_api_version = if api_version == ApiVersion::V1ttl {
+            ApiVersion::V1
+        } else {
+            api_version
+        };
+        let ctx = Context {
+            api_version: req_api_version,
+            ..Default::default()
+        };
 
         let test_data = vec![
             (b"r\0a".to_vec(), b"aa".to_vec()),
@@ -4258,7 +4283,7 @@ mod tests {
         // Write key-value pairs in batch
         storage
             .raw_batch_put(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
                 test_data.clone(),
                 vec![0; test_data.len()],
@@ -4275,7 +4300,7 @@ mod tests {
         expect_multi_values(
             results.clone(),
             block_on(storage.raw_scan(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
                 b"r\0".to_vec(),
                 None,
@@ -4289,7 +4314,7 @@ mod tests {
         expect_multi_values(
             results,
             block_on(storage.raw_scan(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
                 b"r\0c2".to_vec(),
                 None,
@@ -4307,7 +4332,7 @@ mod tests {
         expect_multi_values(
             results.clone(),
             block_on(storage.raw_scan(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
                 b"r\0".to_vec(),
                 None,
@@ -4321,7 +4346,7 @@ mod tests {
         expect_multi_values(
             results,
             block_on(storage.raw_scan(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
                 b"r\0c2".to_vec(),
                 None,
@@ -4340,7 +4365,7 @@ mod tests {
         expect_multi_values(
             results,
             block_on(storage.raw_scan(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
                 b"r\0z".to_vec(),
                 None,
@@ -4360,7 +4385,7 @@ mod tests {
         expect_multi_values(
             results,
             block_on(storage.raw_scan(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
                 b"r\0z".to_vec(),
                 None,
@@ -4382,7 +4407,7 @@ mod tests {
         expect_multi_values(
             results,
             block_on(storage.raw_scan(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
                 b"r\0b2".to_vec(),
                 Some(b"r\0c2".to_vec()),
@@ -4402,7 +4427,7 @@ mod tests {
         expect_multi_values(
             results,
             block_on(storage.raw_scan(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
                 b"r\0b2".to_vec(),
                 Some(b"r\0b2\x00".to_vec()),
@@ -4425,7 +4450,7 @@ mod tests {
         expect_multi_values(
             results,
             block_on(storage.raw_scan(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
                 b"r\0c2".to_vec(),
                 Some(b"r\0b2".to_vec()),
@@ -4444,7 +4469,7 @@ mod tests {
         expect_multi_values(
             results,
             block_on(storage.raw_scan(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
                 b"r\0b2\x00".to_vec(),
                 Some(b"r\0b2".to_vec()),
@@ -4471,7 +4496,7 @@ mod tests {
             block_on(async {
                 storage
                     .raw_scan(
-                        Context::default(),
+                        ctx.clone(),
                         "".to_string(),
                         b"r\0c1".to_vec(),
                         Some(b"r\0d3".to_vec()),
@@ -4488,7 +4513,7 @@ mod tests {
             block_on(async {
                 storage
                     .raw_scan(
-                        Context::default(),
+                        ctx.clone(),
                         "".to_string(),
                         b"r\0d3".to_vec(),
                         Some(b"r\0c1".to_vec()),
@@ -4612,34 +4637,43 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
+        let req_api_version = if api_version == ApiVersion::V1ttl {
+            ApiVersion::V1
+        } else {
+            api_version
+        };
+        let ctx = Context {
+            api_version: req_api_version,
+            ..Default::default()
+        };
 
         let test_data = vec![
-            (b"a".to_vec(), b"aa".to_vec()),
-            (b"a1".to_vec(), b"aa11".to_vec()),
-            (b"a2".to_vec(), b"aa22".to_vec()),
-            (b"a3".to_vec(), b"aa33".to_vec()),
-            (b"b".to_vec(), b"bb".to_vec()),
-            (b"b1".to_vec(), b"bb11".to_vec()),
-            (b"b2".to_vec(), b"bb22".to_vec()),
-            (b"b3".to_vec(), b"bb33".to_vec()),
-            (b"c".to_vec(), b"cc".to_vec()),
-            (b"c1".to_vec(), b"cc11".to_vec()),
-            (b"c2".to_vec(), b"cc22".to_vec()),
-            (b"c3".to_vec(), b"cc33".to_vec()),
-            (b"d".to_vec(), b"dd".to_vec()),
-            (b"d1".to_vec(), b"dd11".to_vec()),
-            (b"d2".to_vec(), b"dd22".to_vec()),
-            (b"d3".to_vec(), b"dd33".to_vec()),
-            (b"e".to_vec(), b"ee".to_vec()),
-            (b"e1".to_vec(), b"ee11".to_vec()),
-            (b"e2".to_vec(), b"ee22".to_vec()),
-            (b"e3".to_vec(), b"ee33".to_vec()),
+            (b"r\0a".to_vec(), b"aa".to_vec()),
+            (b"r\0a1".to_vec(), b"aa11".to_vec()),
+            (b"r\0a2".to_vec(), b"aa22".to_vec()),
+            (b"r\0a3".to_vec(), b"aa33".to_vec()),
+            (b"r\0b".to_vec(), b"bb".to_vec()),
+            (b"r\0b1".to_vec(), b"bb11".to_vec()),
+            (b"r\0b2".to_vec(), b"bb22".to_vec()),
+            (b"r\0b3".to_vec(), b"bb33".to_vec()),
+            (b"r\0c".to_vec(), b"cc".to_vec()),
+            (b"r\0c1".to_vec(), b"cc11".to_vec()),
+            (b"r\0c2".to_vec(), b"cc22".to_vec()),
+            (b"r\0c3".to_vec(), b"cc33".to_vec()),
+            (b"r\0d".to_vec(), b"dd".to_vec()),
+            (b"r\0d1".to_vec(), b"dd11".to_vec()),
+            (b"r\0d2".to_vec(), b"dd22".to_vec()),
+            (b"r\0d3".to_vec(), b"dd33".to_vec()),
+            (b"r\0e".to_vec(), b"ee".to_vec()),
+            (b"r\0e1".to_vec(), b"ee11".to_vec()),
+            (b"r\0e2".to_vec(), b"ee22".to_vec()),
+            (b"r\0e3".to_vec(), b"ee33".to_vec()),
         ];
 
         // Write key-value pairs in batch
         storage
             .raw_batch_put(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
                 test_data.clone(),
                 vec![0; test_data.len()],
@@ -4653,25 +4687,25 @@ mod tests {
         let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
         expect_multi_values(
             results,
-            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)).unwrap(),
+            block_on(storage.raw_batch_get(ctx.clone(), "".to_string(), keys)).unwrap(),
         );
 
         let results = vec![
-            Some((b"a".to_vec(), b"aa".to_vec())),
-            Some((b"a1".to_vec(), b"aa11".to_vec())),
-            Some((b"a2".to_vec(), b"aa22".to_vec())),
-            Some((b"a3".to_vec(), b"aa33".to_vec())),
-            Some((b"b".to_vec(), b"bb".to_vec())),
-            Some((b"b1".to_vec(), b"bb11".to_vec())),
-            Some((b"b2".to_vec(), b"bb22".to_vec())),
-            Some((b"b3".to_vec(), b"bb33".to_vec())),
-            Some((b"c".to_vec(), b"cc".to_vec())),
-            Some((b"c1".to_vec(), b"cc11".to_vec())),
-            Some((b"c2".to_vec(), b"cc22".to_vec())),
-            Some((b"c3".to_vec(), b"cc33".to_vec())),
-            Some((b"d".to_vec(), b"dd".to_vec())),
+            Some((b"r\0a".to_vec(), b"aa".to_vec())),
+            Some((b"r\0a1".to_vec(), b"aa11".to_vec())),
+            Some((b"r\0a2".to_vec(), b"aa22".to_vec())),
+            Some((b"r\0a3".to_vec(), b"aa33".to_vec())),
+            Some((b"r\0b".to_vec(), b"bb".to_vec())),
+            Some((b"r\0b1".to_vec(), b"bb11".to_vec())),
+            Some((b"r\0b2".to_vec(), b"bb22".to_vec())),
+            Some((b"r\0b3".to_vec(), b"bb33".to_vec())),
+            Some((b"r\0c".to_vec(), b"cc".to_vec())),
+            Some((b"r\0c1".to_vec(), b"cc11".to_vec())),
+            Some((b"r\0c2".to_vec(), b"cc22".to_vec())),
+            Some((b"r\0c3".to_vec(), b"cc33".to_vec())),
+            Some((b"r\0d".to_vec(), b"dd".to_vec())),
         ];
-        let ranges: Vec<KeyRange> = vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
+        let ranges: Vec<KeyRange> = vec![b"r\0a".to_vec(), b"r\0b".to_vec(), b"r\0c".to_vec()]
             .into_iter()
             .map(|k| {
                 let mut range = KeyRange::default();
@@ -4682,7 +4716,7 @@ mod tests {
         expect_multi_values(
             results,
             block_on(storage.raw_batch_scan(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
                 ranges.clone(),
                 5,
@@ -4693,24 +4727,24 @@ mod tests {
         );
 
         let results = vec![
-            Some((b"a".to_vec(), vec![])),
-            Some((b"a1".to_vec(), vec![])),
-            Some((b"a2".to_vec(), vec![])),
-            Some((b"a3".to_vec(), vec![])),
-            Some((b"b".to_vec(), vec![])),
-            Some((b"b1".to_vec(), vec![])),
-            Some((b"b2".to_vec(), vec![])),
-            Some((b"b3".to_vec(), vec![])),
-            Some((b"c".to_vec(), vec![])),
-            Some((b"c1".to_vec(), vec![])),
-            Some((b"c2".to_vec(), vec![])),
-            Some((b"c3".to_vec(), vec![])),
-            Some((b"d".to_vec(), vec![])),
+            Some((b"r\0a".to_vec(), vec![])),
+            Some((b"r\0a1".to_vec(), vec![])),
+            Some((b"r\0a2".to_vec(), vec![])),
+            Some((b"r\0a3".to_vec(), vec![])),
+            Some((b"r\0b".to_vec(), vec![])),
+            Some((b"r\0b1".to_vec(), vec![])),
+            Some((b"r\0b2".to_vec(), vec![])),
+            Some((b"r\0b3".to_vec(), vec![])),
+            Some((b"r\0c".to_vec(), vec![])),
+            Some((b"r\0c1".to_vec(), vec![])),
+            Some((b"r\0c2".to_vec(), vec![])),
+            Some((b"r\0c3".to_vec(), vec![])),
+            Some((b"r\0d".to_vec(), vec![])),
         ];
         expect_multi_values(
             results,
             block_on(storage.raw_batch_scan(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
                 ranges.clone(),
                 5,
@@ -4721,20 +4755,20 @@ mod tests {
         );
 
         let results = vec![
-            Some((b"a".to_vec(), b"aa".to_vec())),
-            Some((b"a1".to_vec(), b"aa11".to_vec())),
-            Some((b"a2".to_vec(), b"aa22".to_vec())),
-            Some((b"b".to_vec(), b"bb".to_vec())),
-            Some((b"b1".to_vec(), b"bb11".to_vec())),
-            Some((b"b2".to_vec(), b"bb22".to_vec())),
-            Some((b"c".to_vec(), b"cc".to_vec())),
-            Some((b"c1".to_vec(), b"cc11".to_vec())),
-            Some((b"c2".to_vec(), b"cc22".to_vec())),
+            Some((b"r\0a".to_vec(), b"aa".to_vec())),
+            Some((b"r\0a1".to_vec(), b"aa11".to_vec())),
+            Some((b"r\0a2".to_vec(), b"aa22".to_vec())),
+            Some((b"r\0b".to_vec(), b"bb".to_vec())),
+            Some((b"r\0b1".to_vec(), b"bb11".to_vec())),
+            Some((b"r\0b2".to_vec(), b"bb22".to_vec())),
+            Some((b"r\0c".to_vec(), b"cc".to_vec())),
+            Some((b"r\0c1".to_vec(), b"cc11".to_vec())),
+            Some((b"r\0c2".to_vec(), b"cc22".to_vec())),
         ];
         expect_multi_values(
             results,
             block_on(storage.raw_batch_scan(
-                Context::default(),
+                ctx.clone(),
                 "".to_string(),
                 ranges.clone(),
                 3,
@@ -4745,44 +4779,37 @@ mod tests {
         );
 
         let results = vec![
-            Some((b"a".to_vec(), vec![])),
-            Some((b"a1".to_vec(), vec![])),
-            Some((b"a2".to_vec(), vec![])),
-            Some((b"b".to_vec(), vec![])),
-            Some((b"b1".to_vec(), vec![])),
-            Some((b"b2".to_vec(), vec![])),
-            Some((b"c".to_vec(), vec![])),
-            Some((b"c1".to_vec(), vec![])),
-            Some((b"c2".to_vec(), vec![])),
+            Some((b"r\0a".to_vec(), vec![])),
+            Some((b"r\0a1".to_vec(), vec![])),
+            Some((b"r\0a2".to_vec(), vec![])),
+            Some((b"r\0b".to_vec(), vec![])),
+            Some((b"r\0b1".to_vec(), vec![])),
+            Some((b"r\0b2".to_vec(), vec![])),
+            Some((b"r\0c".to_vec(), vec![])),
+            Some((b"r\0c1".to_vec(), vec![])),
+            Some((b"r\0c2".to_vec(), vec![])),
         ];
         expect_multi_values(
             results,
-            block_on(storage.raw_batch_scan(
-                Context::default(),
-                "".to_string(),
-                ranges,
-                3,
-                true,
-                false,
-            ))
-            .unwrap(),
+            block_on(storage.raw_batch_scan(ctx.clone(), "".to_string(), ranges, 3, true, false))
+                .unwrap(),
         );
 
         let results = vec![
-            Some((b"a2".to_vec(), b"aa22".to_vec())),
-            Some((b"a1".to_vec(), b"aa11".to_vec())),
-            Some((b"a".to_vec(), b"aa".to_vec())),
-            Some((b"b2".to_vec(), b"bb22".to_vec())),
-            Some((b"b1".to_vec(), b"bb11".to_vec())),
-            Some((b"b".to_vec(), b"bb".to_vec())),
-            Some((b"c2".to_vec(), b"cc22".to_vec())),
-            Some((b"c1".to_vec(), b"cc11".to_vec())),
-            Some((b"c".to_vec(), b"cc".to_vec())),
+            Some((b"r\0a2".to_vec(), b"aa22".to_vec())),
+            Some((b"r\0a1".to_vec(), b"aa11".to_vec())),
+            Some((b"r\0a".to_vec(), b"aa".to_vec())),
+            Some((b"r\0b2".to_vec(), b"bb22".to_vec())),
+            Some((b"r\0b1".to_vec(), b"bb11".to_vec())),
+            Some((b"r\0b".to_vec(), b"bb".to_vec())),
+            Some((b"r\0c2".to_vec(), b"cc22".to_vec())),
+            Some((b"r\0c1".to_vec(), b"cc11".to_vec())),
+            Some((b"r\0c".to_vec(), b"cc".to_vec())),
         ];
         let ranges: Vec<KeyRange> = vec![
-            (b"a3".to_vec(), b"a".to_vec()),
-            (b"b3".to_vec(), b"b".to_vec()),
-            (b"c3".to_vec(), b"c".to_vec()),
+            (b"r\0a3".to_vec(), b"r\0a".to_vec()),
+            (b"r\0b3".to_vec(), b"r\0b".to_vec()),
+            (b"r\0c3".to_vec(), b"r\0c".to_vec()),
         ]
         .into_iter()
         .map(|(s, e)| {
@@ -4794,26 +4821,19 @@ mod tests {
         .collect();
         expect_multi_values(
             results,
-            block_on(storage.raw_batch_scan(
-                Context::default(),
-                "".to_string(),
-                ranges,
-                5,
-                false,
-                true,
-            ))
-            .unwrap(),
+            block_on(storage.raw_batch_scan(ctx.clone(), "".to_string(), ranges, 5, false, true))
+                .unwrap(),
         );
 
         let results = vec![
-            Some((b"c2".to_vec(), b"cc22".to_vec())),
-            Some((b"c1".to_vec(), b"cc11".to_vec())),
-            Some((b"b2".to_vec(), b"bb22".to_vec())),
-            Some((b"b1".to_vec(), b"bb11".to_vec())),
-            Some((b"a2".to_vec(), b"aa22".to_vec())),
-            Some((b"a1".to_vec(), b"aa11".to_vec())),
+            Some((b"r\0c2".to_vec(), b"cc22".to_vec())),
+            Some((b"r\0c1".to_vec(), b"cc11".to_vec())),
+            Some((b"r\0b2".to_vec(), b"bb22".to_vec())),
+            Some((b"r\0b1".to_vec(), b"bb11".to_vec())),
+            Some((b"r\0a2".to_vec(), b"aa22".to_vec())),
+            Some((b"r\0a1".to_vec(), b"aa11".to_vec())),
         ];
-        let ranges: Vec<KeyRange> = vec![b"c3".to_vec(), b"b3".to_vec(), b"a3".to_vec()]
+        let ranges: Vec<KeyRange> = vec![b"r\0c3".to_vec(), b"r\0b3".to_vec(), b"r\0a3".to_vec()]
             .into_iter()
             .map(|s| {
                 let mut range = KeyRange::default();
@@ -4823,32 +4843,25 @@ mod tests {
             .collect();
         expect_multi_values(
             results,
-            block_on(storage.raw_batch_scan(
-                Context::default(),
-                "".to_string(),
-                ranges,
-                2,
-                false,
-                true,
-            ))
-            .unwrap(),
+            block_on(storage.raw_batch_scan(ctx.clone(), "".to_string(), ranges, 2, false, true))
+                .unwrap(),
         );
 
         let results = vec![
-            Some((b"a2".to_vec(), vec![])),
-            Some((b"a1".to_vec(), vec![])),
-            Some((b"a".to_vec(), vec![])),
-            Some((b"b2".to_vec(), vec![])),
-            Some((b"b1".to_vec(), vec![])),
-            Some((b"b".to_vec(), vec![])),
-            Some((b"c2".to_vec(), vec![])),
-            Some((b"c1".to_vec(), vec![])),
-            Some((b"c".to_vec(), vec![])),
+            Some((b"r\0a2".to_vec(), vec![])),
+            Some((b"r\0a1".to_vec(), vec![])),
+            Some((b"r\0a".to_vec(), vec![])),
+            Some((b"r\0b2".to_vec(), vec![])),
+            Some((b"r\0b1".to_vec(), vec![])),
+            Some((b"r\0b".to_vec(), vec![])),
+            Some((b"r\0c2".to_vec(), vec![])),
+            Some((b"r\0c1".to_vec(), vec![])),
+            Some((b"r\0c".to_vec(), vec![])),
         ];
         let ranges: Vec<KeyRange> = vec![
-            (b"a3".to_vec(), b"a".to_vec()),
-            (b"b3".to_vec(), b"b".to_vec()),
-            (b"c3".to_vec(), b"c".to_vec()),
+            (b"r\0a3".to_vec(), b"r\0a".to_vec()),
+            (b"r\0b3".to_vec(), b"r\0b".to_vec()),
+            (b"r\0c3".to_vec(), b"r\0c".to_vec()),
         ]
         .into_iter()
         .map(|(s, e)| {
@@ -4860,15 +4873,7 @@ mod tests {
         .collect();
         expect_multi_values(
             results,
-            block_on(storage.raw_batch_scan(
-                Context::default(),
-                "".to_string(),
-                ranges,
-                5,
-                true,
-                true,
-            ))
-            .unwrap(),
+            block_on(storage.raw_batch_scan(ctx, "".to_string(), ranges, 5, true, true)).unwrap(),
         );
     }
 
@@ -4883,21 +4888,30 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
+        let req_api_version = if api_version == ApiVersion::V1ttl {
+            ApiVersion::V1
+        } else {
+            api_version
+        };
+        let ctx = Context {
+            api_version: req_api_version,
+            ..Default::default()
+        };
 
         let test_data = vec![
-            (b"a".to_vec(), b"aa".to_vec(), 10),
-            (b"b".to_vec(), b"bb".to_vec(), 20),
-            (b"c".to_vec(), b"cc".to_vec(), 0),
-            (b"d".to_vec(), b"dd".to_vec(), 10),
-            (b"e".to_vec(), b"ee".to_vec(), 20),
-            (b"f".to_vec(), b"ff".to_vec(), u64::MAX),
+            (b"r\0a".to_vec(), b"aa".to_vec(), 10),
+            (b"r\0b".to_vec(), b"bb".to_vec(), 20),
+            (b"r\0c".to_vec(), b"cc".to_vec(), 0),
+            (b"r\0d".to_vec(), b"dd".to_vec(), 10),
+            (b"r\0e".to_vec(), b"ee".to_vec(), 20),
+            (b"r\0f".to_vec(), b"ff".to_vec(), u64::MAX),
         ];
 
         // Write key-value pairs one by one
         for &(ref key, ref value, ttl) in &test_data {
             storage
                 .raw_put(
-                    Context::default(),
+                    ctx.clone(),
                     "".to_string(),
                     key.clone(),
                     value.clone(),
@@ -4909,9 +4923,8 @@ mod tests {
         rx.recv().unwrap();
 
         for &(ref key, _, ttl) in &test_data {
-            let res =
-                block_on(storage.raw_get_key_ttl(Context::default(), "".to_string(), key.clone()))
-                    .unwrap();
+            let res = block_on(storage.raw_get_key_ttl(ctx.clone(), "".to_string(), key.clone()))
+                .unwrap();
             if ttl != 0 {
                 if ttl > u64::MAX - ttl_current_ts() {
                     assert_eq!(res, Some(u64::MAX - ttl_current_ts()));
