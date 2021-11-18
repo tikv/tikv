@@ -4320,7 +4320,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compaction_style() {
+    fn test_numeric_enum_serializing() {
         let normal_string_config = r#"
             compaction-style = 1
         "#;
@@ -4354,5 +4354,19 @@ mod tests {
             let _: DefaultCfConfig = toml::from_str(bad_string_config).unwrap();
         });
         assert!(r.is_err());
+
+        // rate-limiter-mode defalut values is 2
+        let config_str = r#"
+            rate-limiter-mode = 1
+        "#;
+
+        let config: DbConfig = toml::from_str(config_str).unwrap();
+        assert_eq!(config.rate_limiter_mode, DBRateLimiterMode::ReadOnly);
+
+        assert!(
+            toml::to_string(&config)
+                .unwrap()
+                .contains("rate-limiter-mode = 1")
+        );
     }
 }
