@@ -793,16 +793,31 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         }
 
         let now = TiInstant::now();
-        if self.poll_ctx.trans.need_flush()
-            && now.saturating_duration_since(self.last_flush_msg_time)
-                >= self.poll_ctx.cfg.raft_msg_flush_interval.0
-        {
-            self.last_flush_msg_time = now;
-            self.poll_ctx.trans.flush();
+        if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
+            if self.poll_ctx.trans.need_flush() && !write_worker.is_empty() {
+                self.poll_ctx.trans.flush();
+            }
+
+            self.flush_events();
+        } else {
+            if self.poll_ctx.trans.need_flush()
+                && now.saturating_duration_since(self.last_flush_msg_time)
+                    >= self.poll_ctx.cfg.raft_msg_flush_interval.0
+            {
+                self.last_flush_msg_time = now;
+                self.poll_ctx.trans.flush();
+            }
+
+            if now.saturating_duration_since(self.last_flush_time) >= Duration::from_millis(1) {
+                self.last_flush_time = now;
+                self.need_flush_events = false;
+                self.flush_events();
+            } else {
+                self.need_flush_events = true;
+            }
         }
 
-        let dur = now.saturating_duration_since(self.timer);
-        if self.poll_ctx.has_ready {
+        let dur = if self.poll_ctx.has_ready {
             // Only enable the fail point when the store id is equal to 3, which is
             // the id of slow store in tests.
             fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
@@ -815,6 +830,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 }
             }
 
+            let dur = self.timer.saturating_elapsed();
             if !self.poll_ctx.store_stat.is_busy {
                 let election_timeout = Duration::from_millis(
                     self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
@@ -836,21 +852,16 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 self.poll_ctx.raft_metrics.ready.message - self.previous_metrics.message,
                 self.poll_ctx.raft_metrics.ready.snapshot - self.previous_metrics.snapshot
             );
-        }
+            dur
+        } else {
+            now.saturating_duration_since(self.timer)
+        };
 
         self.poll_ctx.current_time = None;
         self.poll_ctx
             .raft_metrics
             .process_ready
             .observe(duration_to_sec(dur));
-
-        if now.saturating_duration_since(self.last_flush_time) >= Duration::from_millis(1) {
-            self.last_flush_time = now;
-            self.need_flush_events = false;
-            self.flush_events();
-        } else {
-            self.need_flush_events = true;
-        }
 
         if !self.poll_ctx.pending_latency_inspect.is_empty() {
             for inspector in &mut self.poll_ctx.pending_latency_inspect {
@@ -875,15 +886,23 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn pause(&mut self) {
-        let now = TiInstant::now();
-        if self.poll_ctx.trans.need_flush() {
-            self.last_flush_msg_time = now;
-            self.poll_ctx.trans.flush();
-        }
-        if self.need_flush_events {
-            self.last_flush_time = now;
-            self.need_flush_events = false;
-            self.flush_events();
+        if self.poll_ctx.sync_write_worker.is_some() {
+            if self.poll_ctx.trans.need_flush() {
+                self.poll_ctx.trans.flush();
+            }
+        } else {
+            if self.poll_ctx.trans.need_flush() || self.need_flush_events {
+                let now = TiInstant::now();
+                if self.poll_ctx.trans.need_flush() {
+                    self.last_flush_msg_time = now;
+                    self.poll_ctx.trans.flush();
+                }
+                if self.need_flush_events {
+                    self.last_flush_time = now;
+                    self.need_flush_events = false;
+                    self.flush_events();
+                }
+            }
         }
     }
 }

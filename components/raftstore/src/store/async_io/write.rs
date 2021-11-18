@@ -618,6 +618,10 @@ where
         self.batch.clear();
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.batch.is_empty()
+    }
+
     fn clear_latency_inspect(&mut self) {
         if self.pending_latency_inspect.is_empty() {
             return;
