@@ -64,7 +64,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1637169555092,
+  "iteration": 1637207378932,
   "links": [],
   "panels": [
     {
@@ -12435,7 +12435,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 11
+            "y": 53
           },
           "hiddenSeries": false,
           "id": 108,
@@ -12542,7 +12542,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 11
+            "y": 53
           },
           "hiddenSeries": false,
           "id": 7,
@@ -12650,7 +12650,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 18
+            "y": 60
           },
           "hiddenSeries": false,
           "id": 119,
@@ -12758,7 +12758,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 18
+            "y": 60
           },
           "hiddenSeries": false,
           "id": 120,
@@ -12868,7 +12868,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 25
+            "y": 67
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -12936,7 +12936,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 25
+            "y": 67
           },
           "hiddenSeries": false,
           "id": 42,
@@ -13044,7 +13044,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 32
+            "y": 74
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -13114,7 +13114,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 32
+            "y": 74
           },
           "hiddenSeries": false,
           "id": 13235,
@@ -13223,7 +13223,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 39
+            "y": 81
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -13290,7 +13290,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 39
+            "y": 81
           },
           "hiddenSeries": false,
           "id": 2536,
@@ -13392,7 +13392,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 46
+            "y": 88
           },
           "hiddenSeries": false,
           "id": 1975,
@@ -13495,7 +13495,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 46
+            "y": 88
           },
           "hiddenSeries": false,
           "id": 1976,
@@ -16419,7 +16419,7 @@
           }
         }
       ],
-      "title": "Raft GC",
+      "title": "Raft Log GC",
       "type": "row"
     },
     {
