@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::fsm::{Fsm, FsmScheduler, Priority};
 use crate::mailbox::BasicMailbox;
 use crate::router::Router;
-use crossbeam::channel::{self, SendError};
+use crossbeam::channel::{self, after, SendError};
 use file_system::{set_io_type, IOType};
 use std::borrow::Cow;
 use std::sync::atomic::AtomicUsize;
@@ -254,6 +254,7 @@ struct Poller<N: Fsm, C: Fsm, Handler> {
     handler: Handler,
     max_batch_size: usize,
     reschedule_duration: Duration,
+    before_pause_wait: Option<Duration>,
 }
 
 enum ReschedulePolicy {
@@ -273,9 +274,25 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         }
 
         if batch.is_empty() {
-            self.handler.pause();
-            if let Ok(fsm) = self.fsm_receiver.recv() {
-                return batch.push(fsm);
+            if let Some(d) = self.before_pause_wait {
+                channel::select! {
+                    recv(self.fsm_receiver) -> msg => {
+                        if let Ok(fsm) = msg {
+                            return batch.push(fsm);
+                        }
+                    }
+                    recv(after(d)) -> _ => {
+                        self.handler.pause();
+                        if let Ok(fsm) = self.fsm_receiver.recv() {
+                            return batch.push(fsm);
+                        }
+                    }
+                }
+            } else {
+                self.handler.pause();
+                if let Ok(fsm) = self.fsm_receiver.recv() {
+                    return batch.push(fsm);
+                }
             }
         }
         !batch.is_empty()
@@ -386,6 +403,7 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     workers: Vec<JoinHandle<()>>,
     reschedule_duration: Duration,
     low_priority_pool_size: usize,
+    before_pause_wait: Option<Duration>,
 }
 
 impl<N, C> BatchSystem<N, C>
@@ -413,6 +431,7 @@ where
             handler,
             max_batch_size: self.max_batch_size,
             reschedule_duration: self.reschedule_duration,
+            before_pause_wait: self.before_pause_wait,
         };
         let props = tikv_util::thread_group::current_properties();
         let t = thread::Builder::new()
@@ -505,6 +524,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
         reschedule_duration: cfg.reschedule_duration.0,
         workers: vec![],
         low_priority_pool_size: cfg.low_priority_pool_size,
+        before_pause_wait: cfg.before_pause_wait,
     };
     (router, system)
 }

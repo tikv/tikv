@@ -105,6 +105,10 @@ fn test_async_io_cannot_destroy_when_persist_snapshot() {
 
     cluster.must_transfer_leader(region.get_id(), peer_1);
 
+    cluster.must_put(b"k", b"v");
+    // Make sure peer 3 exists
+    must_get_equal(&cluster.get_engine(3), b"k", b"v");
+
     let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
     let send_filter = Box::new(
         RegionPacketFilter::new(region.get_id(), 3)

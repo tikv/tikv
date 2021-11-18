@@ -10,7 +10,7 @@ use encryption_export::{
     DataKeyManager, DecrypterReader, Iv,
 };
 use engine_rocks::get_env;
-use engine_rocks::raw_util::new_engine_opt;
+use engine_rocks::raw_util::{db_exist, new_engine_opt};
 use engine_rocks::RocksEngine;
 use engine_traits::{
     EncryptionKeyManager, Engines, Error as EngineError, RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK,
@@ -50,9 +50,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{process, str, thread, u64};
 use structopt::StructOpt;
-use tikv::config::{ConfigController, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv_util::config::canonicalize_sub_path;
 use tikv_util::{escape, run_and_wait_child_process, unescape};
 use txn_types::Key;
 
@@ -103,8 +102,9 @@ fn new_debug_executor(
         return Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>;
     }
 
+    // TODO: perhaps we should allow user skip specifying data path.
     let data_dir = data_dir.unwrap();
-    let kv_path = canonicalize_sub_path(data_dir, DEFAULT_ROCKSDB_SUB_DIR).unwrap();
+    let kv_path = cfg.infer_kv_engine_path(Some(data_dir)).unwrap();
 
     let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
@@ -134,7 +134,11 @@ fn new_debug_executor(
         let mut raft_db_opts = cfg.raftdb.build_opt();
         raft_db_opts.set_env(env);
         let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
-        let raft_path = canonicalize_sub_path(data_dir, &cfg.raft_store.raftdb_path).unwrap();
+        let raft_path = cfg.infer_raft_db_path(Some(data_dir)).unwrap();
+        if !db_exist(&raft_path) {
+            error!("raft db not exists: {}", raft_path);
+            process::exit(-1);
+        }
         let raft_db = match new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts) {
             Ok(db) => db,
             Err(e) => handle_engine_error(e),
@@ -145,7 +149,11 @@ fn new_debug_executor(
         Box::new(debugger) as Box<dyn DebugExecutor>
     } else {
         let mut config = cfg.raft_engine.config();
-        config.dir = canonicalize_sub_path(data_dir, &config.dir).unwrap();
+        config.dir = cfg.infer_raft_engine_path(Some(data_dir)).unwrap();
+        if !RaftLogEngine::exists(&config.dir) {
+            error!("raft engine not exists: {}", config.dir);
+            process::exit(-1);
+        }
         let raft_db = RaftLogEngine::new(config).unwrap();
         let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
         Box::new(debugger) as Box<dyn DebugExecutor>
@@ -861,7 +869,8 @@ impl DebugExecutor for DebugClient {
         let resp = self
             .get_store_info(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_store_info", e));
-        println!("{}", resp.get_store_id())
+        println!("store id: {}", resp.get_store_id());
+        println!("api version: {:?}", resp.get_api_version())
     }
 
     fn dump_cluster_info(&self) {
@@ -1033,7 +1042,7 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
             .alloc_id()
             .unwrap_or_else(|e| perror_and_exit("RpcClient::alloc_id", e));
 
-        let store_id = self.get_store_id().expect("get store id");
+        let store_id = self.get_store_ident().expect("get store id").store_id;
 
         region.set_id(new_region_id);
         let old_version = region.get_region_epoch().get_version();
@@ -1088,16 +1097,17 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     }
 
     fn dump_store_info(&self) {
-        let store_id = self.get_store_id();
-        if let Ok(id) = store_id {
-            println!("store id: {}", id);
+        let store_ident_info = self.get_store_ident();
+        if let Ok(ident) = store_ident_info {
+            println!("store id: {}", ident.get_store_id());
+            println!("api version: {:?}", ident.get_api_version());
         }
     }
 
     fn dump_cluster_info(&self) {
-        let cluster_id = self.get_cluster_id();
-        if let Ok(id) = cluster_id {
-            println!("cluster id: {}", id);
+        let store_ident_info = self.get_store_ident();
+        if let Ok(ident) = store_ident_info {
+            println!("cluster id: {}", ident.get_cluster_id());
         }
     }
 }
@@ -1623,7 +1633,7 @@ enum Cmd {
         #[structopt(subcommand)]
         cmd: FailCmd,
     },
-    /// Print the store id
+    /// Print the store id and api version
     Store {},
     /// Print the cluster id
     Cluster {},

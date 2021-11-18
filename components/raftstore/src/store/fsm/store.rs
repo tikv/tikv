@@ -794,7 +794,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         let now = TiInstant::now();
         if self.poll_ctx.trans.need_flush()
             && now.saturating_duration_since(self.last_flush_msg_time)
-                >= Duration::from_micros(self.poll_ctx.cfg.raft_msg_flush_interval_us)
+                >= self.poll_ctx.cfg.raft_msg_flush_interval.0
         {
             self.last_flush_msg_time = now;
             self.poll_ctx.trans.flush();
@@ -860,10 +860,14 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn pause(&mut self) {
+        let now = TiInstant::now();
         if self.poll_ctx.trans.need_flush() {
+            self.last_flush_msg_time = now;
             self.poll_ctx.trans.flush();
         }
         if self.need_flush_events {
+            self.last_flush_time = now;
+            self.need_flush_events = false;
             self.flush_events();
         }
     }
@@ -1208,7 +1212,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .region_worker
             .start_with_timer("snapshot-worker", region_runner);
 
-        let raftlog_gc_runner = RaftlogGcRunner::new(self.router(), engines.clone());
+        let raftlog_gc_runner = RaftlogGcRunner::new(
+            self.router(),
+            engines.clone(),
+            cfg.value().raft_log_compact_sync_interval.0,
+        );
         let raftlog_gc_scheduler = workers
             .background_worker
             .start_with_timer("raft-gc-worker", raftlog_gc_runner);
