@@ -10,8 +10,13 @@ use encryption_export::{
     create_backend, data_key_manager_from_config, encryption_method_from_db_encryption_method,
     DataKeyManager, DecrypterReader, Iv,
 };
+<<<<<<< HEAD
 use engine_rocks::encryption::get_env;
 use engine_rocks::raw_util::new_engine_opt;
+=======
+use engine_rocks::get_env;
+use engine_rocks::raw_util::{db_exist, new_engine_opt};
+>>>>>>> 78e7221e9... ctl: detect raft db correctly (#11395)
 use engine_rocks::RocksEngine;
 use engine_traits::{
     EncryptionKeyManager, Engines, Error as EngineError, RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK,
@@ -46,10 +51,17 @@ use std::string::ToString;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{process, str, thread, u64};
+<<<<<<< HEAD
 use tikv::config::{ConfigController, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv_util::config::canonicalize_sub_path;
 use tikv_util::{escape, unescape};
+=======
+use structopt::StructOpt;
+use tikv::config::{ConfigController, TiKvConfig};
+use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
+use tikv_util::{escape, run_and_wait_child_process, unescape};
+>>>>>>> 78e7221e9... ctl: detect raft db correctly (#11395)
 use txn_types::Key;
 
 const METRICS_PROMETHEUS: &str = "prometheus";
@@ -99,8 +111,9 @@ fn new_debug_executor(
         return Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>;
     }
 
+    // TODO: perhaps we should allow user skip specifying data path.
     let data_dir = data_dir.unwrap();
-    let kv_path = canonicalize_sub_path(data_dir, DEFAULT_ROCKSDB_SUB_DIR).unwrap();
+    let kv_path = cfg.infer_kv_engine_path(Some(data_dir)).unwrap();
 
     let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
@@ -130,7 +143,11 @@ fn new_debug_executor(
         let mut raft_db_opts = cfg.raftdb.build_opt();
         raft_db_opts.set_env(env);
         let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
-        let raft_path = canonicalize_sub_path(data_dir, &cfg.raft_store.raftdb_path).unwrap();
+        let raft_path = cfg.infer_raft_db_path(Some(data_dir)).unwrap();
+        if !db_exist(&raft_path) {
+            error!("raft db not exists: {}", raft_path);
+            process::exit(-1);
+        }
         let raft_db = match new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts) {
             Ok(db) => db,
             Err(e) => handle_engine_error(e),
@@ -141,8 +158,17 @@ fn new_debug_executor(
         Box::new(debugger) as Box<dyn DebugExecutor>
     } else {
         let mut config = cfg.raft_engine.config();
+<<<<<<< HEAD
         config.dir = canonicalize_sub_path(data_dir, &config.dir).unwrap();
         let raft_db = RaftLogEngine::new(config);
+=======
+        config.dir = cfg.infer_raft_engine_path(Some(data_dir)).unwrap();
+        if !RaftLogEngine::exists(&config.dir) {
+            error!("raft engine not exists: {}", config.dir);
+            process::exit(-1);
+        }
+        let raft_db = RaftLogEngine::new(config).unwrap();
+>>>>>>> 78e7221e9... ctl: detect raft db correctly (#11395)
         let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
         Box::new(debugger) as Box<dyn DebugExecutor>
     }
