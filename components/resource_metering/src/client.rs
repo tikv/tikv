@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::metrics::{IGNORED_DATA_COUNTER, REPORT_DATA_COUNTER, REPORT_DURATION_HISTOGRAM};
 use crate::model::Records;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,6 +46,8 @@ impl Client for GrpcClient {
         }
         let handle = self.limiter.try_acquire();
         if handle.is_none() {
+            IGNORED_DATA_COUNTER.with_label_values(&["report"]).inc();
+            warn!("the last report has not been completed, discarding the new report data");
             return;
         }
         if self.address != address || self.client.is_none() {
@@ -55,13 +58,20 @@ impl Client for GrpcClient {
         let call_opt = CallOption::default().timeout(Duration::from_secs(2));
         let call = client.report_opt(call_opt);
         if let Err(err) = &call {
+            IGNORED_DATA_COUNTER.with_label_values(&["report"]).inc();
             warn!("failed to connect to receiver"; "error" => ?err);
             return;
         }
         let (mut tx, rx) = call.unwrap();
         client.spawn(async move {
             let _hd = handle;
+
+            let _t = REPORT_DURATION_HISTOGRAM.start_timer();
             let others = records.others;
+            let to_send_cnt = records.records.len() + if others.is_empty() { 0 } else { 1 };
+            REPORT_DATA_COUNTER
+                .with_label_values(&["to_send"])
+                .inc_by(to_send_cnt as _);
             for (tag, record) in records.records {
                 let mut req = ResourceUsageRecord::default();
                 req.set_resource_group_tag(tag);
@@ -71,6 +81,7 @@ impl Client for GrpcClient {
                     warn!("failed to send records"; "error" => ?err);
                     return;
                 }
+                REPORT_DATA_COUNTER.with_label_values(&["sent"]).inc();
             }
             if !others.is_empty() {
                 let mut req = ResourceUsageRecord::default();
@@ -80,6 +91,7 @@ impl Client for GrpcClient {
                     warn!("failed to send records"; "error" => ?err);
                     return;
                 }
+                REPORT_DATA_COUNTER.with_label_values(&["sent"]).inc();
             }
             if let Err(err) = tx.close().await {
                 warn!("failed to close a grpc call"; "error" => ?err);

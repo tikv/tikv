@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::metrics::IGNORED_DATA_COUNTER;
 use crate::{RawRecords, Task};
 
 use std::sync::atomic::AtomicU64;
@@ -43,7 +44,9 @@ pub struct CollectorImpl {
 
 impl Collector for CollectorImpl {
     fn collect(&self, records: Arc<RawRecords>) {
-        self.scheduler.schedule(Task::Records(records)).ok();
+        if self.scheduler.schedule(Task::Records(records)).is_err() {
+            IGNORED_DATA_COUNTER.with_label_values(&["collect"]).inc();
+        }
     }
 }
 
