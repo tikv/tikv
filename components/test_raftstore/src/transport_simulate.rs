@@ -12,6 +12,7 @@ use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
+
 use raft::eraftpb::MessageType;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::{
@@ -574,6 +575,73 @@ impl Filter for CollectSnapshotFilter {
         } else {
             res
         }
+    }
+}
+/// `SendMsgOnceFilter` is a simulation transport filter to simulate the net error.
+/// it will send/receive message util these message contained the filter_type message
+pub struct SendMsgOnceFilter {
+    notifier: Mutex<Sender<()>>,
+    once: AtomicBool,
+    filter_type: MessageType,
+    pending_notify: AtomicUsize,
+}
+
+impl SendMsgOnceFilter {
+    pub fn new(ch: Sender<()>, filter_type: MessageType) -> SendMsgOnceFilter {
+        SendMsgOnceFilter {
+            notifier: Mutex::new(ch),
+            once: AtomicBool::new(true),
+            filter_type,
+            pending_notify: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl Filter for SendMsgOnceFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        msgs.retain(|msg| {
+            if !self.once.load(Ordering::SeqCst) {
+                return false;
+            }
+            if msg.get_message().get_msg_type() != self.filter_type {
+                self.pending_notify.fetch_add(1, Ordering::SeqCst);
+                return true;
+            } else {
+                if self.once.load(Ordering::SeqCst) {
+                    self.pending_notify.fetch_add(1, Ordering::SeqCst);
+                    self.once.store(false, Ordering::SeqCst);
+                    return true;
+                }
+                false
+            }
+        });
+        Ok(())
+    }
+    fn after(&self, _: Result<()>) -> Result<()> {
+        let mut n = self.pending_notify.load(Ordering::SeqCst);
+        loop {
+            if n == 0 {
+                // the pending_notify should be zero and once is false
+                if self.once.load(Ordering::SeqCst) {
+                    let _ = self.notifier.lock().unwrap().send(());
+                }
+                break;
+            }
+
+            match self.pending_notify.compare_exchange_weak(
+                n,
+                n - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => {
+                    n -= 1;
+                }
+                Err(v) => n = v,
+            }
+        }
+
+        Ok(())
     }
 }
 

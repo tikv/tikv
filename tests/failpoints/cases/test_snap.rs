@@ -551,27 +551,31 @@ fn test_sending_fail_with_net_error() {
     cluster.run_conf_change();
 
     cluster.must_put(b"k1", b"v1");
-    let ready_notify = Arc::default();
+
+    // should ensure leader can send the snapshot request
     let (notify_tx, notify_rx) = mpsc::channel();
     cluster.sim.write().unwrap().add_send_filter(
         1,
-        Box::new(MessageTypeNotifier::new(
-            MessageType::MsgSnapshot,
-            notify_tx,
-            Arc::clone(&ready_notify),
-        )),
+        Box::new(SendMsgOnceFilter::new(notify_tx, MessageType::MsgSnapshot)),
+    );
+    // should ensure learner can receive the snapshot request
+    let (receive_tx, receive_rx) = mpsc::channel();
+    cluster.sim.write().unwrap().add_recv_filter(
+        2,
+        Box::new(SendMsgOnceFilter::new(receive_tx, MessageType::MsgSnapshot)),
     );
 
     // store2 will return err when receive data.
     fail::cfg("receiving_snapshot_net_error", "return()").unwrap();
     pd_client.add_peer(1, new_learner_peer(2, 2));
 
-    // ready to recv notify.
-    ready_notify.store(true, Ordering::SeqCst);
+    // ready to send/recv notify.
     notify_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    receive_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    // request has ben arrived, then need to wait receiver handle the snapshot request
+    sleep_ms(100);
+    assert_eq!(cluster.get_snap_mgr(1).stats().sending_count, 0);
     let engine2 = cluster.get_engine(2);
     must_get_none(&engine2, b"k1");
-
-    assert_eq!(cluster.get_snap_mgr(1).stats().sending_count, 0);
     assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
 }
