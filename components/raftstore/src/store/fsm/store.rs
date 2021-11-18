@@ -853,7 +853,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 inspector.record_store_process(dur);
             }
             if self.poll_ctx.sync_write_worker.is_some() {
-                for inspector in &mut self.poll_ctx.pending_latency_inspect {
+                for mut inspector in std::mem::take(&mut self.poll_ctx.pending_latency_inspect) {
                     inspector.record_store_write(dur);
                 }
             } else {
