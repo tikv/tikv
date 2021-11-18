@@ -253,12 +253,10 @@
 //!   Likewise `engine_rocks` can temporarily call code from inside `engine`.
 #![feature(min_specialization)]
 
-#[allow(unused_extern_crates)]
-extern crate tikv_alloc;
 #[cfg(test)]
-#[macro_use]
 extern crate serde_derive;
 extern crate slog_global;
+extern crate tikv_alloc;
 #[macro_use(fail_point)]
 extern crate fail;
 
@@ -340,8 +338,6 @@ pub use raft_engine::{CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch};
 pub mod compaction_job;
 pub mod util;
 pub use compaction_job::*;
-
-pub mod config;
 
 // FIXME: This should live somewhere else
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
