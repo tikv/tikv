@@ -334,6 +334,7 @@ pub fn build_executors<S: Storage + 'static>(
         executor = new_executor;
         is_src_scan_executor = false;
     }
+
     Ok(executor)
 }
 
@@ -356,7 +357,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             storage,
             ranges,
             config.clone(),
-            is_streaming || paging_size.is_some(), // For streaming request, executors will continue scan from range end where last scan is finished
+            is_streaming || paging_size.is_some(), // For streaming and paging request, executors will continue scan from range end where last scan is finished
         )?;
 
         let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
