@@ -103,7 +103,7 @@ impl rocksdb::EventListener for RocksEventListener {
                 DBBackgroundErrorReason::Flush | DBBackgroundErrorReason::Compaction
             ) && err.starts_with(NO_SPACE_ERROR)
             {
-                // Ignoring NoSpace error and let RocksDB automatically recovers.
+                // Ignore NoSpace error and let RocksDB automatically recover.
                 return;
             }
             let r = match reason {
