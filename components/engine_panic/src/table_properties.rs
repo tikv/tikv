@@ -1,0 +1,32 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
+use crate::engine::PanicEngine;
+use engine_traits::{Range, Result};
+
+pub struct UserCollectedProperties;
+impl engine_traits::UserCollectedProperties for UserCollectedProperties {
+    fn get(&self, index: &[u8]) -> Option<&[u8]> {
+        None
+    }
+}
+
+pub struct TablePropertiesCollection;
+impl engine_traits::TablePropertiesCollection for TablePropertiesCollection {
+    type UserCollectedProperties = UserCollectedProperties;
+    fn iter_user_collected_properties<F>(&self, _: F)
+    where
+        F: FnMut(&Self::UserCollectedProperties) -> bool,
+    {
+    }
+}
+
+impl engine_traits::TablePropertiesExt for PanicEngine {
+    type TablePropertiesCollection = TablePropertiesCollection;
+    fn table_properties_collection(
+        &self,
+        cf: &str,
+        ranges: &[Range],
+    ) -> Result<Self::TablePropertiesCollection> {
+        panic!()
+    }
+}
