@@ -31,6 +31,7 @@ fn test_region_detail() {
 #[test]
 fn test_latency_inspect() {
     let mut cluster = new_node_cluster(0, 1);
+    cluster.cfg.raft_store.store_io_pool_size = 2;
     cluster.run();
     let router = cluster.sim.wl().get_router(1).unwrap();
     let (tx, rx) = std::sync::mpsc::sync_channel(10);
@@ -52,8 +53,8 @@ fn test_latency_inspect() {
 #[test]
 fn test_sync_latency_inspect() {
     let mut cluster = new_node_cluster(0, 1);
-    cluster.run();
     cluster.cfg.raft_store.store_io_pool_size = 0;
+    cluster.run();
     let router = cluster.sim.wl().get_router(1).unwrap();
     let (tx, rx) = std::sync::mpsc::sync_channel(10);
     let inspector = LatencyInspector::new(
