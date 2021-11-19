@@ -1502,7 +1502,7 @@ mod tests {
     }
 
     #[test]
-    fn test_gc_keys() {
+    fn test_gc_keys_statistics() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let prefixed_engine = PrefixedEngine(engine.clone());
 
