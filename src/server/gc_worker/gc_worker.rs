@@ -245,7 +245,7 @@ where
         gc_info.found_versions += next_gc_info.found_versions;
         gc_info.deleted_versions += next_gc_info.deleted_versions;
         gc_info.is_completed = next_gc_info.is_completed;
-        let mut stats = mem::take(&mut reader.statistics);
+        let stats = mem::take(&mut reader.statistics);
         self.stats.add(&stats);
         Ok(())
     }
