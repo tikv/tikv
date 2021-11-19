@@ -318,14 +318,18 @@ impl WriteCompactionFilter {
     fn schedule_gc_task(&self, task: GcTask<RocksEngine>, log_on_error: bool) {
         match self.gc_scheduler.schedule(task) {
             Ok(_) => {}
-            Err(ScheduleError::Full(_)) => {
-                GC_COMPACTION_FAILURE.with_label_values(&["full"]).inc();
-            }
             Err(e) => {
                 if log_on_error {
                     error!("compaction filter schedule {} fail", e);
                 }
-                GC_COMPACTION_FAILURE.with_label_values(&["schedule"]).inc();
+                match e {
+                    ScheduleError::Full(_) => {
+                        GC_COMPACTION_FAILURE.with_label_values(&["full"]).inc();
+                    }
+                    ScheduleError::Stopped(_) => {
+                        GC_COMPACTION_FAILURE.with_label_values(&["stopped"]).inc();
+                    }
+                }
             }
         }
     }
@@ -574,7 +578,7 @@ impl CompactionFilter for WriteCompactionFilter {
             Ok(decision) => decision,
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
-                GC_COMPACTION_FAILURE.with_label_values(&["err"]).inc();
+                GC_COMPACTION_FAILURE.with_label_values(&["filter"]).inc();
                 self.encountered_errors = true;
                 CompactionFilterDecision::Keep
             }
