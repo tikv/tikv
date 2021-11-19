@@ -807,10 +807,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         for peer in peers.iter_mut().flatten() {
             peer.update_memory_trace(&mut self.trace_event);
         }
-    }
 
-    fn end(&mut self, peers: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {
-        let now = TiInstant::now();
         if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
             if self.poll_ctx.trans.need_flush() && !write_worker.is_empty() {
                 self.poll_ctx.trans.flush();
@@ -818,6 +815,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 
             self.flush_events();
         } else {
+            let now = TiInstant::now();
+
             if self.poll_ctx.trans.need_flush()
                 && now.saturating_duration_since(self.last_flush_msg_time)
                     >= self.poll_ctx.cfg.raft_msg_flush_interval.0
@@ -834,7 +833,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 self.need_flush_events = true;
             }
         }
+    }
 
+    fn end(&mut self, peers: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {
         let dur = if self.poll_ctx.has_ready {
             // Only enable the fail point when the store id is equal to 3, which is
             // the id of slow store in tests.
@@ -872,7 +873,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             );
             dur
         } else {
-            now.saturating_duration_since(self.timer)
+            self.timer.saturating_elapsed()
         };
 
         self.poll_ctx.current_time = None;
@@ -892,6 +893,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     inspector.finish();
                 }
             } else {
+                let now = TiInstant::now();
                 let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
                 if let Err(err) =
                     self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
