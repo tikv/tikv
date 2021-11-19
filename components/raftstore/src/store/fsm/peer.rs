@@ -630,7 +630,6 @@ where
             self.propose_batch_raft_command(false);
             self.check_batch_cmd_and_proposed_cb();
         }
-        self.collect_ready();
     }
 
     fn propose_batch_raft_command(&mut self, force: bool) {
@@ -1224,11 +1223,14 @@ where
         }
     }
 
-    pub fn collect_ready(&mut self) {
+    /// Collect ready if any.
+    ///
+    /// Returns false is no readiness is generated.
+    pub fn collect_ready(&mut self) -> bool {
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
         if !has_ready || self.fsm.stopped {
-            return;
+            return false;
         }
         self.ctx.pending_count += 1;
         self.ctx.has_ready = true;
@@ -1247,7 +1249,10 @@ where
                 self.register_raft_base_tick();
                 self.fsm.peer.leader_unreachable = false;
             }
+
+            return r.has_write_ready;
         }
+        false
     }
 
     #[inline]

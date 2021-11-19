@@ -5,14 +5,15 @@ use std::cell::Cell;
 use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, u64};
 
 use batch_system::{
-    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
+    Priority,
 };
 use crossbeam::channel::{unbounded, Sender, TryRecvError, TrySendError};
 use engine_traits::{Engines, KvEngine, Mutable, PerfContextKind, WriteBatch, WriteBatchExt};
@@ -739,8 +740,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         expected_msg_count
     }
 
-    fn handle_normal(&mut self, peer: &mut PeerFsm<EK, ER>) -> Option<usize> {
-        let mut expected_msg_count = None;
+    fn handle_normal(
+        &mut self,
+        peer: &mut impl DerefMut<Target = PeerFsm<EK, ER>>,
+    ) -> HandleResult {
+        let mut handle_result = HandleResult::KeepProcessing;
 
         fail_point!(
             "pause_on_peer_collect_message",
@@ -772,26 +776,40 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     self.peer_msg_buf.push(msg);
                 }
                 Err(TryRecvError::Empty) => {
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
                     peer.stop();
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
             }
         }
+
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
-        expected_msg_count
-    }
-
-    fn end(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
-        for peer in peers.iter_mut() {
-            peer.update_memory_trace(&mut self.trace_event);
+        // No readiness is generated and using sync write, skipping calling ready and release early.
+        if !delegate.collect_ready() && self.poll_ctx.sync_write_worker.is_some() {
+            if let HandleResult::StopAt { skip_end, .. } = &mut handle_result {
+                *skip_end = true;
+            }
         }
 
+        handle_result
+    }
+
+    fn light_end(
+        &mut self,
+        peers: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>],
+        _to_skip_end: &mut Vec<usize>,
+    ) {
+        for peer in peers.iter_mut().flatten() {
+            peer.update_memory_trace(&mut self.trace_event);
+        }
+    }
+
+    fn end(&mut self, peers: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {
         let now = TiInstant::now();
         if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
             if self.poll_ctx.trans.need_flush() && !write_worker.is_empty() {
@@ -825,7 +843,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
                 write_worker.write_to_db(false);
 
-                for peer in peers.iter_mut() {
+                for peer in peers.iter_mut().flatten() {
                     PeerFsmDelegate::new(peer, &mut self.poll_ctx).post_raft_ready_append();
                 }
             }

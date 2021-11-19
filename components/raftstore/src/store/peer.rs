@@ -440,6 +440,7 @@ pub struct UnpersistedReady {
 pub struct ReadyResult {
     pub state_role: Option<StateRole>,
     pub has_new_entries: bool,
+    pub has_write_ready: bool,
 }
 
 pub struct Peer<EK, ER>
@@ -2059,7 +2060,7 @@ where
 
         let ready_number = ready.number();
         let persisted_msgs = ready.take_persisted_messages();
-
+        let mut has_write_ready = false;
         match &res {
             HandleReadyResult::SendIOTask | HandleReadyResult::Snapshot { .. } => {
                 if !persisted_msgs.is_empty() {
@@ -2075,6 +2076,7 @@ where
 
                     assert_eq!(self.unpersisted_ready, None);
                     self.unpersisted_ready = Some(ready);
+                    has_write_ready = true;
                 } else {
                     self.write_router.send_write_msg(
                         ctx,
@@ -2172,6 +2174,7 @@ where
         Some(ReadyResult {
             state_role,
             has_new_entries,
+            has_write_ready,
         })
     }
 
