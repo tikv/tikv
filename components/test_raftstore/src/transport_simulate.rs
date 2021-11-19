@@ -602,17 +602,12 @@ impl Filter for SendMsgOnceFilter {
         msgs.retain(|msg| {
             if !self.once.load(Ordering::SeqCst) {
                 return false;
-            }
-            if msg.get_message().get_msg_type() != self.filter_type {
-                self.pending_notify.fetch_add(1, Ordering::SeqCst);
-                return true;
             } else {
-                if self.once.load(Ordering::SeqCst) {
-                    self.pending_notify.fetch_add(1, Ordering::SeqCst);
+                self.pending_notify.fetch_add(1, Ordering::SeqCst);
+                if msg.get_message().get_msg_type() == self.filter_type {
                     self.once.store(false, Ordering::SeqCst);
-                    return true;
                 }
-                false
+                true
             }
         });
         Ok(())
