@@ -2398,11 +2398,7 @@ where
         ctx: &mut PollContext<EK, ER, T>,
     ) -> Option<PersistSnapshotResult> {
         assert!(ctx.sync_write_worker.is_some());
-        let ready = if let Some(r) = self.unpersisted_ready.take() {
-            r
-        } else {
-            return None;
-        };
+        let ready = self.unpersisted_ready.take()?;
 
         self.persisted_number = ready.number();
 
