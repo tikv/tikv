@@ -601,7 +601,7 @@ impl Filter for SendMsgOnceFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         msgs.retain(|msg| {
             if !self.once.load(Ordering::SeqCst) {
-                return false;
+                false
             } else {
                 self.pending_notify.fetch_add(1, Ordering::SeqCst);
                 if msg.get_message().get_msg_type() == self.filter_type {
