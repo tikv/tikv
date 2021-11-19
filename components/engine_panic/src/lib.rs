@@ -43,5 +43,7 @@ pub mod perf_context;
 pub use crate::perf_context::*;
 pub mod flow_control_factors;
 pub use crate::flow_control_factors::*;
+pub mod table_properties;
+pub use crate::table_properties::*;
 
 mod raft_engine;
