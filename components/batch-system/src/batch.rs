@@ -86,7 +86,6 @@ impl_sched!(ControlScheduler, FsmTypes::Control, Fsm = C);
 pub struct NormalFsm<N> {
     fsm: Box<N>,
     timer: Instant,
-    offset: usize,
     policy: Option<ReschedulePolicy>,
 }
 
@@ -96,7 +95,6 @@ impl<N> NormalFsm<N> {
         NormalFsm {
             fsm,
             timer: Instant::now_coarse(),
-            offset: 0,
             policy: None,
         }
     }
@@ -312,12 +310,10 @@ pub trait PollHandler<N, C> {
     fn handle_normal(&mut self, normal: &mut impl DerefMut<Target = N>) -> HandleResult;
 
     /// This function is called after `handle_normal` is called for all fsm and before calling
-    /// `end`. The function is expected to run lightweight work. If any fsms expects to skip
-    /// `end`, its offset should be pushed to `to_skip_end`.
+    /// `end`. The function is expected to run lightweight work.
     fn light_end(
         &mut self,
         _batch: &mut [Option<impl DerefMut<Target = N>>],
-        _to_skip_end: &mut Vec<usize>,
     ) {
     }
 
@@ -413,7 +409,6 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             let mut hot_fsm_count = 0;
             for (i, p) in batch.normals.iter_mut().enumerate() {
                 let p = p.as_mut().unwrap();
-                p.offset = i;
                 let res = self.handler.handle_normal(p);
                 if p.is_stopped() {
                     p.policy = Some(ReschedulePolicy::Remove);
@@ -454,7 +449,6 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     break;
                 }
                 let p = batch.normals[fsm_cnt].as_mut().unwrap();
-                p.offset = fsm_cnt;
                 let res = self.handler.handle_normal(p);
                 if p.is_stopped() {
                     p.policy = Some(ReschedulePolicy::Remove);
@@ -468,7 +462,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 }
                 fsm_cnt += 1;
             }
-            self.handler.light_end(&mut batch.normals, &mut to_skip_end);
+            self.handler.light_end(&mut batch.normals);
             for offset in &to_skip_end {
                 batch.schedule(&self.router, *offset, true);
             }
