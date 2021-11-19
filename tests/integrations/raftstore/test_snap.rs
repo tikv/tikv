@@ -440,6 +440,13 @@ fn test_server_snapshot_with_append() {
 }
 
 #[test]
+fn test_node_snapshot_with_append_sync() {
+    let mut cluster = new_node_cluster(0, 4);
+    cluster.cfg.raft_store.store_io_pool_size = 0;
+    test_snapshot_with_append(&mut cluster);
+}
+
+#[test]
 fn test_inspected_snapshot() {
     let mut cluster = new_server_cluster(1, 3);
     cluster.cfg.prefer_mem = false;

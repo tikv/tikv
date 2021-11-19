@@ -1167,7 +1167,7 @@ where
     }
 
     pub fn post_raft_ready_append(&mut self) {
-        if let Some(persist_snap_res) = self.fsm.peer.on_advance_ready(self.ctx) {
+        if let Some(persist_snap_res) = self.fsm.peer.handle_raft_ready_advance(self.ctx) {
             self.on_ready_persist_snapshot(persist_snap_res);
             if self.fsm.peer.pending_merge_state.is_some() {
                 // After applying a snapshot, merge is rollbacked implicitly.
@@ -2266,6 +2266,7 @@ where
         self.fsm.peer.pending_remove = true;
 
         if self.fsm.peer.has_unpersisted_ready() {
+            assert!(self.ctx.sync_write_worker.is_none());
             // The destroy must be delayed if there are some unpersisted readies.
             // Otherwise there is a race of writting kv db and raft db between here
             // and write worker.

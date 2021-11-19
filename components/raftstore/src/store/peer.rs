@@ -2390,7 +2390,7 @@ where
         }
     }
 
-    pub fn on_advance_ready<T: Transport>(
+    pub fn handle_raft_ready_advance<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) -> Option<PersistSnapshotResult> {
