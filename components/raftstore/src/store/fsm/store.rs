@@ -882,8 +882,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             .observe(duration_to_sec(dur));
 
         if !self.poll_ctx.pending_latency_inspect.is_empty() {
-            let latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
-            for inspector in &mut self.poll_ctx.pending_latency_inspect {
+            let mut latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
+            for inspector in &mut latency_inspect {
                 inspector.record_store_process(dur);
             }
             if self.poll_ctx.sync_write_worker.is_some() {
