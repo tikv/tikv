@@ -63,9 +63,10 @@ lazy_static! {
     )
     .unwrap();
     // A counter for errors met by `WriteCompactionFilter`.
-    static ref GC_COMPACTION_FAILURE: IntCounter = register_int_counter!(
+    static ref GC_COMPACTION_FAILURE: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_failure",
-        "Compaction filter meets failure"
+        "Compaction filter meets failure",
+        &["type"]
     )
     .unwrap();
     // A counter for skip performing GC in compactions.
@@ -564,7 +565,7 @@ impl CompactionFilter for WriteCompactionFilter {
             Ok(decision) => decision,
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
-                GC_COMPACTION_FAILURE.inc();
+                GC_COMPACTION_FAILURE.with_label_values(&["filter"]).inc();
                 self.encountered_errors = true;
                 CompactionFilterDecision::Keep
             }
