@@ -311,11 +311,7 @@ pub trait PollHandler<N, C> {
 
     /// This function is called after `handle_normal` is called for all fsm and before calling
     /// `end`. The function is expected to run lightweight work.
-    fn light_end(
-        &mut self,
-        _batch: &mut [Option<impl DerefMut<Target = N>>],
-    ) {
-    }
+    fn light_end(&mut self, _batch: &mut [Option<impl DerefMut<Target = N>>]) {}
 
     /// This function is called at the end of every round.
     fn end(&mut self, batch: &mut [Option<impl DerefMut<Target = N>>]);

@@ -799,10 +799,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         handle_result
     }
 
-    fn light_end(
-        &mut self,
-        peers: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>],
-    ) {
+    fn light_end(&mut self, peers: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {
         for peer in peers.iter_mut().flatten() {
             peer.update_memory_trace(&mut self.trace_event);
         }
