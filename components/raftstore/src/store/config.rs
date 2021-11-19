@@ -169,6 +169,7 @@ pub struct Config {
     #[serde(flatten, with = "prefix_store")]
     pub store_batch_system: BatchSystemConfig,
 
+    /// If it is 0, it means io tasks are handled in store threads.
     #[online_config(skip)]
     pub store_io_pool_size: usize,
 
@@ -493,9 +494,6 @@ impl Config {
             self.raft_msg_flush_interval.0,
             Duration::from_millis(1),
         ));
-        if self.store_io_pool_size == 0 {
-            return Err(box_err!("store-io-pool-size should be greater than 0"));
-        }
         if self.store_io_notify_capacity == 0 {
             return Err(box_err!(
                 "store-io-notify-capacity should be greater than 0"

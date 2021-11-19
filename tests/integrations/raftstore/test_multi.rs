@@ -793,6 +793,13 @@ fn test_server_batch_write() {
     test_batch_write(&mut cluster);
 }
 
+#[test]
+fn test_server_sync_batch_write() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.store_io_pool_size = 0;
+    test_batch_write(&mut cluster);
+}
+
 // Tests whether logs are catch up quickly.
 #[test]
 fn test_node_catch_up_logs() {
