@@ -168,6 +168,7 @@ pub async fn region_resolved_ts_store(
     let mut resp_map: HashMap<u64, Vec<u64>> = HashMap::default();
     // region_id -> `(Vec<Peer>, LeaderInfo)`
     let info_map = region_read_progress.dump_leader_infos(&regions);
+    let mut valid_regions = HashSet::default();
 
     for (region_id, (peer_list, leader_info)) in info_map {
         let leader_id = leader_info.get_peer_id();
@@ -178,6 +179,9 @@ pub async fn region_resolved_ts_store(
         for peer in &peer_list {
             if peer.store_id == store_id && peer.id == leader_id {
                 resp_map.entry(region_id).or_default().push(store_id);
+                if peer_list.len() == 1 {
+                    valid_regions.insert(region_id);
+                }
                 continue;
             }
             store_map
@@ -218,7 +222,6 @@ pub async fn region_resolved_ts_store(
             .boxed()
         })
         .collect();
-    let mut valid_regions = HashSet::default();
     for _ in 0..store_count {
         let (res, _, remains) = select_all(stores).await;
         stores = remains;
