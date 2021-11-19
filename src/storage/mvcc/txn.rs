@@ -1,8 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::reader::{MvccReader, OverlappedWrite, TxnCommitRecord};
 use crate::storage::mvcc::Result;
+=======
+// #[PerformanceCriticalPath]
+use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
+use crate::storage::kv::Modify;
+>>>>>>> dce2dc811... gc: Fix GC scan effectiveness to avoid OOM (#11416)
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
@@ -18,6 +24,7 @@ pub struct GcInfo {
     pub is_completed: bool,
 }
 
+<<<<<<< HEAD
 /// Generate the Write record that should be written that means to to perform a specified rollback
 /// operation.
 pub(crate) fn make_rollback(
@@ -74,6 +81,14 @@ impl MissingLockAction {
             _ => unreachable!(),
         };
         make_rollback(ts, protected, overlapped_write)
+=======
+impl GcInfo {
+    pub fn report_metrics(&self) {
+        MVCC_VERSIONS_HISTOGRAM.observe(self.found_versions as f64);
+        if self.deleted_versions > 0 {
+            GC_DELETE_VERSIONS_HISTOGRAM.observe(self.deleted_versions as f64);
+        }
+>>>>>>> dce2dc811... gc: Fix GC scan effectiveness to avoid OOM (#11416)
     }
 }
 

@@ -1,7 +1,13 @@
+<<<<<<< HEAD
 use crate::storage::mvcc::{
     GcInfo, MvccTxn, Result as MvccResult, GC_DELETE_VERSIONS_HISTOGRAM, MAX_TXN_WRITE_SIZE,
     MVCC_VERSIONS_HISTOGRAM,
 };
+=======
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
+use crate::storage::mvcc::{GcInfo, MvccReader, MvccTxn, Result as MvccResult, MAX_TXN_WRITE_SIZE};
+>>>>>>> dce2dc811... gc: Fix GC scan effectiveness to avoid OOM (#11416)
 use crate::storage::Snapshot;
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
@@ -106,15 +112,6 @@ impl State {
             State::RemoveAll(_) => {
                 gc.delete_write(write, commit_ts);
             }
-        }
-    }
-}
-
-impl GcInfo {
-    fn report_metrics(&self) {
-        MVCC_VERSIONS_HISTOGRAM.observe(self.found_versions as f64);
-        if self.deleted_versions > 0 {
-            GC_DELETE_VERSIONS_HISTOGRAM.observe(self.deleted_versions as f64);
         }
     }
 }
