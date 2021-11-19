@@ -70,7 +70,7 @@ impl SysQuota {
         #[cfg(target_os = "linux")]
         info!(
             "cgroup quota: memory={:?}, cpu={:?}, cores={:?}",
-            ReadableSize(SELF_CGROUP.memory_limit_in_bytes() as u64),
+            SELF_CGROUP.memory_limit_in_bytes(),
             SELF_CGROUP.cpu_quota(),
             SELF_CGROUP.cpuset_cores(),
         );
