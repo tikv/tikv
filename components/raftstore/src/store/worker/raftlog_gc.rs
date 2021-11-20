@@ -126,7 +126,7 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
                     groups.push(RaftLogGCTask {
                         raft_group_id: region_id,
                         from: start_idx,
-                        to: end_idx
+                        to: end_idx,
                     });
                 }
                 Task::Purge => {

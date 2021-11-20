@@ -5,7 +5,8 @@ use crate::{util, RocksEngine, RocksWriteBatch};
 
 use engine_traits::{
     Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineReadOnly,
-    RaftLogBatch, Result, SyncMutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
+    RaftLogBatch, RaftLogGCTask, Result, SyncMutable, WriteBatch, WriteBatchExt, WriteOptions,
+    CF_DEFAULT,
 };
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
@@ -204,11 +205,11 @@ impl RaftEngine for RocksEngine {
         self.put_msg(&keys::raft_state_key(raft_group_id), state)
     }
 
-    fn batch_gc(&self, groups: Vec<(u64, u64, u64)>) -> Result<usize> {
+    fn batch_gc(&self, groups: Vec<RaftLogGCTask>) -> Result<usize> {
         let mut total = 0;
         let mut raft_wb = self.write_batch_with_cap(4 * 1024);
-        for (raft_group_id, from, to) in groups {
-            total += self.gc_impl(raft_group_id, from, to, &mut raft_wb)?;
+        for task in groups {
+            total += self.gc_impl(task.raft_group_id, task.from, task.to, &mut raft_wb)?;
         }
         // TODO: disable WAL here.
         if !WriteBatch::is_empty(&raft_wb) {
