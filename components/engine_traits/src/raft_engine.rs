@@ -20,6 +20,12 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     ) -> Result<usize>;
 }
 
+pub struct RaftLogGCTask {
+    pub raft_group_id: u64,
+    pub from: u64,
+    pub to: u64,
+}
+
 pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     type LogBatch: RaftLogBatch;
 
@@ -59,10 +65,10 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     /// Generally, `from` can be passed in `0`.
     fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize>;
 
-    fn batch_gc(&self, groups: Vec<(u64, u64, u64)>) -> Result<usize> {
+    fn batch_gc(&self, tasks: Vec<RaftLogGCTask>) -> Result<usize> {
         let mut total = 0;
-        for (group, from, to) in groups {
-            total += self.gc(group, from, to)?;
+        for task in tasks {
+            total += self.gc(task.raft_group_id, task.from, task.to)?;
         }
         Ok(total)
     }
