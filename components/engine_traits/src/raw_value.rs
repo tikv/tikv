@@ -254,11 +254,12 @@ mod tests {
     #[test]
     fn test_decode_err() {
         let cases = vec![
+            // At least 8 bytes for expire_ts.
             (vec![], ApiVersion::V1ttl),
-            // at least 8 bytes for expire_ts.
             (vec![1, 2, 3, 4, 5, 6, 7], ApiVersion::V1ttl),
+            // At least 1 byte for flags.
             (vec![], ApiVersion::V2),
-            // the last byte indicates that expire_ts is set, therefore 8 more bytes for
+            // The last byte indicates that expire_ts is set, therefore 8 more bytes for
             // expire_ts is expected.
             (vec![1], ApiVersion::V2),
             (vec![1, 2, 3, 4, 5, 6, 7, 1], ApiVersion::V2),
