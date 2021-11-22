@@ -64,7 +64,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1637207378932,
+  "iteration": 1637572877668,
   "links": [],
   "panels": [
     {
@@ -4984,7 +4984,7 @@
               {
                 "evaluator": {
                   "params": [
-                    1.8
+                    1.7
                   ],
                   "type": "gt"
                 },
@@ -5097,7 +5097,7 @@
               "fill": true,
               "line": true,
               "op": "gt",
-              "value": 1.8,
+              "value": 1.7,
               "visible": true
             }
           ],
@@ -11588,7 +11588,7 @@
           },
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time consumed when Raft appends log",
+          "description": "The time duration of store write loop when store-io-pool-size is not zero.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -11603,6 +11603,186 @@
           "hideZeroBuckets": true,
           "highlightCards": true,
           "id": 39,
+          "legend": {
+            "show": false
+          },
+          "links": [],
+          "reverseYBuckets": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "sum(delta(tikv_raftstore_store_write_loop_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le)",
+              "format": "heatmap",
+              "interval": "",
+              "intervalFactor": 2,
+              "legendFormat": "{{le}}",
+              "metric": "",
+              "refId": "A",
+              "step": 4
+            }
+          ],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Store write loop duration",
+          "tooltip": {
+            "show": true,
+            "showHistogram": false
+          },
+          "type": "heatmap",
+          "xAxis": {
+            "show": true
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 0,
+            "format": "s",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true,
+            "splitFactor": null
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The time duration of store write loop on each TiKV instance when store-io-pool-size is not zero.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "grid": {},
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 17
+          },
+          "hiddenSeries": false,
+          "id": 40,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.7",
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_store_write_loop_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, instance))",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 2,
+              "legendFormat": "{{instance}} ",
+              "refId": "A",
+              "step": 4
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "99% Store write loop duration per server",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "cards": {
+            "cardPadding": null,
+            "cardRound": null
+          },
+          "color": {
+            "cardColor": "#b4ff00",
+            "colorScale": "sqrt",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The time consumed when Raft appends log",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 24
+          },
+          "heatmap": {},
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 13377,
           "legend": {
             "show": false
           },
@@ -11665,10 +11845,10 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 17
+            "y": 24
           },
           "hiddenSeries": false,
-          "id": 40,
+          "id": 13376,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -11700,12 +11880,47 @@
           "steppedLine": false,
           "targets": [
             {
+              "exemplar": true,
               "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_append_log_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, instance))",
               "format": "time_series",
+              "hide": false,
+              "interval": "",
               "intervalFactor": 2,
               "legendFormat": "{{instance}} ",
               "refId": "A",
               "step": 4
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_store_write_kvdb_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, instance))",
+              "hide": true,
+              "interval": "",
+              "legendFormat": "kvdb-{{instance}}",
+              "refId": "B"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_store_write_raftdb_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, instance))",
+              "hide": true,
+              "interval": "",
+              "legendFormat": "raftdb-{{instance}}",
+              "refId": "C"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_store_write_send_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, instance))",
+              "hide": true,
+              "interval": "",
+              "legendFormat": "sendmsg-{{instance}}",
+              "refId": "D"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_store_write_callback_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, instance))",
+              "hide": true,
+              "interval": "",
+              "legendFormat": "callback-{{instance}}",
+              "refId": "E"
             }
           ],
           "thresholds": [],
@@ -11773,7 +11988,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 24
+            "y": 31
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -11836,7 +12051,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 24
+            "y": 31
           },
           "hiddenSeries": false,
           "id": 3688,
@@ -11940,7 +12155,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 31
+            "y": 38
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -12008,7 +12223,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 31
+            "y": 38
           },
           "hiddenSeries": false,
           "id": 32,
@@ -12110,7 +12325,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 38
+            "y": 45
           },
           "hiddenSeries": false,
           "id": 13229,
@@ -12210,7 +12425,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 38
+            "y": 45
           },
           "hiddenSeries": false,
           "id": 13231,
@@ -12310,7 +12525,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 45
+            "y": 52
           },
           "hiddenSeries": false,
           "id": 13233,
@@ -12435,7 +12650,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 53
+            "y": 11
           },
           "hiddenSeries": false,
           "id": 108,
@@ -12542,7 +12757,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 53
+            "y": 11
           },
           "hiddenSeries": false,
           "id": 7,
@@ -12650,7 +12865,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 60
+            "y": 18
           },
           "hiddenSeries": false,
           "id": 119,
@@ -12758,7 +12973,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 60
+            "y": 18
           },
           "hiddenSeries": false,
           "id": 120,
@@ -12868,7 +13083,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 67
+            "y": 25
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -12936,7 +13151,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 67
+            "y": 25
           },
           "hiddenSeries": false,
           "id": 42,
@@ -13044,7 +13259,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 74
+            "y": 32
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -13114,7 +13329,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 74
+            "y": 32
           },
           "hiddenSeries": false,
           "id": 13235,
@@ -13223,7 +13438,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 81
+            "y": 39
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -13290,7 +13505,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 81
+            "y": 39
           },
           "hiddenSeries": false,
           "id": 2536,
@@ -13392,7 +13607,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 88
+            "y": 46
           },
           "hiddenSeries": false,
           "id": 1975,
@@ -13495,7 +13710,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 88
+            "y": 46
           },
           "hiddenSeries": false,
           "id": 1976,
@@ -13591,7 +13806,7 @@
         }
       ],
       "repeat": null,
-      "title": "Raft propose",
+      "title": "Raft Propose",
       "type": "row"
     },
     {
@@ -13908,7 +14123,7 @@
         }
       ],
       "repeat": null,
-      "title": "Raft process",
+      "title": "Raft Process",
       "type": "row"
     },
     {
@@ -14563,7 +14778,7 @@
         }
       ],
       "repeat": null,
-      "title": "Raft message",
+      "title": "Raft Message",
       "type": "row"
     },
     {
@@ -15228,7 +15443,7 @@
         }
       ],
       "repeat": null,
-      "title": "Raft admin",
+      "title": "Raft Admin",
       "type": "row"
     },
     {
@@ -19352,7 +19567,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 32
+        "y": 29
       },
       "id": 2755,
       "panels": [
@@ -19808,7 +20023,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 33
+        "y": 30
       },
       "id": 2758,
       "panels": [
@@ -21134,7 +21349,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 34
+        "y": 31
       },
       "id": 2759,
       "panels": [
@@ -21751,7 +21966,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 35
+        "y": 32
       },
       "id": 2760,
       "panels": [
@@ -22163,7 +22378,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 36
+        "y": 33
       },
       "id": 2757,
       "panels": [
@@ -22963,7 +23178,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 37
+        "y": 34
       },
       "id": 3197,
       "panels": [
@@ -24057,7 +24272,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 38
+        "y": 35
       },
       "id": 2761,
       "panels": [
@@ -24454,7 +24669,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 39
+        "y": 36
       },
       "id": 2762,
       "panels": [
@@ -29194,7 +29409,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 41
+        "y": 38
       },
       "id": 3301,
       "panels": [
@@ -32203,7 +32418,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 42
+        "y": 39
       },
       "id": 2820,
       "panels": [
@@ -32932,7 +33147,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 43
+        "y": 40
       },
       "id": 8389,
       "panels": [
@@ -34113,7 +34328,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 44
+        "y": 41
       },
       "id": 2763,
       "panels": [
@@ -34218,7 +34433,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 45
+        "y": 42
       },
       "id": 3922,
       "panels": [
@@ -36939,7 +37154,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 46
+        "y": 43
       },
       "id": 4466,
       "panels": [

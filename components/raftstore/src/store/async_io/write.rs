@@ -591,7 +591,10 @@ where
         now = Instant::now();
         let callback_time = duration_to_sec(now.saturating_duration_since(now2));
         STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(callback_time);
+
         let total_cost = now.saturating_duration_since(timer);
+        STORE_WRITE_TO_DB_DURATION_HISTOGRAM.observe(duration_to_sec(total_cost));
+
         slow_log!(
             total_cost,
             "[store {}] async write too slow, write_kv: {}s, write_raft: {}s, send: {}s, callback: {}s thread: {}",
