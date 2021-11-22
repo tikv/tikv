@@ -100,25 +100,25 @@ impl<'a> RawValue<&'a [u8]> {
                 })
             }
             ApiVersion::V2 => {
-                let len = bytes.len();
-                let mut meta_size = 1;
-                if len < meta_size {
+                let mut rest_len = bytes.len();
+                if rest_len < 1 {
                     return Err(Error::Codec(codec::Error::ValueLength));
                 }
-                let flags = ValueMeta::from_bits(bytes[len - 1])
+                rest_len -= 1;
+                let flags = ValueMeta::from_bits(bytes[rest_len])
                     .ok_or(Error::Codec(codec::Error::ValueMeta))?;
                 let expire_ts = if flags.contains(ValueMeta::EXPIRE_TS) {
-                    meta_size += number::U64_SIZE;
-                    if len < meta_size {
+                    if rest_len < number::U64_SIZE {
                         return Err(Error::Codec(codec::Error::ValueLength));
                     }
-                    let mut expire_ts_slice = &bytes[len - meta_size - number::U64_SIZE..];
+                    rest_len -= number::U64_SIZE;
+                    let mut expire_ts_slice = &bytes[rest_len..rest_len + number::U64_SIZE];
                     Some(number::decode_u64(&mut expire_ts_slice)?)
                 } else {
                     None
                 };
                 Ok(RawValue {
-                    user_value: &bytes[..len - meta_size],
+                    user_value: &bytes[..rest_len],
                     expire_ts,
                 })
             }
