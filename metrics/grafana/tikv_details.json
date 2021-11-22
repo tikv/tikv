@@ -64,7 +64,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1637572877668,
+  "iteration": 1637575565298,
   "links": [],
   "panels": [
     {
@@ -2313,7 +2313,6 @@
             "overrides": []
           },
           "fill": 0,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 7,
@@ -2321,7 +2320,6 @@
             "x": 0,
             "y": 30
           },
-          "hiddenSeries": false,
           "id": 1722,
           "legend": {
             "alignAsTable": true,
@@ -2343,9 +2341,6 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
           "pluginVersion": "7.5.7",
           "pointradius": 5,
@@ -2427,7 +2422,6 @@
             "overrides": []
           },
           "fill": 0,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 7,
@@ -2435,7 +2429,6 @@
             "x": 12,
             "y": 30
           },
-          "hiddenSeries": false,
           "id": 1723,
           "legend": {
             "alignAsTable": true,
@@ -2457,9 +2450,6 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
           "pluginVersion": "7.5.7",
           "pointradius": 5,
@@ -2552,12 +2542,7 @@
           "description": "The size of each column family",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 3,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
@@ -2565,7 +2550,6 @@
             "x": 0,
             "y": 3
           },
-          "hiddenSeries": false,
           "id": 33,
           "legend": {
             "alignAsTable": true,
@@ -2586,11 +2570,7 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -2660,12 +2640,7 @@
           "description": "The storage size per TiKV instance",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 5,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
@@ -2673,7 +2648,6 @@
             "x": 12,
             "y": 3
           },
-          "hiddenSeries": false,
           "id": 1705,
           "legend": {
             "alignAsTable": true,
@@ -2693,11 +2667,7 @@
           "linewidth": 0,
           "links": [],
           "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -2810,12 +2780,7 @@
           "description": "The total number of channel full errors on each TiKV instance",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 3,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
@@ -2823,7 +2788,6 @@
             "x": 0,
             "y": 11
           },
-          "hiddenSeries": false,
           "id": 22,
           "legend": {
             "alignAsTable": true,
@@ -2845,11 +2809,7 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -2874,8 +2834,7 @@
               "fill": true,
               "line": true,
               "op": "gt",
-              "value": 0,
-              "visible": true
+              "value": 0
             }
           ],
           "timeFrom": null,
@@ -2929,12 +2888,7 @@
           "description": "The number of leaders being written on each TiKV instance",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 0,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
@@ -2942,7 +2896,6 @@
             "x": 12,
             "y": 11
           },
-          "hiddenSeries": false,
           "id": 75,
           "legend": {
             "alignAsTable": true,
@@ -2963,11 +2916,7 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -3071,12 +3020,7 @@
           "description": "The approximate Region size",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 0,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
@@ -3084,7 +3028,6 @@
             "x": 0,
             "y": 19
           },
-          "hiddenSeries": false,
           "id": 1481,
           "legend": {
             "alignAsTable": true,
@@ -3105,11 +3048,7 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -3146,16 +3085,7 @@
               "step": 10
             }
           ],
-          "thresholds": [
-            {
-              "colorMode": "critical",
-              "fill": true,
-              "line": true,
-              "op": "gt",
-              "value": 1073741824,
-              "visible": true
-            }
-          ],
+          "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
@@ -3206,12 +3136,7 @@
           "decimals": 1,
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 0,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
@@ -3219,7 +3144,6 @@
             "x": 12,
             "y": 19
           },
-          "hiddenSeries": false,
           "id": 3638,
           "legend": {
             "alignAsTable": true,
@@ -3240,12 +3164,8 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true
-          },
           "paceLength": 10,
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -3316,12 +3236,7 @@
           "description": "The average rate of writing bytes to Regions per TiKV instance",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 1,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
@@ -3329,7 +3244,6 @@
             "x": 0,
             "y": 27
           },
-          "hiddenSeries": false,
           "id": 58,
           "legend": {
             "alignAsTable": true,
@@ -3350,11 +3264,7 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "connected",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -3429,10 +3339,6 @@
           },
           "dataFormat": "timeseries",
           "datasource": "${DS_TEST-CLUSTER}",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "gridPos": {
             "h": 8,
             "w": 12,
@@ -3495,12 +3401,7 @@
           "description": "The average rate of written keys to Regions per TiKV instance",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 1,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
@@ -3508,7 +3409,6 @@
             "x": 0,
             "y": 35
           },
-          "hiddenSeries": false,
           "id": 57,
           "legend": {
             "alignAsTable": true,
@@ -3528,11 +3428,7 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "connected",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -3607,10 +3503,6 @@
           },
           "dataFormat": "timeseries",
           "datasource": "${DS_TEST-CLUSTER}",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "gridPos": {
             "h": 8,
             "w": 12,
@@ -3673,10 +3565,6 @@
           "description": "The ratio of request batch output to input per TiKV instance",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 1,
           "grid": {},
           "gridPos": {
@@ -3702,7 +3590,6 @@
           "links": [],
           "nullPointMode": "null",
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 2,
           "points": false,
           "renderer": "flot",
@@ -3778,10 +3665,6 @@
           "description": "The size of requests into request batch per TiKV instance",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 1,
           "grid": {},
           "gridPos": {
@@ -3807,7 +3690,6 @@
           "links": [],
           "nullPointMode": "null",
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 2,
           "points": false,
           "renderer": "flot",
@@ -3882,10 +3764,6 @@
           "description": " \tThe number of peers in hibernated state",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 0,
           "grid": {},
           "gridPos": {
@@ -3914,7 +3792,6 @@
           "links": [],
           "nullPointMode": "null",
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -3987,10 +3864,6 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": null,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 1,
           "gridPos": {
             "h": 8,
@@ -4017,7 +3890,6 @@
           "links": [],
           "nullPointMode": "null",
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 2,
           "points": false,
           "renderer": "flot",
@@ -4081,10 +3953,6 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 1,
           "gridPos": {
             "h": 8,
@@ -4109,7 +3977,6 @@
           "links": [],
           "nullPointMode": "null",
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 2,
           "points": false,
           "renderer": "flot",
@@ -4979,7 +4846,6 @@
       "panels": [
         {
           "alert": {
-            "alertRuleTags": {},
             "conditions": [
               {
                 "evaluator": {
@@ -5080,10 +4946,8 @@
           "steppedLine": false,
           "targets": [
             {
-              "exemplar": true,
               "expr": "sum(rate(tikv_thread_cpu_seconds_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"raftstore_.*\"}[1m])) by (instance)",
               "format": "time_series",
-              "interval": "",
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
               "metric": "tikv_thread_cpu_seconds_total",
@@ -5354,7 +5218,7 @@
             "y": 12
           },
           "hiddenSeries": false,
-          "id": 13125,
+          "id": 13115,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -6487,7 +6351,6 @@
             "overrides": []
           },
           "fill": 0,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 7,
@@ -6495,7 +6358,6 @@
             "x": 0,
             "y": 40
           },
-          "hiddenSeries": false,
           "id": 68,
           "legend": {
             "alignAsTable": true,
@@ -6515,9 +6377,6 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
           "pluginVersion": "7.5.7",
           "pointradius": 5,
@@ -6594,7 +6453,6 @@
             "overrides": []
           },
           "fill": 0,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 7,
@@ -6602,7 +6460,6 @@
             "x": 12,
             "y": 40
           },
-          "hiddenSeries": false,
           "id": 692,
           "legend": {
             "alignAsTable": true,
@@ -6623,9 +6480,6 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
           "pluginVersion": "7.5.7",
           "pointradius": 5,
@@ -6728,7 +6582,6 @@
             "overrides": []
           },
           "fill": 0,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 7,
@@ -6736,7 +6589,6 @@
             "x": 0,
             "y": 47
           },
-          "hiddenSeries": false,
           "id": 691,
           "legend": {
             "alignAsTable": true,
@@ -6757,9 +6609,6 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
           "pluginVersion": "7.5.7",
           "pointradius": 5,
@@ -6870,14 +6719,12 @@
             "overrides": []
           },
           "fill": 1,
-          "fillGradient": 0,
           "gridPos": {
             "h": 7,
             "w": 12,
             "x": 12,
             "y": 47
           },
-          "hiddenSeries": false,
           "id": 62,
           "legend": {
             "alignAsTable": true,
@@ -6897,9 +6744,6 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
           "paceLength": 10,
           "percentage": false,
           "pluginVersion": "7.5.7",
@@ -6986,14 +6830,12 @@
             "overrides": []
           },
           "fill": 1,
-          "fillGradient": 0,
           "gridPos": {
             "h": 7,
             "w": 12,
             "x": 0,
             "y": 54
           },
-          "hiddenSeries": false,
           "id": 60,
           "legend": {
             "alignAsTable": true,
@@ -7013,9 +6855,6 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
           "paceLength": 10,
           "percentage": false,
           "pluginVersion": "7.5.7",
@@ -9689,7 +9528,7 @@
         "x": 0,
         "y": 8
       },
-      "id": 13166,
+      "id": 13117,
       "panels": [
         {
           "aliasColors": {
@@ -9855,7 +9694,7 @@
             "y": 18
           },
           "hiddenSeries": false,
-          "id": 13207,
+          "id": 13257,
           "legend": {
             "avg": false,
             "current": false,
@@ -9995,7 +9834,7 @@
             "y": 18
           },
           "hiddenSeries": false,
-          "id": 13209,
+          "id": 13259,
           "legend": {
             "avg": false,
             "current": false,
@@ -10135,7 +9974,7 @@
             "y": 26
           },
           "hiddenSeries": false,
-          "id": 13211,
+          "id": 13261,
           "legend": {
             "avg": false,
             "current": false,
@@ -10275,7 +10114,7 @@
             "y": 26
           },
           "hiddenSeries": false,
-          "id": 13213,
+          "id": 13263,
           "legend": {
             "avg": false,
             "current": false,
@@ -10415,7 +10254,7 @@
             "y": 34
           },
           "hiddenSeries": false,
-          "id": 13215,
+          "id": 13265,
           "legend": {
             "avg": false,
             "current": false,
@@ -10555,7 +10394,7 @@
             "y": 34
           },
           "hiddenSeries": false,
-          "id": 13217,
+          "id": 13267,
           "legend": {
             "avg": false,
             "current": false,
@@ -10695,7 +10534,7 @@
             "y": 42
           },
           "hiddenSeries": false,
-          "id": 13219,
+          "id": 13269,
           "legend": {
             "avg": false,
             "current": false,
@@ -10835,7 +10674,7 @@
             "y": 42
           },
           "hiddenSeries": false,
-          "id": 13221,
+          "id": 13271,
           "legend": {
             "avg": false,
             "current": false,
@@ -10975,7 +10814,7 @@
             "y": 50
           },
           "hiddenSeries": false,
-          "id": 13223,
+          "id": 13273,
           "legend": {
             "avg": false,
             "current": false,
@@ -11115,7 +10954,7 @@
             "y": 50
           },
           "hiddenSeries": false,
-          "id": 13225,
+          "id": 13275,
           "legend": {
             "avg": false,
             "current": false,
@@ -11194,7 +11033,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Store commit duration",
+          "title": "Store commit and persist duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -11255,7 +11094,7 @@
             "y": 58
           },
           "hiddenSeries": false,
-          "id": 13227,
+          "id": 13277,
           "legend": {
             "avg": false,
             "current": false,
@@ -11414,7 +11253,7 @@
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 118,
+          "id": 13279,
           "legend": {
             "show": false
           },
@@ -11480,7 +11319,7 @@
             "y": 10
           },
           "hiddenSeries": false,
-          "id": 4375,
+          "id": 13281,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -11586,6 +11425,7 @@
             "exponent": 0.5,
             "mode": "spectrum"
           },
+          "dashes": false,
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "description": "The time duration of store write loop when store-io-pool-size is not zero.",
@@ -11602,7 +11442,7 @@
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 39,
+          "id": 13283,
           "legend": {
             "show": false
           },
@@ -11670,7 +11510,7 @@
             "y": 17
           },
           "hiddenSeries": false,
-          "id": 40,
+          "id": 13285,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -11782,7 +11622,7 @@
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 13377,
+          "id": 39,
           "legend": {
             "show": false
           },
@@ -12328,7 +12168,7 @@
             "y": 45
           },
           "hiddenSeries": false,
-          "id": 13229,
+          "id": 13378,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -12428,7 +12268,7 @@
             "y": 45
           },
           "hiddenSeries": false,
-          "id": 13231,
+          "id": 13380,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -12528,7 +12368,7 @@
             "y": 52
           },
           "hiddenSeries": false,
-          "id": 13233,
+          "id": 13382,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -13248,6 +13088,7 @@
             "exponent": 0.5,
             "mode": "spectrum"
           },
+          "dashes": false,
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "description": "The wait time of each store write task",
@@ -13264,7 +13105,7 @@
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 13237,
+          "id": 13524,
           "legend": {
             "show": false
           },
@@ -13332,7 +13173,7 @@
             "y": 32
           },
           "hiddenSeries": false,
-          "id": 13235,
+          "id": 13522,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -14158,7 +13999,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 13
+            "y": 29
           },
           "hiddenSeries": false,
           "id": 1615,
@@ -14265,7 +14106,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 13
+            "y": 29
           },
           "hiddenSeries": false,
           "id": 1616,
@@ -14370,7 +14211,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 20
+            "y": 36
           },
           "hiddenSeries": false,
           "id": 106,
@@ -14476,7 +14317,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 20
+            "y": 36
           },
           "hiddenSeries": false,
           "id": 11,
@@ -14583,7 +14424,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 27
+            "y": 43
           },
           "hiddenSeries": false,
           "id": 25,
@@ -14690,7 +14531,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 27
+            "y": 43
           },
           "hiddenSeries": false,
           "id": 1309,
@@ -14802,20 +14643,14 @@
           "description": "The number of admin proposals",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 1,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 14
+            "y": 11
           },
-          "hiddenSeries": false,
           "id": 76,
           "legend": {
             "alignAsTable": true,
@@ -14835,11 +14670,7 @@
           "linewidth": 2,
           "links": [],
           "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -14910,20 +14741,14 @@
           "description": "The number of the processed apply command",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 1,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 14
+            "y": 11
           },
-          "hiddenSeries": false,
           "id": 77,
           "legend": {
             "alignAsTable": true,
@@ -14943,11 +14768,7 @@
           "linewidth": 2,
           "links": [],
           "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -15018,20 +14839,14 @@
           "description": "The number of raftstore split checksss",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 1,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 21
+            "y": 18
           },
-          "hiddenSeries": false,
           "id": 70,
           "legend": {
             "alignAsTable": true,
@@ -15051,11 +14866,7 @@
           "linewidth": 2,
           "links": [],
           "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -15126,20 +14937,14 @@
           "description": "The time consumed when running split check in .9999",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 1,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 21
+            "y": 18
           },
-          "hiddenSeries": false,
           "id": 71,
           "legend": {
             "alignAsTable": true,
@@ -15160,11 +14965,7 @@
           "linewidth": 2,
           "links": [],
           "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -15235,7 +15036,9 @@
           "editable": true,
           "error": false,
           "fieldConfig": {
-            "defaults": {},
+            "defaults": {
+              "custom": {}
+            },
             "overrides": []
           },
           "fill": 0,
@@ -15245,7 +15048,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 28
+            "y": 25
           },
           "hiddenSeries": false,
           "id": 3636,
@@ -15269,7 +15072,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.7",
+          "pluginVersion": "7.3.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -15346,7 +15149,9 @@
           "editable": true,
           "error": false,
           "fieldConfig": {
-            "defaults": {},
+            "defaults": {
+              "custom": {}
+            },
             "overrides": []
           },
           "fill": 0,
@@ -15356,7 +15161,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 28
+            "y": 25
           },
           "hiddenSeries": false,
           "id": 3637,
@@ -15380,7 +15185,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.7",
+          "pluginVersion": "7.3.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -15475,7 +15280,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 63
+            "y": 102
           },
           "hiddenSeries": false,
           "id": 12882,
@@ -15604,7 +15409,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 63
+            "y": 102
           },
           "hiddenSeries": false,
           "id": 12886,
@@ -15736,7 +15541,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 71
+            "y": 110
           },
           "hiddenSeries": false,
           "id": 12881,
@@ -15846,7 +15651,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 71
+            "y": 110
           },
           "hiddenSeries": false,
           "id": 12972,
@@ -15956,7 +15761,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 79
+            "y": 118
           },
           "hiddenSeries": false,
           "id": 12884,
@@ -16063,7 +15868,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 79
+            "y": 118
           },
           "hiddenSeries": false,
           "id": 12973,
@@ -16192,7 +15997,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 87
+            "y": 126
           },
           "hiddenSeries": false,
           "id": 12883,
@@ -16324,7 +16129,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 87
+            "y": 126
           },
           "hiddenSeries": false,
           "id": 12887,
@@ -16434,7 +16239,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 95
+            "y": 134
           },
           "hiddenSeries": false,
           "id": 12975,
@@ -16544,7 +16349,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 95
+            "y": 134
           },
           "hiddenSeries": false,
           "id": 12974,
@@ -17057,20 +16862,14 @@
           "description": "The total count of different kinds of commands received",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 1,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 66
+            "y": 14
           },
-          "hiddenSeries": false,
           "id": 2,
           "legend": {
             "alignAsTable": true,
@@ -17092,11 +16891,7 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -17166,20 +16961,14 @@
           "description": "The total number of engine asynchronous request errors",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 1,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 66
+            "y": 14
           },
-          "hiddenSeries": false,
           "id": 8,
           "legend": {
             "alignAsTable": true,
@@ -17201,11 +16990,7 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
-          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -17281,15 +17066,11 @@
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "description": "The time consumed by processing asynchronous snapshot requests",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 74
+            "y": 22
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -17351,15 +17132,11 @@
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "description": "The time consumed by processing asynchronous write requests",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 74
+            "y": 22
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -17443,7 +17220,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 67
+            "y": 70
           },
           "height": "",
           "hiddenSeries": false,
@@ -17562,7 +17339,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 67
+            "y": 70
           },
           "height": "",
           "hiddenSeries": false,
@@ -17676,7 +17453,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 75
+            "y": 78
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -17744,7 +17521,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 75
+            "y": 78
           },
           "height": "",
           "hiddenSeries": false,
@@ -17852,7 +17629,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 83
+            "y": 86
           },
           "hiddenSeries": false,
           "id": 9947,
@@ -17959,7 +17736,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 83
+            "y": 86
           },
           "height": "",
           "hiddenSeries": false,
@@ -18098,7 +17875,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 91
+            "y": 94
           },
           "height": "",
           "hiddenSeries": false,
@@ -18223,7 +18000,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 91
+            "y": 94
           },
           "hiddenSeries": false,
           "id": 9946,
@@ -18364,7 +18141,7 @@
             "h": 10,
             "w": 24,
             "x": 0,
-            "y": 68
+            "y": 18
           },
           "height": "400",
           "hiddenSeries": false,
@@ -18487,7 +18264,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 78
+            "y": 28
           },
           "hiddenSeries": false,
           "id": 3,
@@ -18622,7 +18399,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 78
+            "y": 28
           },
           "hiddenSeries": false,
           "id": 194,
@@ -18757,7 +18534,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 86
+            "y": 36
           },
           "hiddenSeries": false,
           "id": 195,
@@ -18892,7 +18669,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 86
+            "y": 36
           },
           "hiddenSeries": false,
           "id": 373,
@@ -19021,15 +18798,13 @@
             "overrides": []
           },
           "fill": 1,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 94
+            "y": 44
           },
-          "hiddenSeries": false,
           "id": 560,
           "legend": {
             "alignAsTable": true,
@@ -19051,9 +18826,6 @@
           "linewidth": 2,
           "links": [],
           "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
           "pluginVersion": "7.5.7",
           "pointradius": 5,
@@ -19138,15 +18910,13 @@
             "overrides": []
           },
           "fill": 1,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 94
+            "y": 44
           },
-          "hiddenSeries": false,
           "id": 675,
           "legend": {
             "alignAsTable": true,
@@ -19168,9 +18938,6 @@
           "linewidth": 2,
           "links": [],
           "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
           "pluginVersion": "7.5.7",
           "pointradius": 5,
@@ -19255,15 +19022,13 @@
             "overrides": []
           },
           "fill": 1,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 102
+            "y": 52
           },
-          "hiddenSeries": false,
           "id": 829,
           "legend": {
             "alignAsTable": true,
@@ -19285,9 +19050,6 @@
           "linewidth": 2,
           "links": [],
           "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
           "pluginVersion": "7.5.7",
           "pointradius": 5,
@@ -19372,15 +19134,13 @@
             "overrides": []
           },
           "fill": 1,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 102
+            "y": 52
           },
-          "hiddenSeries": false,
           "id": 830,
           "legend": {
             "alignAsTable": true,
@@ -19402,9 +19162,6 @@
           "linewidth": 2,
           "links": [],
           "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
           "pluginVersion": "7.5.7",
           "pointradius": 5,
@@ -19497,7 +19254,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 110
+            "y": 60
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -29711,22 +29468,22 @@
           "stack": false,
           "steppedLine": false,
           "targets": [
-          {
-            "exemplar": true,
-            "expr": "sum(rate(raft_engine_write_size_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
-            "interval": "",
-            "legendFormat": "write",
-            "queryType": "randomWalk",
-            "refId": "A"
-          },
-          {
-            "exemplar": true,
-            "expr": "sum(rate(raft_engine_background_rewrite_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
-            "hide": false,
-            "interval": "",
-            "legendFormat": "rewrite {{type}}",
-            "refId": "B"
-          }
+            {
+              "exemplar": true,
+              "expr": "sum(rate(raft_engine_write_size_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "interval": "",
+              "legendFormat": "write",
+              "queryType": "randomWalk",
+              "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(raft_engine_background_rewrite_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "rewrite {{type}}",
+              "refId": "B"
+            }
           ],
           "thresholds": [],
           "timeFrom": null,
@@ -29819,30 +29576,30 @@
           "stack": false,
           "steppedLine": false,
           "targets": [
-          {
-            "exemplar": true,
-            "expr": "histogram_quantile(0.99, sum(rate(raft_engine_write_preprocess_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
-            "hide": false,
-            "interval": "",
-            "legendFormat": "wait",
-            "refId": "A"
-          },
-          {
-            "exemplar": true,
-            "expr": "histogram_quantile(0.99, sum(rate(raft_engine_write_leader_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
-            "hide": false,
-            "interval": "",
-            "legendFormat": "wal",
-            "refId": "B"
-          },
-          {
-            "exemplar": true,
-            "expr": "histogram_quantile(0.99, sum(rate(raft_engine_write_apply_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
-            "hide": false,
-            "interval": "",
-            "legendFormat": "apply",
-            "refId": "C"
-          }
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(raft_engine_write_preprocess_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "wait",
+              "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(raft_engine_write_leader_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "wal",
+              "refId": "B"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(raft_engine_write_apply_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "apply",
+              "refId": "C"
+            }
           ],
           "thresholds": [],
           "timeFrom": null,
@@ -29935,30 +29692,30 @@
           "stack": false,
           "steppedLine": false,
           "targets": [
-          {
-            "exemplar": true,
-            "expr": "sum(rate(raft_engine_write_size_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) / sum(rate(raft_engine_write_size_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
-            "interval": "",
-            "legendFormat": "avg",
-            "queryType": "randomWalk",
-            "refId": "A"
-          },
-          {
-            "exemplar": true,
-            "expr": "histogram_quantile(0.99, sum(rate(raft_engine_write_size_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
-            "hide": false,
-            "interval": "",
-            "legendFormat": "99%",
-            "refId": "B"
-          },
-          {
-            "exemplar": true,
-            "expr": "histogram_quantile(0.999, sum(rate(raft_engine_write_size_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
-            "hide": false,
-            "interval": "",
-            "legendFormat": "999%",
-            "refId": "C"
-          }
+            {
+              "exemplar": true,
+              "expr": "sum(rate(raft_engine_write_size_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) / sum(rate(raft_engine_write_size_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "interval": "",
+              "legendFormat": "avg",
+              "queryType": "randomWalk",
+              "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(raft_engine_write_size_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "99%",
+              "refId": "B"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.999, sum(rate(raft_engine_write_size_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "999%",
+              "refId": "C"
+            }
           ],
           "thresholds": [],
           "timeFrom": null,
@@ -30051,38 +29808,38 @@
           "stack": false,
           "steppedLine": false,
           "targets": [
-          {
-            "exemplar": true,
-            "expr": "histogram_quantile(0.999, sum(rate(raft_engine_write_leader_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
-            "hide": false,
-            "interval": "",
-            "legendFormat": "total",
-            "refId": "D"
-          },
-          {
-            "exemplar": true,
-            "expr": "histogram_quantile(0.999, sum(rate(raft_engine_sync_log_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
-            "hide": false,
-            "interval": "",
-            "legendFormat": "sync",
-            "refId": "A"
-          },
-          {
-            "exemplar": true,
-            "expr": "histogram_quantile(0.999, sum(rate(raft_engine_allocate_log_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
-            "hide": false,
-            "interval": "",
-            "legendFormat": "allocate",
-            "refId": "G"
-          },
-          {
-            "exemplar": true,
-            "expr": "histogram_quantile(0.999, sum(rate(raft_engine_rotate_log_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
-            "hide": false,
-            "interval": "",
-            "legendFormat": "rotate",
-            "refId": "H"
-          }
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.999, sum(rate(raft_engine_write_leader_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "total",
+              "refId": "D"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.999, sum(rate(raft_engine_sync_log_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "sync",
+              "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.999, sum(rate(raft_engine_allocate_log_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "allocate",
+              "refId": "G"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.999, sum(rate(raft_engine_rotate_log_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "rotate",
+              "refId": "H"
+            }
           ],
           "thresholds": [],
           "timeFrom": null,
@@ -30175,14 +29932,14 @@
           "stack": false,
           "steppedLine": false,
           "targets": [
-          {
-            "exemplar": true,
-            "expr": "avg(raft_engine_log_file_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (type)",
-            "interval": "",
-            "legendFormat": "{{type}}",
-            "queryType": "randomWalk",
-            "refId": "A"
-          }
+            {
+              "exemplar": true,
+              "expr": "avg(raft_engine_log_file_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (type)",
+              "interval": "",
+              "legendFormat": "{{type}}",
+              "queryType": "randomWalk",
+              "refId": "A"
+            }
           ],
           "thresholds": [],
           "timeFrom": null,
@@ -30275,38 +30032,38 @@
           "stack": false,
           "steppedLine": false,
           "targets": [
-          {
-            "exemplar": true,
-            "expr": "histogram_quantile(0.99, sum(rate(raft_engine_read_entry_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
-            "hide": false,
-            "interval": "",
-            "legendFormat": "read_entry",
-            "refId": "B"
-          },
-          {
-            "exemplar": true,
-            "expr": "histogram_quantile(0.99, sum(rate(raft_engine_read_message_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
-            "hide": false,
-            "interval": "",
-            "legendFormat": "read_message",
-            "refId": "D"
-          },
-          {
-            "exemplar": true,
-            "expr": "histogram_quantile(0.99, sum(rate(raft_engine_compact_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
-            "hide": false,
-            "interval": "",
-            "legendFormat": "compact",
-            "refId": "F"
-          },
-          {
-            "exemplar": true,
-            "expr": "histogram_quantile(0.99, sum(rate(raft_engine_purge_expired_files_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
-            "hide": false,
-            "interval": "",
-            "legendFormat": "purge",
-            "refId": "H"
-          }
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(raft_engine_read_entry_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "read_entry",
+              "refId": "B"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(raft_engine_read_message_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "read_message",
+              "refId": "D"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(raft_engine_compact_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "compact",
+              "refId": "F"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(raft_engine_purge_expired_files_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "purge",
+              "refId": "H"
+            }
           ],
           "thresholds": [],
           "timeFrom": null,
@@ -30399,15 +30156,15 @@
           "stack": false,
           "steppedLine": false,
           "targets": [
-          {
-            "exemplar": true,
-            "expr": "avg(raft_engine_log_entry_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (type)",
-            "hide": false,
-            "interval": "",
-            "legendFormat": "{{type}}",
-            "queryType": "randomWalk",
-            "refId": "A"
-          }
+            {
+              "exemplar": true,
+              "expr": "avg(raft_engine_log_entry_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (type)",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "{{type}}",
+              "queryType": "randomWalk",
+              "refId": "A"
+            }
           ],
           "thresholds": [],
           "timeFrom": null,
@@ -30461,7 +30218,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 61
+        "y": 39
       },
       "id": 3301,
       "panels": [
@@ -33470,7 +33227,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 62
+        "y": 40
       },
       "id": 2820,
       "panels": [
@@ -34199,7 +33956,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 63
+        "y": 41
       },
       "id": 8389,
       "panels": [
@@ -35380,7 +35137,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 64
+        "y": 42
       },
       "id": 2763,
       "panels": [
@@ -35485,7 +35242,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 65
+        "y": 43
       },
       "id": 3922,
       "panels": [
@@ -38206,7 +37963,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 66
+        "y": 44
       },
       "id": 4466,
       "panels": [
