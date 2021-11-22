@@ -377,7 +377,6 @@ impl WriteRef<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_write_type() {
