@@ -543,7 +543,7 @@ fn test_snapshot_gc_after_failed() {
 }
 #[test]
 fn test_sending_fail_with_net_error() {
-    let mut cluster = new_server_cluster(0, 2);
+    let mut cluster = new_server_cluster(1, 2);
     configure_for_snapshot(&mut cluster);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
 

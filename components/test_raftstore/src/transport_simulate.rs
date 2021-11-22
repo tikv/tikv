@@ -12,7 +12,6 @@ use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
-
 use raft::eraftpb::MessageType;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::{
@@ -577,6 +576,7 @@ impl Filter for CollectSnapshotFilter {
         }
     }
 }
+
 pub struct DropSnapshotFilter {
     notifier: Mutex<Sender<u64>>,
 }
