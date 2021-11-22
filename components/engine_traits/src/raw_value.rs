@@ -24,7 +24,7 @@ bitflags::bitflags! {
     }
 }
 
-/// A raw kv value and it's metadata.
+/// A RawKV value and it's metadata.
 ///
 /// ### ApiVersion::V1
 ///
