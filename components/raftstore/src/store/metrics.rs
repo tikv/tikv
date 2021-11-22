@@ -260,7 +260,7 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_store_write_raftdb_duration_seconds",
             "Bucketed histogram of store write raft db duration.",
-            exponential_buckets(0.0005, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
     pub static ref STORE_WRITE_SEND_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
