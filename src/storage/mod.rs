@@ -6675,27 +6675,20 @@ mod tests {
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].as_ref().unwrap(), &Some(v1.clone()));
         // scan
-        for desc in &[false] {
+        for desc in &[false, true] {
             let mut values = vec![
                 Some((k1.clone(), v1.clone())),
                 Some((k2.clone(), v2.clone())),
             ];
+            let mut key = Key::from_raw(b"\x00");
             if *desc {
+                key = Key::from_raw(b"\xff");
                 values.reverse();
             }
             expect_multi_values(
                 values,
-                block_on(storage.scan(
-                    ctx.clone(),
-                    Key::from_raw(b"\x00"),
-                    None,
-                    1000,
-                    0,
-                    110.into(),
-                    false,
-                    *desc,
-                ))
-                .unwrap(),
+                block_on(storage.scan(ctx.clone(), key, None, 1000, 0, 110.into(), false, *desc))
+                    .unwrap(),
             );
         }
     }
