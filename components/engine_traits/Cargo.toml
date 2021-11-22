@@ -22,6 +22,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
 fail = "0.4"
+case_macros = { path = "../case_macros" }
 
 [dev-dependencies]
 toml = "0.5"
