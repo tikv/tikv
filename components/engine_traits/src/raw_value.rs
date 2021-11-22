@@ -263,6 +263,9 @@ mod tests {
             // expire_ts is expected.
             (vec![1], ApiVersion::V2),
             (vec![1, 2, 3, 4, 5, 6, 7, 1], ApiVersion::V2),
+            // Undefined flag.
+            (vec![2], ApiVersion::V2),
+            (vec![1, 2, 3, 4, 5, 6, 7, 8, 2], ApiVersion::V2),
         ];
 
         for (bytes, api_version) in cases {
