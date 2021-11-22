@@ -113,10 +113,12 @@ pub struct ReqContext {
     /// The transaction start_ts of the request
     pub txn_start_ts: TimeStamp,
 
-    /// The set of timestamps of locks that can be bypassed during the reading.
+    /// The set of timestamps of locks that can be bypassed during the reading
+    /// because either they will be rolled back or their commit_ts > read request's start_ts.
     pub bypass_locks: TsSet,
 
-    /// The set of timestamps of locks that can be accessed during the reading.
+    /// The set of timestamps of locks that value in it can be accessed during the reading
+    /// because they will be committed and their commit_ts <= read request's start_ts.
     pub access_locks: TsSet,
 
     /// The data version to match. If it matches the underlying data version,

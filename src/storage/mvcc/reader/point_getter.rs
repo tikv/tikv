@@ -87,7 +87,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         self
     }
 
-    /// Set a set to locks that the reading process should access.
+    /// Set a set to locks that the reading process can access their values.
     ///
     /// Defaults to none.
     #[inline]
@@ -377,7 +377,11 @@ impl<S: Snapshot> PointGetter<S> {
                 }
             }
             LockType::Delete => Ok(None),
-            LockType::Lock | LockType::Pessimistic => unreachable!(),
+            LockType::Lock | LockType::Pessimistic => {
+                // Only when fails to call `Lock::check_ts_conflict()`, the function is called, so it's
+                // unreachable here.
+                unreachable!()
+            }
         }
     }
 }
