@@ -440,6 +440,7 @@ pub struct UnpersistedReady {
 pub struct ReadyResult {
     pub state_role: Option<StateRole>,
     pub has_new_entries: bool,
+    pub has_write_ready: bool,
 }
 
 pub struct Peer<EK, ER>
@@ -582,9 +583,12 @@ where
     pub memtrace_raft_entries: usize,
     /// Used for sending write msg.
     write_router: WriteRouter<EK, ER>,
+    /// Used for async write io.
     unpersisted_readies: VecDeque<UnpersistedReady>,
     /// The message count in `unpersisted_readies` for memory caculation.
     unpersisted_message_count: usize,
+    /// Used for sync write io.
+    unpersisted_ready: Option<Ready>,
     /// The last known persisted number.
     persisted_number: u64,
     /// The context of applying snapshot.
@@ -696,6 +700,7 @@ where
             write_router: WriteRouter::new(tag),
             unpersisted_readies: VecDeque::default(),
             unpersisted_message_count: 0,
+            unpersisted_ready: None,
             persisted_number: 0,
             apply_snap_ctx: None,
         };
@@ -1834,7 +1839,7 @@ where
                     let msgs = self.build_raft_messages(ctx, snap_ctx.msgs);
                     self.send_raft_messages(ctx, msgs);
 
-                    // Snapshot has been persisted.
+                    // Snapshot has been applied.
                     self.last_applying_idx = self.get_store().truncated_index();
                     self.raft_group.advance_apply_to(self.last_applying_idx);
                     self.cmd_epoch_checker.advance_apply(
@@ -2055,7 +2060,7 @@ where
 
         let ready_number = ready.number();
         let persisted_msgs = ready.take_persisted_messages();
-
+        let mut has_write_ready = false;
         match &res {
             HandleReadyResult::SendIOTask | HandleReadyResult::Snapshot { .. } => {
                 if !persisted_msgs.is_empty() {
@@ -2066,19 +2071,27 @@ where
                     task.request_times = request_times;
                 }
 
-                self.write_router.send_write_msg(
-                    ctx,
-                    self.unpersisted_readies.back().map(|r| r.number),
-                    WriteMsg::WriteTask(task),
-                );
+                if let Some(write_worker) = &mut ctx.sync_write_worker {
+                    write_worker.handle_write_task(task);
 
-                self.unpersisted_readies.push_back(UnpersistedReady {
-                    number: ready_number,
-                    max_empty_number: ready_number,
-                    raft_msgs: vec![],
-                });
+                    assert_eq!(self.unpersisted_ready, None);
+                    self.unpersisted_ready = Some(ready);
+                    has_write_ready = true;
+                } else {
+                    self.write_router.send_write_msg(
+                        ctx,
+                        self.unpersisted_readies.back().map(|r| r.number),
+                        WriteMsg::WriteTask(task),
+                    );
 
-                self.raft_group.advance_append_async(ready);
+                    self.unpersisted_readies.push_back(UnpersistedReady {
+                        number: ready_number,
+                        max_empty_number: ready_number,
+                        raft_msgs: vec![],
+                    });
+
+                    self.raft_group.advance_append_async(ready);
+                }
             }
             HandleReadyResult::NoIOTask => {
                 if let Some(last) = self.unpersisted_readies.back_mut() {
@@ -2161,6 +2174,7 @@ where
         Some(ReadyResult {
             state_role,
             has_new_entries,
+            has_write_ready,
         })
     }
 
@@ -2246,10 +2260,20 @@ where
             } else {
                 vec![]
             };
+            // Note that the `commit_index` and `commit_term` here may be used to
+            // forward the commit index. So it must be less than or equal to persist
+            // index.
+            let commit_index = cmp::min(
+                self.raft_group.raft.raft_log.committed,
+                self.raft_group.raft.raft_log.persisted,
+            );
+            let commit_term = self.get_store().term(commit_index).unwrap();
             let mut apply = Apply::new(
                 self.peer_id(),
                 self.region_id,
                 self.term(),
+                commit_index,
+                commit_term,
                 committed_entries,
                 cbs,
             );
@@ -2313,6 +2337,7 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         number: u64,
     ) -> Option<PersistSnapshotResult> {
+        assert!(ctx.sync_write_worker.is_none());
         if self.persisted_number >= number {
             return None;
         }
@@ -2366,6 +2391,64 @@ where
         } else {
             None
         }
+    }
+
+    pub fn handle_raft_ready_advance<T: Transport>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+    ) -> Option<PersistSnapshotResult> {
+        assert!(ctx.sync_write_worker.is_some());
+        let ready = self.unpersisted_ready.take()?;
+
+        self.persisted_number = ready.number();
+
+        if !ready.snapshot().is_empty() {
+            self.raft_group.advance_append_async(ready);
+            // The ready is persisted, but we don't want to handle following light
+            // ready immediately to avoid flow out of control, so use
+            // `on_persist_ready` instead of `advance_append`.
+            // We don't need to set `has_ready` to true, as snapshot is always
+            // checked when ticking.
+            self.raft_group.on_persist_ready(self.persisted_number);
+            return Some(self.on_persist_snapshot(ctx, self.persisted_number));
+        }
+
+        let pre_persist_index = self.raft_group.raft.raft_log.persisted;
+        let pre_commit_index = self.raft_group.raft.raft_log.committed;
+        let mut light_rd = self.raft_group.advance_append(ready);
+        self.report_persist_log_duration(pre_persist_index, &ctx.raft_metrics);
+        self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
+
+        let persist_index = self.raft_group.raft.raft_log.persisted;
+        self.mut_store().update_cache_persisted(persist_index);
+
+        self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);
+
+        if let Some(commit_index) = light_rd.commit_index() {
+            let pre_commit_index = self.get_store().commit_index();
+            assert!(commit_index >= pre_commit_index);
+            // No need to persist the commit index but the one in memory
+            // (i.e. commit of hardstate in PeerStorage) should be updated.
+            self.mut_store().set_commit_index(commit_index);
+            if self.is_leader() {
+                self.on_leader_commit_idx_changed(pre_commit_index, commit_index);
+            }
+        }
+
+        if !light_rd.messages().is_empty() {
+            if !self.is_leader() {
+                fail_point!("raft_before_follower_send");
+            }
+            let msgs = light_rd.take_messages();
+            let m = self.build_raft_messages(ctx, msgs);
+            self.send_raft_messages(ctx, m);
+        }
+
+        if !light_rd.committed_entries().is_empty() {
+            self.handle_raft_committed_entries(ctx, light_rd.take_committed_entries());
+        }
+
+        None
     }
 
     pub fn unpersisted_ready_len(&self) -> usize {

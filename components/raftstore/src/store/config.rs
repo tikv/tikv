@@ -7,7 +7,7 @@ use time::Duration as TimeDuration;
 
 use crate::{coprocessor, Result};
 use batch_system::Config as BatchSystemConfig;
-use engine_traits::config as engine_config;
+use engine_traits::perf_level_serde;
 use engine_traits::PerfLevel;
 use lazy_static::lazy_static;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig};
@@ -169,6 +169,7 @@ pub struct Config {
     #[serde(flatten, with = "prefix_store")]
     pub store_batch_system: BatchSystemConfig,
 
+    /// If it is 0, it means io tasks are handled in store threads.
     #[online_config(skip)]
     pub store_io_pool_size: usize,
 
@@ -185,7 +186,7 @@ pub struct Config {
     #[online_config(hidden)]
     pub apply_yield_duration: ReadableDuration,
 
-    #[serde(with = "engine_config::perf_level_serde")]
+    #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub perf_level: PerfLevel,
 
@@ -299,7 +300,7 @@ impl Default for Config {
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
-            store_io_pool_size: 1,
+            store_io_pool_size: 0,
             store_io_notify_capacity: 40960,
             future_poll_size: 1,
             hibernate_regions: true,
@@ -493,9 +494,6 @@ impl Config {
             self.raft_msg_flush_interval.0,
             Duration::from_millis(1),
         ));
-        if self.store_io_pool_size == 0 {
-            return Err(box_err!("store-io-pool-size should be greater than 0"));
-        }
         if self.store_io_notify_capacity == 0 {
             return Err(box_err!(
                 "store-io-notify-capacity should be greater than 0"
