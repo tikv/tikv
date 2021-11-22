@@ -103,6 +103,7 @@ mod raft_engine;
 
 pub use rocksdb::set_perf_level;
 pub use rocksdb::PerfContext;
+pub use rocksdb::PerfLevel;
 
 pub mod flow_control_factors;
 pub use flow_control_factors::*;
