@@ -429,7 +429,11 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 chunks.push(chunk);
             }
 
-            if drained || self.paging_size.map_or(false, |p| record_len > p as usize) {
+            if drained
+                || self
+                    .paging_size
+                    .map_or(false, |p| chunks.len() >= p as usize)
+            {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
 
