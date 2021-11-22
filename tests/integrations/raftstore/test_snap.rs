@@ -442,6 +442,7 @@ fn test_server_snapshot_with_append() {
 #[test]
 fn test_inspected_snapshot() {
     let mut cluster = new_server_cluster(1, 3);
+    cluster.cfg.prefer_mem = false;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 8;
     cluster.cfg.raft_store.merge_max_log_gap = 3;
@@ -572,7 +573,8 @@ fn test_gen_during_heavy_recv() {
     pd_client.must_add_peer(r1, new_learner_peer(3, 3));
     sleep_ms(500);
     must_get_equal(&cluster.get_engine(3), b"zzz-0000", b"value");
-
+    assert_eq!(cluster.get_snap_mgr(1).stats().sending_count, 0);
+    assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
     drop(cluster);
     let _ = th.join();
 }
