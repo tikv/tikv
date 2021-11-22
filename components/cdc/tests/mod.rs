@@ -3,8 +3,9 @@
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::*;
-use std::time::Duration;
 
+use cdc::{CdcObserver, FeatureGate, MemoryQuota, Task};
+use configuration::Configuration;
 use futures::{Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
 use grpcio::{ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver};
@@ -16,11 +17,10 @@ use security::*;
 use test_raftstore::*;
 use tikv::config::CdcConfig;
 use tikv_util::collections::HashMap;
-use tikv_util::worker::Worker;
+use tikv_util::config::ReadableDuration;
+use tikv_util::worker::{Runnable, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
-
-use cdc::{CdcObserver, MemoryQuota, Task};
 
 #[allow(clippy::type_complexity)]
 pub fn new_event_feed(
@@ -116,8 +116,9 @@ impl TestSuiteBuilder {
             let sim = cluster.sim.rl();
             let raft_router = sim.get_server_router(*id);
             let cdc_ob = obs.get(&id).unwrap().clone();
+            let cfg = CdcConfig::default();
             let mut cdc_endpoint = cdc::Endpoint::new(
-                &CdcConfig::default(),
+                &cfg,
                 pd_cli.clone(),
                 worker.scheduler(),
                 raft_router,
@@ -125,7 +126,9 @@ impl TestSuiteBuilder {
                 cluster.store_metas[id].clone(),
                 MemoryQuota::new(std::usize::MAX),
             );
-            cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
+            let mut updated_cfg = cfg.clone();
+            updated_cfg.min_ts_interval = ReadableDuration::millis(100);
+            cdc_endpoint.run(Task::ChangeConfig(cfg.diff(&updated_cfg)));
             cdc_endpoint.set_max_scan_batch_size(2);
             worker.start(cdc_endpoint).unwrap();
         }
@@ -172,8 +175,9 @@ impl TestSuite {
         let mut req = ChangeDataRequest::default();
         req.region_id = region_id;
         req.set_region_epoch(self.get_context(region_id).take_region_epoch());
-        // Batch resolved ts is supported by TiCDC in v4.0.8 release.
-        req.mut_header().set_ticdc_version("4.0.8".into());
+        // Enable batch resolved ts feature.
+        req.mut_header()
+            .set_ticdc_version(FeatureGate::batch_resolved_ts().to_string());
         req
     }
 
