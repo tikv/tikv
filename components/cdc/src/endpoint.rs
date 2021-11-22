@@ -1575,6 +1575,7 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches::assert_matches;
     use std::collections::BTreeMap;
     use std::fmt::Display;
     use std::sync::atomic::AtomicU64;
@@ -2421,7 +2422,10 @@ mod tests {
             err: Some(Error::request(err_header.clone())),
         };
         ep.run(Task::Deregister(deregister));
-        assert!(channel::recv_timeout(&mut rx, Duration::from_millis(200)).is_err());
+        assert_matches!(
+            channel::recv_timeout(&mut rx, Duration::from_millis(200)),
+            Err(_)
+        );
         assert_eq!(ep.capture_regions.len(), 1);
 
         let deregister = Deregister::Downstream {

@@ -1,5 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::assert_matches::assert_matches;
+
 use encryption::compat;
 use encryption::FileDictionaryFile;
 use kvproto::encryptionpb::{EncryptionMethod, FileInfo};
@@ -23,7 +25,7 @@ fn test_file_dict_file_record_corrupted() {
     fail::remove("file_dict_log_append_incomplete");
     file_dict_file.insert("info2", &info2).unwrap();
     // Intermediate record damage is not allowed.
-    assert!(file_dict_file.recovery().is_err());
+    assert_matches!(file_dict_file.recovery(), Err(_));
 
     let mut file_dict_file = FileDictionaryFile::new(
         tempdir.path(),

@@ -569,6 +569,7 @@ mod tests {
     use engine_traits::{IterOptions, SyncMutable, CF_DEFAULT};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
+    use std::assert_matches::assert_matches;
     use std::sync::Arc;
     use tempfile::Builder;
     use txn_types::Key;
@@ -637,9 +638,9 @@ mod tests {
             iter.seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
                 .unwrap()
         );
-        assert!(
-            iter.seek(&Key::from_encoded_slice(b"a9"), &mut statistics)
-                .is_err()
+        assert_matches!(
+            iter.seek(&Key::from_encoded_slice(b"a9"), &mut statistics),
+            Err(_)
         );
 
         assert!(
@@ -651,9 +652,9 @@ mod tests {
             iter.seek_for_prev(&Key::from_encoded_slice(b"a3"), &mut statistics)
                 .unwrap()
         );
-        assert!(
-            iter.seek_for_prev(&Key::from_encoded_slice(b"a1"), &mut statistics)
-                .is_err()
+        assert_matches!(
+            iter.seek_for_prev(&Key::from_encoded_slice(b"a1"), &mut statistics),
+            Err(_)
         );
     }
 
@@ -695,13 +696,13 @@ mod tests {
                 .reverse_seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
                 .unwrap()
         );
-        assert!(
-            iter.reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
-                .is_err()
+        assert_matches!(
+            iter.reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics),
+            Err(_)
         );
-        assert!(
-            iter.reverse_seek(&Key::from_encoded_slice(b"a8"), &mut statistics)
-                .is_err()
+        assert_matches!(
+            iter.reverse_seek(&Key::from_encoded_slice(b"a8"), &mut statistics),
+            Err(_)
         );
 
         assert!(iter.seek_to_last(&mut statistics));

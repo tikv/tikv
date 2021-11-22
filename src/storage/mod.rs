@@ -2443,6 +2443,7 @@ mod tests {
     use futures::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, Op};
     use std::{
+        assert_matches::assert_matches,
         sync::{
             atomic::{AtomicBool, Ordering},
             mpsc::{channel, Sender},
@@ -6115,7 +6116,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         // No wait for msg
-        assert!(msg_rx.try_recv().is_err());
+        assert_matches!(msg_rx.try_recv(), Err(_));
 
         // Meet lock-k.
         storage
@@ -6480,7 +6481,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         // No msg
-        assert!(msg_rx.try_recv().is_err());
+        assert_matches!(msg_rx.try_recv(), Err(_), Err(_));
 
         // Expired
         storage
@@ -7286,7 +7287,7 @@ mod tests {
             if is_legal {
                 assert!(res.is_ok(), "case {}", i);
             } else {
-                assert!(res.is_err(), "case {}", i);
+                assert_matches!(res, Err(_), "case {}", i);
                 assert_eq!(
                     res.unwrap_err().error_code(),
                     error_code::storage::API_VERSION_NOT_MATCHED,

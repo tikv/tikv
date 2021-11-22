@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::assert_matches::assert_matches;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
@@ -259,7 +260,10 @@ fn test_validate_endpoints() {
 
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let connector = PdConnector::new(env, mgr);
-    assert!(block_on(connector.validate_endpoints(&new_config(eps))).is_err());
+    assert_matches!(
+        block_on(connector.validate_endpoints(&new_config(eps))),
+        Err(_)
+    );
 }
 
 #[test]
@@ -278,7 +282,10 @@ fn test_validate_endpoints_retry() {
     eps.pop();
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let connector = PdConnector::new(env, mgr);
-    assert!(block_on(connector.validate_endpoints(&new_config(eps))).is_err());
+    assert_matches!(
+        block_on(connector.validate_endpoints(&new_config(eps))),
+        Err(_)
+    );
 }
 
 fn test_retry<F: Fn(&RpcClient)>(func: F) {

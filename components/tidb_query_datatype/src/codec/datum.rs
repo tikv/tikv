@@ -1148,6 +1148,7 @@ mod tests {
     use crate::codec::mysql::{Decimal, Duration, Time, MAX_FSP};
     use crate::expr::{EvalConfig, EvalContext};
 
+    use std::assert_matches::assert_matches;
     use std::cmp::Ordering;
     use std::slice::from_ref;
     use std::str::FromStr;
@@ -1962,7 +1963,7 @@ mod tests {
         ];
 
         for d in illegal_cases {
-            assert!(d.cast_as_json().is_err());
+            assert_matches!(d.cast_as_json(), Err(_));
         }
     }
 
@@ -1983,7 +1984,7 @@ mod tests {
         let illegal_cases = vec![Datum::Max, Datum::Min];
 
         for d in illegal_cases {
-            assert!(d.into_json().is_err());
+            assert_matches!(d.into_json(), Err(_));
         }
     }
 

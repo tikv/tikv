@@ -5,6 +5,7 @@ use engine_rocks::{Compat, RocksEngine};
 use engine_traits::{Peekable, RaftEngineReadOnly, CF_RAFT};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
+use std::assert_matches::assert_matches;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -56,7 +57,7 @@ fn test_wait_for_apply_index() {
         .async_command_on_node(3, request, cb)
         .unwrap();
     // Must timeout here
-    assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
+    assert_matches!(rx.recv_timeout(Duration::from_millis(500)), Err(_));
     fail::remove("on_apply_write_cmd");
 
     // After write cmd applied, the follower read will be executed.

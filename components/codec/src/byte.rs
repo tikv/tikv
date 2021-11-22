@@ -558,6 +558,7 @@ mod tests {
 
     use super::*;
     use crate::number;
+    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_mem_cmp_encoded_len() {
@@ -950,7 +951,7 @@ mod tests {
             let result = panic_hook::recover_safe(move || {
                 let _ = MemComparableByteCodec::encode_all(src.as_slice(), dest.as_mut_slice());
             });
-            assert!(result.is_err());
+            assert_matches!(result, Err(_));
 
             let mut src_in_place = vec![0; dest_len];
             let result = panic_hook::recover_safe(move || {
@@ -959,7 +960,7 @@ mod tests {
                     src_len,
                 );
             });
-            assert!(result.is_err());
+            assert_matches!(result, Err(_));
         }
     }
 
@@ -1119,7 +1120,7 @@ mod tests {
                 invalid_src.as_slice(),
                 dest.as_mut_slice(),
             );
-            assert!(result.is_err());
+            assert_matches!(result, Err(_));
         }
     }
 
@@ -1140,7 +1141,7 @@ mod tests {
                         dest.as_mut_slice(),
                     );
                 });
-                assert!(result.is_err());
+                assert_matches!(result, Err(_));
             }
             {
                 let mut dest = vec![0; src.len()];

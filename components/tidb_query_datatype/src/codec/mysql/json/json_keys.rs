@@ -53,7 +53,9 @@ fn json_keys(j: &JsonRef<'_>) -> Result<Option<Json>> {
 mod tests {
     use super::super::path_expr::parse_json_path_expr;
     use super::*;
+    use std::assert_matches::assert_matches;
     use std::str::FromStr;
+
     #[test]
     fn test_json_keys() {
         let mut test_cases = vec![
@@ -123,7 +125,7 @@ mod tests {
                     i, expected, result,
                 );
             } else {
-                assert!(got.is_err(), "#{} expect modify error but got {:?}", i, got);
+                assert_matches!(got, Err(_), "#{} expect modify error but got {:?}", i, got);
             }
         }
     }

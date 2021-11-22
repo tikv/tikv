@@ -268,6 +268,7 @@ mod tests {
 
     use super::*;
     use crate::test_util::RpnFnScalarEvaluator;
+    use std::assert_matches::assert_matches;
     use tidb_query_datatype::codec::mysql::TimeType;
     use tidb_query_datatype::expr::EvalContext;
 
@@ -402,7 +403,7 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
         }
-        assert!(
+        assert_matches!(
             RpnFnScalarEvaluator::new()
                 .push_param_with_field_type(
                     Some((std::i64::MAX as u64 + 2) as i64),
@@ -411,8 +412,8 @@ mod tests {
                         .flag(FieldTypeFlag::UNSIGNED)
                         .build()
                 )
-                .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
-                .is_err()
+                .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt),
+            Err(_)
         );
 
         let signed_test_cases = vec![
@@ -429,11 +430,11 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
         }
-        assert!(
+        assert_matches!(
             RpnFnScalarEvaluator::new()
                 .push_param(std::i64::MIN)
-                .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
-                .is_err()
+                .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt),
+            Err(_)
         );
     }
 

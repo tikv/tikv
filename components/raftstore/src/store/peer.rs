@@ -4618,6 +4618,7 @@ mod tests {
     use crate::store::util::u64_to_timespec;
     use kvproto::raft_cmdpb;
     use protobuf::ProtobufEnum;
+    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_sync_log() {
@@ -4807,7 +4808,7 @@ mod tests {
                 applied_to_index_term: true,
                 lease_state: LeaseState::Valid,
             };
-            assert!(inspector.inspect(&req).is_err());
+            assert_matches!(inspector.inspect(&req), Err(_));
         }
     }
 

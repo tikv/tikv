@@ -1,5 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::assert_matches::assert_matches;
+
 use kvproto::kvrpcpb::{ApiVersion, Context, LockInfo};
 
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
@@ -241,10 +243,9 @@ impl<E: Engine> AssertionStorage<E> {
     }
 
     pub fn get_err(&self, key: &[u8], ts: impl Into<TimeStamp>) {
-        assert!(
-            self.store
-                .get(self.ctx.clone(), key.to_vec(), ts.into())
-                .is_err()
+        assert_matches!(
+            self.store.get(self.ctx.clone(), key.to_vec(), ts.into()),
+            Err(_)
         );
     }
 
@@ -275,10 +276,9 @@ impl<E: Engine> AssertionStorage<E> {
 
     pub fn batch_get_err(&self, keys: &[&[u8]], ts: impl Into<TimeStamp>) {
         let keys: Vec<Vec<u8>> = keys.iter().map(|x| x.to_vec()).collect();
-        assert!(
-            self.store
-                .batch_get(self.ctx.clone(), &keys, ts.into())
-                .is_err()
+        assert_matches!(
+            self.store.batch_get(self.ctx.clone(), &keys, ts.into()),
+            Err(_)
         );
     }
 
@@ -297,10 +297,9 @@ impl<E: Engine> AssertionStorage<E> {
     }
 
     pub fn batch_get_command_err(&self, keys: &[&[u8]], ts: u64) {
-        assert!(
-            self.store
-                .batch_get_command(self.ctx.clone(), keys, ts)
-                .is_err()
+        assert_matches!(
+            self.store.batch_get_command(self.ctx.clone(), keys, ts),
+            Err(_)
         );
     }
 
@@ -336,7 +335,7 @@ impl<E: Engine> AssertionStorage<E> {
     ) where
         T: std::fmt::Debug,
     {
-        assert!(resp.is_err());
+        assert_matches!(resp, Err(_));
         let err = resp.unwrap_err();
         match err {
             StorageError(box StorageErrorInner::Txn(TxnError(
@@ -388,15 +387,14 @@ impl<E: Engine> AssertionStorage<E> {
         _commit_ts: impl Into<TimeStamp>,
     ) {
         let start_ts = start_ts.into();
-        assert!(
-            self.store
-                .prewrite(
-                    self.ctx.clone(),
-                    vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
-                    key.to_vec(),
-                    start_ts,
-                )
-                .is_err()
+        assert_matches!(
+            self.store.prewrite(
+                self.ctx.clone(),
+                vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
+                key.to_vec(),
+                start_ts,
+            ),
+            Err(_)
         );
     }
 
@@ -646,15 +644,14 @@ impl<E: Engine> AssertionStorage<E> {
         start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
     ) {
-        assert!(
-            self.store
-                .cleanup(
-                    self.ctx.clone(),
-                    Key::from_raw(key),
-                    start_ts.into(),
-                    current_ts.into()
-                )
-                .is_err()
+        assert_matches!(
+            self.store.cleanup(
+                self.ctx.clone(),
+                Key::from_raw(key),
+                start_ts.into(),
+                current_ts.into()
+            ),
+            Err(_)
         );
     }
 
@@ -667,10 +664,9 @@ impl<E: Engine> AssertionStorage<E> {
 
     pub fn rollback_err(&self, keys: Vec<&[u8]>, start_ts: impl Into<TimeStamp>) {
         let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
-        assert!(
-            self.store
-                .rollback(self.ctx.clone(), keys, start_ts.into())
-                .is_err()
+        assert_matches!(
+            self.store.rollback(self.ctx.clone(), keys, start_ts.into()),
+            Err(_)
         );
     }
 

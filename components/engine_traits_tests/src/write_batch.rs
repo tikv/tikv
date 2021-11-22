@@ -4,6 +4,7 @@ use super::{assert_engine_error, default_engine};
 use engine_test::kv::KvTestEngine;
 use engine_traits::{Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt};
 use panic_hook::recover_safe;
+use std::assert_matches::assert_matches;
 
 #[test]
 fn write_batch_none_no_commit() {
@@ -281,11 +282,11 @@ fn write_batch_delete_range_backward_range() {
     let mut wb = db.engine.write_batch();
 
     wb.delete_range(b"c", b"a").unwrap();
-    assert!(
+    assert_matches!(
         recover_safe(|| {
             wb.write().unwrap();
-        })
-        .is_err()
+        }),
+        Err(_)
     );
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
@@ -320,11 +321,11 @@ fn write_batch_delete_range_backward_range_partial_commit() {
     wb.put(b"f", b"").unwrap();
     wb.delete(b"a").unwrap();
 
-    assert!(
+    assert_matches!(
         recover_safe(|| {
             wb.write().unwrap();
-        })
-        .is_err()
+        }),
+        Err(_)
     );
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());

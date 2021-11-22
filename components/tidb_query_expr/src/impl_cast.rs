@@ -1443,6 +1443,7 @@ mod tests {
     use crate::impl_cast::*;
     use crate::types::test_util::RpnFnScalarEvaluator;
     use crate::RpnFnCallExtra;
+    use std::assert_matches::assert_matches;
     use std::collections::BTreeMap;
     use std::fmt::{Debug, Display};
     use std::sync::Arc;
@@ -2373,7 +2374,7 @@ mod tests {
                 assert!(output.is_ok(), "input: {:?}", input);
                 assert_eq!(output.unwrap().unwrap(), exp, "input={:?}", input);
             } else {
-                assert!(output.is_err());
+                assert_matches!(output, Err(_));
             }
         }
     }
@@ -3602,7 +3603,7 @@ mod tests {
                     input
                 );
             } else {
-                assert!(output.is_err());
+                assert_matches!(output, Err(_));
             }
         }
     }
@@ -6046,7 +6047,7 @@ mod tests {
                                 ctx.warnings.warnings,
                                 expect_err
                             );
-                            assert!(result.is_err(), "log: {}", log)
+                            assert_matches!(result, Err(_), "log: {}", log)
                         }
                     },
                     Ok(v) => {

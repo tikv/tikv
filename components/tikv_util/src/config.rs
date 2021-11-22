@@ -1010,6 +1010,7 @@ mod check_data_dir {
 
     #[cfg(test)]
     mod tests {
+        use std::assert_matches::assert_matches;
         use std::fs::File;
         use std::io::Write;
         use std::os::unix::fs::symlink;
@@ -1039,21 +1040,21 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
 
             // not found
             let f2 = get_fs_info("/tmp", &mnt_file);
-            assert!(f2.is_err());
+            assert_matches!(f2, Err(_));
         }
 
         #[test]
         fn test_get_rotational_info() {
             // test device not exist
             let ret = get_rotational_info("/dev/invalid");
-            assert!(ret.is_err());
+            assert_matches!(ret, Err(_));
         }
 
         #[test]
         fn test_check_data_dir() {
             // test invalid data_path
             let ret = check_data_dir("/sys/invalid", "/proc/mounts");
-            assert!(ret.is_err());
+            assert_matches!(ret, Err(_));
             // get real path's fs_info
             let tmp_dir = Builder::new()
                 .prefix("test-check-data-dir")
@@ -1527,7 +1528,7 @@ mod tests {
         ];
         for src in illegal_cases {
             let src_str = format!("s = {:?}", src);
-            assert!(toml::from_str::<SizeHolder>(&src_str).is_err(), "{}", src);
+            assert_matches!(toml::from_str::<SizeHolder>(&src_str), Err(_), "{}", src);
         }
     }
 
@@ -1599,9 +1600,9 @@ mod tests {
         let illegal_cases = vec!["1H", "1M", "1S", "1MS", "1h1h", "h"];
         for src in illegal_cases {
             let src_str = format!("d = {:?}", src);
-            assert!(toml::from_str::<DurHolder>(&src_str).is_err(), "{}", src);
+            assert_matches!(toml::from_str::<DurHolder>(&src_str), Err(_), "{}", src);
         }
-        assert!(toml::from_str::<DurHolder>("d = 23").is_err());
+        assert_matches!(toml::from_str::<DurHolder>("d = 23"), Err(_));
     }
 
     #[test]
@@ -1668,7 +1669,7 @@ mod tests {
         {
             File::create(&path2).unwrap();
         }
-        assert!(canonicalize_path(&path2).is_err());
+        assert_matches!(canonicalize_path(&path2), Err(_));
         assert!(Path::new(&path2).exists());
     }
 
@@ -1793,11 +1794,11 @@ mod tests {
         let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
         create_file(&tmp_file, b"");
         let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "");
-        assert!(ret.is_err());
+        assert_matches!(ret, Err(_));
         let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
-        assert!(ret.is_err());
+        assert_matches!(ret, Err(_));
         let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "xt");
-        assert!(ret.is_ok());
+        assert_matches!(ret, Err(_));
     }
 
     #[test]

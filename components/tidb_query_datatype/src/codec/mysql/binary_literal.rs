@@ -207,6 +207,7 @@ impl Ord for BinaryLiteral {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_trim_leading_zero_bytes() {
@@ -273,7 +274,7 @@ mod tests {
         }
 
         let lit = BinaryLiteral::from_u64(100, -2);
-        assert!(lit.is_err());
+        assert_matches!(lit, Err(_));
     }
 
     #[test]
@@ -409,7 +410,7 @@ mod tests {
         for (input, exptected, err) in cs {
             if err {
                 let lit = BinaryLiteral::from_bit_str(input);
-                assert!(lit.is_err(), "input: {}, lit: {:?}", input, lit);
+                assert_matches!(lit, Err(_), "input: {}, lit: {:?}", input, lit);
             } else {
                 let lit = BinaryLiteral::from_bit_str(input).unwrap();
                 assert_eq!(lit.0, exptected);
@@ -459,11 +460,9 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (s, expected, err) in cs {
             if err {
-                assert!(
-                    BinaryLiteral::from_hex_str(s)
-                        .unwrap()
-                        .to_uint(&mut ctx)
-                        .is_err()
+                assert_matches!(
+                    BinaryLiteral::from_hex_str(s).unwrap().to_uint(&mut ctx),
+                    Err(_)
                 );
             } else {
                 let lit = BinaryLiteral::from_hex_str(s).unwrap();

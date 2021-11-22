@@ -1067,6 +1067,7 @@ impl<T: BufferWriter> NumberEncoder for T {}
 #[cfg(test)]
 mod tests {
     use protobuf::CodedOutputStream;
+    use std::assert_matches::assert_matches;
 
     fn get_u8_samples() -> Vec<u8> {
         vec![
@@ -1260,20 +1261,20 @@ mod tests {
                 // Encode to a `Cursor` (backed by Vec) without sufficient capacity
                 let buf: Vec<u8> = vec![];
                 let mut cursor = std::io::Cursor::new(buf);
-                assert!(super::NumberEncoder::$buf_enc(&mut cursor, sample).is_err());
+                assert_matches!(super::NumberEncoder::$buf_enc(&mut cursor, sample), Err(_));
                 assert_eq!(cursor.position(), 0);
                 assert_eq!(cursor.get_ref().len(), 0);
 
                 // Note that Vec capacity is not counted in Cursor.
                 let buf: Vec<u8> = Vec::with_capacity(len);
                 let mut cursor = std::io::Cursor::new(buf);
-                assert!(super::NumberEncoder::$buf_enc(&mut cursor, sample).is_err());
+                assert_matches!(super::NumberEncoder::$buf_enc(&mut cursor, sample), Err(_));
                 assert_eq!(cursor.position(), 0);
                 assert_eq!(cursor.get_ref().len(), 0);
 
                 let buf: Vec<u8> = vec![0; len - 1];
                 let mut cursor = std::io::Cursor::new(buf);
-                assert!(super::NumberEncoder::$buf_enc(&mut cursor, sample).is_err());
+                assert_matches!(super::NumberEncoder::$buf_enc(&mut cursor, sample), Err(_));
                 assert_eq!(cursor.position(), 0);
                 assert_eq!(cursor.get_ref().len(), len - 1);
 
@@ -1323,7 +1324,10 @@ mod tests {
                         let buf = payload.clone();
                         let mut cursor = std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert!(super::NumberEncoder::$buf_enc(&mut cursor, sample).is_err());
+                        assert_matches!(
+                            super::NumberEncoder::$buf_enc(&mut cursor, sample),
+                            Err(_)
+                        );
                         // underlying buffer and position should be unchanged
                         assert_eq!(&cursor.get_ref().as_slice(), &payload.as_slice());
                         assert_eq!(cursor.position(), pos as u64);
@@ -1333,19 +1337,19 @@ mod tests {
                 // Decode from a `Cursor` without sufficient capacity
                 let buf: Vec<u8> = vec![];
                 let mut cursor = std::io::Cursor::new(buf);
-                assert!(super::NumberDecoder::$buf_dec(&mut cursor).is_err());
+                assert_matches!(super::NumberDecoder::$buf_dec(&mut cursor), Err(_));
                 assert_eq!(cursor.position(), 0);
                 assert_eq!(cursor.get_ref().len(), 0);
 
                 let buf: Vec<u8> = Vec::with_capacity(len);
                 let mut cursor = std::io::Cursor::new(buf);
-                assert!(super::NumberDecoder::$buf_dec(&mut cursor).is_err());
+                assert_matches!(super::NumberDecoder::$buf_dec(&mut cursor), Err(_));
                 assert_eq!(cursor.position(), 0);
                 assert_eq!(cursor.get_ref().len(), 0);
 
                 let buf: Vec<u8> = vec![0; len - 1];
                 let mut cursor = std::io::Cursor::new(buf);
-                assert!(super::NumberDecoder::$buf_dec(&mut cursor).is_err());
+                assert_matches!(super::NumberDecoder::$buf_dec(&mut cursor), Err(_));
                 assert_eq!(cursor.position(), 0);
                 assert_eq!(cursor.get_ref().len(), len - 1);
 
@@ -1396,7 +1400,7 @@ mod tests {
                         let buf = payload.clone();
                         let mut cursor = std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert!(super::NumberDecoder::$buf_dec(&mut cursor).is_err());
+                        assert_matches!(super::NumberDecoder::$buf_dec(&mut cursor), Err(_));
                         // underlying buffer and position should be unchanged
                         assert_eq!(&cursor.get_ref().as_slice(), &payload.as_slice());
                         assert_eq!(cursor.position(), pos as u64);
@@ -1659,7 +1663,7 @@ mod tests {
                 // Incomplete buffer, we should got errors in decoding, but get `len` as length
                 for l in 0..len {
                     let result = super::NumberCodec::$dec(&base_buf[0..l]);
-                    assert!(result.is_err());
+                    assert_matches!(result, Err(_));
 
                     let result = super::NumberCodec::get_first_encoded_var_int_len(&base_buf[0..l]);
                     assert_eq!(result, l);
@@ -1677,7 +1681,10 @@ mod tests {
                         let buf = payload.clone();
                         let mut cursor = std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert!(super::NumberEncoder::$buf_enc(&mut cursor, sample).is_err());
+                        assert_matches!(
+                            super::NumberEncoder::$buf_enc(&mut cursor, sample),
+                            Err(_)
+                        );
                         // underlying buffer and position should be unchanged
                         assert_eq!(&cursor.get_ref().as_slice(), &payload.as_slice());
                         assert_eq!(cursor.position(), pos as u64);
@@ -1718,7 +1725,10 @@ mod tests {
                         let buf = payload.clone();
                         let mut cursor = std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert!(super::NumberEncoder::$buf_enc(&mut cursor, sample).is_err());
+                        assert_matches!(
+                            super::NumberEncoder::$buf_enc(&mut cursor, sample),
+                            Err(_)
+                        );
                         // underlying buffer and position should be unchanged
                         assert_eq!(&cursor.get_ref().as_slice(), &payload.as_slice());
                         assert_eq!(cursor.position(), pos as u64);
@@ -1734,7 +1744,7 @@ mod tests {
                         let buf = payload.clone();
                         let mut cursor = std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert!(super::NumberDecoder::$buf_dec(&mut cursor).is_err());
+                        assert_matches!(super::NumberDecoder::$buf_dec(&mut cursor), Err(_));
                         // underlying buffer and position should be unchanged
                         assert_eq!(&cursor.get_ref().as_slice(), &payload.as_slice());
                         assert_eq!(cursor.position(), pos as u64);

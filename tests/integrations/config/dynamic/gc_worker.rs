@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use raftstore::router::RaftStoreBlackHole;
+use std::assert_matches::assert_matches;
 use std::f64::INFINITY;
 use std::sync::mpsc::channel;
 use std::time::Duration;
@@ -19,7 +20,7 @@ fn test_gc_config_validate() {
 
     let mut invalid_cfg = GcConfig::default();
     invalid_cfg.batch_keys = 0;
-    assert!(invalid_cfg.validate().is_err());
+    assert_matches!(invalid_cfg.validate(), Err(_));
 }
 
 fn setup_cfg_controller(

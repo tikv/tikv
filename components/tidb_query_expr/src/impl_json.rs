@@ -335,6 +335,8 @@ mod tests {
 
     use crate::types::test_util::RpnFnScalarEvaluator;
 
+    use std::assert_matches::assert_matches;
+
     #[test]
     fn test_json_depth() {
         let cases = vec![
@@ -585,7 +587,7 @@ mod tests {
                 .push_params(err_args)
                 .evaluate(ScalarFuncSig::JsonObjectSig);
 
-            assert!(output.is_err());
+            assert_matches!(output, Err(_));
         }
     }
 
@@ -949,7 +951,7 @@ mod tests {
             if is_success {
                 assert_eq!(output.unwrap(), expected, "{:?}", vargs);
             } else {
-                assert!(output.is_err());
+                assert_matches!(output, Err(_));
             }
         }
     }

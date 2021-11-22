@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::assert_matches::assert_matches;
 use std::f64::INFINITY;
 use std::path::Path;
 use std::sync::Arc;
@@ -85,7 +86,7 @@ fn test_turnoff_titan() {
 
     // try reopen db when titan isn't properly turned off.
     configure_for_disable_titan(&mut cluster);
-    assert!(cluster.pre_start_check().is_err());
+    assert_matches!(cluster.pre_start_check(), Err(_));
 
     configure_for_enable_titan(&mut cluster, ReadableSize::kb(0));
     assert!(cluster.pre_start_check().is_ok());

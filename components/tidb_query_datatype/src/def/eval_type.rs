@@ -91,6 +91,7 @@ mod tests {
     use super::*;
     use crate::FieldTypeAccessor;
     use crate::FieldTypeTp::*;
+    use std::assert_matches::assert_matches;
     use std::convert::TryFrom;
 
     #[test]
@@ -135,7 +136,7 @@ mod tests {
             if let Some(etype) = etype {
                 assert_eq!(ftt.unwrap(), etype);
             } else {
-                assert!(ftt.is_err());
+                assert_matches!(ftt, Err(_));
             }
         }
     }

@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::assert_matches::assert_matches;
 use std::collections::HashMap;
 use std::mem;
 use std::sync::atomic::AtomicBool;
@@ -98,7 +99,7 @@ fn test_replica_read_not_applied() {
 
     // Read index on follower should be blocked instead of get an old value.
     let resp1_ch = async_read_on_peer(&mut cluster, new_peer(3, 3), r1.clone(), b"k1", true, true);
-    assert!(resp1_ch.recv_timeout(Duration::from_secs(1)).is_err());
+    assert_matches!(resp1_ch.recv_timeout(Duration::from_secs(1)), Err(_));
 
     // Unpark all append responses so that the new leader can commit its first entry.
     let router = cluster.sim.wl().get_router(2).unwrap();
@@ -148,7 +149,7 @@ fn test_replica_read_on_hibernate() {
 
     // Read index on follower should be blocked.
     let resp1_ch = async_read_on_peer(&mut cluster, new_peer(1, 1), r1, b"k1", true, true);
-    assert!(resp1_ch.recv_timeout(Duration::from_secs(1)).is_err());
+    assert_matches!(resp1_ch.recv_timeout(Duration::from_secs(1)), Err(_));
 
     let (tx, rx) = mpsc::sync_channel(1024);
     let cb = Arc::new(move |msg: &RaftMessage| {
@@ -270,7 +271,7 @@ fn test_replica_read_on_stale_peer() {
     cluster.must_put(b"k2", b"v2");
     let resp1_ch = async_read_on_peer(&mut cluster, peer_on_store3, region, b"k2", true, true);
     // must be timeout
-    assert!(resp1_ch.recv_timeout(Duration::from_micros(100)).is_err());
+    assert_matches!(resp1_ch.recv_timeout(Duration::from_micros(100)), Err(_));
 }
 
 #[test]
@@ -303,7 +304,7 @@ fn test_read_index_out_of_order() {
     // Can't get read resonse because heartbeat responses are blocked.
     let r1 = cluster.get_region(b"k1");
     let resp1 = async_read_on_peer(&mut cluster, new_peer(1, 1), r1.clone(), b"k1", true, true);
-    assert!(resp1.recv_timeout(Duration::from_secs(2)).is_err());
+    assert_matches!(resp1.recv_timeout(Duration::from_secs(2)), Err(_));
 
     pd_client.must_remove_peer(rid, new_peer(2, 2));
 
@@ -343,8 +344,8 @@ fn test_read_index_retry_lock_checking() {
     let r1 = cluster.get_region(b"k1");
     let resp1 = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", true);
     let resp2 = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k2", true);
-    assert!(resp1.recv_timeout(Duration::from_secs(2)).is_err());
-    assert!(resp2.try_recv().is_err());
+    assert_matches!(resp1.recv_timeout(Duration::from_secs(2)), Err(_));
+    assert_matches!(resp2.try_recv(), Err(_));
 
     // k1 has a memory lock
     let leader_cm = cluster.sim.rl().get_concurrency_manager(1);

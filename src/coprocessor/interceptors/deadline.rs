@@ -39,6 +39,7 @@ where
 mod tests {
     use super::*;
 
+    use std::assert_matches::assert_matches;
     use std::{thread, time::Duration};
     use tokio::task::yield_now;
 
@@ -57,6 +58,6 @@ mod tests {
         assert!(res.is_ok());
 
         let res = check_deadline(work(100), Deadline::from_now(Duration::from_millis(500))).await;
-        assert!(res.is_err());
+        assert_matches!(res, Err(_));
     }
 }

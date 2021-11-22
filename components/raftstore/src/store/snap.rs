@@ -933,6 +933,7 @@ impl Snapshot {
 
 // To check whether a procedure about apply snapshot aborts or not.
 struct ApplyAbortChecker(Arc<AtomicUsize>);
+
 impl snap_io::StaleDetector for ApplyAbortChecker {
     fn is_stale(&self) -> bool {
         self.0.load(Ordering::Relaxed) == JOB_STATUS_CANCELLING
@@ -1529,6 +1530,7 @@ impl SnapManagerBuilder {
 #[cfg(test)]
 pub mod tests {
     use file_system::{self, File, OpenOptions};
+    use std::assert_matches::assert_matches;
     use std::cmp;
     use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::path::{Path, PathBuf};
@@ -1565,6 +1567,7 @@ pub mod tests {
     use crate::store::peer_storage::JOB_STATUS_RUNNING;
     use crate::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
     use crate::Result;
+    use core::panicking::assert_matches_failed;
 
     const TEST_STORE_ID: u64 = 1;
     const TEST_KEY: &[u8] = b"akey";
@@ -2117,7 +2120,10 @@ pub mod tests {
 
         corrupt_snapshot_size_in(dir.path());
 
-        assert!(Snapshot::new_for_sending(dir.path(), &key, &mgr_core,).is_err());
+        assert_matches!(
+            Snapshot::new_for_sending(dir.path(), &key, &mgr_core,),
+            Err(_)
+        );
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
@@ -2163,11 +2169,17 @@ pub mod tests {
             write_batch_size: TEST_WRITE_BATCH_SIZE,
             coprocessor_host: CoprocessorHost::<KvTestEngine>::default(),
         };
-        assert!(s5.apply(options).is_err());
+        assert_matches!(s5.apply(options), Err(_));
 
         corrupt_snapshot_size_in(dst_dir.path());
-        assert!(Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_meta,).is_err());
-        assert!(Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core).is_err());
+        assert_matches!(
+            Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_meta,),
+            Err(_)
+        );
+        assert_matches!(
+            Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core),
+            Err(_)
+        );
     }
 
     #[test]
@@ -2206,7 +2218,10 @@ pub mod tests {
 
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
 
-        assert!(Snapshot::new_for_sending(dir.path(), &key, &mgr_core,).is_err());
+        assert_matches!(
+            Snapshot::new_for_sending(dir.path(), &key, &mgr_core,),
+            Err(_)
+        );
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
@@ -2235,10 +2250,13 @@ pub mod tests {
 
         assert_eq!(1, corrupt_snapshot_meta_file(dst_dir.path()));
 
-        assert!(Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core,).is_err());
-        assert!(
-            Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_data.take_meta(),)
-                .is_err()
+        assert_matches!(
+            Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core,),
+            Err(_)
+        );
+        assert_matches!(
+            Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_data.take_meta(),),
+            Err(_)
         );
     }
 
@@ -2261,7 +2279,7 @@ pub mod tests {
         let path2 = temp_path2.to_str().unwrap().to_owned();
         File::create(temp_path2).unwrap();
         mgr = SnapManager::new(path2);
-        assert!(mgr.init().is_err());
+        assert_matches!(mgr.init(), Err(_));
     }
 
     #[test]

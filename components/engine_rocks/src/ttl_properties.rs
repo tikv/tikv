@@ -115,6 +115,7 @@ impl TablePropertiesCollectorFactory<TtlPropertiesCollector> for TtlPropertiesCo
 mod tests {
     use super::*;
     use engine_traits::util::append_expire_ts;
+    use std::assert_matches::assert_matches;
     use tikv_util::time::UnixSecs;
 
     #[test]
@@ -146,10 +147,10 @@ mod tests {
         assert_eq!(props.min_expire_ts, 1);
 
         let case2 = [("za", 0)];
-        assert!(get_properties(&case2).is_err());
+        assert_matches!(get_properties(&case2), Err(_));
 
         let case3 = [];
-        assert!(get_properties(&case3).is_err());
+        assert_matches!(get_properties(&case3), Err(_));
 
         let case4 = [("za", 1)];
         let props = get_properties(&case4).unwrap();

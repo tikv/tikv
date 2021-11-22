@@ -538,6 +538,7 @@ mod tests {
     use super::*;
     use rusoto_core::signature::SignedRequest;
     use rusoto_mock::MockRequestDispatcher;
+    use std::assert_matches::assert_matches;
     use tikv_util::stream::block_on_external_io;
 
     #[test]
@@ -553,7 +554,7 @@ mod tests {
         });
         assert!(S3Storage::new(config.clone()).is_ok());
         config.bucket.region = StringNonEmpty::opt("foo".to_string());
-        assert!(S3Storage::new(config).is_err());
+        assert_matches!(S3Storage::new(config), Err(_));
     }
 
     #[cfg(feature = "failpoints")]
@@ -602,7 +603,7 @@ mod tests {
             )
             .await;
         fail::remove(s3_put_obj_err_fp);
-        assert!(resp.is_err());
+        assert_matches!(resp, Err(_));
 
         // test timeout
         let s3_timeout_injected_fp = "s3_timeout_injected";
@@ -621,7 +622,7 @@ mod tests {
             .await;
         fail::remove(s3_sleep_injected_fp);
         // timeout occur due to delay 200ms
-        assert!(resp.is_err());
+        assert_matches!(resp, Err(_));
 
         // inject 50ms delay
         fail::cfg(s3_sleep_injected_fp, "return(50)").unwrap();

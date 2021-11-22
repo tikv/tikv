@@ -652,6 +652,7 @@ impl<'a> EvaluableRef<'a> for SetRef<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches::assert_matches;
     use std::f64;
 
     #[test]
@@ -680,8 +681,9 @@ mod tests {
                     assert_eq!(rb.unwrap(), val);
                 }
                 None => {
-                    assert!(
-                        rb.is_err(),
+                    assert_matches!(
+                        rb,
+                        Err(_),
                         "index: {}, {:?} should not be converted, but got: {:?}",
                         i,
                         v,
@@ -698,7 +700,7 @@ mod tests {
             .as_bytes()
             .to_vec()
             .as_mysql_bool(&mut ctx);
-        assert!(val.is_err());
+        assert_matches!(val, Err(_));
 
         let mut ctx = EvalContext::default();
         let val: Result<bool> = f64::NEG_INFINITY
@@ -706,7 +708,7 @@ mod tests {
             .as_bytes()
             .to_vec()
             .as_mysql_bool(&mut ctx);
-        assert!(val.is_err());
+        assert_matches!(val, Err(_));
     }
 
     #[test]

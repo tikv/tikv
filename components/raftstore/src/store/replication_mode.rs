@@ -181,6 +181,7 @@ mod tests {
     use crate::store::util::new_peer;
     use kvproto::metapb;
     use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
+    use std::assert_matches::assert_matches;
     use std::panic;
 
     fn new_label(key: &str, value: &str) -> metapb::StoreLabel {
@@ -315,6 +316,6 @@ mod tests {
                 .group
                 .register_store(1, vec![label1.clone(), label3.clone()])
         });
-        assert!(res.is_err(), "existing group id can't be changed.");
+        assert_matches!(res, Err(_), "existing group id can't be changed.");
     }
 }

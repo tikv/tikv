@@ -2,6 +2,7 @@
 
 use futures::executor::block_on;
 use kvproto::kvrpcpb::Context;
+use std::assert_matches::assert_matches;
 use std::{sync::mpsc::channel, thread, time::Duration};
 use storage::mvcc::tests::must_get;
 use storage::mvcc::{self, tests::must_locked};
@@ -12,7 +13,6 @@ use tikv::storage::txn::tests::{
 };
 use tikv::storage::{self, lock_manager::DummyLockManager, TestEngineBuilder, TestStorageBuilder};
 use txn_types::{Key, Mutation, TimeStamp};
-
 #[test]
 fn test_txn_failpoints() {
     let engine = TestEngineBuilder::new().build().unwrap();
@@ -294,9 +294,9 @@ fn test_max_commit_ts_error() {
         )
         .unwrap();
     thread::sleep(Duration::from_millis(200));
-    assert!(
-        cm.read_key_check(&Key::from_raw(b"k1"), |_| Err(()))
-            .is_err()
+    assert_matches!(
+        cm.read_key_check(&Key::from_raw(b"k1"), |_| Err(())),
+        Err(_)
     );
     cm.update_max_ts(200.into());
 

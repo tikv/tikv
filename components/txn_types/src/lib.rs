@@ -2,6 +2,7 @@
 
 #![feature(box_patterns)]
 #![feature(min_specialization)]
+#![feature(assert_matches)]
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;

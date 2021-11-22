@@ -6,6 +6,7 @@
 
 #![feature(min_specialization)]
 #![feature(negative_impls)]
+#![feature(assert_matches)]
 
 #[macro_use]
 extern crate derive_more;

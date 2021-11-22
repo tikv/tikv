@@ -148,6 +148,7 @@ pub mod tests {
     use crate::storage::{types::TxnStatus, ProcessResult, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+    use std::assert_matches::assert_matches;
     use tikv_util::deadline::Deadline;
     use txn_types::Key;
     use txn_types::WriteType;
@@ -225,19 +226,18 @@ pub mod tests {
             resolving_pessimistic_lock,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
-        assert!(
-            command
-                .process_write(
-                    snapshot,
-                    WriteContext {
-                        lock_mgr: &DummyLockManager,
-                        concurrency_manager: cm,
-                        extra_op: Default::default(),
-                        statistics: &mut Default::default(),
-                        async_apply_prewrite: false,
-                    },
-                )
-                .is_err()
+        assert_matches!(
+            command.process_write(
+                snapshot,
+                WriteContext {
+                    lock_mgr: &DummyLockManager,
+                    concurrency_manager: cm,
+                    extra_op: Default::default(),
+                    statistics: &mut Default::default(),
+                    async_apply_prewrite: false,
+                },
+            ),
+            Err(_)
         );
     }
 

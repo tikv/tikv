@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::assert_matches::assert_matches;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -169,7 +170,7 @@ fn test_node_switch_api_version() {
     // Should not be able to switch from V1 to V2 now.
     cluster.cfg.storage.api_version = 2;
     cluster.cfg.storage.enable_ttl = true;
-    assert!(cluster.start().is_err());
+    assert_matches!(cluster.start(), Err(_));
     cluster.shutdown();
 
     // Prepare a new storage and switch it to V2.
@@ -185,6 +186,6 @@ fn test_node_switch_api_version() {
     // Should not be able to switch from V2 to V1 now.
     cluster.cfg.storage.api_version = 1;
     cluster.cfg.storage.enable_ttl = false;
-    assert!(cluster.start().is_err());
+    assert_matches!(cluster.start(), Err(_));
     cluster.shutdown();
 }

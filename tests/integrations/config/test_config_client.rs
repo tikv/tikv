@@ -2,6 +2,7 @@
 
 use online_config::{ConfigChange, OnlineConfig};
 use raftstore::store::Config as RaftstoreConfig;
+use std::assert_matches::assert_matches;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -29,23 +30,23 @@ fn test_update_config() {
 
     // update not support config
     let res = cfg_controller.update(change("server.addr", "localhost:3000"));
-    assert!(res.is_err());
+    assert_matches!(res, Err(_));
     assert_eq!(cfg_controller.get_current(), cfg);
 
     // update to invalid config
     let res = cfg_controller.update(change("raftstore.raft-log-gc-threshold", "0"));
-    assert!(res.is_err());
+    assert_matches!(res, Err(_));
     assert_eq!(cfg_controller.get_current(), cfg);
 
     // bad update request
     let res = cfg_controller.update(change("xxx.yyy", "0"));
-    assert!(res.is_err());
+    assert_matches!(res, Err(_));
     let res = cfg_controller.update(change("raftstore.xxx", "0"));
-    assert!(res.is_err());
+    assert_matches!(res, Err(_));
     let res = cfg_controller.update(change("raftstore.raft-log-gc-threshold", "10MB"));
-    assert!(res.is_err());
+    assert_matches!(res, Err(_));
     let res = cfg_controller.update(change("raft-log-gc-threshold", "10MB"));
-    assert!(res.is_err());
+    assert_matches!(res, Err(_));
     assert_eq!(cfg_controller.get_current(), cfg);
 }
 

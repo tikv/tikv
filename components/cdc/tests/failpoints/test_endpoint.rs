@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::assert_matches::assert_matches;
 use std::thread;
 use std::time::Duration;
 
@@ -289,7 +290,7 @@ fn test_no_resolved_ts_before_downstream_initialized() {
         for _ in 0..10 {
             let _ = receive_events[0](false);
             let mut rx = event_feeds[1].replace(None).unwrap();
-            assert!(recv_timeout(&mut rx, Duration::from_secs(1)).is_err());
+            assert_matches!(recv_timeout(&mut rx, Duration::from_secs(1)), Err(_));
             event_feeds[1].replace(Some(rx));
         }
     });

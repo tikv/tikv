@@ -1319,6 +1319,7 @@ mod tests {
     use kvproto::kvrpcpb::ApiVersion;
     use kvproto::metapb::{Peer, PeerRole, Region};
     use raft::eraftpb::EntryType;
+    use std::assert_matches::assert_matches;
     use tempfile::Builder;
 
     use super::*;
@@ -1629,8 +1630,8 @@ mod tests {
     fn test_scan_mvcc() {
         let debugger = new_debugger();
         // Test scan with bad start, end or limit.
-        assert!(debugger.scan_mvcc(b"z", b"", 0).is_err());
-        assert!(debugger.scan_mvcc(b"z", b"x", 3).is_err());
+        assert_matches!(debugger.scan_mvcc(b"z", b"", 0), Err(_));
+        assert_matches!(debugger.scan_mvcc(b"z", b"x", 3), Err(_));
     }
 
     #[test]
@@ -1938,7 +1939,7 @@ mod tests {
 
         region.set_start_key(b"k".to_vec());
         region.set_end_key(b"z".to_vec());
-        assert!(debugger.recreate_region(region.clone()).is_err());
+        assert_matches!(debugger.recreate_region(region.clone()), Err(_));
 
         remove_region_state(1);
         remove_region_state(2);
@@ -1950,7 +1951,7 @@ mod tests {
 
         region.set_start_key(b"z".to_vec());
         region.set_end_key(b"".to_vec());
-        assert!(debugger.recreate_region(region).is_err());
+        assert_matches!(debugger.recreate_region(region), Err(_));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(custom_test_frameworks)]
+#![feature(assert_matches)]
 #![test_runner(test_util::run_failpoint_tests)]
 
 mod test_endpoint;

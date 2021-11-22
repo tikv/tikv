@@ -333,6 +333,7 @@ mod tests {
     use futures::channel::{mpsc, oneshot};
     use futures::executor::block_on;
     use futures::{SinkExt, TryFutureExt};
+    use std::assert_matches::assert_matches;
     use std::sync::mpsc::sync_channel;
     use std::thread;
     use std::time::Duration;
@@ -385,7 +386,7 @@ mod tests {
         assert_eq!(block_on(res2).unwrap().unwrap_err(), expected);
 
         drop(tx1);
-        assert!(block_on(res1).unwrap().is_err());
+        assert_matches!(block_on(res1).unwrap(), Err(_));
     }
 
     #[test]
@@ -430,7 +431,7 @@ mod tests {
         let (mut tx, rx) = mpsc::channel(1);
         let res = rt.spawn(activate_heap_profile(rx, std::env::temp_dir(), || {}));
         block_on(tx.send(Err("test".to_string()))).unwrap();
-        assert!(block_on(res).unwrap().is_err());
+        assert_matches!(block_on(res).unwrap(), Err(_));
 
         // Test heap profiling can be activated again.
         let (tx, rx) = sync_channel::<i32>(1);

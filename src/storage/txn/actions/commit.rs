@@ -6,6 +6,7 @@ use crate::storage::mvcc::{
     ErrorInner, LockType, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
 };
 use crate::storage::Snapshot;
+use std::assert_matches::assert_matches;
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
 pub fn commit<S: Snapshot>(
@@ -148,7 +149,10 @@ pub mod tests {
         let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-        assert!(commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).is_err());
+        assert_matches!(
+            commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()),
+            Err(_)
+        );
     }
 
     #[cfg(test)]

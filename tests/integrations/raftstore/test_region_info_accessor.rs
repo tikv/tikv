@@ -4,6 +4,7 @@ use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::coprocessor::{RangeKey, RegionInfo, RegionInfoAccessor};
 use raftstore::store::util::{find_peer, new_peer};
+use std::assert_matches::assert_matches;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::thread;
@@ -181,7 +182,7 @@ fn test_node_cluster_region_info_accessor() {
     cluster.run_conf_change();
     let c = rx.recv().unwrap();
     // We only created it on the node whose id == 1 so we shouldn't receive more than one item.
-    assert!(rx.try_recv().is_err());
+    assert_matches!(rx.try_recv(), Err(_));
 
     test_region_info_accessor_impl(&mut cluster, &c);
 

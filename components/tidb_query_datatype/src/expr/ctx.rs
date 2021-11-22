@@ -326,6 +326,7 @@ impl EvalContext {
 mod tests {
     use super::super::Error;
     use super::*;
+    use std::assert_matches::assert_matches;
     use std::sync::Arc;
 
     #[test]
@@ -333,7 +334,7 @@ mod tests {
         // ignore_truncate = false, truncate_as_warning = false
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::new()));
         assert!(ctx.handle_truncate(false).is_ok());
-        assert!(ctx.handle_truncate(true).is_err());
+        assert_matches!(ctx.handle_truncate(true), Err(_));
         assert!(ctx.take_warnings().warnings.is_empty());
         // ignore_truncate = false;
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));

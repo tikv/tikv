@@ -554,6 +554,7 @@ mod tests {
     use super::*;
     use crate::import_file::ImportPath;
     use crate::*;
+    use std::assert_matches::assert_matches;
 
     fn do_test_import_dir(key_manager: Option<Arc<DataKeyManager>>) {
         let temp_dir = Builder::new().prefix("test_import_dir").tempdir().unwrap();
@@ -572,7 +573,7 @@ mod tests {
             check_file_not_exists(&path.clone, key_manager.as_deref());
 
             // Cannot create the same file again.
-            assert!(dir.create(&meta, key_manager.clone()).is_err());
+            assert_matches!(dir.create(&meta, key_manager.clone()), Err(_));
         }
 
         // Test ImportDir::delete()
@@ -664,7 +665,7 @@ mod tests {
             );
             f.append(data).unwrap();
             // Invalid crc32 and length.
-            assert!(f.finish().is_err());
+            assert_matches!(f.finish(), Err(_));
             check_file_exists(&path.temp, data_key_manager.as_deref());
             check_file_not_exists(&path.save, data_key_manager.as_deref());
         }

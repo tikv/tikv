@@ -755,6 +755,7 @@ mod tests {
     use engine_traits::EncryptionMethod as DBEncryptionMethod;
     use file_system::{remove_file, File};
     use matches::assert_matches;
+    use std::assert_matches::assert_matches;
     use tempfile::TempDir;
     use test_util::create_test_key_file;
 
@@ -937,7 +938,7 @@ mod tests {
         let mut previous_key = new_mock_backend();
         previous_key.track("previous".to_string());
         let manager = new_mock_key_manager(&tmp_dir, None, current_key, previous_key);
-        assert!(manager.is_err());
+        assert_matches!(manager, Err(_));
         assert_eq!(encrypt_called("current"), 1);
         assert_eq!(encrypt_called("previous"), 0);
         assert_eq!(decrypt_called("current"), 1);
@@ -978,7 +979,7 @@ mod tests {
 
         remove_file(tmp_dir.path().join(KEY_DICT_NAME)).unwrap();
         let manager = new_key_manager_def(&tmp_dir, None);
-        assert!(manager.is_err());
+        assert_matches!(manager, Err(_));
     }
 
     #[test]
@@ -992,7 +993,7 @@ mod tests {
 
         remove_file(tmp_dir.path().join(FILE_DICT_NAME)).unwrap();
         let manager = new_key_manager_def(&tmp_dir, None);
-        assert!(manager.is_err());
+        assert_matches!(manager, Err(_));
     }
 
     #[test]
@@ -1253,7 +1254,7 @@ mod tests {
 
         let result = new_key_manager(&tmp_dir, None, wrong_key, previous);
         // When the master key is invalid, the key manager left a empty file dict and return errors.
-        assert!(result.is_err());
+        assert_matches!(result, Err(_));
         let previous = Box::new(PlaintextBackend::default()) as Box<dyn Backend>;
         let result = new_key_manager(&tmp_dir, None, right_key, previous);
         assert!(result.is_ok());

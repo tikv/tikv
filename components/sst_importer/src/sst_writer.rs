@@ -241,6 +241,7 @@ mod tests {
 
     use super::*;
     use crate::{Config, SSTImporter};
+    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_write_txn_sst() {
@@ -344,6 +345,6 @@ mod tests {
         let mut w = importer.new_raw_writer::<TestEngine>(&db, meta).unwrap();
         let mut batch = RawWriteBatch::default();
         batch.set_ttl(10);
-        assert!(w.write(batch).is_err());
+        assert_matches!(w.write(batch), Err(_));
     }
 }

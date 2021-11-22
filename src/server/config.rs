@@ -425,6 +425,7 @@ fn validate_label_value(s: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches::assert_matches;
     use tikv_util::config::ReadableDuration;
 
     #[test]
@@ -438,23 +439,23 @@ mod tests {
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.concurrent_send_snap_limit = 0;
-        assert!(invalid_cfg.validate().is_err());
+        assert_matches!(invalid_cfg.validate(), Err(_));
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.concurrent_recv_snap_limit = 0;
-        assert!(invalid_cfg.validate().is_err());
+        assert_matches!(invalid_cfg.validate(), Err(_));
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.end_point_recursion_limit = 0;
-        assert!(invalid_cfg.validate().is_err());
+        assert_matches!(invalid_cfg.validate(), Err(_));
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.end_point_request_max_handle_duration = ReadableDuration::secs(0);
-        assert!(invalid_cfg.validate().is_err());
+        assert_matches!(invalid_cfg.validate(), Err(_));
 
         invalid_cfg = Config::default();
         invalid_cfg.addr = "0.0.0.0:1000".to_owned();
-        assert!(invalid_cfg.validate().is_err());
+        assert_matches!(invalid_cfg.validate(), Err(_));
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.validate().unwrap();
 
@@ -465,21 +466,21 @@ mod tests {
         }
         assert!(invalid_cfg.advertise_status_addr.is_empty());
         invalid_cfg.advertise_status_addr = "0.0.0.0:1000".to_owned();
-        assert!(invalid_cfg.validate().is_err());
+        assert_matches!(invalid_cfg.validate(), Err(_));
 
         invalid_cfg = Config::default();
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.advertise_status_addr = "127.0.0.1:1000".to_owned();
-        assert!(invalid_cfg.validate().is_err());
+        assert_matches!(invalid_cfg.validate(), Err(_));
 
         invalid_cfg = Config::default();
         invalid_cfg.grpc_stream_initial_window_size = ReadableSize(i32::MAX as u64 + 1);
-        assert!(invalid_cfg.validate().is_err());
+        assert_matches!(invalid_cfg.validate(), Err(_));
 
         cfg.labels.insert("k1".to_owned(), "v1".to_owned());
         cfg.validate().unwrap();
         cfg.labels.insert("k2".to_owned(), "v2?".to_owned());
-        assert!(cfg.validate().is_err());
+        assert_matches!(invalid_cfg.validate(), Err(_));
     }
 
     #[test]

@@ -81,6 +81,7 @@ mod tests {
 
     use crate::util::mock_executor::MockExecutor;
     use crate::util::mock_executor::MockScanExecutor;
+    use std::assert_matches::assert_matches;
     use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
     use tidb_query_datatype::codec::data_type::VectorValue;
     use tidb_query_datatype::expr::EvalWarnings;
@@ -126,7 +127,7 @@ mod tests {
         let r = exec.next_batch(1);
         assert_eq!(&r.logical_rows, &[1, 2]);
         assert_eq!(r.physical_columns.rows_len(), 3);
-        assert!(r.is_drained.is_err());
+        assert_matches!(r.is_drained, Err(_));
     }
 
     #[test]

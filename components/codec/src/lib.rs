@@ -3,6 +3,7 @@
 #![cfg_attr(test, feature(test))]
 #![feature(core_intrinsics)]
 #![feature(min_specialization)]
+#![feature(assert_matches)]
 
 #[cfg(test)]
 extern crate test;

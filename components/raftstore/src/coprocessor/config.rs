@@ -122,6 +122,7 @@ impl std::ops::Deref for SplitCheckConfigManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_config_validate() {
@@ -131,11 +132,11 @@ mod tests {
         cfg = Config::default();
         cfg.region_max_size = ReadableSize(10);
         cfg.region_split_size = ReadableSize(20);
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::default();
         cfg.region_max_keys = 10;
         cfg.region_split_keys = 20;
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
     }
 }

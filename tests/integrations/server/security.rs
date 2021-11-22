@@ -4,6 +4,7 @@ use collections::HashSet;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
+use std::assert_matches::assert_matches;
 use std::sync::Arc;
 use test_raftstore::new_server_cluster;
 use tikv_util::HandyRwLock;
@@ -45,5 +46,5 @@ fn test_check_cn_fail() {
 
     let client = TikvClient::new(channel);
     let status = client.kv_get(&GetRequest::default());
-    assert!(status.is_err());
+    assert_matches!(status, Err(_));
 }

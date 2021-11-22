@@ -216,6 +216,7 @@ impl<'de> Deserialize<'de> for Json {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_from_str_for_object() {
@@ -264,7 +265,7 @@ mod tests {
         let illegal_cases = vec!["[pxx,apaa]", "hpeheh", ""];
         for json_str in illegal_cases {
             let resp = Json::from_str(json_str);
-            assert!(resp.is_err());
+            assert_matches!(resp, Err(_));
         }
     }
 }

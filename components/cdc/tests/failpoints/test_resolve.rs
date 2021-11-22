@@ -7,6 +7,7 @@ use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
+use std::assert_matches::assert_matches;
 use std::time::Duration;
 use test_raftstore::*;
 use tikv_util::config::*;
@@ -254,7 +255,7 @@ fn test_joint_confchange() {
         receive_resolved_ts(&receive_event);
         tx.send(()).unwrap();
     });
-    assert!(rx.recv_timeout(Duration::from_secs(2)).is_err());
+    assert_matches!(rx.recv_timeout(Duration::from_secs(2)), Err(_));
 
     fail::remove(update_region_fp);
     fail::remove(deregister_fp);

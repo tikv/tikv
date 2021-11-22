@@ -778,6 +778,7 @@ mod tests {
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Context, ExtraOp};
+    use std::assert_matches::assert_matches;
     use txn_types::{Key, Mutation, TimeStamp};
 
     fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
@@ -1883,7 +1884,7 @@ mod tests {
             async_apply_prewrite: false,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
-        assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
+        assert_matches!(prewrite_cmd.cmd.process_write(snap, context), Err(_));
 
         // Test the pessimistic lock is not found path.
         must_acquire_pessimistic_lock(&engine, k1, v1, 10, 10);
@@ -1903,6 +1904,6 @@ mod tests {
             async_apply_prewrite: false,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
-        assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
+        assert_matches!(prewrite_cmd.cmd.process_write(snap, context), Err(_));
     }
 }

@@ -419,6 +419,7 @@ impl FieldTypeAccessor for ColumnInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches::assert_matches;
     use std::i32;
 
     fn field_types() -> Vec<FieldTypeTp> {
@@ -515,7 +516,7 @@ mod tests {
             if let Some(c) = expected {
                 assert_eq!(coll.unwrap(), c);
             } else {
-                assert!(coll.is_err());
+                assert_matches!(coll, Err(_));
             }
         }
     }

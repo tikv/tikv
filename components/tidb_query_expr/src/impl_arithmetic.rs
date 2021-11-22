@@ -507,6 +507,7 @@ impl ArithmeticOpWithCtx for RealDivide {
 mod tests {
     use super::*;
 
+    use std::assert_matches::assert_matches;
     use std::str::FromStr;
 
     use tidb_query_datatype::builder::FieldTypeBuilder;
@@ -580,7 +581,7 @@ mod tests {
                 .push_param(rhs)
                 .evaluate(ScalarFuncSig::PlusReal);
             if is_err {
-                assert!(output.is_err())
+                assert_matches!(output, Err(_))
             } else {
                 let output = output.unwrap();
                 assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
@@ -657,7 +658,7 @@ mod tests {
                 .push_param_with_field_type(rhs, rhs_field_type)
                 .evaluate(ScalarFuncSig::MinusInt);
             if is_err {
-                assert!(output.is_err())
+                assert_matches!(output, Err(_))
             } else {
                 let output = output.unwrap();
                 assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
@@ -693,7 +694,7 @@ mod tests {
                 .push_param(rhs)
                 .evaluate(ScalarFuncSig::MinusReal);
             if is_err {
-                assert!(output.is_err())
+                assert_matches!(output, Err(_))
             } else {
                 let output = output.unwrap();
                 assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
@@ -965,7 +966,7 @@ mod tests {
                 .push_param_with_field_type(lhs, lhs_field_type)
                 .push_param_with_field_type(rhs, rhs_field_type)
                 .evaluate(ScalarFuncSig::IntDivideInt);
-            assert!(output.is_err(), "lhs={:?}, rhs={:?}", lhs, rhs);
+            assert_matches!(output, Err(_), "lhs={:?}, rhs={:?}", lhs, rhs);
         }
     }
 
@@ -1010,7 +1011,7 @@ mod tests {
                 .push_param(rhs)
                 .evaluate(ScalarFuncSig::IntDivideDecimal);
 
-            assert!(output.is_err(), "lhs={:?}, rhs={:?}", lhs, rhs);
+            assert_matches!(output, Err(_), "lhs={:?}, rhs={:?}", lhs, rhs);
         }
     }
 
@@ -1035,12 +1036,12 @@ mod tests {
         ];
 
         for (lhs, rhs) in should_fail {
-            assert!(
+            assert_matches!(
                 RpnFnScalarEvaluator::new()
                     .push_param(lhs)
                     .push_param(rhs)
-                    .evaluate::<Real>(ScalarFuncSig::MultiplyReal)
-                    .is_err(),
+                    .evaluate::<Real>(ScalarFuncSig::MultiplyReal),
+                Err(_),
                 "{} * {} should fail",
                 lhs,
                 rhs
@@ -1068,12 +1069,12 @@ mod tests {
 
         let should_fail = vec![(std::i64::MAX, 2), (std::i64::MIN, -1)];
         for (lhs, rhs) in should_fail {
-            assert!(
+            assert_matches!(
                 RpnFnScalarEvaluator::new()
                     .push_param_with_field_type(lhs, FieldTypeTp::LongLong)
                     .push_param_with_field_type(rhs, FieldTypeTp::LongLong)
-                    .evaluate::<Int>(ScalarFuncSig::MultiplyInt)
-                    .is_err(),
+                    .evaluate::<Int>(ScalarFuncSig::MultiplyInt),
+                Err(_),
                 "{} * {} should fail",
                 lhs,
                 rhs
@@ -1103,7 +1104,7 @@ mod tests {
 
         let should_fail = vec![(-2, 1), (std::i64::MIN, 2)];
         for (lhs, rhs) in should_fail {
-            assert!(
+            assert_matches!(
                 RpnFnScalarEvaluator::new()
                     .push_param_with_field_type(lhs, FieldTypeTp::LongLong)
                     .push_param_with_field_type(
@@ -1112,8 +1113,8 @@ mod tests {
                             .tp(FieldTypeTp::LongLong)
                             .flag(FieldTypeFlag::UNSIGNED)
                     )
-                    .evaluate::<Int>(ScalarFuncSig::MultiplyInt)
-                    .is_err(),
+                    .evaluate::<Int>(ScalarFuncSig::MultiplyInt),
+                Err(_),
                 "{} * {} should fail",
                 lhs,
                 rhs
@@ -1152,7 +1153,7 @@ mod tests {
 
         let should_fail = vec![(std::u64::MAX as i64, 2)];
         for (lhs, rhs) in should_fail {
-            assert!(
+            assert_matches!(
                 RpnFnScalarEvaluator::new()
                     .push_param_with_field_type(
                         lhs,
@@ -1166,8 +1167,8 @@ mod tests {
                             .tp(FieldTypeTp::LongLong)
                             .flag(FieldTypeFlag::UNSIGNED)
                     )
-                    .evaluate::<Int>(ScalarFuncSig::MultiplyIntUnsigned)
-                    .is_err(),
+                    .evaluate::<Int>(ScalarFuncSig::MultiplyIntUnsigned),
+                Err(_),
                 "{} * {} should fail",
                 lhs,
                 rhs
@@ -1220,12 +1221,12 @@ mod tests {
 
         let overflow = vec![(std::f64::MAX, 0.0001)];
         for (lhs, rhs) in overflow {
-            assert!(
+            assert_matches!(
                 RpnFnScalarEvaluator::new()
                     .push_param(lhs)
                     .push_param(rhs)
-                    .evaluate::<Real>(ScalarFuncSig::DivideReal)
-                    .is_err()
+                    .evaluate::<Real>(ScalarFuncSig::DivideReal),
+                Err(_)
             )
         }
     }
@@ -1295,7 +1296,7 @@ mod tests {
                 if is_ok {
                     assert!(result.unwrap().is_none());
                 } else {
-                    assert!(result.is_err());
+                    assert_matches!(result, Err(_));
                 }
 
                 if has_warning {

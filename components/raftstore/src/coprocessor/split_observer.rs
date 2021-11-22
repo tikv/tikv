@@ -163,6 +163,7 @@ mod tests {
     use byteorder::{BigEndian, WriteBytesExt};
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
+    use std::assert_matches::assert_matches;
     use tidb_query_datatype::codec::{datum, table, Datum};
     use tidb_query_datatype::expr::EvalContext;
     use tikv_util::codec::bytes::encode_bytes;
@@ -254,7 +255,7 @@ mod tests {
         req = new_batch_split_request(split_keys.clone());
         // Although invalid keys should be skipped, but if all keys are
         // invalid, errors should be reported.
-        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_err());
+        assert_matches!(observer.pre_propose_admin(&mut ctx, &mut req), Err(_));
 
         let mut key = new_row_key(1, 2, 0);
         let mut expected_key = key[..key.len() - 8].to_vec();

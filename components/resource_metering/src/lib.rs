@@ -4,6 +4,7 @@
 
 #![feature(shrink_to)]
 #![feature(hash_drain_filter)]
+#![feature(assert_matches)]
 
 use crate::localstorage::STORAGE;
 

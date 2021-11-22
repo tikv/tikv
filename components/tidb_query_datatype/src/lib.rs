@@ -6,6 +6,7 @@
 #![feature(min_specialization)]
 #![feature(test)]
 #![feature(str_internals)]
+#![feature(assert_matches)]
 
 #[macro_use]
 extern crate num_derive;

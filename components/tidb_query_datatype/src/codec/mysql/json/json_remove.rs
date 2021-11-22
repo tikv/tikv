@@ -30,6 +30,7 @@ impl<'a> JsonRef<'a> {
 mod tests {
     use super::super::path_expr::parse_json_path_expr;
     use super::*;
+    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_json_remove() {
@@ -72,7 +73,7 @@ mod tests {
                 let j = r.unwrap();
                 assert_eq!(e, j, "#{} expect remove json {:?} == {:?}", i, j, e);
             } else {
-                assert!(r.is_err(), "#{} expect remove error but got {:?}", i, r);
+                assert_matches!(r, Err(_), "#{} expect remove error but got {:?}", i, r);
             }
         }
     }

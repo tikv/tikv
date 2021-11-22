@@ -276,6 +276,7 @@ pub(crate) mod tests {
         TxnStatus,
     };
     use kvproto::kvrpcpb::Context;
+    use std::assert_matches::assert_matches;
     use txn_types::{TimeStamp, WriteType, SHORT_VALUE_MAX_LEN};
 
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
@@ -390,19 +391,19 @@ pub(crate) mod tests {
         must_commit(&engine, k1, 1, 2);
 
         // "k1" already exist, returns AlreadyExist error.
-        assert!(matches!(
+        assert_matches!(
             try_prewrite_insert(&engine, k1, v2, k1, 3),
             Err(Error(box ErrorInner::AlreadyExist { .. }))
-        ));
+        );
 
         // Delete "k1"
         must_prewrite_delete(&engine, k1, k1, 4);
 
         // There is a lock, returns KeyIsLocked error.
-        assert!(matches!(
+        assert_matches!(
             try_prewrite_insert(&engine, k1, v2, k1, 6),
             Err(Error(box ErrorInner::KeyIsLocked(_)))
-        ));
+        );
 
         must_commit(&engine, k1, 4, 5);
 
@@ -414,10 +415,10 @@ pub(crate) mod tests {
         must_prewrite_put(&engine, k1, v3, k1, 8);
         must_rollback(&engine, k1, 8, false);
 
-        assert!(matches!(
+        assert_matches!(
             try_prewrite_insert(&engine, k1, v3, k1, 9),
             Err(Error(box ErrorInner::AlreadyExist { .. }))
-        ));
+        );
 
         // Delete "k1" again
         must_prewrite_delete(&engine, k1, k1, 10);
@@ -440,7 +441,7 @@ pub(crate) mod tests {
         must_commit(&engine, k1, 1, 2);
 
         // "k1" already exist, returns AlreadyExist error.
-        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 3).is_err());
+        assert_matches!(try_prewrite_check_not_exists(&engine, k1, k1, 3), Err(_));
 
         // Delete "k1"
         must_prewrite_delete(&engine, k1, k1, 4);
@@ -455,7 +456,7 @@ pub(crate) mod tests {
         // Rollback
         must_prewrite_put(&engine, k1, v3, k1, 9);
         must_rollback(&engine, k1, 9, false);
-        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 10).is_err());
+        assert_matches!(try_prewrite_check_not_exists(&engine, k1, k1, 10), Err(_));
 
         // Delete "k1" again
         must_prewrite_delete(&engine, k1, k1, 11);
@@ -473,7 +474,10 @@ pub(crate) mod tests {
     fn test_mvcc_txn_pessmistic_prewrite_check_not_exist() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let k = b"k1";
-        assert!(try_pessimistic_prewrite_check_not_exists(&engine, k, k, 3).is_err())
+        assert_matches!(
+            try_pessimistic_prewrite_check_not_exists(&engine, k, k, 3),
+            Err(_)
+        );
     }
 
     #[test]
@@ -785,7 +789,7 @@ pub(crate) mod tests {
         let cm = ConcurrencyManager::new(10.into());
         let mut txn = MvccTxn::new(5.into(), cm.clone());
         let mut reader = SnapshotReader::new(5.into(), snapshot, true);
-        assert!(
+        assert_matches!(
             prewrite(
                 &mut txn,
                 &mut reader,
@@ -793,8 +797,8 @@ pub(crate) mod tests {
                 Mutation::Put((Key::from_raw(key), value.to_vec())),
                 &None,
                 false,
-            )
-            .is_err()
+            ),
+            Err(_)
         );
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -983,7 +987,7 @@ pub(crate) mod tests {
         // start_ts = 5,  commit_ts = 15, Lock
 
         must_get(&engine, k, 19, v);
-        assert!(try_prewrite_insert(&engine, k, v, k, 20).is_err());
+        assert_matches!(try_prewrite_insert(&engine, k, v, k, 20), Err(_));
     }
 
     #[test]

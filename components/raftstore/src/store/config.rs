@@ -771,6 +771,7 @@ impl std::ops::Deref for RaftstoreConfigManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_config_validate() {
@@ -786,12 +787,12 @@ mod tests {
         );
 
         cfg.raft_heartbeat_ticks = 0;
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.raft_election_timeout_ticks = 10;
         cfg.raft_heartbeat_ticks = 10;
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.raft_min_election_timeout_ticks = 5;
@@ -802,66 +803,66 @@ mod tests {
         cfg.validate().unwrap();
 
         cfg.raft_heartbeat_ticks = 11;
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.raft_log_gc_threshold = 0;
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.raft_log_gc_size_limit = ReadableSize(0);
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);
         cfg.raft_election_timeout_ticks = 10;
         cfg.raft_store_max_leader_lease = ReadableDuration::secs(20);
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.raft_log_gc_count_limit = 100;
         cfg.merge_max_log_gap = 110;
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.merge_check_tick_interval = ReadableDuration::secs(0);
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);
         cfg.raft_election_timeout_ticks = 10;
         cfg.peer_stale_state_check_interval = ReadableDuration::secs(5);
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.peer_stale_state_check_interval = ReadableDuration::minutes(2);
         cfg.abnormal_leader_missing_duration = ReadableDuration::minutes(1);
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.abnormal_leader_missing_duration = ReadableDuration::minutes(2);
         cfg.max_leader_missing_duration = ReadableDuration::minutes(1);
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.local_read_batch_size = 0;
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.apply_batch_system.max_batch_size = Some(0);
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.apply_batch_system.pool_size = 0;
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.store_batch_system.max_batch_size = Some(0);
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.store_batch_system.pool_size = 0;
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.hibernate_regions = true;
@@ -885,13 +886,13 @@ mod tests {
 
         cfg = Config::new();
         cfg.future_poll_size = 0;
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);
         cfg.raft_election_timeout_ticks = 11;
         cfg.raft_store_max_leader_lease = ReadableDuration::secs(11);
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         cfg = Config::new();
         cfg.hibernate_regions = true;

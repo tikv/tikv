@@ -180,6 +180,7 @@ impl TsSet {
 mod tests {
     use super::*;
     use crate::types::Key;
+    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_ts() {
@@ -196,7 +197,7 @@ mod tests {
     fn test_split_ts() {
         let k = b"k";
         let ts = TimeStamp(123);
-        assert!(Key::split_on_ts_for(k).is_err());
+        assert_matches!(Key::split_on_ts_for(k), Err(_));
         let enc = Key::from_encoded_slice(k).append_ts(ts);
         let res = Key::split_on_ts_for(enc.as_encoded()).unwrap();
         assert_eq!(res, (k.as_ref(), ts));

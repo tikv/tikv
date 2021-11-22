@@ -2397,6 +2397,7 @@ mod tests {
 
     use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
     use crate::expr::{EvalConfig, Flag};
+    use std::assert_matches::assert_matches;
     use std::cmp::Ordering;
     use std::collections::hash_map::DefaultHasher;
     use std::f64::EPSILON;
@@ -2484,7 +2485,7 @@ mod tests {
             );
             match expect {
                 Err(e) => {
-                    assert!(r.is_err(), "{}", log.as_str());
+                    assert_matches!(r, Err(_), "{}", log.as_str());
                     match e {
                         Error::InvalidDataType(_) => (),
                         _ => panic!("{}", log.as_str()),
@@ -3029,7 +3030,7 @@ mod tests {
         // error cases
         let cases = vec![b"1e18446744073709551620"];
         for case in cases {
-            assert!(Decimal::from_bytes(case).is_err());
+            assert_matches!(Decimal::from_bytes(case),Err(_));
         }
     }
 
@@ -3683,7 +3684,7 @@ mod tests {
         // OVERFLOWING
         let big = (0..85).map(|_| '9').collect::<String>();
         let val: Result<Decimal> = big.as_bytes().convert(&mut ctx);
-        assert!(val.is_err(), "expected error, but got {:?}", val);
+        assert_matches!(val, Err(_), "expected error, but got {:?}", val);
         assert_eq!(val.unwrap_err().code(), ERR_DATA_OUT_OF_RANGE);
 
         // OVERFLOW_AS_WARNING

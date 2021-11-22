@@ -129,6 +129,7 @@ mod tests {
     use crate::storage::{Cursor, CursorBuilder, ScanMode};
     use engine_traits::IterOptions;
     use kvproto::kvrpcpb::Context;
+    use std::assert_matches::assert_matches;
     use tikv_kv::tests::*;
     use txn_types::Key;
     use txn_types::TimeStamp;
@@ -209,7 +210,7 @@ mod tests {
 
         let mut statistics = CfStatistics::default();
         let res = iter.seek(&Key::from_raw(b"foo"), &mut statistics);
-        assert!(res.is_err());
+        assert_matches!(res, Err(_));
         assert!(
             res.unwrap_err()
                 .to_string()

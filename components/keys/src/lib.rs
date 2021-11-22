@@ -307,6 +307,7 @@ mod tests {
     use super::*;
     use byteorder::{BigEndian, WriteBytesExt};
     use kvproto::metapb::{Peer, Region};
+    use std::assert_matches::assert_matches;
     use std::cmp::Ordering;
 
     #[test]
@@ -414,17 +415,17 @@ mod tests {
 
         let state_key = raft_state_key(1);
         // invalid length
-        assert!(decode_raft_log_key(&state_key).is_err());
+        assert_matches!(decode_raft_log_key(&state_key), Err(_));
 
         let mut state_key = state_key.to_vec();
         state_key.write_u64::<BigEndian>(2).unwrap();
         // invalid suffix
-        assert!(decode_raft_log_key(&state_key).is_err());
+        assert_matches!(decode_raft_log_key(&state_key), Err(_));
 
         let mut region_state_key = region_state_key(1).to_vec();
         region_state_key.write_u64::<BigEndian>(2).unwrap();
         // invalid prefix
-        assert!(decode_raft_log_key(&region_state_key).is_err());
+        assert_matches!(decode_raft_log_key(&region_state_key), Err(_));
     }
 
     #[test]
@@ -439,8 +440,11 @@ mod tests {
 
         let mut region = Region::default();
         // uninitialised region should not be passed in `enc_start_key` and `enc_end_key`.
-        assert!(::panic_hook::recover_safe(|| enc_start_key(&region)).is_err());
-        assert!(::panic_hook::recover_safe(|| enc_end_key(&region)).is_err());
+        assert_matches!(
+            ::panic_hook::recover_safe(|| enc_start_key(&region)),
+            Err(_)
+        );
+        assert_matches!(::panic_hook::recover_safe(|| enc_end_key(&region)), Err(_));
 
         region.mut_peers().push(Peer::default());
         assert_eq!(enc_start_key(&region), vec![DATA_PREFIX]);

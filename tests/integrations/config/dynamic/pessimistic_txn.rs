@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::assert_matches::assert_matches;
 use std::sync::{atomic::Ordering, mpsc, Arc};
 use std::time::Duration;
 
@@ -18,7 +19,7 @@ fn test_config_validate() {
 
     let mut invalid_cfg = Config::default();
     invalid_cfg.wait_for_lock_timeout = ReadableDuration::millis(0);
-    assert!(invalid_cfg.validate().is_err());
+    assert_matches!(invalid_cfg.validate(), Err(_));
 }
 
 #[derive(Clone)]

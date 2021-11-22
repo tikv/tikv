@@ -1,5 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-
+#![feature(assert_matches)]
 //! Implementation of engine_traits for RocksDB
 //!
 //! This is a work-in-progress attempt to abstract all the features needed by

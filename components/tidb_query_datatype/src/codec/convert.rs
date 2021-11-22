@@ -1102,6 +1102,7 @@ fn no_exp_float_str_to_int_str(valid_float: &str, mut dot_idx: usize) -> Cow<'_,
 mod tests {
     #![allow(clippy::float_cmp)]
 
+    use std::assert_matches::assert_matches;
     use std::fmt::Debug;
     use std::sync::Arc;
     use std::{f64, i64, isize, u64};
@@ -1400,14 +1401,14 @@ mod tests {
         let mut ctx = EvalContext::default();
         let bs = b"123bb".to_vec();
         let val = bs.to_int(&mut ctx, FieldTypeTp::LongLong);
-        assert!(val.is_err());
+        assert_matches!(val, Err(_));
         assert_eq!(val.unwrap_err().code(), ERR_TRUNCATE_WRONG_VALUE);
 
         // Invalid UTF8 chars
         let mut ctx = EvalContext::default();
         let invalid_utf8: Vec<u8> = vec![0, 159, 146, 150];
         let val = invalid_utf8.to_int(&mut ctx, FieldTypeTp::LongLong);
-        assert!(val.is_err());
+        assert_matches!(val, Err(_));
         assert_eq!(val.unwrap_err().code(), WARN_DATA_TRUNCATED);
 
         // IGNORE_TRUNCATE
@@ -1555,7 +1556,7 @@ mod tests {
         // SHOULD_CLIP_TO_ZERO
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::IN_INSERT_STMT)));
         let r = (-12345_i64).to_uint(&mut ctx, FieldTypeTp::LongLong);
-        assert!(r.is_err());
+        assert_matches!(r, Err(_));
 
         // SHOULD_CLIP_TO_ZERO | OVERFLOW_AS_WARNING
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(
@@ -1893,11 +1894,11 @@ mod tests {
         // test overflow
         let mut ctx = EvalContext::default();
         let val: Result<f64> = f64::INFINITY.to_string().as_bytes().convert(&mut ctx);
-        assert!(val.is_err());
+        assert_matches!(val, Err(_));
 
         let mut ctx = EvalContext::default();
         let val: Result<f64> = f64::NEG_INFINITY.to_string().as_bytes().convert(&mut ctx);
-        assert!(val.is_err());
+        assert_matches!(val, Err(_));
 
         // TRUNCATE_AS_WARNING
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));

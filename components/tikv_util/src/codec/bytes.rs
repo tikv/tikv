@@ -335,6 +335,7 @@ pub fn is_encoded_from(encoded: &[u8], raw: &[u8], desc: bool) -> bool {
 mod tests {
     use super::*;
     use crate::codec::{bytes, number};
+    use std::assert_matches::assert_matches;
     use std::cmp::Ordering;
 
     #[test]
@@ -440,8 +441,8 @@ mod tests {
         ];
 
         for mut x in invalid_bytes {
-            assert!(decode_bytes(&mut x.as_slice(), false).is_err());
-            assert!(decode_bytes_in_place(&mut x, false).is_err());
+            assert_matches!(decode_bytes(&mut x.as_slice(), false), Err(_));
+            assert_matches!(decode_bytes_in_place(&mut x, false), Err(_));
         }
     }
 

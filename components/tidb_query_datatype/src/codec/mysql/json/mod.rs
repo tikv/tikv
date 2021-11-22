@@ -494,6 +494,7 @@ impl crate::codec::data_type::AsMySQLBool for Json {
 mod tests {
     use super::*;
 
+    use std::assert_matches::assert_matches;
     use std::sync::Arc;
 
     use crate::codec::error::ERR_TRUNCATE_WRONG_VALUE;
@@ -530,7 +531,7 @@ mod tests {
             ],
         ];
         for d in cases {
-            assert!(json_object(d).is_err());
+            assert_matches!(json_object(d), Err(_));
         }
 
         let cases = vec![

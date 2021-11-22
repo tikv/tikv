@@ -4,6 +4,7 @@ use super::default_engine;
 use engine_traits::SeekKey;
 use engine_traits::{Iterable, Iterator, KvEngine};
 use panic_hook::recover_safe;
+use std::assert_matches::assert_matches;
 
 fn iter_empty<E, I, IF>(e: &E, i: IF)
 where
@@ -15,19 +16,19 @@ where
 
     assert_eq!(iter.valid().unwrap(), false);
 
-    assert!(iter.prev().is_err());
-    assert!(iter.next().is_err());
-    assert!(
+    assert_matches!(iter.prev(), Err(_));
+    assert_matches!(iter.next(), Err(_));
+    assert_matches!(
         recover_safe(|| {
             iter.key();
-        })
-        .is_err()
+        }),
+        Err(_)
     );
-    assert!(
+    assert_matches!(
         recover_safe(|| {
             iter.value();
-        })
-        .is_err()
+        }),
+        Err(_)
     );
 
     assert_eq!(iter.seek(SeekKey::Start).unwrap(), false);
@@ -86,17 +87,17 @@ where
 
     assert!(!iter.valid().unwrap());
 
-    assert!(
+    assert_matches!(
         recover_safe(|| {
             iter.key();
-        })
-        .is_err()
+        }),
+        Err(_)
     );
-    assert!(
+    assert_matches!(
         recover_safe(|| {
             iter.value();
-        })
-        .is_err()
+        }),
+        Err(_)
     );
 }
 
@@ -148,17 +149,17 @@ where
 
     assert!(!iter.valid().unwrap());
 
-    assert!(
+    assert_matches!(
         recover_safe(|| {
             iter.key();
-        })
-        .is_err()
+        }),
+        Err(_)
     );
-    assert!(
+    assert_matches!(
         recover_safe(|| {
             iter.value();
-        })
-        .is_err()
+        }),
+        Err(_)
     );
 }
 

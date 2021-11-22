@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::assert_matches::assert_matches;
 use std::thread;
 use std::time::Duration;
 
@@ -58,14 +59,13 @@ fn test_raft_storage() {
     // Test wrong region id.
     let region_id = ctx.get_region_id();
     ctx.set_region_id(region_id + 1);
-    assert!(storage.get(ctx.clone(), raw_key.clone(), 20).is_err());
-    assert!(
-        storage
-            .batch_get(ctx.clone(), &[raw_key.clone()], 20)
-            .is_err()
+    assert_matches!(storage.get(ctx.clone(), raw_key.clone(), 20), Err(_));
+    assert_matches!(
+        storage.batch_get(ctx.clone(), &[raw_key.clone()], 20),
+        Err(_)
     );
-    assert!(storage.scan(ctx.clone(), key, None, 1, false, 20).is_err());
-    assert!(storage.scan_locks(ctx, 20, None, None, 100).is_err());
+    assert_matches!(storage.scan(ctx.clone(), key, None, 1, false, 20), Err(_));
+    assert_matches!(storage.scan_locks(ctx, 20, None, None, 100), Err(_));
 }
 
 #[test]
@@ -112,7 +112,7 @@ fn test_raft_storage_rollback_before_prewrite() {
         b"key".to_vec(),
         10,
     );
-    assert!(ret.is_err());
+    assert_matches!(ret, Err(_));
     let err = ret.unwrap_err();
     match err {
         StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
@@ -160,7 +160,7 @@ fn test_raft_storage_store_not_match() {
 
     peer.set_store_id(store_id + 1);
     ctx.set_peer(peer);
-    assert!(storage.get(ctx.clone(), raw_key.clone(), 20).is_err());
+    assert_matches!(storage.get(ctx.clone(), raw_key.clone(), 20), Err(_));
     let res = storage.get(ctx.clone(), raw_key.clone(), 20);
     if let StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
         box KvErrorInner::Request(ref e),
@@ -170,13 +170,12 @@ fn test_raft_storage_store_not_match() {
     } else {
         panic!("expect store_not_match, but got {:?}", res);
     }
-    assert!(
-        storage
-            .batch_get(ctx.clone(), &[raw_key.clone()], 20)
-            .is_err()
+    assert_matches!(
+        storage.batch_get(ctx.clone(), &[raw_key.clone()], 20),
+        Err(_)
     );
-    assert!(storage.scan(ctx.clone(), key, None, 1, false, 20).is_err());
-    assert!(storage.scan_locks(ctx, 20, None, None, 100).is_err());
+    assert_matches!(storage.scan(ctx.clone(), key, None, 1, false, 20), Err(_));
+    assert_matches!(storage.scan_locks(ctx, 20, None, None, 100), Err(_));
 }
 
 #[test]

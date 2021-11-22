@@ -189,6 +189,7 @@ impl StoreAddrResolver for PdStoreAddrResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches::assert_matches;
     use std::marker::PhantomData;
     use std::net::SocketAddr;
     use std::ops::Sub;
@@ -270,7 +271,7 @@ mod tests {
     fn test_resolve_store_state_tombstone() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Tombstone);
         let runner = new_runner(store);
-        assert!(runner.get_address(0).is_err());
+        assert_matches!(runner.get_address(0), Err(_));
     }
 
     #[test]

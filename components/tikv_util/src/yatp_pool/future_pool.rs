@@ -170,6 +170,7 @@ impl std::error::Error for Full {
 mod tests {
     use super::*;
 
+    use std::assert_matches::assert_matches;
     use std::sync::mpsc;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -241,11 +242,11 @@ mod tests {
             .unwrap()
         };
 
-        assert!(try_recv_tick().is_err());
+        assert_matches!(try_recv_tick(), Err(_));
 
         // Tick is emitted because long enough time has elapsed since pool is created
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
-        assert!(try_recv_tick().is_err());
+        assert_matches!(try_recv_tick(), Err(_));
 
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
@@ -253,29 +254,29 @@ mod tests {
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
 
         // So far we have only elapsed TICK_INTERVAL * 0.2, so no ticks so far.
-        assert!(try_recv_tick().is_err());
+        assert_matches!(try_recv_tick(), Err(_));
 
         // Even if long enough time has elapsed, tick is not emitted until next task arrives
         thread::sleep(TICK_INTERVAL * 2);
-        assert!(try_recv_tick().is_err());
+        assert_matches!(try_recv_tick(), Err(_));
 
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
         assert_eq!(try_recv_tick().unwrap(), 0);
-        assert!(try_recv_tick().is_err());
+        assert_matches!(try_recv_tick(), Err(_));
 
         // Tick is not emitted if there is no task
         thread::sleep(TICK_INTERVAL * 2);
-        assert!(try_recv_tick().is_err());
+        assert_matches!(try_recv_tick(), Err(_));
 
         // Tick is emitted since long enough time has passed
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
         assert_eq!(try_recv_tick().unwrap(), 1);
-        assert!(try_recv_tick().is_err());
+        assert_matches!(try_recv_tick(), Err(_));
 
         // Tick is emitted immediately after a long task
         spawn_future_and_wait(&pool, TICK_INTERVAL * 2);
         assert_eq!(try_recv_tick().unwrap(), 2);
-        assert!(try_recv_tick().is_err());
+        assert_matches!(try_recv_tick(), Err(_));
     }
 
     #[test]
@@ -290,18 +291,18 @@ mod tests {
 
         let pool = Builder::new(ticker).thread_count(2, 2).build_future_pool();
 
-        assert!(rx.try_recv().is_err());
+        assert_matches!(rx.try_recv(), Err(_));
 
         // Spawn two tasks, each will be processed in one worker thread.
         spawn_future_without_wait(&pool, TICK_INTERVAL / 2);
         spawn_future_without_wait(&pool, TICK_INTERVAL / 2);
 
-        assert!(rx.try_recv().is_err());
+        assert_matches!(rx.try_recv(), Err(_));
 
         // Wait long enough time to trigger a tick.
         thread::sleep(TICK_INTERVAL * 2);
 
-        assert!(rx.try_recv().is_err());
+        assert_matches!(rx.try_recv(), Err(_));
 
         // These two tasks should both trigger a tick.
         spawn_future_without_wait(&pool, TICK_INTERVAL);
@@ -312,7 +313,7 @@ mod tests {
 
         assert_eq!(rx.try_recv().unwrap(), 0);
         assert_eq!(rx.try_recv().unwrap(), 1);
-        assert!(rx.try_recv().is_err());
+        assert_matches!(rx.try_recv(), Err(_));
     }
 
     #[test]
@@ -410,13 +411,14 @@ mod tests {
             spawn_long_time_future(&read_pool, 4, 400).unwrap(),
         );
         // no available results (running = 4)
-        assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
+        assert_matches!(rx.recv_timeout(Duration::from_millis(50))        assert_matches!(rx.try_recv(),Err(_));
+        );
 
         // full
-        assert!(spawn_long_time_future(&read_pool, 5, 100).is_err());
+        assert_matches!(spawn_long_time_future(&read_pool, 5, 100), Err(_));
 
         // full
-        assert!(spawn_long_time_future(&read_pool, 6, 100).is_err());
+        assert_matches!(spawn_long_time_future(&read_pool, 6, 100), Err(_));
 
         // wait a future completes (running = 3)
         assert_eq!(rx.recv().unwrap(), Ok(1));
@@ -425,7 +427,7 @@ mod tests {
         wait_on_new_thread(tx, spawn_long_time_future(&read_pool, 7, 5).unwrap());
 
         // full
-        assert!(spawn_long_time_future(&read_pool, 8, 100).is_err());
+        assert_matches!(spawn_long_time_future(&read_pool, 8, 100), Err(_));
 
         assert!(rx.recv().is_ok());
         assert!(rx.recv().is_ok());
@@ -433,6 +435,6 @@ mod tests {
         assert!(rx.recv().is_ok());
 
         // no more results
-        assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
+        assert_matches!(rx.recv_timeout(Duration::from_millis(500)), Err(_));
     }
 }

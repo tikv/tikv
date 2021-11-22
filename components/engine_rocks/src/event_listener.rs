@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::rocks_metrics::*;
+use std::assert_matches::assert_matches;
 
 use file_system::{get_io_type, set_io_type, IOType};
 use rocksdb::{
@@ -96,7 +97,7 @@ impl rocksdb::EventListener for RocksEventListener {
     }
 
     fn on_background_error(&self, reason: DBBackgroundErrorReason, result: Result<(), String>) {
-        assert!(result.is_err());
+        assert_matches!(result, Err(_));
         if let Err(err) = result {
             if matches!(
                 reason,

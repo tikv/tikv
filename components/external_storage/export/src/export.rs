@@ -232,6 +232,7 @@ pub fn make_cloud_backend(config: CloudDynamic) -> StorageBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches::assert_matches;
     use tempfile::Builder;
 
     #[test]
@@ -253,7 +254,7 @@ mod tests {
         create_storage(&backend, Default::default()).unwrap();
 
         let backend = StorageBackend::default();
-        assert!(create_storage(&backend, Default::default()).is_err());
+        assert_matches!(create_storage(&backend, Default::default()), Err(_));
     }
 }
 

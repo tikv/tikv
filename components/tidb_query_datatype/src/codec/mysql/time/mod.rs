@@ -1961,6 +1961,7 @@ mod tests {
     use crate::codec::mysql::{MAX_FSP, UNSPECIFIED_FSP};
     use crate::expr::EvalConfig;
 
+    use std::assert_matches::assert_matches;
     use std::sync::Arc;
 
     #[derive(Debug)]
@@ -2042,7 +2043,10 @@ mod tests {
 
         let should_fail = vec![-1111, 1, 100, 700_100, 100_000_000, 100_000_101_000_000];
         for case in should_fail {
-            assert!(Time::parse_from_i64(&mut ctx, case, TimeType::DateTime, 0).is_err());
+            assert_matches!(
+                Time::parse_from_i64(&mut ctx, case, TimeType::DateTime, 0),
+                Err(_)
+            );
         }
         Ok(())
     }
@@ -2153,7 +2157,7 @@ mod tests {
         ];
 
         for case in should_fail {
-            assert!(Time::parse_date(&mut ctx, case).is_err());
+            assert_matches!(Time::parse_date(&mut ctx, case), Err(_));
         }
         Ok(())
     }
@@ -2266,7 +2270,7 @@ mod tests {
         ];
 
         for (case, fsp) in should_fail {
-            assert!(Time::parse_datetime(&mut ctx, case, fsp, false).is_err());
+            assert_matches!(Time::parse_datetime(&mut ctx, case, fsp, false), Err(_));
         }
         Ok(())
     }
@@ -2525,7 +2529,10 @@ mod tests {
             ..TimeEnv::default()
         });
 
-        assert!(Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false).is_err());
+        assert_matches!(
+            Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false),
+            Err(_)
+        );
 
         // Enable NO_ZERO_DATE, STRICT_MODE and IGNORE_TRUNCATE.
         // If zero-date is encountered, an error is returned.
@@ -2557,7 +2564,7 @@ mod tests {
                 strict_mode: true,
                 ..TimeEnv::default()
             });
-            assert!(Time::parse_datetime(&mut ctx, case, 0, false).is_err());
+            assert_matches!(Time::parse_datetime(&mut ctx, case, 0, false)v);
         }
 
         Ok(())
@@ -2603,7 +2610,7 @@ mod tests {
                 strict_mode: true,
                 ..TimeEnv::default()
             });
-            assert!(Time::parse_datetime(&mut ctx, case, 0, false).is_err());
+            assert_matches!(Time::parse_datetime(&mut ctx, case, 0, false), Err(_));
         }
 
         Ok(())

@@ -193,6 +193,7 @@ mod tests {
     use crate::raw_util;
     use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable};
     use kvproto::metapb::Region;
+    use std::assert_matches::assert_matches;
     use std::sync::Arc;
     use tempfile::Builder;
 
@@ -247,7 +248,7 @@ mod tests {
         engine.put_cf(cf, b"k1", b"v2").unwrap();
 
         assert_eq!(&*engine.get_value(b"k1").unwrap().unwrap(), b"v1");
-        assert!(engine.get_value_cf("foo", b"k1").is_err());
+        assert_matches!(engine.get_value_cf("foo", b"k1"), Err(_));
         assert_eq!(&*engine.get_value_cf(cf, b"k1").unwrap().unwrap(), b"v2");
     }
 

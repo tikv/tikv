@@ -195,6 +195,7 @@ pub fn random_bytes(_ctx: &mut EvalContext, arg: Option<&Int>) -> Result<Option<
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches::assert_matches;
     use tipb::ScalarFuncSig;
 
     use super::*;
@@ -447,11 +448,11 @@ mod tests {
         ];
 
         for len in overflow_tests {
-            assert!(
+            assert_matches!(
                 RpnFnScalarEvaluator::new()
                     .push_param(len)
-                    .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
-                    .is_err(),
+                    .evaluate::<Bytes>(ScalarFuncSig::RandomBytes),
+                Err(_)
             );
         }
 

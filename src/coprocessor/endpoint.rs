@@ -633,6 +633,7 @@ fn make_error_response(e: Error) -> coppb::Response {
 mod tests {
     use super::*;
 
+    use std::assert_matches::assert_matches;
     use std::sync::{atomic, mpsc};
     use std::thread;
     use std::vec;
@@ -831,7 +832,10 @@ mod tests {
             None,
             PerfLevel::EnableCount,
         );
-        assert!(block_on(copr.handle_unary_request(outdated_req_ctx, handler_builder)).is_err());
+        assert_matches!(
+            block_on(copr.handle_unary_request(outdated_req_ctx, handler_builder)),
+            Err(_)
+        );
     }
 
     #[test]
@@ -976,7 +980,7 @@ mod tests {
 
         // verify
         for _ in 2..5 {
-            assert!(rx.recv().unwrap().is_err());
+            assert_matches!(rx.recv().unwrap(), Err(_));
         }
         for i in 0..2 {
             let resp = rx.recv().unwrap().unwrap();

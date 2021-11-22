@@ -544,6 +544,7 @@ mod tests {
     use collections::{HashMap, HashSet};
 
     use super::*;
+    use std::assert_matches::assert_matches;
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;
@@ -791,13 +792,13 @@ mod tests {
         let mut range = KeyRange::default();
         range.set_end(small_key.clone());
         range.set_start(large_key);
-        assert!(check_table_ranges(&[range]).is_err());
+        assert_matches!(check_table_ranges(&[range]), Err(_));
 
         // test invalid end
         let mut range = KeyRange::default();
         range.set_start(small_key);
         range.set_end(b"xx".to_vec());
-        assert!(check_table_ranges(&[range]).is_err());
+        assert_matches!(check_table_ranges(&[range]), Err(_));
     }
 
     #[test]
@@ -808,7 +809,7 @@ mod tests {
             assert_eq!(tid, decode_table_id(&k).unwrap());
             let k = encode_index_seek_key(tid, 1, &k);
             assert_eq!(tid, decode_table_id(&k).unwrap());
-            assert!(decode_table_id(b"xxx").is_err());
+            assert_matches!(decode_table_id(b"xxx"), Err(_));
         }
     }
 
@@ -816,15 +817,27 @@ mod tests {
     fn test_check_key_type() {
         let record_key = encode_row_key(TABLE_ID, 1);
         assert!(check_key_type(record_key.as_slice(), RECORD_PREFIX_SEP).is_ok());
-        assert!(check_key_type(record_key.as_slice(), INDEX_PREFIX_SEP).is_err());
+        assert_matches!(
+            check_key_type(record_key.as_slice(), INDEX_PREFIX_SEP),
+            Err(_)
+        );
 
         let (_, index_key) =
             generate_index_data_for_test(TABLE_ID, INDEX_ID, 1, &Datum::I64(1), true);
-        assert!(check_key_type(index_key.as_slice(), RECORD_PREFIX_SEP).is_err());
+        assert_matches!(
+            check_key_type(index_key.as_slice(), RECORD_PREFIX_SEP),
+            Err(_)
+        );
         assert!(check_key_type(index_key.as_slice(), INDEX_PREFIX_SEP).is_ok());
 
         let too_small_key = vec![0];
-        assert!(check_key_type(too_small_key.as_slice(), RECORD_PREFIX_SEP).is_err());
-        assert!(check_key_type(too_small_key.as_slice(), INDEX_PREFIX_SEP).is_err());
+        assert_matches!(
+            check_key_type(too_small_key.as_slice(), RECORD_PREFIX_SEP),
+            Err(_)
+        );
+        assert_matches!(
+            check_key_type(too_small_key.as_slice(), INDEX_PREFIX_SEP),
+            Err(_)
+        );
     }
 }

@@ -698,6 +698,7 @@ impl Default for MySQLRng {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches::assert_matches;
     use std::str::FromStr;
     use std::{f64, i64};
     use tidb_query_datatype::builder::FieldTypeBuilder;
@@ -838,7 +839,7 @@ mod tests {
             let output = RpnFnScalarEvaluator::new().push_param(arg).evaluate(sig);
 
             if is_err {
-                assert!(output.is_err());
+                assert_matches!(output, Err(_));
             } else {
                 let output = output.unwrap();
                 assert_eq!(output, expect_output, "{:?}", arg);
@@ -1185,7 +1186,7 @@ mod tests {
             let output: Result<Option<Real>> = RpnFnScalarEvaluator::new()
                 .push_param(Some(Real::from(x)))
                 .evaluate(ScalarFuncSig::Exp);
-            assert!(output.is_err());
+            assert_matches!(output, Err(_));
         }
     }
 
@@ -1294,11 +1295,11 @@ mod tests {
                 .unwrap();
             assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
         }
-        assert!(
+        assert_matches!(
             RpnFnScalarEvaluator::new()
                 .push_param(Some(Real::from(0.0_f64)))
-                .evaluate::<Real>(ScalarFuncSig::Cot)
-                .is_err()
+                .evaluate::<Real>(ScalarFuncSig::Cot),
+            Err(_)
         );
     }
 
@@ -1348,12 +1349,12 @@ mod tests {
         ];
 
         for (lhs, rhs) in invalid_cases {
-            assert!(
+            assert_matches!(
                 RpnFnScalarEvaluator::new()
                     .push_param(lhs)
                     .push_param(rhs)
-                    .evaluate::<Real>(ScalarFuncSig::Pow)
-                    .is_err()
+                    .evaluate::<Real>(ScalarFuncSig::Pow),
+                Err(_)
             );
         }
     }

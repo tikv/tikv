@@ -6,6 +6,7 @@
 #![feature(div_duration)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
+#![feature(assert_matches)]
 #![recursion_limit = "256"]
 
 #[cfg(test)]

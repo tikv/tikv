@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::assert_matches::assert_matches;
 use std::fs;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
@@ -504,6 +505,7 @@ impl TidRetriever {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches::assert_matches;
     use std::env::temp_dir;
     use std::io::Write;
     use std::time::Duration;
@@ -737,7 +739,7 @@ mod tests {
 
         let (raw_name, _) = get_thread_name("(@#)").unwrap();
         assert_eq!(sanitize_thread_name(1, raw_name), "1");
-        assert!(get_thread_name("invalid_stat").is_err());
+        assert_matches!(get_thread_name("invalid_stat"), Err(_));
     }
 
     #[test]

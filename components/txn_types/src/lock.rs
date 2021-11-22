@@ -373,6 +373,7 @@ impl Lock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_lock_type() {
@@ -585,7 +586,7 @@ mod tests {
         }
 
         // Test `Lock::parse()` handles incorrect input.
-        assert!(Lock::parse(b"").is_err());
+        assert_matches!(Lock::parse(b""), Err(_));
 
         let lock = Lock::new(
             LockType::Lock,
@@ -598,7 +599,7 @@ mod tests {
             TimeStamp::zero(),
         );
         let mut v = lock.to_bytes();
-        assert!(Lock::parse(&v[..4]).is_err());
+        assert_matches!(Lock::parse(&v[..4]), Err(_));
         // Test `Lock::parse()` ignores unknown bytes.
         v.extend(b"unknown");
         let l = Lock::parse(&v).unwrap();

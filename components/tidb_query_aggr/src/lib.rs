@@ -5,6 +5,7 @@
 #![allow(incomplete_features)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
+#![feature(assert_matches)]
 
 #[macro_use(box_try)]
 extern crate tikv_util;
@@ -366,6 +367,7 @@ where
 mod tests {
     use super::*;
 
+    use std::assert_matches::assert_matches;
     use tidb_query_datatype::EvalType;
 
     #[test]
@@ -436,7 +438,7 @@ mod tests {
                 Real::new(1.0).ok().as_ref()
             );
         });
-        assert!(result.is_err());
+        assert_matches!(result, Err(_));
 
         let result = panic_hook::recover_safe(|| {
             let mut s = s.clone();
@@ -446,7 +448,7 @@ mod tests {
                 Some(&[1u8] as BytesRef)
             );
         });
-        assert!(result.is_err());
+        assert_matches!(result, Err(_));
 
         // Push result to Real VectorValue should success.
         let mut target = vec![VectorValue::with_capacity(0, EvalType::Real)];
@@ -483,13 +485,13 @@ mod tests {
             let mut target: Vec<VectorValue> = Vec::new();
             let _ = (&mut s as &mut dyn AggrFunctionState).push_result(&mut ctx, &mut target[..]);
         });
-        assert!(result.is_err());
+        assert_matches!(result, Err(_));
 
         let result = panic_hook::recover_safe(|| {
             let mut s = s.clone();
             let mut target: Vec<VectorValue> = vec![VectorValue::with_capacity(0, EvalType::Int)];
             let _ = (&mut s as &mut dyn AggrFunctionState).push_result(&mut ctx, &mut target[..]);
         });
-        assert!(result.is_err());
+        assert_matches!(result, Err(_));
     }
 }

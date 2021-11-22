@@ -1050,6 +1050,7 @@ fn substring(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> Result
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches::assert_matches;
     use std::{f64, i64};
 
     use tidb_query_datatype::builder::FieldTypeBuilder;
@@ -3775,7 +3776,7 @@ mod tests {
             .push_param(args.1)
             .push_param(args.2)
             .evaluate(ScalarFuncSig::Trim3Args);
-        assert!(got.is_err());
+        assert_matches!(got, Err(_));
 
         let invalid_utf8_cases = vec![
             (
@@ -3865,7 +3866,7 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .evaluate::<i64>(ScalarFuncSig::CharLengthUtf8);
-            assert!(output.is_err());
+            assert_matches!(output, Err(_));
         }
     }
 

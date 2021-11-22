@@ -150,6 +150,8 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
 mod tests {
     use super::*;
 
+    use std::assert_matches::assert_matches;
+
     #[test]
     fn test_path_expression_flag() {
         let mut e = PathExpression {
@@ -227,7 +229,7 @@ mod tests {
                     i, expected, got
                 );
             } else {
-                assert!(r.is_err(), "#{} expect error but got {:?}", i, r);
+                assert_matches!(r, Err(_), "#{} expect error but got {:?}", i, r);
             }
         }
     }

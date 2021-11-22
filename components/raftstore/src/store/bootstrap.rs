@@ -127,6 +127,7 @@ mod tests {
     use super::*;
     use engine_traits::Engines;
     use engine_traits::{Peekable, CF_DEFAULT};
+    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_bootstrap() {
@@ -146,7 +147,7 @@ mod tests {
         let region = initial_region(1, 1, 1);
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());
-        assert!(bootstrap_store(&engines, 1, 1).is_err());
+        assert_matches!(bootstrap_store(&engines, 1, 1), Err(_));
 
         assert!(prepare_bootstrap_cluster(&engines, &region).is_ok());
         assert!(

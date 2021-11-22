@@ -83,6 +83,7 @@ fn decode_escaped_unicode(s: &str) -> Result<char> {
 mod tests {
     use super::super::Json;
     use super::*;
+    use std::assert_matches::assert_matches;
     use std::collections::BTreeMap;
 
     #[test]
@@ -137,7 +138,7 @@ mod tests {
                     i, expected, got
                 );
             } else {
-                assert!(r.is_err(), "#{} expected error but got {:?}", i, r);
+                assert_matches!(r, Err(_), "#{} expected error but got {:?}", i, r);
             }
         }
 

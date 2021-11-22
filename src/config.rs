@@ -1734,26 +1734,26 @@ mod unified_read_pool_tests {
             min_thread_count: 0,
             ..cfg
         };
-        assert!(invalid_cfg.validate().is_err());
+        assert_matches!(invalid_cfg.validate(), Err(_));
 
         let invalid_cfg = UnifiedReadPoolConfig {
             min_thread_count: 2,
             max_thread_count: 1,
             ..cfg
         };
-        assert!(invalid_cfg.validate().is_err());
+        assert_matches!(invalid_cfg.validate(), Err(_));
 
         let invalid_cfg = UnifiedReadPoolConfig {
             stack_size: ReadableSize::mb(1),
             ..cfg
         };
-        assert!(invalid_cfg.validate().is_err());
+        assert_matches!(invalid_cfg.validate(), Err(_));
 
         let invalid_cfg = UnifiedReadPoolConfig {
             max_tasks_per_worker: 1,
             ..cfg
         };
-        assert!(invalid_cfg.validate().is_err());
+        assert_matches!(invalid_cfg.validate(), Err(_));
     }
 }
 
@@ -1897,41 +1897,41 @@ macro_rules! readpool_config {
 
                 let mut invalid_cfg = cfg.clone();
                 invalid_cfg.high_concurrency = 0;
-                assert!(invalid_cfg.validate().is_err());
+                assert_matches!(invalid_cfg.validate(),Err(_));
 
                 let mut invalid_cfg = cfg.clone();
                 invalid_cfg.normal_concurrency = 0;
-                assert!(invalid_cfg.validate().is_err());
+                assert_matches!(invalid_cfg.validate(),Err(_));
 
                 let mut invalid_cfg = cfg.clone();
                 invalid_cfg.low_concurrency = 0;
-                assert!(invalid_cfg.validate().is_err());
+                assert_matches!(invalid_cfg.validate(),Err(_));
 
                 let mut invalid_cfg = cfg.clone();
                 invalid_cfg.stack_size = ReadableSize::mb(1);
-                assert!(invalid_cfg.validate().is_err());
+                assert_matches!(invalid_cfg.validate(),Err(_));
 
                 let mut invalid_cfg = cfg.clone();
                 invalid_cfg.max_tasks_per_worker_high = 0;
-                assert!(invalid_cfg.validate().is_err());
+                assert_matches!(invalid_cfg.validate(),Err(_));
                 invalid_cfg.max_tasks_per_worker_high = 1;
-                assert!(invalid_cfg.validate().is_err());
+                assert_matches!(invalid_cfg.validate(),Err(_));
                 invalid_cfg.max_tasks_per_worker_high = 100;
                 assert!(cfg.validate().is_ok());
 
                 let mut invalid_cfg = cfg.clone();
                 invalid_cfg.max_tasks_per_worker_normal = 0;
-                assert!(invalid_cfg.validate().is_err());
+                assert_matches!(invalid_cfg.validate(),Err(_));
                 invalid_cfg.max_tasks_per_worker_normal = 1;
-                assert!(invalid_cfg.validate().is_err());
+                assert_matches!(invalid_cfg.validate(),Err(_));
                 invalid_cfg.max_tasks_per_worker_normal = 100;
                 assert!(cfg.validate().is_ok());
 
                 let mut invalid_cfg = cfg.clone();
                 invalid_cfg.max_tasks_per_worker_low = 0;
-                assert!(invalid_cfg.validate().is_err());
+                assert_matches!(invalid_cfg.validate(),Err(_));
                 invalid_cfg.max_tasks_per_worker_low = 1;
-                assert!(invalid_cfg.validate().is_err());
+                assert_matches!(invalid_cfg.validate(),Err(_));
                 invalid_cfg.max_tasks_per_worker_low = 100;
                 assert!(cfg.validate().is_ok());
 
@@ -2045,7 +2045,7 @@ mod readpool_tests {
             stack_size: ReadableSize::mb(0),
             max_tasks_per_worker: 0,
         };
-        assert!(unified.validate().is_err());
+        assert_matches!(unified.validate(), Err(_));
         let storage = StorageReadPoolConfig {
             use_unified_pool: Some(false),
             ..Default::default()
@@ -2072,7 +2072,7 @@ mod readpool_tests {
             high_concurrency: 0,
             ..Default::default()
         };
-        assert!(storage.validate().is_err());
+        assert_matches!(storage.validate(), Err(_));
         let coprocessor = CoprReadPoolConfig {
             use_unified_pool: Some(false),
             ..Default::default()
@@ -2083,7 +2083,7 @@ mod readpool_tests {
             coprocessor,
         };
         assert!(!invalid_cfg.is_unified_pool_enabled());
-        assert!(invalid_cfg.validate().is_err());
+        assert_matches!(invalid_cfg.validate(), Err(_));
     }
 
     #[test]
@@ -2094,7 +2094,7 @@ mod readpool_tests {
             max_thread_count: 0,
             ..Default::default()
         };
-        assert!(unified.validate().is_err());
+        assert_matches!(unified.validate(), Err(_));
         let storage = StorageReadPoolConfig {
             use_unified_pool: Some(true),
             ..Default::default()
@@ -2109,7 +2109,7 @@ mod readpool_tests {
         };
         cfg.adjust_use_unified_pool();
         assert!(cfg.is_unified_pool_enabled());
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
     }
 
     #[test]
@@ -2153,7 +2153,7 @@ mod readpool_tests {
             ..Default::default()
         };
         assert!(cfg.is_unified_pool_enabled());
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
         cfg.storage.low_concurrency = 1;
         assert!(cfg.validate().is_ok());
 
@@ -2174,7 +2174,7 @@ mod readpool_tests {
             ..Default::default()
         };
         assert!(cfg.is_unified_pool_enabled());
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
         cfg.coprocessor.low_concurrency = 1;
         assert!(cfg.validate().is_ok());
     }
@@ -3275,6 +3275,7 @@ mod tests {
     use raft_log_engine::RecoveryMode;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use slog::Level;
+    use std::assert_matches::assert_matches;
     use std::sync::Arc;
     use std::time::Duration;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
@@ -3301,25 +3302,25 @@ mod tests {
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
 
         tikv_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+        assert_matches!(tikv_cfg.check_critical_cfg_with(&last_cfg), Err(_));
 
         last_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
 
         tikv_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+        assert_matches!(tikv_cfg.check_critical_cfg_with(&last_cfg), Err(_));
 
         last_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
 
         tikv_cfg.storage.data_dir = "/data1".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+        assert_matches!(tikv_cfg.check_critical_cfg_with(&last_cfg), Err(_));
 
         last_cfg.storage.data_dir = "/data1".to_owned();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
 
         tikv_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+        assert_matches!(tikv_cfg.check_critical_cfg_with(&last_cfg), Err(_));
 
         last_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
@@ -3392,7 +3393,7 @@ mod tests {
         tikv_cfg.pd.endpoints = vec!["".to_owned()];
         let dur = tikv_cfg.raft_store.raft_heartbeat_interval();
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur);
-        assert!(tikv_cfg.validate().is_err());
+        assert_matches!(tikv_cfg.validate(), Err(_));
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur * 2);
         tikv_cfg.validate().unwrap();
     }
@@ -3406,7 +3407,7 @@ mod tests {
         tikv_cfg.rocksdb.writecf.block_size = ReadableSize::gb(10);
         tikv_cfg.rocksdb.raftcf.block_size = ReadableSize::gb(10);
         tikv_cfg.raftdb.defaultcf.block_size = ReadableSize::gb(10);
-        assert!(tikv_cfg.validate().is_err());
+        assert_matches!(tikv_cfg.validate(), Err(_));
         tikv_cfg.rocksdb.defaultcf.block_size = ReadableSize::kb(10);
         tikv_cfg.rocksdb.lockcf.block_size = ReadableSize::kb(10);
         tikv_cfg.rocksdb.writecf.block_size = ReadableSize::kb(10);
@@ -3519,7 +3520,7 @@ mod tests {
         for (name, value) in cases {
             let mut change = HashMap::new();
             change.insert(name, value);
-            assert!(to_config_change(change).is_err());
+            assert_matches!(to_config_change(change), Err(_));
         }
     }
 
@@ -3656,20 +3657,17 @@ mod tests {
         cfg_controller.register(Module::ResolvedTs, Box::new(TestConfigManager(tx)));
 
         // Return error if try to update not support config or unknow config
-        assert!(
-            cfg_controller
-                .update_config("resolved-ts.enable", "false")
-                .is_err()
+        assert_matches!(
+            cfg_controller.update_config("resolved-ts.enable", "false"),
+            Err(_)
         );
-        assert!(
-            cfg_controller
-                .update_config("resolved-ts.scan-lock-pool-size", "10")
-                .is_err()
+        assert_matches!(
+            cfg_controller.update_config("resolved-ts.scan-lock-pool-size", "10"),
+            Err(_)
         );
-        assert!(
-            cfg_controller
-                .update_config("resolved-ts.xxx", "false")
-                .is_err()
+        assert_matches!(
+            cfg_controller.update_config("resolved-ts.xxx", "false"),
+            Err(_)
         );
 
         let mut resolved_ts_cfg = cfg_controller.get_current().resolved_ts;
@@ -3690,10 +3688,9 @@ mod tests {
         );
 
         // Return error if try to update `advance-ts-interval` to an invalid value
-        assert!(
-            cfg_controller
-                .update_config("resolved-ts.advance-ts-interval", "0m")
-                .is_err()
+        assert_matches!(
+            cfg_controller.update_config("resolved-ts.advance-ts-interval", "0m"),
+            Err(_)
         );
         assert_eq!(
             resolved_ts_cfg.advance_ts_interval,
@@ -3783,10 +3780,9 @@ mod tests {
 
         // Can not update block cache through storage module
         // when shared block cache is disabled
-        assert!(
-            cfg_controller
-                .update_config("storage.block-cache.capacity", "512MB")
-                .is_err()
+        assert_matches!(
+            cfg_controller.update_config("storage.block-cache.capacity", "512MB"),
+            Err(_)
         );
     }
 
@@ -3821,10 +3817,9 @@ mod tests {
         let (db, cfg_controller, ..) = new_engines(cfg);
 
         // Can not update shared block cache through rocksdb module
-        assert!(
-            cfg_controller
-                .update_config("rocksdb.defaultcf.block-cache-size", "256MB")
-                .is_err()
+        assert_matches!(
+            cfg_controller.update_config("rocksdb.defaultcf.block-cache-size", "256MB"),
+            Err(_)
         );
 
         cfg_controller
@@ -4047,7 +4042,7 @@ mod tests {
 
         // Test validating memory_usage_limit when it's greater than max.
         cfg.memory_usage_limit.0 = Some(ReadableSize(SysQuota::memory_limit_in_bytes() * 2));
-        assert!(cfg.validate().is_err());
+        assert_matches!(cfg.validate(), Err(_));
 
         // Test memory_usage_limit is based on block cache size if it's not configured.
         cfg.memory_usage_limit = OptionReadableSize(None);
@@ -4356,7 +4351,7 @@ mod tests {
         let r = panic_hook::recover_safe(|| {
             let _: DefaultCfConfig = toml::from_str(bad_string_config).unwrap();
         });
-        assert!(r.is_err());
+        assert_matches!(r, Err(_));
 
         let bad_string_config = r#"
             compaction-style = 4
@@ -4364,7 +4359,7 @@ mod tests {
         let r = panic_hook::recover_safe(|| {
             let _: DefaultCfConfig = toml::from_str(bad_string_config).unwrap();
         });
-        assert!(r.is_err());
+        assert_matches!(r, Err(_));
 
         // rate-limiter-mode defalut values is 2
         let config_str = r#"

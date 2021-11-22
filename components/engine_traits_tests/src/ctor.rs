@@ -8,6 +8,7 @@ use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions, EngineConstru
 use engine_test::kv::KvTestEngine;
 use engine_traits::{KvEngine, SyncMutable, ALL_CFS};
 
+use std::assert_matches::assert_matches;
 use std::fs;
 
 #[test]
@@ -71,7 +72,7 @@ fn new_engine_readonly_dir() {
     let path = path.to_str().unwrap();
     let err = KvTestEngine::new_engine(path, None, ALL_CFS, None);
 
-    assert!(err.is_err());
+    assert_matches!(err, Err(_));
 }
 
 #[test]
@@ -95,5 +96,5 @@ fn new_engine_opt_readonly_dir() {
         .collect();
     let err = KvTestEngine::new_engine_opt(path, db_opts, cf_opts);
 
-    assert!(err.is_err());
+    assert_matches!(err, Err(_));
 }

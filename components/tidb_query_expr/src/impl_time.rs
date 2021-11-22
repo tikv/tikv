@@ -885,6 +885,7 @@ fn datetime_to_string(mut datetime: DateTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches::assert_matches;
 
     use tipb::ScalarFuncSig;
 
@@ -2355,7 +2356,7 @@ mod tests {
                         .build(),
                 )
                 .evaluate::<Duration>(ScalarFuncSig::MakeTime);
-            assert!(output.is_err());
+            assert_matches!(output, Err(_));
         }
     }
 

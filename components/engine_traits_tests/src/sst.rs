@@ -3,6 +3,7 @@
 //! Tests for `SstExt`
 
 use panic_hook::recover_safe;
+use std::assert_matches::assert_matches;
 use std::fs;
 
 use super::tempdir;
@@ -158,19 +159,19 @@ fn delete() -> Result<()> {
 
     assert_eq!(iter.valid()?, false);
 
-    assert!(iter.prev().is_err());
-    assert!(iter.next().is_err());
-    assert!(
+    assert_matches!(iter.prev(), Err(_));
+    assert_matches!(iter.next(), Err(_));
+    assert_matches!(
         recover_safe(|| {
             iter.key();
-        })
-        .is_err()
+        }),
+        Err(_)
     );
-    assert!(
+    assert_matches!(
         recover_safe(|| {
             iter.value();
-        })
-        .is_err()
+        }),
+        Err(_)
     );
 
     assert_eq!(iter.seek(SeekKey::Start)?, false);

@@ -399,6 +399,7 @@ mod tests {
     use tipb::ColumnInfo;
     use tipb::FieldType;
 
+    use std::assert_matches::assert_matches;
     use tidb_query_common::execute_stats::*;
     use tidb_query_common::storage::test_fixture::FixtureStorage;
     use tidb_query_common::util::convert_to_prefix_next;
@@ -891,7 +892,7 @@ mod tests {
             .unwrap();
 
             let mut result = executor.next_batch(10);
-            assert!(result.is_drained.is_err());
+            assert_matches!(result.is_drained, Err(_));
             assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_decoded());
@@ -998,7 +999,7 @@ mod tests {
             .unwrap();
 
             let mut result = executor.next_batch(10);
-            assert!(result.is_drained.is_err());
+            assert_matches!(result.is_drained, Err(_));
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
@@ -1035,7 +1036,7 @@ mod tests {
             .unwrap();
 
             let mut result = executor.next_batch(1);
-            assert!(!result.is_drained.is_err());
+            assert_matches!(!result.is_drained, Err(_));
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
@@ -1053,7 +1054,7 @@ mod tests {
             );
 
             let result = executor.next_batch(1);
-            assert!(result.is_drained.is_err());
+            assert_matches!(result.is_drained, Err(_));
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 0);
         }
@@ -1074,7 +1075,7 @@ mod tests {
             .unwrap();
 
             let result = executor.next_batch(10);
-            assert!(result.is_drained.is_err());
+            assert_matches!(result.is_drained, Err(_));
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 0);
         }
@@ -1095,7 +1096,7 @@ mod tests {
             .unwrap();
 
             let mut result = executor.next_batch(10);
-            assert!(!result.is_drained.is_err());
+            assert_matches!(!result.is_drained, Err(_));
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_decoded());
@@ -1129,7 +1130,7 @@ mod tests {
             .unwrap();
 
             let result = executor.next_batch(10);
-            assert!(result.is_drained.is_err());
+            assert_matches!(result.is_drained, Err(_));
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 0);
         }

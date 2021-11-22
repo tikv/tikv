@@ -2,6 +2,7 @@
 #![feature(box_patterns)]
 #![feature(test)]
 #![feature(custom_test_frameworks)]
+#![feature(assert_matches)]
 #![test_runner(test_util::run_failpoint_tests)]
 #![recursion_limit = "100"]
 

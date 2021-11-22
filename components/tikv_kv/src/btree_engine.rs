@@ -290,6 +290,7 @@ pub mod tests {
     use super::*;
     use crate::{Cursor, ScanMode};
     use engine_traits::IterOptions;
+    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_btree_engine() {
@@ -407,6 +408,9 @@ pub mod tests {
     #[test]
     fn test_get_not_exist_cf() {
         let engine = BTreeEngine::new(&[]);
-        assert!(::panic_hook::recover_safe(|| engine.get_cf("not_exist_cf")).is_err());
+        assert_matches!(
+            ::panic_hook::recover_safe(|| engine.get_cf("not_exist_cf")),
+            Err(_)
+        );
     }
 }

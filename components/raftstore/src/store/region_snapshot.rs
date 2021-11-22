@@ -390,6 +390,7 @@ mod tests {
     use engine_traits::{Engines, KvEngine, Peekable, RaftEngine, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
+    use std::assert_matches::assert_matches;
     use tempfile::Builder;
     use tikv_util::worker;
 
@@ -503,7 +504,7 @@ mod tests {
         assert!(v0.is_none());
 
         let v4 = snap.get_value(b"key5");
-        assert!(v4.is_err());
+        assert_matches!(v4, Err(_));
     }
 
     #[allow(clippy::type_complexity)]

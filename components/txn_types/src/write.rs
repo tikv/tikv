@@ -377,6 +377,7 @@ impl WriteRef<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_write_type() {
@@ -441,11 +442,11 @@ mod tests {
         }
 
         // Test `Write::parse()` handles incorrect input.
-        assert!(WriteRef::parse(b"").is_err());
+        assert_matches!(WriteRef::parse(b""), Err(_));
 
         let lock = Write::new(WriteType::Lock, 1.into(), Some(b"short_value".to_vec()));
         let mut v = lock.as_ref().to_bytes();
-        assert!(WriteRef::parse(&v[..1]).is_err());
+        assert_matches!(WriteRef::parse(&v[..1]), Err(_));
         assert_eq!(Write::parse_type(&v).unwrap(), lock.write_type);
         // Test `Write::parse()` ignores unknown bytes.
         v.extend(b"unknown");

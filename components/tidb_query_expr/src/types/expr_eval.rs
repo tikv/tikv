@@ -282,6 +282,7 @@ mod tests {
     use crate::impl_arithmetic::*;
     use crate::impl_compare::*;
     use crate::{RpnExpressionBuilder, RpnFnMeta};
+    use std::assert_matches::assert_matches;
     use test::{black_box, Bencher};
     use tidb_query_common::Result;
     use tidb_query_datatype::codec::batch::LazyBatchColumn;
@@ -407,7 +408,7 @@ mod tests {
             // smaller row number
             let _ = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 4);
         });
-        assert!(hooked_eval.is_err());
+        assert_matches!(hooked_eval, Err(_));
 
         let mut c = columns;
         let exp = RpnExpressionBuilder::new_for_test()
@@ -418,7 +419,7 @@ mod tests {
             // larger row number
             let _ = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 6);
         });
-        assert!(hooked_eval.is_err());
+        assert_matches!(hooked_eval, Err(_));
     }
 
     /// Single function call node (i.e. nullary function)
@@ -912,7 +913,7 @@ mod tests {
         let hooked_eval = panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
         });
-        assert!(hooked_eval.is_err());
+        assert_matches!(hooked_eval, Err(_));
     }
 
     /// Irregular RPN expression (contains unused node). Should panic.
@@ -936,7 +937,7 @@ mod tests {
         let hooked_eval = panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
         });
-        assert!(hooked_eval.is_err());
+        assert_matches!(hooked_eval, Err(_));
     }
 
     /// Eval type does not match. Should panic.
@@ -958,7 +959,7 @@ mod tests {
         let hooked_eval = panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
         });
-        assert!(hooked_eval.is_err());
+        assert_matches!(hooked_eval, Err(_));
     }
 
     /// Parse from an expression tree then evaluate.

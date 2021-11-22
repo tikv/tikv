@@ -351,6 +351,8 @@ mod tests {
 
     use txn_types::SHORT_VALUE_MAX_LEN;
 
+    use std::assert_matches::assert_matches;
+
     use crate::storage::kv::{
         CfStatistics, Engine, PerfStatisticsInstant, RocksEngine, TestEngineBuilder,
     };
@@ -424,7 +426,7 @@ mod tests {
     }
 
     fn must_get_err<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8]) {
-        assert!(point_getter.get(&Key::from_raw(key)).is_err());
+        assert_matches!(point_getter.get(&Key::from_raw(key)), Err(_));
     }
 
     fn assert_seek_next_prev(stat: &CfStatistics, seek: usize, next: usize, prev: usize) {

@@ -234,6 +234,7 @@ impl Rotator for RotateBySize {
 mod tests {
     use super::*;
 
+    use std::assert_matches::assert_matches;
     use std::ffi::OsStr;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tempfile::TempDir;
@@ -464,7 +465,7 @@ mod tests {
 
         // Rename failed.
         logger.write_all(&[0xff; 1025]).unwrap();
-        assert!(logger.flush().is_err());
+        assert_eq!(logger.flush(), Err(_));
 
         // dropping the logger still should not panic.
         drop(logger);

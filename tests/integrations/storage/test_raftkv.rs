@@ -1,4 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+use std::assert_matches::assert_matches;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::thread;
@@ -545,5 +546,5 @@ fn wrong_context<E: Engine>(ctx: &Context, engine: &E) {
     let region_id = ctx.get_region_id();
     let mut ctx = ctx.to_owned();
     ctx.set_region_id(region_id + 1);
-    assert!(engine.write(&ctx, WriteData::default()).is_err());
+    assert_matches!(engine.write(&ctx, WriteData::default()), Err(_));
 }

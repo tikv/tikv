@@ -17,6 +17,7 @@ pub use txn_types::{
     SHORT_VALUE_MAX_LEN,
 };
 
+use std::assert_matches::assert_matches;
 use std::error;
 use std::io;
 
@@ -442,7 +443,7 @@ pub mod tests {
         if check_lock(&mut reader, key, ts).is_err() {
             return;
         }
-        assert!(reader.get(key, ts).is_err());
+        assert_matches!(reader.get(key, ts), Err(_));
     }
 
     pub fn must_locked<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) -> Lock {

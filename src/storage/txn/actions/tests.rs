@@ -10,6 +10,7 @@ use crate::storage::{txn, Engine};
 use concurrency_manager::ConcurrencyManager;
 use kvproto::kvrpcpb::Context;
 use prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties};
+use std::assert_matches::assert_matches;
 
 pub fn must_prewrite_put_impl<E: Engine>(
     engine: &E,
@@ -459,7 +460,7 @@ pub fn must_prewrite_lock_err<E: Engine>(
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
 
-    assert!(
+    assert_matches!(
         prewrite(
             &mut txn,
             &mut reader,
@@ -467,8 +468,8 @@ pub fn must_prewrite_lock_err<E: Engine>(
             Mutation::Lock(Key::from_raw(key)),
             &None,
             false,
-        )
-        .is_err()
+        ),
+        Err(_)
     );
 }
 
@@ -512,14 +513,14 @@ pub fn must_rollback_err<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<
     let cm = ConcurrencyManager::new(start_ts);
     let mut txn = MvccTxn::new(start_ts, cm);
     let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-    assert!(
+    assert_matches!(
         txn::cleanup(
             &mut txn,
             &mut reader,
             Key::from_raw(key),
             TimeStamp::zero(),
             false,
-        )
-        .is_err()
+        ),
+        Err(_)
     );
 }

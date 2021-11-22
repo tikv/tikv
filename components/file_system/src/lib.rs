@@ -2,6 +2,7 @@
 
 #![feature(test)]
 #![feature(duration_consts_2)]
+#![feature(assert_matches)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -436,6 +437,7 @@ pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) ->
 mod tests {
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
+    use std::assert_matches::assert_matches;
     use std::io::Write;
     use std::iter;
     use tempfile::{Builder, TempDir};
@@ -474,7 +476,7 @@ mod tests {
 
         // Ensure it works for non-existent file.
         let non_existent_file = dir_path.join("non_existent_file");
-        assert!(get_file_size(&non_existent_file).is_err());
+        assert_matches!(get_file_size(&non_existent_file), Err(_));
     }
 
     #[test]

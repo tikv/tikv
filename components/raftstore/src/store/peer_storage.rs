@@ -1770,6 +1770,7 @@ mod tests {
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};
     use raft::{Error as RaftError, StorageError};
+    use std::assert_matches::assert_matches;
     use std::cell::RefCell;
     use std::path::Path;
     use std::sync::atomic::*;
@@ -2456,7 +2457,7 @@ mod tests {
             assert_eq!(e, cache.entry(e.get_index()).unwrap());
         }
         let res = panic_hook::recover_safe(|| cache.entry(7));
-        assert!(res.is_err());
+        assert_matches!(res, Err(_));
     }
 
     #[test]
@@ -2486,7 +2487,7 @@ mod tests {
             router,
         );
         worker.start(runner);
-        assert!(s1.snapshot(0).is_err());
+        assert_matches!(s1.snapshot(0), Err(_));
         let gen_task = s1.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s1.engines, &sched).unwrap();
 
@@ -2576,7 +2577,7 @@ mod tests {
             JOB_STATUS_FAILED,
         ))));
         let res = panic_hook::recover_safe(|| s.cancel_applying_snap());
-        assert!(res.is_err());
+        assert_matches!(res, Err(_));
     }
 
     #[test]
@@ -2625,7 +2626,7 @@ mod tests {
             JOB_STATUS_FAILED,
         ))));
         let res = panic_hook::recover_safe(|| s.check_applying_snap());
-        assert!(res.is_err());
+        assert_matches!(res, Err(_));
     }
 
     #[test]
@@ -2665,7 +2666,7 @@ mod tests {
             .unwrap();
         raft_state.mut_hard_state().set_commit(12);
         engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
-        assert!(build_storage().is_err());
+        assert_matches!(build_storage(), Err(_));
 
         let log_key = keys::raft_log_key(1, 20);
         engines
@@ -2680,7 +2681,7 @@ mod tests {
 
         // Missing last log is invalid.
         engines.raft.delete(&log_key).unwrap();
-        assert!(build_storage().is_err());
+        assert_matches!(build_storage(), Err(_));
         engines
             .raft
             .put_msg(&log_key, &new_entry(20, RAFT_INIT_LOG_TERM))
@@ -2698,7 +2699,7 @@ mod tests {
             .kv
             .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
             .unwrap();
-        assert!(build_storage().is_err());
+        assert_matches!(build_storage(), Err(_));
 
         // It should not recover if corresponding log doesn't exist.
         apply_state.set_commit_index(14);
@@ -2707,7 +2708,7 @@ mod tests {
             .kv
             .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
             .unwrap();
-        assert!(build_storage().is_err());
+        assert_matches!(build_storage(), Err(_));
 
         let log_key = keys::raft_log_key(1, 14);
         engines
@@ -2724,7 +2725,7 @@ mod tests {
             .raft
             .put_msg(&log_key, &new_entry(14, RAFT_INIT_LOG_TERM - 1))
             .unwrap();
-        assert!(build_storage().is_err());
+        assert_matches!(build_storage(), Err(_));
 
         // hard state term miss match is invalid.
         engines
@@ -2733,7 +2734,7 @@ mod tests {
             .unwrap();
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM - 1);
         engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
-        assert!(build_storage().is_err());
+        assert_matches!(build_storage(), Err(_));
 
         // last index < recorded_commit_index is invalid.
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
@@ -2744,7 +2745,7 @@ mod tests {
             .put_msg(&log_key, &new_entry(13, RAFT_INIT_LOG_TERM))
             .unwrap();
         engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
-        assert!(build_storage().is_err());
+        assert_matches!(build_storage(), Err(_));
     }
 
     fn gen_snap_for_test(rx: Receiver<Snapshot>) -> SnapState {

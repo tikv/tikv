@@ -297,6 +297,7 @@ numeric_enum_serializing_mod! {recovery_mode_serde DBRecoveryMode {
 mod tests {
     use super::*;
     use rocksdb::DBCompressionType;
+    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_parse_compression_type() {
@@ -333,23 +334,26 @@ mod tests {
         }
 
         // length is wrong.
-        assert!(toml::from_str::<CompressionTypeHolder>("tp = [\"no\"]").is_err());
-        assert!(
+        assert_matches!(
+            toml::from_str::<CompressionTypeHolder>("tp = [\"no\"]"),
+            Err(_)
+        );
+        assert_matches!(
             toml::from_str::<CompressionTypeHolder>(
                 r#"tp = [
             "no", "no", "no", "no", "no", "no", "no", "no"
         ]"#
-            )
-            .is_err()
+            ),
+            Err(_)
         );
         // value is wrong.
-        assert!(
+        assert_matches!(
             toml::from_str::<CompressionTypeHolder>(
                 r#"tp = [
             "no", "no", "no", "no", "no", "no", "yes"
         ]"#
-            )
-            .is_err()
+            ),
+            Err(_)
         );
     }
 }

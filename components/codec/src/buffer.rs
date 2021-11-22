@@ -285,6 +285,7 @@ impl<T: BufferWriter + ?Sized> BufferWriter for Box<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_buffer_reader_cursor() {
@@ -339,7 +340,7 @@ mod tests {
 
         // Read more bytes than available
         buffer.set_position(39);
-        assert!(buffer.read_bytes(2).is_err());
+        assert_matches!(buffer.read_bytes(2), Err(_));
         assert_eq!(buffer.position(), 39);
         assert_eq!(buffer.bytes(), &base[39..40]);
     }
@@ -374,14 +375,14 @@ mod tests {
         assert_eq!(buffer, &base[21..40]);
         assert_eq!(buffer.bytes(), &base[21..40]);
 
-        assert!(buffer.read_bytes(20).is_err());
+        assert_matches!(buffer.read_bytes(20), Err(_));
 
         buffer.advance(19);
         assert_eq!(buffer, &[]);
         assert_eq!(buffer.bytes(), &[]);
 
         assert_eq!(buffer.read_bytes(0).unwrap(), &[]);
-        assert!(buffer.read_bytes(1).is_err());
+        assert_matches!(buffer.read_bytes(1), Err(_));
     }
 
     #[test]
@@ -420,7 +421,7 @@ mod tests {
             assert_eq!(buffer.position(), 20);
 
             // Write more bytes than available size
-            assert!(buffer.write_bytes(&base_write[20..]).is_err());
+            assert_matches!(buffer.write_bytes(&base_write[20..]), Err(_));
             assert_eq!(&buffer.get_ref()[0..20], &base_write[0..20]);
             assert_eq!(&buffer.get_ref()[20..], &base[20..]);
             assert_eq!(buffer.position(), 20);
@@ -519,7 +520,7 @@ mod tests {
             let mut buf_slice = &mut buffer[20..];
 
             // Buffer remain 20, write 21 bytes shall fail.
-            assert!(buf_slice.write_bytes(&base_write[20..41]).is_err());
+            assert_matches!(buf_slice.write_bytes(&base_write[20..41]), Err(_));
 
             // Write remaining 20 bytes
             buf_slice.bytes_mut(20)[..20].clone_from_slice(&base_write[20..40]);
