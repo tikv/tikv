@@ -540,6 +540,7 @@ fn test_snapshot_gc_after_failed() {
     fail::cfg("get_snapshot_for_gc", "off").unwrap();
     cluster.sim.wl().clear_recv_filters(3);
 }
+
 #[test]
 fn test_sending_fail_with_net_error() {
     let mut cluster = new_server_cluster(1, 2);
