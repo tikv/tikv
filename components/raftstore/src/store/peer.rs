@@ -3597,29 +3597,17 @@ where
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let peers = transfer_leader.get_peers();
 
-        let transferred = match peers.is_empty() {
-            true => self.pre_transfer_leader(transfer_leader.get_peer()),
-            false => {
-                let prs = self.raft_group.raft.prs();
-                let mut peer = metapb::Peer::default();
-                let mut max_matched = 0;
-
-                for candidate in peers {
-                    if let Some(pr) = prs.get(candidate.id) {
-                        if pr.matched > max_matched {
-                            max_matched = pr.matched;
-                            peer = candidate.clone();
-                        }
-                    } else {
-                        continue;
-                    }
-                }
-
-                if peer == metapb::Peer::default() {
-                    return false;
-                }
-                self.pre_transfer_leader(&peer)
+        let transferred = if peers.is_empty() {
+            self.pre_transfer_leader(transfer_leader.get_peer())
+        } else {
+            let prs = self.raft_group.raft.prs();
+            let peer = peers
+                .iter()
+                .max_by_key(|c| prs.get(c.id).map_or(0, |pr| pr.matched));
+            if peer.is_none() || *peer.unwrap() == metapb::Peer::default() {
+                return false;
             }
+            self.pre_transfer_leader(peer.unwrap())
         };
 
         // transfer leader command doesn't need to replicate log and apply, so we
