@@ -1426,6 +1426,7 @@ mod tests {
     use std::fs::File;
     use std::io::Write;
     use std::path::Path;
+    use std::assert_matches::assert_matches;
 
     use super::*;
     use tempfile::Builder;
@@ -1528,7 +1529,7 @@ mod tests {
         ];
         for src in illegal_cases {
             let src_str = format!("s = {:?}", src);
-            assert_matches!(toml::from_str::<SizeHolder>(&src_str), Err(_), "{}", src);
+            assert!(toml::from_str::<SizeHolder>(&src_str).is_err(), "{}", src);
         }
     }
 
@@ -1600,7 +1601,7 @@ mod tests {
         let illegal_cases = vec!["1H", "1M", "1S", "1MS", "1h1h", "h"];
         for src in illegal_cases {
             let src_str = format!("d = {:?}", src);
-            assert_matches!(toml::from_str::<DurHolder>(&src_str), Err(_), "{}", src);
+            assert(toml::from_str::<DurHolder>(&src_str).is_err(), "{}", src);
         }
         assert_matches!(toml::from_str::<DurHolder>("d = 23"), Err(_));
     }

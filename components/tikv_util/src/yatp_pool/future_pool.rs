@@ -411,14 +411,13 @@ mod tests {
             spawn_long_time_future(&read_pool, 4, 400).unwrap(),
         );
         // no available results (running = 4)
-        assert_matches!(rx.recv_timeout(Duration::from_millis(50))        assert_matches!(rx.try_recv(),Err(_));
-        );
+        assert_matches!(rx.recv_timeout(Duration::from_millis(50)),,Err(_));
 
         // full
-        assert_matches!(spawn_long_time_future(&read_pool, 5, 100), Err(_));
+        assert!(spawn_long_time_future(&read_pool, 5, 100).is_err());
 
         // full
-        assert_matches!(spawn_long_time_future(&read_pool, 6, 100), Err(_));
+        assert!(spawn_long_time_future(&read_pool, 6, 100).is_err());
 
         // wait a future completes (running = 3)
         assert_eq!(rx.recv().unwrap(), Ok(1));
@@ -427,7 +426,7 @@ mod tests {
         wait_on_new_thread(tx, spawn_long_time_future(&read_pool, 7, 5).unwrap());
 
         // full
-        assert_matches!(spawn_long_time_future(&read_pool, 8, 100), Err(_));
+        assert!(spawn_long_time_future(&read_pool, 8, 100).is_err());
 
         assert!(rx.recv().is_ok());
         assert!(rx.recv().is_ok());

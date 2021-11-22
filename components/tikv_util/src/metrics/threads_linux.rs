@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::assert_matches::assert_matches;
 use std::fs;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
