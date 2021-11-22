@@ -101,15 +101,18 @@ impl<'a> RawValue<&'a [u8]> {
             }
             ApiVersion::V2 => {
                 let len = bytes.len();
-                if len == 0 {
+                let mut meta_size = 1;
+                if len < meta_size {
                     return Err(Error::Codec(codec::Error::ValueLength));
                 }
                 let flags = ValueMeta::from_bits(bytes[len - 1])
                     .ok_or(Error::Codec(codec::Error::ValueMeta))?;
-                let mut meta_size = 1;
                 let expire_ts = if flags.contains(ValueMeta::EXPIRE_TS) {
-                    let mut expire_ts_slice = &bytes[len - meta_size - number::U64_SIZE..];
                     meta_size += number::U64_SIZE;
+                    if len < meta_size {
+                        return Err(Error::Codec(codec::Error::ValueLength));
+                    }
+                    let mut expire_ts_slice = &bytes[len - meta_size - number::U64_SIZE..];
                     Some(number::decode_u64(&mut expire_ts_slice)?)
                 } else {
                     None
@@ -197,6 +200,8 @@ impl RawValue<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches::assert_matches;
+
     use super::*;
 
     #[test]
@@ -245,6 +250,25 @@ mod tests {
         }
         for case in &cases {
             assert_encode_decode_identity(case.0, Some(case.1), case.3, ApiVersion::V2);
+        }
+    }
+
+    #[test]
+    fn test_decode_err() {
+        let cases = vec![
+            (vec![], ApiVersion::V1ttl),
+            // at least 8 bytes for expire_ts.
+            (vec![1, 2, 3, 4, 5, 6, 7], ApiVersion::V1ttl),
+            (vec![], ApiVersion::V2),
+            // the last byte indicates that expire_ts is set, therefore 8 more bytes for
+            // expire_ts is expected.
+            (vec![1], ApiVersion::V2),
+            (vec![1, 2, 3, 4, 5, 6, 7, 1], ApiVersion::V2),
+        ];
+
+        for (bytes, api_version) in cases {
+            assert_matches!(RawValue::from_bytes(&bytes, api_version), Err(_));
+            assert_matches!(RawValue::from_owned_bytes(bytes, api_version), Err(_));
         }
     }
 

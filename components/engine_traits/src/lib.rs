@@ -252,6 +252,7 @@
 //!   `engine_traits` and reexported from `engine` to ease the transition.
 //!   Likewise `engine_rocks` can temporarily call code from inside `engine`.
 #![feature(min_specialization)]
+#![feature(assert_matches)]
 
 #[cfg(test)]
 extern crate serde_derive;
