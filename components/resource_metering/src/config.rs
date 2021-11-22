@@ -174,6 +174,6 @@ mod tests {
             max_resource_groups: 2000,
             precision: ReadableDuration::days(999), // invalid
         };
-        assert_matches!(cfg.validate().,Err(_));
+        assert_matches!(cfg.validate(),Err(_));
     }
 }

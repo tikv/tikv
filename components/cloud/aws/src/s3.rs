@@ -554,7 +554,7 @@ mod tests {
         });
         assert!(S3Storage::new(config.clone()).is_ok());
         config.bucket.region = StringNonEmpty::opt("foo".to_string());
-        assert_matches!(S3Storage::new(config), Err(_));
+        assert!(S3Storage::new(config).is_err());
     }
 
     #[cfg(feature = "failpoints")]

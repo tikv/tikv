@@ -2,6 +2,8 @@
 
 // #[PerformanceCriticalPath] Common key utitlies.
 
+#![feature(assert_matches)]
+
 //! TiKV key building
 
 #[allow(unused_extern_crates)]

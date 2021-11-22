@@ -1603,7 +1603,7 @@ mod tests {
             let src_str = format!("d = {:?}", src);
             assert_matches!(toml::from_str::<DurHolder>(&src_str),Err(_), "{}", src);
         }
-        assert_matches!(toml::from_str::<DurHolder>("d = 23"), Err(_));
+        assert!(toml::from_str::<DurHolder>("d = 23").is_err());
     }
 
     #[test]

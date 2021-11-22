@@ -2564,7 +2564,7 @@ mod tests {
                 strict_mode: true,
                 ..TimeEnv::default()
             });
-            assert_matches!(Time::parse_datetime(&mut ctx, case, 0, false)v);
+            assert_matches!(Time::parse_datetime(&mut ctx, case, 0, false));
         }
 
         Ok(())
