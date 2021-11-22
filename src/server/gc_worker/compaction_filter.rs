@@ -19,12 +19,7 @@ use engine_traits::{MiscExt, Mutable, MvccProperties};
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use raftstore::coprocessor::RegionInfoProvider;
-<<<<<<< HEAD
 use tikv_util::{time::Instant, worker::FutureScheduler};
-=======
-use tikv_util::time::Instant;
-use tikv_util::worker::{ScheduleError, Scheduler};
->>>>>>> dce2dc811... gc: Fix GC scan effectiveness to avoid OOM (#11416)
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use crate::server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager};
@@ -304,13 +299,7 @@ impl WriteCompactionFilter {
 
     // `log_on_error` indicates whether to print an error log on scheduling failures.
     // It's only enabled for `GcTask::OrphanVersions`.
-<<<<<<< HEAD
     fn schedule_gc_task(&self, task: GcTask, log_on_error: bool) {
-        if let Err(e) = self.gc_scheduler.schedule(task) {
-            if log_on_error {
-                error!("compaction filter schedule {} fail", e.0);
-=======
-    fn schedule_gc_task(&self, task: GcTask<RocksEngine>, log_on_error: bool) {
         match self.gc_scheduler.schedule(task) {
             Ok(_) => {}
             Err(e) => {
@@ -325,7 +314,6 @@ impl WriteCompactionFilter {
                         GC_COMPACTION_FAILURE.with_label_values(&["stopped"]).inc();
                     }
                 }
->>>>>>> dce2dc811... gc: Fix GC scan effectiveness to avoid OOM (#11416)
             }
         }
     }
