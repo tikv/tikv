@@ -83,11 +83,11 @@ impl<'a> RawValue<&'a [u8]> {
                 expire_ts: None,
             }),
             ApiVersion::V1ttl => {
-                let len = bytes.len();
-                if len < number::U64_SIZE {
-                    return Err(Error::Codec(codec::Error::ValueLength));
-                }
-                let mut expire_ts_slice = &bytes[len - number::U64_SIZE..];
+                let rest_len = bytes
+                    .len()
+                    .checked_sub(number::U64_SIZE)
+                    .ok_or_else(|| Error::Codec(codec::Error::ValueLength))?;
+                let mut expire_ts_slice = &bytes[rest_len..];
                 let expire_ts = number::decode_u64(&mut expire_ts_slice)?;
                 let expire_ts = if expire_ts == 0 {
                     None
@@ -95,23 +95,21 @@ impl<'a> RawValue<&'a [u8]> {
                     Some(expire_ts)
                 };
                 Ok(RawValue {
-                    user_value: &bytes[..len - number::U64_SIZE],
+                    user_value: &bytes[..rest_len],
                     expire_ts,
                 })
             }
             ApiVersion::V2 => {
-                let mut rest_len = bytes.len();
-                if rest_len < 1 {
-                    return Err(Error::Codec(codec::Error::ValueLength));
-                }
-                rest_len -= 1;
+                let mut rest_len = bytes
+                    .len()
+                    .checked_sub(1)
+                    .ok_or_else(|| Error::Codec(codec::Error::ValueLength))?;
                 let flags = ValueMeta::from_bits(bytes[rest_len])
                     .ok_or(Error::Codec(codec::Error::ValueMeta))?;
                 let expire_ts = if flags.contains(ValueMeta::EXPIRE_TS) {
-                    if rest_len < number::U64_SIZE {
-                        return Err(Error::Codec(codec::Error::ValueLength));
-                    }
-                    rest_len -= number::U64_SIZE;
+                    rest_len = rest_len
+                        .checked_sub(number::U64_SIZE)
+                        .ok_or_else(|| Error::Codec(codec::Error::ValueLength))?;
                     let mut expire_ts_slice = &bytes[rest_len..rest_len + number::U64_SIZE];
                     Some(number::decode_u64(&mut expire_ts_slice)?)
                 } else {
