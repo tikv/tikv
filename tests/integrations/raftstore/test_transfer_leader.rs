@@ -79,7 +79,6 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
         false,
     );
 
-    // without multi targets
     for id in 1..4 {
         // select a new leader to transfer
         pd_client.transfer_leader(region.get_id(), new_peer(id, id), vec![]);
@@ -109,52 +108,73 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v");
     }
+}
 
-    // with multi targets
-    for id in 1..4 {
-        // select multi target leaders to transfer
-        // set `peer` 0 to make sure the new leader must come from `peers`
-        pd_client.transfer_leader(
-            region.get_id(),
-            new_peer(0, 0),
-            vec![new_peer(id, id), new_peer((id % 3) + 1, (id % 3) + 1)],
-        );
+fn test_pd_transfer_leader_multi_target<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
 
-        for _ in 0..100 {
-            // reset leader and wait transfer successfully.
-            cluster.reset_leader_of_region(1);
+    cluster.run();
 
-            sleep_ms(20);
+    cluster.must_put(b"k1", b"v1");
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    cluster.must_put(b"k2", b"v2");
+    // append index of the cluster will finally be 2, 2, 1
 
-            if let Some(leader) = cluster.leader_of_region(1) {
-                if leader.get_id() == id || leader.get_id() == (id % 3) + 1 {
-                    // make sure new leader apply an entry on its term
-                    // so we can use its local reader safely
-                    cluster.must_put(b"k1", b"v1");
-                    break;
-                }
+    // call command on this leader directly, must successfully.
+    let mut region = cluster.get_region(b"");
+    let mut req = new_request(
+        region.get_id(),
+        region.take_region_epoch(),
+        vec![new_get_cmd(b"k1")],
+        false,
+    );
+
+    // select multi target leaders to transfer
+    // set `peer` to 3, make sure the new leader comes from `peers`
+    pd_client.transfer_leader(
+        region.get_id(),
+        new_peer(3, 3),
+        vec![new_peer(2, 2), new_peer(3, 3)],
+    );
+
+    for _ in 0..100 {
+        // reset leader and wait transfer successfully.
+        cluster.reset_leader_of_region(1);
+
+        sleep_ms(20);
+
+        if let Some(leader) = cluster.leader_of_region(1) {
+            if leader.get_id() == 2 {
+                // make sure new leader apply an entry on its term
+                // so we can use its local reader safely
+                cluster.must_put(b"k2", b"v2");
+                break;
             }
         }
-
-        assert!(
-            cluster.leader_of_region(1) == Some(new_peer(id, id))
-                || cluster.leader_of_region(1) == Some(new_peer((id % 3) + 1, (id % 3) + 1))
-        );
-        let leader_id = cluster.leader_of_region(1).unwrap().id;
-        req.mut_header().set_peer(new_peer(leader_id, leader_id));
-        debug!("requesting {:?}", req);
-        let resp = cluster
-            .call_command(req.clone(), Duration::from_secs(5))
-            .unwrap();
-        assert!(!resp.get_header().has_error(), "{:?}", resp);
-        assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v");
     }
+
+    assert!(cluster.leader_of_region(1) == Some(new_peer(2, 2)));
+    let leader_id = cluster.leader_of_region(1).unwrap().id;
+    req.mut_header().set_peer(new_peer(leader_id, leader_id));
+    debug!("requesting {:?}", req);
+    let resp = cluster
+        .call_command(req.clone(), Duration::from_secs(5))
+        .unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+    assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
 }
 
 #[test]
 fn test_server_pd_transfer_leader() {
     let mut cluster = new_server_cluster(0, 3);
     test_pd_transfer_leader(&mut cluster);
+}
+
+#[test]
+fn test_server_pd_transfer_leader_multi_target() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_pd_transfer_leader_multi_target(&mut cluster);
 }
 
 fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {

@@ -246,13 +246,7 @@ impl Operator {
                 ref peer,
                 ref peers,
                 ref mut policy,
-            } => {
-                leader == peer
-                    || peers
-                        .iter()
-                        .fold(false, |finished, peer| finished | (leader == peer))
-                    || !policy.schedule()
-            }
+            } => leader == peer || peers.iter().any(|peer| leader == peer) || !policy.schedule(),
             Operator::MergeRegion {
                 source_region_id,
                 ref mut policy,
