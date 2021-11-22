@@ -411,7 +411,7 @@ mod tests {
             spawn_long_time_future(&read_pool, 4, 400).unwrap(),
         );
         // no available results (running = 4)
-        assert_matches!(rx.recv_timeout(Duration::from_millis(50)),,Err(_));
+        assert_matches!(rx.recv_timeout(Duration::from_millis(50)),Err(_));
 
         // full
         assert!(spawn_long_time_future(&read_pool, 5, 100).is_err());
