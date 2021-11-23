@@ -78,7 +78,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
 
 impl<E: KvEngine> AdvanceTsWorker<E> {
     pub fn advance_ts_for_regions(&self, regions: Vec<u64>) {
-        if regions.len() == 0 {
+        if regions.is_empty() {
             return;
         }
         let pd_client = self.pd_client.clone();
