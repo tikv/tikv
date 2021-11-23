@@ -624,9 +624,12 @@ where
             }
         }
         // Propose batch request which may be still waiting for more raft-command
-        self.propose_batch_raft_command(false);
-        self.check_batch_cmd_and_proposed_cb();
-        self.collect_ready();
+        if self.ctx.sync_write_worker.is_some() {
+            self.propose_batch_raft_command(true);
+        } else {
+            self.propose_batch_raft_command(false);
+            self.check_batch_cmd_and_proposed_cb();
+        }
     }
 
     fn propose_batch_raft_command(&mut self, force: bool) {
@@ -1162,6 +1165,17 @@ where
         }
     }
 
+    pub fn post_raft_ready_append(&mut self) {
+        if let Some(persist_snap_res) = self.fsm.peer.handle_raft_ready_advance(self.ctx) {
+            self.on_ready_persist_snapshot(persist_snap_res);
+            if self.fsm.peer.pending_merge_state.is_some() {
+                // After applying a snapshot, merge is rollbacked implicitly.
+                self.on_ready_rollback_merge(0, None);
+            }
+            self.register_raft_base_tick();
+        }
+    }
+
     fn report_snapshot_status(&mut self, to_peer_id: u64, status: SnapshotStatus) {
         let to_peer = match self.fsm.peer.get_peer_from_cache(to_peer_id) {
             Some(peer) => peer,
@@ -1209,11 +1223,14 @@ where
         }
     }
 
-    pub fn collect_ready(&mut self) {
+    /// Collect ready if any.
+    ///
+    /// Returns false is no readiness is generated.
+    pub fn collect_ready(&mut self) -> bool {
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
         if !has_ready || self.fsm.stopped {
-            return;
+            return false;
         }
         self.ctx.pending_count += 1;
         self.ctx.has_ready = true;
@@ -1232,7 +1249,10 @@ where
                 self.register_raft_base_tick();
                 self.fsm.peer.leader_unreachable = false;
             }
+
+            return r.has_write_ready;
         }
+        false
     }
 
     #[inline]
@@ -2251,6 +2271,7 @@ where
         self.fsm.peer.pending_remove = true;
 
         if self.fsm.peer.has_unpersisted_ready() {
+            assert!(self.ctx.sync_write_worker.is_none());
             // The destroy must be delayed if there are some unpersisted readies.
             // Otherwise there is a race of writting kv db and raft db between here
             // and write worker.

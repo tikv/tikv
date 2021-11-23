@@ -1,9 +1,44 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::RocksEngine;
-use crate::util;
-use engine_traits::Range;
-use engine_traits::{Error, Result};
+use crate::{util, RocksEngine};
+use engine_traits::{Error, Range, Result};
+
+#[repr(transparent)]
+pub struct UserCollectedProperties(rocksdb::UserCollectedProperties);
+impl engine_traits::UserCollectedProperties for UserCollectedProperties {
+    fn get(&self, index: &[u8]) -> Option<&[u8]> {
+        self.0.get(index)
+    }
+}
+
+#[repr(transparent)]
+pub struct TablePropertiesCollection(rocksdb::TablePropertiesCollection);
+impl engine_traits::TablePropertiesCollection for TablePropertiesCollection {
+    type UserCollectedProperties = UserCollectedProperties;
+    fn iter_user_collected_properties<F>(&self, mut f: F)
+    where
+        F: FnMut(&Self::UserCollectedProperties) -> bool,
+    {
+        for (_, props) in (&self.0).into_iter() {
+            let props = unsafe { std::mem::transmute(props.user_collected_properties()) };
+            if !f(props) {
+                break;
+            }
+        }
+    }
+}
+
+impl engine_traits::TablePropertiesExt for RocksEngine {
+    type TablePropertiesCollection = TablePropertiesCollection;
+    fn table_properties_collection(
+        &self,
+        cf: &str,
+        ranges: &[Range],
+    ) -> Result<Self::TablePropertiesCollection> {
+        let collection = self.get_properties_of_tables_in_range(cf, ranges)?;
+        Ok(TablePropertiesCollection(collection))
+    }
+}
 
 impl RocksEngine {
     pub(crate) fn get_properties_of_tables_in_range(
