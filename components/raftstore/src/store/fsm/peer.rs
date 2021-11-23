@@ -2531,6 +2531,8 @@ where
             // New peer derive write flow from parent region,
             // this will be used by balance write flow.
             new_peer.peer.peer_stat = self.fsm.peer.peer_stat.clone();
+            new_peer.peer.last_compacted_idx =
+                new_peer.apply_state().get_truncated_state().get_index() + 1;
             let campaigned = new_peer.peer.maybe_campaign(is_leader);
             new_peer.has_ready |= campaigned;
 

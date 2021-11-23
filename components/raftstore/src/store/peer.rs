@@ -1958,6 +1958,7 @@ where
         if !ready.snapshot().is_empty() {
             // Snapshot's metadata has been applied.
             self.last_applying_idx = self.get_store().truncated_index();
+            self.last_compacted_idx = self.last_applying_idx + 1;
             self.raft_group.advance_append_async(ready);
             // The ready is persisted, but we don't want to handle following light
             // ready immediately to avoid flow out of control, so use
