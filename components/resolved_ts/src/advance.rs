@@ -78,6 +78,9 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
 
 impl<E: KvEngine> AdvanceTsWorker<E> {
     pub fn advance_ts_for_regions(&self, regions: Vec<u64>) {
+        if regions.len() == 0 {
+            return;
+        }
         let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let cm: ConcurrencyManager = self.concurrency_manager.clone();
@@ -223,6 +226,7 @@ pub async fn region_resolved_ts_store(
         })
         .collect();
     for _ in 0..store_count {
+        // Use `select_all` to avoid the process getting blocked when some TiKVs were down.
         let (res, _, remains) = select_all(stores).await;
         stores = remains;
         if let Ok((store_id, resp)) = res {
@@ -233,6 +237,7 @@ pub async fn region_resolved_ts_store(
                 }
             }
         }
+        // Return early if all regions had already got quorum.
         if valid_regions.len() == regions.len() {
             // break here because all regions have quorum,
             // so there is no need waiting for other stores to respond.
