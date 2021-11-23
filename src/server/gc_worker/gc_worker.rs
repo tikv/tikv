@@ -384,6 +384,10 @@ where
             "start_key" => %start_key, "end_key" => %end_key
         );
 
+        info!("sleep 4min...");
+
+        std::thread::sleep(std::time::Duration::from_secs(4 * 60));
+
         let local_storage = self.engine.kv_engine();
 
         // Convert keys to RocksDB layer form
