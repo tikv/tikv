@@ -14,6 +14,8 @@ use tikv_util::config::*;
 use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
+use kvproto::raft_serverpb::RaftMessage;
+
 #[test]
 fn test_overlap_cleanup() {
     let mut cluster = new_node_cluster(0, 3);
@@ -325,7 +327,6 @@ fn test_receive_old_snapshot() {
             .reserve_dropped(Arc::clone(&dropped_msgs)),
     );
     cluster.sim.wl().add_recv_filter(2, recv_filter);
-
     cluster.clear_send_filters();
 
     for _ in 0..20 {
@@ -545,25 +546,41 @@ fn test_snapshot_gc_after_failed() {
 fn test_sending_fail_with_net_error() {
     let mut cluster = new_server_cluster(1, 2);
     configure_for_snapshot(&mut cluster);
-
-    let on_send_store_fp = "receiving_snapshot_net_error";
+    cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_operator();
-    cluster.run_conf_change();
-
+    let r1 = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
+    let (send_tx, send_rx) = mpsc::sync_channel(1);
+    // only send one MessageType::MsgSnapshot message
+    cluster.sim.wl().add_send_filter(
+        1,
+        Box::new(
+            RegionPacketFilter::new(r1, 1)
+                .allow(1)
+                .direction(Direction::Send)
+                .msg_type(MessageType::MsgSnapshot)
+                .set_msg_callback(Arc::new(move |m: &RaftMessage| {
+                    if m.get_message().get_msg_type() == MessageType::MsgSnapshot {
+                        let _ = send_tx.send(());
+                    }
+                })),
+        ),
+    );
 
-    // store2 will not receive any data from stream
-    fail::cfg(on_send_store_fp, "return()").unwrap();
-    pd_client.add_peer(1, new_learner_peer(2, 2));
+    // peer2 will interrupt in receiving snapshot
+    fail::cfg("receiving_snapshot_net_error", "return()").unwrap();
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
 
+    // ready to send notify.
+    send_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    // need to wait receiver handle the snapshot request
+    sleep_ms(100);
+
+    // peer2 will not become learner so ti will has k1 key and receiving count will zero
     let engine2 = cluster.get_engine(2);
     must_get_none(&engine2, b"k1");
-
-    // wait for sending snapshot
-    sleep_ms(100);
-    assert_eq!(cluster.get_snap_mgr(1).stats().sending_count, 0);
     assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
 }
