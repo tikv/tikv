@@ -46,10 +46,10 @@ use tokio::runtime::{Builder, Runtime};
 use tokio::sync::Semaphore;
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
-use crate::channel::{MemoryQuota, SendError};
+use crate::channel::{CdcEvent, MemoryQuota, SendError};
 use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
-use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
+use crate::service::{Conn, ConnID, FeatureGate};
 use crate::{CdcObserver, Error, Result};
 
 pub enum Deregister {
