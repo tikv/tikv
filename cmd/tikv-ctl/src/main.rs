@@ -7,7 +7,7 @@ extern crate log;
 use clap::{crate_authors, AppSettings};
 use encryption_export::{
     create_backend, data_key_manager_from_config, encryption_method_from_db_encryption_method,
-    DataKeyManager, EncryptReader, Iv,
+    DataKeyManager, DecryptReader, Iv,
 };
 use engine_rocks::get_env;
 use engine_rocks::raw_util::{db_exist, new_engine_opt};
