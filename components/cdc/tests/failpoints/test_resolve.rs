@@ -53,7 +53,7 @@ fn test_stale_resolver() {
         .get_region_cdc_client(region.get_id())
         .event_feed()
         .unwrap();
-    event_feed_wrap.replace(Some(resp_rx));
+    event_feed_wrap.as_ref().replace(Some(resp_rx));
     let _req_tx = req_tx
         .send((req.clone(), WriteFlags::default()))
         .wait()
@@ -100,7 +100,7 @@ fn test_stale_resolver() {
         }
     }
 
-    event_feed_wrap.replace(Some(resp_rx1));
+    event_feed_wrap.as_ref().replace(Some(resp_rx1));
     // Receive events
     for _ in 0..2 {
         let mut events = receive_event(false).events.to_vec();
@@ -125,7 +125,7 @@ fn test_stale_resolver() {
         }
     }
 
-    event_feed_wrap.replace(None);
+    event_feed_wrap.as_ref().replace(None);
     suite.stop();
 }
 
@@ -183,7 +183,7 @@ fn test_region_error() {
     fail::remove(multi_batch_fp);
     fail::remove(deregister_fp);
 
-    source_wrap.replace(None);
-    target_wrap.replace(None);
+    source_wrap.as_ref().replace(None);
+    target_wrap.as_ref().replace(None);
     suite.stop();
 }

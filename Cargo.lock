@@ -4369,7 +4369,6 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "futures 0.1.29",
- "futures 0.3.8",
  "futures-cpupool",
  "grpcio",
  "keys",
