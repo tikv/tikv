@@ -2,20 +2,12 @@
 
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
-use tipb::{Chunk, SelectResponse};
+use tipb::SelectResponse;
 
 use test_coprocessor::*;
 use test_storage::*;
 use tidb_query_datatype::codec::{datum, Datum};
 use tidb_query_datatype::expr::EvalContext;
-
-fn check_chunk_datum_count(chunks: &[Chunk], datum_limit: usize) {
-    let mut iter = chunks.iter();
-    let res = iter.any(|x| datum::decode(&mut x.get_rows_data()).unwrap().len() != datum_limit);
-    if res {
-        assert!(iter.next().is_none());
-    }
-}
 
 #[test]
 fn test_deadline() {
@@ -194,28 +186,27 @@ fn test_paging_scan() {
 
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &data);
-    // set batch size to 1, this avoids scan too many data.
+    // set batch size and grow size to 1, so that only 1 row will be scanned in each batch.
     fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
-    let paging_size = 1;
-    let chunk_datum_limit = paging_size * 3; // we have 3 fields. 
-
-    let req = DAGSelect::from(&product)
-        .paging_size(paging_size as u64)
-        .build();
-    let mut resp = handle_select(&endpoint, req);
-    check_chunk_datum_count(resp.get_chunks(), chunk_datum_limit);
-    let mut row_count = 0;
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
-    for (row, (id, name, cnt)) in spliter.zip(data) {
-        let name_datum = name.unwrap().as_bytes().into();
-        let expected_encoded = datum::encode_value(
-            &mut EvalContext::default(),
-            &[Datum::I64(id), name_datum, Datum::I64(cnt)],
-        )
-        .unwrap();
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
-        assert_eq!(result_encoded, &*expected_encoded);
-        row_count += 1;
+    fail::cfg("copr_batch_grow_size", "return(1)").unwrap();
+    for paging_size in 1..=4 {
+        let req = DAGSelect::from(&product)
+            .paging_size(paging_size as u64)
+            .build();
+        let mut resp = handle_select(&endpoint, req);
+        let mut row_count = 0;
+        let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+        for (row, (id, name, cnt)) in spliter.zip(data.clone()) {
+            let name_datum = name.unwrap().as_bytes().into();
+            let expected_encoded = datum::encode_value(
+                &mut EvalContext::default(),
+                &[Datum::I64(id), name_datum, Datum::I64(cnt)],
+            )
+            .unwrap();
+            let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+            assert_eq!(result_encoded, &*expected_encoded);
+            row_count += 1;
+        }
+        assert_eq!(row_count, paging_size);
     }
-    assert_eq!(row_count, paging_size);
 }

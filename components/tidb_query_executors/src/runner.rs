@@ -622,9 +622,16 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 }
 
 #[inline]
+fn batch_grow_factor() -> usize {
+    fail_point!("copr_batch_grow_size", |r| r
+        .map_or(1, |e| e.parse().unwrap()));
+    BATCH_GROW_FACTOR
+}
+
+#[inline]
 fn grow_batch_size(batch_size: &mut usize) {
     if *batch_size < BATCH_MAX_SIZE {
-        *batch_size *= BATCH_GROW_FACTOR;
+        *batch_size *= batch_grow_factor();
         if *batch_size > BATCH_MAX_SIZE {
             *batch_size = BATCH_MAX_SIZE
         }
