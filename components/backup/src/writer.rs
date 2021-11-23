@@ -4,7 +4,7 @@ use std::fmt::Display;
 use std::io::Read;
 use std::sync::Arc;
 
-use encryption::{CrypterReader, Iv};
+use encryption::{EncryptReader, Iv};
 use engine_rocks::raw::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
@@ -123,7 +123,7 @@ impl Writer {
         let iv = Iv::new_ctr();
         let encrypter_reader =
             EncryptReader::new(sst_reader, cipher.cipher_type, &cipher.cipher_key, iv)
-                .map_err(|e| Error::Other(box_err!("new CrypterReader error: {:?}", e)))?;
+                .map_err(|e| Error::Other(box_err!("new EncryptReader error: {:?}", e)))?;
 
         let (reader, hasher) = Sha256Reader::new(encrypter_reader)
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;

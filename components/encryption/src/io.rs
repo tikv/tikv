@@ -188,7 +188,7 @@ impl DecryptWriter<File> {
 }
 
 /// Implementation of EncryptWriter and DecryptWriter.
-pub struct CrypterReader<R> {
+struct CrypterReader<R> {
     reader: R,
     crypter: Option<CrypterCore>,
 }
@@ -250,7 +250,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for CrypterReader<R> {
 }
 
 /// Implementation of EncryptWriter and DecryptWriter.
-pub struct CrypterWriter<W> {
+struct CrypterWriter<W> {
     writer: W,
     crypter: Option<CrypterCore>,
 }
