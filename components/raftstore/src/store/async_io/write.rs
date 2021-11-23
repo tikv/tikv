@@ -423,8 +423,6 @@ where
 
             self.write_to_db(true);
 
-            self.metrics.flush();
-
             self.clear_latency_inspect();
             // update config
             if let Some(incoming) = self.cfg_tracker.any_new() {
@@ -618,6 +616,7 @@ where
         );
 
         self.batch.clear();
+        self.metrics.flush();
     }
 
     pub fn is_empty(&self) -> bool {
