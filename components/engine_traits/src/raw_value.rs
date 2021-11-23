@@ -86,7 +86,7 @@ impl<'a> RawValue<&'a [u8]> {
                 let rest_len = bytes
                     .len()
                     .checked_sub(number::U64_SIZE)
-                    .ok_or_else(|| Error::Codec(codec::Error::ValueLength))?;
+                    .ok_or(Error::Codec(codec::Error::ValueLength))?;
                 let mut expire_ts_slice = &bytes[rest_len..];
                 let expire_ts = number::decode_u64(&mut expire_ts_slice)?;
                 let expire_ts = if expire_ts == 0 {
@@ -103,13 +103,13 @@ impl<'a> RawValue<&'a [u8]> {
                 let mut rest_len = bytes
                     .len()
                     .checked_sub(1)
-                    .ok_or_else(|| Error::Codec(codec::Error::ValueLength))?;
+                    .ok_or(Error::Codec(codec::Error::ValueLength))?;
                 let flags = ValueMeta::from_bits(bytes[rest_len])
                     .ok_or(Error::Codec(codec::Error::ValueMeta))?;
                 let expire_ts = if flags.contains(ValueMeta::EXPIRE_TS) {
                     rest_len = rest_len
                         .checked_sub(number::U64_SIZE)
-                        .ok_or_else(|| Error::Codec(codec::Error::ValueLength))?;
+                        .ok_or(Error::Codec(codec::Error::ValueLength))?;
                     let mut expire_ts_slice = &bytes[rest_len..rest_len + number::U64_SIZE];
                     Some(number::decode_u64(&mut expire_ts_slice)?)
                 } else {
