@@ -19,39 +19,192 @@ use tikv_util::box_err;
 const AES_BLOCK_SIZE: usize = 16;
 const MAX_INPLACE_CRYPTION_SIZE: usize = 1024 * 1024;
 
-/// Encrypt or decrypt content as data being read.
+/// Encrypt content as data being read.
+pub struct EncryptReader<R>(CrypterReader<R>);
+
+impl<R> EncryptReader<R> {
+    pub fn new(
+        reader: R,
+        method: EncryptionMethod,
+        key: &[u8],
+        iv: Iv,
+    ) -> Result<EncryptReader<R>> {
+        Ok(EncryptReader(CrypterReader::new(
+            reader,
+            method,
+            key,
+            Mode::Encrypt,
+            iv,
+        )?))
+    }
+}
+
+impl<R: Read> Read for EncryptReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
+        self.0.read(buf)
+    }
+}
+
+impl<R: Seek> Seek for EncryptReader<R> {
+    fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
+        self.0.seek(pos)
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for EncryptReader<R> {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<IoResult<usize>> {
+        unsafe { self.map_unchecked_mut(|r| &mut r.0) }.poll_read(cx, buf)
+    }
+}
+
+/// Decrypt content as data being read.
+pub struct DecryptReader<R>(CrypterReader<R>);
+
+impl<R> DecryptReader<R> {
+    pub fn new(
+        reader: R,
+        method: EncryptionMethod,
+        key: &[u8],
+        iv: Iv,
+    ) -> Result<DecryptReader<R>> {
+        Ok(DecryptReader(CrypterReader::new(
+            reader,
+            method,
+            key,
+            Mode::Decrypt,
+            iv,
+        )?))
+    }
+}
+
+impl<R: Read> Read for DecryptReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
+        self.0.read(buf)
+    }
+}
+
+impl<R: Seek> Seek for DecryptReader<R> {
+    fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
+        self.0.seek(pos)
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for DecryptReader<R> {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<IoResult<usize>> {
+        unsafe { self.map_unchecked_mut(|r| &mut r.0) }.poll_read(cx, buf)
+    }
+}
+
+/// Encrypt content as data being written.
+pub struct EncryptWriter<W>(CrypterWriter<W>);
+
+impl<W> EncryptWriter<W> {
+    pub fn new(
+        writer: W,
+        method: EncryptionMethod,
+        key: &[u8],
+        iv: Iv,
+    ) -> Result<EncryptWriter<W>> {
+        Ok(EncryptWriter(CrypterWriter::new(
+            writer,
+            method,
+            key,
+            Mode::Encrypt,
+            iv,
+        )?))
+    }
+
+    pub fn finalize(self) -> IoResult<W> {
+        self.0.finalize()
+    }
+}
+
+impl<W: Write> Write for EncryptWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> IoResult<()> {
+        self.0.flush()
+    }
+}
+
+impl<W: Seek> Seek for EncryptWriter<W> {
+    fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
+        self.0.seek(pos)
+    }
+}
+
+impl EncryptWriter<File> {
+    pub fn sync_all(&self) -> IoResult<()> {
+        self.0.sync_all()
+    }
+}
+
+/// Decrypt content as data being written.
+pub struct DecryptWriter<W>(CrypterWriter<W>);
+
+impl<W> DecryptWriter<W> {
+    pub fn new(
+        writer: W,
+        method: EncryptionMethod,
+        key: &[u8],
+        iv: Iv,
+    ) -> Result<DecryptWriter<W>> {
+        Ok(DecryptWriter(CrypterWriter::new(
+            writer,
+            method,
+            key,
+            Mode::Decrypt,
+            iv,
+        )?))
+    }
+
+    pub fn finalize(self) -> IoResult<W> {
+        self.0.finalize()
+    }
+}
+
+impl<W: Write> Write for DecryptWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> IoResult<()> {
+        self.0.flush()
+    }
+}
+
+impl<W: Seek> Seek for DecryptWriter<W> {
+    fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
+        self.0.seek(pos)
+    }
+}
+
+impl DecryptWriter<File> {
+    pub fn sync_all(&self) -> IoResult<()> {
+        self.0.sync_all()
+    }
+}
+
+/// Implementation of EncryptWriter and DecryptWriter.
 pub struct CrypterReader<R> {
     reader: R,
     crypter: Option<CrypterCore>,
 }
 
 impl<R> CrypterReader<R> {
-    pub fn new_encrypter(
+    pub fn new(
         reader: R,
         method: EncryptionMethod,
         key: &[u8],
+        mode: Mode,
         iv: Iv,
     ) -> Result<CrypterReader<R>> {
         Ok(Self {
             reader,
             crypter: if method != EncryptionMethod::Plaintext {
-                Some(CrypterCore::new(method, key, Mode::Encrypt, iv)?)
-            } else {
-                None
-            },
-        })
-    }
-
-    pub fn new_decrypter(
-        reader: R,
-        method: EncryptionMethod,
-        key: &[u8],
-        iv: Iv,
-    ) -> Result<CrypterReader<R>> {
-        Ok(Self {
-            reader,
-            crypter: if method != EncryptionMethod::Plaintext {
-                Some(CrypterCore::new(method, key, Mode::Decrypt, iv)?)
+                Some(CrypterCore::new(method, key, mode, iv)?)
             } else {
                 None
             },
@@ -96,39 +249,24 @@ impl<R: AsyncRead + Unpin> AsyncRead for CrypterReader<R> {
     }
 }
 
-/// Encrypt or decrypt content as data being written.
+/// Implementation of EncryptWriter and DecryptWriter.
 pub struct CrypterWriter<W> {
     writer: W,
     crypter: Option<CrypterCore>,
 }
 
 impl<W> CrypterWriter<W> {
-    pub fn new_encrypter(
+    pub fn new(
         writer: W,
         method: EncryptionMethod,
         key: &[u8],
+        mode: Mode,
         iv: Iv,
     ) -> Result<CrypterWriter<W>> {
         Ok(Self {
             writer,
             crypter: if method != EncryptionMethod::Plaintext {
-                Some(CrypterCore::new(method, key, Mode::Encrypt, iv)?)
-            } else {
-                None
-            },
-        })
-    }
-
-    pub fn new_decrypter(
-        writer: W,
-        method: EncryptionMethod,
-        key: &[u8],
-        iv: Iv,
-    ) -> Result<CrypterWriter<W>> {
-        Ok(Self {
-            writer,
-            crypter: if method != EncryptionMethod::Plaintext {
-                Some(CrypterCore::new(method, key, Mode::Decrypt, iv)?)
+                Some(CrypterCore::new(method, key, mode, iv)?)
             } else {
                 None
             },
@@ -370,11 +508,11 @@ mod tests {
                 let mut plaintext = vec![0; 1024];
                 OsRng.fill_bytes(&mut plaintext);
                 let buf = Vec::with_capacity(1024);
-                let mut encrypter = CrypterWriter::new_encrypter(buf, method, &key, iv).unwrap();
+                let mut encrypter = EncryptWriter::new(buf, method, &key, iv).unwrap();
                 encrypter.write_all(&plaintext).unwrap();
 
                 let buf = std::io::Cursor::new(encrypter.finalize().unwrap());
-                let mut decrypter = CrypterReader::new_decrypter(buf, method, &key, iv).unwrap();
+                let mut decrypter = DecryptReader::new(buf, method, &key, iv).unwrap();
                 let mut piece = vec![0; 5];
                 // Read the first two blocks randomly.
                 for i in 0..31 {
@@ -416,8 +554,8 @@ mod tests {
             let key = generate_data_key(method);
             let readable_text = std::io::Cursor::new(plaintext.clone());
             let iv = Iv::new_ctr();
-            let encrypter = CrypterReader::new_encrypter(readable_text, method, &key, iv).unwrap();
-            let mut decrypter = CrypterReader::new_decrypter(encrypter, method, &key, iv).unwrap();
+            let encrypter = EncryptReader::new(readable_text, method, &key, iv).unwrap();
+            let mut decrypter = DecryptReader::new(encrypter, method, &key, iv).unwrap();
             let mut read = vec![0; 10240];
             for offset in offsets {
                 for size in sizes {
@@ -452,8 +590,8 @@ mod tests {
             let key = generate_data_key(method);
             let writable_text = std::io::Cursor::new(written.clone());
             let iv = Iv::new_ctr();
-            let encrypter = CrypterWriter::new_encrypter(writable_text, method, &key, iv).unwrap();
-            let mut decrypter = CrypterWriter::new_decrypter(encrypter, method, &key, iv).unwrap();
+            let encrypter = EncryptWriter::new(writable_text, method, &key, iv).unwrap();
+            let mut decrypter = DecryptWriter::new(encrypter, method, &key, iv).unwrap();
             // First write full data.
             assert_eq!(decrypter.seek(SeekFrom::Start(0)).unwrap(), 0);
             assert_eq!(decrypter.write(&plaintext).unwrap(), plaintext.len());

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use encryption::{encryption_method_from_db_encryption_method, CrypterReader, Iv};
+use encryption::{encryption_method_from_db_encryption_method, DecryptReader, Iv};
 use engine_traits::FileEncryptionInfo;
 use file_system::File;
 use futures_io::AsyncRead;
@@ -143,7 +143,7 @@ pub fn encrypt_wrap_reader<'a>(
     reader: Box<dyn AsyncRead + Unpin + 'a>,
 ) -> io::Result<Box<dyn AsyncRead + Unpin + 'a>> {
     let input = match file_crypter {
-        Some(x) => Box::new(CrypterReader::new_decrypter(
+        Some(x) => Box::new(DecryptReader::new(
             reader,
             encryption_method_from_db_encryption_method(x.method),
             &x.key,

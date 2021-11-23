@@ -122,7 +122,7 @@ impl Writer {
         let file_name = format!("{}_{}.sst", name, cf);
         let iv = Iv::new_ctr();
         let encrypter_reader =
-            CrypterReader::new_encrypter(sst_reader, cipher.cipher_type, &cipher.cipher_key, iv)
+            EncryptReader::new(sst_reader, cipher.cipher_type, &cipher.cipher_key, iv)
                 .map_err(|e| Error::Other(box_err!("new CrypterReader error: {:?}", e)))?;
 
         let (reader, hasher) = Sha256Reader::new(encrypter_reader)

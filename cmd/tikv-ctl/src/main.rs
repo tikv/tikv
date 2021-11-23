@@ -1923,7 +1923,7 @@ fn main() {
 
         let iv = Iv::from_slice(&file_info.iv).unwrap();
         let f = File::open(&infile).unwrap();
-        let mut reader = CrypterReader::new_decrypter(f, mthd, &file_info.key, iv).unwrap();
+        let mut reader = DecryptReader::new(f, mthd, &file_info.key, iv).unwrap();
 
         io::copy(&mut reader, &mut outf).unwrap();
         println!("crc32: {}", calc_crc32(outfile).unwrap());
