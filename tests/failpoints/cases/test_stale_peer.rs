@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use engine_rocks::Compat;
 use engine_traits::Peekable;
+use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RaftMessage};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
@@ -210,4 +211,100 @@ fn test_stale_peer_destroy_when_apply_snapshot() {
     cluster.sim.wl().send_raft_msg(tombstone_msg).unwrap();
 
     must_get_none(&cluster.get_engine(3), b"k1");
+}
+
+#[test]
+fn test_destroy_uninitialized_peer_when_there_exists_old_peer() {
+    // 4 stores cluster.
+    let mut cluster = new_node_cluster(0, 4);
+    cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.hibernate_regions = false;
+
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+
+    // Now region 1 only has peer (1, 1);
+    let (key, value) = (b"k1", b"v1");
+
+    cluster.must_put(key, value);
+    assert_eq!(cluster.get(key), Some(value.to_vec()));
+
+    // add peer (2,2) to region 1.
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    // add peer (3, 3) to region 1.
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    let epoch = pd_client.get_region_epoch(r1);
+
+    // Conf version must change.
+    assert!(epoch.get_conf_ver() > 2);
+
+    // Transfer leader to peer (2, 2).
+    cluster.must_transfer_leader(r1, new_peer(2, 2));
+
+    // Isolate node 1
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+
+    for i in 2..10 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+
+    // Remove 3 and add 4
+    pd_client.must_add_peer(r1, new_learner_peer(4, 4));
+    // must_get_equal(&cluster.get_engine(4), b"k10", b"v1");
+
+    pd_client.must_add_peer(r1, new_peer(4, 4));
+    pd_client.must_remove_peer(r1, new_peer(3, 3));
+
+    for i in 11..20 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+
+    // Add learner on store 5
+    pd_client.must_add_peer(r1, new_learner_peer(3, 5));
+
+    // Ensure 5 drops all snapshot
+    let (notify_tx, _notify_rx) = mpsc::channel();
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(3, Box::new(DropSnapshotFilter::new(notify_tx)));
+
+    for i in 21..30 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+
+    // Remove and destroy the uninitialized 5
+    let peer_5 = new_learner_peer(3, 5);
+    pd_client.must_remove_peer(r1, peer_5.clone());
+    cluster.must_destroy_peer(r1, 3, peer_5.clone());
+
+    let region = block_on(pd_client.get_region_by_id(r1)).unwrap();
+    must_region_cleared(&cluster.get_all_engines(3), &region.unwrap());
+
+    // Unisolate 1 and try wakeup 3
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(2, Box::new(PartitionFilter::new(vec![1, 3])));
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(4, Box::new(PartitionFilter::new(vec![1, 3])));
+
+    cluster.sim.wl().clear_send_filters(1);
+    cluster.sim.wl().clear_send_filters(3);
+    cluster.sim.wl().clear_recv_filters(3);
+
+    sleep_ms(
+        6u64 * cluster.cfg.raft_store.raft_election_timeout_ticks as u64
+            * cluster.cfg.raft_store.raft_base_tick_interval.0.as_millis() as u64,
+    );
+
+    let region = block_on(pd_client.get_region_by_id(r1)).unwrap();
+    must_region_cleared(&cluster.get_all_engines(3), &region.unwrap());
 }
