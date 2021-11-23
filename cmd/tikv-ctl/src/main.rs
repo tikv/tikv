@@ -7,7 +7,7 @@ extern crate log;
 use clap::{crate_authors, AppSettings};
 use encryption_export::{
     create_backend, data_key_manager_from_config, encryption_method_from_db_encryption_method,
-    DataKeyManager, DecryptReader, Iv,
+    DataKeyManager, DecrypterReader, Iv,
 };
 use engine_rocks::get_env;
 use engine_rocks::raw_util::{db_exist, new_engine_opt};
@@ -1923,7 +1923,7 @@ fn main() {
 
         let iv = Iv::from_slice(&file_info.iv).unwrap();
         let f = File::open(&infile).unwrap();
-        let mut reader = DecryptReader::new(f, mthd, &file_info.key, iv).unwrap();
+        let mut reader = DecrypterReader::new(f, mthd, &file_info.key, iv).unwrap();
 
         io::copy(&mut reader, &mut outf).unwrap();
         println!("crc32: {}", calc_crc32(outfile).unwrap());

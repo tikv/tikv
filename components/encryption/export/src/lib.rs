@@ -17,7 +17,7 @@ use cloud::Error as CloudError;
 pub use encryption::KmsBackend;
 pub use encryption::{
     encryption_method_from_db_encryption_method, Backend, DataKeyManager, DataKeyManagerArgs,
-    DecryptReader, EncryptionConfig, Error, FileConfig, Iv, KmsConfig, MasterKeyConfig, Result,
+    DecrypterReader, EncryptionConfig, Error, FileConfig, Iv, KmsConfig, MasterKeyConfig, Result,
 };
 use encryption::{
     DataKeyPair, EncryptedKey, FileBackend, KmsProvider, PlainKey, PlaintextBackend,

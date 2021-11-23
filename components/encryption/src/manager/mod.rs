@@ -19,7 +19,7 @@ use crate::config::EncryptionConfig;
 use crate::crypter::{self, compat, Iv};
 use crate::encrypted_file::EncryptedFile;
 use crate::file_dict_file::FileDictionaryFile;
-use crate::io::{DecryptReader, EncryptWriter};
+use crate::io::{DecrypterReader, EncrypterWriter};
 use crate::master_key::Backend;
 use crate::metrics::*;
 use crate::{Error, Result};
@@ -565,7 +565,7 @@ impl DataKeyManager {
         })
     }
 
-    pub fn create_file_for_write<P: AsRef<Path>>(&self, path: P) -> Result<EncryptWriter<File>> {
+    pub fn create_file_for_write<P: AsRef<Path>>(&self, path: P) -> Result<EncrypterWriter<File>> {
         let file_writer = File::create(&path)?;
         self.create_file_with_writer(path, file_writer)
     }
@@ -574,7 +574,7 @@ impl DataKeyManager {
         &self,
         path: P,
         writer: W,
-    ) -> Result<EncryptWriter<W>> {
+    ) -> Result<EncrypterWriter<W>> {
         let fname = path.as_ref().to_str().ok_or_else(|| {
             Error::Other(box_err!(
                 "failed to convert path to string {:?}",
@@ -582,7 +582,7 @@ impl DataKeyManager {
             ))
         })?;
         let file = self.new_file(fname)?;
-        EncryptWriter::new(
+        EncrypterWriter::new(
             writer,
             crypter::encryption_method_from_db_encryption_method(file.method),
             &file.key,
@@ -590,7 +590,7 @@ impl DataKeyManager {
         )
     }
 
-    pub fn open_file_for_read<P: AsRef<Path>>(&self, path: P) -> Result<DecryptReader<File>> {
+    pub fn open_file_for_read<P: AsRef<Path>>(&self, path: P) -> Result<DecrypterReader<File>> {
         let file_reader = File::open(&path)?;
         self.open_file_with_reader(path, file_reader)
     }
@@ -599,7 +599,7 @@ impl DataKeyManager {
         &self,
         path: P,
         reader: R,
-    ) -> Result<DecryptReader<R>> {
+    ) -> Result<DecrypterReader<R>> {
         let fname = path.as_ref().to_str().ok_or_else(|| {
             Error::Other(box_err!(
                 "failed to convert path to string {:?}",
@@ -607,7 +607,7 @@ impl DataKeyManager {
             ))
         })?;
         let file = self.get_file(fname)?;
-        DecryptReader::new(
+        DecrypterReader::new(
             reader,
             crypter::encryption_method_from_db_encryption_method(file.method),
             &file.key,

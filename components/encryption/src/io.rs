@@ -20,16 +20,16 @@ const AES_BLOCK_SIZE: usize = 16;
 const MAX_INPLACE_CRYPTION_SIZE: usize = 1024 * 1024;
 
 /// Encrypt content as data being read.
-pub struct EncryptReader<R>(CrypterReader<R>);
+pub struct EncrypterReader<R>(CrypterReader<R>);
 
-impl<R> EncryptReader<R> {
+impl<R> EncrypterReader<R> {
     pub fn new(
         reader: R,
         method: EncryptionMethod,
         key: &[u8],
         iv: Iv,
-    ) -> Result<EncryptReader<R>> {
-        Ok(EncryptReader(CrypterReader::new(
+    ) -> Result<EncrypterReader<R>> {
+        Ok(EncrypterReader(CrypterReader::new(
             reader,
             method,
             key,
@@ -39,35 +39,35 @@ impl<R> EncryptReader<R> {
     }
 }
 
-impl<R: Read> Read for EncryptReader<R> {
+impl<R: Read> Read for EncrypterReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         self.0.read(buf)
     }
 }
 
-impl<R: Seek> Seek for EncryptReader<R> {
+impl<R: Seek> Seek for EncrypterReader<R> {
     fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
         self.0.seek(pos)
     }
 }
 
-impl<R: AsyncRead + Unpin> AsyncRead for EncryptReader<R> {
+impl<R: AsyncRead + Unpin> AsyncRead for EncrypterReader<R> {
     fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<IoResult<usize>> {
         unsafe { self.map_unchecked_mut(|r| &mut r.0) }.poll_read(cx, buf)
     }
 }
 
 /// Decrypt content as data being read.
-pub struct DecryptReader<R>(CrypterReader<R>);
+pub struct DecrypterReader<R>(CrypterReader<R>);
 
-impl<R> DecryptReader<R> {
+impl<R> DecrypterReader<R> {
     pub fn new(
         reader: R,
         method: EncryptionMethod,
         key: &[u8],
         iv: Iv,
-    ) -> Result<DecryptReader<R>> {
-        Ok(DecryptReader(CrypterReader::new(
+    ) -> Result<DecrypterReader<R>> {
+        Ok(DecrypterReader(CrypterReader::new(
             reader,
             method,
             key,
@@ -77,35 +77,35 @@ impl<R> DecryptReader<R> {
     }
 }
 
-impl<R: Read> Read for DecryptReader<R> {
+impl<R: Read> Read for DecrypterReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         self.0.read(buf)
     }
 }
 
-impl<R: Seek> Seek for DecryptReader<R> {
+impl<R: Seek> Seek for DecrypterReader<R> {
     fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
         self.0.seek(pos)
     }
 }
 
-impl<R: AsyncRead + Unpin> AsyncRead for DecryptReader<R> {
+impl<R: AsyncRead + Unpin> AsyncRead for DecrypterReader<R> {
     fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<IoResult<usize>> {
         unsafe { self.map_unchecked_mut(|r| &mut r.0) }.poll_read(cx, buf)
     }
 }
 
 /// Encrypt content as data being written.
-pub struct EncryptWriter<W>(CrypterWriter<W>);
+pub struct EncrypterWriter<W>(CrypterWriter<W>);
 
-impl<W> EncryptWriter<W> {
+impl<W> EncrypterWriter<W> {
     pub fn new(
         writer: W,
         method: EncryptionMethod,
         key: &[u8],
         iv: Iv,
-    ) -> Result<EncryptWriter<W>> {
-        Ok(EncryptWriter(CrypterWriter::new(
+    ) -> Result<EncrypterWriter<W>> {
+        Ok(EncrypterWriter(CrypterWriter::new(
             writer,
             method,
             key,
@@ -119,7 +119,7 @@ impl<W> EncryptWriter<W> {
     }
 }
 
-impl<W: Write> Write for EncryptWriter<W> {
+impl<W: Write> Write for EncrypterWriter<W> {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
         self.0.write(buf)
     }
@@ -129,29 +129,29 @@ impl<W: Write> Write for EncryptWriter<W> {
     }
 }
 
-impl<W: Seek> Seek for EncryptWriter<W> {
+impl<W: Seek> Seek for EncrypterWriter<W> {
     fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
         self.0.seek(pos)
     }
 }
 
-impl EncryptWriter<File> {
+impl EncrypterWriter<File> {
     pub fn sync_all(&self) -> IoResult<()> {
         self.0.sync_all()
     }
 }
 
 /// Decrypt content as data being written.
-pub struct DecryptWriter<W>(CrypterWriter<W>);
+pub struct DecrypterWriter<W>(CrypterWriter<W>);
 
-impl<W> DecryptWriter<W> {
+impl<W> DecrypterWriter<W> {
     pub fn new(
         writer: W,
         method: EncryptionMethod,
         key: &[u8],
         iv: Iv,
-    ) -> Result<DecryptWriter<W>> {
-        Ok(DecryptWriter(CrypterWriter::new(
+    ) -> Result<DecrypterWriter<W>> {
+        Ok(DecrypterWriter(CrypterWriter::new(
             writer,
             method,
             key,
@@ -165,7 +165,7 @@ impl<W> DecryptWriter<W> {
     }
 }
 
-impl<W: Write> Write for DecryptWriter<W> {
+impl<W: Write> Write for DecrypterWriter<W> {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
         self.0.write(buf)
     }
@@ -175,19 +175,19 @@ impl<W: Write> Write for DecryptWriter<W> {
     }
 }
 
-impl<W: Seek> Seek for DecryptWriter<W> {
+impl<W: Seek> Seek for DecrypterWriter<W> {
     fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
         self.0.seek(pos)
     }
 }
 
-impl DecryptWriter<File> {
+impl DecrypterWriter<File> {
     pub fn sync_all(&self) -> IoResult<()> {
         self.0.sync_all()
     }
 }
 
-/// Implementation of EncryptWriter and DecryptWriter.
+/// Implementation of EncrypterWriter and DecrypterWriter.
 struct CrypterReader<R> {
     reader: R,
     crypter: Option<CrypterCore>,
@@ -249,7 +249,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for CrypterReader<R> {
     }
 }
 
-/// Implementation of EncryptWriter and DecryptWriter.
+/// Implementation of EncrypterWriter and DecrypterWriter.
 struct CrypterWriter<W> {
     writer: W,
     crypter: Option<CrypterCore>,
@@ -508,11 +508,11 @@ mod tests {
                 let mut plaintext = vec![0; 1024];
                 OsRng.fill_bytes(&mut plaintext);
                 let buf = Vec::with_capacity(1024);
-                let mut encrypter = EncryptWriter::new(buf, method, &key, iv).unwrap();
+                let mut encrypter = EncrypterWriter::new(buf, method, &key, iv).unwrap();
                 encrypter.write_all(&plaintext).unwrap();
 
                 let buf = std::io::Cursor::new(encrypter.finalize().unwrap());
-                let mut decrypter = DecryptReader::new(buf, method, &key, iv).unwrap();
+                let mut decrypter = DecrypterReader::new(buf, method, &key, iv).unwrap();
                 let mut piece = vec![0; 5];
                 // Read the first two blocks randomly.
                 for i in 0..31 {
@@ -554,8 +554,8 @@ mod tests {
             let key = generate_data_key(method);
             let readable_text = std::io::Cursor::new(plaintext.clone());
             let iv = Iv::new_ctr();
-            let encrypter = EncryptReader::new(readable_text, method, &key, iv).unwrap();
-            let mut decrypter = DecryptReader::new(encrypter, method, &key, iv).unwrap();
+            let encrypter = EncrypterReader::new(readable_text, method, &key, iv).unwrap();
+            let mut decrypter = DecrypterReader::new(encrypter, method, &key, iv).unwrap();
             let mut read = vec![0; 10240];
             for offset in offsets {
                 for size in sizes {
@@ -590,8 +590,8 @@ mod tests {
             let key = generate_data_key(method);
             let writable_text = std::io::Cursor::new(written.clone());
             let iv = Iv::new_ctr();
-            let encrypter = EncryptWriter::new(writable_text, method, &key, iv).unwrap();
-            let mut decrypter = DecryptWriter::new(encrypter, method, &key, iv).unwrap();
+            let encrypter = EncrypterWriter::new(writable_text, method, &key, iv).unwrap();
+            let mut decrypter = DecrypterWriter::new(encrypter, method, &key, iv).unwrap();
             // First write full data.
             assert_eq!(decrypter.seek(SeekFrom::Start(0)).unwrap(), 0);
             assert_eq!(decrypter.write(&plaintext).unwrap(), plaintext.len());
