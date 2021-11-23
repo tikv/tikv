@@ -1,10 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::Cell;
-use std::rc::Rc;
 use std::sync::*;
+use std::time::Duration;
 
-use cdc::{CdcObserver, FeatureGate, MemoryQuota, Task};
 use configuration::Configuration;
 use futures::{Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
@@ -21,34 +19,76 @@ use tikv_util::config::ReadableDuration;
 use tikv_util::worker::{Runnable, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
+use futures03::compat::Stream01CompatExt;
+
+use cdc::{recv_timeout, CdcObserver, FeatureGate, MemoryQuota, Task};
+static INIT: Once = Once::new();
+
+pub fn init() {
+    INIT.call_once(test_util::setup_for_ci);
+}
+
+#[derive(Clone)]
+pub struct ClientReceiver {
+    receiver: Arc<Mutex<Option<ClientDuplexReceiver<ChangeDataEvent>>>>,
+}
+
+impl ClientReceiver {
+    pub fn replace(
+        &self,
+        rx: Option<ClientDuplexReceiver<ChangeDataEvent>>,
+    ) -> Option<ClientDuplexReceiver<ChangeDataEvent>> {
+        std::mem::replace(&mut *self.receiver.lock().unwrap(), rx)
+    }
+}
 
 #[allow(clippy::type_complexity)]
 pub fn new_event_feed(
     client: &ChangeDataClient,
 ) -> (
     ClientDuplexSender<ChangeDataRequest>,
-    Rc<Cell<Option<ClientDuplexReceiver<ChangeDataEvent>>>>,
-    impl Fn(bool) -> ChangeDataEvent,
+    ClientReceiver,
+    Box<dyn Fn(bool) -> ChangeDataEvent + Send>,
 ) {
     let (req_tx, resp_rx) = client.event_feed().unwrap();
-    let event_feed_wrap = Rc::new(Cell::new(Some(resp_rx)));
+    let event_feed_wrap = Arc::new(Mutex::new(Some(resp_rx)));
     let event_feed_wrap_clone = event_feed_wrap.clone();
 
     let receive_event = move |keep_resolved_ts: bool| loop {
-        let event_feed = event_feed_wrap_clone.as_ref();
-        let (change_data, events) = match event_feed.replace(None).unwrap().into_future().wait() {
-            Ok(res) => res,
-            Err(e) => panic!("receive failed {:?}", e.0),
+        let mut events;
+        {
+            let mut event_feed = event_feed_wrap_clone.lock().unwrap();
+            events = event_feed.take();
+        }
+        let mut events_rx = if let Some(events_rx) = events.as_mut() {
+            events_rx
+        } else {
+            return ChangeDataEvent::default();
         };
-        event_feed.set(Some(events));
-        let change_data_event = change_data.unwrap();
+        let change_data =
+            if let Some(event) = recv_timeout(&mut (&mut events_rx).compat(), Duration::from_secs(5)).unwrap() {
+                event
+            } else {
+                return ChangeDataEvent::default();
+            };
+        {
+            let mut event_feed = event_feed_wrap_clone.lock().unwrap();
+            *event_feed = events;
+        }
+        let change_data_event = change_data.unwrap_or_default();
         if !keep_resolved_ts && change_data_event.has_resolved_ts() {
             continue;
         }
         tikv_util::info!("cdc receive event {:?}", change_data_event);
         break change_data_event;
     };
-    (req_tx, event_feed_wrap, receive_event)
+    (
+        req_tx,
+        ClientReceiver {
+            receiver: event_feed_wrap,
+        },
+        Box::new(receive_event),
+    )
 }
 
 pub struct TestSuiteBuilder {
