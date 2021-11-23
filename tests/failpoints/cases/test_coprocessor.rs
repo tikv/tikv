@@ -216,7 +216,7 @@ fn test_paging_scan() {
         assert_eq!(row_count, paging_size);
         let range = resp.get_range();
         let start_key = product.get_record_range_one(i64::MIN);
-        let end_key = product.get_record_range_one(data[paging_size-1].0);
+        let end_key = product.get_record_range_one(data[paging_size - 1].0);
         assert_eq!(range.get_start(), start_key.get_start());
         assert_ge!(range.get_end(), end_key.get_start());
         assert_le!(range.get_end(), end_key.get_end());
