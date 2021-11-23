@@ -178,6 +178,11 @@ impl DAGSelect {
         self
     }
 
+    pub fn desc(mut self, desc: bool) -> DAGSelect {
+        self.execs[0].mut_tbl_scan().set_desc(desc);
+        self
+    }
+
     pub fn paging_size(mut self, paging_size: u64) -> DAGSelect {
         assert_ne!(paging_size, 0);
         self.paging_size = Some(paging_size);

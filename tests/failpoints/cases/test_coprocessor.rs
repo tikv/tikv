@@ -190,35 +190,52 @@ fn test_paging_scan() {
     // set batch size and grow size to 1, so that only 1 row will be scanned in each batch.
     fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
     fail::cfg("copr_batch_grow_size", "return(1)").unwrap();
-    for paging_size in 1..=4 {
-        let req = DAGSelect::from(&product)
-            .paging_size(paging_size as u64)
-            .build();
+    for desc in [false, true] {
+        for paging_size in 1..=4 {
+            let mut exp = data.clone();
+            if desc {
+                exp.reverse();
+            }
 
-        let resp = handle_request(&endpoint, req);
-        let mut select_resp = SelectResponse::default();
-        select_resp.merge_from_bytes(resp.get_data()).unwrap();
+            let req = DAGSelect::from(&product)
+                .paging_size(paging_size as u64)
+                .desc(desc)
+                .build();
+            let resp = handle_request(&endpoint, req);
+            let mut select_resp = SelectResponse::default();
+            select_resp.merge_from_bytes(resp.get_data()).unwrap();
 
-        let mut row_count = 0;
-        let spliter = DAGChunkSpliter::new(select_resp.take_chunks().into(), 3);
-        for (row, (id, name, cnt)) in spliter.zip(data.clone()) {
-            let name_datum = name.unwrap().as_bytes().into();
-            let expected_encoded = datum::encode_value(
-                &mut EvalContext::default(),
-                &[Datum::I64(id), name_datum, Datum::I64(cnt)],
-            )
-            .unwrap();
-            let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
-            assert_eq!(result_encoded, &*expected_encoded);
-            row_count += 1;
+            let mut row_count = 0;
+            let spliter = DAGChunkSpliter::new(select_resp.take_chunks().into(), 3);
+            for (row, (id, name, cnt)) in spliter.zip(exp) {
+                let name_datum = name.unwrap().as_bytes().into();
+                let expected_encoded = datum::encode_value(
+                    &mut EvalContext::default(),
+                    &[Datum::I64(id), name_datum, Datum::I64(cnt)],
+                )
+                .unwrap();
+                let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+                assert_eq!(result_encoded, &*expected_encoded);
+                row_count += 1;
+            }
+            assert_eq!(row_count, paging_size);
+
+            let res_range = resp.get_range();
+            let (res_start_key, res_end_key) = match desc {
+                true => (res_range.get_end(), res_range.get_start()),
+                false => (res_range.get_start(), res_range.get_end()),
+            };
+            let start_key = match desc {
+                true => product.get_record_range_one(i64::MAX),
+                false => product.get_record_range_one(i64::MIN),
+            };
+            let end_key = match desc {
+                true => product.get_record_range_one(data[data.len() - paging_size].0),
+                false => product.get_record_range_one(data[paging_size - 1].0),
+            };
+            assert_eq!(res_start_key, start_key.get_start());
+            assert_ge!(res_end_key, end_key.get_start());
+            assert_le!(res_end_key, end_key.get_end());
         }
-
-        assert_eq!(row_count, paging_size);
-        let range = resp.get_range();
-        let start_key = product.get_record_range_one(i64::MIN);
-        let end_key = product.get_record_range_one(data[paging_size - 1].0);
-        assert_eq!(range.get_start(), start_key.get_start());
-        assert_ge!(range.get_end(), end_key.get_start());
-        assert_le!(range.get_end(), end_key.get_end());
     }
 }
