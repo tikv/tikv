@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::kvrpcpb::{Context, IsolationLevel};
+use more_asserts::{assert_ge, assert_le};
 use protobuf::Message;
 use tipb::SelectResponse;
 
@@ -193,9 +194,13 @@ fn test_paging_scan() {
         let req = DAGSelect::from(&product)
             .paging_size(paging_size as u64)
             .build();
-        let mut resp = handle_select(&endpoint, req);
+
+        let resp = handle_request(&endpoint, req);
+        let mut select_resp = SelectResponse::default();
+        select_resp.merge_from_bytes(resp.get_data()).unwrap();
+
         let mut row_count = 0;
-        let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+        let spliter = DAGChunkSpliter::new(select_resp.take_chunks().into(), 3);
         for (row, (id, name, cnt)) in spliter.zip(data.clone()) {
             let name_datum = name.unwrap().as_bytes().into();
             let expected_encoded = datum::encode_value(
@@ -207,6 +212,13 @@ fn test_paging_scan() {
             assert_eq!(result_encoded, &*expected_encoded);
             row_count += 1;
         }
+
         assert_eq!(row_count, paging_size);
+        let range = resp.get_range();
+        let start_key = product.get_record_range_one(i64::MIN);
+        let end_key = product.get_record_range_one(data[paging_size-1].0);
+        assert_eq!(range.get_start(), start_key.get_start());
+        assert_ge!(range.get_end(), end_key.get_start());
+        assert_le!(range.get_end(), end_key.get_end());
     }
 }
