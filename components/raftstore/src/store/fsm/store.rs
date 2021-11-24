@@ -177,6 +177,10 @@ impl<E: KvEngine> RaftRouter<E> {
         &self,
         mut msg: RaftMessage,
     ) -> std::result::Result<(), TrySendError<RaftMessage>> {
+        fail_point!("send_raft_message_full", |_| Err(TrySendError::Full(
+            RaftMessage::default()
+        )));
+
         let id = msg.get_region_id();
         match self.try_send(id, PeerMsg::RaftMessage(msg)) {
             Either::Left(Ok(())) => return Ok(()),
