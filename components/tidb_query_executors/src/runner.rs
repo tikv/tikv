@@ -400,6 +400,11 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         BATCH_INITIAL_SIZE
     }
 
+    /// handle_request returns the response of selection and an optional range,
+    /// only paging request will return Some(IntervalRange),
+    /// this should be used when calculating ranges of the next batch.
+    /// IntervalRange records whole range scanned though there are gaps in multi ranges.
+    /// e.g.: [(k1 -> k2), (k4 -> k5)] may got response (k1, k2, k4) with IntervalRange like (k1, k4).
     pub async fn handle_request(&mut self) -> Result<(SelectResponse, Option<IntervalRange>)> {
         let mut chunks = vec![];
         let mut batch_size = Self::batch_initial_size();
