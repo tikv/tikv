@@ -10,6 +10,7 @@ use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 const WRITE_BATCH_MAX_BATCH: usize = 16;
 const WRITE_BATCH_LIMIT: usize = 16;
+const WRITE_BATCH_UNLIMITED_SIZE: usize = usize::max_value() - 1;
 
 impl WriteBatchExt for RocksEngine {
     type WriteBatch = RocksWriteBatch;
@@ -17,18 +18,7 @@ impl WriteBatchExt for RocksEngine {
     const WRITE_BATCH_MAX_KEYS: usize = 256;
 
     fn write_batch(&self) -> RocksWriteBatch {
-        let wb = RawWriteBatch::new();
-        let options = self.as_inner().get_db_options();
-        let enable_batch_vec = options.is_enable_multi_batch_write();
-        RocksWriteBatch {
-            db: self.as_inner().clone(),
-            wbs: vec![wb],
-            save_points: vec![],
-            index: 0,
-            cur_batch_size: 0,
-            batch_size_limit: WRITE_BATCH_LIMIT,
-            enable_batch_vec,
-        }
+        RocksWriteBatch::new(self.as_inner().clone())
     }
 
     fn write_batch_with_cap(&self, cap: usize) -> RocksWriteBatch {
@@ -47,23 +37,26 @@ pub struct RocksWriteBatch {
     wbs: Vec<RawWriteBatch>,
     save_points: Vec<usize>,
     index: usize,
-    cur_batch_size: usize,
+    total_count: usize,
     batch_size_limit: usize,
-    enable_batch_vec: bool,
 }
 
 impl RocksWriteBatch {
     pub fn new(db: Arc<DB>) -> RocksWriteBatch {
         let wb = RawWriteBatch::new();
         let opt = db.get_db_options();
+        let batch_size_limit = if opt.is_enable_multi_batch_write() {
+            WRITE_BATCH_LIMIT
+        } else {
+            WRITE_BATCH_UNLIMITED_SIZE
+        };
         RocksWriteBatch {
             db,
             wbs: vec![wb],
             save_points: vec![],
             index: 0,
-            cur_batch_size: 0,
-            batch_size_limit: WRITE_BATCH_LIMIT,
-            enable_batch_vec: opt.is_enable_multi_batch_write(),
+            total_count: 0,
+            batch_size_limit,
         }
     }
 
@@ -82,31 +75,31 @@ impl RocksWriteBatch {
     /// `check_switch_batch` will split a large WriteBatch into many smaller ones. This is to avoid
     /// a large WriteBatch blocking write_thread too long.
     fn check_switch_batch(&mut self) {
-        if self.enable_batch_vec
-            && self.batch_size_limit > 0
-            && self.cur_batch_size >= self.batch_size_limit
-        {
+        if self.wbs[self.index].count() >= self.batch_size_limit {
             self.index += 1;
-            self.cur_batch_size = 0;
             if self.index >= self.wbs.len() {
                 self.wbs.push(RawWriteBatch::default());
             }
         }
-        self.cur_batch_size += 1;
+        self.total_count += 1;
     }
 }
 
 impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
     fn with_capacity(engine: &RocksEngine, cap: usize) -> RocksWriteBatch {
         let wb = RawWriteBatch::with_capacity(cap);
+        let batch_size_limit = if engine.is_support_multi_batch_write() {
+            WRITE_BATCH_LIMIT
+        } else {
+            WRITE_BATCH_UNLIMITED_SIZE
+        };
         RocksWriteBatch {
             db: engine.as_inner().clone(),
             wbs: vec![wb],
             save_points: vec![],
             index: 0,
-            cur_batch_size: 0,
-            batch_size_limit: WRITE_BATCH_LIMIT,
-            enable_batch_vec: engine.is_support_multi_batch_write(),
+            total_count: 0,
+            batch_size_limit,
         }
     }
 
@@ -128,7 +121,7 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
     }
 
     fn count(&self) -> usize {
-        self.cur_batch_size + self.index * self.batch_size_limit
+        self.total_count
     }
 
     fn is_empty(&self) -> bool {
@@ -136,7 +129,7 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
     }
 
     fn should_write_to_engine(&self) -> bool {
-        self.index >= WRITE_BATCH_MAX_BATCH
+        self.total_count > RocksEngine::WRITE_BATCH_MAX_KEYS
     }
 
     fn clear(&mut self) {
@@ -145,7 +138,7 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
         }
         self.save_points.clear();
         self.index = 0;
-        self.cur_batch_size = 0;
+        self.total_count = 0;
     }
 
     fn set_save_point(&mut self) {
@@ -173,7 +166,8 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
 
     fn merge(&mut self, other: Self) {
         for i in 0..=other.index {
-            self.wbs[self.index].append(other.wbs[other.index].data());
+            self.wbs[self.index].append(other.wbs[i].data());
+            self.total_count += other.wbs[i].count();
         }
     }
 }
