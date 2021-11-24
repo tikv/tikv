@@ -250,12 +250,10 @@ impl Dicts {
                     return Ok(());
                 }
             };
-            if file_dict.files.get(dst_fname).is_some() {
-                return Err(Error::Io(IoError::new(
-                    ErrorKind::AlreadyExists,
-                    format!("file already exists, {}", dst_fname),
-                )));
-            }
+            // When an encrypted file exists in the file system, the file_dict must have info about
+            // this file. But the opposite is not true, this is because the actual file operation
+            // and file_dict operation are not atomic.
+            check_stale_file_exist(dst_fname, &mut file_dict, &mut file_dict_file)?;
             let method = file.method;
             file_dict.files.insert(dst_fname.to_owned(), file.clone());
             let file_num = file_dict.files.len() as _;
@@ -268,35 +266,6 @@ impl Dicts {
             info!("link encrypted file"; "src" => src_fname, "dst" => dst_fname);
         } else {
             info!("link plaintext file"; "src" => src_fname, "dst" => dst_fname);
-        }
-        Ok(())
-    }
-
-    fn rename_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
-        let mut file_dict_file = self.file_dict_file.lock().unwrap();
-        let (method, file, file_num) = {
-            let mut file_dict = self.file_dict.lock().unwrap();
-            let file = match file_dict.files.remove(src_fname) {
-                Some(file_info) => file_info,
-                None => {
-                    // Could be a plaintext file not tracked by file dictionary.
-                    info!("rename untracked plaintext file"; "src" => src_fname, "dst" => dst_fname);
-                    return Ok(());
-                }
-            };
-            let method = file.method;
-            file_dict.files.insert(dst_fname.to_owned(), file.clone());
-            let file_num = file_dict.files.len() as _;
-            (method, file, file_num)
-        };
-        file_dict_file.replace(src_fname, dst_fname, file)?;
-
-        ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
-
-        if method != compat(EncryptionMethod::Plaintext) {
-            info!("rename encrypted file"; "src" => src_fname, "dst" => dst_fname);
-        } else {
-            info!("rename plaintext file"; "src" => src_fname, "dst" => dst_fname);
         }
         Ok(())
     }
@@ -359,6 +328,28 @@ impl Dicts {
         data_key.was_exposed = false;
         self.rotate_key(key_id, data_key, master_key)
     }
+}
+
+fn check_stale_file_exist(
+    fname: &str,
+    file_dict: &mut FileDictionary,
+    file_dict_file: &mut FileDictionaryFile,
+) -> Result<()> {
+    if file_dict.files.get(fname).is_some() {
+        if Path::new(fname).exists() {
+            return Err(Error::Io(IoError::new(
+                ErrorKind::AlreadyExists,
+                format!("file already exists, {}", fname),
+            )));
+        }
+        info!(
+            "Clean stale file information in file dictionary: {:?}",
+            fname
+        );
+        file_dict_file.remove(fname)?;
+        let _ = file_dict.files.remove(fname);
+    }
+    Ok(())
 }
 
 fn run_background_rotate_work(
@@ -653,11 +644,6 @@ impl EncryptionKeyManager for DataKeyManager {
         self.dicts.link_file(src_fname, dst_fname)?;
         Ok(())
     }
-
-    fn rename_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
-        self.dicts.rename_file(src_fname, dst_fname)?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -890,21 +876,27 @@ mod tests {
 
     #[test]
     fn test_key_manager_link() {
+        let tmp_path = TempDir::new().unwrap();
+        let file_foo1 = tmp_path.path().join("foo1");
+        let _ = std::fs::File::create(&file_foo1).unwrap();
+        let foo1_path = file_foo1.as_path().to_str().unwrap();
+
         let (_tmp, manager) = new_tmp_key_manager(None, None, None, None);
         let manager = manager.unwrap().unwrap();
 
         let file = manager.new_file("foo").unwrap();
-        manager.link_file("foo", "foo1").unwrap();
+        manager.link_file("foo", foo1_path).unwrap();
 
         // Must be the same.
-        let file1 = manager.get_file("foo1").unwrap();
+        let file1 = manager.get_file(foo1_path).unwrap();
         assert_eq!(file1, file);
 
         // Source file not exists.
         manager.link_file("not exists", "not exists1").unwrap();
         // Target file already exists.
         manager.new_file("foo2").unwrap();
-        manager.link_file("foo2", "foo1").unwrap_err();
+        // Here we create a temp file "foo1" to make the `link_file` return an error.
+        manager.link_file("foo2", foo1_path).unwrap_err();
     }
 
     #[test]
@@ -914,14 +906,18 @@ mod tests {
 
         manager.method = EncryptionMethod::Aes192Ctr;
         let file = manager.new_file("foo").unwrap();
-        manager.rename_file("foo", "foo1").unwrap();
+
+        manager.link_file("foo", "foo1").unwrap();
+        manager.delete_file("foo").unwrap();
 
         // Must be the same.
         let file1 = manager.get_file("foo1").unwrap();
         assert_eq!(file1, file);
 
         // foo must not exist (should be plaintext)
-        manager.rename_file("foo", "foo2").unwrap();
+        manager.link_file("foo", "foo2").unwrap();
+        manager.delete_file("foo").unwrap();
+
         let file_foo = manager.get_file("foo").unwrap();
         assert_ne!(file_foo, file);
         assert_eq!(file_foo.method, DBEncryptionMethod::Plaintext);

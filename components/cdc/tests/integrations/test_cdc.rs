@@ -3,7 +3,7 @@
 use std::sync::*;
 use std::time::Duration;
 
-use crate::{new_event_feed, TestSuite};
+use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 use futures::sink::Sink;
 use futures::Future;
 use grpcio::WriteFlags;
@@ -522,7 +522,7 @@ fn test_region_split() {
     let mut cluster = new_server_cluster(1, 1);
     configure_for_lease_read(&mut cluster, Some(100), None);
     cluster.pd_client.disable_default_operator();
-    let mut suite = TestSuite::with_cluster(1, cluster);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
 
     let region = suite.cluster.get_region(&[]);
     let mut req = suite.new_changedata_request(region.get_id());

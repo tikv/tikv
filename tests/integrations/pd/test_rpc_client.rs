@@ -6,12 +6,13 @@ use std::thread;
 use std::time::Duration;
 
 use futures::Future;
+use futures03::executor::block_on;
 use futures_cpupool::Builder;
 use grpcio::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
-use pd_client::{validate_endpoints, Error as PdError, PdClient, RegionStat, RpcClient};
+use pd_client::{Error as PdError, PdClient, PdConnector, RegionStat, RpcClient};
 use raftstore::store;
 use security::{SecurityConfig, SecurityManager};
 use tikv_util::config::ReadableDuration;
@@ -220,7 +221,27 @@ fn test_validate_endpoints() {
     let eps = server.bind_addrs();
 
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    assert!(validate_endpoints(env, &new_config(eps), mgr.clone()).is_err());
+    let connector = PdConnector::new(env, mgr);
+    assert!(block_on(connector.validate_endpoints(&new_config(eps))).is_err());
+}
+
+#[test]
+fn test_validate_endpoints_retry() {
+    let eps_count = 3;
+    let server = MockServer::with_case(eps_count, Arc::new(Split::new()));
+    let env = Arc::new(
+        EnvBuilder::new()
+            .cq_count(1)
+            .name_prefix(thd_name!("test-pd"))
+            .build(),
+    );
+    let mut eps = server.bind_addrs();
+    let mock_port = 65535;
+    eps.insert(0, ("127.0.0.1".to_string(), mock_port));
+    eps.pop();
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    let connector = PdConnector::new(env, mgr);
+    assert!(block_on(connector.validate_endpoints(&new_config(eps))).is_err());
 }
 
 fn test_retry<F: Fn(&RpcClient)>(func: F) {
