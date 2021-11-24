@@ -5,7 +5,10 @@ use engine_traits::{Range, Result};
 
 pub struct UserCollectedProperties;
 impl engine_traits::UserCollectedProperties for UserCollectedProperties {
-    fn get(&self, index: &[u8]) -> Option<&[u8]> {
+    fn get(&self, _: &[u8]) -> Option<&[u8]> {
+        None
+    }
+    fn approximate_size_and_keys(&self, _: &[u8], _: &[u8]) -> Option<(usize, usize)> {
         None
     }
 }
