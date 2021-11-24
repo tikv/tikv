@@ -3998,8 +3998,13 @@ where
                 if let Some(x) = self.disk_full_peers.peers.get_mut(&peer) {
                     // It can help to establish a quorum.
                     x.1 = true;
+                    // for merge region, all peers have been set to the max.
                     if !self.has_region_merge_proposal {
                         raft.adjust_max_inflight_msgs(peer, 1);
+                        debug!(
+                            "refill disk full peer max inflight to 1 in potential quorum set: region id {}, peer id {}",
+                            self.region_id, peer
+                        );
                     }
                 }
             }
