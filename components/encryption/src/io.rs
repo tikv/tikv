@@ -512,6 +512,8 @@ mod tests {
                 encrypter.write_all(&plaintext).unwrap();
 
                 let buf = std::io::Cursor::new(encrypter.finalize().unwrap());
+                // Make sure it's actually encrypted.
+                assert_ne!(buf, plaintext);
                 let mut decrypter = DecrypterReader::new(buf, method, &key, iv).unwrap();
                 let mut piece = vec![0; 5];
                 // Read the first two blocks randomly.
