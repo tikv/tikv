@@ -19,7 +19,7 @@ pub use raftstore::store::Config as RaftStoreConfig;
 use super::snap::Task as SnapTask;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
-pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20106";
+pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20170";
 pub const DEFAULT_ENGINE_ADDR: &str = if cfg!(feature = "failpoints") {
     "127.0.0.1:20206"
 } else {
@@ -27,7 +27,7 @@ pub const DEFAULT_ENGINE_ADDR: &str = if cfg!(feature = "failpoints") {
 };
 
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
-const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20108";
+const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20292";
 const DEFAULT_GRPC_CONCURRENCY: usize = 5;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
