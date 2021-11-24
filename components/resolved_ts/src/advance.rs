@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use collections::{HashMap, HashSet};
@@ -10,7 +10,7 @@ use futures::compat::Future01CompatExt;
 use futures::future::select_all;
 use futures::FutureExt;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::{CheckLeaderRequest, CheckLeaderResponse, LeaderInfo};
+use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo};
 use kvproto::metapb::{Peer, PeerRole};
 use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
@@ -21,6 +21,7 @@ use security::SecurityManager;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::Scheduler;
 use tokio::runtime::{Builder, Runtime};
+use tokio::sync::Mutex;
 use txn_types::TimeStamp;
 
 use crate::endpoint::Task;
@@ -30,7 +31,7 @@ use crate::metrics::{CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM, CHECK_LEADER_REQ_SIZ
 const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 
 pub struct AdvanceTsWorker<E: KvEngine> {
-    store_meta: Arc<Mutex<StoreMeta>>,
+    store_meta: Arc<StdMutex<StoreMeta>>,
     region_read_progress: RegionReadProgressRegistry,
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
@@ -49,7 +50,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
     pub fn new(
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task<E::Snapshot>>,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<StdMutex<StoreMeta>>,
         region_read_progress: RegionReadProgressRegistry,
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
@@ -147,7 +148,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
 // current peer has a quorum which accepts its leadership.
 pub async fn region_resolved_ts_store(
     regions: Vec<u64>,
-    store_meta: Arc<Mutex<StoreMeta>>,
+    store_meta: Arc<StdMutex<StoreMeta>>,
     region_read_progress: RegionReadProgressRegistry,
     pd_client: Arc<dyn PdClient>,
     security_mgr: Arc<SecurityManager>,
@@ -211,16 +212,28 @@ pub async fn region_resolved_ts_store(
             CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
             CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
             async move {
-                send_check_leader_request(
-                    store_id,
-                    regions,
-                    pd_client,
-                    security_mgr,
-                    env,
-                    tikv_clients,
-                    min_ts,
-                )
-                .await
+                let client = box_try!(
+                    get_tikv_client(store_id, pd_client, security_mgr, env, tikv_clients.clone())
+                        .await
+                );
+                let mut req = CheckLeaderRequest::default();
+                req.set_regions(regions.into());
+                req.set_ts(min_ts.into_inner());
+                let res = box_try!(
+                    tokio::time::timeout(
+                        Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS),
+                        box_try!(client.check_leader_async(&req))
+                    )
+                    .await
+                );
+                let resp = match res {
+                    Ok(resp) => resp,
+                    Err(err) => {
+                        tikv_clients.lock().await.remove(&store_id);
+                        return Err(box_err!(err));
+                    }
+                };
+                Result::Ok((store_id, resp))
             }
             .boxed()
         })
@@ -245,39 +258,6 @@ pub async fn region_resolved_ts_store(
         }
     }
     valid_regions.into_iter().collect()
-}
-
-async fn send_check_leader_request(
-    store_id: u64,
-    regions: Vec<LeaderInfo>,
-    pd_client: Arc<dyn PdClient>,
-    security_mgr: Arc<SecurityManager>,
-    env: Arc<Environment>,
-    tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
-    min_ts: TimeStamp,
-) -> Result<(u64, CheckLeaderResponse)> {
-    if tikv_clients.lock().unwrap().get(&store_id).is_none() {
-        let store = box_try!(pd_client.get_store_async(store_id).await);
-        let cb = ChannelBuilder::new(env.clone());
-        let channel = security_mgr.connect(cb, &store.address);
-        tikv_clients
-            .lock()
-            .unwrap()
-            .insert(store_id, TikvClient::new(channel));
-    }
-    let client = tikv_clients.lock().unwrap().get(&store_id).unwrap().clone();
-    let mut req = CheckLeaderRequest::default();
-    req.set_regions(regions.into());
-    req.set_ts(min_ts.into_inner());
-    let res = box_try!(
-        tokio::time::timeout(
-            Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS),
-            box_try!(client.check_leader_async(&req))
-        )
-        .await
-    );
-    let resp = box_try!(res);
-    Result::Ok((store_id, resp))
 }
 
 fn region_has_quorum(peers: &[Peer], stores: &[u64]) -> bool {
@@ -335,4 +315,26 @@ fn find_store_id(peer_list: &[Peer], peer_id: u64) -> Option<u64> {
         }
     }
     None
+}
+
+async fn get_tikv_client(
+    store_id: u64,
+    pd_client: Arc<dyn PdClient>,
+    security_mgr: Arc<SecurityManager>,
+    env: Arc<Environment>,
+    tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
+) -> Result<TikvClient> {
+    let mut clients = tikv_clients.lock().await;
+    let client = match clients.get(&store_id) {
+        Some(client) => client.clone(),
+        None => {
+            let store = box_try!(pd_client.get_store_async(store_id).await);
+            let cb = ChannelBuilder::new(env.clone());
+            let channel = security_mgr.connect(cb, &store.address);
+            let client = TikvClient::new(channel);
+            clients.insert(store_id, client.clone());
+            client
+        }
+    };
+    Ok(client)
 }

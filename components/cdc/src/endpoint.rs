@@ -3,7 +3,7 @@
 use std::f64::INFINITY;
 use std::fmt;
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use collections::{HashMap, HashSet};
@@ -43,7 +43,7 @@ use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tikv_util::{box_err, debug, error, impl_display_as_debug, info, warn};
 use tokio::runtime::{Builder, Runtime};
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, Semaphore};
 use txn_types::{Key, Lock, LockType, TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::channel::{CdcEvent, MemoryQuota, SendError};
@@ -233,7 +233,7 @@ pub struct Endpoint<T, E> {
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
     tso_worker: Runtime,
-    store_meta: Arc<Mutex<StoreMeta>>,
+    store_meta: Arc<StdMutex<StoreMeta>>,
     /// The concurrency manager for transactions. It's needed for CDC to check locks when
     /// calculating resolved_ts.
     concurrency_manager: ConcurrencyManager,
@@ -271,7 +271,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         scheduler: Scheduler<Task>,
         raft_router: T,
         observer: CdcObserver,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<StdMutex<StoreMeta>>,
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
@@ -1509,7 +1509,7 @@ mod tests {
     ) {
         let mut region = Region::default();
         region.set_id(1);
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let store_meta = Arc::new(StdMutex::new(StoreMeta::new(0)));
         let read_delegate = ReadDelegate {
             tag: String::new(),
             region: Arc::new(region),
