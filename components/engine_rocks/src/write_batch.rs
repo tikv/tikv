@@ -8,7 +8,6 @@ use crate::util::get_cf_handle;
 use engine_traits::{self, Error, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions};
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
-const WRITE_BATCH_MAX_BATCH: usize = 16;
 const WRITE_BATCH_LIMIT: usize = 16;
 const WRITE_BATCH_UNLIMITED_SIZE: usize = usize::max_value() - 1;
 
@@ -220,7 +219,7 @@ mod tests {
     use super::super::util::new_engine_opt;
     use super::super::RocksDBOptions;
     use super::*;
-    use engine_traits::WriteBatch;
+    use engine_traits::{Peekable, WriteBatch};
     use rocksdb::DBOptions as RawDBOptions;
     use tempfile::Builder;
 
@@ -241,14 +240,19 @@ mod tests {
         )
         .unwrap();
         let mut wb = engine.write_batch();
+        assert_eq!(wb.batch_size_limit, WRITE_BATCH_LIMIT);
         for _i in 0..RocksEngine::WRITE_BATCH_MAX_KEYS {
             wb.put(b"aaa", b"bbb").unwrap();
         }
         assert!(!wb.should_write_to_engine());
         wb.put(b"aaa", b"bbb").unwrap();
         assert!(wb.should_write_to_engine());
+        wb.write().unwrap();
+        let v = engine.get_value(b"aaa").unwrap();
+        assert!(v.is_some());
+        assert_eq!(v.unwrap(), b"bbb");
         let mut wb = RocksWriteBatch::with_capacity(&engine, 1024);
-        for _i in 0..WRITE_BATCH_MAX_BATCH * WRITE_BATCH_LIMIT {
+        for _i in 0..RocksEngine::WRITE_BATCH_MAX_KEYS {
             wb.put(b"aaa", b"bbb").unwrap();
         }
         assert!(!wb.should_write_to_engine());
