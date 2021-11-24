@@ -192,12 +192,12 @@ impl<E: KvEngine> RawSSTWriter<E> {
         };
 
         for m in batch.take_pairs().into_iter() {
-            let value = RawValue {
-                user_value: m.get_value(),
-                expire_ts,
-            };
             match m.get_op() {
                 PairOp::Put => {
+                    let value = RawValue {
+                        user_value: m.get_value(),
+                        expire_ts,
+                    };
                     self.put(m.get_key(), &value.to_bytes(self.api_version), PairOp::Put)?;
                 }
                 PairOp::Delete => {
