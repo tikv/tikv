@@ -40,18 +40,21 @@ impl<R> EncrypterReader<R> {
 }
 
 impl<R: Read> Read for EncrypterReader<R> {
+    #[inline]
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         self.0.read(buf)
     }
 }
 
 impl<R: Seek> Seek for EncrypterReader<R> {
+    #[inline]
     fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
         self.0.seek(pos)
     }
 }
 
 impl<R: AsyncRead + Unpin> AsyncRead for EncrypterReader<R> {
+    #[inline]
     fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<IoResult<usize>> {
         unsafe { self.map_unchecked_mut(|r| &mut r.0) }.poll_read(cx, buf)
     }
@@ -78,18 +81,21 @@ impl<R> DecrypterReader<R> {
 }
 
 impl<R: Read> Read for DecrypterReader<R> {
+    #[inline]
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         self.0.read(buf)
     }
 }
 
 impl<R: Seek> Seek for DecrypterReader<R> {
+    #[inline]
     fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
         self.0.seek(pos)
     }
 }
 
 impl<R: AsyncRead + Unpin> AsyncRead for DecrypterReader<R> {
+    #[inline]
     fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<IoResult<usize>> {
         unsafe { self.map_unchecked_mut(|r| &mut r.0) }.poll_read(cx, buf)
     }
@@ -114,28 +120,33 @@ impl<W> EncrypterWriter<W> {
         )?))
     }
 
+    #[inline]
     pub fn finalize(self) -> IoResult<W> {
         self.0.finalize()
     }
 }
 
 impl<W: Write> Write for EncrypterWriter<W> {
+    #[inline]
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
         self.0.write(buf)
     }
 
+    #[inline]
     fn flush(&mut self) -> IoResult<()> {
         self.0.flush()
     }
 }
 
 impl<W: Seek> Seek for EncrypterWriter<W> {
+    #[inline]
     fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
         self.0.seek(pos)
     }
 }
 
 impl EncrypterWriter<File> {
+    #[inline]
     pub fn sync_all(&self) -> IoResult<()> {
         self.0.sync_all()
     }
@@ -160,28 +171,33 @@ impl<W> DecrypterWriter<W> {
         )?))
     }
 
+    #[inline]
     pub fn finalize(self) -> IoResult<W> {
         self.0.finalize()
     }
 }
 
 impl<W: Write> Write for DecrypterWriter<W> {
+    #[inline]
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
         self.0.write(buf)
     }
 
+    #[inline]
     fn flush(&mut self) -> IoResult<()> {
         self.0.flush()
     }
 }
 
 impl<W: Seek> Seek for DecrypterWriter<W> {
+    #[inline]
     fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
         self.0.seek(pos)
     }
 }
 
 impl DecrypterWriter<File> {
+    #[inline]
     pub fn sync_all(&self) -> IoResult<()> {
         self.0.sync_all()
     }
@@ -213,6 +229,7 @@ impl<R> CrypterReader<R> {
 }
 
 impl<R: Read> Read for CrypterReader<R> {
+    #[inline]
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         let count = self.reader.read(buf)?;
         if let Some(crypter) = self.crypter.as_mut() {
@@ -223,6 +240,7 @@ impl<R: Read> Read for CrypterReader<R> {
 }
 
 impl<R: Seek> Seek for CrypterReader<R> {
+    #[inline]
     fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
         let offset = self.reader.seek(pos)?;
         if let Some(crypter) = self.crypter.as_mut() {
@@ -233,6 +251,7 @@ impl<R: Seek> Seek for CrypterReader<R> {
 }
 
 impl<R: AsyncRead + Unpin> AsyncRead for CrypterReader<R> {
+    #[inline]
     fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<IoResult<usize>> {
         let inner = Pin::into_inner(self);
         let poll = Pin::new(&mut inner.reader).poll_read(cx, buf);
@@ -274,6 +293,7 @@ impl<W> CrypterWriter<W> {
     }
 
     /// Finalize the internal writer and encrypter and return the writer.
+    #[inline]
     pub fn finalize(mut self) -> IoResult<W> {
         if let Some(crypter) = self.crypter.as_mut() {
             crypter.finalize()?;
@@ -283,6 +303,7 @@ impl<W> CrypterWriter<W> {
 }
 
 impl<W: Write> Write for CrypterWriter<W> {
+    #[inline]
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
         if let Some(crypter) = self.crypter.as_mut() {
             let crypted = crypter.do_crypter(buf)?;
@@ -293,12 +314,14 @@ impl<W: Write> Write for CrypterWriter<W> {
         }
     }
 
+    #[inline]
     fn flush(&mut self) -> IoResult<()> {
         self.writer.flush()
     }
 }
 
 impl<W: Seek> Seek for CrypterWriter<W> {
+    #[inline]
     fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
         let offset = self.writer.seek(pos)?;
         if let Some(crypter) = self.crypter.as_mut() {
@@ -309,6 +332,7 @@ impl<W: Seek> Seek for CrypterWriter<W> {
 }
 
 impl CrypterWriter<File> {
+    #[inline]
     pub fn sync_all(&self) -> IoResult<()> {
         self.writer.sync_all()
     }
@@ -361,7 +385,6 @@ impl CrypterCore {
         })
     }
 
-    #[inline]
     fn reset_buffer(&mut self, size: usize) {
         // OCrypter require the output buffer to have block_size extra bytes, or it will panic.
         self.buffer.reserve(size + self.block_size);
@@ -370,7 +393,6 @@ impl CrypterCore {
         }
     }
 
-    #[inline]
     pub fn reset_crypter(&mut self, offset: u64) -> IoResult<()> {
         let mut iv = self.initial_iv;
         iv.add_offset(offset / AES_BLOCK_SIZE as u64)?;
@@ -397,7 +419,6 @@ impl CrypterCore {
     /// For simplicity, the following implementation rely on the fact that OpenSSL always
     /// return exact same size as input in CTR mode. If it is not true in the future, or we
     /// want to support other counter modes, this code needs to be updated.
-    #[inline]
     pub fn do_crypter_in_place(&mut self, buf: &mut [u8]) -> IoResult<()> {
         if self.crypter.is_none() {
             self.reset_crypter(0)?;
@@ -426,7 +447,6 @@ impl CrypterCore {
         Ok(())
     }
 
-    #[inline]
     pub fn do_crypter(&mut self, buf: &[u8]) -> IoResult<&[u8]> {
         if self.crypter.is_none() {
             self.reset_crypter(0)?;
@@ -447,7 +467,6 @@ impl CrypterCore {
         Ok(&self.buffer[..count])
     }
 
-    #[inline]
     pub fn finalize(&mut self) -> IoResult<()> {
         if self.crypter.is_some() {
             self.reset_buffer(0);
@@ -511,10 +530,15 @@ mod tests {
                 let mut encrypter = EncrypterWriter::new(buf, method, &key, iv).unwrap();
                 encrypter.write_all(&plaintext).unwrap();
 
-                let buf = std::io::Cursor::new(encrypter.finalize().unwrap());
+                let buf = encrypter.finalize().unwrap();
+                if method != EncryptionMethod::Plaintext {
+                    assert_ne!(buf, plaintext);
+                } else {
+                    assert_eq!(buf, plaintext);
+                }
+                let buf_reader = std::io::Cursor::new(buf);
                 // Make sure it's actually encrypted.
-                assert_ne!(buf, plaintext);
-                let mut decrypter = DecrypterReader::new(buf, method, &key, iv).unwrap();
+                let mut decrypter = DecrypterReader::new(buf_reader, method, &key, iv).unwrap();
                 let mut piece = vec![0; 5];
                 // Read the first two blocks randomly.
                 for i in 0..31 {
