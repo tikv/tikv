@@ -5,9 +5,18 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{thread, u64};
 
-use rand::RngCore;
-use tempfile::{Builder, TempDir};
-
+use encryption::{DataKeyManager, FileConfig, MasterKeyConfig};
+use engine::rocks::DB;
+use engine::*;
+use engine_rocks::config::BlobRunMode;
+use engine_rocks::encryption::get_env;
+use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
+use engine_rocks::{Compat, RocksEngine};
+use engine_traits::{Iterable, Peekable};
+use engine_traits::{ALL_CFS, CF_DEFAULT, CF_RAFT};
+use futures03::compat::Compat01As03;
+use futures03::executor::block_on;
+use grpcio::{ChannelBuilder, Environment};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::*;
 use kvproto::metapb::{self, RegionEpoch};
@@ -19,26 +28,19 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use kvproto::tikvpb::TikvClient;
 use raft::eraftpb::ConfChangeType;
-
-use encryption::{DataKeyManager, FileConfig, MasterKeyConfig};
-use engine::rocks::DB;
-use engine::*;
-use engine_rocks::config::BlobRunMode;
-use engine_rocks::encryption::get_env;
-use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
-use engine_rocks::{Compat, RocksEngine};
-use engine_traits::{Iterable, Peekable};
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
+use rand::RngCore;
+use tempfile::{Builder, TempDir};
 use tikv::config::*;
 use tikv::storage::config::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv_util::config::*;
 use tikv_util::{escape, HandyRwLock};
 
 use super::*;
+use crate::pd_client::PdClient;
 
-use engine_traits::{ALL_CFS, CF_DEFAULT, CF_RAFT};
 pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
@@ -739,6 +741,19 @@ pub fn must_kv_commit(
     assert_eq!(commit_resp.get_commit_version(), expect_commit_ts);
 }
 
+pub fn must_kv_rollback(client: &TikvClient, ctx: Context, keys: Vec<Vec<u8>>, start_ts: u64) {
+    let mut rollback_req = BatchRollbackRequest::default();
+    rollback_req.set_context(ctx);
+    rollback_req.start_version = start_ts;
+    rollback_req.set_keys(keys.into_iter().collect());
+    let rollback_req = client.kv_batch_rollback(&rollback_req).unwrap();
+    assert!(
+        !rollback_req.has_region_error(),
+        "{:?}",
+        rollback_req.get_region_error()
+    );
+}
+
 pub fn kv_pessimistic_lock(
     client: &TikvClient,
     ctx: Context,
@@ -854,4 +869,62 @@ pub fn remove_lock_observer(client: &TikvClient, max_ts: u64) -> RemoveLockObser
 pub fn must_remove_lock_observer(client: &TikvClient, max_ts: u64) {
     let resp = remove_lock_observer(client, max_ts);
     assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
+}
+
+pub fn get_tso(pd_client: &TestPdClient) -> u64 {
+    let f = Compat01As03::new(pd_client.get_tso());
+    block_on(f).unwrap().into_inner()
+}
+
+// A helpful wrapper to make the test logic clear
+pub struct PeerClient {
+    pub cli: TikvClient,
+    pub ctx: Context,
+}
+
+impl PeerClient {
+    pub fn new(cluster: &Cluster<ServerCluster>, region_id: u64, peer: metapb::Peer) -> PeerClient {
+        let cli = {
+            let env = Arc::new(Environment::new(1));
+            let channel =
+                ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(peer.get_store_id()));
+            TikvClient::new(channel)
+        };
+        let ctx = {
+            let epoch = cluster.get_region_epoch(region_id);
+            let mut ctx = Context::default();
+            ctx.set_region_id(region_id);
+            ctx.set_peer(peer);
+            ctx.set_region_epoch(epoch);
+            ctx
+        };
+        PeerClient { cli, ctx }
+    }
+
+    pub fn must_kv_prewrite(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
+        must_kv_prewrite(&self.cli, self.ctx.clone(), muts, pk, ts)
+    }
+
+    pub fn must_kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: u64, commit_ts: u64) {
+        must_kv_commit(
+            &self.cli,
+            self.ctx.clone(),
+            keys,
+            start_ts,
+            commit_ts,
+            commit_ts,
+        )
+    }
+
+    pub fn must_kv_rollback(&self, keys: Vec<Vec<u8>>, start_ts: u64) {
+        must_kv_rollback(&self.cli, self.ctx.clone(), keys, start_ts)
+    }
+
+    pub fn must_kv_pessimistic_lock(&self, key: Vec<u8>, ts: u64) {
+        must_kv_pessimistic_lock(&self.cli, self.ctx.clone(), key, ts)
+    }
+
+    pub fn must_kv_pessimistic_rollback(&self, key: Vec<u8>, ts: u64) {
+        must_kv_pessimistic_rollback(&self.cli, self.ctx.clone(), key, ts)
+    }
 }
