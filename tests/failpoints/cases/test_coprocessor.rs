@@ -239,53 +239,6 @@ fn test_paging_scan() {
             assert_le!(res_end_key, end_key.get_end());
         }
     }
-
-    // test drained
-    {
-        for desc in [false, true] {
-            let paging_size = 5;
-            let mut exp = data.clone();
-            if desc {
-                exp.reverse();
-            }
-
-            let req = DAGSelect::from(&product)
-                .paging_size(paging_size)
-                .desc(desc)
-                .build();
-            let req_ranges = req.get_ranges().to_owned();
-            let resp = handle_request(&endpoint, req);
-            let mut select_resp = SelectResponse::default();
-            select_resp.merge_from_bytes(resp.get_data()).unwrap();
-
-            let mut row_count = 0;
-            let spliter = DAGChunkSpliter::new(select_resp.take_chunks().into(), 3);
-            for (row, (id, name, cnt)) in spliter.zip(exp) {
-                let name_datum = name.unwrap().as_bytes().into();
-                let expected_encoded = datum::encode_value(
-                    &mut EvalContext::default(),
-                    &[Datum::I64(id), name_datum, Datum::I64(cnt)],
-                )
-                .unwrap();
-                let result_encoded =
-                    datum::encode_value(&mut EvalContext::default(), &row).unwrap();
-                assert_eq!(result_encoded, &*expected_encoded);
-                row_count += 1;
-            }
-            assert_eq!(row_count, data.len());
-
-            let res_range = resp.get_range();
-            let res_end_key = match desc {
-                true => res_range.get_start(),
-                false => res_range.get_end(),
-            };
-            let end_key = match desc {
-                true => req_ranges.last().unwrap().get_start(),
-                false => req_ranges.first().unwrap().get_end(),
-            };
-            assert_eq!(res_end_key, end_key);
-        }
-    }
 }
 
 #[test]
@@ -303,6 +256,7 @@ fn test_paging_scan_multi_ranges() {
     fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
     fail::cfg("copr_batch_grow_size", "return(1)").unwrap();
 
+    // test multi ranges with gap
     for desc in [true] {
         let paging_size = 3;
         let mut exp = [
@@ -361,5 +315,64 @@ fn test_paging_scan_multi_ranges() {
         assert_eq!(res_start_key, start_key);
         assert_ge!(res_end_key, end_key.get_start());
         assert_le!(res_end_key, end_key.get_end());
+    }
+
+    // test drained
+    for desc in [false, true] {
+        let paging_size = 5;
+        let mut exp = [
+            data[0].clone(),
+            data[1].clone(),
+            data[3].clone(),
+            data[4].clone(),
+        ];
+        if desc {
+            exp.reverse();
+        }
+
+        let builder = DAGSelect::from(&product)
+            .paging_size(paging_size)
+            .desc(desc);
+        let mut range1 = builder.key_ranges[0].clone();
+        range1.set_end(product.get_record_range_one(data[1].0).get_end().into());
+        let mut range2 = builder.key_ranges[0].clone();
+        range2.set_start(product.get_record_range_one(data[3].0).get_start().into());
+        let key_ranges = vec![range1.clone(), range2.clone()];
+
+        let req = builder.key_ranges(key_ranges).build();
+        let resp = handle_request(&endpoint, req);
+        let mut select_resp = SelectResponse::default();
+        select_resp.merge_from_bytes(resp.get_data()).unwrap();
+
+        let mut row_count = 0;
+        let spliter = DAGChunkSpliter::new(select_resp.take_chunks().into(), 3);
+        for (row, (id, name, cnt)) in spliter.zip(exp) {
+            let name_datum = name.unwrap().as_bytes().into();
+            let expected_encoded = datum::encode_value(
+                &mut EvalContext::default(),
+                &[Datum::I64(id), name_datum, Datum::I64(cnt)],
+            )
+            .unwrap();
+            let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+            assert_eq!(result_encoded, &*expected_encoded);
+            row_count += 1;
+        }
+        assert_eq!(row_count, exp.len());
+
+        let res_range = resp.get_range();
+        let (res_start_key, res_end_key) = match desc {
+            true => (res_range.get_end(), res_range.get_start()),
+            false => (res_range.get_start(), res_range.get_end()),
+        };
+        let start_key = match desc {
+            true => range2.get_end(),
+            false => range1.get_start(),
+        };
+        let end_key = match desc {
+            true => product.get_record_range_one(i64::MIN),
+            false => product.get_record_range_one(i64::MAX),
+        };
+        assert_eq!(res_start_key, start_key);
+        assert_eq!(res_end_key, end_key.get_start(), "{}", desc);
     }
 }
