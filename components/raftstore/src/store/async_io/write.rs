@@ -423,14 +423,7 @@ where
 
             self.write_to_db(true);
 
-            self.metrics.flush();
-
             self.clear_latency_inspect();
-            // update config
-            if let Some(incoming) = self.cfg_tracker.any_new() {
-                self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
-                self.metrics.waterfall_metrics = incoming.waterfall_metrics;
-            }
 
             STORE_WRITE_LOOP_DURATION_HISTOGRAM
                 .observe(duration_to_sec(handle_begin.saturating_elapsed()));
@@ -618,6 +611,13 @@ where
         );
 
         self.batch.clear();
+        self.metrics.flush();
+
+        // update config
+        if let Some(incoming) = self.cfg_tracker.any_new() {
+            self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
+            self.metrics.waterfall_metrics = incoming.waterfall_metrics;
+        }
     }
 
     pub fn is_empty(&self) -> bool {
