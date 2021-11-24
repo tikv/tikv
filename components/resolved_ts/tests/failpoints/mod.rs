@@ -32,15 +32,19 @@ fn test_check_leader_timeout() {
     // `resolved-ts` won't be updated
     let rts = suite.region_resolved_ts(region.id).unwrap();
 
+    let store2_fp = "before_check_leader_store_2";
+    fail::cfg(store2_fp, "pause").unwrap();
     let store3_fp = "before_check_leader_store_3";
     fail::cfg(store3_fp, "pause").unwrap();
 
     // Commit
     let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(region.id, vec![k.to_vec()], start_ts, commit_ts);
-    sleep_ms(1000);
-    // Check rts was not advanced after 1s and will be finnally advanced before timeout (5s)
+    sleep_ms(6000);
+    // Check rts was not advanced after 5s
     suite.must_get_rts(region.id, rts);
+    fail::remove(store2_fp);
+    // And can be advanced after store2 recovered.
     suite.must_get_rts_ge(region.id, commit_ts);
 
     fail::remove(store3_fp);
