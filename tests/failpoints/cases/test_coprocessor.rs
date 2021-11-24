@@ -260,10 +260,10 @@ fn test_paging_scan_multi_ranges() {
     for desc in [true] {
         let paging_size = 3;
         let mut exp = [
-            data[0].clone(),
-            data[1].clone(),
-            data[3].clone(),
-            data[4].clone(),
+            data[0],
+            data[1],
+            data[3],
+            data[4],
         ];
         if desc {
             exp.reverse();
@@ -321,10 +321,10 @@ fn test_paging_scan_multi_ranges() {
     for desc in [false, true] {
         let paging_size = 5;
         let mut exp = [
-            data[0].clone(),
-            data[1].clone(),
-            data[3].clone(),
-            data[4].clone(),
+            data[0],
+            data[1],
+            data[3],
+            data[4],
         ];
         if desc {
             exp.reverse();
