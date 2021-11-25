@@ -1197,7 +1197,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         if status_enabled {
             let mut status_server = match StatusServer::new(
                 self.config.server.status_thread_pool_size,
-                Some(self.pd_client.clone()),
                 self.cfg_controller.take().unwrap(),
                 Arc::new(self.config.security.clone()),
                 self.router.clone(),
@@ -1210,10 +1209,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 }
             };
             // Start the status server.
-            if let Err(e) = status_server.start(
-                self.config.server.status_addr.clone(),
-                self.config.server.advertise_status_addr.clone(),
-            ) {
+            if let Err(e) = status_server.start(self.config.server.status_addr.clone()) {
                 error_unknown!(%e; "failed to bind addr for status service");
             } else {
                 self.to_stop.push(status_server);

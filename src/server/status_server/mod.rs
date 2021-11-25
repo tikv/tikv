@@ -15,29 +15,22 @@ use std::pin::Pin;
 use std::str::{self, FromStr};
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use async_stream::stream;
 use collections::HashMap;
 use engine_traits::KvEngine;
 use futures::compat::{Compat01As03, Stream01CompatExt};
-use futures::executor::block_on;
 use futures::future::{ok, poll_fn};
 use futures::prelude::*;
-use hyper::client::HttpConnector;
 use hyper::server::accept::Accept;
 use hyper::server::conn::{AddrIncoming, AddrStream};
 use hyper::server::Builder as HyperBuilder;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{self, header, Body, Client, Method, Request, Response, Server, StatusCode, Uri};
-use hyper_openssl::HttpsConnector;
+use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
 use online_config::OnlineConfig;
-use openssl::ssl::{
-    Ssl, SslAcceptor, SslConnector, SslConnectorBuilder, SslFiletype, SslMethod, SslVerifyMode,
-};
+use openssl::ssl::{Ssl, SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
-use pd_client::{RpcClient, REQUEST_RECONNECT_INTERVAL};
 use pin_project::pin_project;
 use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
@@ -54,8 +47,6 @@ use tokio_openssl::SslStream;
 use crate::config::{log_level_serde, ConfigController};
 use crate::server::Result;
 
-const COMPONENT_REQUEST_RETRY: usize = 5;
-static COMPONENT: &str = "tikv";
 static TIMER_CANCELED: &str = "tokio timer canceled";
 
 #[cfg(feature = "failpoints")]
@@ -77,8 +68,6 @@ pub struct StatusServer<E, R> {
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
-    advertise_addr: Option<String>,
-    pd_client: Option<Arc<RpcClient>>,
     cfg_controller: ConfigController,
     router: R,
     security_config: Arc<SecurityConfig>,
@@ -93,7 +82,6 @@ where
 {
     pub fn new(
         status_thread_pool_size: usize,
-        pd_client: Option<Arc<RpcClient>>,
         cfg_controller: ConfigController,
         security_config: Arc<SecurityConfig>,
         router: R,
@@ -113,8 +101,6 @@ where
             tx,
             rx: Some(rx),
             addr: None,
-            advertise_addr: None,
-            pd_client,
             cfg_controller,
             router,
             security_config,
@@ -364,9 +350,7 @@ where
         }
     }
 
-    pub fn stop(mut self) {
-        // unregister the status address to pd
-        self.unregister_addr();
+    pub fn stop(self) {
         let _ = self.tx.send(());
         self.thread_pool.shutdown_timeout(Duration::from_secs(3));
     }
@@ -376,153 +360,6 @@ where
     // in test to avoid port conflict.
     pub fn listening_addr(&self) -> SocketAddr {
         self.addr.unwrap()
-    }
-
-    // Conveniently generate ssl connector according to SecurityConfig for https client
-    // Return `None` if SecurityConfig is not set up.
-    fn generate_ssl_connector(&self) -> Option<SslConnectorBuilder> {
-        if !self.security_config.cert_path.is_empty()
-            && !self.security_config.key_path.is_empty()
-            && !self.security_config.ca_path.is_empty()
-        {
-            let mut ssl = SslConnector::builder(SslMethod::tls()).unwrap();
-            ssl.set_ca_file(&self.security_config.ca_path).unwrap();
-            ssl.set_certificate_file(&self.security_config.cert_path, SslFiletype::PEM)
-                .unwrap();
-            ssl.set_private_key_file(&self.security_config.key_path, SslFiletype::PEM)
-                .unwrap();
-            Some(ssl)
-        } else {
-            None
-        }
-    }
-
-    fn register_addr(&mut self, advertise_addr: String) {
-        if let Some(ssl) = self.generate_ssl_connector() {
-            let mut connector = HttpConnector::new();
-            connector.enforce_http(false);
-            let https_conn = HttpsConnector::with_connector(connector, ssl).unwrap();
-            self.register_addr_core(https_conn, advertise_addr);
-        } else {
-            self.register_addr_core(HttpConnector::new(), advertise_addr);
-        }
-    }
-
-    fn register_addr_core<C>(&mut self, conn: C, advertise_addr: String)
-    where
-        C: hyper::client::connect::Connect + Clone + Send + Sync + 'static,
-    {
-        if self.pd_client.is_none() {
-            return;
-        }
-        let pd_client = self.pd_client.as_ref().unwrap();
-        let client = Client::builder().build::<_, Body>(conn);
-
-        let json = {
-            let mut body = std::collections::HashMap::new();
-            body.insert("component".to_owned(), COMPONENT.to_owned());
-            body.insert("addr".to_owned(), advertise_addr.clone());
-            serde_json::to_string(&body).unwrap()
-        };
-
-        for _ in 0..COMPONENT_REQUEST_RETRY {
-            for pd_addr in pd_client.get_leader().get_client_urls() {
-                let client = client.clone();
-                let uri: Uri = (pd_addr.to_owned() + "/pd/api/v1/component")
-                    .parse()
-                    .unwrap();
-                let req = Request::builder()
-                    .method("POST")
-                    .uri(uri)
-                    .header(http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(json.clone()))
-                    .expect("construct post request failed");
-                let req_handle = self
-                    .thread_pool
-                    .spawn(async move { client.request(req).await });
-
-                match block_on(req_handle).unwrap() {
-                    Ok(resp) if resp.status() == StatusCode::OK => {
-                        self.advertise_addr = Some(advertise_addr);
-                        return;
-                    }
-                    Ok(resp) => {
-                        let status = resp.status();
-                        warn!("failed to register addr to pd"; "status code" => status.as_str(), "body" => ?resp.body());
-                    }
-                    Err(e) => warn!("failed to register addr to pd"; "error" => ?e),
-                }
-            }
-            // refresh the pd leader
-            if let Err(e) = pd_client.reconnect() {
-                warn!("failed to reconnect pd client"; "err" => ?e);
-                thread::sleep(REQUEST_RECONNECT_INTERVAL);
-            }
-        }
-        warn!(
-            "failed to register addr to pd after {} tries",
-            COMPONENT_REQUEST_RETRY
-        );
-    }
-
-    fn unregister_addr(&mut self) {
-        if let Some(ssl) = self.generate_ssl_connector() {
-            let mut connector = HttpConnector::new();
-            connector.enforce_http(false);
-            let https_conn = HttpsConnector::with_connector(connector, ssl).unwrap();
-            self.unregister_addr_core(https_conn);
-        } else {
-            self.unregister_addr_core(HttpConnector::new());
-        }
-    }
-
-    fn unregister_addr_core<C>(&mut self, conn: C)
-    where
-        C: hyper::client::connect::Connect + Clone + Send + Sync + 'static,
-    {
-        if self.pd_client.is_none() || self.advertise_addr.is_none() {
-            return;
-        }
-        let advertise_addr = self.advertise_addr.as_ref().unwrap().to_owned();
-        let pd_client = self.pd_client.as_ref().unwrap();
-        let client = Client::builder().build::<_, Body>(conn);
-
-        for _ in 0..COMPONENT_REQUEST_RETRY {
-            for pd_addr in pd_client.get_leader().get_client_urls() {
-                let client = client.clone();
-                let uri: Uri = (pd_addr.to_owned()
-                    + &format!("/pd/api/v1/component/{}/{}", COMPONENT, advertise_addr))
-                    .parse()
-                    .unwrap();
-                let req = Request::delete(uri)
-                    .body(Body::empty())
-                    .expect("construct delete request failed");
-                let req_handle = self
-                    .thread_pool
-                    .spawn(async move { client.request(req).await });
-
-                match block_on(req_handle).unwrap() {
-                    Ok(resp) if resp.status() == StatusCode::OK => {
-                        self.advertise_addr = None;
-                        return;
-                    }
-                    Ok(resp) => {
-                        let status = resp.status();
-                        warn!("failed to unregister addr to pd"; "status code" => status.as_str(), "body" => ?resp.body());
-                    }
-                    Err(e) => warn!("failed to unregister addr to pd"; "error" => ?e),
-                }
-            }
-            // refresh the pd leader
-            if let Err(e) = pd_client.reconnect() {
-                warn!("failed to reconnect pd client"; "err" => ?e);
-                thread::sleep(REQUEST_RECONNECT_INTERVAL);
-            }
-        }
-        warn!(
-            "failed to unregister addr to pd after {} tries",
-            COMPONENT_REQUEST_RETRY
-        );
     }
 }
 
@@ -711,7 +548,7 @@ where
         self.thread_pool.spawn(graceful);
     }
 
-    pub fn start(&mut self, status_addr: String, advertise_status_addr: String) -> Result<()> {
+    pub fn start(&mut self, status_addr: String) -> Result<()> {
         let addr = SocketAddr::from_str(&status_addr)?;
 
         let incoming = {
@@ -738,8 +575,6 @@ where
             let server = Server::builder(incoming);
             self.start_serve(server);
         }
-        // register the advertise status address to pd
-        self.register_addr(advertise_status_addr);
         Ok(())
     }
 }
@@ -1001,7 +836,6 @@ mod tests {
     fn test_status_service() {
         let mut status_server = StatusServer::new(
             1,
-            None,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
@@ -1009,7 +843,7 @@ mod tests {
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr);
+        let _ = status_server.start(addr);
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
@@ -1049,7 +883,6 @@ mod tests {
     fn test_config_endpoint() {
         let mut status_server = StatusServer::new(
             1,
-            None,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
@@ -1057,7 +890,7 @@ mod tests {
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr);
+        let _ = status_server.start(addr);
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
@@ -1094,7 +927,6 @@ mod tests {
         let _guard = fail::FailScenario::setup();
         let mut status_server = StatusServer::new(
             1,
-            None,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
@@ -1102,7 +934,7 @@ mod tests {
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr);
+        let _ = status_server.start(addr);
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
 
@@ -1210,7 +1042,6 @@ mod tests {
         let _guard = fail::FailScenario::setup();
         let mut status_server = StatusServer::new(
             1,
-            None,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
@@ -1218,7 +1049,7 @@ mod tests {
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr);
+        let _ = status_server.start(addr);
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
 
@@ -1254,7 +1085,6 @@ mod tests {
         let _guard = fail::FailScenario::setup();
         let mut status_server = StatusServer::new(
             1,
-            None,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
@@ -1262,7 +1092,7 @@ mod tests {
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr);
+        let _ = status_server.start(addr);
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
 
@@ -1290,7 +1120,6 @@ mod tests {
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
         let mut status_server = StatusServer::new(
             1,
-            None,
             ConfigController::default(),
             Arc::new(new_security_cfg(Some(allowed_cn))),
             MockRouter,
@@ -1298,7 +1127,7 @@ mod tests {
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr);
+        let _ = status_server.start(addr);
 
         let mut connector = HttpConnector::new();
         connector.enforce_http(false);
@@ -1363,7 +1192,6 @@ mod tests {
     fn test_pprof_heap_service() {
         let mut status_server = StatusServer::new(
             1,
-            None,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
@@ -1371,7 +1199,7 @@ mod tests {
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr);
+        let _ = status_server.start(addr);
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
@@ -1393,7 +1221,6 @@ mod tests {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let mut status_server = StatusServer::new(
             1,
-            None,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
@@ -1401,7 +1228,7 @@ mod tests {
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr);
+        let _ = status_server.start(addr);
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
@@ -1421,7 +1248,6 @@ mod tests {
     fn test_change_log_level() {
         let mut status_server = StatusServer::new(
             1,
-            None,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
@@ -1429,7 +1255,7 @@ mod tests {
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr);
+        let _ = status_server.start(addr);
 
         let uri = Uri::builder()
             .scheme("http")
