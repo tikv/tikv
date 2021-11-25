@@ -121,7 +121,17 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "58982858be7540a465c790b95aaea6710e5139bf8956b1d1344d014fa40100b0"
 dependencies = [
- "async-stream-impl",
+ "async-stream-impl 0.2.0",
+ "futures-core",
+]
+
+[[package]]
+name = "async-stream"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "171374e7e3b2504e0e5236e3b59260560f9fe94bfe9ac39ba5e4e929c5590625"
+dependencies = [
+ "async-stream-impl 0.3.2",
  "futures-core",
 ]
 
@@ -130,6 +140,17 @@ name = "async-stream-impl"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "393356ed99aa7bff0ac486dde592633b83ab02bd254d8c209d5b9f1d0f533480"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "648ed8c8d2ce5409ccd57453d9d1b214b342a0d69376a6feda1fd6cae3299308"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -186,7 +207,7 @@ dependencies = [
  "http",
  "hyper",
  "hyper-tls",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_kms",
@@ -235,7 +256,7 @@ dependencies = [
  "grpcio",
  "hex 0.4.2",
  "keys",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "log_wrappers",
  "online_config",
@@ -368,6 +389,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "br-stream"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes 0.4.12",
+ "etcd-client",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git?branch=br-stream)",
+ "lazy_static",
+ "protobuf",
+ "regex",
+ "thiserror",
+ "tikv_util",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "bstr"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -487,7 +525,7 @@ dependencies = [
  "futures 0.3.15",
  "futures-timer",
  "grpcio",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "log_wrappers",
  "online_config",
@@ -593,7 +631,7 @@ dependencies = [
  "error_code",
  "fail",
  "futures-io",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "openssl",
  "protobuf",
  "rusoto_core",
@@ -1051,7 +1089,7 @@ dependencies = [
  "futures 0.3.15",
  "futures-util",
  "hex 0.4.2",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "matches",
  "online_config",
@@ -1083,7 +1121,7 @@ dependencies = [
  "encryption",
  "error_code",
  "file_system",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "openssl",
  "protobuf",
  "rust-ini",
@@ -1098,7 +1136,7 @@ name = "engine_panic"
 version = "0.0.1"
 dependencies = [
  "engine_traits",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "raft",
  "tikv_alloc",
  "tikv_util",
@@ -1116,7 +1154,7 @@ dependencies = [
  "fail",
  "file_system",
  "keys",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "log_wrappers",
  "num_cpus",
@@ -1158,7 +1196,7 @@ dependencies = [
  "error_code",
  "fail",
  "file_system",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "log_wrappers",
  "protobuf",
  "raft",
@@ -1199,12 +1237,27 @@ name = "error_code"
 version = "0.0.1"
 dependencies = [
  "grpcio",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "raft",
  "serde",
  "tikv_alloc",
  "toml",
+]
+
+[[package]]
+name = "etcd-client"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76b9f5b0b4f53cf836bef05b22cd5239479700bc8d44a04c3c77f1ba6c2c73e9"
+dependencies = [
+ "http",
+ "prost 0.8.0",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build",
+ "tower-service",
 ]
 
 [[package]]
@@ -1231,7 +1284,7 @@ dependencies = [
  "futures-io",
  "futures-util",
  "grpcio",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "libloading",
  "matches",
@@ -1271,7 +1324,7 @@ dependencies = [
  "futures-util",
  "gcp",
  "grpcio",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "libc 0.2.106",
  "libloading",
@@ -1347,17 +1400,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "filedescriptor"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ed3d8a5e20435ff00469e51a0d82049bae66504b5c429920dadf9bb54d47b3f"
-dependencies = [
- "libc 0.2.106",
- "thiserror",
- "winapi 0.3.9",
-]
-
-[[package]]
 name = "filetime"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1380,6 +1422,12 @@ dependencies = [
  "libc 0.2.106",
  "winapi 0.3.9",
 ]
+
+[[package]]
+name = "fixedbitset"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37ab347416e802de484e4d03c7316c48f1ecb56574dfd4a46a80f173ce1de04d"
 
 [[package]]
 name = "fixedbitset"
@@ -1652,11 +1700,11 @@ dependencies = [
 
 [[package]]
 name = "gag"
-version = "1.0.0"
+version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a713bee13966e9fbffdf7193af71d54a6b35a0bb34997cd6c9519ebeb5005972"
+checksum = "8cc0b9f53275dc5fada808f1d2f82e3688a6c14d735633d1590b7be8eb2307b5"
 dependencies = [
- "filedescriptor",
+ "libc 0.2.106",
  "tempfile",
 ]
 
@@ -1670,7 +1718,7 @@ dependencies = [
  "http",
  "hyper",
  "hyper-tls",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "matches",
  "slog",
  "slog-global",
@@ -1959,6 +2007,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyper-timeout"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbb958482e8c7be4bc3cf272a766a2b0bf1a6755e7a6ae777f017a31d11b13b1"
+dependencies = [
+ "hyper",
+ "pin-project-lite",
+ "tokio",
+ "tokio-io-timeout",
+]
+
+[[package]]
 name = "hyper-tls"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2050,7 +2110,7 @@ name = "into_other"
 version = "0.0.1"
 dependencies = [
  "engine_traits",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "raft",
 ]
 
@@ -2137,12 +2197,24 @@ name = "keys"
 version = "0.1.0"
 dependencies = [
  "byteorder",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "log_wrappers",
  "panic_hook",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
+]
+
+[[package]]
+name = "kvproto"
+version = "0.0.2"
+source = "git+https://github.com/pingcap/kvproto.git?branch=br-stream#050aa40e17b9265993629b83b23fe3a2acca665f"
+dependencies = [
+ "futures 0.3.15",
+ "grpcio",
+ "protobuf",
+ "protobuf-build",
+ "raft-proto",
 ]
 
 [[package]]
@@ -2939,7 +3011,7 @@ dependencies = [
  "fail",
  "futures 0.3.15",
  "grpcio",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "log",
  "log_wrappers",
@@ -3003,11 +3075,21 @@ dependencies = [
 
 [[package]]
 name = "petgraph"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "467d164a6de56270bd7c4d070df81d07beace25012d5103ced4e9ff08d6afdb7"
+dependencies = [
+ "fixedbitset 0.2.0",
+ "indexmap",
+]
+
+[[package]]
+name = "petgraph"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a13a2fa9d0b63e5f22328828741e523766fff0ee9e779316902290dff3f824f"
 dependencies = [
- "fixedbitset",
+ "fixedbitset 0.4.0",
  "indexmap",
 ]
 
@@ -3160,9 +3242,9 @@ dependencies = [
  "log",
  "nix 0.23.0",
  "parking_lot",
- "prost",
- "prost-build",
- "prost-derive",
+ "prost 0.9.0",
+ "prost-build 0.9.0",
+ "prost-derive 0.9.0",
  "symbolic-demangle",
  "tempfile",
  "thiserror",
@@ -3295,12 +3377,40 @@ dependencies = [
 
 [[package]]
 name = "prost"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de5e2533f59d08fcf364fd374ebda0692a70bd6d7e66ef97f306f45c6c5d8020"
+dependencies = [
+ "bytes 1.0.1",
+ "prost-derive 0.8.0",
+]
+
+[[package]]
+name = "prost"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "444879275cb4fd84958b1a1d5420d15e6fcf7c235fe47f053c9c2a80aceb6001"
 dependencies = [
  "bytes 1.0.1",
- "prost-derive",
+ "prost-derive 0.9.0",
+]
+
+[[package]]
+name = "prost-build"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "355f634b43cdd80724ee7848f95770e7e70eefa6dcf14fea676216573b8fd603"
+dependencies = [
+ "bytes 1.0.1",
+ "heck",
+ "itertools 0.10.0",
+ "log",
+ "multimap",
+ "petgraph 0.5.1",
+ "prost 0.8.0",
+ "prost-types 0.8.0",
+ "tempfile",
+ "which",
 ]
 
 [[package]]
@@ -3315,12 +3425,25 @@ dependencies = [
  "lazy_static",
  "log",
  "multimap",
- "petgraph",
- "prost",
- "prost-types",
+ "petgraph 0.6.0",
+ "prost 0.9.0",
+ "prost-types 0.9.0",
  "regex",
  "tempfile",
  "which",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "600d2f334aa05acb02a755e217ef1ab6dea4d51b58b7846588b747edec04efba"
+dependencies = [
+ "anyhow",
+ "itertools 0.10.0",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -3338,12 +3461,22 @@ dependencies = [
 
 [[package]]
 name = "prost-types"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "603bbd6394701d13f3f25aada59c7de9d35a6a5887cfc156181234a44002771b"
+dependencies = [
+ "bytes 1.0.1",
+ "prost 0.8.0",
+]
+
+[[package]]
+name = "prost-types"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "534b7a0e836e3c482d2693070f982e39e7611da9695d4d1f5a4b186b51faef0a"
 dependencies = [
  "bytes 1.0.1",
- "prost",
+ "prost 0.9.0",
 ]
 
 [[package]]
@@ -3449,7 +3582,7 @@ name = "raft_log_engine"
 version = "0.0.1"
 dependencies = [
  "engine_traits",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "num_cpus",
  "online_config",
@@ -3492,7 +3625,7 @@ dependencies = [
  "into_other",
  "itertools 0.10.0",
  "keys",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "log",
  "log_wrappers",
@@ -3816,7 +3949,7 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "hex 0.4.2",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "log_wrappers",
  "online_config",
@@ -3849,7 +3982,7 @@ dependencies = [
  "fail",
  "futures 0.3.15",
  "grpcio",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "libc 0.2.106",
  "log",
@@ -4324,7 +4457,7 @@ dependencies = [
  "grpcio",
  "hex 0.4.2",
  "keys",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "libc 0.2.106",
  "log",
  "log_wrappers",
@@ -4535,7 +4668,7 @@ dependencies = [
  "futures-util",
  "grpcio",
  "keys",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "log_wrappers",
  "prometheus",
@@ -4793,7 +4926,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "rand 0.8.3",
  "tempfile",
  "test_raftstore",
@@ -4811,7 +4944,7 @@ dependencies = [
  "concurrency_manager",
  "engine_rocks",
  "futures 0.3.15",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "protobuf",
  "test_storage",
  "tidb_query_common",
@@ -4830,7 +4963,7 @@ dependencies = [
  "fail",
  "futures 0.3.15",
  "grpcio",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "pd_client",
  "security",
  "slog",
@@ -4854,7 +4987,7 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "keys",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "log_wrappers",
  "pd_client",
@@ -4883,7 +5016,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "keys",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "uuid",
 ]
 
@@ -4893,7 +5026,7 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "futures 0.3.15",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "pd_client",
  "raftstore",
  "test_raftstore",
@@ -4911,7 +5044,7 @@ dependencies = [
  "encryption_export",
  "fail",
  "grpcio",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "rand 0.8.3",
  "rand_isaac",
  "security",
@@ -4949,7 +5082,7 @@ dependencies = [
  "grpcio-health",
  "hyper",
  "keys",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "log_wrappers",
  "more-asserts",
  "online_config",
@@ -5076,7 +5209,7 @@ dependencies = [
  "byteorder",
  "derive_more",
  "error_code",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "log_wrappers",
  "prometheus",
@@ -5101,7 +5234,7 @@ dependencies = [
  "collections",
  "error_code",
  "hex 0.4.2",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "log_wrappers",
  "match_template",
@@ -5133,7 +5266,7 @@ dependencies = [
  "collections",
  "fail",
  "itertools 0.10.0",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "log_wrappers",
  "match_template",
  "protobuf",
@@ -5193,7 +5326,7 @@ name = "tikv"
 version = "5.4.0-alpha"
 dependencies = [
  "anyhow",
- "async-stream",
+ "async-stream 0.2.0",
  "async-trait",
  "backtrace",
  "batch-system",
@@ -5231,7 +5364,7 @@ dependencies = [
  "into_other",
  "itertools 0.10.0",
  "keys",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "libc 0.2.106",
  "libloading",
@@ -5327,7 +5460,7 @@ dependencies = [
  "grpcio",
  "hex 0.4.2",
  "keys",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "libc 0.2.106",
  "log",
  "log_wrappers",
@@ -5432,7 +5565,7 @@ dependencies = [
  "futures 0.3.15",
  "into_other",
  "keys",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "log_wrappers",
  "panic_hook",
  "prometheus",
@@ -5470,7 +5603,7 @@ dependencies = [
  "gag",
  "grpcio",
  "http",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static",
  "libc 0.2.106",
  "log",
@@ -5581,6 +5714,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-io-timeout"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90c49f106be240de154571dd31fbe48acb10ba6c6dd6f6517ad603abffa42de9"
+dependencies = [
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-macros"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5661,6 +5804,69 @@ dependencies = [
 ]
 
 [[package]]
+name = "tonic"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "796c5e1cd49905e65dd8e700d4cb1dffcbfdb4fc9d017de08c1a537afd83627c"
+dependencies = [
+ "async-stream 0.3.2",
+ "async-trait",
+ "base64",
+ "bytes 1.0.1",
+ "futures-core",
+ "futures-util",
+ "h2",
+ "http",
+ "http-body",
+ "hyper",
+ "hyper-timeout",
+ "percent-encoding",
+ "pin-project",
+ "prost 0.8.0",
+ "prost-derive 0.8.0",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tower",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+ "tracing-futures",
+]
+
+[[package]]
+name = "tonic-build"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12b52d07035516c2b74337d2ac7746075e7dcae7643816c1b12c5ff8a7484c08"
+dependencies = [
+ "proc-macro2",
+ "prost-build 0.8.0",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "tower"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f60422bc7fefa2f3ec70359b8ff1caff59d785877eb70595904605bcc412470f"
+dependencies = [
+ "futures-core",
+ "futures-util",
+ "indexmap",
+ "pin-project",
+ "rand 0.8.3",
+ "slab",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
 name = "tower-layer"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5668,9 +5874,9 @@ checksum = "343bc9466d3fe6b0f960ef45960509f84480bf4fd96f92901afe7ff3df9d3a62"
 
 [[package]]
 name = "tower-service"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e987b6bf443f4b5b3b6f38704195592cca41c5bb7aedd3c3693c7081f8289860"
+checksum = "360dfd1d6d30e05fda32ace2c8c70e9c0a9da713275777f5a4dbb8a1893930c6"
 
 [[package]]
 name = "tracing"
@@ -5679,8 +5885,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01ebdc2bb4498ab1ab5f5b73c5803825e60199229ccba0698170e3be0e7f959f"
 dependencies = [
  "cfg-if 1.0.0",
+ "log",
  "pin-project-lite",
+ "tracing-attributes",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-attributes"
+version = "0.1.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4f480b8f81512e825f337ad51e94c1eb5d3bbdf2b363dcd01e2b19a9ffe3f8e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -5690,6 +5909,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f50de3927f93d202783f4513cda820ab47ef17f624b03c096e86ef00c67e6b5f"
 dependencies = [
  "lazy_static",
+]
+
+[[package]]
+name = "tracing-futures"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97d095ae15e245a057c8e8451bab9b3ee1e1f68e9ba2b4fbc18d0ac5237835f2"
+dependencies = [
+ "pin-project",
+ "tracing",
 ]
 
 [[package]]
@@ -5724,7 +5953,7 @@ dependencies = [
  "collections",
  "error_code",
  "farmhash",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "log_wrappers",
  "panic_hook",
  "rand 0.8.3",

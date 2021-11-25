@@ -1,5 +1,3 @@
-use std::fmt::Display;
-
 use etcd_client::Error as EtcdError;
 use protobuf::ProtobufError;
 use std::result::Result as StdResult;
@@ -13,12 +11,6 @@ pub enum Error {
     Protobuf(#[from] ProtobufError),
     #[error("No such task {task_name:?}")]
     NoSuchTask { task_name: String },
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
 }
 
 pub type Result<T> = StdResult<T, Error>;
