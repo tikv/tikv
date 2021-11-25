@@ -5015,6 +5015,7 @@ dependencies = [
  "profiler",
  "protobuf",
  "raft",
+ "raft_log_engine",
  "raftstore",
  "rand 0.8.3",
  "rand_xorshift",
