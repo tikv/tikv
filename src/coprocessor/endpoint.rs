@@ -215,6 +215,10 @@ impl<E: Engine> Endpoint<E> {
                         req_ctx.access_locks.clone(),
                         req.get_is_cache_enabled(),
                     );
+                    let paging_size = match req.get_paging_size() {
+                        0 => None,
+                        i => Some(i),
+                    };
                     dag::DagHandlerBuilder::new(
                         dag,
                         req_ctx.ranges.clone(),
@@ -223,6 +227,7 @@ impl<E: Engine> Endpoint<E> {
                         batch_row_limit,
                         is_streaming,
                         req.get_is_cache_enabled(),
+                        paging_size,
                     )
                     .data_version(data_version)
                     .build()

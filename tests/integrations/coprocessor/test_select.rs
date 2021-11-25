@@ -1683,8 +1683,8 @@ fn test_invalid_range() {
     let (_, endpoint) = init_with_data(&product, &data);
 
     let mut select = DAGSelect::from(&product);
-    select.key_range.set_start(b"xxx".to_vec());
-    select.key_range.set_end(b"zzz".to_vec());
+    select.key_ranges[0].set_start(b"xxx".to_vec());
+    select.key_ranges[0].set_end(b"zzz".to_vec());
     let req = select.build();
     let resp = handle_request(&endpoint, req);
     assert!(!resp.get_other_error().is_empty());
