@@ -12,7 +12,7 @@ lazy_static! {
 }
 
 pub struct MetaKey(pub Vec<u8>);
-pub struct KeyValue(MetaKey, Vec<u8>);
+pub struct KeyValue(pub MetaKey, pub Vec<u8>);
 
 impl Into<Vec<u8>> for MetaKey {
     fn into(self) -> Vec<u8> {
