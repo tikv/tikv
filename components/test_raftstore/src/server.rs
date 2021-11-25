@@ -308,14 +308,14 @@ impl Simulator for ServerCluster {
         let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
         let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
 
-        let mut lock_mgr = LockManager::new(cfg.pessimistic_txn.pipelined);
+        let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
         let store = create_raft_storage(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
             lock_mgr.clone(),
             concurrency_manager.clone(),
-            lock_mgr.get_pipelined(),
+            lock_mgr.get_storage_dynamic_configs(),
             Arc::new(FlowController::empty()),
             pd_sender,
         )?;
