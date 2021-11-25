@@ -548,7 +548,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 .map_err(Error::from)
                 .for_each(move |msg| {
                     RAFT_MESSAGE_RECV_COUNTER.inc();
-                    ch.send_raft_msg(msg).map_err(Error::from)
+                    if let Err(e) = ch.send_raft_msg(msg) {
+                        // `send_raft_msg` may return `RaftStoreError::RegionNotFound` or
+                        // `RaftStoreError::Transport(DiscardReason::Full)`, return the error
+                        // here will cause the connection break which doesn't help the situation
+                        error!("dispatch raft msg from gRPC to raftstore fail"; "err" => ?e);
+                    }
+                    Ok(())
                 })
                 .then(|res| {
                     let status = match res {
@@ -585,7 +591,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
                     for msg in msgs.take_msgs().into_iter() {
                         if let Err(e) = ch.send_raft_msg(msg) {
-                            return Err(Error::from(e));
+                            // `send_raft_msg` may return `RaftStoreError::RegionNotFound` or
+                            // `RaftStoreError::Transport(DiscardReason::Full)`, return the error
+                            // here will cause the connection break which doesn't help the situation
+                            error!("dispatch raft msg from gRPC to raftstore fail"; "err" => ?e);
                         }
                     }
                     Ok(())
