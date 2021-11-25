@@ -922,13 +922,27 @@
 [raft-engine]
 ## Enable raft-engine will ignore all settings about `raftdb`.
 # enable = false
-## Recovery mode. Candidates are `tolerate-corrupted-tail-records` and `absolute-consistency`.
-# recovery_mode = "tolerate-corrupted-tail-records"
+
+## The directory to keep log files.
+## If not set, it will be `{data-dir}/raft-engine`.
+# dir = ""
+
+## Log file recovery mode. Candidates:
+##   absolute-consistency
+##   tolerate-tail-corruption
+##   tolerate-any-corruption
+# recovery_mode = "tolerate-tail-corruption"
+
+## Flush buffered writes to disk when their accumulative size exceed this threshold.
 # bytes-per-sync = "256KB"
+
+## Target file size for one single log file.
 # target-file-size = "128MB"
+
 # purge-threshold = "10GB"
-## Raft engine has builtin entry cache. `cache-limit` limits the memory usage of the cache.
-# cache-limit = "1GB"
+
+## Compress write with encoded size larger than this threshold.
+# batch-compression-threshold = "8KB"
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.

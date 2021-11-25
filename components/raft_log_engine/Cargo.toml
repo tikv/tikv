@@ -7,6 +7,8 @@ edition = "2018"
 [dependencies]
 engine_traits = { path = "../engine_traits", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
+encryption = { path = "../encryption" }
+file_system = { path = "../file_system" }
 num_cpus = "1"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
