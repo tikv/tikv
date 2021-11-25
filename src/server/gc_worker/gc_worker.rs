@@ -40,10 +40,7 @@ use super::compaction_filter::{
     GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
 };
 use super::config::{GcConfig, GcWorkerConfigManager};
-use super::config::{GcConfig, GcWorkerConfigManager};
 use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
-use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
-use super::{check_need_gc, Callback, Error, ErrorInner, Result};
 use super::{Callback, Error, ErrorInner, Result};
 use crate::storage::txn::gc;
 
