@@ -436,11 +436,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 record_all += record_len;
             }
 
-            if drained
-                || self
-                    .paging_size
-                    .map_or(false, |p| record_all >= p as usize)
-            {
+            if drained || self.paging_size.map_or(false, |p| record_all >= p as usize) {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
 
