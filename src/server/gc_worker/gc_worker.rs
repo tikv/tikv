@@ -54,6 +54,7 @@ const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
 pub const GC_MAX_EXECUTING_TASKS: usize = 10;
 const GC_TASK_SLOW_SECONDS: u64 = 30;
+const GC_MAX_PENDING_TASKS: usize = 4096;
 
 /// Provides safe point.
 pub trait GcSafePointProvider: Send + 'static {
@@ -245,7 +246,8 @@ where
         gc_info.found_versions += next_gc_info.found_versions;
         gc_info.deleted_versions += next_gc_info.deleted_versions;
         gc_info.is_completed = next_gc_info.is_completed;
-        self.stats.add(&reader.statistics);
+        let stats = mem::take(&mut reader.statistics);
+        self.stats.add(&stats);
         Ok(())
     }
 
@@ -349,11 +351,18 @@ where
             Ok(Box::new(keys.into_iter()))
         }
 
+        let count = keys.len();
         let mut keys = get_keys_in_regions(keys, regions_provider)?;
 
         let snapshot = self.engine.snapshot_on_kv_engine(b"", b"")?;
         let mut txn = Self::new_txn();
-        let mut reader = MvccReader::new(snapshot, None /*scan_mode*/, false);
+        let mut reader = if count <= 1 {
+            MvccReader::new(snapshot, None, false)
+        } else {
+            // keys are closing to each other in one batch of gc keys, so do not use
+            // prefix seek here to avoid too many seeks
+            MvccReader::new(snapshot, Some(ScanMode::Forward), false)
+        };
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
@@ -782,7 +791,7 @@ where
         cfg: GcConfig,
         feature_gate: FeatureGate,
     ) -> GcWorker<E, RR> {
-        let worker_builder = WorkerBuilder::new("gc-worker");
+        let worker_builder = WorkerBuilder::new("gc-worker").pending_capacity(GC_MAX_PENDING_TASKS);
         let worker = worker_builder.create().lazy_build("gc-worker");
         let worker_scheduler = worker.scheduler();
         GcWorker {
@@ -1491,5 +1500,56 @@ mod tests {
                 assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
             }
         }
+    }
+
+    #[test]
+    fn test_gc_keys_statistics() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let prefixed_engine = PrefixedEngine(engine.clone());
+
+        let (tx, _rx) = mpsc::channel();
+        let cfg = GcConfig::default();
+        let mut runner = GcRunner::new(
+            prefixed_engine.clone(),
+            RaftStoreBlackHole,
+            tx,
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
+                .0
+                .tracker("gc-woker".to_owned()),
+            cfg,
+        );
+
+        let mut r1 = Region::default();
+        r1.set_id(1);
+        r1.mut_region_epoch().set_version(1);
+        r1.set_start_key(b"".to_vec());
+        r1.set_end_key(b"".to_vec());
+        r1.mut_peers().push(Peer::default());
+        r1.mut_peers()[0].set_store_id(1);
+
+        let mut host = CoprocessorHost::<RocksEngine>::default();
+        let ri_provider = RegionInfoAccessor::new(&mut host);
+        host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
+
+        let db = engine.kv_engine().as_inner().clone();
+        let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+        let mut keys = vec![];
+        for i in 0..100 {
+            let k = format!("k{:02}", i).into_bytes();
+            must_prewrite_put(&prefixed_engine, &k, b"value", &k, 101);
+            must_commit(&prefixed_engine, &k, 101, 102);
+            must_prewrite_delete(&prefixed_engine, &k, &k, 151);
+            must_commit(&prefixed_engine, &k, 151, 152);
+            keys.push(Key::from_raw(&k));
+        }
+        db.flush_cf(cf, true).unwrap();
+
+        assert_eq!(runner.stats.write.seek, 0);
+        assert_eq!(runner.stats.write.next, 0);
+        runner
+            .gc_keys(keys, TimeStamp::new(200), Some((1, Arc::new(ri_provider))))
+            .unwrap();
+        assert_eq!(runner.stats.write.seek, 1);
+        assert_eq!(runner.stats.write.next, 100 * 2);
     }
 }

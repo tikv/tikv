@@ -324,7 +324,7 @@ where
     }
 }
 
-struct Worker<EK, ER, N, T>
+pub struct Worker<EK, ER, N, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -352,7 +352,7 @@ where
     N: Notifier,
     T: Transport,
 {
-    fn new(
+    pub fn new(
         store_id: u64,
         tag: String,
         engines: Engines<EK, ER>,
@@ -421,16 +421,9 @@ where
 
             STORE_WRITE_TRIGGER_SIZE_HISTOGRAM.observe(self.batch.get_raft_size() as f64);
 
-            self.write_to_db();
-
-            self.metrics.flush();
+            self.write_to_db(true);
 
             self.clear_latency_inspect();
-            // update config
-            if let Some(incoming) = self.cfg_tracker.any_new() {
-                self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
-                self.metrics.waterfall_metrics = incoming.waterfall_metrics;
-            }
 
             STORE_WRITE_LOOP_DURATION_HISTOGRAM
                 .observe(duration_to_sec(handle_begin.saturating_elapsed()));
@@ -456,7 +449,7 @@ where
                 self.metrics
                     .task_wait
                     .observe(duration_to_sec(task.send_time.saturating_elapsed()));
-                self.batch.add_write_task(task);
+                self.handle_write_task(task);
             }
             WriteMsg::LatencyInspect {
                 send_time,
@@ -468,7 +461,15 @@ where
         false
     }
 
-    fn write_to_db(&mut self) {
+    pub fn handle_write_task(&mut self, task: WriteTask<EK, ER>) {
+        self.batch.add_write_task(task);
+    }
+
+    pub fn write_to_db(&mut self, notify: bool) {
+        if self.batch.is_empty() {
+            return;
+        }
+
         let timer = Instant::now();
 
         self.batch.before_write_to_db(&self.metrics);
@@ -584,14 +585,20 @@ where
         let send_time = duration_to_sec(now2.saturating_duration_since(now));
         STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(send_time);
 
-        for (region_id, (peer_id, ready_number)) in &self.batch.readies {
-            self.notifier
-                .notify_persisted(*region_id, *peer_id, *ready_number);
+        let mut callback_time = 0f64;
+        if notify {
+            for (region_id, (peer_id, ready_number)) in &self.batch.readies {
+                self.notifier
+                    .notify_persisted(*region_id, *peer_id, *ready_number);
+            }
+            now = Instant::now();
+            callback_time = duration_to_sec(now.saturating_duration_since(now2));
+            STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(callback_time);
         }
-        now = Instant::now();
-        let callback_time = duration_to_sec(now.saturating_duration_since(now2));
-        STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(callback_time);
+
         let total_cost = now.saturating_duration_since(timer);
+        STORE_WRITE_TO_DB_DURATION_HISTOGRAM.observe(duration_to_sec(total_cost));
+
         slow_log!(
             total_cost,
             "[store {}] async write too slow, write_kv: {}s, write_raft: {}s, send: {}s, callback: {}s thread: {}",
@@ -604,6 +611,17 @@ where
         );
 
         self.batch.clear();
+        self.metrics.flush();
+
+        // update config
+        if let Some(incoming) = self.cfg_tracker.any_new() {
+            self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
+            self.metrics.waterfall_metrics = incoming.waterfall_metrics;
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.batch.is_empty()
     }
 
     fn clear_latency_inspect(&mut self) {
