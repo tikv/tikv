@@ -500,7 +500,14 @@ fn test_almost_and_already_full_behavior() {
     let index_3 = cluster.raft_local_state(1, 3).last_index;
     let index_4 = cluster.raft_local_state(1, 4).last_index;
     let index_5 = cluster.raft_local_state(1, 5).last_index;
-    assert!(index_1 == index_2 && index_1 == index_3 && index_1 > index_4 && index_1 > index_5);
+    assert!(
+        index_1 >= index_2
+            && index_1 >= index_3
+            && index_2 > index_4
+            && index_2 > index_5
+            && index_3 > index_4
+            && index_3 > index_5
+    );
 
     for i in [2u64, 3] {
         fail::remove(get_fp(DiskUsage::AlmostFull, i));
