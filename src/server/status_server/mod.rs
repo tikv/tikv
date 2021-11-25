@@ -21,21 +21,16 @@ use async_stream::stream;
 use collections::HashMap;
 use engine_traits::KvEngine;
 use futures::compat::{Compat01As03, Stream01CompatExt};
-use futures::executor::block_on;
 use futures::future::{ok, poll_fn};
 use futures::prelude::*;
 use hyper::server::accept::Accept;
 use hyper::server::conn::{AddrIncoming, AddrStream};
 use hyper::server::Builder as HyperBuilder;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{self, header, Body, Client, Method, Request, Response, Server, StatusCode, Uri};
-use hyper_openssl::HttpsConnector;
+use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
 use online_config::OnlineConfig;
-use openssl::ssl::{
-    Ssl, SslAcceptor, SslConnector, SslConnectorBuilder, SslFiletype, SslMethod, SslVerifyMode,
-};
+use openssl::ssl::{Ssl, SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
-use pd_client::{RpcClient, REQUEST_RECONNECT_INTERVAL};
 use pin_project::pin_project;
 use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
