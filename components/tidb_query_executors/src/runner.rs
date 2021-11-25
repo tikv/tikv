@@ -410,6 +410,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut batch_size = Self::batch_initial_size();
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
+        let mut record_all = 0;
 
         let mut time_slice_start = Instant::now();
         loop {
@@ -432,12 +433,13 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
             if record_len > 0 {
                 chunks.push(chunk);
+                record_all += record_len;
             }
 
             if drained
                 || self
                     .paging_size
-                    .map_or(false, |p| chunks.len() >= p as usize)
+                    .map_or(false, |p| record_all >= p as usize)
             {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
