@@ -1,10 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-<<<<<<< HEAD
-=======
 // #[PerformanceCriticalPath]
 use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
->>>>>>> dce2dc811... gc: Fix GC scan effectiveness to avoid OOM (#11416)
 use crate::storage::kv::Modify;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
