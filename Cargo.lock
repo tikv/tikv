@@ -48,6 +48,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ahash"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43bb833f0bf979d8475d38fbf09ed3b8a55e1885fe93ad3f93239fc6a4f17b98"
+dependencies = [
+ "getrandom 0.2.3",
+ "once_cell",
+ "version_check 0.9.2",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "0.7.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -179,7 +190,7 @@ dependencies = [
  "async-trait",
  "bytes 1.0.1",
  "cloud",
- "fail 0.5.0",
+ "fail",
  "futures 0.3.15",
  "futures-util",
  "grpcio",
@@ -240,7 +251,7 @@ dependencies = [
  "log_wrappers",
  "online_config",
  "pd_client",
- "prometheus 0.13.0",
+ "prometheus",
  "raft",
  "raftstore",
  "rand 0.8.3",
@@ -277,7 +288,7 @@ dependencies = [
  "derive_more",
  "file_system",
  "lazy_static",
- "prometheus 0.13.0",
+ "prometheus",
  "serde",
  "serde_derive",
  "slog",
@@ -483,7 +494,7 @@ dependencies = [
  "crossbeam",
  "engine_rocks",
  "engine_traits",
- "fail 0.5.0",
+ "fail",
  "futures 0.3.15",
  "futures-timer",
  "grpcio",
@@ -493,7 +504,7 @@ dependencies = [
  "online_config",
  "panic_hook",
  "pd_client",
- "prometheus 0.13.0",
+ "prometheus",
  "prometheus-static-metric",
  "protobuf",
  "raft",
@@ -591,7 +602,7 @@ dependencies = [
  "async-trait",
  "derive_more",
  "error_code",
- "fail 0.5.0",
+ "fail",
  "futures-io",
  "kvproto",
  "openssl",
@@ -641,7 +652,7 @@ version = "0.0.1"
 dependencies = [
  "criterion",
  "crossbeam-skiplist",
- "fail 0.5.0",
+ "fail",
  "futures 0.3.15",
  "parking_lot",
  "rand 0.8.3",
@@ -1046,7 +1057,7 @@ dependencies = [
  "derive_more",
  "engine_traits",
  "error_code",
- "fail 0.5.0",
+ "fail",
  "file_system",
  "futures 0.3.15",
  "futures-util",
@@ -1056,7 +1067,7 @@ dependencies = [
  "matches",
  "online_config",
  "openssl",
- "prometheus 0.13.0",
+ "prometheus",
  "protobuf",
  "rand 0.8.3",
  "serde",
@@ -1113,7 +1124,7 @@ dependencies = [
  "collections",
  "encryption",
  "engine_traits",
- "fail 0.5.0",
+ "fail",
  "file_system",
  "keys",
  "kvproto",
@@ -1121,7 +1132,7 @@ dependencies = [
  "log_wrappers",
  "num_cpus",
  "online_config",
- "prometheus 0.13.0",
+ "prometheus",
  "prometheus-static-metric",
  "protobuf",
  "raft",
@@ -1157,7 +1168,7 @@ version = "0.0.1"
 dependencies = [
  "case_macros",
  "error_code",
- "fail 0.5.0",
+ "fail",
  "file_system",
  "kvproto",
  "log_wrappers",
@@ -1224,7 +1235,7 @@ dependencies = [
  "bytes 1.0.1",
  "encryption",
  "engine_traits",
- "fail 0.5.0",
+ "fail",
  "ffi-support",
  "file_system",
  "futures 0.3.15",
@@ -1236,7 +1247,7 @@ dependencies = [
  "lazy_static",
  "libloading",
  "matches",
- "prometheus 0.13.0",
+ "prometheus",
  "protobuf",
  "rand 0.8.3",
  "rusoto_core",
@@ -1295,17 +1306,6 @@ dependencies = [
 
 [[package]]
 name = "fail"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3be3c61c59fdc91f5dbc3ea31ee8623122ce80057058be560654c5d410d181a6"
-dependencies = [
- "lazy_static",
- "log",
- "rand 0.7.3",
-]
-
-[[package]]
-name = "fail"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec3245a0ca564e7f3c797d20d833a6870f57a728ac967d5225b3ffdef4465011"
@@ -1347,7 +1347,7 @@ dependencies = [
  "online_config",
  "openssl",
  "parking_lot",
- "prometheus 0.13.0",
+ "prometheus",
  "prometheus-static-metric",
  "rand 0.8.3",
  "serde",
@@ -1844,6 +1844,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7afe4a420e3fe79967a00898cc1f4db7c8a49a9333a29f8a4bd76a253d5cd04"
 
 [[package]]
+name = "hashbrown"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab5ef0d4909ef3724cc8cce6ccc8572c5c817592e9285f5464f8e86f8bd3726e"
+dependencies = [
+ "ahash 0.7.4",
+]
+
+[[package]]
 name = "heck"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2007,7 +2016,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "824845a0bf897a9042383849b02c1bc219c2383772efcd5c6f9766fa4b81aef3"
 dependencies = [
  "autocfg",
- "hashbrown",
+ "hashbrown 0.9.1",
 ]
 
 [[package]]
@@ -2016,7 +2025,7 @@ version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37fb405dbcc505ed20838c4f8dad7b901094de90add237755df54bd5dcda2fdd"
 dependencies = [
- "ahash",
+ "ahash 0.6.3",
  "atty",
  "indexmap",
  "itoa",
@@ -2160,7 +2169,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#4b56b856fcfcb5e505b3d79d4941d7b4fc803235"
+source = "git+https://github.com/pingcap/kvproto.git#a22c6b52443e743edc164e40afcf6cfcfa5ed2bf"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2948,14 +2957,14 @@ version = "0.1.0"
 dependencies = [
  "collections",
  "error_code",
- "fail 0.5.0",
+ "fail",
  "futures 0.3.15",
  "grpcio",
  "kvproto",
  "lazy_static",
  "log",
  "log_wrappers",
- "prometheus 0.13.0",
+ "prometheus",
  "security",
  "semver 0.10.0",
  "serde",
@@ -3269,22 +3278,6 @@ dependencies = [
 
 [[package]]
 name = "prometheus"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5986aa8d62380092d2f50f8b1cdba9cb9b6731ffd4b25b51fd126b6c3e05b99c"
-dependencies = [
- "cfg-if 1.0.0",
- "fnv",
- "lazy_static",
- "libc 0.2.106",
- "memchr",
- "parking_lot",
- "protobuf",
- "thiserror",
-]
-
-[[package]]
-name = "prometheus"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7f64969ffd5dd8f39bd57a68ac53c163a095ed9d0fb707146da1b27025a3504"
@@ -3442,22 +3435,27 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=master#a21012f921d848eb02e86eb722462f1db9cacd73"
+source = "git+https://github.com/tikv/raft-engine?branch=master#5d2e4fb4af706b3f3cff38145725ca57d6b2cbb9"
 dependencies = [
  "byteorder",
  "crc32fast",
  "crossbeam",
- "fail 0.4.0",
- "fxhash",
+ "fail",
+ "fs2",
+ "hashbrown 0.11.2",
  "hex 0.4.2",
  "lazy_static",
+ "libc 0.2.106",
  "log",
  "lz4-sys",
- "nix 0.18.0",
+ "nix 0.19.0",
+ "num-derive",
+ "num-traits",
  "parking_lot",
- "prometheus 0.12.0",
+ "prometheus",
  "prometheus-static-metric",
  "protobuf",
+ "rayon",
  "serde",
  "thiserror",
 ]
@@ -3476,7 +3474,9 @@ dependencies = [
 name = "raft_log_engine"
 version = "0.0.1"
 dependencies = [
+ "encryption",
  "engine_traits",
+ "file_system",
  "kvproto",
  "lazy_static",
  "num_cpus",
@@ -3512,7 +3512,7 @@ dependencies = [
  "engine_test",
  "engine_traits",
  "error_code",
- "fail 0.5.0",
+ "fail",
  "file_system",
  "fs2",
  "futures 0.3.15",
@@ -3530,7 +3530,7 @@ dependencies = [
  "ordered-float 2.7.0",
  "panic_hook",
  "pd_client",
- "prometheus 0.13.0",
+ "prometheus",
  "prometheus-static-metric",
  "protobuf",
  "raft",
@@ -3840,7 +3840,7 @@ dependencies = [
  "crossbeam",
  "engine_rocks",
  "engine_traits",
- "fail 0.5.0",
+ "fail",
  "futures 0.3.15",
  "grpcio",
  "hex 0.4.2",
@@ -3850,7 +3850,7 @@ dependencies = [
  "online_config",
  "panic_hook",
  "pd_client",
- "prometheus 0.13.0",
+ "prometheus",
  "protobuf",
  "raft",
  "raftstore",
@@ -3874,7 +3874,7 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "crossbeam",
- "fail 0.5.0",
+ "fail",
  "futures 0.3.15",
  "grpcio",
  "kvproto",
@@ -3885,7 +3885,7 @@ dependencies = [
  "pdqselect",
  "pin-project",
  "procinfo",
- "prometheus 0.13.0",
+ "prometheus",
  "prometheus-static-metric",
  "rand 0.8.3",
  "serde",
@@ -4358,7 +4358,7 @@ dependencies = [
  "log_wrappers",
  "nix 0.11.1",
  "pd_client",
- "prometheus 0.13.0",
+ "prometheus",
  "promptly",
  "protobuf",
  "raft",
@@ -4566,7 +4566,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
- "prometheus 0.13.0",
+ "prometheus",
  "serde",
  "serde_derive",
  "slog",
@@ -4855,7 +4855,7 @@ name = "test_pd"
 version = "0.0.1"
 dependencies = [
  "collections",
- "fail 0.5.0",
+ "fail",
  "futures 0.3.15",
  "grpcio",
  "kvproto",
@@ -4877,7 +4877,7 @@ dependencies = [
  "encryption_export",
  "engine_rocks",
  "engine_traits",
- "fail 0.5.0",
+ "fail",
  "file_system",
  "futures 0.3.15",
  "grpcio",
@@ -4937,7 +4937,7 @@ dependencies = [
  "backtrace",
  "collections",
  "encryption_export",
- "fail 0.5.0",
+ "fail",
  "grpcio",
  "kvproto",
  "rand 0.8.3",
@@ -4970,7 +4970,7 @@ dependencies = [
  "engine_traits",
  "error_code",
  "external_storage_export",
- "fail 0.5.0",
+ "fail",
  "file_system",
  "futures 0.3.15",
  "grpcio",
@@ -4988,6 +4988,7 @@ dependencies = [
  "profiler",
  "protobuf",
  "raft",
+ "raft_log_engine",
  "raftstore",
  "rand 0.8.3",
  "rand_xorshift",
@@ -5107,7 +5108,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
- "prometheus 0.13.0",
+ "prometheus",
  "prometheus-static-metric",
  "serde_json",
  "thiserror",
@@ -5159,7 +5160,7 @@ dependencies = [
  "anyhow",
  "codec",
  "collections",
- "fail 0.5.0",
+ "fail",
  "itertools 0.10.0",
  "kvproto",
  "log_wrappers",
@@ -5243,7 +5244,7 @@ dependencies = [
  "engine_traits_tests",
  "error_code",
  "example_plugin",
- "fail 0.5.0",
+ "fail",
  "file_system",
  "fs2",
  "futures 0.3.15",
@@ -5284,7 +5285,7 @@ dependencies = [
  "pnet_datalink",
  "pprof",
  "procinfo",
- "prometheus 0.13.0",
+ "prometheus",
  "prometheus-static-metric",
  "protobuf",
  "raft",
@@ -5361,7 +5362,7 @@ dependencies = [
  "log_wrappers",
  "nix 0.19.0",
  "pd_client",
- "prometheus 0.13.0",
+ "prometheus",
  "promptly",
  "protobuf",
  "raft",
@@ -5455,7 +5456,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "fail 0.5.0",
+ "fail",
  "file_system",
  "futures 0.3.15",
  "into_other",
@@ -5463,7 +5464,7 @@ dependencies = [
  "kvproto",
  "log_wrappers",
  "panic_hook",
- "prometheus 0.13.0",
+ "prometheus",
  "prometheus-static-metric",
  "raftstore",
  "slog",
@@ -5491,7 +5492,7 @@ dependencies = [
  "crossbeam",
  "derive_more",
  "error_code",
- "fail 0.5.0",
+ "fail",
  "fs2",
  "futures 0.3.15",
  "futures-util",
@@ -5511,7 +5512,7 @@ dependencies = [
  "panic_hook",
  "procfs",
  "procinfo",
- "prometheus 0.13.0",
+ "prometheus",
  "protobuf",
  "rand 0.8.3",
  "regex",
@@ -6126,11 +6127,11 @@ source = "git+https://github.com/tikv/yatp.git?branch=master#d564d197f6cc5d086a3
 dependencies = [
  "crossbeam-deque",
  "dashmap",
- "fail 0.5.0",
+ "fail",
  "lazy_static",
  "num_cpus",
  "parking_lot_core",
- "prometheus 0.13.0",
+ "prometheus",
  "rand 0.8.3",
 ]
 
