@@ -14992,10 +14992,10 @@
               "refId": "F"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_failure{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "expr": "sum(rate(tikv_gc_compaction_failure{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "failure",
+              "legendFormat": "failure-{{type}}",
               "refId": "G"
             }
           ],
