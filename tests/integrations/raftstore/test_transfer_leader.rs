@@ -8,7 +8,7 @@ use kvproto::kvrpcpb::Context;
 use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
-use tikv::storage::kv::SnapContext;
+use tikv::storage::kv::{SnapContext, SnapshotExt};
 use tikv_util::config::*;
 
 fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -201,7 +201,7 @@ fn test_sync_max_ts_after_leader_transfer() {
             }
             thread::sleep(Duration::from_millis(1 << retry));
         }
-        assert!(snapshot.is_max_ts_synced());
+        assert!(snapshot.ext().is_max_ts_synced());
     };
 
     cluster.must_transfer_leader(1, new_peer(1, 1));

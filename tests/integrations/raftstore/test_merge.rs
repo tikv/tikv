@@ -16,6 +16,7 @@ use engine_traits::{CF_RAFT, CF_WRITE};
 use pd_client::PdClient;
 use test_raftstore::*;
 use tikv::storage::kv::SnapContext;
+use tikv::storage::kv::SnapshotExt;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 
@@ -1179,7 +1180,7 @@ fn test_sync_max_ts_after_region_merge() {
             }
             thread::sleep(Duration::from_millis(1 << retry));
         }
-        assert!(snapshot.is_max_ts_synced());
+        assert!(snapshot.ext().is_max_ts_synced());
     };
 
     wait_for_synced(&mut cluster);
