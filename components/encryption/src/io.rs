@@ -203,7 +203,7 @@ impl DecrypterWriter<File> {
     }
 }
 
-/// Implementation of EncrypterWriter and DecrypterWriter.
+/// Implementation of EncrypterReader and DecrypterReader.
 struct CrypterReader<R> {
     reader: R,
     crypter: Option<CrypterCore>,
@@ -531,13 +531,13 @@ mod tests {
                 encrypter.write_all(&plaintext).unwrap();
 
                 let buf = encrypter.finalize().unwrap();
+                // Make sure it's properly encrypted.
                 if method != EncryptionMethod::Plaintext {
                     assert_ne!(buf, plaintext);
                 } else {
                     assert_eq!(buf, plaintext);
                 }
                 let buf_reader = std::io::Cursor::new(buf);
-                // Make sure it's actually encrypted.
                 let mut decrypter = DecrypterReader::new(buf_reader, method, &key, iv).unwrap();
                 let mut piece = vec![0; 5];
                 // Read the first two blocks randomly.
