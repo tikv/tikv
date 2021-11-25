@@ -112,7 +112,7 @@ fn new_debug_executor(
 
     let cache = cfg.storage.block_cache.build_shared_cache();
     let shared_block_cache = cache.is_some();
-    let env = get_env(key_manager, None /*io_rate_limiter*/).unwrap();
+    let env = get_env(key_manager.clone(), None /*io_rate_limiter*/).unwrap();
 
     let mut kv_db_opts = cfg.rocksdb.build_opt();
     kv_db_opts.set_env(env.clone());
@@ -146,7 +146,7 @@ fn new_debug_executor(
     } else {
         let mut config = cfg.raft_engine.config();
         config.dir = canonicalize_sub_path(data_dir, &config.dir).unwrap();
-        let raft_db = RaftLogEngine::new(config).unwrap();
+        let raft_db = RaftLogEngine::new(config, key_manager, None /*io_rate_limiter*/).unwrap();
         let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
         Box::new(debugger) as Box<dyn DebugExecutor>
     }

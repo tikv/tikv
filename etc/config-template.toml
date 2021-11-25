@@ -920,15 +920,42 @@
 # enable-compaction-guard = false
 
 [raft-engine]
-## Enable raft-engine will ignore all settings about `raftdb`.
+## When enabled, configurations of `raftdb` will be ignored.
 # enable = false
-## Recovery mode. Candidates are `tolerate-corrupted-tail-records` and `absolute-consistency`.
-# recovery_mode = "tolerate-corrupted-tail-records"
-# bytes-per-sync = "256KB"
+
+## Directory to store log files. Will be created on startup if not exists.
+## If not set, it will be `{data-dir}/raft-engine`.
+# dir = ""
+
+## Compress a log batch if its size exceeds this value.
+## It set to zero, compression is disabled.
+# batch-compression-threshold = "8KB"
+
+## Flush buffered writes to disk when their accumulative size exceed this threshold.
+## Setting it to zero disables incremental sync.
+# bytes-per-sync = "4MB"
+
+## Target file size for rotating log files.
 # target-file-size = "128MB"
+
+## Purge main log queue if its file size exceeds this value.
 # purge-threshold = "10GB"
-## Raft engine has builtin entry cache. `cache-limit` limits the memory usage of the cache.
-# cache-limit = "1GB"
+
+## How to deal with file corruption during recovery. Candidates:
+##   absolute-consistency
+##   tolerate-tail-corruption
+##   tolerate-any-corruption
+# recovery-mode = "tolerate-tail-corruption"
+
+## Minimum I/O size for reading log files during recovery.
+##
+## Default: "16KB". Minimum: "512B".
+# recovery-read-block-size = "16KB"
+
+## The number of threads used to scan and recovery log files.
+##
+## Default: 4. Minimum: 1.
+# recovery-threads = 4
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
