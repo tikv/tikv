@@ -171,13 +171,13 @@ dependencies = [
  "async-trait",
  "bytes 0.5.3",
  "cloud",
- "fail",
+ "fail 0.5.0",
  "futures 0.3.8",
  "futures-util",
  "grpcio",
  "http",
- "hyper",
- "hyper-tls",
+ "hyper 0.13.10",
+ "hyper-tls 0.4.1",
  "kvproto",
  "matches",
  "rusoto_core",
@@ -238,7 +238,7 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "pd_client",
- "prometheus",
+ "prometheus 0.13.0",
  "raft",
  "raftstore",
  "rand 0.7.3",
@@ -274,6 +274,12 @@ name = "base64"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d5ca2cd0adc3f48f9e9ea5a6bbdf9ccc0bfade884847e484d452414c7ccffb3"
+
+[[package]]
+name = "base64"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "904dfeac50f3cdaba28fc6f57fdcddb75f49ed61346676a78c4ffe55877802fd"
 
 [[package]]
 name = "batch-system"
@@ -502,7 +508,7 @@ dependencies = [
  "crossbeam",
  "engine_rocks",
  "engine_traits",
- "fail",
+ "fail 0.5.0",
  "futures 0.3.8",
  "futures-timer",
  "grpcio",
@@ -511,7 +517,7 @@ dependencies = [
  "log_wrappers",
  "panic_hook",
  "pd_client",
- "prometheus",
+ "prometheus 0.13.0",
  "prost",
  "protobuf",
  "raft",
@@ -608,7 +614,7 @@ dependencies = [
  "async-trait",
  "derive_more",
  "error_code",
- "fail",
+ "fail 0.5.0",
  "futures-io",
  "kvproto",
  "openssl",
@@ -676,7 +682,7 @@ version = "0.0.1"
 dependencies = [
  "criterion",
  "crossbeam-skiplist",
- "fail",
+ "fail 0.5.0",
  "futures 0.3.8",
  "parking_lot 0.11.0",
  "rand 0.7.3",
@@ -907,10 +913,11 @@ dependencies = [
 [[package]]
 name = "crossbeam-epoch"
 version = "0.9.3"
-source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2584f639eb95fea8c798496315b297cf81b9b58b6d30ab066a75455333cf4b12"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.3 (git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0)",
+ "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static",
  "memoffset 0.6.1",
  "scopeguard",
@@ -919,11 +926,10 @@ dependencies = [
 [[package]]
 name = "crossbeam-epoch"
 version = "0.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2584f639eb95fea8c798496315b297cf81b9b58b6d30ab066a75455333cf4b12"
+source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-utils 0.8.3 (git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0)",
  "lazy_static",
  "memoffset 0.6.1",
  "scopeguard",
@@ -964,7 +970,8 @@ dependencies = [
 [[package]]
 name = "crossbeam-utils"
 version = "0.8.3"
-source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7e9d99fa91428effe99c5c6d4634cdeba32b8cf784fc428a2a687f61a952c49"
 dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
@@ -974,8 +981,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-utils"
 version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7e9d99fa91428effe99c5c6d4634cdeba32b8cf784fc428a2a687f61a952c49"
+source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
 dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
@@ -1179,7 +1185,7 @@ dependencies = [
  "derive_more",
  "engine_traits",
  "error_code",
- "fail",
+ "fail 0.5.0",
  "file_system",
  "futures 0.3.8",
  "futures-util",
@@ -1188,7 +1194,7 @@ dependencies = [
  "lazy_static",
  "matches",
  "openssl",
- "prometheus",
+ "prometheus 0.13.0",
  "protobuf",
  "rand 0.7.3",
  "serde",
@@ -1245,14 +1251,14 @@ dependencies = [
  "configuration",
  "encryption",
  "engine_traits",
- "fail",
+ "fail 0.5.0",
  "file_system",
  "keys",
  "kvproto",
  "lazy_static",
  "log_wrappers",
  "num_cpus",
- "prometheus",
+ "prometheus 0.13.0",
  "prometheus-static-metric",
  "protobuf",
  "raft",
@@ -1350,7 +1356,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "bytes 0.5.3",
- "fail",
+ "fail 0.5.0",
  "ffi-support",
  "file_system",
  "futures 0.3.8",
@@ -1362,7 +1368,7 @@ dependencies = [
  "lazy_static",
  "libloading",
  "matches",
- "prometheus",
+ "prometheus 0.13.0",
  "protobuf",
  "rand 0.7.3",
  "rusoto_core",
@@ -1429,6 +1435,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fail"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec3245a0ca564e7f3c797d20d833a6870f57a728ac967d5225b3ffdef4465011"
+dependencies = [
+ "lazy_static",
+ "log",
+ "rand 0.8.3",
+]
+
+[[package]]
 name = "failure"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1482,7 +1499,7 @@ dependencies = [
  "nix 0.19.0",
  "openssl",
  "parking_lot 0.11.0",
- "prometheus",
+ "prometheus 0.13.0",
  "prometheus-static-metric",
  "rand 0.7.3",
  "serde",
@@ -1543,6 +1560,16 @@ name = "foreign-types-shared"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
+
+[[package]]
+name = "form_urlencoded"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fc25a87fa4fd2094bffb06925852034d90a17f0d1e05197d4956d3555752191"
+dependencies = [
+ "matches",
+ "percent-encoding",
+]
 
 [[package]]
 name = "fs2"
@@ -1778,8 +1805,8 @@ dependencies = [
  "cloud",
  "futures-util",
  "http",
- "hyper",
- "hyper-tls",
+ "hyper 0.13.10",
+ "hyper-tls 0.4.1",
  "kvproto",
  "matches",
  "slog",
@@ -1932,6 +1959,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "h2"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b67e66362108efccd8ac053abafc8b7a8d86a37e6e48fc4f6f7485eb5e9e6a5"
+dependencies = [
+ "bytes 1.0.1",
+ "fnv",
+ "futures-core",
+ "futures-sink",
+ "futures-util",
+ "http",
+ "indexmap",
+ "slab",
+ "tokio 1.9.0",
+ "tokio-util 0.6.9",
+ "tracing",
+ "tracing-futures",
+]
+
+[[package]]
 name = "half"
 version = "1.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2010,6 +2057,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-body"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ff4f84919677303da5f147645dbea6b1881f368d03ac84e1dc09031ebd7b2c6"
+dependencies = [
+ "bytes 1.0.1",
+ "http",
+ "pin-project-lite 0.2.0",
+]
+
+[[package]]
 name = "httparse"
 version = "1.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2031,15 +2089,39 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
- "h2",
+ "h2 0.2.2",
  "http",
- "http-body",
+ "http-body 0.3.1",
  "httparse",
  "httpdate",
  "itoa",
  "pin-project 1.0.1",
  "socket2",
  "tokio 0.2.24",
+ "tower-service",
+ "tracing",
+ "want",
+]
+
+[[package]]
+name = "hyper"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8e946c2b1349055e0b72ae281b238baf1a3ea7307c7e9f9d64673bdd9c26ac7"
+dependencies = [
+ "bytes 1.0.1",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "h2 0.3.0",
+ "http",
+ "http-body 0.4.4",
+ "httparse",
+ "httpdate",
+ "itoa",
+ "pin-project 1.0.1",
+ "socket2",
+ "tokio 1.9.0",
  "tower-service",
  "tracing",
  "want",
@@ -2054,7 +2136,7 @@ dependencies = [
  "antidote",
  "bytes 0.5.3",
  "http",
- "hyper",
+ "hyper 0.13.10",
  "linked_hash_set",
  "once_cell",
  "openssl",
@@ -2070,10 +2152,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3adcd308402b9553630734e9c36b77a7e48b3821251ca2493e8cd596763aafaa"
 dependencies = [
  "bytes 0.5.3",
- "hyper",
+ "hyper 0.13.10",
  "native-tls",
  "tokio 0.2.24",
  "tokio-tls",
+]
+
+[[package]]
+name = "hyper-tls"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6183ddfa99b85da61a140bea0efc93fdf56ceaa041b37d553518030827f9905"
+dependencies = [
+ "bytes 1.0.1",
+ "hyper 0.14.4",
+ "native-tls",
+ "tokio 1.9.0",
+ "tokio-native-tls",
 ]
 
 [[package]]
@@ -2475,9 +2570,9 @@ checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
 name = "memchr"
-version = "2.2.1"
+version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88579771288728879b57485cc7d6b07d648c9f0141eb955f8ab7f9d45394468e"
+checksum = "308cc39be01b73d0d18f82a0e7b2a3df85245f84af96fdddc5d202d27e47b86a"
 dependencies = [
  "libc 0.2.86",
 ]
@@ -2544,16 +2639,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd1d63acd1b78403cc0c325605908475dd9b9a3acbf65ed8bcab97e27014afcf"
 
 [[package]]
-name = "mime_guess"
-version = "2.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2684d4c2e97d99848d30b324b00c8fcc7e5c897b7cbb5819b09e7c90e8baf212"
-dependencies = [
- "mime",
- "unicase",
-]
-
-[[package]]
 name = "miniz_oxide"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2582,6 +2667,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mio"
+version = "0.7.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8067b404fe97c70829f082dec8bcf4f71225d7eaea1d8645349cb76fa06205cc"
+dependencies = [
+ "libc 0.2.86",
+ "log",
+ "miow 0.3.6",
+ "ntapi",
+ "winapi 0.3.8",
+]
+
+[[package]]
 name = "mio-extras"
 version = "2.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2589,7 +2687,7 @@ checksum = "52403fe290012ce777c4626790c8951324a2b9e3316b3143779c72b029742f19"
 dependencies = [
  "lazycell",
  "log",
- "mio",
+ "mio 0.6.22",
  "slab",
 ]
 
@@ -2600,7 +2698,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5e374eff525ce1c5b7687c4cef63943e7686524a387933ad27ca7ec43779cb3"
 dependencies = [
  "log",
- "mio",
+ "mio 0.6.22",
  "miow 0.3.6",
  "winapi 0.3.8",
 ]
@@ -2613,7 +2711,7 @@ checksum = "966257a94e196b11bb43aca423754d87429960a768de9414f3691d6957abf125"
 dependencies = [
  "iovec",
  "libc 0.2.86",
- "mio",
+ "mio 0.6.22",
 ]
 
 [[package]]
@@ -2792,7 +2890,7 @@ dependencies = [
  "fsevent-sys",
  "inotify",
  "libc 0.2.86",
- "mio",
+ "mio 0.6.22",
  "mio-extras",
  "walkdir",
  "winapi 0.3.8",
@@ -3075,14 +3173,14 @@ version = "0.1.0"
 dependencies = [
  "collections",
  "error_code",
- "fail",
+ "fail 0.5.0",
  "futures 0.3.8",
  "grpcio",
  "kvproto",
  "lazy_static",
  "log",
  "log_wrappers",
- "prometheus",
+ "prometheus 0.13.0",
  "security",
  "semver 0.10.0",
  "serde",
@@ -3430,10 +3528,24 @@ dependencies = [
  "cfg-if 0.1.10",
  "fnv",
  "lazy_static",
+ "parking_lot 0.11.0",
+ "regex",
+ "thiserror",
+]
+
+[[package]]
+name = "prometheus"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7f64969ffd5dd8f39bd57a68ac53c163a095ed9d0fb707146da1b27025a3504"
+dependencies = [
+ "cfg-if 1.0.0",
+ "fnv",
+ "lazy_static",
  "libc 0.2.86",
+ "memchr",
  "parking_lot 0.11.0",
  "protobuf",
- "regex",
  "reqwest",
  "thiserror",
 ]
@@ -3651,7 +3763,7 @@ dependencies = [
  "engine_test",
  "engine_traits",
  "error_code",
- "fail",
+ "fail 0.5.0",
  "file_system",
  "fs2",
  "futures 0.3.8",
@@ -3666,7 +3778,7 @@ dependencies = [
  "openssl",
  "panic_hook",
  "pd_client",
- "prometheus",
+ "prometheus 0.13.0",
  "prometheus-static-metric",
  "prost",
  "protobuf",
@@ -3937,32 +4049,31 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.10.8"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9eaa17ac5d7b838b7503d118fa16ad88f440498bf9ffe5424e621f93190d61e"
+checksum = "0460542b551950620a3648c6aa23318ac6b3cd779114bd873209e6e8b5eb1c34"
 dependencies = [
- "base64 0.12.0",
- "bytes 0.5.3",
+ "base64 0.13.0",
+ "bytes 1.0.1",
  "encoding_rs",
  "futures-core",
  "futures-util",
  "http",
- "http-body",
- "hyper",
- "hyper-tls",
+ "http-body 0.4.4",
+ "hyper 0.14.4",
+ "hyper-tls 0.5.0",
  "ipnet",
  "js-sys",
  "lazy_static",
  "log",
  "mime",
- "mime_guess",
  "native-tls",
  "percent-encoding",
- "pin-project-lite 0.1.4",
+ "pin-project-lite 0.2.0",
  "serde",
- "serde_urlencoded",
- "tokio 0.2.24",
- "tokio-tls",
+ "serde_urlencoded 0.7.0",
+ "tokio 1.9.0",
+ "tokio-native-tls",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -3980,7 +4091,7 @@ dependencies = [
  "crossbeam",
  "engine_rocks",
  "engine_traits",
- "fail",
+ "fail 0.5.0",
  "futures 0.3.8",
  "grpcio",
  "hex 0.4.2",
@@ -3989,7 +4100,7 @@ dependencies = [
  "log_wrappers",
  "panic_hook",
  "pd_client",
- "prometheus",
+ "prometheus 0.13.0",
  "prost",
  "protobuf",
  "raft",
@@ -4024,7 +4135,7 @@ dependencies = [
  "pdqselect",
  "pin-project 1.0.1",
  "procinfo",
- "prometheus",
+ "prometheus 0.13.0",
  "prometheus-static-metric",
  "rand 0.8.3",
  "serde",
@@ -4087,8 +4198,8 @@ dependencies = [
  "crc32fast",
  "futures 0.3.8",
  "http",
- "hyper",
- "hyper-tls",
+ "hyper 0.13.10",
+ "hyper-tls 0.4.1",
  "lazy_static",
  "log",
  "md5",
@@ -4112,7 +4223,7 @@ dependencies = [
  "chrono",
  "dirs",
  "futures 0.3.8",
- "hyper",
+ "hyper 0.13.10",
  "pin-project 0.4.8",
  "regex",
  "serde",
@@ -4172,7 +4283,7 @@ dependencies = [
  "hex 0.4.2",
  "hmac",
  "http",
- "hyper",
+ "hyper 0.13.10",
  "log",
  "md5",
  "percent-encoding",
@@ -4195,7 +4306,7 @@ dependencies = [
  "chrono",
  "futures 0.3.8",
  "rusoto_core",
- "serde_urlencoded",
+ "serde_urlencoded 0.6.1",
  "tempfile",
  "xml-rs",
 ]
@@ -4456,6 +4567,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_urlencoded"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edfa57a7f8d9c1d260a549e7224100f6c43d43f9103e06dd8b4095a9b2b43ce9"
+dependencies = [
+ "form_urlencoded",
+ "itoa",
+ "ryu",
+ "serde",
+]
+
+[[package]]
 name = "serde_with"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4504,7 +4627,7 @@ dependencies = [
  "log_wrappers",
  "nix 0.11.1",
  "pd_client",
- "prometheus",
+ "prometheus 0.13.0",
  "promptly",
  "protobuf",
  "raft",
@@ -4701,7 +4824,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
- "prometheus",
+ "prometheus 0.13.0",
  "serde",
  "serde_derive",
  "slog",
@@ -4946,7 +5069,7 @@ dependencies = [
  "pin-utils",
  "serde",
  "serde_json",
- "serde_urlencoded",
+ "serde_urlencoded 0.6.1",
  "thiserror",
  "url",
 ]
@@ -5067,7 +5190,7 @@ name = "test_pd"
 version = "0.0.1"
 dependencies = [
  "collections",
- "fail",
+ "fail 0.5.0",
  "futures 0.3.8",
  "grpcio",
  "kvproto",
@@ -5088,7 +5211,7 @@ dependencies = [
  "encryption_export",
  "engine_rocks",
  "engine_traits",
- "fail",
+ "fail 0.5.0",
  "file_system",
  "futures 0.3.8",
  "grpcio",
@@ -5147,7 +5270,7 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "encryption_export",
- "fail",
+ "fail 0.5.0",
  "grpcio",
  "kvproto",
  "rand 0.7.3",
@@ -5181,12 +5304,12 @@ dependencies = [
  "engine_traits",
  "error_code",
  "external_storage_export",
- "fail",
+ "fail 0.5.0",
  "file_system",
  "futures 0.3.8",
  "grpcio",
  "grpcio-health",
- "hyper",
+ "hyper 0.13.10",
  "keys",
  "kvproto",
  "log_wrappers",
@@ -5315,7 +5438,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
- "prometheus",
+ "prometheus 0.13.0",
  "prometheus-static-metric",
  "thiserror",
  "tikv_util",
@@ -5366,7 +5489,7 @@ dependencies = [
  "anyhow",
  "codec",
  "collections",
- "fail",
+ "fail 0.5.0",
  "itertools 0.8.2",
  "kvproto",
  "log_wrappers",
@@ -5448,7 +5571,7 @@ dependencies = [
  "engine_traits_tests",
  "error_code",
  "example_plugin",
- "fail",
+ "fail 0.5.0",
  "file_system",
  "fs2",
  "futures 0.3.8",
@@ -5458,9 +5581,9 @@ dependencies = [
  "grpcio-health",
  "hex 0.4.2",
  "http",
- "hyper",
+ "hyper 0.13.10",
  "hyper-openssl",
- "hyper-tls",
+ "hyper-tls 0.4.1",
  "into_other",
  "itertools 0.8.2",
  "keys",
@@ -5487,7 +5610,7 @@ dependencies = [
  "pnet_datalink",
  "pprof",
  "procinfo",
- "prometheus",
+ "prometheus 0.13.0",
  "prometheus-static-metric",
  "prost",
  "protobuf",
@@ -5563,7 +5686,7 @@ dependencies = [
  "log_wrappers",
  "nix 0.19.0",
  "pd_client",
- "prometheus",
+ "prometheus 0.13.0",
  "promptly",
  "protobuf",
  "raft",
@@ -5656,7 +5779,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "fail",
+ "fail 0.5.0",
  "file_system",
  "futures 0.3.8",
  "into_other",
@@ -5664,7 +5787,7 @@ dependencies = [
  "kvproto",
  "log_wrappers",
  "panic_hook",
- "prometheus",
+ "prometheus 0.13.0",
  "prometheus-static-metric",
  "raftstore",
  "slog",
@@ -5693,7 +5816,7 @@ dependencies = [
  "crossbeam",
  "derive_more",
  "error_code",
- "fail",
+ "fail 0.5.0",
  "fs2",
  "futures 0.3.8",
  "futures-util",
@@ -5712,7 +5835,7 @@ dependencies = [
  "panic_hook",
  "procfs",
  "procinfo",
- "prometheus",
+ "prometheus 0.13.0",
  "protobuf",
  "rand 0.7.3",
  "regex",
@@ -5830,7 +5953,7 @@ dependencies = [
  "lazy_static",
  "libc 0.2.86",
  "memchr",
- "mio",
+ "mio 0.6.22",
  "mio-named-pipes",
  "mio-uds",
  "num_cpus",
@@ -5848,7 +5971,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b7b349f11a7047e6d1276853e612d152f5e8a352c61917887cc2169e2366b4c"
 dependencies = [
  "autocfg",
+ "bytes 1.0.1",
+ "libc 0.2.86",
+ "memchr",
+ "mio 0.7.14",
+ "num_cpus",
  "pin-project-lite 0.2.0",
+ "winapi 0.3.8",
 ]
 
 [[package]]
@@ -5870,6 +5999,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "tokio-native-tls"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7d995660bd2b7f8c1568414c1126076c13fbb725c40112dc0120b78eb9b717b"
+dependencies = [
+ "native-tls",
+ "tokio 1.9.0",
 ]
 
 [[package]]
@@ -5934,6 +6073,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-util"
+version = "0.6.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e99e1983e5d376cd8eb4b66604d2e99e79f5bd988c3055891dcd8c9e2604cc0"
+dependencies = [
+ "bytes 1.0.1",
+ "futures-core",
+ "futures-sink",
+ "log",
+ "pin-project-lite 0.2.0",
+ "tokio 1.9.0",
+]
+
+[[package]]
 name = "toml"
 version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5967,6 +6120,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f50de3927f93d202783f4513cda820ab47ef17f624b03c096e86ef00c67e6b5f"
 dependencies = [
  "lazy_static",
+]
+
+[[package]]
+name = "tracing-futures"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97d095ae15e245a057c8e8451bab9b3ee1e1f68e9ba2b4fbc18d0ac5237835f2"
+dependencies = [
+ "pin-project 1.0.1",
+ "tracing",
 ]
 
 [[package]]
@@ -6030,15 +6193,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eeba86d422ce181a719445e51872fa30f1f7413b62becb52e95ec91aa262d85c"
 
 [[package]]
-name = "unicase"
-version = "2.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50f37be617794602aabbeee0be4f259dc1778fabe05e2d67ee8f79326d5cb4f6"
-dependencies = [
- "version_check 0.9.2",
-]
-
-[[package]]
 name = "unicode-bidi"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6082,10 +6236,11 @@ checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
 
 [[package]]
 name = "url"
-version = "2.1.1"
+version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "829d4a8476c35c9bf0bbce5a3b23f4106f79728039b726d292bb93bc106787cb"
+checksum = "a507c383b2d33b5fc35d1861e77e6b383d158b2da5e14fe51b83dfedf6fd578c"
 dependencies = [
+ "form_urlencoded",
  "idna",
  "matches",
  "percent-encoding",
@@ -6222,11 +6377,11 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-futures"
-version = "0.4.9"
+version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "457414a91863c0ec00090dba537f88ab955d93ca6555862c29b6d860990b8a8a"
+checksum = "3de431a2910c86679c34283a33f66f4e4abd7e0aec27b6669060148872aadf94"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "js-sys",
  "wasm-bindgen",
  "web-sys",
@@ -6377,11 +6532,11 @@ source = "git+https://github.com/tikv/yatp.git?branch=master#6bbea16a485583d7a6e
 dependencies = [
  "crossbeam-deque 0.7.4",
  "dashmap",
- "fail",
+ "fail 0.4.0",
  "lazy_static",
  "num_cpus",
  "parking_lot_core 0.8.0",
- "prometheus",
+ "prometheus 0.10.0",
  "rand 0.7.3",
 ]
 

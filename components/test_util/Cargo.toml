@@ -25,7 +25,7 @@ cloud-gcp = [ "encryption_export/cloud-gcp" ]
 
 [dependencies]
 encryption_export = { path = "../encryption/export", default-features = false }
-fail = "0.4"
+fail = "0.5"
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-5.1", default-features = false }
 rand = "0.7"

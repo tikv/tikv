@@ -142,7 +142,7 @@ engine_test = { path = "components/engine_test", default-features = false }
 engine_traits = { path = "components/engine_traits", default-features = false }
 engine_traits_tests = { path = "components/engine_traits_tests", default-features = false }
 error_code = { path = "components/error_code", default-features = false }
-fail = "0.4"
+fail = "0.5"
 file_system = { path = "components/file_system", default-features = false }
 fs2 = "0.4"
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
@@ -194,7 +194,7 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 strum = { version = "0.20", features = ["derive"] }
 parking_lot = "0.11"
-prometheus = { version = "0.10", features = ["nightly"] }
+prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.4"
 sst_importer = { path = "components/sst_importer", default-features = false }
 sysinfo = "0.16"

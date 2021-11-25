@@ -25,7 +25,7 @@ libc = "0.2"
 nix = "0.19"
 openssl = "0.10"
 parking_lot = "0.11"
-prometheus = { version = "0.10", features = ["nightly"] }
+prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.4"
 rand = "0.7.3"
 serde = "1.0"

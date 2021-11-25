@@ -113,7 +113,7 @@ sse = ["tikv/sse"]
 portable = ["tikv/portable"]
 
 [dependencies]
-fail = "0.4"
+fail = "0.5"
 batch-system = { path = "../components/batch-system", default-features = false }
 crc64fast = "0.1"
 crossbeam = "0.8"
