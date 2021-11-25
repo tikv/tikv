@@ -47,4 +47,4 @@ txn_types = { path = "../txn_types", default-features = false }
 encryption_export = { path = "../encryption/export", default-features = false }
 tokio = { version = "1.5", features = ["rt-multi-thread"]}
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
-fail = "0.4"
+fail = "0.5"

@@ -18,4 +18,4 @@ tikv_util = { path = "../tikv_util", default-features = false }
 url = "2.0"
 
 [dev-dependencies]
-fail = "0.4"
+fail = "0.5"
