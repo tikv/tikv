@@ -15,6 +15,7 @@ use raft::eraftpb::Entry;
 use raft_engine::{
     Command, Engine as RawRaftEngine, Error as RaftEngineError, FileBuilder, LogBatch, MessageExt,
 };
+use tikv_util::Either;
 
 pub use raft_engine::{Config as RaftEngineConfig, RecoveryMode};
 
@@ -30,17 +31,15 @@ impl MessageExt for MessageExtTyped {
 }
 
 struct ManagedReader<R: Seek + Read> {
-    raw: Option<R>,
-    decrypter: Option<DecrypterReader<R>>,
+    inner: Either<R, DecrypterReader<R>>,
     rate_limiter: Option<Arc<IORateLimiter>>,
 }
 
 impl<R: Seek + Read> Seek for ManagedReader<R> {
     fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
-        match (&mut self.raw, &mut self.decrypter) {
-            (Some(ref mut reader), None) => reader.seek(pos),
-            (None, Some(ref mut reader)) => reader.seek(pos),
-            _ => unreachable!(),
+        match self.inner.as_mut() {
+            Either::Left(reader) => reader.seek(pos),
+            Either::Right(reader) => reader.seek(pos),
         }
     }
 }
@@ -51,26 +50,23 @@ impl<R: Seek + Read> Read for ManagedReader<R> {
         if let Some(ref mut limiter) = self.rate_limiter {
             size = limiter.request(IOType::ForegroundRead, IOOp::Read, size);
         }
-        match (&mut self.raw, &mut self.decrypter) {
-            (Some(ref mut reader), None) => reader.read(&mut buf[..size]),
-            (None, Some(ref mut reader)) => reader.read(&mut buf[..size]),
-            _ => unreachable!(),
+        match self.inner.as_mut() {
+            Either::Left(reader) => reader.read(&mut buf[..size]),
+            Either::Right(reader) => reader.read(&mut buf[..size]),
         }
     }
 }
 
 struct ManagedWriter<W: Seek + Write> {
-    raw: Option<W>,
-    encrypter: Option<EncrypterWriter<W>>,
+    inner: Either<W, EncrypterWriter<W>>,
     rate_limiter: Option<Arc<IORateLimiter>>,
 }
 
 impl<W: Seek + Write> Seek for ManagedWriter<W> {
     fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
-        match (&mut self.raw, &mut self.encrypter) {
-            (Some(ref mut writer), None) => writer.seek(pos),
-            (None, Some(ref mut writer)) => writer.seek(pos),
-            _ => unreachable!(),
+        match self.inner.as_mut() {
+            Either::Left(writer) => writer.seek(pos),
+            Either::Right(writer) => writer.seek(pos),
         }
     }
 }
@@ -81,10 +77,9 @@ impl<W: Seek + Write> Write for ManagedWriter<W> {
         if let Some(ref mut limiter) = self.rate_limiter {
             size = limiter.request(IOType::ForegroundWrite, IOOp::Write, size);
         }
-        match (&mut self.raw, &mut self.encrypter) {
-            (Some(ref mut writer), None) => writer.write(&buf[..size]),
-            (None, Some(ref mut writer)) => writer.write(&buf[..size]),
-            _ => unreachable!(),
+        match self.inner.as_mut() {
+            Either::Left(writer) => writer.write(&buf[..size]),
+            Either::Right(writer) => writer.write(&buf[..size]),
         }
     }
 
@@ -120,14 +115,12 @@ impl FileBuilder for ManagedFileBuilder {
     {
         if let Some(ref key_manager) = self.key_manager {
             Ok(ManagedReader {
-                raw: None,
-                decrypter: Some(key_manager.open_file_with_reader(path, reader)?),
+                inner: Either::Right(key_manager.open_file_with_reader(path, reader)?),
                 rate_limiter: self.rate_limiter.clone(),
             })
         } else {
             Ok(ManagedReader {
-                raw: Some(reader),
-                decrypter: None,
+                inner: Either::Left(reader),
                 rate_limiter: self.rate_limiter.clone(),
             })
         }
@@ -139,14 +132,12 @@ impl FileBuilder for ManagedFileBuilder {
     {
         if let Some(ref key_manager) = self.key_manager {
             Ok(ManagedWriter {
-                raw: None,
-                encrypter: Some(key_manager.open_file_with_writer(path, writer, create)?),
+                inner: Either::Right(key_manager.open_file_with_writer(path, writer, create)?),
                 rate_limiter: self.rate_limiter.clone(),
             })
         } else {
             Ok(ManagedWriter {
-                raw: Some(writer),
-                encrypter: None,
+                inner: Either::Left(writer),
                 rate_limiter: self.rate_limiter.clone(),
             })
         }
