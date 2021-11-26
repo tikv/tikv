@@ -1,30 +1,24 @@
-use std::{fmt::Debug, sync::Arc};
+use std::fmt::Debug;
 
 use super::{
-    keys::MetaKey,
-    store::{Keys, KvEvent, KvEventType, MetaStore, Snapshot, WithRevision},
+    keys::{KeyValue, MetaKey},
+    store::{GetExtra, Keys, KvEvent, KvEventType, MetaStore, Snapshot, WithRevision},
 };
-use etcd_client::{GetOptions, SortOrder, SortTarget};
+
 use kvproto::brpb::StreamBackupTaskInfo;
-use tokio::sync::Mutex;
+
 use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
 
 use crate::errors::{Error, Result};
 
 /// Some operations over metadata key space.
 pub struct MetadataClient<Store> {
-    // TODO: for better testing, make it an interface.
-    // Can we get rid of the mutex? (which means, we must use a singleton client.)
-    // Or make a pool of clients?
-    cli: Arc<Mutex<etcd_client::Client>>,
-    store: Store,
+    store_id: u64,
+    meta_store: Store,
 }
 
 pub struct Task {
     pub info: StreamBackupTaskInfo,
-    // attache the client into the task can provide some convenient interfaces
-    // like task.range_overlap_of().
-    cli: Arc<Mutex<etcd_client::Client>>,
 }
 
 impl Debug for Task {
@@ -38,57 +32,6 @@ impl Debug for Task {
     }
 }
 
-impl Task {
-    async fn range_overlap_of(
-        &self,
-        (start_key, end_key): (Vec<u8>, Vec<u8>),
-    ) -> Result<WithRevision<Vec<(Vec<u8>, Vec<u8>)>>> {
-        let prev = self
-            .cli
-            .lock()
-            .await
-            .get(
-                MetaKey::ranges_of(self.info.name.as_str()),
-                Some(
-                    GetOptions::new()
-                        .with_range(MetaKey::range_of(self.info.name.as_str(), &start_key))
-                        .with_sort(SortTarget::Key, SortOrder::Descend)
-                        .with_limit(1),
-                ),
-            )
-            .await?;
-        // the header should not be taken here!
-        let rev = prev.header().unwrap().revision();
-        let all = self
-            .cli
-            .lock()
-            .await
-            .get(
-                MetaKey::range_of(self.info.name.as_str(), &start_key),
-                Some(
-                    GetOptions::new()
-                        .with_range(MetaKey::range_of(&self.info.name, &end_key))
-                        .with_revision(rev),
-                ),
-            )
-            .await?;
-        let mut result = Vec::with_capacity(all.count() as usize + 1);
-        if prev.count() > 0 {
-            let kv = &prev.kvs()[0];
-            if kv.value() > start_key.as_slice() {
-                result.push((kv.key().to_owned(), kv.value().to_owned()));
-            }
-        }
-        for kv in all.kvs() {
-            result.push((kv.key().to_owned(), kv.value().to_owned()))
-        }
-        Ok(WithRevision {
-            revision: rev,
-            inner: result,
-        })
-    }
-}
-
 #[derive(Debug)]
 pub enum MetadataEvent {
     AddTask { task: String },
@@ -99,7 +42,7 @@ pub enum MetadataEvent {
 impl MetadataEvent {
     fn from_watch_event(event: &KvEvent) -> Option<MetadataEvent> {
         // Maybe report an error when the kv isn't present?
-        let key_str = std::str::from_utf8(event.pair.1.as_slice()).ok()?;
+        let key_str = std::str::from_utf8(event.pair.key()).ok()?;
         let task_name = super::keys::extract_name_from_info(key_str)?;
         Some(match event.kind {
             KvEventType::Put => MetadataEvent::AddTask {
@@ -121,19 +64,19 @@ macro_rules! send_or_break {
 }
 
 impl<Store: MetaStore> MetadataClient<Store> {
-    pub async fn new(pd_addrs: &[&str]) -> Result<Self> {
-        let cli = etcd_client::Client::connect(pd_addrs, None).await?;
-        Ok(Self {
-            cli: Arc::new(Mutex::new(cli)),
-            store: todo!(),
-        })
+    pub fn new(store: Store, store_id: u64) -> Self {
+        Self {
+            meta_store: store,
+            store_id,
+        }
     }
 
     pub async fn get_task(&self, name: &str) -> Result<Task> {
         let items = self
-            .store
-            .snap()
-            .get(&Keys::Key(MetaKey::task_of(name)))
+            .meta_store
+            .snapshot()
+            .await?
+            .get(Keys::Key(MetaKey::task_of(name)))
             .await?;
         if items.len() == 0 {
             return Err(Error::NoSuchTask {
@@ -141,20 +84,16 @@ impl<Store: MetaStore> MetadataClient<Store> {
             });
         }
         let info = protobuf::parse_from_bytes::<StreamBackupTaskInfo>(&items[0].1)?;
-        Ok(Task {
-            info,
-            cli: self.cli.clone(),
-        })
+        Ok(Task { info })
     }
 
     pub async fn get_tasks(&self) -> Result<WithRevision<Vec<Task>>> {
-        let snap = self.store.snap();
-        let kvs = snap.get(&Keys::Prefix(MetaKey::tasks())).await?;
+        let snap = self.meta_store.snapshot().await?;
+        let kvs = snap.get(Keys::Prefix(MetaKey::tasks())).await?;
         let mut tasks = Vec::with_capacity(kvs.len());
         for kv in kvs {
             tasks.push(Task {
                 info: protobuf::parse_from_bytes(&kv.1)?,
-                cli: self.cli.clone(),
             });
         }
         Ok(WithRevision {
@@ -167,7 +106,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
     /// the revision would usually come from a WithRevision struct(which indices the revision of the inner item).
     pub async fn events_from(&self, revision: i64) -> Result<impl Stream<Item = MetadataEvent>> {
         let mut watcher = self
-            .store
+            .meta_store
             .watch(Keys::Prefix(MetaKey::tasks()), revision + 1)
             .await?;
         let (tx, rx) = tokio::sync::mpsc::channel(64);
@@ -176,6 +115,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
                 match watcher.stream.next().await {
                     Some(Err(err)) => {
                         send_or_break!(tx, MetadataEvent::Error { err: err.into() });
+                        break;
                     }
                     None => break,
                     Some(Ok(event)) => {
@@ -190,5 +130,90 @@ impl<Store: MetaStore> MetadataClient<Store> {
             watcher.cancel.await
         });
         Ok(ReceiverStream::new(rx))
+    }
+
+    /// forward the progress of some task.
+    pub async fn step_task(&self, task_name: &str, region_id: u64, ts: u64) -> Result<()> {
+        self.meta_store
+            .set(KeyValue(
+                MetaKey::next_backup_ts_of(task_name, self.store_id, region_id),
+                ts.to_be_bytes().to_vec(),
+            ))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn ranges_of_task(
+        &self,
+        task_name: &str,
+    ) -> Result<WithRevision<Vec<(Vec<u8>, Vec<u8>)>>> {
+        let snap = self.meta_store.snapshot().await?;
+        let ranges = snap
+            .get(Keys::Prefix(MetaKey::ranges_of(task_name)))
+            .await?;
+
+        Ok(WithRevision {
+            revision: snap.revision(),
+            inner: ranges
+                .into_iter()
+                .map(|mut kv| {
+                    let key = kv.take_key();
+                    (
+                        super::keys::extract_range_from_key(key.as_slice(), task_name)
+                            .map(|s| s.to_vec())
+                            .unwrap_or(key),
+                        kv.take_value(),
+                    )
+                })
+                .collect(),
+        })
+    }
+
+    pub async fn range_overlap_of_task(
+        &self,
+        task_name: &str,
+        (start_key, end_key): (Vec<u8>, Vec<u8>),
+    ) -> Result<WithRevision<Vec<(Vec<u8>, Vec<u8>)>>> {
+        let snap = self.meta_store.snapshot().await?;
+        let mut prev = snap
+            .get_extra(
+                Keys::Range(
+                    MetaKey::ranges_of(task_name),
+                    MetaKey::range_of(task_name, &start_key),
+                ),
+                GetExtra {
+                    desc_order: true,
+                    limit: 1,
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let all = snap
+            .get(Keys::Range(
+                MetaKey::range_of(task_name, &start_key),
+                MetaKey::range_of(task_name, &end_key),
+            ))
+            .await?;
+
+        let mut result = Vec::with_capacity(all.len() as usize + 1);
+        if prev.kvs.len() > 0 {
+            let kv = &mut prev.kvs[0];
+            if kv.value() > start_key.as_slice() {
+                let key = kv.take_key();
+                result.push((
+                    super::keys::extract_range_from_key(&key, task_name)
+                        .map(|s| s.to_vec())
+                        .unwrap_or(key),
+                    kv.take_value(),
+                ));
+            }
+        }
+        for mut kv in all {
+            result.push((kv.take_key(), kv.take_value()))
+        }
+        Ok(WithRevision {
+            revision: snap.revision(),
+            inner: result,
+        })
     }
 }

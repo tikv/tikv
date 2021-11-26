@@ -1,3 +1,4 @@
+use bytes::BufMut;
 use lazy_static::lazy_static;
 use regex::Regex;
 
@@ -11,8 +12,38 @@ lazy_static! {
         Regex::new(r"/tidb/br-stream/info/(?P<task_name>\w+)").unwrap();
 }
 
+#[derive(Clone)]
 pub struct MetaKey(pub Vec<u8>);
+#[derive(Clone, Debug)]
 pub struct KeyValue(pub MetaKey, pub Vec<u8>);
+
+impl std::fmt::Debug for MetaKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match std::str::from_utf8(&self.0) {
+            Ok(s) => format!("{}", s),
+            Err(_) => format!("<{}>", hex::encode(&self.0)),
+        };
+        f.debug_tuple("MetaKey").field(&s).finish()
+    }
+}
+
+impl KeyValue {
+    pub fn key(&self) -> &[u8] {
+        self.0.0.as_slice()
+    }
+
+    pub fn value(&self) -> &[u8] {
+        self.1.as_slice()
+    }
+
+    pub fn take_key(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.0.0)
+    }
+
+    pub fn take_value(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.1)
+    }
+}
 
 impl Into<Vec<u8>> for MetaKey {
     fn into(self) -> Vec<u8> {
@@ -26,29 +57,47 @@ impl MetaKey {
         Self(format!("{}{}", PREFIX, PATH_INFO).into_bytes())
     }
 
-    /// the path for the specfied path.
+    /// the path for the specified path.
     pub fn task_of(name: &str) -> Self {
         Self(format!("{}{}/{}", PREFIX, PATH_INFO, name).into_bytes())
     }
 
     /// the path prefix for the ranges of some tasks.
     pub fn ranges_of(name: &str) -> Self {
-        Self(format!("{}{}", PREFIX, PATH_RANGES).into_bytes())
+        Self(format!("{}{}/{}/", PREFIX, PATH_RANGES, name).into_bytes())
     }
 
     /// Generate the range key of some task.
     /// It should be <prefix>/ranges/<task-name(string)>/<start-key(binary).
     pub fn range_of(name: &str, rng: &[u8]) -> Self {
         let mut ranges = Self::ranges_of(name);
-        ranges.0.push(b'/');
         ranges.0.extend(rng);
         ranges
+    }
+
+    pub fn next_backup_ts_of(name: &str, store_id: u64, region_id: u64) -> Self {
+        let base = format!("{}{}/{}", PREFIX, PATH_NEXT_BACKUP_TS, name);
+        let mut buf = bytes::BytesMut::from(base);
+        buf.put(b'/');
+        buf.put_u64_be(store_id);
+        buf.put(b'/');
+        buf.put_u64_be(region_id);
+        Self(buf.to_vec())
     }
 }
 
 /// extract the task name from the task info path.
 pub fn extract_name_from_info(full_path: &str) -> Option<&str> {
-    EXTRACT_NAME_FROM_INFO_RE
-        .captures(full_path)
-        .map(|captures| captures.name("task_name").unwrap().as_str())
+    Some(
+        EXTRACT_NAME_FROM_INFO_RE
+            .captures(full_path)?
+            .name("task_name")?
+            .as_str(),
+    )
+}
+
+/// extract the range from the key path.
+pub fn extract_range_from_key<'a>(full_path: &'a [u8], task_name: &str) -> Option<&'a [u8]> {
+    let mut prefix = MetaKey::ranges_of(task_name);
+    full_path.strip_prefix(prefix.0.as_slice())
 }
