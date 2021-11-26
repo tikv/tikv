@@ -1555,14 +1555,7 @@ mod tests {
         )
         .unwrap();
 
-        commit(
-            &engine,
-            &mut statistics,
-            vec![Key::from_raw(key)],
-            8,
-            9,
-        )
-        .unwrap();
+        commit(&engine, &mut statistics, vec![Key::from_raw(key)], 8, 9).unwrap();
 
         // T1: start_ts = 10, reapeatly prewrite on k, with should_not_exist flag set
         let res = prewrite_with_cm(
