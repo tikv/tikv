@@ -1526,7 +1526,6 @@ mod tests {
         must_commit(&engine, key, 3, 5);
         
         // T2: start_ts = 10, prewrite on k, with should_not_exist flag set.
-        let mut statistics = Statistics::default();
         let res = prewrite_with_cm(
             &engine,
             cm.clone(),
@@ -1536,9 +1535,13 @@ mod tests {
             10,
             None,
         )
-        .err()
-        .unwrap();
-        assert!(e, Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { .. }))));
+        .unwrap_err();
+        assert!(matches!(
+            res,
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::AlreadyExist { .. }
+            )))
+        ));
 
         // T3: start_ts = 8, commit_ts = 9, prewrite a DELETE operation on k
         must_prewrite_delete(&engine, key, key, 8);
@@ -1547,16 +1550,20 @@ mod tests {
         // T1: start_ts = 10, reapeatly prewrite on k, with should_not_exist flag set
         let res = prewrite_with_cm(
             &engine,
-            cm.clone(),
+            cm,
             &mut statistics,
             vec![Mutation::CheckNotExists(Key::from_raw(key))],
             key.to_vec(),
             10, 
             None,
         )
-        .err()
-        .unwrap();
-        assert!(e, Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { .. }))));
+        .unwrap_err();
+        assert!(matches!(
+            res,
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::AlreadyExist { .. }
+            )))
+        ));
     }
 
     #[test]
