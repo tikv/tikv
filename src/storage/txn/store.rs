@@ -250,6 +250,8 @@ pub struct SnapshotStore<S: Snapshot> {
     isolation_level: IsolationLevel,
     fill_cache: bool,
     bypass_locks: TsSet,
+    access_locks: TsSet,
+
     check_has_newer_ts_data: bool,
 
     point_getter_cache: Option<PointGetter<S>>,
@@ -264,6 +266,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .isolation_level(self.isolation_level)
             .multi(false)
             .bypass_locks(self.bypass_locks.clone())
+            .access_locks(self.access_locks.clone())
             .build()?;
         let v = point_getter.get(key)?;
         statistics.add(&point_getter.take_statistics());
@@ -278,6 +281,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                     .isolation_level(self.isolation_level)
                     .multi(true)
                     .bypass_locks(self.bypass_locks.clone())
+                    .access_locks(self.access_locks.clone())
                     .check_has_newer_ts_data(self.check_has_newer_ts_data)
                     .build()?,
             );
@@ -311,37 +315,24 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         keys: &[Key],
         statistics: &mut Statistics,
     ) -> Result<Vec<Result<Option<Value>>>> {
-        use std::mem::{self, MaybeUninit};
-        type Element = Result<Option<Value>>;
-
         if keys.len() == 1 {
             return Ok(vec![self.get(&keys[0], statistics)]);
         }
-
-        let mut order_and_keys: Vec<_> = keys.iter().enumerate().collect();
-        order_and_keys.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
 
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .multi(true)
             .bypass_locks(self.bypass_locks.clone())
+            .access_locks(self.access_locks.clone())
             .build()?;
 
-        let mut values: Vec<MaybeUninit<Element>> = Vec::with_capacity(keys.len());
-        for _ in 0..keys.len() {
-            values.push(MaybeUninit::uninit());
-        }
-        for (original_order, key) in order_and_keys {
+        let mut values = Vec::with_capacity(keys.len());
+        for key in keys {
             let value = point_getter.get(key).map_err(Error::from);
-            unsafe {
-                values[original_order].as_mut_ptr().write(value);
-            }
+            values.push(value)
         }
-
         statistics.add(&point_getter.take_statistics());
-
-        let values = unsafe { mem::transmute::<Vec<MaybeUninit<Element>>, Vec<Element>>(values) };
         Ok(values)
     }
 
@@ -363,6 +354,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .bypass_locks(self.bypass_locks.clone())
+            .access_locks(self.access_locks.clone())
             .check_has_newer_ts_data(check_has_newer_ts_data)
             .build()?;
 
@@ -409,6 +401,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         isolation_level: IsolationLevel,
         fill_cache: bool,
         bypass_locks: TsSet,
+        access_locks: TsSet,
         check_has_newer_ts_data: bool,
     ) -> Self {
         SnapshotStore {
@@ -417,6 +410,7 @@ impl<S: Snapshot> SnapshotStore<S> {
             isolation_level,
             fill_cache,
             bypass_locks,
+            access_locks,
             check_has_newer_ts_data,
 
             point_getter_cache: None,
@@ -735,6 +729,7 @@ mod tests {
                 IsolationLevel::Si,
                 true,
                 Default::default(),
+                Default::default(),
                 false,
             )
         }
@@ -949,6 +944,7 @@ mod tests {
             IsolationLevel::Si,
             true,
             Default::default(),
+            Default::default(),
             false,
         );
         let bound_a = Key::from_encoded(b"a".to_vec());
@@ -1002,6 +998,7 @@ mod tests {
             TimeStamp::zero(),
             IsolationLevel::Si,
             true,
+            Default::default(),
             Default::default(),
             false,
         );

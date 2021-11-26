@@ -299,6 +299,7 @@ impl TestSuite {
             IsolationLevel::Si,
             false,
             Default::default(),
+            Default::default(),
             false,
         );
         let mut scanner = RangesScanner::new(RangesScannerOptions {
