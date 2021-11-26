@@ -1166,7 +1166,9 @@ dependencies = [
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
+ "bitflags",
  "case_macros",
+ "codec",
  "error_code",
  "fail",
  "file_system",
@@ -5329,7 +5331,6 @@ dependencies = [
  "tokio-timer",
  "toml",
  "txn_types",
- "unsigned-varint",
  "url",
  "uuid",
  "walkdir",
@@ -5819,12 +5820,6 @@ name = "unicode-xid"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "826e7639553986605ec5979c7dd957c7895e93eabed50ab2ffa7f6128a75097c"
-
-[[package]]
-name = "unsigned-varint"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f8d425fafb8cd76bc3f22aace4af471d3156301d7508f2107e98fbeae10bc7f"
 
 [[package]]
 name = "untrusted"

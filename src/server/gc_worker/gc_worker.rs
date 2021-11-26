@@ -1019,7 +1019,7 @@ mod tests {
     use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
     use engine_traits::KvEngine;
     use futures::executor::block_on;
-    use kvproto::kvrpcpb::Op;
+    use kvproto::kvrpcpb::{ApiVersion, Op};
     use kvproto::metapb::Peer;
     use raft::StateRole;
     use raftstore::coprocessor::region_info_accessor::RegionInfoAccessor;
@@ -1166,10 +1166,13 @@ mod tests {
         // Return Result from this function so we can use the `wait_op` macro here.
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage =
-            TestStorageBuilder::from_engine_and_lock_mgr(engine.clone(), DummyLockManager {})
-                .build()
-                .unwrap();
+        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
+            engine.clone(),
+            DummyLockManager {},
+            ApiVersion::V1,
+        )
+        .build()
+        .unwrap();
         let gate = FeatureGate::default();
         gate.set_version("5.0.0").unwrap();
         let (tx, _rx) = mpsc::channel();
@@ -1331,6 +1334,7 @@ mod tests {
         let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
             prefixed_engine.clone(),
             DummyLockManager {},
+            ApiVersion::V1,
         )
         .build()
         .unwrap();

@@ -6,6 +6,7 @@ use engine_rocks::raw::ColumnFamilyOptions;
 use engine_rocks::raw_util::CFOptions;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use file_system::IORateLimiter;
+use kvproto::kvrpcpb::ApiVersion;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tikv_util::config::ReadableSize;
@@ -21,7 +22,7 @@ pub struct TestEngineBuilder {
     path: Option<PathBuf>,
     cfs: Option<Vec<CfName>>,
     io_rate_limiter: Option<Arc<IORateLimiter>>,
-    enable_ttl: bool,
+    api_version: ApiVersion,
 }
 
 impl TestEngineBuilder {
@@ -30,7 +31,7 @@ impl TestEngineBuilder {
             path: None,
             cfs: None,
             io_rate_limiter: None,
-            enable_ttl: false,
+            api_version: ApiVersion::V1,
         }
     }
 
@@ -50,8 +51,8 @@ impl TestEngineBuilder {
         self
     }
 
-    pub fn ttl(mut self, b: bool) -> Self {
-        self.enable_ttl = b;
+    pub fn api_version(mut self, api_version: ApiVersion) -> Self {
+        self.api_version = api_version;
         self
     }
 
@@ -84,7 +85,7 @@ impl TestEngineBuilder {
             None => TEMP_DIR.to_owned(),
             Some(p) => p.to_str().unwrap().to_owned(),
         };
-        let enable_ttl = self.enable_ttl;
+        let api_version = self.api_version;
         let cfs = self.cfs.unwrap_or_else(|| ALL_CFS.to_vec());
         let mut cache_opt = BlockCacheConfig::default();
         if !enable_block_cache {
@@ -96,7 +97,7 @@ impl TestEngineBuilder {
             .map(|cf| match *cf {
                 CF_DEFAULT => CFOptions::new(
                     CF_DEFAULT,
-                    cfg_rocksdb.defaultcf.build_opt(&cache, None, enable_ttl),
+                    cfg_rocksdb.defaultcf.build_opt(&cache, None, api_version),
                 ),
                 CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
                 CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
