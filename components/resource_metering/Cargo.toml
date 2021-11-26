@@ -12,7 +12,7 @@ collections = { path = "../collections" }
 libc = "0.2"
 crossbeam = "0.8"
 pin-project = "1.0"
-prometheus = { version = "0.12", features = ["nightly"] }
+prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 tikv_util = { path = "../tikv_util" }
@@ -25,7 +25,7 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 futures = "0.3"
 pdqselect = "0.1"
-fail = "0.4"
+fail = "0.5"
 thread-id = "4.0.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]

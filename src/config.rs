@@ -1371,7 +1371,7 @@ pub struct RaftEngineConfig {
 
 impl RaftEngineConfig {
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        self.config.validate().map_err(Box::new)?;
+        self.config.sanitize().map_err(Box::new)?;
         Ok(())
     }
 
@@ -3272,7 +3272,6 @@ mod tests {
     use case_macros::*;
     use engine_rocks::raw_util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
-    use raft_log_engine::RecoveryMode;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use slog::Level;
     use std::sync::Arc;
@@ -3950,26 +3949,6 @@ mod tests {
                 "security.encryption.master-keys".to_owned(),
             ],
         );
-    }
-
-    #[test]
-    fn test_raft_engine() {
-        let content = r#"
-            [raft-engine]
-            enable = true
-            recovery_mode = "tolerate-corrupted-tail-records"
-            bytes-per-sync = "64KB"
-            purge-threshold = "1GB"
-        "#;
-        let cfg: TiKvConfig = toml::from_str(content).unwrap();
-        assert!(cfg.raft_engine.enable);
-        let config = &cfg.raft_engine.config;
-        assert_eq!(
-            config.recovery_mode,
-            RecoveryMode::TolerateCorruptedTailRecords
-        );
-        assert_eq!(config.bytes_per_sync.0, ReadableSize::kb(64).0);
-        assert_eq!(config.purge_threshold.0, ReadableSize::gb(1).0);
     }
 
     #[test]
