@@ -305,6 +305,8 @@ mod perf_context;
 pub use crate::perf_context::*;
 mod flow_control_factors;
 pub use crate::flow_control_factors::*;
+mod table_properties;
+pub use crate::table_properties::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
@@ -330,7 +332,7 @@ pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
 mod raft_engine;
-pub use raft_engine::{CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch};
+pub use raft_engine::{CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask};
 
 // These modules need further scrutiny
 
