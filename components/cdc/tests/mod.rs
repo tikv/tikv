@@ -138,6 +138,7 @@ impl TestSuiteBuilder {
                     create_change_data(cdc::Service::new(
                         scheduler.clone(),
                         MemoryQuota::new(memory_quota),
+                        None,
                     ))
                 }));
             sim.txn_extra_schedulers.insert(

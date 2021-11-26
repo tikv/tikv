@@ -94,7 +94,7 @@ use tikv_util::{
     math::MovingAvgU32,
     sys::{disk, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
-    time::{Instant, Monitor},
+    time::{Instant, Limiter, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
@@ -205,6 +205,7 @@ struct Servers<EK: KvEngine, ER: RaftEngine> {
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
     cdc_memory_quota: MemoryQuota,
+    cdc_bandwidth_limiter: Option<Limiter>,
 }
 
 type LocalServer<EK, ER> =
@@ -934,6 +935,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             importer,
             cdc_scheduler,
             cdc_memory_quota,
+            cdc_bandwidth_limiter: if self.config.cdc.bandwidth_limit.0 > 0 {
+                Some(Limiter::new(self.config.cdc.bandwidth_limit.0 as f64))
+            } else {
+                None
+            },
         });
 
         server_config
@@ -1036,6 +1042,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let cdc_service = cdc::Service::new(
             servers.cdc_scheduler.clone(),
             servers.cdc_memory_quota.clone(),
+            servers.cdc_bandwidth_limiter.clone(),
         );
         if servers
             .server

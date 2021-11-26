@@ -12,6 +12,7 @@ use futures::stream::TryStreamExt;
 use grpcio::{DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
+use tikv_util::time::Limiter;
 use tikv_util::worker::*;
 use tikv_util::{error, info, warn};
 
@@ -167,16 +168,22 @@ impl Conn {
 pub struct Service {
     scheduler: Scheduler<Task>,
     memory_quota: MemoryQuota,
+    bandwidth_limiter: Option<Limiter>,
 }
 
 impl Service {
     /// Create a ChangeData service.
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
-    pub fn new(scheduler: Scheduler<Task>, memory_quota: MemoryQuota) -> Service {
+    pub fn new(
+        scheduler: Scheduler<Task>,
+        memory_quota: MemoryQuota,
+        bandwidth_limiter: Option<Limiter>,
+    ) -> Service {
         Service {
             scheduler,
             memory_quota,
+            bandwidth_limiter,
         }
     }
 }
@@ -188,8 +195,11 @@ impl ChangeData for Service {
         stream: RequestStream<ChangeDataRequest>,
         mut sink: DuplexSink<ChangeDataEvent>,
     ) {
-        let (event_sink, mut event_drain) =
-            channel(CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
+        let (event_sink, mut event_drain) = channel(
+            CDC_CHANNLE_CAPACITY,
+            self.memory_quota.clone(),
+            self.bandwidth_limiter.clone(),
+        );
         let peer = ctx.peer();
         let conn = Conn::new(event_sink, peer);
         let conn_id = conn.get_id();
@@ -323,7 +333,7 @@ mod tests {
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = MemoryQuota::new(capacity);
         let (scheduler, rx) = dummy_scheduler();
-        let cdc_service = Service::new(scheduler, memory_quota);
+        let cdc_service = Service::new(scheduler, memory_quota, None);
         let env = Arc::new(EnvBuilder::new().build());
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));

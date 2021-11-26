@@ -244,7 +244,11 @@ impl MemoryQuota {
     }
 }
 
-pub fn channel(buffer: usize, memory_quota: MemoryQuota) -> (Sink, Drain) {
+pub fn channel(
+    buffer: usize,
+    memory_quota: MemoryQuota,
+    bandwidth_limiter: Option<Limiter>,
+) -> (Sink, Drain) {
     let (unbounded_sender, unbounded_receiver) = unbounded();
     let (bounded_sender, bounded_receiver) = bounded(buffer);
     (
@@ -252,7 +256,7 @@ pub fn channel(buffer: usize, memory_quota: MemoryQuota) -> (Sink, Drain) {
             unbounded_sender,
             bounded_sender,
             memory_quota: memory_quota.clone(),
-            bandwidth_limiter: None,
+            bandwidth_limiter,
         },
         Drain {
             unbounded_receiver,
@@ -471,7 +475,7 @@ mod tests {
     type Send = Box<dyn FnMut(CdcEvent) -> Result<(), SendError>>;
     fn new_test_channel(buffer: usize, capacity: usize, force_send: bool) -> (Send, Drain) {
         let memory_quota = MemoryQuota::new(capacity);
-        let (mut tx, rx) = channel(buffer, memory_quota);
+        let (mut tx, rx) = channel(buffer, memory_quota, None);
         let mut flag = true;
         let send = move |event| {
             flag = !flag;
@@ -619,7 +623,7 @@ mod tests {
         let max_pending_bytes = 1024;
         let buffer = max_pending_bytes / event.size();
         let memory_quota = MemoryQuota::new(max_pending_bytes as _);
-        let (tx, _rx) = channel(buffer as _, memory_quota);
+        let (tx, _rx) = channel(buffer as _, memory_quota, None);
         for _ in 0..buffer {
             tx.unbounded_send(CdcEvent::Event(e.clone()), false)
                 .unwrap();

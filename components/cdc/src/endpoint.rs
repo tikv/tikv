@@ -1470,7 +1470,7 @@ mod tests {
     ) {
         let (receiver_worker, rx) = new_receiver_worker();
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
-        let (sink, drain) = crate::channel::channel(buffer, quota);
+        let (sink, drain) = crate::channel::channel(buffer, quota, None);
 
         let pool = Builder::new_multi_thread()
             .thread_name("test-initializer-worker")
@@ -1867,7 +1867,7 @@ mod tests {
     #[test]
     fn test_raftstore_is_busy() {
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
-        let (tx, _rx) = channel::channel(1, quota);
+        let (tx, _rx) = channel::channel(1, quota, None);
         let (mut ep, raft_router, mut task_rx) = mock_endpoint(&CdcConfig::default());
         // Fill the channel.
         let _raft_rx = raft_router.add_region(1 /* region id */, 1 /* cap */);
@@ -1919,7 +1919,7 @@ mod tests {
         });
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
-        let (tx, mut rx) = channel::channel(1, quota);
+        let (tx, mut rx) = channel::channel(1, quota, None);
         let mut rx = rx.drain();
 
         let conn = Conn::new(tx, String::new());
@@ -2061,7 +2061,7 @@ mod tests {
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
 
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
-        let (tx, mut rx) = channel::channel(1, quota);
+        let (tx, mut rx) = channel::channel(1, quota, None);
         let mut rx = rx.drain();
         let mut region = Region::default();
         region.set_id(1);
@@ -2131,7 +2131,7 @@ mod tests {
 
         // Register region 3 to another conn which is not support batch resolved ts.
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
-        let (tx, mut rx2) = channel::channel(1, quota);
+        let (tx, mut rx2) = channel::channel(1, quota, None);
         let mut rx2 = rx2.drain();
         let mut region = Region::default();
         region.set_id(3);
@@ -2190,7 +2190,7 @@ mod tests {
         let (mut ep, raft_router, _task_rx) = mock_endpoint(&CdcConfig::default());
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
-        let (tx, mut rx) = channel::channel(1, quota);
+        let (tx, mut rx) = channel::channel(1, quota, None);
         let mut rx = rx.drain();
 
         let conn = Conn::new(tx, String::new());
@@ -2318,7 +2318,7 @@ mod tests {
         // Hold raft_rxs to avoid SendError panic.
         let mut raft_rxs = vec![];
         for region_ids in vec![vec![1, 2], vec![3]] {
-            let (tx, rx) = channel::channel(1, quota.clone());
+            let (tx, rx) = channel::channel(1, quota.clone(), None);
             conn_rxs.push(rx);
             let conn = Conn::new(tx, String::new());
             let conn_id = conn.get_id();
@@ -2421,13 +2421,13 @@ mod tests {
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
 
         // Open conn a
-        let (tx1, _rx1) = channel::channel(1, quota.clone());
+        let (tx1, _rx1) = channel::channel(1, quota.clone(), None);
         let conn_a = Conn::new(tx1, String::new());
         let conn_id_a = conn_a.get_id();
         ep.run(Task::OpenConn { conn: conn_a });
 
         // Open conn b
-        let (tx2, mut rx2) = channel::channel(1, quota);
+        let (tx2, mut rx2) = channel::channel(1, quota, None);
         let mut rx2 = rx2.drain();
         let conn_b = Conn::new(tx2, String::new());
         let conn_id_b = conn_b.get_id();
