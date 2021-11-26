@@ -22,6 +22,8 @@ mod recorder;
 mod reporter;
 pub mod utils;
 
+pub(crate) mod metrics;
+
 pub use client::{Client, GrpcClient};
 pub use collector::Collector;
 pub use collector::{register_collector, CollectorHandle, CollectorId};

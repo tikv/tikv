@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::localstorage::LocalStorage;
+use crate::metrics::STAT_TASK_COUNT;
 use crate::recorder::SubRecorder;
 use crate::utils;
 use crate::utils::Stat;
@@ -8,15 +9,6 @@ use crate::{RawRecord, RawRecords, SharedTagPtr};
 
 use collections::HashMap;
 use fail::fail_point;
-use lazy_static::lazy_static;
-
-lazy_static! {
-    static ref STAT_TASK_COUNT: prometheus::IntCounter = prometheus::register_int_counter!(
-        "tikv_req_cpu_stat_task_count",
-        "Counter of stat_task call"
-    )
-    .unwrap();
-}
 
 /// An implementation of [SubRecorder] for collecting cpu statistics.
 ///
