@@ -341,7 +341,10 @@ where
     }
 
     pub async fn dump_rsprof(seconds: u64, frequency: i32) -> pprof::Result<pprof::Report> {
-        let guard = pprof::ProfilerGuard::new(frequency)?;
+        let guard = pprof::ProfilerGuardBuilder::default()
+            .frequency(frequency)
+            .blocklist(&["libc", "libgcc", "pthread"])
+            .build()?;
         info!(
             "start profiling {} seconds with frequency {} /s",
             seconds, frequency

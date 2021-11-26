@@ -179,7 +179,7 @@ pd_client = { path = "components/pd_client", default-features = false }
 pin-project = "1.0"
 pnet_datalink = "0.23"
 prost = "0.7"
-pprof = { version = "^0.4", default-features = false, features = ["flamegraph", "protobuf", "cpp"] }
+pprof = { version = "^0.6", default-features = false, features = ["flamegraph", "protobuf", "cpp"] }
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "components/raftstore", default-features = false }
