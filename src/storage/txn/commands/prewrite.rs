@@ -760,7 +760,7 @@ mod tests {
     use super::*;
     use crate::storage::txn::actions::acquire_pessimistic_lock::tests::must_pessimistic_locked;
     use crate::storage::txn::actions::tests::{
-        must_pessimistic_prewrite_put_async_commit, must_prewrite_put,
+        must_pessimistic_prewrite_put_async_commit, must_prewrite_delete, must_prewrite_put,
         must_prewrite_put_async_commit,
     };
     use crate::storage::{
@@ -1525,14 +1525,14 @@ mod tests {
         must_prewrite_put(&engine, key, value, key, 3);
         must_commit(&engine, key, 3, 5);
 
-        // T2: start_ts = 10, prewrite on k, with should_not_exist flag set.
+        // T2: start_ts = 15, prewrite on k, with should_not_exist flag set.
         let res = prewrite_with_cm(
             &engine,
             cm.clone(),
             &mut statistics,
             vec![Mutation::CheckNotExists(Key::from_raw(key))],
             key.to_vec(),
-            10,
+            15,
             None,
         )
         .unwrap_err();
@@ -1543,19 +1543,12 @@ mod tests {
             )))
         ));
 
-        // T3: start_ts = 8, commit_ts = 9, prewrite a DELETE operation on k
-        prewrite_with_cm(
-            &engine,
-            cm.clone(),
-            &mut statistics,
-            vec![Mutation::Delete(Key::from_raw(key))],
-            key.to_vec(),
-            8,
-            None,
-        )
-        .unwrap();
+        // update max_ts to 15
+        cm.update_max_ts(TimeStamp::from(15));
 
-        commit(&engine, &mut statistics, vec![Key::from_raw(key)], 8, 9).unwrap();
+        // T3: start_ts = 8, commit_ts = max_ts + 1 = 16, prewrite a DELETE operation on k
+        must_prewrite_delete(&engine, key, key, 8);
+        must_commit(&engine, key, 8, cm.max_ts().into_inner() + 1);
 
         // T1: start_ts = 10, reapeatly prewrite on k, with should_not_exist flag set
         let res = prewrite_with_cm(
@@ -1571,7 +1564,7 @@ mod tests {
         assert!(matches!(
             res,
             Error(box ErrorInner::Mvcc(MvccError(
-                box MvccErrorInner::AlreadyExist { .. }
+                box MvccErrorInner::WriteConflict { .. }
             )))
         ));
     }
