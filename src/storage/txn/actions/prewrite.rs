@@ -78,6 +78,11 @@ pub fn prewrite<S: Snapshot>(
         return Ok((min_commit_ts, OldValue::Unspecified));
     }
 
+    // Update max_ts for Insert operation to guarante linearizability and snapshot isolation
+    if mutation.should_not_exist {
+        txn.concurrency_manager.update_max_ts(txn_props.start_ts);
+    }
+
     let old_value = if txn_props.need_old_value
         && matches!(
             mutation.mutation_type,

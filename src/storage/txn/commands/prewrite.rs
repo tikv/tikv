@@ -761,7 +761,7 @@ mod tests {
     use crate::storage::txn::actions::acquire_pessimistic_lock::tests::must_pessimistic_locked;
     use crate::storage::txn::actions::tests::{
         must_pessimistic_prewrite_put_async_commit, must_prewrite_put,
-        must_prewrite_put_async_commit,
+        must_prewrite_put_async_commit, must_prewrite_delete,
     };
     use crate::storage::{
         mvcc::{tests::*, Error as MvccError, ErrorInner as MvccErrorInner},
@@ -1509,6 +1509,54 @@ mod tests {
             let result = cmd.cmd.process_write(snap, context).unwrap();
             assert_eq!(result.response_policy, case.expected);
         }
+    }
+
+    // this test for prewrite with should_not_exist flag
+    #[test]
+    fn test_prewrite_should_not_exist() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        // concurency_manager.max_tx = 5
+        let cm = ConcurrencyManager::new(5.into());
+        let mut statistics = Statistics::default();
+
+        let (key, value) = (b"k", b"val");
+        
+        // T1: start_ts = 3, commit_ts = 5, put key:value
+        must_prewrite_put(&engine, key, value, key, 3);
+        must_commit(&engine, key, 3, 5);
+        
+        // T2: start_ts = 10, prewrite on k, with should_not_exist flag set.
+        let mut statistics = Statistics::default();
+        let res = prewrite_with_cm(
+            &engine,
+            cm.clone(),
+            &mut statistics,
+            vec![Mutation::CheckNotExists(Key::from_raw(key))],
+            key.to_vec(),
+            10,
+            None,
+        )
+        .err()
+        .unwrap();
+        assert!(e, Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { .. }))));
+
+        // T3: start_ts = 8, commit_ts = 9, prewrite a DELETE operation on k
+        must_prewrite_delete(&engine, key, key, 8);
+        must_commit(&engine, key, 8, 9);
+
+        // T1: start_ts = 10, reapeatly prewrite on k, with should_not_exist flag set
+        let res = prewrite_with_cm(
+            &engine,
+            cm.clone(),
+            &mut statistics,
+            vec![Mutation::CheckNotExists(Key::from_raw(key))],
+            key.to_vec(),
+            10, 
+            None,
+        )
+        .err()
+        .unwrap();
+        assert!(e, Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { .. }))));
     }
 
     #[test]

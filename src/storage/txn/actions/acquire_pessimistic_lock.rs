@@ -25,6 +25,11 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
 
+    // Update max_ts for Insert operation to guarante linearizability and snapshot isolation
+    if should_not_exist {
+        txn.concurrency_manager.update_max_ts(for_update_ts);
+    }
+
     fn pessimistic_lock(
         primary: &[u8],
         start_ts: TimeStamp,
