@@ -15,7 +15,7 @@ use futures::{
 use grpcio::WriteFlags;
 use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
 use protobuf::Message;
-use tikv_util::time::Instant;
+use tikv_util::time::{Instant, Limiter};
 use tikv_util::{impl_display_as_debug, warn};
 
 use crate::metrics::*;
@@ -252,6 +252,7 @@ pub fn channel(buffer: usize, memory_quota: MemoryQuota) -> (Sink, Drain) {
             unbounded_sender,
             bounded_sender,
             memory_quota: memory_quota.clone(),
+            bandwidth_limiter: None,
         },
         Drain {
             unbounded_receiver,
@@ -300,6 +301,7 @@ pub struct Sink {
     unbounded_sender: UnboundedSender<(CdcEvent, usize)>,
     bounded_sender: Sender<(CdcEvent, usize)>,
     memory_quota: MemoryQuota,
+    bandwidth_limiter: Option<Limiter>,
 }
 
 impl Sink {
@@ -309,14 +311,15 @@ impl Sink {
         if bytes != 0 && !self.memory_quota.alloc(bytes) {
             return Err(SendError::Congested);
         }
-        match self.unbounded_sender.unbounded_send((event, bytes)) {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                // Free quota if send fails.
-                self.memory_quota.free(bytes);
-                Err(SendError::from(e))
-            }
+        if let Err(e) = self.unbounded_sender.unbounded_send((event, bytes)) {
+            // Free quota if send fails.
+            self.memory_quota.free(bytes);
+            return Err(SendError::from(e));
         }
+        if let Some(ref limiter) = self.bandwidth_limiter {
+            limiter.blocking_consume(bytes as usize);
+        }
+        Ok(())
     }
 
     pub async fn send_all(&mut self, events: Vec<CdcEvent>) -> Result<(), SendError> {
@@ -341,6 +344,11 @@ impl Sink {
             // Free quota if send fails.
             self.memory_quota.free(total_bytes as _);
             return Err(SendError::from(e));
+        }
+        if let Some(ref limiter) = self.bandwidth_limiter {
+            // NOTE: `unbounded_send` and `send_all` share one rate limiter.
+            // It could be unfair as batch size of `send_all` much larger.
+            limiter.consume(total_bytes as usize).await;
         }
         Ok(())
     }

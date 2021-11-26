@@ -618,6 +618,7 @@ incremental-scan-concurrency = 4
 incremental-scan-speed-limit = 7
 old-value-cache-memory-quota = "14MB"
 sink-memory-quota = "7MB"
+bandwidth-limit = "1024MB"
 
 [resolved-ts]
 enable = true

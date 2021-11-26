@@ -2249,6 +2249,8 @@ pub struct CdcConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub old_value_cache_size: usize,
+    /// Network bandwidth limit for cdc.
+    pub bandwidth_limit: ReadableSize,
 }
 
 impl Default for CdcConfig {
@@ -2269,6 +2271,7 @@ impl Default for CdcConfig {
             old_value_cache_memory_quota: ReadableSize::mb(512),
             // Deprecated! preserved for compatibility check.
             old_value_cache_size: 0,
+            bandwidth_limit: ReadableSize::mb(512),
         }
     }
 }

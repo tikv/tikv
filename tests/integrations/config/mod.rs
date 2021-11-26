@@ -732,6 +732,7 @@ fn test_serde_custom_tikv_config() {
         incremental_scan_speed_limit: ReadableSize(7),
         old_value_cache_memory_quota: ReadableSize::mb(14),
         sink_memory_quota: ReadableSize::mb(7),
+        bandwidth_limit: ReadableSize::mb(1024),
     };
     value.resolved_ts = ResolvedTsConfig {
         enable: true,
