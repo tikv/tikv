@@ -4236,6 +4236,32 @@ mod tests {
     }
 
     #[test]
+    fn test_compatibility_with_old_config_template() {
+        let mut buf = Vec::new();
+        let resp = reqwest::blocking::get(
+            "https://raw.githubusercontent.com/tikv/tikv/master/etc/config-template.toml",
+        );
+        match resp {
+            Ok(mut resp) => {
+                std::io::copy(&mut resp, &mut buf).expect("failed to copy content");
+                let template_config = std::str::from_utf8(&buf)
+                    .unwrap()
+                    .lines()
+                    .map(|l| l.strip_prefix('#').unwrap_or(l))
+                    .join("\n");
+                let _: TiKvConfig = toml::from_str(&template_config).unwrap();
+            }
+            Err(e) => {
+                if e.is_timeout() {
+                    println!("warn: fail to download latest config template due to timeout");
+                } else {
+                    panic!("fail to download latest config template");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_cdc() {
         let content = r#"
             [cdc]
