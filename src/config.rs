@@ -1371,7 +1371,7 @@ pub struct RaftEngineConfig {
 
 impl RaftEngineConfig {
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        self.config.validate().map_err(Box::new)?;
+        self.config.sanitize().map_err(Box::new)?;
         Ok(())
     }
 
@@ -3272,7 +3272,6 @@ mod tests {
     use case_macros::*;
     use engine_rocks::raw_util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
-    use raft_log_engine::RecoveryMode;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use slog::Level;
     use std::sync::Arc;
@@ -3953,26 +3952,6 @@ mod tests {
     }
 
     #[test]
-    fn test_raft_engine() {
-        let content = r#"
-            [raft-engine]
-            enable = true
-            recovery_mode = "tolerate-corrupted-tail-records"
-            bytes-per-sync = "64KB"
-            purge-threshold = "1GB"
-        "#;
-        let cfg: TiKvConfig = toml::from_str(content).unwrap();
-        assert!(cfg.raft_engine.enable);
-        let config = &cfg.raft_engine.config;
-        assert_eq!(
-            config.recovery_mode,
-            RecoveryMode::TolerateCorruptedTailRecords
-        );
-        assert_eq!(config.bytes_per_sync.0, ReadableSize::kb(64).0);
-        assert_eq!(config.purge_threshold.0, ReadableSize::gb(1).0);
-    }
-
-    #[test]
     fn test_raft_engine_dir() {
         let content = r#"
             [raft-engine]
@@ -4254,6 +4233,32 @@ mod tests {
         cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
 
         assert_eq!(cfg, default_cfg);
+    }
+
+    #[test]
+    fn test_compatibility_with_old_config_template() {
+        let mut buf = Vec::new();
+        let resp = reqwest::blocking::get(
+            "https://raw.githubusercontent.com/tikv/tikv/master/etc/config-template.toml",
+        );
+        match resp {
+            Ok(mut resp) => {
+                std::io::copy(&mut resp, &mut buf).expect("failed to copy content");
+                let template_config = std::str::from_utf8(&buf)
+                    .unwrap()
+                    .lines()
+                    .map(|l| l.strip_prefix('#').unwrap_or(l))
+                    .join("\n");
+                let _: TiKvConfig = toml::from_str(&template_config).unwrap();
+            }
+            Err(e) => {
+                if e.is_timeout() {
+                    println!("warn: fail to download latest config template due to timeout");
+                } else {
+                    panic!("fail to download latest config template");
+                }
+            }
+        }
     }
 
     #[test]

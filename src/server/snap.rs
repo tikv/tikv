@@ -192,7 +192,7 @@ struct RecvSnapContext {
     key: SnapKey,
     file: Option<Box<Snapshot>>,
     raft_msg: RaftMessage,
-    _with_io_type: WithIOType,
+    io_type: IOType,
 }
 
 impl RecvSnapContext {
@@ -212,11 +212,12 @@ impl RecvSnapContext {
         let data = meta.get_message().get_snapshot().get_data();
         let mut snapshot = RaftSnapshotData::default();
         snapshot.merge_from_bytes(data)?;
-        let with_io_type = WithIOType::new(if snapshot.get_meta().get_for_balance() {
+        let io_type = if snapshot.get_meta().get_for_balance() {
             IOType::LoadBalance
         } else {
             IOType::Replication
-        });
+        };
+        let _with_io_type = WithIOType::new(io_type);
 
         let snap = {
             let s = match snap_mgr.get_snapshot_for_receiving(&key, data) {
@@ -237,11 +238,12 @@ impl RecvSnapContext {
             key,
             file: snap,
             raft_msg: meta,
-            _with_io_type: with_io_type,
+            io_type,
         })
     }
 
     fn finish<R: RaftStoreRouter<impl KvEngine>>(self, raft_router: R) -> Result<()> {
+        let _with_io_type = WithIOType::new(self.io_type);
         let key = self.key;
         if let Some(mut file) = self.file {
             info!("saving snapshot file"; "snap_key" => %key, "file" => file.path());
@@ -284,6 +286,7 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
                 return Err(box_err!("{} receive chunk with empty data", context.key));
             }
             let f = context.file.as_mut().unwrap();
+            let _with_io_type = WithIOType::new(context.io_type);
             if let Err(e) = Write::write_all(&mut *f, &data) {
                 let key = &context.key;
                 let path = context.file.as_mut().unwrap().path();
