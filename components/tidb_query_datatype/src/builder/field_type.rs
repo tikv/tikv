@@ -38,6 +38,11 @@ impl FieldTypeBuilder {
         self
     }
 
+    pub fn charset(mut self, v: &str) -> Self {
+        self.0.set_charset(String::from(v));
+        self
+    }
+
     pub fn build(self) -> FieldType {
         self.0
     }
