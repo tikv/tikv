@@ -9,7 +9,9 @@ use kvproto::raft_serverpb::RaftMessage;
 use raftstore::errors::{Error as RaftStoreError, Result as RaftStoreResult};
 use raftstore::router::{handle_send_error, RaftStoreRouter};
 use raftstore::store::msg::{CasualMessage, PeerMsg, SignificantMsg};
-use raftstore::store::{CasualRouter, ProposalRouter, RaftCommand, StoreMsg, StoreRouter};
+use raftstore::store::{
+    CasualRouter, ProposalRouter, RaftCommand, SignificantRouter, StoreMsg, StoreRouter,
+};
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 
 #[derive(Clone)]
@@ -64,16 +66,8 @@ impl CasualRouter<RocksEngine> for MockRaftStoreRouter {
     }
 }
 
-impl RaftStoreRouter<RocksEngine> for MockRaftStoreRouter {
-    fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
-        unimplemented!()
-    }
-
-    fn significant_send(
-        &self,
-        region_id: u64,
-        msg: SignificantMsg<RocksSnapshot>,
-    ) -> RaftStoreResult<()> {
+impl SignificantRouter<RocksEngine> for MockRaftStoreRouter {
+    fn send(&self, region_id: u64, msg: SignificantMsg<RocksSnapshot>) -> RaftStoreResult<()> {
         let mut senders = self.senders.lock().unwrap();
         if let Some(tx) = senders.get_mut(&region_id) {
             tx.force_send(PeerMsg::SignificantMsg(msg)).unwrap();
@@ -82,6 +76,12 @@ impl RaftStoreRouter<RocksEngine> for MockRaftStoreRouter {
             error!("failed to send significant msg"; "msg" => ?msg);
             Err(RaftStoreError::RegionNotFound(region_id))
         }
+    }
+}
+
+impl RaftStoreRouter<RocksEngine> for MockRaftStoreRouter {
+    fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
+        unimplemented!()
     }
 
     fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {}
