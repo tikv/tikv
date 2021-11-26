@@ -230,7 +230,6 @@ fn test_batch_size_edge_limit() {
 
     // Put them in buffer so sibling messages will be likely be batched during sending.
     let mut msgs = Vec::with_capacity(5);
-    // `send` should success.
     for _ in 0..5 {
         let mut raft_m = RaftMessage::default();
         // Magic number, this can make estimated size about 4940000, hence two messages will be
@@ -251,7 +250,7 @@ fn test_batch_size_edge_limit() {
     raft_client.flush();
 
     check_msg_count(10000, &msg_count, 5);
-    // The final received message count should be 10 exactly.
+    // The final received message count should be 5 exactly.
     drop(raft_client);
     drop(mock_server);
     assert_eq!(msg_count.load(Ordering::SeqCst), 5);
