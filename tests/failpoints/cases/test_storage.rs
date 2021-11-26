@@ -478,9 +478,9 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
         ..Default::default()
     };
     let snapshot = engine.snapshot(snap_ctx).unwrap();
-    let max_ts_sync_status = snapshot.max_ts_sync_status.clone().unwrap();
+    let txn_ext = snapshot.txn_ext.clone().unwrap();
     for retry in 0..10 {
-        if max_ts_sync_status.load(Ordering::SeqCst) & 1 == 1 {
+        if txn_ext.is_max_ts_synced() {
             break;
         }
         thread::sleep(Duration::from_millis(1 << retry));
