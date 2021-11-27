@@ -1041,13 +1041,13 @@ fn substring_utf8(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> R
         return Ok(writer.write_ref(Some(b"")));
     }
 
+    let input = str::from_utf8(input)?;
     let char_len = input.chars().count();
     let start = if positive_search {
         (pos - 1).min(char_len)
     } else {
         char_len.checked_sub(pos).unwrap_or(char_len)
     };
-    let input = str::from_utf8(input)?;
     Ok(writer.write(Some(
         input
             .chars()
