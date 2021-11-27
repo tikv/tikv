@@ -1016,7 +1016,11 @@ pub fn repeat(input: BytesRef, cnt: &Int, writer: BytesWriter) -> Result<BytesGu
 
 #[rpn_fn(writer)]
 #[inline]
-pub fn substring_2_args_utf8(input: BytesRef, pos: &Int, writer: BytesWriter) -> Result<BytesGuard> {
+pub fn substring_2_args_utf8(
+    input: BytesRef,
+    pos: &Int,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
     substring_utf8(input, *pos, input.chars().count() as Int, writer)
 }
 
@@ -1043,12 +1047,18 @@ fn substring_utf8(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> R
     let start = if positive_search {
         (pos - 1).min(char_len)
     } else {
-        char_len.checked_sub(pos).unwrap_or_else(|| char_len)
+        char_len.checked_sub(pos).unwrap_or(char_len)
     };
     let input = str::from_utf8(input)?;
-    Ok(writer.write(Some(input.chars().skip(start).take(len).collect::<String>().into_bytes())))
+    Ok(writer.write(Some(
+        input
+            .chars()
+            .skip(start)
+            .take(len)
+            .collect::<String>()
+            .into_bytes(),
+    )))
 }
-
 
 #[rpn_fn(writer)]
 #[inline]
@@ -4369,9 +4379,7 @@ mod tests {
             ),
         ];
 
-        let mut i = 1;
         for (str, pos, exp) in cases {
-            i = i + 1;
             let output = RpnFnScalarEvaluator::new()
                 .push_param(str)
                 .push_param(pos)
