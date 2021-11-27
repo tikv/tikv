@@ -1014,6 +1014,52 @@ pub fn repeat(input: BytesRef, cnt: &Int, writer: BytesWriter) -> Result<BytesGu
 
 #[rpn_fn(writer)]
 #[inline]
+pub fn substring_2_args_utf8(
+    input: BytesRef,
+    pos: &Int,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    substring_utf8(input, *pos, input.chars().count() as Int, writer)
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn substring_3_args_utf8(
+    input: BytesRef,
+    pos: &Int,
+    len: &Int,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    substring_utf8(input, *pos, *len, writer)
+}
+
+#[inline]
+fn substring_utf8(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> Result<BytesGuard> {
+    let (len, len_positive) = i64_to_usize(len, len > 0);
+    let (pos, positive_search) = i64_to_usize(pos, pos > 0);
+    if pos == 0 || len == 0 || !len_positive {
+        return Ok(writer.write_ref(Some(b"")));
+    }
+
+    let char_len = input.chars().count();
+    let start = if positive_search {
+        (pos - 1).min(char_len)
+    } else {
+        char_len.checked_sub(pos).unwrap_or(char_len)
+    };
+    let input = str::from_utf8(input)?;
+    Ok(writer.write(Some(
+        input
+            .chars()
+            .skip(start)
+            .take(len)
+            .collect::<String>()
+            .into_bytes(),
+    )))
+}
+
+#[rpn_fn(writer)]
+#[inline]
 pub fn substring_2_args(input: BytesRef, pos: &Int, writer: BytesWriter) -> Result<BytesGuard> {
     substring(input, *pos, input.len() as Int, writer)
 }
@@ -4251,6 +4297,179 @@ mod tests {
                 .push_param(pos)
                 .push_param(len)
                 .evaluate(ScalarFuncSig::Substring3Args)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_substring_2_args_utf8() {
+        let cases = vec![
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(1),
+                Some("中文a测试bb".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测试".as_bytes().to_vec()),
+                Some(-3),
+                Some("a测试".as_bytes().to_vec()),
+            ),
+            (
+                Some("\x61\x76\x5e\x38\x2f\x35".as_bytes().to_vec()),
+                Some(-1),
+                Some("\x35".as_bytes().to_vec()),
+            ),
+            (
+                Some("\x61\x76\x5e\x38\x2f\x35".as_bytes().to_vec()),
+                Some(2),
+                Some("\x76\x5e\x38\x2f\x35".as_bytes().to_vec()),
+            ),
+            (
+                Some("Quadratically".as_bytes().to_vec()),
+                Some(5),
+                Some("ratically".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(1),
+                Some("Sakila".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(-3),
+                Some("ila".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(0),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(100),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(-100),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(i64::max_value()),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(i64::min_value()),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("".as_bytes().to_vec()),
+                Some(1),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("".as_bytes().to_vec()),
+                Some(-1),
+                Some("".as_bytes().to_vec()),
+            ),
+        ];
+
+        for (str, pos, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(str)
+                .push_param(pos)
+                .evaluate(ScalarFuncSig::Substring2ArgsUtf8)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_substring_3_args_utf8() {
+        let cases = vec![
+            (
+                Some("Quadratically".as_bytes().to_vec()),
+                Some(5),
+                Some(6),
+                Some("ratica".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(-5),
+                Some(3),
+                Some("aki".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(2),
+                Some(0),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(2),
+                Some(-1),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(2),
+                Some(100),
+                Some("akila".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(100),
+                Some(5),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(-100),
+                Some(5),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(4),
+                Some(3),
+                Some("测a试".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(4),
+                Some(100),
+                Some("测a试".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(4),
+                Some(4),
+                Some("测a试".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(-3),
+                Some(3),
+                Some("测a试".as_bytes().to_vec()),
+            ),
+            (
+                Some("".as_bytes().to_vec()),
+                Some(1),
+                Some(1),
+                Some("".as_bytes().to_vec()),
+            ),
+        ];
+
+        for (str, pos, len, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(str)
+                .push_param(pos)
+                .push_param(len)
+                .evaluate(ScalarFuncSig::Substring3ArgsUtf8)
                 .unwrap();
             assert_eq!(output, exp);
         }
