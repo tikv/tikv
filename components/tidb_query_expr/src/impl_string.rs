@@ -4446,6 +4446,36 @@ mod tests {
             ),
             (
                 Some("中文a测a试".as_bytes().to_vec()),
+                Some(100),
+                Some(1),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(100),
+                Some(i64::min_value()),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(100),
+                Some(i64::max_value()),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(i64::min_value()),
+                Some(1),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(i64::max_value()),
+                Some(1),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
                 Some(4),
                 Some(4),
                 Some("测a试".as_bytes().to_vec()),
@@ -4455,6 +4485,18 @@ mod tests {
                 Some(-3),
                 Some(3),
                 Some("测a试".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(0),
+                Some(3),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(1),
+                Some(0),
+                Some("".as_bytes().to_vec()),
             ),
             (
                 Some("".as_bytes().to_vec()),
