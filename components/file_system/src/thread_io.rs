@@ -24,6 +24,7 @@ use crate::IOType;
 
 lazy_static! {
     static ref THREAD_IO_SENTINEL_VEC: ThreadLocal<Arc<ThreadIOSentinel>> = ThreadLocal::new();
+    static ref THREAD_IO_TOTAL: [AtomicIOBytes; IOType::COUNT] = Default::default();
 }
 
 thread_local! {
@@ -54,10 +55,11 @@ struct AtomicIOBytes {
     write: AtomicU64,
 }
 
-pub fn fetch_all_thread_io_bytes() {
+pub fn fetch_all_thread_io_bytes(io_type: IOType) -> IOBytes {
     THREAD_IO_SENTINEL_VEC.iter().for_each(|sentinel| {
         fetch_sentinel(sentinel, None);
     });
+    THREAD_IO_TOTAL[io_type as usize].load(Ordering::Relaxed)
 }
 
 fn fetch_sentinel(sentinel: &ThreadIOSentinel, new_io_type: Option<IOType>) {
@@ -68,6 +70,7 @@ fn fetch_sentinel(sentinel: &ThreadIOSentinel, new_io_type: Option<IOType>) {
         let last_io_bytes = private.borrow().last_bytes;
 
         sentinel.bytes[io_type as usize].fetch_add(io_bytes - last_io_bytes, Ordering::Relaxed);
+        THREAD_IO_TOTAL[io_type as usize].fetch_add(io_bytes - last_io_bytes, Ordering::Relaxed);
         private.borrow_mut().last_bytes = io_bytes;
         if let Some(new_io_type) = new_io_type {
             private.borrow_mut().io_type = new_io_type;
@@ -178,10 +181,12 @@ impl AtomicIOBytes {
             write: self.write.load(order),
         }
     }
+
     fn store(&self, val: IOBytes, order: Ordering) {
         self.read.store(val.read, order);
         self.write.store(val.write, order);
     }
+
     fn fetch_add(&self, other: IOBytes, order: Ordering) {
         self.read.fetch_add(other.read, order);
         self.write.fetch_add(other.write, order);

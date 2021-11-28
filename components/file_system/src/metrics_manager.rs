@@ -30,7 +30,7 @@ impl BytesFetcher {
                 write: stats.fetch(io_type, IOOp::Write) as u64,
             },
             BytesFetcher::FromIOSnooper() => fetch_io_bytes(io_type),
-            BytesFetcher::FromProc() => thread_io::fetch_thread_io_bytes(io_type),
+            BytesFetcher::FromProc() => thread_io::fetch_all_thread_io_bytes(io_type),
         }
     }
 }
