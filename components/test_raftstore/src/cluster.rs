@@ -1210,6 +1210,17 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn remove_peer(&mut self, region_id: u64, peer: metapb::Peer) -> RaftCmdResponse {
+        let epoch = self.get_region_epoch(region_id);
+        let remove_peer = new_admin_request(
+            region_id,
+            &epoch,
+            new_change_peer_request(ConfChangeType::RemoveNode, peer),
+        );
+        self.call_command_on_leader(remove_peer, Duration::from_secs(5))
+            .unwrap()
+    }
+
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
         let epoch = self.get_region_epoch(region_id);
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));

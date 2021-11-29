@@ -2963,6 +2963,15 @@ where
                         cp
                     ));
                 }
+                (ConfChangeType::RemoveNode, PeerRole::Voter)
+                    if kind == ConfChangeKind::Simple && current_voter.len() == 2 =>
+                {
+                    return Err(box_err!(
+                        "{} unsafe request {:?}, to remove voter directly from a 2 voters raft group, please demoting voter firstly. see issue 10595 for detail",
+                        self.tag,
+                        cp
+                    ));
+                }
                 (ConfChangeType::RemoveNode, _)
                 | (ConfChangeType::AddNode, PeerRole::Voter)
                 | (ConfChangeType::AddLearnerNode, PeerRole::Learner) => {}

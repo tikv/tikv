@@ -931,3 +931,40 @@ fn test_conf_change_fast() {
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     assert!(timer.saturating_elapsed() < Duration::from_secs(5));
 }
+
+#[test]
+fn test_crash_when_remove_node_from_two_member_cluster() {
+    let mut cluster = new_node_cluster(0, 2);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(1, 1));
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    cluster.must_put(b"k", b"v");
+
+    // Ensure 1 is leader
+    let region = pd_client.get_region(b"k").unwrap();
+    let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+
+    cluster.must_put(b"k1", b"v");
+    let resp = cluster.remove_peer(r1, new_peer(1, 1));
+    assert!(resp.get_header().has_error());
+    assert!(
+        resp.get_header()
+            .get_error()
+            .get_message()
+            .contains("unsafe")
+    );
+
+    let resp = cluster.remove_peer(r1, new_peer(2, 2));
+    assert!(resp.get_header().has_error());
+    assert!(
+        resp.get_header()
+            .get_error()
+            .get_message()
+            .contains("unsafe")
+    );
+}
