@@ -391,22 +391,22 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             (ApiVersion::V2, ApiVersion::V1) if Self::is_txn_command(cmd) => {
                 // For compatibility, accept TiDB request only.
                 for key in keys {
-                    if !key_prefix::is_tidb_key(key) {
-                        return make_invalid_key_prefix_err(key);
+                    if !key_prefix::is_tidb_key(key.as_ref()) {
+                        return make_invalid_key_prefix_err(key.as_ref());
                     }
                 }
             }
             (ApiVersion::V2, ApiVersion::V2) if Self::is_raw_command(cmd) => {
                 for key in keys {
-                    if !key_prefix::is_raw_key(key) {
-                        return make_invalid_key_prefix_err(key);
+                    if !key_prefix::is_raw_key(key.as_ref()) {
+                        return make_invalid_key_prefix_err(key.as_ref());
                     }
                 }
             }
             (ApiVersion::V2, ApiVersion::V2) if Self::is_txn_command(cmd) => {
                 for key in keys {
-                    if !key_prefix::is_txn_key(key) {
-                        return make_invalid_key_prefix_err(key);
+                    if !key_prefix::is_txn_key(key.as_ref()) {
+                        return make_invalid_key_prefix_err(key.as_ref());
                     }
                 }
             }
@@ -6789,9 +6789,9 @@ mod tests {
                 Some((k1.clone(), v1.clone())),
                 Some((k2.clone(), v2.clone())),
             ];
-            let mut key = Key::from_raw(b"\x00");
+            let mut key = b"\x00".to_vec();
             if *desc {
-                key = Key::from_raw(b"\xff");
+                key = b"\xff".to_vec();
                 values.reverse();
             }
             expect_multi_values(
@@ -7431,7 +7431,7 @@ mod tests {
                 ApiVersion::V1,
                 CommandKind::get,
                 vec![TIDB_KEY_CASE],
-                false,
+                Some(API_VERSION_NOT_MATCHED),
             ),
             // storage api_version = V1, reject V2 request.
             (

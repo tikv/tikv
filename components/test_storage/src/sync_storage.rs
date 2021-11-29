@@ -26,25 +26,31 @@ pub struct SyncTestStorageBuilder<E: Engine> {
     engine: E,
     config: Option<Config>,
     gc_config: Option<GcConfig>,
-    api_version: Option<ApiVersion>,
+    api_version: ApiVersion,
     enable_ttl: bool,
 }
 
 impl SyncTestStorageBuilder<RocksEngine> {
-    pub fn new(enable_ttl: bool) -> Self {
+    pub fn new(api_version: ApiVersion) -> Self {
         Self {
-            engine: TestEngineBuilder::new().ttl(enable_ttl).build().unwrap(),
+            engine: TestEngineBuilder::new()
+                .api_version(api_version)
+                .build()
+                .unwrap(),
             config: None,
             gc_config: None,
-            api_version: None,
-            enable_ttl,
+            api_version,
+            enable_ttl: match api_version {
+                ApiVersion::V1ttl | ApiVersion::V2 => true,
+                ApiVersion::V1 => false,
+            },
         }
     }
 }
 
 impl Default for SyncTestStorageBuilder<RocksEngine> {
     fn default() -> Self {
-        Self::new(false)
+        Self::new(ApiVersion::V1)
     }
 }
 
@@ -54,7 +60,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
             engine,
             config: None,
             gc_config: None,
-            api_version: None,
+            api_version: ApiVersion::V1,
             enable_ttl: false,
         }
     }
@@ -66,11 +72,6 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
 
     pub fn gc_config(mut self, gc_config: GcConfig) -> Self {
         self.gc_config = Some(gc_config);
-        self
-    }
-
-    pub fn api_version(mut self, api_version: ApiVersion) -> Self {
-        self.api_version = Some(api_version);
         self
     }
 
@@ -86,9 +87,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
         }
-        if let Some(api_version) = self.api_version.take() {
-            builder = builder.set_api_version(api_version);
-        }
+        builder = builder.set_api_version(self.api_version);
         builder = builder.set_enable_ttl(self.enable_ttl);
         let (tx, _rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(

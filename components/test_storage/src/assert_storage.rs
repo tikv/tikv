@@ -24,19 +24,16 @@ impl Default for AssertionStorage<RocksEngine> {
     fn default() -> Self {
         AssertionStorage {
             ctx: Context::default(),
-            store: SyncTestStorageBuilder::new(false).build().unwrap(),
+            store: SyncTestStorageBuilder::default().build().unwrap(),
         }
     }
 }
 
 impl AssertionStorage<RocksEngine> {
-    pub fn new(api_version: ApiVersion, enable_ttl: bool) -> Self {
+    pub fn new(api_version: ApiVersion) -> Self {
         AssertionStorage {
             ctx: Context::default(),
-            store: SyncTestStorageBuilder::new(enable_ttl)
-                .api_version(api_version)
-                .build()
-                .unwrap(),
+            store: SyncTestStorageBuilder::new(api_version).build().unwrap(),
         }
     }
 }
