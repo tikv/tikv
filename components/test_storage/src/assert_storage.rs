@@ -10,7 +10,7 @@ use tikv::storage::{
     self, Engine, Error as StorageError, ErrorInner as StorageErrorInner, TxnStatus,
 };
 use tikv_util::HandyRwLock;
-use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
+use txn_types::{self, Key, KvPair, Mutation, TimeStamp, Value};
 
 use super::*;
 
@@ -686,16 +686,8 @@ impl<E: Engine> AssertionStorage<E> {
         limit: usize,
         expect: Vec<LockInfo>,
     ) {
-        let start_key = if start_key.is_empty() {
-            None
-        } else {
-            Some(start_key.to_vec())
-        };
-        let end_key = if end_key.is_empty() {
-            None
-        } else {
-            Some(end_key.to_vec())
-        };
+        let start_key = txn_types::raw_key_maybe_unbounded_into_option(start_key.to_vec());
+        let end_key = txn_types::raw_key_maybe_unbounded_into_option(end_key.to_vec());
 
         assert_eq!(
             self.store
@@ -712,16 +704,8 @@ impl<E: Engine> AssertionStorage<E> {
         end_key: &[u8],
         limit: usize,
     ) {
-        let start_key = if start_key.is_empty() {
-            None
-        } else {
-            Some(start_key.to_vec())
-        };
-        let end_key = if end_key.is_empty() {
-            None
-        } else {
-            Some(end_key.to_vec())
-        };
+        let start_key = txn_types::raw_key_maybe_unbounded_into_option(start_key.to_vec());
+        let end_key = txn_types::raw_key_maybe_unbounded_into_option(end_key.to_vec());
 
         self.store
             .scan_locks(self.ctx.clone(), max_ts.into(), start_key, end_key, limit)

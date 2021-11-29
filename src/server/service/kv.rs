@@ -1333,11 +1333,7 @@ fn future_scan<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: ScanRequest,
 ) -> impl Future<Output = ServerResult<ScanResponse>> {
-    let raw_end_key = if req.end_key.is_empty() {
-        None
-    } else {
-        Some(req.take_end_key())
-    };
+    let raw_end_key = txn_types::raw_key_maybe_unbounded_into_option(req.take_end_key());
     let v = storage.scan(
         req.take_context(),
         req.take_start_key(),
@@ -1421,16 +1417,8 @@ fn future_scan_lock<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: ScanLockRequest,
 ) -> impl Future<Output = ServerResult<ScanLockResponse>> {
-    let raw_start_key = if req.start_key.is_empty() {
-        None
-    } else {
-        Some(req.take_start_key())
-    };
-    let raw_end_key = if req.end_key.is_empty() {
-        None
-    } else {
-        Some(req.take_end_key())
-    };
+    let raw_start_key = txn_types::raw_key_maybe_unbounded_into_option(req.take_start_key());
+    let raw_end_key = txn_types::raw_key_maybe_unbounded_into_option(req.take_end_key());
 
     let v = storage.scan_lock(
         req.take_context(),
@@ -1677,11 +1665,7 @@ fn future_raw_scan<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawScanRequest,
 ) -> impl Future<Output = ServerResult<RawScanResponse>> {
-    let end_key = if req.get_end_key().is_empty() {
-        None
-    } else {
-        Some(req.take_end_key())
-    };
+    let end_key = txn_types::raw_key_maybe_unbounded_into_option(req.take_end_key());
     let v = storage.raw_scan(
         req.take_context(),
         req.take_cf(),
