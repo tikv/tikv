@@ -1,4 +1,5 @@
 mod client;
+mod test;
 pub mod keys;
 pub mod store;
 

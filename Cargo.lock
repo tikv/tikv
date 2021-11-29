@@ -1262,6 +1262,7 @@ dependencies = [
  "tonic",
  "tonic-build",
  "tower-service",
+ "visible",
 ]
 
 [[package]]
@@ -6101,6 +6102,16 @@ name = "version_check"
 version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5a972e5669d67ba988ce3dc826706fb0a8b01471c088cb0b6110b805cc36aed"
+
+[[package]]
+name = "visible"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a044005fd5c0fc1ebd79c622e5606431c6b879a6a19acafb754be9926a2de73e"
+dependencies = [
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "vlog"

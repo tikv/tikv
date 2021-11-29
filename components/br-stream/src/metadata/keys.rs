@@ -67,14 +67,15 @@ impl MetaKey {
         Self(format!("{}{}/{}/", PREFIX, PATH_RANGES, name).into_bytes())
     }
 
-    /// Generate the range key of some task.
-    /// It should be <prefix>/ranges/<task-name(string)>/<start-key(binary).
+    /// Generate the prefix key of some task.
+    /// It should be <prefix>/ranges/<task-name(string)>/<start-key(binary)>.
     pub fn range_of(name: &str, rng: &[u8]) -> Self {
         let mut ranges = Self::ranges_of(name);
         ranges.0.extend(rng);
         ranges
     }
 
+    /// The key of next backup ts of some region in some store.
     pub fn next_backup_ts_of(name: &str, store_id: u64, region_id: u64) -> Self {
         let base = format!("{}{}/{}", PREFIX, PATH_NEXT_BACKUP_TS, name);
         let mut buf = bytes::BytesMut::from(base);
@@ -83,6 +84,34 @@ impl MetaKey {
         buf.put(b'/');
         buf.put_u64_be(region_id);
         Self(buf.to_vec())
+    }
+
+    /// The key for pausing some task.
+    pub fn pause(name: &str) -> Self {
+        Self(format!("{}{}/{}", PREFIX, PATH_PAUSE, name).into_bytes())
+    }
+
+    /// return the key that keeps the range [self, self.next()) contains only
+    /// `self`.
+    pub fn next(&self) -> Self {
+        let mut next = self.clone();
+        next.0.push(0);
+        next
+    }
+
+    /// return the key that keeps the range [self, self.next_prefix()) contains
+    /// all keys with the prefix `self`.
+    pub fn next_prefix(&self) -> Self {
+        let mut next_prefix = self.clone();
+        for i in (self.0.len() - 1)..=0 {
+            if next_prefix.0[i] == u8::MAX {
+                next_prefix.0.pop();
+            } else {
+                next_prefix.0[i] += 1;
+                break;
+            }
+        }
+        return next_prefix;
     }
 }
 
@@ -98,6 +127,6 @@ pub fn extract_name_from_info(full_path: &str) -> Option<&str> {
 
 /// extract the range from the key path.
 pub fn extract_range_from_key<'a>(full_path: &'a [u8], task_name: &str) -> Option<&'a [u8]> {
-    let mut prefix = MetaKey::ranges_of(task_name);
+    let prefix = MetaKey::ranges_of(task_name);
     full_path.strip_prefix(prefix.0.as_slice())
 }

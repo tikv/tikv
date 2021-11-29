@@ -1,8 +1,12 @@
-use std::{future::Future, pin::Pin, sync::Arc};
+use std::{
+    future::Future,
+    ops::{Bound, Range, RangeBounds},
+    pin::Pin,
+    sync::Arc,
+};
 
 use etcd_client::{EventType, GetOptions, SortOrder, SortTarget, WatchOptions};
 use futures::StreamExt;
-use protobuf::ProtobufEnum;
 use tikv_util::warn;
 use tokio::sync::Mutex;
 use tokio_stream::Stream;
@@ -23,10 +27,28 @@ pub struct WithRevision<T> {
 /// The key set for getting.
 /// I guess there should be a `&[u8]` in meta key,
 /// but the etcd client requires Into<Vec<u8>> :(
+#[derive(Debug)]
 pub enum Keys {
     Prefix(MetaKey),
     Range(MetaKey, MetaKey),
     Key(MetaKey),
+}
+
+impl Keys {
+    /// convert the key set for corresponding key range.
+    pub fn into_bound(self) -> (Vec<u8>, Vec<u8>) {
+        match self {
+            Keys::Prefix(x) => {
+                let next = x.next_prefix().0;
+                ((x.0), (next))
+            }
+            Keys::Range(start, end) => ((start.0), (end.0)),
+            Keys::Key(k) => {
+                let next = k.next().0;
+                ((k.0), (next))
+            }
+        }
+    }
 }
 
 #[derive(Default, Debug)]

@@ -11,12 +11,15 @@ use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
 
 use crate::errors::{Error, Result};
 
-/// Some operations over metadata key space.
+/// Some operations over stream backup metadata key space.
 pub struct MetadataClient<Store> {
     store_id: u64,
     meta_store: Store,
 }
 
+/// a stream backup task.
+/// the initial design of this task would bind with a `MetaStore`,
+/// which allows fluent API like `task.step(region_id, next_backup_ts)`.
 pub struct Task {
     pub info: StreamBackupTaskInfo,
 }
@@ -63,7 +66,21 @@ macro_rules! send_or_break {
     };
 }
 
+/// extract the start key and the end key from a metadata key-value pair.
+/// example: KeyValue(<prefix>/ranges/<start-key>, <end-key>) -> (<start-key>, <end-key>)
+fn take_range(kv: &mut KeyValue, task_name: &str) -> (Vec<u8>, Vec<u8>) {
+    let key = kv.take_key();
+    (
+        super::keys::extract_range_from_key(key.as_slice(), task_name)
+            .map(|v| v.to_vec())
+            .unwrap_or(key),
+        kv.take_value(),
+    )
+}
+
 impl<Store: MetaStore> MetadataClient<Store> {
+    /// create a new store.
+    /// the store_id should be the store id of current TiKV.
     pub fn new(store: Store, store_id: u64) -> Self {
         Self {
             meta_store: store,
@@ -71,6 +88,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
         }
     }
 
+    /// query the named task from the meta store.
     pub async fn get_task(&self, name: &str) -> Result<Task> {
         let items = self
             .meta_store
@@ -87,6 +105,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
         Ok(Task { info })
     }
 
+    /// fetch all tasks from the meta store.
     pub async fn get_tasks(&self) -> Result<WithRevision<Vec<Task>>> {
         let snap = self.meta_store.snapshot().await?;
         let kvs = snap.get(Keys::Prefix(MetaKey::tasks())).await?;
@@ -104,6 +123,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
 
     /// watch event stream from the revision(exclusive).
     /// the revision would usually come from a WithRevision struct(which indices the revision of the inner item).
+    /// Drop the receiver stream to unsubscribe the events.
     pub async fn events_from(&self, revision: i64) -> Result<impl Stream<Item = MetadataEvent>> {
         let mut watcher = self
             .meta_store
@@ -143,6 +163,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
         Ok(())
     }
 
+    /// get all target ranges of some task.
     pub async fn ranges_of_task(
         &self,
         task_name: &str,
@@ -156,19 +177,13 @@ impl<Store: MetaStore> MetadataClient<Store> {
             revision: snap.revision(),
             inner: ranges
                 .into_iter()
-                .map(|mut kv| {
-                    let key = kv.take_key();
-                    (
-                        super::keys::extract_range_from_key(key.as_slice(), task_name)
-                            .map(|s| s.to_vec())
-                            .unwrap_or(key),
-                        kv.take_value(),
-                    )
-                })
+                .map(|mut kv| take_range(&mut kv, task_name))
                 .collect(),
         })
     }
 
+    /// Perform a two-phase bisection search algorithm for the intersection of all ranges
+    /// and
     pub async fn range_overlap_of_task(
         &self,
         task_name: &str,
@@ -199,21 +214,39 @@ impl<Store: MetaStore> MetadataClient<Store> {
         if prev.kvs.len() > 0 {
             let kv = &mut prev.kvs[0];
             if kv.value() > start_key.as_slice() {
-                let key = kv.take_key();
-                result.push((
-                    super::keys::extract_range_from_key(&key, task_name)
-                        .map(|s| s.to_vec())
-                        .unwrap_or(key),
-                    kv.take_value(),
-                ));
+                result.push(take_range(kv, task_name));
             }
         }
         for mut kv in all {
-            result.push((kv.take_key(), kv.take_value()))
+            result.push(take_range(&mut kv, task_name));
         }
         Ok(WithRevision {
             revision: snap.revision(),
             inner: result,
         })
+    }
+
+    /// insert a task with ranges into the metadata store.
+    /// the current abstraction of metadata store doesn't support transaction API.
+    /// Hence this function is non-transactional and only for testing.
+    #[cfg(test)]
+    pub(crate) async fn insert_task_with_range(
+        &self,
+        task: Task,
+        ranges: &[(&[u8], &[u8])],
+    ) -> Result<()> {
+        let bin = protobuf::Message::write_to_bytes(&task.info)?;
+        self.meta_store
+            .set(KeyValue(MetaKey::task_of(&task.info.name), bin))
+            .await?;
+        for (start_key, end_key) in ranges {
+            self.meta_store
+                .set(KeyValue(
+                    MetaKey::range_of(&task.info.name, start_key),
+                    end_key.to_owned().to_vec(),
+                ))
+                .await?;
+        }
+        Ok(())
     }
 }
