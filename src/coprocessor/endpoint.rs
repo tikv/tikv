@@ -15,6 +15,7 @@ use kvproto::kvrpcpb::{self, IsolationLevel};
 use kvproto::{coprocessor as coppb, errorpb};
 use protobuf::CodedInputStream;
 use protobuf::Message;
+use tikv_kv::SnapshotExt;
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
 
 use crate::server::Config;
@@ -205,7 +206,7 @@ impl<E: Engine> Endpoint<E> {
 
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 builder = Box::new(move |snap, req_ctx| {
-                    let data_version = snap.get_data_version();
+                    let data_version = snap.ext().get_data_version();
                     let store = SnapshotStore::new(
                         snap,
                         start_ts.into(),
@@ -373,7 +374,7 @@ impl<E: Engine> Endpoint<E> {
         tracker.req_ctx.deadline.check()?;
 
         let mut handler = if tracker.req_ctx.cache_match_version.is_some()
-            && tracker.req_ctx.cache_match_version == snapshot.get_data_version()
+            && tracker.req_ctx.cache_match_version == snapshot.ext().get_data_version()
         {
             // Build a cached request handler instead if cache version is matching.
             CachedRequestHandler::builder()(snapshot, &tracker.req_ctx)?

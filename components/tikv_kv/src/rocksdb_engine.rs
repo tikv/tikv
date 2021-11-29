@@ -21,7 +21,7 @@ use txn_types::{Key, Value};
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
-    write_modifies, Callback, CbContext, Engine, Error, ErrorInner, ExtCallback,
+    write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner, ExtCallback,
     Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
 };
 
@@ -53,10 +53,8 @@ impl Runnable for Runner {
 
     fn run(&mut self, t: Task) {
         match t {
-            Task::Write(modifies, cb) => {
-                cb((CbContext::new(), write_modifies(&self.0.kv, modifies)))
-            }
-            Task::Snapshot(cb) => cb((CbContext::new(), Ok(Arc::new(self.0.kv.snapshot())))),
+            Task::Write(modifies, cb) => cb(write_modifies(&self.0.kv, modifies)),
+            Task::Snapshot(cb) => cb(Ok(Arc::new(self.0.kv.snapshot()))),
             Task::Pause(dur) => std::thread::sleep(dur),
         }
     }
@@ -229,6 +227,7 @@ impl Engine for RocksEngine {
 
 impl Snapshot for Arc<RocksSnapshot> {
     type Iter = RocksEngineIterator;
+    type Ext<'a> = DummySnapshotExt;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get"; "key" => %key);
@@ -256,6 +255,10 @@ impl Snapshot for Arc<RocksSnapshot> {
     fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
         trace!("RocksSnapshot: create cf iterator");
         Ok(self.iterator_cf_opt(cf, iter_opt)?)
+    }
+
+    fn ext(&self) -> DummySnapshotExt {
+        DummySnapshotExt
     }
 }
 
