@@ -18,9 +18,7 @@ use raftstore::store::{
 };
 use raftstore::Result;
 use tempfile::{Builder, TempDir};
-use tikv::storage::kv::{
-    Callback as EngineCallback, CbContext, Modify, Result as EngineResult, WriteData,
-};
+use tikv::storage::kv::{Callback as EngineCallback, Modify, WriteData};
 use tikv::storage::Engine;
 use tikv::{
     server::raftkv::{CmdRes, RaftKv},
@@ -148,22 +146,18 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
     };
 
     b.iter(|| {
-        let cb1: EngineCallback<RegionSnapshot<RocksSnapshot>> = Box::new(
-            move |(_, res): (CbContext, EngineResult<RegionSnapshot<RocksSnapshot>>)| {
-                assert!(res.is_ok());
-            },
-        );
-        let cb2: EngineCallback<CmdRes<RocksSnapshot>> = Box::new(
-            move |(ctx, res): (CbContext, EngineResult<CmdRes<RocksSnapshot>>)| {
-                if let Ok(CmdRes::Snap(snap)) = res {
-                    cb1((ctx, Ok(snap)));
-                }
-            },
-        );
+        let cb1: EngineCallback<RegionSnapshot<RocksSnapshot>> = Box::new(move |res| {
+            assert!(res.is_ok());
+        });
+        let cb2: EngineCallback<CmdRes<RocksSnapshot>> = Box::new(move |res| {
+            if let Ok(CmdRes::Snap(snap)) = res {
+                cb1(Ok(snap));
+            }
+        });
         let cb: Callback<RocksSnapshot> =
             Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
                 let res = CmdRes::Snap(resp.snapshot.unwrap());
-                cb2((CbContext::new(), Ok(res)));
+                cb2(Ok(res));
             }));
         cb.invoke_read(resp.clone());
     });
