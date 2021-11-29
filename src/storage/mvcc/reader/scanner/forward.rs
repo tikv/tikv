@@ -265,7 +265,10 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     &mut self.cursors,
                     &mut self.statistics,
                 )? {
-                    HandleRes::Return(output) => return Ok(Some(output)),
+                    HandleRes::Return(output) => {
+                        self.statistics.processed_size += self.scan_policy.output_size(&output);
+                        return Ok(Some(output));
+                    }
                     HandleRes::Skip(key) => key,
                 };
             }
@@ -358,7 +361,43 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
-        scan_latest_handle_lock(current_user_key, cfg, cursors, statistics)
+        if cfg.isolation_level == IsolationLevel::Rc {
+            cursors.lock.next(&mut statistics.lock);
+            return Ok(HandleRes::Skip(current_user_key));
+        }
+        // Only needs to check lock in SI
+        let lock = {
+            let lock_value = cursors.lock.value(&mut statistics.lock);
+            Lock::parse(lock_value)?
+        };
+        cursors.lock.next(&mut statistics.lock);
+        if let Err(e) = Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &current_user_key,
+            cfg.ts,
+            &cfg.bypass_locks,
+        ) {
+            statistics.lock.processed_keys += 1;
+            // Skip current_user_key because this key is either blocked or handled.
+            cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
+            if cfg.access_locks.contains(lock.ts) {
+                cursors.ensure_default_cursor(cfg)?;
+                return super::load_data_by_lock(
+                    &current_user_key,
+                    cfg,
+                    cursors.default.as_mut().unwrap(),
+                    lock,
+                    statistics,
+                )
+                .map(|val| match val {
+                    Some(v) => HandleRes::Return((current_user_key, v)),
+                    None => HandleRes::Skip(current_user_key),
+                })
+                .map_err(Into::into);
+            }
+            return Err(e.into());
+        }
+        Ok(HandleRes::Skip(current_user_key))
     }
 
     fn handle_write(
@@ -564,7 +603,6 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
                 cfg.ts,
                 &cfg.bypass_locks,
             )
-            .map(|_| ())
         }
         IsolationLevel::Rc => Ok(()),
     };

@@ -123,7 +123,7 @@ impl Endpoint {
 
 fn extract_region_error(error: &PluginError) -> Option<kvproto::errorpb::Error> {
     match error {
-        PluginError::Other(other_err) => other_err
+        PluginError::Other(_, other_err) => other_err
             .downcast_ref::<storage::Result<()>>()
             .and_then(|e| storage::errors::extract_region_error::<()>(e)),
         _ => None,

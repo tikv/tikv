@@ -11,10 +11,9 @@ use rand::random;
 
 use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
 
-use engine_traits::{CF_DEFAULT, CF_LOCK};
+use engine_traits::{key_prefix, CF_DEFAULT, CF_LOCK};
 use test_storage::*;
 use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
-use tikv::storage::key_prefix::{RAW_KEY_PREFIX, TXN_KEY_PREFIX};
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 use tikv::storage::Engine;
@@ -855,21 +854,21 @@ fn test_txn_store_write_conflict() {
 }
 
 const TIDB_KEY_CASE: &[u8] = b"t_a";
-const TXN_KEY_CASE: &[u8] = &[TXN_KEY_PREFIX, 0, b'a'];
-const RAW_KEY_CASE: &[u8] = &[RAW_KEY_PREFIX, 0, b'a'];
-const RAW_KEY_CASE_Z: &[u8] = &[RAW_KEY_PREFIX, 0, b'z'];
+const TXN_KEY_CASE: &[u8] = &[key_prefix::TXN_KEY_PREFIX, 0, b'a'];
+const RAW_KEY_CASE: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'a'];
+const RAW_KEY_CASE_Z: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'z'];
 
 #[test]
 fn test_txn_store_txnkv_api_version() {
     let test_data = vec![
-        // config api_version = V1|V1ttl, for backward compatible.
+        // storage api_version = V1|V1ttl, for backward compatible.
         (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, true),
         (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, true),
         // storage api_version = V1ttl, allow RawKV request only.
         (ApiVersion::V1ttl, ApiVersion::V1, TXN_KEY_CASE, false),
-        // config api_version = V1, reject V2 request.
+        // storage api_version = V1, reject V2 request.
         (ApiVersion::V1, ApiVersion::V2, TIDB_KEY_CASE, false),
-        // config api_version = V2.
+        // storage api_version = V2.
         // backward compatible for TiDB request, and TiDB request only.
         (ApiVersion::V2, ApiVersion::V1, TIDB_KEY_CASE, true),
         (ApiVersion::V2, ApiVersion::V1, TXN_KEY_CASE, false),
@@ -879,12 +878,12 @@ fn test_txn_store_txnkv_api_version() {
         (ApiVersion::V2, ApiVersion::V2, TIDB_KEY_CASE, false),
     ];
 
-    for (config_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
-        let enable_ttl = match config_api_version {
+    for (storage_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
+        let enable_ttl = match storage_api_version {
             ApiVersion::V1ttl => true,
             ApiVersion::V1 | ApiVersion::V2 => false,
         };
-        let mut store = AssertionStorage::new(config_api_version, enable_ttl);
+        let mut store = AssertionStorage::new(storage_api_version, enable_ttl);
         store.ctx.set_api_version(req_api_version);
 
         if is_legal {
@@ -917,12 +916,12 @@ fn test_txn_store_txnkv_api_version() {
 #[test]
 fn test_txn_store_rawkv_api_version() {
     let test_data = vec![
-        // config api_version = V1|V1ttl, for backward compatible.
+        // storage api_version = V1|V1ttl, for backward compatible.
         (ApiVersion::V1, ApiVersion::V1, RAW_KEY_CASE, true),
         (ApiVersion::V1ttl, ApiVersion::V1, RAW_KEY_CASE, true),
-        // config api_version = V1, reject V2 request.
+        // storage api_version = V1, reject V2 request.
         (ApiVersion::V1, ApiVersion::V2, RAW_KEY_CASE, false),
-        // config api_version = V2.
+        // storage api_version = V2.
         // backward compatible for TiDB request, and TiDB request only.
         (ApiVersion::V2, ApiVersion::V1, RAW_KEY_CASE, false),
         // V2 api validation.
@@ -932,12 +931,12 @@ fn test_txn_store_rawkv_api_version() {
 
     let cf = "";
 
-    for (config_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
-        let enable_ttl = match config_api_version {
+    for (storage_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
+        let enable_ttl = match storage_api_version {
             ApiVersion::V1ttl | ApiVersion::V2 => true,
             ApiVersion::V1 => false,
         };
-        let mut store = AssertionStorage::new(config_api_version, enable_ttl);
+        let mut store = AssertionStorage::new(storage_api_version, enable_ttl);
         store.ctx.set_api_version(req_api_version);
 
         let mut range = KeyRange::default();

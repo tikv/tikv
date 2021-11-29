@@ -8,7 +8,6 @@ use engine_traits::CfName;
 use engine_traits::{IterOptions, Peekable, ReadOptions, Snapshot};
 use raftstore::store::{RegionIterator, RegionSnapshot};
 use raftstore::Error as RaftServerError;
-use std::sync::atomic::Ordering;
 use txn_types::{Key, Value};
 
 impl From<RaftServerError> for Error {
@@ -74,9 +73,9 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
     }
 
     fn is_max_ts_synced(&self) -> bool {
-        self.max_ts_sync_status
+        self.txn_ext
             .as_ref()
-            .map(|v| v.load(Ordering::SeqCst) & 1 == 1)
+            .map(|txn_ext| txn_ext.is_max_ts_synced())
             .unwrap_or(false)
     }
 }

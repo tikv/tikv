@@ -43,6 +43,7 @@ fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
         IsolationLevel::Si,
         true,
         Default::default(),
+        Default::default(),
         false,
     );
 

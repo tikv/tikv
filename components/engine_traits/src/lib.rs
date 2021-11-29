@@ -252,13 +252,12 @@
 //!   `engine_traits` and reexported from `engine` to ease the transition.
 //!   Likewise `engine_rocks` can temporarily call code from inside `engine`.
 #![feature(min_specialization)]
+#![feature(assert_matches)]
 
-#[allow(unused_extern_crates)]
-extern crate tikv_alloc;
 #[cfg(test)]
-#[macro_use]
 extern crate serde_derive;
 extern crate slog_global;
+extern crate tikv_alloc;
 #[macro_use(fail_point)]
 extern crate fail;
 
@@ -306,6 +305,8 @@ mod perf_context;
 pub use crate::perf_context::*;
 mod flow_control_factors;
 pub use crate::flow_control_factors::*;
+mod table_properties;
+pub use crate::table_properties::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
@@ -331,15 +332,15 @@ pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
 mod raft_engine;
-pub use raft_engine::{CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch};
+pub use raft_engine::{CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask};
 
 // These modules need further scrutiny
 
 pub mod compaction_job;
+pub mod key_prefix;
+pub mod raw_value;
 pub mod util;
 pub use compaction_job::*;
-
-pub mod config;
 
 // FIXME: This should live somewhere else
 pub const DATA_KEY_PREFIX_LEN: usize = 1;

@@ -21,7 +21,7 @@ use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::time::Instant;
-use tikv_util::worker::Scheduler;
+use tikv_util::worker::{ScheduleError, Scheduler};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use crate::server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager};
@@ -62,9 +62,10 @@ lazy_static! {
     )
     .unwrap();
     // A counter for errors met by `WriteCompactionFilter`.
-    static ref GC_COMPACTION_FAILURE: IntCounter = register_int_counter!(
+    static ref GC_COMPACTION_FAILURE: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_failure",
-        "Compaction filter meets failure"
+        "Compaction filter meets failure",
+        &["type"]
     )
     .unwrap();
     // A counter for skip performing GC in compactions.
@@ -315,9 +316,20 @@ impl WriteCompactionFilter {
     // `log_on_error` indicates whether to print an error log on scheduling failures.
     // It's only enabled for `GcTask::OrphanVersions`.
     fn schedule_gc_task(&self, task: GcTask<RocksEngine>, log_on_error: bool) {
-        if let Err(e) = self.gc_scheduler.schedule(task) {
-            if log_on_error {
-                error!("compaction filter schedule {} fail", e);
+        match self.gc_scheduler.schedule(task) {
+            Ok(_) => {}
+            Err(e) => {
+                if log_on_error {
+                    error!("compaction filter schedule {} fail", e);
+                }
+                match e {
+                    ScheduleError::Full(_) => {
+                        GC_COMPACTION_FAILURE.with_label_values(&["full"]).inc();
+                    }
+                    ScheduleError::Stopped(_) => {
+                        GC_COMPACTION_FAILURE.with_label_values(&["stopped"]).inc();
+                    }
+                }
             }
         }
     }
@@ -566,7 +578,7 @@ impl CompactionFilter for WriteCompactionFilter {
             Ok(decision) => decision,
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
-                GC_COMPACTION_FAILURE.inc();
+                GC_COMPACTION_FAILURE.with_label_values(&["filter"]).inc();
                 self.encountered_errors = true;
                 CompactionFilterDecision::Keep
             }

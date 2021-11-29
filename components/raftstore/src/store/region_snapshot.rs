@@ -9,7 +9,7 @@ use kvproto::raft_serverpb::RaftApplyState;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::store::{util, PeerStorage};
+use crate::store::{util, PeerStorage, TxnExt};
 use crate::{Error, Result};
 use engine_traits::util::check_key_in_range;
 use engine_traits::RaftEngine;
@@ -30,8 +30,8 @@ pub struct RegionSnapshot<S: Snapshot> {
     snap: Arc<S>,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
-    // `None` means the snapshot does not care about max_ts
-    pub max_ts_sync_status: Option<Arc<AtomicU64>>,
+    // `None` means the snapshot does not provide peer related transaction extensions.
+    pub txn_ext: Option<Arc<TxnExt>>,
 }
 
 impl<S> RegionSnapshot<S>
@@ -60,7 +60,7 @@ where
             // Use 0 to indicate that the apply index is missing and we need to KvGet it,
             // since apply index must be >= RAFT_INIT_LOG_INDEX.
             apply_index: Arc::new(AtomicU64::new(0)),
-            max_ts_sync_status: None,
+            txn_ext: None,
         }
     }
 
@@ -172,7 +172,7 @@ where
             snap: self.snap.clone(),
             region: Arc::clone(&self.region),
             apply_index: Arc::clone(&self.apply_index),
-            max_ts_sync_status: self.max_ts_sync_status.clone(),
+            txn_ext: self.txn_ext.clone(),
         }
     }
 }
