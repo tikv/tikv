@@ -1,3 +1,4 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use std::fmt::Debug;
 
 use super::{
@@ -9,7 +10,7 @@ use super::{
 
 use kvproto::brpb::StreamBackupTaskInfo;
 
-use tokio_stream::{StreamExt};
+use tokio_stream::StreamExt;
 
 use crate::errors::{Error, Result};
 
@@ -105,7 +106,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
             .await?
             .get(Keys::Key(MetaKey::task_of(name)))
             .await?;
-        if items.len() == 0 {
+        if items.is_empty() {
             return Err(Error::NoSuchTask {
                 task_name: name.to_owned(),
             });
@@ -139,7 +140,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
             .await?;
         Ok(Subscription {
             stream: Box::pin(watcher.stream.filter_map(|item| match item {
-                Err(err) => Some(MetadataEvent::Error { err: err.into() }),
+                Err(err) => Some(MetadataEvent::Error { err }),
                 Ok(event) => MetadataEvent::from_watch_event(&event),
             })),
             cancel: watcher.cancel,
@@ -206,7 +207,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
             .await?;
 
         let mut result = Vec::with_capacity(all.len() as usize + 1);
-        if prev.kvs.len() > 0 {
+        if !prev.kvs.is_empty() {
             let kv = &mut prev.kvs[0];
             if kv.value() > start_key.as_slice() {
                 result.push(take_range(kv, task_name));
@@ -232,7 +233,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
                 region,
             )))
             .await?;
-        if items.len() == 0 {
+        if items.is_empty() {
             Ok(task.info.start_ts)
         } else {
             assert!(items.len() == 1, "{:?}", items);

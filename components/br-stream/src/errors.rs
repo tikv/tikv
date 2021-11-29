@@ -1,3 +1,4 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use etcd_client::Error as EtcdError;
 use protobuf::ProtobufError;
 use std::result::Result as StdResult;

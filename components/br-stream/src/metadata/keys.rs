@@ -1,3 +1,4 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use bytes::BufMut;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -35,7 +36,7 @@ pub struct KeyValue(pub MetaKey, pub Vec<u8>);
 impl std::fmt::Debug for MetaKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match std::str::from_utf8(&self.0) {
-            Ok(s) => format!("{}", s),
+            Ok(s) => s.to_owned(),
             Err(_) => format!("<{}>", hex::encode(&self.0)),
         };
         f.debug_tuple("MetaKey").field(&s).finish()
@@ -60,9 +61,9 @@ impl KeyValue {
     }
 }
 
-impl Into<Vec<u8>> for MetaKey {
-    fn into(self) -> Vec<u8> {
-        self.0
+impl From<MetaKey> for Vec<u8> {
+    fn from(key: MetaKey) -> Self {
+        key.0
     }
 }
 
@@ -122,11 +123,11 @@ impl MetaKey {
             if next_prefix.0[i] == u8::MAX {
                 next_prefix.0.pop();
             } else {
-                next_prefix.0[i] = next_prefix.0[i] + 1;
+                next_prefix.0[i] += 1;
                 break;
             }
         }
-        return next_prefix;
+        next_prefix
     }
 }
 

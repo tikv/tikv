@@ -1,6 +1,7 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 mod client;
-mod test;
 pub mod keys;
 pub mod store;
+mod test;
 
 pub use client::{MetadataClient, MetadataEvent, Task};

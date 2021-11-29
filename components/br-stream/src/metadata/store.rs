@@ -1,8 +1,5 @@
-use std::{
-    future::Future,
-    pin::Pin,
-    sync::Arc,
-};
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use etcd_client::{DeleteOptions, EventType, GetOptions, SortOrder, SortTarget, WatchOptions};
 use futures::StreamExt;
@@ -125,22 +122,29 @@ impl EtcdStore {
     }
 }
 
-impl Into<KvEventType> for EventType {
-    fn into(self) -> KvEventType {
-        match self {
-            Self::Delete => KvEventType::Delete,
-            Self::Put => KvEventType::Put,
+impl From<EventType> for KvEventType {
+    fn from(e: EventType) -> Self {
+        match e {
+            EventType::Put => Self::Put,
+            EventType::Delete => Self::Delete,
         }
     }
 }
 
-impl Into<KeyValue> for etcd_client::KeyValue {
-    fn into(self) -> KeyValue {
-        KeyValue(MetaKey(self.key().to_owned()), self.value().to_owned())
+impl From<etcd_client::KeyValue> for KeyValue {
+    fn from(kv: etcd_client::KeyValue) -> Self {
+        // TODO: we can move out the vector in the KeyValue struct here. (instead of copying.)
+        // But that isn't possible for now because:
+        // - The raw KV pair(defined by the protocol buffer of etcd) is private.
+        // - That did could be exported by `pub-fields` feature of the client.
+        //   However that feature isn't published in theirs Cargo.toml (Is that a mistake?).
+        // - Indeed, we can use `mem::transmute` here because `etcd_client::KeyValue` has `#[repr(transparent)]`.
+        //   But before here become a known bottle neck, I'm not sure whether it's worthwhile for involving unsafe code.
+        KeyValue(MetaKey(kv.key().to_owned()), kv.value().to_owned())
     }
 }
 
-/// Add the etcd options required by the keys.
+/// Prepare the etcd options required by the keys.
 /// Return the start key for requesting.
 macro_rules! prepare_opt {
     ($opt: ident, $keys: expr) => {
@@ -190,7 +194,7 @@ impl MetaStore for EtcdStore {
                             events.events().to_owned().into_iter().filter_map(|event| {
                                 let kv = event.kv()?;
                                 Some(Ok(KvEvent {
-                                    kind: event.event_type().clone().into(),
+                                    kind: event.event_type().into(),
                                     pair: kv.clone().into(),
                                 }))
                             }),
