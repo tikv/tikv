@@ -939,7 +939,6 @@ fn test_crash_when_remove_node_from_two_member_cluster() {
     pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
-    pd_client.must_add_peer(r1, new_peer(1, 1));
     pd_client.must_add_peer(r1, new_peer(2, 2));
 
     cluster.must_put(b"k", b"v");
@@ -950,21 +949,30 @@ fn test_crash_when_remove_node_from_two_member_cluster() {
     cluster.must_transfer_leader(region.get_id(), peer_on_store1);
 
     cluster.must_put(b"k1", b"v");
-    let resp = cluster.remove_peer(r1, new_peer(1, 1));
-    assert!(resp.get_header().has_error());
+
+    let resp =
+        call_conf_change(&mut cluster, r1, ConfChangeType::RemoveNode, new_peer(1, 1)).unwrap();
+    let exec_res = resp
+        .get_header()
+        .get_error()
+        .get_message()
+        .contains("make region unavailable");
     assert!(
-        resp.get_header()
-            .get_error()
-            .get_message()
-            .contains("unsafe")
+        exec_res,
+        "remove voter directly in 2 replica raft group should failed, but got {:?}",
+        resp
     );
 
-    let resp = cluster.remove_peer(r1, new_peer(2, 2));
-    assert!(resp.get_header().has_error());
+    let resp =
+        call_conf_change(&mut cluster, r1, ConfChangeType::RemoveNode, new_peer(2, 2)).unwrap();
+    let exec_res = resp
+        .get_header()
+        .get_error()
+        .get_message()
+        .contains("make region unavailable");
     assert!(
-        resp.get_header()
-            .get_error()
-            .get_message()
-            .contains("unsafe")
+        exec_res,
+        "remove voter directly in 2 replica raft group should failed, but got {:?}",
+        resp
     );
 }

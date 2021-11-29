@@ -11,7 +11,7 @@ use grpcio::WriteFlags;
 use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
-use raft::eraftpb::MessageType;
+use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
 use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv_util::HandyRwLock;
@@ -1568,6 +1568,10 @@ fn test_region_created_replicate() {
     suite
         .cluster
         .must_transfer_leader(region.id, new_peer(2, 2));
+    suite.cluster.pd_client.must_joint_confchange(
+        region.id,
+        vec![(ConfChangeType::AddLearnerNode, new_learner_peer(1, 1))],
+    );
     suite
         .cluster
         .pd_client

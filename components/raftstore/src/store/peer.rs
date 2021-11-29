@@ -2967,7 +2967,7 @@ where
                     if kind == ConfChangeKind::Simple && current_voter.len() == 2 =>
                 {
                     return Err(box_err!(
-                        "{} unsafe request {:?}, to remove voter directly from a 2 voters raft group, please demoting voter firstly. see issue 10595 for detail",
+                        "{} removing voter directly from a 2 voters raft group may make region unavailable, please demoting voter firstly, request: {:?}",
                         self.tag,
                         cp
                     ));
