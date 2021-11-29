@@ -1280,7 +1280,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .start_with_timer("snapshot-worker", region_runner);
 
         let raftlog_gc_runner = RaftlogGcRunner::new(
-            self.router(),
             engines.clone(),
             cfg.value().raft_log_compact_sync_interval.0,
         );

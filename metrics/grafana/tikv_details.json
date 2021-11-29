@@ -29648,7 +29648,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(raft_engine_background_rewrite_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
+              "expr": "sum(rate(raft_engine_background_rewrite_bytes_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
               "hide": false,
               "interval": "",
               "legendFormat": "rewrite {{type}}",
