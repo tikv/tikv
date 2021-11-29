@@ -407,6 +407,7 @@ mod tests {
     use crate::server::TestRaftStoreRouter;
     use crate::storage::TestStorageBuilder;
     use grpcio::EnvBuilder;
+    use kvproto::kvrpcpb::ApiVersion;
     use raftstore::store::transport::Transport;
     use raftstore::store::*;
 
@@ -460,7 +461,7 @@ mod tests {
             ..Default::default()
         };
 
-        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
+        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
             .build()
             .unwrap();
 

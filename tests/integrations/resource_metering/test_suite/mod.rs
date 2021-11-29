@@ -9,7 +9,7 @@ use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::channel::oneshot;
 use futures::{select, FutureExt};
 use grpcio::{Environment, Server};
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{ApiVersion, Context};
 use kvproto::resource_usage_agent::ResourceUsageRecord;
 use mock_receiver_server::MockReceiverServer;
 use resource_metering::{init_recorder, Config, ConfigManager, Task, TEST_TAG_PREFIX};
@@ -44,9 +44,13 @@ impl TestSuite {
     pub fn new() -> Self {
         fail::cfg("cpu-record-test-filter", "return").unwrap();
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilder::from_engine_and_lock_mgr(engine, DummyLockManager {})
-            .build()
-            .unwrap();
+        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
+            engine,
+            DummyLockManager {},
+            ApiVersion::V1,
+        )
+        .build()
+        .unwrap();
 
         let mut reporter = Box::new(LazyWorker::new("resource-metering-reporter"));
         let scheduler = reporter.scheduler();

@@ -252,6 +252,7 @@
 //!   `engine_traits` and reexported from `engine` to ease the transition.
 //!   Likewise `engine_rocks` can temporarily call code from inside `engine`.
 #![feature(min_specialization)]
+#![feature(assert_matches)]
 
 #[cfg(test)]
 extern crate serde_derive;
@@ -336,6 +337,8 @@ pub use raft_engine::{CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch, 
 // These modules need further scrutiny
 
 pub mod compaction_job;
+pub mod key_prefix;
+pub mod raw_value;
 pub mod util;
 pub use compaction_job::*;
 

@@ -22,6 +22,7 @@ mod read_queue;
 mod region_snapshot;
 mod replication_mode;
 mod snap;
+mod txn_ext;
 mod worker;
 
 pub use self::bootstrap::{
@@ -56,6 +57,7 @@ pub use self::snap::{
     Snapshot, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
+pub use self::txn_ext::{PeerPessimisticLocks, TxnExt};
 pub use self::util::{RegionReadProgress, RegionReadProgressRegistry};
 pub use self::worker::{
     AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, QueryStats, ReadDelegate,
