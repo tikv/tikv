@@ -4193,6 +4193,7 @@ mod tests {
             .iter()
             .map(|&(ref k, _)| {
                 let mut req = RawGetRequest::default();
+                req.set_context(ctx.clone());
                 req.set_key(k.clone());
                 ids.push(ids.len() as u64);
                 req
