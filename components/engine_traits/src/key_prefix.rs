@@ -2,6 +2,8 @@
 
 //! Key prefix definistions and utils for API V2.
 
+use codec::number::NumberDecoder;
+
 pub const TIDB_RANGES: &[(&[u8], &[u8])] = &[(&[b'm'], &[b'm' + 1]), (&[b't'], &[b't' + 1])];
 pub const TIDB_RANGES_COMPLEMENT: &[(&[u8], &[u8])] =
     &[(&[], &[b'm']), (&[b'm' + 1], &[b't']), (&[b't' + 1], &[])];
@@ -33,9 +35,9 @@ pub fn is_txn_key(key: &[u8]) -> bool {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum KeyPrefix {
     /// Raw key prefix.
-    Raw { keyspace_id: usize },
+    Raw { keyspace_id: u64 },
     /// Transaction key prefix.
-    Txn { keyspace_id: usize },
+    Txn { keyspace_id: u64 },
     /// TiDB key prefix.
     TiDB,
     /// Unrecognised key prefix.
@@ -50,12 +52,20 @@ impl KeyPrefix {
         }
 
         match key[0] {
-            RAW_KEY_PREFIX => unsigned_varint::decode::usize(&key[1..])
-                .map(|(keyspace_id, rest)| (KeyPrefix::Raw { keyspace_id }, rest))
-                .unwrap_or((KeyPrefix::Unknown, key)),
-            TXN_KEY_PREFIX => unsigned_varint::decode::usize(&key[1..])
-                .map(|(keyspace_id, rest)| (KeyPrefix::Txn { keyspace_id }, rest))
-                .unwrap_or((KeyPrefix::Unknown, key)),
+            RAW_KEY_PREFIX => {
+                let mut slice = &key[1..];
+                match slice.read_var_u64() {
+                    Ok(keyspace_id) => (KeyPrefix::Raw { keyspace_id }, slice),
+                    Err(_) => (KeyPrefix::Unknown, key),
+                }
+            }
+            TXN_KEY_PREFIX => {
+                let mut slice = &key[1..];
+                match slice.read_var_u64() {
+                    Ok(keyspace_id) => (KeyPrefix::Txn { keyspace_id }, slice),
+                    Err(_) => (KeyPrefix::Unknown, key),
+                }
+            }
             b'm' | b't' => {
                 // TiDB prefix is also a part of the user key, so don't strip the prefix.
                 (KeyPrefix::TiDB, key)
@@ -68,14 +78,15 @@ impl KeyPrefix {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codec::number::NumberEncoder;
 
     const KEYSPACE_ID_500: &[u8] = &[244, 3];
 
     #[test]
     fn test_keyspace_id() {
-        let mut buf = [0; 10];
-        let slice = unsigned_varint::encode::usize(500, &mut buf);
-        assert_eq!(slice, KEYSPACE_ID_500);
+        let mut buf = Vec::new();
+        buf.write_var_u64(500).unwrap();
+        assert_eq!(&buf, KEYSPACE_ID_500);
     }
 
     #[test]

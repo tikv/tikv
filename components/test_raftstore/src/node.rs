@@ -261,7 +261,7 @@ impl Simulator for NodeCluster {
 
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(&cfg.import, dir, None, false).unwrap())
+            Arc::new(SSTImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
         };
 
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());

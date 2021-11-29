@@ -14,10 +14,11 @@ use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::raw::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
-use engine_traits::config::PerfLevel;
+use engine_traits::PerfLevel;
 use file_system::{IOPriority, IORateLimitMode};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
+use raft_log_engine::RecoveryMode;
 use raftstore::coprocessor::{Config as CopConfig, ConsistencyCheckMethod};
 use raftstore::store::Config as RaftstoreConfig;
 use security::SecurityConfig;
@@ -222,7 +223,7 @@ fn test_serde_custom_tikv_config() {
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
-        raft_msg_flush_interval_us: 2333,
+        raft_msg_flush_interval: ReadableDuration::micros(2333),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -608,7 +609,15 @@ fn test_serde_custom_tikv_config() {
         titan: titan_db_config,
     };
     value.raft_engine.enable = true;
-    value.raft_engine.mut_config().dir = "test-dir".to_owned();
+    let raft_engine_config = value.raft_engine.mut_config();
+    raft_engine_config.dir = "test-dir".to_owned();
+    raft_engine_config.batch_compression_threshold.0 = ReadableSize::kb(1).0;
+    raft_engine_config.bytes_per_sync.0 = ReadableSize::kb(64).0;
+    raft_engine_config.target_file_size.0 = ReadableSize::mb(1).0;
+    raft_engine_config.purge_threshold.0 = ReadableSize::gb(1).0;
+    raft_engine_config.recovery_mode = RecoveryMode::TolerateTailCorruption;
+    raft_engine_config.recovery_read_block_size.0 = ReadableSize::kb(1).0;
+    raft_engine_config.recovery_threads = 2;
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
         gc_ratio_threshold: 1.2,
@@ -618,9 +627,9 @@ fn test_serde_custom_tikv_config() {
         scheduler_pending_write_threshold: ReadableSize::kb(123),
         reserve_space: ReadableSize::gb(10),
         enable_async_apply_prewrite: true,
+        api_version: 1,
         enable_ttl: true,
         ttl_check_poll_interval: ReadableDuration::hours(0),
-        api_version: 1,
         flow_control: FlowControlConfig {
             enable: false,
             l0_files_threshold: 10,

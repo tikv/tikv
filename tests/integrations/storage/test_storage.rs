@@ -11,10 +11,9 @@ use rand::random;
 
 use kvproto::kvrpcpb::{ApiVersion, Context, LockInfo};
 
-use engine_traits::{CF_DEFAULT, CF_LOCK};
+use engine_traits::{key_prefix, CF_DEFAULT, CF_LOCK};
 use test_storage::*;
 use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
-use tikv::storage::key_prefix::{RAW_KEY_PREFIX, TXN_KEY_PREFIX};
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 use tikv::storage::Engine;
@@ -855,8 +854,8 @@ fn test_txn_store_write_conflict() {
 }
 
 const TIDB_KEY_CASE: &[u8] = b"t_a";
-const TXN_KEY_CASE: &[u8] = &[TXN_KEY_PREFIX, 0, b'a'];
-const RAW_KEY_CASE: &[u8] = &[RAW_KEY_PREFIX, 0, b'a'];
+const TXN_KEY_CASE: &[u8] = &[key_prefix::TXN_KEY_PREFIX, 0, b'a'];
+const RAW_KEY_CASE: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'a'];
 
 #[test]
 fn test_txn_store_txnkv_api_version() {
@@ -877,8 +876,8 @@ fn test_txn_store_txnkv_api_version() {
         (ApiVersion::V2, ApiVersion::V2, TIDB_KEY_CASE, false),
     ];
 
-    for (config_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
-        let mut store = AssertionStorage::new(config_api_version);
+    for (storage_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
+        let mut store = AssertionStorage::new(storage_api_version);
         store.ctx.set_api_version(req_api_version);
 
         if is_legal {
@@ -914,8 +913,8 @@ fn test_txn_store_rawkv_api_version() {
         (ApiVersion::V2, ApiVersion::V2, RAW_KEY_CASE, true),
     ];
 
-    for (config_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
-        let mut store = AssertionStorage::new(config_api_version);
+    for (storage_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
+        let mut store = AssertionStorage::new(storage_api_version);
         store.ctx.set_api_version(req_api_version);
 
         if is_legal {

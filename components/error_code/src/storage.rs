@@ -23,6 +23,7 @@ define_error_codes!(
     MAX_TIMESTAMP_NOT_SYNCED => ("MaxTimestampNotSynced", "", ""),
     DEADLINE_EXCEEDED => ("DeadlineExceeded", "", ""),
     API_VERSION_NOT_MATCHED => ("ApiVersionNotMatched", "", ""),
+    INVALID_KEY_PREFIX => ("InvalidKeyPrefix", "", ""),
 
     COMMITTED => ("Committed", "", ""),
     PESSIMISTIC_LOCK_ROLLED_BACK => ("PessimisticLockRolledBack", "", ""),

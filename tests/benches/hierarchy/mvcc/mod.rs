@@ -58,7 +58,7 @@ where
         .unwrap();
     }
     let write_data = WriteData::from_modifies(txn.into_modifies());
-    let _ = engine.async_write(&ctx, write_data, Box::new(move |(..)| {}));
+    let _ = engine.async_write(&ctx, write_data, Box::new(move |_| {}));
     let keys: Vec<Key> = kvs.iter().map(|(k, _)| Key::from_raw(k)).collect();
     let snapshot = engine.snapshot(Default::default()).unwrap();
     (snapshot, keys)
