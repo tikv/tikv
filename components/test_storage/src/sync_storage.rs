@@ -70,8 +70,14 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
     }
 
     pub fn build(mut self) -> Result<SyncTestStorage<E>> {
-        let mut builder =
-            TestStorageBuilder::from_engine_and_lock_mgr(self.engine.clone(), DummyLockManager {});
+        let mut builder = TestStorageBuilder::from_engine_and_lock_mgr(
+            self.engine.clone(),
+            DummyLockManager {},
+            self.config
+                .as_ref()
+                .map(|cfg| cfg.api_version())
+                .unwrap_or_default(),
+        );
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
         }

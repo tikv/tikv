@@ -22,8 +22,9 @@ pub struct DAGSelect {
     pub limit: Option<u64>,
     pub aggregate: Vec<Expr>,
     pub group_by: Vec<Expr>,
-    pub key_range: KeyRange,
+    pub key_ranges: Vec<KeyRange>,
     pub output_offsets: Option<Vec<u32>>,
+    pub paging_size: Option<u64>,
 }
 
 impl DAGSelect {
@@ -44,8 +45,9 @@ impl DAGSelect {
             limit: None,
             aggregate: vec![],
             group_by: vec![],
-            key_range: table.get_record_range_all(),
+            key_ranges: vec![table.get_record_range_all()],
             output_offsets: None,
+            paging_size: None,
         }
     }
 
@@ -70,8 +72,9 @@ impl DAGSelect {
             limit: None,
             aggregate: vec![],
             group_by: vec![],
-            key_range: range,
+            key_ranges: vec![range],
             output_offsets: None,
+            paging_size: None,
         }
     }
 
@@ -175,6 +178,22 @@ impl DAGSelect {
         self
     }
 
+    pub fn desc(mut self, desc: bool) -> DAGSelect {
+        self.execs[0].mut_tbl_scan().set_desc(desc);
+        self
+    }
+
+    pub fn paging_size(mut self, paging_size: u64) -> DAGSelect {
+        assert_ne!(paging_size, 0);
+        self.paging_size = Some(paging_size);
+        self
+    }
+
+    pub fn key_ranges(mut self, key_ranges: Vec<KeyRange>) -> DAGSelect {
+        self.key_ranges = key_ranges;
+        self
+    }
+
     pub fn build(self) -> Request {
         self.build_with(Context::default(), &[0])
     }
@@ -232,7 +251,8 @@ impl DAGSelect {
         req.set_start_ts(next_id() as u64);
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(dag.write_to_bytes().unwrap());
-        req.set_ranges(vec![self.key_range].into());
+        req.set_ranges(self.key_ranges.into());
+        req.set_paging_size(self.paging_size.unwrap_or(0));
         req.set_context(ctx);
         req
     }
