@@ -1038,11 +1038,11 @@ checksum = "bb1f6b1ce1c140482ea30ddd3335fc0024ac7ee112895426e0a629a6c20adfe3"
 
 [[package]]
 name = "encoding_rs"
-version = "0.8.24"
+version = "0.8.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a51b8cf747471cb9499b6d59e59b0444f4c90eba8968c4e44874e92b5b64ace2"
+checksum = "a74ea89a0a1b98f6332de42c95baff457ada66d1cb4030f9ff151b2041a1c746"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
 ]
 
 [[package]]
@@ -1166,7 +1166,9 @@ dependencies = [
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
+ "bitflags",
  "case_macros",
+ "codec",
  "error_code",
  "fail",
  "file_system",
@@ -2169,7 +2171,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#a22c6b52443e743edc164e40afcf6cfcfa5ed2bf"
+source = "git+https://github.com/pingcap/kvproto.git#03abd340988f539630450c78ead7b13dcf5e056d"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3435,7 +3437,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=master#5d2e4fb4af706b3f3cff38145725ca57d6b2cbb9"
+source = "git+https://github.com/tikv/raft-engine?branch=master#a06397be343e3c766568aca5a1f447cf234b4954"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -3529,6 +3531,7 @@ dependencies = [
  "openssl",
  "ordered-float 2.7.0",
  "panic_hook",
+ "parking_lot",
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
@@ -5128,6 +5131,7 @@ dependencies = [
  "chrono-tz",
  "codec",
  "collections",
+ "encoding_rs",
  "error_code",
  "hex 0.4.2",
  "kvproto",
@@ -5293,6 +5297,7 @@ dependencies = [
  "raftstore",
  "rand 0.7.3",
  "regex",
+ "reqwest",
  "resource_metering",
  "rev_lines",
  "seahash",
@@ -5326,7 +5331,6 @@ dependencies = [
  "tokio-timer",
  "toml",
  "txn_types",
- "unsigned-varint",
  "url",
  "uuid",
  "walkdir",
@@ -5562,7 +5566,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#ec68283c17354fe66f3ab3288ad135c095178182"
+source = "git+https://github.com/pingcap/tipb.git#e9b045a0bdf83bd96827751ad7b3c82b1f1bb334"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5816,12 +5820,6 @@ name = "unicode-xid"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "826e7639553986605ec5979c7dd957c7895e93eabed50ab2ffa7f6128a75097c"
-
-[[package]]
-name = "unsigned-varint"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f8d425fafb8cd76bc3f22aace4af471d3156301d7508f2107e98fbeae10bc7f"
 
 [[package]]
 name = "untrusted"

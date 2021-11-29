@@ -27,6 +27,7 @@ use crate::storage::{
 use engine_traits::CF_WRITE;
 use kvproto::kvrpcpb::ExtraOp;
 use std::mem;
+use tikv_kv::SnapshotExt;
 use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
 
 use super::ReaderWithStats;
@@ -389,7 +390,8 @@ impl<K: PrewriteKind> Prewriter<K> {
     // If it is possibly stale due to leader transfer or region merge, return an error.
     // TODO: Fallback to non-async commit if not synced instead of returning an error.
     fn check_max_ts_synced(&self, snapshot: &impl Snapshot) -> Result<()> {
-        if (self.secondary_keys.is_some() || self.try_one_pc) && !snapshot.is_max_ts_synced() {
+        if (self.secondary_keys.is_some() || self.try_one_pc) && !snapshot.ext().is_max_ts_synced()
+        {
             Err(ErrorInner::MaxTimestampNotSynced {
                 region_id: self.ctx.get_region_id(),
                 start_ts: self.start_ts,
@@ -1308,8 +1310,17 @@ mod tests {
         #[derive(Clone)]
         struct MockSnapshot;
 
+        struct MockSnapshotExt;
+
+        impl SnapshotExt for MockSnapshotExt {
+            fn is_max_ts_synced(&self) -> bool {
+                false
+            }
+        }
+
         impl Snapshot for MockSnapshot {
             type Iter = KvTestEngineIterator;
+            type Ext<'a> = MockSnapshotExt;
 
             fn get(&self, _: &Key) -> Result<Option<Value>> {
                 unimplemented!()
@@ -1326,8 +1337,8 @@ mod tests {
             fn iter_cf(&self, _: CfName, _: IterOptions) -> Result<Self::Iter> {
                 unimplemented!()
             }
-            fn is_max_ts_synced(&self) -> bool {
-                false
+            fn ext(&self) -> MockSnapshotExt {
+                MockSnapshotExt
             }
         }
 
