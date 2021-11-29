@@ -2,24 +2,27 @@ use std::fmt::Debug;
 
 use super::{
     keys::{KeyValue, MetaKey},
-    store::{GetExtra, Keys, KvEvent, KvEventType, MetaStore, Snapshot, WithRevision},
+    store::{
+        GetExtra, Keys, KvEvent, KvEventType, MetaStore, Snapshot, Subscription, WithRevision,
+    },
 };
 
 use kvproto::brpb::StreamBackupTaskInfo;
 
-use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
+use tokio_stream::{StreamExt};
 
 use crate::errors::{Error, Result};
 
 /// Some operations over stream backup metadata key space.
 pub struct MetadataClient<Store> {
     store_id: u64,
-    meta_store: Store,
+    pub(crate) meta_store: Store,
 }
 
 /// a stream backup task.
 /// the initial design of this task would bind with a `MetaStore`,
 /// which allows fluent API like `task.step(region_id, next_backup_ts)`.
+#[derive(Default)]
 pub struct Task {
     pub info: StreamBackupTaskInfo,
 }
@@ -42,6 +45,20 @@ pub enum MetadataEvent {
     Error { err: Error },
 }
 
+impl PartialEq for MetadataEvent {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::AddTask { task: l_task }, Self::AddTask { task: r_task }) => l_task == r_task,
+            (Self::RemoveTask { task: l_task }, Self::RemoveTask { task: r_task }) => {
+                l_task == r_task
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for MetadataEvent {}
+
 impl MetadataEvent {
     fn from_watch_event(event: &KvEvent) -> Option<MetadataEvent> {
         // Maybe report an error when the kv isn't present?
@@ -56,14 +73,6 @@ impl MetadataEvent {
             },
         })
     }
-}
-
-macro_rules! send_or_break {
-    ($sender: expr, $item: expr) => {
-        if $sender.send($item).await.is_err() {
-            break;
-        }
-    };
 }
 
 /// extract the start key and the end key from a metadata key-value pair.
@@ -123,33 +132,18 @@ impl<Store: MetaStore> MetadataClient<Store> {
 
     /// watch event stream from the revision(exclusive).
     /// the revision would usually come from a WithRevision struct(which indices the revision of the inner item).
-    /// Drop the receiver stream to unsubscribe the events.
-    pub async fn events_from(&self, revision: i64) -> Result<impl Stream<Item = MetadataEvent>> {
-        let mut watcher = self
+    pub async fn events_from(&self, revision: i64) -> Result<Subscription<MetadataEvent>> {
+        let watcher = self
             .meta_store
             .watch(Keys::Prefix(MetaKey::tasks()), revision + 1)
             .await?;
-        let (tx, rx) = tokio::sync::mpsc::channel(64);
-        tokio::spawn(async move {
-            loop {
-                match watcher.stream.next().await {
-                    Some(Err(err)) => {
-                        send_or_break!(tx, MetadataEvent::Error { err: err.into() });
-                        break;
-                    }
-                    None => break,
-                    Some(Ok(event)) => {
-                        if let Some(event) = MetadataEvent::from_watch_event(&event) {
-                            send_or_break!(tx, event);
-                        }
-                    }
-                }
-            }
-            // we cannot use defer! here because async closure hasn't been supported,
-            // and defer! doesn't support async functions too...
-            watcher.cancel.await
-        });
-        Ok(ReceiverStream::new(rx))
+        Ok(Subscription {
+            stream: Box::pin(watcher.stream.filter_map(|item| match item {
+                Err(err) => Some(MetadataEvent::Error { err: err.into() }),
+                Ok(event) => MetadataEvent::from_watch_event(&event),
+            })),
+            cancel: watcher.cancel,
+        })
     }
 
     /// forward the progress of some task.
@@ -183,7 +177,8 @@ impl<Store: MetaStore> MetadataClient<Store> {
     }
 
     /// Perform a two-phase bisection search algorithm for the intersection of all ranges
-    /// and
+    /// and the specificated range (usually region range.)
+    /// TODO: explain the algorithm?
     pub async fn range_overlap_of_task(
         &self,
         task_name: &str,
@@ -226,13 +221,41 @@ impl<Store: MetaStore> MetadataClient<Store> {
         })
     }
 
+    /// access the next backup ts of some task and some region.
+    pub async fn progress_of_task(&self, task_name: &str, region: u64) -> Result<u64> {
+        let task = self.get_task(task_name).await?;
+        let timestamp = self.meta_store.snapshot().await?;
+        let mut items = timestamp
+            .get(Keys::Key(MetaKey::next_backup_ts_of(
+                task_name,
+                self.store_id,
+                region,
+            )))
+            .await?;
+        if items.len() == 0 {
+            Ok(task.info.start_ts)
+        } else {
+            assert!(items.len() == 1, "{:?}", items);
+            let next_backup_ts = std::mem::take(&mut items[0].1);
+            if next_backup_ts.len() != 8 {
+                return Err(Error::MalformedMetadata(format!(
+                    "the length of next_backup_ts is {} bytes, require 8 bytes",
+                    next_backup_ts.len()
+                )));
+            }
+            let mut buf = [0u8; 8];
+            buf.copy_from_slice(next_backup_ts.as_slice());
+            Ok(u64::from_be_bytes(buf))
+        }
+    }
+
     /// insert a task with ranges into the metadata store.
     /// the current abstraction of metadata store doesn't support transaction API.
     /// Hence this function is non-transactional and only for testing.
     #[cfg(test)]
     pub(crate) async fn insert_task_with_range(
         &self,
-        task: Task,
+        task: &Task,
         ranges: &[(&[u8], &[u8])],
     ) -> Result<()> {
         let bin = protobuf::Message::write_to_bytes(&task.info)?;
@@ -248,5 +271,14 @@ impl<Store: MetaStore> MetadataClient<Store> {
                 .await?;
         }
         Ok(())
+    }
+
+    /// remove some task, without the ranges.
+    /// only for testing.
+    #[cfg(test)]
+    pub(crate) async fn remove_task(&self, name: &str) -> Result<()> {
+        self.meta_store
+            .delete(Keys::Key(MetaKey::task_of(name)))
+            .await
     }
 }

@@ -11,6 +11,8 @@ pub enum Error {
     Protobuf(#[from] ProtobufError),
     #[error("No such task {task_name:?}")]
     NoSuchTask { task_name: String },
+    #[error("Malformed metadata {0}")]
+    MalformedMetadata(String),
 }
 
 pub type Result<T> = StdResult<T, Error>;

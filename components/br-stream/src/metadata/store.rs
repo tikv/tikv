@@ -1,11 +1,10 @@
 use std::{
     future::Future,
-    ops::{Bound, Range, RangeBounds},
     pin::Pin,
     sync::Arc,
 };
 
-use etcd_client::{EventType, GetOptions, SortOrder, SortTarget, WatchOptions};
+use etcd_client::{DeleteOptions, EventType, GetOptions, SortOrder, SortTarget, WatchOptions};
 use futures::StreamExt;
 use tikv_util::warn;
 use tokio::sync::Mutex;
@@ -87,12 +86,16 @@ pub struct KvEvent {
     pub pair: KeyValue,
 }
 
-pub struct Subscription {
-    pub stream: BoxStream<Result<KvEvent>>,
+/// A cancelable event stream.
+pub struct Subscription<Event> {
+    pub stream: BoxStream<Event>,
     /// Futures in rust are lazy.
     /// This is actually `async FnOnce()`.
     pub cancel: BoxFuture<()>,
 }
+
+/// The cancelable stream of kv events.
+pub type KvChangeSubscription = Subscription<Result<KvEvent>>;
 
 #[async_trait]
 /// A storage for storing metadata.
@@ -103,9 +106,11 @@ pub trait MetaStore: Clone + Send + Sync {
     async fn snapshot(&self) -> Result<Self::Snap>;
     /// Set a key in the store.
     async fn set(&self, pair: KeyValue) -> Result<()>;
-    /// Watch a change stream from the store.
+    /// Delete some keys.
+    async fn delete(&self, keys: Keys) -> Result<()>;
+    /// Watch change of some keys from the store.
     /// Can be canceled then by polling the `cancel` future in the Subscription.
-    async fn watch(&self, keys: Keys, start_rev: i64) -> Result<Subscription>;
+    async fn watch(&self, keys: Keys, start_rev: i64) -> Result<KvChangeSubscription>;
 }
 
 // Can we get rid of the mutex? (which means, we must use a singleton client.)
@@ -135,6 +140,24 @@ impl Into<KeyValue> for etcd_client::KeyValue {
     }
 }
 
+/// Add the etcd options required by the keys.
+/// Return the start key for requesting.
+macro_rules! prepare_opt {
+    ($opt: ident, $keys: expr) => {
+        match $keys {
+            Keys::Prefix(key) => {
+                $opt = $opt.with_prefix();
+                key
+            }
+            Keys::Range(key, end_key) => {
+                $opt = $opt.with_range(end_key);
+                key
+            }
+            Keys::Key(key) => key,
+        }
+    };
+}
+
 #[async_trait]
 impl MetaStore for EtcdStore {
     type Snap = EtcdSnapshot;
@@ -152,19 +175,9 @@ impl MetaStore for EtcdStore {
         Ok(())
     }
 
-    async fn watch(&self, keys: Keys, start_rev: i64) -> Result<Subscription> {
+    async fn watch(&self, keys: Keys, start_rev: i64) -> Result<KvChangeSubscription> {
         let mut opt = WatchOptions::new();
-        let key = match keys {
-            Keys::Prefix(key) => {
-                opt = opt.with_prefix();
-                key
-            }
-            Keys::Range(key, end_key) => {
-                opt = opt.with_range(end_key);
-                key
-            }
-            Keys::Key(key) => key,
-        };
+        let key = prepare_opt!(opt, keys);
         opt = opt.with_start_revision(start_rev);
         let (mut watcher, stream) = self.0.lock().await.watch(key, Some(opt)).await?;
         Ok(Subscription {
@@ -173,9 +186,8 @@ impl MetaStore for EtcdStore {
                     match events {
                         Err(err) => Box::pin(tokio_stream::once(Err(err.into()))),
                         Ok(events) => Box::pin(tokio_stream::iter(
+                            // TODO: remove the copy here via access the protobuf field directly.
                             events.events().to_owned().into_iter().filter_map(|event| {
-                                // We must clone twice here to make borrow checker happy.
-                                // Because the client warps the protobuf type and doesn't provide a take method.
                                 let kv = event.kv()?;
                                 Some(Ok(KvEvent {
                                     kind: event.event_type().clone().into(),
@@ -193,6 +205,14 @@ impl MetaStore for EtcdStore {
             }),
         })
     }
+
+    async fn delete(&self, keys: Keys) -> Result<()> {
+        let mut opt = DeleteOptions::new();
+        let key = prepare_opt!(opt, keys);
+
+        self.0.lock().await.delete(key, Some(opt)).await?;
+        Ok(())
+    }
 }
 
 pub struct EtcdSnapshot {
@@ -204,17 +224,7 @@ pub struct EtcdSnapshot {
 impl Snapshot for EtcdSnapshot {
     async fn get_extra(&self, keys: Keys, extra: GetExtra) -> Result<GetResponse> {
         let mut opt = GetOptions::new();
-        let key = match keys {
-            Keys::Prefix(key) => {
-                opt = opt.with_prefix();
-                key
-            }
-            Keys::Range(key, end_key) => {
-                opt = opt.with_range(end_key);
-                key
-            }
-            Keys::Key(key) => key,
-        };
+        let key = prepare_opt!(opt, keys);
         opt = opt.with_revision(self.revision);
         if extra.desc_order {
             opt = opt.with_sort(SortTarget::Key, SortOrder::Descend);

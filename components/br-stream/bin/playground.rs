@@ -30,8 +30,8 @@ async fn main() -> Result<()> {
             println!("\t[{:?}, {:?})", range.0, range.1);
         }
     }
-    let mut stream = meta_client.events_from(rev).await?;
-    while let Some(event) = stream.next().await {
+    let mut sub = meta_client.events_from(rev).await?;
+    while let Some(event) = sub.stream.next().await {
         println!("{:?}", event);
     }
     Ok(())

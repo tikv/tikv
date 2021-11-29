@@ -9,11 +9,26 @@ const PATH_RANGES: &str = "/ranges";
 const PATH_PAUSE: &str = "/pause";
 lazy_static! {
     static ref EXTRACT_NAME_FROM_INFO_RE: Regex =
-        Regex::new(r"/tidb/br-stream/info/(?P<task_name>\w+)").unwrap();
+        Regex::new(r"/tidb/br-stream/info/(?P<task_name>[0-9a-zA-Z_]+)").unwrap();
 }
 
+/// A key that associates to some metadata.
+///
+/// Generally, there are four pattern of metadata:
+/// ```plaintext
+/// For basic task info:
+/// <PREFIX>/info/<task_name> -> <task_info(protobuf)>
+/// For the target ranges of some task:
+/// <PREFIX>/ranges/<task_name>/<start_key(binary)> -> <end_key(binary)>
+/// For the progress of tasks:
+/// <PREFIX>/checkpoint/<task_name>/<store_id(u64,be)>/<region_id(u64,be)> -> <next_backup_ts(u64,be)>
+/// For the status of tasks:
+/// <PREFIX>/pause/<task_name> -> ""
+/// ```
 #[derive(Clone)]
 pub struct MetaKey(pub Vec<u8>);
+
+/// A simple key value pair of metadata.
 #[derive(Clone, Debug)]
 pub struct KeyValue(pub MetaKey, pub Vec<u8>);
 
@@ -103,11 +118,11 @@ impl MetaKey {
     /// all keys with the prefix `self`.
     pub fn next_prefix(&self) -> Self {
         let mut next_prefix = self.clone();
-        for i in (self.0.len() - 1)..=0 {
+        for i in (0..next_prefix.0.len()).rev() {
             if next_prefix.0[i] == u8::MAX {
                 next_prefix.0.pop();
             } else {
-                next_prefix.0[i] += 1;
+                next_prefix.0[i] = next_prefix.0[i] + 1;
                 break;
             }
         }
