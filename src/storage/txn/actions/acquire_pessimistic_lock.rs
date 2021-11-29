@@ -1063,7 +1063,7 @@ pub mod tests {
         let for_update_ts = TimeStamp::new(10);
         let need_old_value = true;
         let need_value = false;
-        let mut txn = MvccTxn::new(start_ts, cm.clone());
+        let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
         let _res = acquire_pessimistic_lock(
             &mut txn,
