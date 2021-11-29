@@ -2484,12 +2484,18 @@ pub mod test_util {
     }
 }
 
-// ------> Begin ------> Scheduled ------> SnapshotReceived ------> Finished ------>
-// |----- schedule_wait_time -----|
-//                                |-- snapshot_wait_time --|
-// |------------------- wait_wall_time --------------------|
-//                                                         |-- process_wall_time --|
-// |------------------------------ kv_read_wall_time ------------------------------|
+/// Latency indicators related to KvGet/KvBatchGet.
+///
+/// The detailed meaning of the indicators is as follows:
+///
+/// ```text
+/// ------> Begin ------> Scheduled ------> SnapshotReceived ------> Finished ------>
+/// |----- schedule_wait_time -----|
+///                                |-- snapshot_wait_time --|
+/// |------------------- wait_wall_time --------------------|
+///                                                         |-- process_wall_time --|
+/// |------------------------------ kv_read_wall_time ------------------------------|
+/// ```
 #[derive(Debug, Default)]
 pub struct KvGetLatencyStats {
     pub wait_wall_time_ms: u64,
