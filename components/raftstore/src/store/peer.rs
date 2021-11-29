@@ -3078,6 +3078,7 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         msg: &eraftpb::Message,
     ) {
+<<<<<<< HEAD
         // log_term is set by original leader, represents the term last log is written
         // in, which should be equal to the original leader's term.
         if msg.get_log_term() != self.term() {
@@ -3112,6 +3113,10 @@ where
         #[allow(clippy::suspicious_operation_groupings)]
         if self.is_applying_snapshot()
             || self.has_pending_snapshot()
+=======
+        let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
+        if pending_snapshot
+>>>>>>> 3b68ccd11... raftstore: relax merge result check (#11478)
             || msg.get_from() != self.leader_id()
             // For followers whose disk is full.
             || !matches!(ctx.self_disk_usage, DiskUsage::Normal)
@@ -3121,6 +3126,8 @@ where
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "from" => msg.get_from(),
+                "pending_snapshot" => pending_snapshot,
+                "disk_usage" => ?ctx.self_disk_usage,
             );
             return;
         }
