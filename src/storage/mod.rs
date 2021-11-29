@@ -453,7 +453,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&raw_key))?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, [&raw_key])?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
@@ -568,12 +568,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         QueryKind::Get,
                     );
 
-                    Self::check_api_version(
-                        api_version,
-                        ctx.api_version,
-                        CMD,
-                        iter::once(raw_key),
-                    )?;
+                    Self::check_api_version(api_version, ctx.api_version, CMD, [raw_key])?;
 
                     let start_ts = req.get_version().into();
                     let isolation_level = ctx.get_isolation_level();
@@ -1172,7 +1167,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             self.api_version,
             ctx.api_version,
             CommandKind::delete_range,
-            vec![raw_start_key, raw_end_key],
+            [raw_start_key, raw_end_key],
         )?;
 
         let mut modifies = Vec::with_capacity(DATA_CFS.len());
@@ -1225,7 +1220,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&key))?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1301,7 +1296,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         api_version,
                         get.get_context().api_version,
                         CMD,
-                        iter::once(get.get_key()),
+                        [get.get_key()],
                     )?;
                 }
 
@@ -1467,7 +1462,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_put;
         let api_version = self.api_version;
 
-        Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&key))?;
+        Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
         if self.api_version == ApiVersion::V1 && ttl != 0 {
@@ -1567,7 +1562,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             self.api_version,
             ctx.api_version,
             CommandKind::raw_delete,
-            iter::once(&key),
+            [&key],
         )?;
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
@@ -1596,7 +1591,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         end_key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let keys = vec![&start_key, &end_key];
+        let keys = [&start_key, &end_key];
         check_key_size!(keys.iter(), self.max_key_size, callback);
         Self::check_api_version(
             self.api_version,
@@ -1927,7 +1922,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&key))?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1978,7 +1973,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             self.api_version,
             ctx.api_version,
             CommandKind::raw_compare_and_swap,
-            iter::once(&key),
+            [&key],
         )?;
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
 
