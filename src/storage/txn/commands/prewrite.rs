@@ -1543,8 +1543,7 @@ mod tests {
             )))
         ));
 
-        // update max_ts to 15
-        cm.update_max_ts(TimeStamp::from(15));
+        assert_eq!(cm.max_ts().into_inner(), 15);
 
         // T3: start_ts = 8, commit_ts = max_ts + 1 = 16, prewrite a DELETE operation on k
         must_prewrite_delete(&engine, key, key, 8);
