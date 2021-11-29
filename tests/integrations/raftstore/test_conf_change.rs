@@ -608,6 +608,7 @@ fn test_transfer_leader_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_add_peer(region_id, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     pd_client.must_add_peer(region_id, new_peer(3, 3));
+<<<<<<< HEAD
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     // transfer to all followers
     let mut leader_id = cluster.leader_of_region(region_id).unwrap().get_id();
@@ -621,6 +622,14 @@ fn test_transfer_leader_safe<T: Simulator>(cluster: &mut Cluster<T>) {
             cluster.leader_of_region(region_id).unwrap().get_id(),
             peer.get_id()
         );
+=======
+
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    cluster.must_put(b"k2", b"v2");
+    for id in 1..=3 {
+        must_get_equal(&cluster.get_engine(id), b"k2", b"v2");
+>>>>>>> 3b68ccd11... raftstore: relax merge result check (#11478)
     }
 
     // Test transfer leader after a safe duration.

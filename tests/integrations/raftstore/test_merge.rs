@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use kvproto::raft_cmdpb::CmdType;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
+use raft::eraftpb::ConfChangeType;
 use raft::eraftpb::MessageType;
 
 use engine_rocks::Compat;
@@ -1198,3 +1199,127 @@ fn test_merge_remove_target_peer_isolated() {
         must_get_none(&cluster.get_engine(3), format!("k{}", i).as_bytes());
     }
 }
+<<<<<<< HEAD
+=======
+
+#[test]
+fn test_sync_max_ts_after_region_merge() {
+    use tikv::storage::{Engine, Snapshot};
+
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.run();
+
+    // Transfer leader to node 1 first to ensure all operations happen on node 1
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
+    let storage = cluster
+        .sim
+        .read()
+        .unwrap()
+        .storages
+        .get(&1)
+        .unwrap()
+        .clone();
+    let wait_for_synced = |cluster: &mut Cluster<ServerCluster>| {
+        let region_id = right.get_id();
+        let leader = cluster.leader_of_region(region_id).unwrap();
+        let epoch = cluster.get_region_epoch(region_id);
+        let mut ctx = Context::default();
+        ctx.set_region_id(region_id);
+        ctx.set_peer(leader);
+        ctx.set_region_epoch(epoch);
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = storage.snapshot(snap_ctx).unwrap();
+        let txn_ext = snapshot.txn_ext.clone().unwrap();
+        for retry in 0..10 {
+            if txn_ext.is_max_ts_synced() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1 << retry));
+        }
+        assert!(snapshot.ext().is_max_ts_synced());
+    };
+
+    wait_for_synced(&mut cluster);
+    let max_ts = cm.max_ts();
+
+    cluster.pd_client.trigger_tso_failure();
+    // Merge left to right
+    cluster.pd_client.must_merge(left.get_id(), right.get_id());
+
+    wait_for_synced(&mut cluster);
+    let new_max_ts = cm.max_ts();
+    assert!(new_max_ts > max_ts);
+}
+
+/// If a follower is demoted by a snapshot, its meta will be changed. The case is to ensure
+/// asserts in code can tolerate the change.
+#[test]
+fn test_merge_snapshot_demote() {
+    let mut cluster = new_node_cluster(0, 4);
+    configure_for_merge(&mut cluster);
+    configure_for_snapshot(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run_conf_change();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    pd_client.must_add_peer(region.get_id(), new_peer(2, 2));
+    pd_client.must_add_peer(region.get_id(), new_peer(3, 3));
+
+    cluster.must_split(&region, b"k2");
+
+    let r1 = pd_client.get_region(b"k1").unwrap();
+    let r2 = pd_client.get_region(b"k3").unwrap();
+
+    let r2_on_store1 = find_peer(&r2, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(r2.get_id(), r2_on_store1);
+
+    // So r2 on store 3 will lag behind.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r2.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+
+    let last_index = cluster.raft_local_state(r2.get_id(), 1).get_last_index();
+    for i in 1..4 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+
+    pd_client.must_merge(r1.get_id(), r2.get_id());
+    cluster.wait_log_truncated(r2.get_id(), 1, last_index + 1);
+
+    // Now demote r2 on store 3 to learner, so its meta will be changed.
+    let r2_on_store3 = find_peer(&r2, 3).unwrap().to_owned();
+    pd_client.must_joint_confchange(
+        r2.get_id(),
+        vec![
+            (ConfChangeType::AddLearnerNode, new_learner_peer(4, 4)),
+            (
+                ConfChangeType::AddLearnerNode,
+                new_learner_peer(3, r2_on_store3.get_id()),
+            ),
+        ],
+    );
+
+    cluster.clear_send_filters();
+    // Now snapshot should be generated and merge on store 3 should be aborted.
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+}
+>>>>>>> 3b68ccd11... raftstore: relax merge result check (#11478)
