@@ -31,7 +31,6 @@ pub use self::{
     types::{PessimisticLockRes, StorageCallback, TxnStatus},
 };
 
-use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Modify, WriteData},
@@ -42,6 +41,10 @@ use crate::storage::{
         scheduler::Scheduler as TxnScheduler,
     },
     types::StorageCallbackType,
+};
+use crate::{
+    read_pool::{ReadPool, ReadPoolHandle},
+    storage::kv::PerfStatisticsInstant,
 };
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
@@ -290,8 +293,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                let perf_snap = PerfStatisticsInstant::new();
+                let get_count = gets.len();
+                let mut statistics = Statistics::default();
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
-                    let mut statistics = Statistics::default();
                     let mut snap_store = SnapshotStore::new(
                         snapshot,
                         TimeStamp::zero(),
@@ -319,7 +324,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     results
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.saturating_elapsed());
+                let dur = command_duration.saturating_elapsed();
+                if dur > std::time::Duration::from_millis(256) {
+                    error!("slow batch get command"; "key_count" => get_count, "takes" => ?dur, "perf_context" => ?perf_snap.delta(), "statistics" => ?statistics);
+                }
+                metrics::tls_collect_command_duration(CMD, dur);
                 Ok(result)
             },
             priority,
@@ -357,8 +366,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                let perf_snap = PerfStatisticsInstant::new();
+                let get_count = keys.len();
+                let mut statistics = Statistics::default();
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
-                    let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
@@ -392,7 +403,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     result
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.saturating_elapsed());
+                let dur = command_duration.saturating_elapsed();
+                if dur > std::time::Duration::from_millis(256) {
+                    error!("slow batch get"; "key_count" => get_count, "takes" => ?dur, "perf_context" => ?perf_snap.delta(), "statistics" => ?statistics);
+                }
+                metrics::tls_collect_command_duration(CMD, dur);
                 result
             },
             priority,
