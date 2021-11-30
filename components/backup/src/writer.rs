@@ -378,6 +378,7 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
     use tikv::storage::TestEngineBuilder;
+    use txn_types::OldValue;
 
     type CfKvs<'a> = (engine_traits::CfName, &'a [(&'a [u8], &'a [u8])]);
 
@@ -475,7 +476,7 @@ mod tests {
                 vec![TxnEntry::Commit {
                     default: (vec![], vec![]),
                     write: (vec![b'a'], vec![b'a']),
-                    old_value: None,
+                    old_value: OldValue::None,
                 }]
                 .into_iter(),
                 false,
@@ -515,12 +516,12 @@ mod tests {
                     TxnEntry::Commit {
                         default: (vec![b'a'], vec![b'a']),
                         write: (vec![b'a'], vec![b'a']),
-                        old_value: None,
+                        old_value: OldValue::None,
                     },
                     TxnEntry::Commit {
                         default: (vec![], vec![]),
                         write: (vec![b'b'], vec![]),
-                        old_value: None,
+                        old_value: OldValue::None,
                     },
                 ]
                 .into_iter(),
