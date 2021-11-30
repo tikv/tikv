@@ -278,14 +278,8 @@ impl<F: Filter + Clone + 'static> FilterFactory for CloneFilterFactory<F> {
     }
 }
 
-pub struct PartitionFilter {
+struct PartitionFilter {
     node_ids: Vec<u64>,
-}
-
-impl PartitionFilter {
-    pub fn new(node_ids: Vec<u64>) -> PartitionFilter {
-        PartitionFilter { node_ids }
-    }
 }
 
 impl Filter for PartitionFilter {
