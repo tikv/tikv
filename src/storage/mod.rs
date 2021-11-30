@@ -54,8 +54,8 @@ pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
         CfStatistics, Cursor, CursorBuilder, Engine, FlowStatistics, FlowStatsReporter, Iterator,
-        PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot, Statistics,
-        TestEngineBuilder,
+        PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot,
+        StageLatencyStats, Statistics, TestEngineBuilder,
     },
     raw::{RawEncodeSnapshot, RawStore},
     read_pool::{build_read_pool, build_read_pool_for_test},
@@ -519,7 +519,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         stage_snap_recv_ts.saturating_duration_since(stage_begin_ts);
                     let process_wall_time =
                         stage_finished_ts.saturating_duration_since(stage_snap_recv_ts);
-                    let latency_stats = KvGetLatencyStats {
+                    let latency_stats = StageLatencyStats {
                         schedule_wait_time: duration_to_ms(schedule_wait_time),
                         snapshot_wait_time: duration_to_ms(snapshot_wait_time),
                         wait_wall_time_ms: duration_to_ms(wait_wall_time),
@@ -829,7 +829,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         stage_snap_recv_ts.saturating_duration_since(stage_begin_ts);
                     let process_wall_time =
                         stage_finished_ts.saturating_duration_since(stage_snap_recv_ts);
-                    let latency_stats = KvGetLatencyStats {
+                    let latency_stats = StageLatencyStats {
                         schedule_wait_time: duration_to_ms(schedule_wait_time),
                         snapshot_wait_time: duration_to_ms(snapshot_wait_time),
                         wait_wall_time_ms: duration_to_ms(wait_wall_time),
@@ -2503,27 +2503,7 @@ pub mod test_util {
 pub struct KvGetStatistics {
     pub stats: Statistics,
     pub perf_stats: PerfStatisticsDelta,
-    pub latency_stats: KvGetLatencyStats,
-}
-
-/// Latency indicators related to KvGet/KvBatchGet.
-///
-/// The detailed meaning of the indicators is as follows:
-///
-/// ```text
-/// ------> Begin ------> Scheduled ------> SnapshotReceived ------> Finished ------>
-/// |----- schedule_wait_time -----|
-///                                |-- snapshot_wait_time --|
-/// |------------------- wait_wall_time --------------------|
-///                                                         |-- process_wall_time --|
-/// |------------------------------ kv_read_wall_time ------------------------------|
-/// ```
-#[derive(Debug, Default, Copy, Clone)]
-pub struct KvGetLatencyStats {
-    pub schedule_wait_time: u64,
-    pub snapshot_wait_time: u64,
-    pub wait_wall_time_ms: u64,
-    pub process_wall_time_ms: u64,
+    pub latency_stats: StageLatencyStats,
 }
 
 #[cfg(test)]
