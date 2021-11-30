@@ -7,7 +7,8 @@ use tokio_stream::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let meta_store = EtcdStore::connect(&["127.0.0.1:2379"]).await?;
+    let meta_store =
+        EtcdStore::from(etcd_client::Client::connect(&["127.0.0.1:12315"], None).await?);
     let meta_client = MetadataClient::new(meta_store, 42);
     let tasks = meta_client.get_tasks().await?;
     let rev = tasks.revision;
