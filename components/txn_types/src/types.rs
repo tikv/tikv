@@ -402,11 +402,14 @@ impl OldValue {
     }
 
     pub fn size(&self) -> usize {
-        let value_size = match self {
+        self.value_size() + std::mem::size_of::<OldValue>()
+    }
+
+    pub fn value_size(&self) -> usize {
+        match self {
             OldValue::Value { value } => value.len(),
             _ => 0,
-        };
-        value_size + std::mem::size_of::<OldValue>()
+        }
     }
 }
 

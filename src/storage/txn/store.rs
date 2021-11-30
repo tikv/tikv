@@ -206,7 +206,7 @@ impl TxnEntry {
                 size += default.1.len();
                 size += write.0.len();
                 size += write.1.len();
-                size += old_value.size();
+                size += old_value.value_size();
             }
             TxnEntry::Prewrite {
                 default,
@@ -217,7 +217,7 @@ impl TxnEntry {
                 size += default.1.len();
                 size += lock.0.len();
                 size += lock.1.len();
-                size += old_value.size();
+                size += old_value.value_size();
             }
         }
         size
