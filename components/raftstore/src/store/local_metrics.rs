@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::sync::{Arc, Mutex};
 
 use prometheus::local::LocalHistogram;
@@ -375,6 +376,45 @@ impl RaftInvalidProposeMetrics {
         }
     }
 }
+
+#[derive(Clone)]
+pub struct RaftLogGcSkippedMetrics {
+    pub reserve_log: u64,
+    pub threshold_limit: u64,
+    pub compact_idx_too_small: u64,
+}
+
+impl Default for RaftLogGcSkippedMetrics {
+    fn default() -> RaftLogGcSkippedMetrics {
+        RaftLogGcSkippedMetrics {
+            reserve_log: 0,
+            threshold_limit: 0,
+            compact_idx_too_small: 0,
+        }
+    }
+}
+
+impl RaftLogGcSkippedMetrics {
+    fn flush(&mut self) {
+        if self.reserve_log > 0 {
+            RAFT_LOG_GC_SKIPPED.reserve_log.inc_by(self.reserve_log);
+            self.reserve_log = 0;
+        }
+        if self.threshold_limit > 0 {
+            RAFT_LOG_GC_SKIPPED
+                .threshold_limit
+                .inc_by(self.threshold_limit);
+            self.threshold_limit = 0;
+        }
+        if self.compact_idx_too_small > 0 {
+            RAFT_LOG_GC_SKIPPED
+                .compact_idx_too_small
+                .inc_by(self.compact_idx_too_small);
+            self.compact_idx_too_small = 0;
+        }
+    }
+}
+
 /// The buffered metrics counters for raft.
 #[derive(Clone)]
 pub struct RaftMetrics {
@@ -384,14 +424,18 @@ pub struct RaftMetrics {
     pub message_dropped: RaftMessageDropMetrics,
     pub propose: RaftProposeMetrics,
     pub process_ready: LocalHistogram,
-    pub append_log: LocalHistogram,
     pub commit_log: LocalHistogram,
     pub check_leader: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
     pub write_block_wait: LocalHistogram,
     pub waterfall_metrics: bool,
-    pub batch_wait: LocalHistogram,
+    pub wf_batch_wait: LocalHistogram,
+    pub wf_send_to_queue: LocalHistogram,
+    pub wf_persist_log: LocalHistogram,
+    pub wf_commit_log: LocalHistogram,
+    pub wf_commit_not_persist_log: LocalHistogram,
+    pub raft_log_gc_skipped: RaftLogGcSkippedMetrics,
 }
 
 impl RaftMetrics {
@@ -405,16 +449,21 @@ impl RaftMetrics {
             process_ready: PEER_RAFT_PROCESS_DURATION
                 .with_label_values(&["ready"])
                 .local(),
-            append_log: PEER_APPEND_LOG_HISTOGRAM.local(),
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
             check_leader: CHECK_LEADER_DURATION_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
             write_block_wait: STORE_WRITE_MSG_BLOCK_WAIT_DURATION_HISTOGRAM.local(),
             waterfall_metrics,
-            batch_wait: STORE_BATCH_WAIT_DURATION_HISTOGRAM.local(),
+            wf_batch_wait: STORE_WF_BATCH_WAIT_DURATION_HISTOGRAM.local(),
+            wf_send_to_queue: STORE_WF_SEND_TO_QUEUE_DURATION_HISTOGRAM.local(),
+            wf_persist_log: STORE_WF_PERSIST_LOG_DURATION_HISTOGRAM.local(),
+            wf_commit_log: STORE_WF_COMMIT_LOG_DURATION_HISTOGRAM.local(),
+            wf_commit_not_persist_log: STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM.local(),
+            raft_log_gc_skipped: RaftLogGcSkippedMetrics::default(),
         }
     }
+
     /// Flushs all metrics
     pub fn flush(&mut self) {
         self.store_time.flush();
@@ -422,14 +471,18 @@ impl RaftMetrics {
         self.send_message.flush();
         self.propose.flush();
         self.process_ready.flush();
-        self.append_log.flush();
         self.commit_log.flush();
         self.check_leader.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
         self.write_block_wait.flush();
+        self.raft_log_gc_skipped.flush();
         if self.waterfall_metrics {
-            self.batch_wait.flush();
+            self.wf_batch_wait.flush();
+            self.wf_send_to_queue.flush();
+            self.wf_persist_log.flush();
+            self.wf_commit_log.flush();
+            self.wf_commit_not_persist_log.flush();
         }
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);
@@ -440,9 +493,9 @@ impl RaftMetrics {
 pub struct StoreWriteMetrics {
     pub task_wait: LocalHistogram,
     pub waterfall_metrics: bool,
-    pub before_write: LocalHistogram,
-    pub kvdb_end: LocalHistogram,
-    pub write_end: LocalHistogram,
+    pub wf_before_write: LocalHistogram,
+    pub wf_kvdb_end: LocalHistogram,
+    pub wf_write_end: LocalHistogram,
 }
 
 impl StoreWriteMetrics {
@@ -450,18 +503,18 @@ impl StoreWriteMetrics {
         Self {
             task_wait: STORE_WRITE_TASK_WAIT_DURATION_HISTOGRAM.local(),
             waterfall_metrics,
-            before_write: STORE_BEFORE_WRITE_DURATION_HISTOGRAM.local(),
-            kvdb_end: STORE_WRITE_KVDB_END_DURATION_HISTOGRAM.local(),
-            write_end: STORE_WRITE_END_DURATION_HISTOGRAM.local(),
+            wf_before_write: STORE_WF_BEFORE_WRITE_DURATION_HISTOGRAM.local(),
+            wf_kvdb_end: STORE_WF_WRITE_KVDB_END_DURATION_HISTOGRAM.local(),
+            wf_write_end: STORE_WF_WRITE_END_DURATION_HISTOGRAM.local(),
         }
     }
 
     pub fn flush(&mut self) {
         self.task_wait.flush();
         if self.waterfall_metrics {
-            self.before_write.flush();
-            self.kvdb_end.flush();
-            self.write_end.flush();
+            self.wf_before_write.flush();
+            self.wf_kvdb_end.flush();
+            self.wf_write_end.flush();
         }
     }
 }

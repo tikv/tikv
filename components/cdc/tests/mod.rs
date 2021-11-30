@@ -34,9 +34,11 @@ pub struct ClientReceiver {
 }
 
 impl ClientReceiver {
-    pub fn replace(&self, rx: Option<ClientDuplexReceiver<ChangeDataEvent>>) {
-        let mut receiver = self.receiver.lock().unwrap();
-        *receiver = rx;
+    pub fn replace(
+        &self,
+        rx: Option<ClientDuplexReceiver<ChangeDataEvent>>,
+    ) -> Option<ClientDuplexReceiver<ChangeDataEvent>> {
+        std::mem::replace(&mut *self.receiver.lock().unwrap(), rx)
     }
 }
 
@@ -167,6 +169,7 @@ impl TestSuiteBuilder {
                 pd_cli.clone(),
                 worker.scheduler(),
                 raft_router,
+                cluster.engines[id].kv.clone(),
                 cdc_ob,
                 cluster.store_metas[id].clone(),
                 cm.clone(),

@@ -171,7 +171,10 @@ impl Buffer for BatchMessageBuffer {
 
     #[inline]
     fn push(&mut self, msg: RaftMessage) {
-        let mut msg_size = msg.start_key.len() + msg.end_key.len();
+        let mut msg_size = msg.start_key.len()
+            + msg.end_key.len()
+            + msg.get_message().context.len()
+            + msg.extra_ctx.len();
         for entry in msg.get_message().get_entries() {
             msg_size += entry.data.len();
         }
@@ -938,16 +941,19 @@ where
         if self.need_flush.is_empty() {
             return;
         }
+        let mut counter = 0;
         for id in &self.need_flush {
             if let Some(s) = self.cache.get_mut(id) {
                 if s.dirty {
                     s.dirty = false;
+                    counter += 1;
                     s.queue.notify();
                 }
                 continue;
             }
             let l = self.pool.lock().unwrap();
             if let Some(q) = l.connections.get(id) {
+                counter += 1;
                 q.notify();
             }
         }
@@ -955,6 +961,7 @@ where
         if self.need_flush.capacity() > 2048 {
             self.need_flush.shrink_to(512);
         }
+        RAFT_MESSAGE_FLUSH_COUNTER.inc_by(counter);
     }
 }
 
@@ -974,5 +981,62 @@ where
             engine: PhantomData::<E>,
             last_hash: (0, 0),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kvproto::metapb::RegionEpoch;
+    use kvproto::raft_serverpb::RaftMessage;
+    use raft::eraftpb::Snapshot;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_push_raft_message_with_context() {
+        let mut msg_buf = BatchMessageBuffer::new(Arc::new(Config::default()));
+        for i in 0..2 {
+            let context_len = msg_buf.cfg.max_grpc_send_msg_len as usize;
+            let context = vec![0; context_len];
+            let mut msg = RaftMessage::default();
+            msg.set_region_id(1);
+            let mut region_epoch = RegionEpoch::default();
+            region_epoch.conf_ver = 1;
+            region_epoch.version = 0x123456;
+            msg.set_region_epoch(region_epoch);
+            msg.set_start_key(b"12345".to_vec());
+            msg.set_end_key(b"67890".to_vec());
+            msg.mut_message().set_snapshot(Snapshot::default());
+            msg.mut_message().set_commit(0);
+            if i != 0 {
+                msg.mut_message().set_context(context.into());
+            }
+            msg_buf.push(msg);
+        }
+        assert!(msg_buf.full());
+    }
+
+    #[test]
+    fn test_push_raft_message_with_extra_ctx() {
+        let mut msg_buf = BatchMessageBuffer::new(Arc::new(Config::default()));
+        for i in 0..2 {
+            let ctx_len = msg_buf.cfg.max_grpc_send_msg_len as usize;
+            let ctx = vec![0; ctx_len];
+            let mut msg = RaftMessage::default();
+            msg.set_region_id(1);
+            let mut region_epoch = RegionEpoch::default();
+            region_epoch.conf_ver = 1;
+            region_epoch.version = 0x123456;
+            msg.set_region_epoch(region_epoch);
+            msg.set_start_key(b"12345".to_vec());
+            msg.set_end_key(b"67890".to_vec());
+            msg.mut_message().set_snapshot(Snapshot::default());
+            msg.mut_message().set_commit(0);
+            if i != 0 {
+                msg.set_extra_ctx(ctx);
+            }
+            msg_buf.push(msg);
+        }
+        assert!(msg_buf.full());
     }
 }

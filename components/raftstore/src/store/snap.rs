@@ -1127,6 +1127,7 @@ impl SnapManager {
         Ok(())
     }
 
+    // [PerformanceCriticalPath]?? I/O involved API should be called in background thread
     // Return all snapshots which is idle not being used.
     pub fn list_idle_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
         // Use a lock to protect the directory when scanning.

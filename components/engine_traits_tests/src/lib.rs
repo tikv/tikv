@@ -11,7 +11,7 @@
 //! e.g. to test the `engine_panic` crate
 //!
 //! ```no_test
-//! cargo test -p engine_traits_tests --no-default-features --features=protobuf-codec,test-engines-panic
+//! cargo test -p engine_traits_tests --no-default-features --features=test-engines-panic
 //! ```
 //!
 //! As of now this mostly tests the essential features of
