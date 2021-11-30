@@ -99,7 +99,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         // cursor and lock cursor. Please refer to `ForwardKvScanner` for details.
 
         loop {
-            let (current_user_key, has_write, has_lock) = {
+            let (current_user_key, mut has_write, has_lock) = {
                 let w_key = if self.write_cursor.valid()? {
                     Some(self.write_cursor.key(&mut self.statistics.write))
                 } else {
@@ -154,7 +154,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                             self.met_newer_ts_data = NewerTsCheckState::Met;
                         }
                         result = Lock::check_ts_conflict(
-                            Cow::Owned(lock),
+                            Cow::Borrowed(&lock),
                             &current_user_key,
                             ts,
                             &self.cfg.bypass_locks,
@@ -163,6 +163,21 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                         .map_err(Into::into);
                         if result.is_err() {
                             self.statistics.lock.processed_keys += 1;
+                            if self.cfg.access_locks.contains(lock.ts) {
+                                self.ensure_default_cursor()?;
+                                result = super::load_data_by_lock(
+                                    &current_user_key,
+                                    &self.cfg,
+                                    self.default_cursor.as_mut().unwrap(),
+                                    lock,
+                                    &mut self.statistics,
+                                );
+                                if has_write {
+                                    // Skip current_user_key because this key is either blocked or handled.
+                                    has_write = false;
+                                    self.move_write_cursor_to_prev_user_key(&current_user_key)?;
+                                }
+                            }
                         }
                     }
                     IsolationLevel::Rc => {}

@@ -36,6 +36,7 @@ use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrai
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use file_system::IOPriority;
 use keys::region_raft_prefix_len;
+use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use pd_client::Config as PdConfig;
 use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
@@ -582,7 +583,7 @@ impl DefaultCfConfig {
         &self,
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
-        enable_ttl: bool,
+        api_version: ApiVersion,
     ) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, region_info_accessor);
         let f = RangePropertiesCollectorFactory {
@@ -590,15 +591,16 @@ impl DefaultCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        if enable_ttl {
+        if let ApiVersion::V1ttl | ApiVersion::V2 = api_version {
             cf_opts.add_table_properties_collector_factory(
                 "tikv.ttl-properties-collector",
-                TtlPropertiesCollectorFactory {},
+                TtlPropertiesCollectorFactory { api_version },
             );
             cf_opts
                 .set_compaction_filter_factory(
                     "ttl_compaction_filter_factory",
-                    Box::new(TTLCompactionFilterFactory {}) as Box<dyn CompactionFilterFactory>,
+                    Box::new(TTLCompactionFilterFactory { api_version })
+                        as Box<dyn CompactionFilterFactory>,
                 )
                 .unwrap();
         }
@@ -1083,13 +1085,13 @@ impl DbConfig {
         &self,
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
-        enable_ttl: bool,
+        api_version: ApiVersion,
     ) -> Vec<CFOptions<'_>> {
         vec![
             CFOptions::new(
                 CF_DEFAULT,
                 self.defaultcf
-                    .build_opt(cache, region_info_accessor, enable_ttl),
+                    .build_opt(cache, region_info_accessor, api_version),
             ),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(
@@ -1371,7 +1373,7 @@ pub struct RaftEngineConfig {
 
 impl RaftEngineConfig {
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        self.config.validate().map_err(Box::new)?;
+        self.config.sanitize().map_err(Box::new)?;
         Ok(())
     }
 
@@ -3272,7 +3274,6 @@ mod tests {
     use case_macros::*;
     use engine_rocks::raw_util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
-    use raft_log_engine::RecoveryMode;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use slog::Level;
     use std::sync::Arc;
@@ -3573,7 +3574,7 @@ mod tests {
                 cfg.rocksdb.build_cf_opts(
                     &cfg.storage.block_cache.build_shared_cache(),
                     None,
-                    cfg.storage.enable_ttl,
+                    cfg.storage.api_version(),
                 ),
             )
             .unwrap(),
@@ -3953,26 +3954,6 @@ mod tests {
     }
 
     #[test]
-    fn test_raft_engine() {
-        let content = r#"
-            [raft-engine]
-            enable = true
-            recovery_mode = "tolerate-corrupted-tail-records"
-            bytes-per-sync = "64KB"
-            purge-threshold = "1GB"
-        "#;
-        let cfg: TiKvConfig = toml::from_str(content).unwrap();
-        assert!(cfg.raft_engine.enable);
-        let config = &cfg.raft_engine.config;
-        assert_eq!(
-            config.recovery_mode,
-            RecoveryMode::TolerateCorruptedTailRecords
-        );
-        assert_eq!(config.bytes_per_sync.0, ReadableSize::kb(64).0);
-        assert_eq!(config.purge_threshold.0, ReadableSize::gb(1).0);
-    }
-
-    #[test]
     fn test_raft_engine_dir() {
         let content = r#"
             [raft-engine]
@@ -4254,6 +4235,32 @@ mod tests {
         cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
 
         assert_eq!(cfg, default_cfg);
+    }
+
+    #[test]
+    fn test_compatibility_with_old_config_template() {
+        let mut buf = Vec::new();
+        let resp = reqwest::blocking::get(
+            "https://raw.githubusercontent.com/tikv/tikv/master/etc/config-template.toml",
+        );
+        match resp {
+            Ok(mut resp) => {
+                std::io::copy(&mut resp, &mut buf).expect("failed to copy content");
+                let template_config = std::str::from_utf8(&buf)
+                    .unwrap()
+                    .lines()
+                    .map(|l| l.strip_prefix('#').unwrap_or(l))
+                    .join("\n");
+                let _: TiKvConfig = toml::from_str(&template_config).unwrap();
+            }
+            Err(e) => {
+                if e.is_timeout() {
+                    println!("warn: fail to download latest config template due to timeout");
+                } else {
+                    panic!("fail to download latest config template");
+                }
+            }
+        }
     }
 
     #[test]

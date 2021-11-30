@@ -4189,6 +4189,7 @@ mod tests {
     use engine_panic::PanicEngine;
     use engine_test::kv::{new_engine, KvTestEngine, KvTestSnapshot, KvTestWriteBatch};
     use engine_traits::{Peekable as PeekableTrait, WriteBatchExt};
+    use kvproto::kvrpcpb::ApiVersion;
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
@@ -4225,8 +4226,9 @@ mod tests {
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
         let dir = Builder::new().prefix(path).tempdir().unwrap();
-        let importer =
-            Arc::new(SSTImporter::new(&ImportConfig::default(), dir.path(), None, false).unwrap());
+        let importer = Arc::new(
+            SSTImporter::new(&ImportConfig::default(), dir.path(), None, ApiVersion::V1).unwrap(),
+        );
         (dir, importer)
     }
 

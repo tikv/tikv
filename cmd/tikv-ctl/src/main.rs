@@ -112,14 +112,14 @@ fn new_debug_executor(
 
     let cache = cfg.storage.block_cache.build_shared_cache();
     let shared_block_cache = cache.is_some();
-    let env = get_env(key_manager, None /*io_rate_limiter*/).unwrap();
+    let env = get_env(key_manager.clone(), None /*io_rate_limiter*/).unwrap();
 
     let mut kv_db_opts = cfg.rocksdb.build_opt();
     kv_db_opts.set_env(env.clone());
     kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
     let kv_cfs_opts = cfg
         .rocksdb
-        .build_cf_opts(&cache, None, cfg.storage.enable_ttl);
+        .build_cf_opts(&cache, None, cfg.storage.api_version());
     let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
     let kv_path = kv_path.to_str().unwrap();
     let kv_db = match new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts) {
@@ -154,7 +154,7 @@ fn new_debug_executor(
             error!("raft engine not exists: {}", config.dir);
             process::exit(-1);
         }
-        let raft_db = RaftLogEngine::new(config).unwrap();
+        let raft_db = RaftLogEngine::new(config, key_manager, None /*io_rate_limiter*/).unwrap();
         let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
         Box::new(debugger) as Box<dyn DebugExecutor>
     }

@@ -3,10 +3,7 @@
 use std::cmp::Ordering as CmpOrdering;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
-};
+use std::sync::{atomic::Ordering, Arc};
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 use std::{cmp, io};
@@ -37,7 +34,7 @@ use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats, WriteStats};
 use crate::store::{
     Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-    SnapManager, StoreInfo, StoreMsg,
+    SnapManager, StoreInfo, StoreMsg, TxnExt,
 };
 
 use collections::HashMap;
@@ -164,7 +161,7 @@ where
     UpdateMaxTimestamp {
         region_id: u64,
         initial_status: u64,
-        max_ts_sync_status: Arc<AtomicU64>,
+        txn_ext: Arc<TxnExt>,
     },
     QueryRegionLeader {
         region_id: u64,
@@ -1382,18 +1379,19 @@ where
         &mut self,
         region_id: u64,
         initial_status: u64,
-        max_ts_sync_status: Arc<AtomicU64>,
+        txn_ext: Arc<TxnExt>,
     ) {
         let pd_client = self.pd_client.clone();
         let concurrency_manager = self.concurrency_manager.clone();
         let f = async move {
             let mut success = false;
-            while max_ts_sync_status.load(Ordering::SeqCst) == initial_status {
+            while txn_ext.max_ts_sync_status.load(Ordering::SeqCst) == initial_status {
                 match pd_client.get_tso().await {
                     Ok(ts) => {
                         concurrency_manager.update_max_ts(ts);
                         // Set the least significant bit to 1 to mark it as synced.
-                        success = max_ts_sync_status
+                        success = txn_ext
+                            .max_ts_sync_status
                             .compare_exchange(
                                 initial_status,
                                 initial_status | 1,
@@ -1680,8 +1678,8 @@ where
             Task::UpdateMaxTimestamp {
                 region_id,
                 initial_status,
-                max_ts_sync_status,
-            } => self.handle_update_max_timestamp(region_id, initial_status, max_ts_sync_status),
+                txn_ext,
+            } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => self.slow_score.record(id, duration.sum()),
             Task::RegionCPURecords(records) => self.handle_region_cpu_records(records),
