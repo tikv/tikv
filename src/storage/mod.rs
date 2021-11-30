@@ -53,9 +53,9 @@ use self::kv::SnapContext;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
-        CbContext, CfStatistics, Cursor, CursorBuilder, Engine, FlowStatistics, FlowStatsReporter,
-        Iterator, PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot,
-        Statistics, TestEngineBuilder,
+        CfStatistics, Cursor, CursorBuilder, Engine, FlowStatistics, FlowStatsReporter, Iterator,
+        PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot, Statistics,
+        TestEngineBuilder,
     },
     raw::{RawEncodeSnapshot, RawStore},
     read_pool::{build_read_pool, build_read_pool_for_test},
@@ -1185,7 +1185,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         self.engine.async_write(
             &ctx,
             batch,
-            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|res| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
         Ok(())
@@ -1484,7 +1484,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         self.engine.async_write(
             &ctx,
             batch,
-            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|res| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
         Ok(())
@@ -1544,7 +1544,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         self.engine.async_write(
             &ctx,
             batch,
-            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|res| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
         Ok(())
@@ -1576,7 +1576,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         self.engine.async_write(
             &ctx,
             batch,
-            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|res| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
         Ok(())
@@ -1611,7 +1611,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         self.engine.async_write(
             &ctx,
             batch,
-            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|res| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
         Ok(())
@@ -1646,7 +1646,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         self.engine.async_write(
             &ctx,
             batch,
-            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|res| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
         Ok(())

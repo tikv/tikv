@@ -20,7 +20,7 @@ use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::{self, test_util::*, *};
 use tikv::storage::{
-    kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContext},
+    kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContext, SnapshotExt},
     Error as StorageError, ErrorInner as StorageErrorInner,
 };
 use tikv_util::future::paired_future_callback;
@@ -487,7 +487,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
         }
         thread::sleep(Duration::from_millis(1 << retry));
     }
-    assert!(snapshot.is_max_ts_synced());
+    assert!(snapshot.ext().is_max_ts_synced());
 
     // should NOT get max timestamp not synced error
     check_max_timestamp_not_synced(false);

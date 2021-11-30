@@ -6,6 +6,7 @@
 
 #![feature(min_specialization)]
 #![feature(negative_impls)]
+#![feature(generic_associated_types)]
 
 #[macro_use]
 extern crate derive_more;
@@ -26,6 +27,8 @@ mod rocksdb_engine;
 mod stats;
 
 use std::cell::UnsafeCell;
+use std::num::NonZeroU64;
+use std::sync::Arc;
 use std::time::Duration;
 use std::{error, ptr, result};
 
@@ -36,6 +39,7 @@ use engine_traits::{
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange};
+use raftstore::store::TxnExt;
 use thiserror::Error;
 use tikv_util::{deadline::Deadline, escape};
 use txn_types::{Key, TimeStamp, TxnExtra, Value};
@@ -55,30 +59,9 @@ use tikv_util::time::ThreadReadId;
 pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
-pub type Callback<T> = Box<dyn FnOnce((CbContext, Result<T>)) + Send>;
+pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
 pub type Result<T> = result::Result<T, Error>;
-
-#[derive(Debug)]
-pub struct CbContext {
-    pub term: Option<u64>,
-    pub txn_extra_op: TxnExtraOp,
-}
-
-impl CbContext {
-    pub fn new() -> CbContext {
-        CbContext {
-            term: None,
-            txn_extra_op: TxnExtraOp::Noop,
-        }
-    }
-}
-
-impl Default for CbContext {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Modify {
@@ -199,20 +182,16 @@ pub trait Engine: Send + Clone + 'static {
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        match wait_op!(|cb| self.async_write(ctx, batch, cb), timeout) {
-            Some((_, res)) => res,
-            None => Err(Error::from(ErrorInner::Timeout(timeout))),
-        }
+        wait_op!(|cb| self.async_write(ctx, batch, cb), timeout)
+            .unwrap_or_else(|| Err(Error::from(ErrorInner::Timeout(timeout))))
     }
 
     fn release_snapshot(&self) {}
 
     fn snapshot(&self, ctx: SnapContext<'_>) -> Result<Self::Snap> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        match wait_op!(|cb| self.async_snapshot(ctx, cb), timeout) {
-            Some((_, res)) => res,
-            None => Err(Error::from(ErrorInner::Timeout(timeout))),
-        }
+        wait_op!(|cb| self.async_snapshot(ctx, cb), timeout)
+            .unwrap_or_else(|| Err(Error::from(ErrorInner::Timeout(timeout))))
     }
 
     fn put(&self, ctx: &Context, key: Key, value: Value) -> Result<()> {
@@ -251,6 +230,7 @@ pub trait Engine: Send + Clone + 'static {
 /// at a specific timestamp. This snapshot is lower-level, a view of the underlying storage.
 pub trait Snapshot: Sync + Send + Clone {
     type Iter: Iterator;
+    type Ext<'a>: SnapshotExt;
 
     /// Get the value associated with `key` in default column family
     fn get(&self, key: &Key) -> Result<Option<Value>>;
@@ -273,21 +253,38 @@ pub trait Snapshot: Sync + Send + Clone {
         None
     }
 
+    fn ext(&self) -> Self::Ext<'_>;
+}
+
+pub trait SnapshotExt {
     /// Retrieves a version that represents the modification status of the underlying data.
     /// Version should be changed when underlying data is changed.
     ///
     /// If the engine does not support data version, then `None` is returned.
-    #[inline]
     fn get_data_version(&self) -> Option<u64> {
         None
     }
 
     fn is_max_ts_synced(&self) -> bool {
-        // If the snapshot does not come from a multi-raft engine, max ts
-        // needn't be updated.
         true
     }
+
+    fn get_term(&self) -> Option<NonZeroU64> {
+        None
+    }
+
+    fn get_txn_extra_op(&self) -> TxnExtraOp {
+        TxnExtraOp::Noop
+    }
+
+    fn get_txn_ext(&self) -> Option<&Arc<TxnExt>> {
+        None
+    }
 }
+
+pub struct DummySnapshotExt;
+
+impl SnapshotExt for DummySnapshotExt {}
 
 pub trait Iterator: Send {
     fn next(&mut self) -> Result<bool>;
@@ -444,23 +441,11 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
     });
 }
 
-/// Get a snapshot of `engine` for read.
+/// Get a snapshot of `engine`.
 pub fn snapshot<E: Engine>(
     engine: &E,
     ctx: SnapContext<'_>,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
-    let fut = snapshot_for_write(engine, ctx);
-    async {
-        let (_, snap) = fut.await?;
-        snap
-    }
-}
-
-/// Get a snapshot and CbContext of `engine` for write.
-pub fn snapshot_for_write<E: Engine>(
-    engine: &E,
-    ctx: SnapContext<'_>,
-) -> impl std::future::Future<Output = Result<(CbContext, Result<E::Snap>)>> {
     let (callback, future) =
         tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
     let val = engine.async_snapshot(ctx, callback);
@@ -471,16 +456,16 @@ pub fn snapshot_for_write<E: Engine>(
             .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))
             .await?;
         fail_point!("after-snapshot");
-        Ok(result)
+        result
     }
 }
 
-pub fn drop_snapshot_callback<E: Engine>() -> (CbContext, Result<E::Snap>) {
+pub fn drop_snapshot_callback<E: Engine>() -> Result<E::Snap> {
     let bt = backtrace::Backtrace::new();
     warn!("async snapshot callback is dropped"; "backtrace" => ?bt);
     let mut err = ErrorHeader::default();
     err.set_message("async snapshot callback is dropped".to_string());
-    (CbContext::new(), Err(Error::from(ErrorInner::Request(err))))
+    Err(Error::from(ErrorInner::Request(err)))
 }
 
 /// Write modifications into a `BaseRocksEngine` instance.

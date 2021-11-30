@@ -21,7 +21,7 @@ To build TiKV you'll need to at least have the following installed:
 * `awk` - Pattern scanning/processing language
 * C++ compiler - gcc 4.9+ (required for gRPC)
 
-If you are targeting platforms other than x86_64 linux, you'll also need:
+If you are targeting platforms other than x86_64/aarch64 linux, you'll also need:
 
 * [`llvm` and `clang`](http://releases.llvm.org/download.html) - Used to generate bindings for different platforms and build native libraries (required for grpcio, rocksdb).
 
@@ -60,13 +60,6 @@ During interactive development, you may prefer using `cargo check`, which will p
 cargo check --all
 ```
 
-It is particularly handy alongside `cargo-watch`, which runs a command each time you change a file.
-
-```bash
-cargo install cargo-watch
-cargo watch -s "cargo check --all"
-```
-
 When you're ready to test out your changes, use the `dev` task. It will format your codebase, build with `clippy` enabled, and run tests. This should run without failure before you create a PR. Unfortunately, some tests will fail intermittently and others don't pass on all platforms. If you're unsure, just ask!
 
 ```bash
@@ -80,13 +73,15 @@ You can run the test suite alone, or just run a specific test:
 make test
 # Run a specific test
 ./scripts/test $TESTNAME -- --nocapture
+# Or using make
+env EXTRA_CARGO_ARGS=$TESTNAME make test
 ```
 
 TiKV follows the Rust community coding style. We use Rustfmt and [Clippy](https://github.com/Manishearth/rust-clippy) to automatically format and lint our code. Using these tools is checked in our CI. These are as part of `make dev`, you can also run them alone:
 
 ```bash
 # Run Rustfmt
-cargo fmt
+make format
 # Run Clippy (note that some lints are ignored, so `cargo clippy` will give many false positives)
 make clippy
 ```
@@ -120,14 +115,17 @@ Read our configuration guide to learn about various [configuration options](http
 
 This is a rough outline of what a contributor's workflow looks like:
 
+- Make sure what you want to contribute is already traced as an issue.
+  * We may discuss the problem and solution in the issue.
 - Create a Git branch from where you want to base your work. This is usually master.
 - Write code, add test cases, and commit your work (see below for message format).
 - Run tests and make sure all tests pass.
 - Push your changes to a branch in your fork of the repository and submit a pull request.
-- Your PR will be reviewed by two maintainers, who may request some changes.
+  * Make sure mention the issue, which is created at step 1, in the commit meesage.
+- Your PR will be reviewed and may be requested some changes.
   * Once you've made changes, your PR must be re-reviewed and approved.
   * If the PR becomes out of date, you can use GitHub's 'update branch' button.
-  * If there are conflicts, you can rebase (or merge) and resolve them locally. Then force push to your PR branch.
+  * If there are conflicts, you can merge and resolve them locally. Then push to your PR branch.
     You do not need to get re-review just for resolving conflicts, but you should request re-review if there are significant changes.
 - Our CI system automatically tests all pull requests.
 - Our [bot](https://github.com/ti-chi-bot) will merge your PR. It can be summoned by commenting `/merge` (requires tests to pass and two approvals. You might have to ask your reviewer to do this).
@@ -162,6 +160,8 @@ the body of the commit should describe the why.
 engine/raftkv: add comment for variable declaration.
 
 Improve documentation.
+
+Close #1234.
 ```
 
 The format can be described more formally as follows:
@@ -170,6 +170,8 @@ The format can be described more formally as follows:
 <subsystem>: <what changed>
 <BLANK LINE>
 <why this change was made>
+<BLANK LINE>
+<issue reference>
 <BLANK LINE>
 Signed-off-by: <Name> <email address>
 ```
@@ -180,7 +182,7 @@ If the change affects more than one subsystem, you can use comma to separate the
 
 If the change affects many subsystems, you can use ```*``` instead, like ```*:```.
 
-The body of the commit message should describe why the change was made and at a high level, how the code works.
+The body of the commit message should describe why the change was made and at a high level, how the code works. It should also reference the issue for problem context.
 
 ### Signing off the Commit
 

@@ -4,8 +4,10 @@
 use engine_traits::{
     IterOptions, KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot,
 };
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftApplyState;
+use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -30,6 +32,8 @@ pub struct RegionSnapshot<S: Snapshot> {
     snap: Arc<S>,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
+    pub term: Option<NonZeroU64>,
+    pub txn_extra_op: TxnExtraOp,
     // `None` means the snapshot does not provide peer related transaction extensions.
     pub txn_ext: Option<Arc<TxnExt>>,
 }
@@ -60,6 +64,8 @@ where
             // Use 0 to indicate that the apply index is missing and we need to KvGet it,
             // since apply index must be >= RAFT_INIT_LOG_INDEX.
             apply_index: Arc::new(AtomicU64::new(0)),
+            term: None,
+            txn_extra_op: TxnExtraOp::Noop,
             txn_ext: None,
         }
     }
@@ -172,6 +178,8 @@ where
             snap: self.snap.clone(),
             region: Arc::clone(&self.region),
             apply_index: Arc::clone(&self.apply_index),
+            term: self.term,
+            txn_extra_op: self.txn_extra_op,
             txn_ext: self.txn_ext.clone(),
         }
     }

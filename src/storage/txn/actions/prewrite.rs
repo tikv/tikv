@@ -31,6 +31,11 @@ pub fn prewrite<S: Snapshot>(
     let mut mutation =
         PrewriteMutation::from_mutation(mutation, secondary_keys, is_pessimistic_lock, txn_props)?;
 
+    // Update max_ts for Insert operation to guarante linearizability and snapshot isolation
+    if mutation.should_not_exist {
+        txn.concurrency_manager.update_max_ts(txn_props.start_ts);
+    }
+
     fail_point!(
         if txn_props.is_pessimistic() {
             "pessimistic_prewrite"

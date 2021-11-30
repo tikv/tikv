@@ -3623,9 +3623,8 @@ where
         msg: &eraftpb::Message,
         peer_disk_usage: DiskUsage,
     ) {
-        #[allow(clippy::suspicious_operation_groupings)]
-        if self.is_handling_snapshot()
-            || self.has_pending_snapshot()
+        let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
+        if pending_snapshot
             || msg.get_from() != self.leader_id()
             // Transfer leader to node with disk full will lead to write availablity downback.
             // But if the current leader is disk full, and send such request, we should allow it,
@@ -3638,6 +3637,8 @@ where
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "from" => msg.get_from(),
+                "pending_snapshot" => pending_snapshot,
+                "disk_usage" => ?ctx.self_disk_usage,
             );
             return;
         }
