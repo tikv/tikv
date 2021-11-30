@@ -27,7 +27,6 @@ pub struct SyncTestStorageBuilder<E: Engine> {
     config: Option<Config>,
     gc_config: Option<GcConfig>,
     api_version: ApiVersion,
-    enable_ttl: bool,
 }
 
 impl SyncTestStorageBuilder<RocksEngine> {
@@ -40,10 +39,6 @@ impl SyncTestStorageBuilder<RocksEngine> {
             config: None,
             gc_config: None,
             api_version,
-            enable_ttl: match api_version {
-                ApiVersion::V1ttl | ApiVersion::V2 => true,
-                ApiVersion::V1 => false,
-            },
         }
     }
 }
@@ -61,7 +56,6 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
             config: None,
             gc_config: None,
             api_version: ApiVersion::V1,
-            enable_ttl: false,
         }
     }
 
@@ -88,7 +82,6 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
             builder = builder.config(config);
         }
         builder = builder.set_api_version(self.api_version);
-        builder = builder.set_enable_ttl(self.enable_ttl);
         let (tx, _rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
             self.engine,

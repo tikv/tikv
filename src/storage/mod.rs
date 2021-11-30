@@ -373,7 +373,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         storage_api_version: ApiVersion,
         req_api_version: ApiVersion,
         cmd: CommandKind,
-        keys: impl IntoIterator<Item = impl std::convert::AsRef<[u8]>>,
+        keys: impl IntoIterator<Item = impl AsRef<[u8]>>,
     ) -> Result<()> {
         let make_invalid_key_prefix_err = |key| {
             Err(Error::from(ErrorInner::InvalidKeyPrefix {
@@ -2094,11 +2094,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     return Err(box_err!("unknown checksum algorithm {:?}", algorithm));
                 }
 
-                let mut keys = Vec::with_capacity(ranges.len() << 1);
-                for range in &ranges {
-                    keys.push(range.get_start_key());
-                    keys.push(range.get_end_key());
-                }
+                let keys = ranges
+                    .iter()
+                    .flat_map(|range| [range.get_start_key(), range.get_end_key()]);
                 Self::check_api_version(api_version, ctx.api_version, CMD, keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
@@ -2240,8 +2238,7 @@ impl FlowStatsReporter for DummyReporter {
 }
 
 impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
-    pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L, api_version: ApiVersion) -> Self {
-        let mut config = Config::default();
+    fn set_api_version_to_config(api_version: ApiVersion, config: &mut Config) {
         match api_version {
             ApiVersion::V1 => {
                 config.api_version = 1;
@@ -2256,6 +2253,11 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
                 config.enable_ttl = true
             }
         };
+    }
+
+    pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L, api_version: ApiVersion) -> Self {
+        let mut config = Config::default();
+        Self::set_api_version_to_config(api_version, &mut config);
         Self {
             engine,
             config,
@@ -2284,15 +2286,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     }
 
     pub fn set_api_version(mut self, api_version: ApiVersion) -> Self {
-        self.config.api_version = match api_version {
-            ApiVersion::V1 | ApiVersion::V1ttl => 1,
-            ApiVersion::V2 => 2,
-        };
-        self
-    }
-
-    pub fn set_enable_ttl(mut self, enable_ttl: bool) -> Self {
-        self.config.enable_ttl = enable_ttl;
+        Self::set_api_version_to_config(api_version, &mut self.config);
         self
     }
 
