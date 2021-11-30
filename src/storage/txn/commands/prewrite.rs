@@ -1543,7 +1543,7 @@ mod tests {
             &engine,
             cm.clone(),
             &mut statistics,
-            vec![Mutation::CheckNotExists(Key::from_raw(key))],
+            vec![Mutation::make_check_not_exists(Key::from_raw(key))],
             key.to_vec(),
             15,
             None,
@@ -1567,7 +1567,7 @@ mod tests {
             &engine,
             cm,
             &mut statistics,
-            vec![Mutation::CheckNotExists(Key::from_raw(key))],
+            vec![Mutation::make_check_not_exists(Key::from_raw(key))],
             key.to_vec(),
             10,
             None,
@@ -1835,7 +1835,7 @@ mod tests {
              ts: u64,
              is_pessimistic_lock,
              is_retry_request| {
-                let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
+                let mutation = Mutation::make_put(Key::from_raw(key), value.to_vec());
                 let mut ctx = Context::default();
                 ctx.set_is_retry_request(is_retry_request);
                 let cmd = PrewritePessimistic::new(

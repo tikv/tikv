@@ -392,7 +392,7 @@ impl<E: Engine> AssertionStorage<E> {
             self.store
                 .prewrite(
                     self.ctx.clone(),
-                    vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
+                    vec![Mutation::make_put(Key::from_raw(key), value.to_vec())],
                     key.to_vec(),
                     start_ts,
                 )

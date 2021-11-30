@@ -6674,8 +6674,8 @@ mod tests {
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
-                        Mutation::Put((Key::from_raw(&k1), v1.clone())),
-                        Mutation::Put((Key::from_raw(&k2), v2.clone())),
+                        Mutation::make_put(Key::from_raw(&k1), v1.clone()),
+                        Mutation::make_put(Key::from_raw(&k2), v2.clone()),
                     ],
                     k1.clone(),
                     100.into(),

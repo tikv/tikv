@@ -4,7 +4,7 @@ use super::timestamp::TimeStamp;
 use bitflags::bitflags;
 use byteorder::{ByteOrder, NativeEndian};
 use collections::HashMap;
-use kvproto::kvrpcpb;
+use kvproto::kvrpcpb::{self, Assertion};
 use std::fmt::{self, Debug, Display, Formatter};
 use tikv_util::codec;
 use tikv_util::codec::bytes;
