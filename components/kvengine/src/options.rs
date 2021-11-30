@@ -3,6 +3,7 @@
 use dyn_clone::DynClone;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::table::sstable;
 use crate::*;
@@ -99,7 +100,7 @@ pub trait RecoverHandler {
     // Recovers from the shard's state to the state that is stored in the toState property.
     // So the Engine has a chance to execute pre-split command.
     // If toState is nil, the implementation should recovers to the latest state.
-    fn recover(&self, engine: &Engine, shard: &Shard, info: &ShardMeta) -> Result<()>;
+    fn recover(&self, engine: &Engine, shard: &Arc<Shard>, info: &ShardMeta) -> Result<()>;
 }
 
 pub trait MetaIterator {

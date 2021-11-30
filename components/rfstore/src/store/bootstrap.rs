@@ -3,7 +3,6 @@
 use super::peer_storage::{
     write_initial_apply_state, write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
 };
-use super::util::new_peer;
 use super::PREPARE_BOOTSTRAP_KEY;
 use crate::Result;
 use bytes::Buf;
@@ -18,6 +17,7 @@ use kvproto::metapb;
 use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, StoreIdent};
 use protobuf::{Message, RepeatedField};
 use tikv_util::{box_err, box_try};
+use raftstore::store::util as outil;
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
     let mut region = metapb::Region::default();
@@ -26,7 +26,7 @@ pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Re
     region.set_end_key(EMPTY_KEY.to_vec());
     region.mut_region_epoch().set_version(INIT_EPOCH_VER);
     region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
-    region.mut_peers().push(new_peer(store_id, peer_id));
+    region.mut_peers().push(outil::new_peer(store_id, peer_id));
     region
 }
 

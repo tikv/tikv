@@ -1,9 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::store::{
-    Applier, Callback, CasualMessage, CasualRouter, LocalReader, PeerFSM, PeerMsg, PeerMsgPayload,
-    PeerState, ProposalRouter, RaftCommand, SignificantMsg, StoreFSM, StoreMsg, StoreRouter,
-};
+use crate::store::{Applier, Callback, CasualMessage, CasualRouter, LocalReader, PeerFsm, PeerMsg, PeerStates, ProposalRouter, RaftCommand, rlog, SignificantMsg, StoreFSM, StoreMsg, StoreRouter};
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use crossbeam::channel::SendError;
 use kvproto::kvrpcpb::Op;
@@ -41,13 +38,13 @@ pub trait RaftStoreRouter: StoreRouter + ProposalRouter + CasualRouter + Send + 
     }
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
+    fn send_command(&self, req: rlog::RaftLog, cb: Callback) -> RaftStoreResult<()> {
         send_command_impl(self, req, cb, None)
     }
 
     fn send_command_with_deadline(
         &self,
-        req: RaftCmdRequest,
+        req: rlog::RaftLog,
         cb: Callback,
         deadline: Deadline,
     ) -> RaftStoreResult<()> {
@@ -71,13 +68,10 @@ pub trait RaftStoreRouter: StoreRouter + ProposalRouter + CasualRouter + Send + 
     /// Report a `StoreResolved` event to all Raft groups.
     fn report_resolved(&self, store_id: u64, group_id: u64) {
         self.broadcast_normal(|| {
-            PeerMsg::new(
+            PeerMsg::SignificantMsg(SignificantMsg::StoreResolved {
+                store_id,
                 group_id,
-                PeerMsgPayload::SignificantMsg(SignificantMsg::StoreResolved {
-                    store_id,
-                    group_id,
-                }),
-            )
+            })
         })
     }
 }
@@ -158,7 +152,7 @@ impl LocalReadRouter for ServerRaftStoreRouter {
         cb: Callback,
     ) -> RaftStoreResult<()> {
         let mut local_reader = self.local_reader.borrow_mut();
-        local_reader.read(read_id, req, cb);
+        local_reader.read(read_id, rlog::RaftLog::Request(req), cb);
         Ok(())
     }
 }
@@ -199,12 +193,12 @@ impl RaftStoreRouter for RaftStoreBlackHole {
 #[derive(Clone)]
 pub struct RaftRouter {
     pub(crate) store_sender: Sender<StoreMsg>,
-    pub(crate) peers: Arc<dashmap::DashMap<u64, PeerState>>,
-    pub(crate) peer_sender: Sender<PeerMsg>,
+    pub(crate) peers: Arc<dashmap::DashMap<u64, PeerStates>>,
+    pub(crate) peer_sender: Sender<(u64, PeerMsg)>,
 }
 
 impl RaftRouter {
-    pub(crate) fn new(peer_sender: Sender<PeerMsg>, store_sender: Sender<StoreMsg>) -> Self {
+    pub(crate) fn new(peer_sender: Sender<(u64, PeerMsg)>, store_sender: Sender<StoreMsg>) -> Self {
         Self {
             store_sender,
             peers: Arc::new(dashmap::DashMap::new()),
@@ -212,11 +206,11 @@ impl RaftRouter {
         }
     }
 
-    pub(crate) fn get(&self, region_id: u64) -> Option<dashmap::mapref::one::Ref<u64, PeerState>> {
+    pub(crate) fn get(&self, region_id: u64) -> Option<dashmap::mapref::one::Ref<u64, PeerStates>> {
         self.peers.get(&region_id)
     }
 
-    pub(crate) fn register(&self, peer: PeerFSM) {
+    pub(crate) fn register(&self, peer: PeerFsm) {
         let id = peer.peer.region().id;
         let ver = peer.peer.region().get_region_epoch().get_version();
         info!(
@@ -226,7 +220,7 @@ impl RaftRouter {
             peer.peer.peer_id()
         );
         let applier = Applier::new_from_peer(&peer);
-        let new_peer = PeerState::new(applier, peer);
+        let new_peer = PeerStates::new(applier, peer);
         self.peers.insert(id, new_peer);
     }
 
@@ -250,12 +244,12 @@ impl RaftRouter {
 impl RaftStoreRouter for RaftRouter {
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let region_id = msg.get_region_id();
-        let raft_msg = PeerMsg::new(region_id, PeerMsgPayload::RaftMessage(msg));
+        let raft_msg = PeerMsg::RaftMessage(msg);
         self.send(region_id, raft_msg)
     }
 
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
-        let msg = PeerMsg::new(region_id, PeerMsgPayload::SignificantMsg(msg));
+        let msg = PeerMsg::SignificantMsg(msg);
         self.send(region_id, msg)
     }
 
@@ -266,11 +260,11 @@ impl RaftStoreRouter for RaftRouter {
 
 fn send_command_impl(
     router: &impl ProposalRouter,
-    req: RaftCmdRequest,
+    req: rlog::RaftLog,
     cb: Callback,
     deadline: Option<Deadline>,
 ) -> RaftStoreResult<()> {
-    let region_id = req.get_header().get_region_id();
+    let region_id = req.get_region_id();
     let mut cmd = RaftCommand::new(req, cb);
     cmd.deadline = deadline;
     router.send(cmd)

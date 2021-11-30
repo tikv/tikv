@@ -1,11 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::store::{Proposal, RegionSnapshot, StoreTick};
+use crate::store::{ApplyMetrics, ApplyResult, ExecResult, Proposal, RegionSnapshot, StoreTick};
 use bytes::Bytes;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
@@ -18,35 +19,18 @@ use tikv_util::escape;
 use super::{rlog, Peer, RaftApplyState};
 
 #[derive(Debug)]
-pub struct PeerMsg {
-    pub region_id: u64,
-    pub(crate) payload: PeerMsgPayload,
-}
-
-impl PeerMsg {
-    pub(crate) fn new(region_id: u64, payload: PeerMsgPayload) -> Self {
-        Self { region_id, payload }
-    }
-
-    pub(crate) fn get_callback(&mut self) -> Callback {
-        match &mut self.payload {
-            PeerMsgPayload::RaftCommand(cmd) => {
-                std::mem::replace(&mut cmd.callback, Callback::None)
-            }
-            _ => Callback::None,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum PeerMsgPayload {
+pub(crate) enum PeerMsg {
     RaftMessage(rspb::RaftMessage),
     RaftCommand(RaftCommand),
-    SplitRegion(MsgSplitRegion),
-    ComputeResult(MsgComputeHashResult),
     Tick,
     Start,
-    ApplyRes,
+    ApplyRes(MsgApplyResult),
+    DestroyRes{
+        // ID of peer that has been destroyed.
+        peer_id: u64,
+        // Whether destroy request is from its target region's snapshot
+        merge_from_snapshot: bool,
+    },
     CasualMessage(CasualMessage),
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
@@ -55,22 +39,24 @@ pub(crate) enum PeerMsgPayload {
     HeartbeatPd,
 }
 
+impl PeerMsg {
+    pub(crate) fn take_callback(&mut self) -> Callback {
+        match &mut self {
+            PeerMsg::RaftCommand(cmd) => {
+                std::mem::replace(&mut cmd.callback, Callback::None)
+            }
+            _ => Callback::None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum ApplyMsg {
-    Apply {
-        region_id: u64,
-        term: u64,
-        entries: Vec<eraftpb::Entry>,
-        soft_state: Option<raft::SoftState>,
-    },
-    Proposal {
-        region_id: u64,
-        peer_id: u64,
-        props: Vec<Proposal>,
-    },
+    Apply(MsgApply),
     Registration(MsgRegistration),
     Destroy {
         region_id: u64,
+        merge_from_snapshot: bool,
     },
 }
 
@@ -78,20 +64,35 @@ pub enum StoreMsg {
     Tick(StoreTick),
     Start { store: metapb::Store },
     StoreUnreachable { store_id: u64 },
-    RaftMessage(Box<rspb::RaftMessage>),
-    GenerateEngineChangeSet(Box<kvenginepb::ChangeSet>),
+    RaftMessage(rspb::RaftMessage),
+    GenerateEngineChangeSet(kvenginepb::ChangeSet),
+}
+
+#[derive(Debug)]
+pub enum MergeResultKind {
+    /// Its target peer applys `CommitMerge` log.
+    FromTargetLog,
+    /// Its target peer receives snapshot.
+    /// In step 1, this peer should mark `pending_move` is true and destroy its apply fsm.
+    /// Then its target peer will remove this peer data and apply snapshot atomically.
+    FromTargetSnapshotStep1,
+    /// In step 2, this peer should destroy its peer fsm.
+    FromTargetSnapshotStep2,
+    /// This peer is no longer needed by its target peer so it can be destroyed by itself.
+    /// It happens if and only if its target peer has been removed by conf change.
+    Stale,
 }
 
 #[derive(Debug)]
 pub struct RaftCommand {
     pub send_time: Instant,
-    pub request: RaftCmdRequest,
+    pub request: rlog::RaftLog,
     pub callback: Callback,
     pub deadline: Option<Deadline>,
 }
 
 impl RaftCommand {
-    pub fn new(request: RaftCmdRequest, cb: Callback) -> Self {
+    pub fn new(request: rlog::RaftLog, cb: Callback) -> Self {
         Self {
             send_time: Instant::now(),
             request,
@@ -102,19 +103,20 @@ impl RaftCommand {
 }
 
 #[derive(Debug)]
-pub struct MsgSplitRegion {
-    pub(crate) ver: u64,
-    pub(crate) conf_ver: u64,
-
-    pub(crate) split_keys: Vec<Bytes>,
-
-    pub(crate) callback: Callback,
+pub struct MsgApply {
+    pub(crate) region_id: u64,
+    pub(crate) term: u64,
+    pub(crate) entries: Vec<eraftpb::Entry>,
+    pub(crate) soft_state: Option<raft::SoftState>,
+    pub(crate) cbs: Vec<Proposal>,
 }
 
 #[derive(Debug)]
-pub struct MsgComputeHashResult {
-    pub index: u64,
-    pub hash: Bytes,
+pub(crate) struct MsgApplyResult {
+    pub(crate) results: VecDeque<ExecResult>,
+    pub(crate) apply_state: RaftApplyState,
+    pub(crate) merged: bool,
+    pub(crate) metrics: ApplyMetrics,
 }
 
 pub struct MsgMergeResult {
@@ -129,10 +131,10 @@ pub struct MsgWaitFollowerSplitFiles {
 
 #[derive(Debug)]
 pub struct MsgRegistration {
-    peer: metapb::Peer,
-    term: u64,
-    apply_state: RaftApplyState,
-    region: metapb::Region,
+    pub(crate) peer: metapb::Peer,
+    pub(crate) term: u64,
+    pub(crate) apply_state: RaftApplyState,
+    pub(crate) region: metapb::Region,
 }
 
 impl MsgRegistration {
@@ -289,24 +291,8 @@ pub enum CasualMessage {
         hash: Vec<u8>,
     },
 
-    /// Approximate size of target region. This message can only be sent by split-check thread.
-    RegionApproximateSize {
-        size: u64,
-    },
-
-    /// Approximate key count of target region.
-    RegionApproximateKeys {
-        keys: u64,
-    },
-    CompactionDeclinedBytes {
-        bytes: u64,
-    },
-    /// Clear region size cache.
-    ClearRegionSize,
     /// Indicate a target region is overlapped.
     RegionOverlapped,
-    /// Notifies that a new snapshot has been generated.
-    SnapshotGenerated,
 
     /// Generally Raft leader keeps as more as possible logs for followers,
     /// however `ForceCompactRaftLogs` only cares the leader itself.
@@ -346,21 +332,7 @@ impl fmt::Debug for CasualMessage {
             CasualMessage::HalfSplitRegion { source, .. } => {
                 write!(fmt, "Half Split from {}", source)
             }
-            CasualMessage::RegionApproximateSize { size } => {
-                write!(fmt, "Region's approximate size [size: {:?}]", size)
-            }
-            CasualMessage::RegionApproximateKeys { keys } => {
-                write!(fmt, "Region's approximate keys [keys: {:?}]", keys)
-            }
-            CasualMessage::CompactionDeclinedBytes { bytes } => {
-                write!(fmt, "compaction declined bytes {}", bytes)
-            }
-            CasualMessage::ClearRegionSize => write! {
-                fmt,
-                "clear region size"
-            },
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
-            CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
             CasualMessage::ForceCompactRaftLogs => write!(fmt, "ForceCompactRaftLogs"),
             CasualMessage::QueryRegionLeaderResp { .. } => write!(fmt, "QueryRegionLeaderResp"),
         }

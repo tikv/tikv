@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::store::{
-    cf_name_to_num, cmd_resp, util, Callback, LeaseState, Peer, PeerMsg, PeerMsgPayload,
-    RaftCommand, ReadResponse, RegionSnapshot, RemoteLease, RequestInspector, RequestPolicy,
-    StoreMeta, LOCAL_READ_EXECUTED_CACHE_REQUESTS, LOCAL_READ_EXECUTED_REQUESTS, LOCAL_READ_REJECT,
+    cf_name_to_num, cmd_resp, rlog, util, Callback, Peer, PeerMsg,
+    RaftCommand, ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy,
+    StoreMeta,
 };
 use crate::{RaftRouter, RaftStoreRouter, Result};
 use engine_traits::{KvEngine, Peekable};
@@ -24,6 +24,8 @@ use tikv_util::lru::LruCache;
 use tikv_util::time::{monotonic_raw_now, Instant, ThreadReadId};
 use tikv_util::{debug, error};
 use time::Timespec;
+use raftstore::store::worker_metrics::*;
+use raftstore::store::util::{RemoteLease, LeaseState};
 
 #[derive(Debug)]
 pub enum Progress {
@@ -242,11 +244,11 @@ impl LocalReader {
 
     fn redirect(&mut self, mut cmd: RaftCommand) {
         debug!("localreader redirects command"; "command" => ?cmd);
-        let region_id = cmd.request.get_header().get_region_id();
+        let region_id = cmd.request.get_region_id();
         let mut err = errorpb::Error::default();
         let result = self.router.send(
             region_id,
-            PeerMsg::new(region_id, PeerMsgPayload::RaftCommand(cmd)),
+            PeerMsg::RaftCommand(cmd),
         );
         if result.is_ok() {
             return;
@@ -304,7 +306,7 @@ impl LocalReader {
 
     fn pre_propose_raft_command(
         &mut self,
-        req: &RaftCmdRequest,
+        req: &rlog::RaftLog,
     ) -> Result<Option<(Arc<ReadDelegate>, RequestPolicy)>> {
         // Check store id.
         if self.store_id.get().is_none() {
@@ -320,7 +322,7 @@ impl LocalReader {
         }
 
         // Check region id.
-        let region_id = req.get_header().get_region_id();
+        let region_id = req.get_region_id();
         let delegate = match self.get_delegate(region_id) {
             Some(d) => d,
             None => {
@@ -372,7 +374,7 @@ impl LocalReader {
     pub fn propose_raft_command(
         &mut self,
         mut read_id: Option<ThreadReadId>,
-        req: RaftCmdRequest,
+        req: rlog::RaftLog,
         cb: Callback,
     ) {
         match self.pre_propose_raft_command(&req) {
@@ -410,7 +412,7 @@ impl LocalReader {
             Ok(None) => self.redirect(RaftCommand::new(req, cb)),
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
-                if let Some(ref delegate) = self.delegates.get(&req.get_header().get_region_id()) {
+                if let Some(ref delegate) = self.delegates.get(&req.get_region_id()) {
                     cmd_resp::bind_term(&mut response, delegate.term);
                 }
                 cb.invoke_read(ReadResponse {
@@ -428,7 +430,7 @@ impl LocalReader {
     /// the last RaftCommand which left a snapshot cached in LocalReader. ThreadReadId is composed
     /// by thread_id and a thread_local incremental sequence.
     #[inline]
-    pub fn read(&mut self, read_id: Option<ThreadReadId>, req: RaftCmdRequest, cb: Callback) {
+    pub fn read(&mut self, read_id: Option<ThreadReadId>, req: rlog::RaftLog, cb: Callback) {
         self.propose_raft_command(read_id, req, cb);
         self.metrics.maybe_flush();
     }

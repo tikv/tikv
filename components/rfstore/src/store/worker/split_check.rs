@@ -6,42 +6,54 @@ use online_config::ConfigChange;
 use std::fmt::{self, Display, Formatter};
 
 use raftstore::coprocessor::Config;
+use tikv_util::time::Duration;
+use tikv_util::worker::{Runnable, RunnableWithTimer};
+use crate::RaftRouter;
 
-pub enum Task {
-    SplitCheckTask {
-        region: Region,
-        auto_split: bool,
-        policy: CheckPolicy,
-    },
-    ChangeConfig(ConfigChange),
-    #[cfg(any(test, feature = "testexport"))]
-    Validate(Box<dyn FnOnce(&Config) + Send>),
+#[derive(Debug)]
+pub struct SplitCheckTask {
+    region_id: u64,
+    max_size: u64,
 }
 
-impl Task {
-    pub fn split_check(region: Region, auto_split: bool, policy: CheckPolicy) -> Task {
-        Task::SplitCheckTask {
-            region,
-            auto_split,
-            policy,
+impl Display for SplitCheckTask {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "[split check worker] Split Check Task for {}, max_size: {}",
+            self.region_id,
+            self.max_size,
+        )
+    }
+}
+
+impl SplitCheckTask {
+    pub fn new(region_id: u64, max_size: u64) -> SplitCheckTask {
+        Self {
+            region_id,
+            max_size,
         }
     }
 }
 
-impl Display for Task {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Task::SplitCheckTask {
-                region, auto_split, ..
-            } => write!(
-                f,
-                "[split check worker] Split Check Task for {}, auto_split: {:?}",
-                region.get_id(),
-                auto_split
-            ),
-            Task::ChangeConfig(_) => write!(f, "[split check worker] Change Config Task"),
-            #[cfg(any(test, feature = "testexport"))]
-            Task::Validate(_) => write!(f, "[split check worker] Validate config"),
+pub struct SplitCheckRunner {
+    kv: kvengine::Engine,
+    router: RaftRouter,
+}
+
+impl SplitCheckRunner {
+    pub fn new(kv: kvengine::Engine, router: RaftRouter) -> Self {
+        Self {
+            kv,
+            router,
         }
+    }
+}
+
+impl Runnable for SplitCheckRunner {
+    type Task = SplitCheckTask;
+
+    fn run(&mut self, task: SplitCheckTask) {
+        todo!()
     }
 }

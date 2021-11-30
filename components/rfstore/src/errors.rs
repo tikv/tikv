@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::store::{PeerMsg, PeerMsgPayload};
+use crate::store::{PeerMsg};
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, metapb};
 use protobuf::ProtobufError;

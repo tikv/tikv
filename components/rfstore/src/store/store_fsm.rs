@@ -20,6 +20,8 @@ use tikv_util::mpsc::{Receiver, Sender};
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::RingQueue;
 use time::Timespec;
+use raftstore::store::local_metrics::RaftMetrics;
+use raftstore::store::{QueryStats};
 
 use super::*;
 use crate::{Error, Result};
@@ -30,6 +32,7 @@ struct Workers {
     pd_worker: FutureWorker<PdTask>,
     region_worker: Worker,
     region_apply_worker: Worker,
+    split_check_worker: Worker,
     coprocessor_host: CoprocessorHost<kvengine::Engine>,
 }
 
@@ -41,7 +44,7 @@ pub struct RaftBatchSystem {
     workers: Option<Workers>,
 
     // Change to none after spawn.
-    peer_receiver: Option<Receiver<PeerMsg>>,
+    peer_receiver: Option<Receiver<(u64, PeerMsg)>>,
     store_fsm: Option<StoreFSM>,
 }
 
@@ -89,6 +92,7 @@ impl RaftBatchSystem {
             pd_worker,
             region_worker: Worker::new("region-worker"),
             region_apply_worker: Worker::new("region-apply-worker"),
+            split_check_worker: Worker::new("split-check-worker"),
             coprocessor_host: coprocessor_host.clone(),
         };
 
@@ -102,6 +106,8 @@ impl RaftBatchSystem {
         let region_scheduler = workers
             .region_worker
             .start_with_timer("snapshot-worker", region_runner);
+        let split_check_runner = SplitCheckRunner::new(engines.kv.clone(), self.router());
+        let split_check_scheduler = workers.split_check_worker.start("split-check-worker", split_check_runner);
 
         let ctx = GlobalContext {
             cfg,
@@ -111,6 +117,7 @@ impl RaftBatchSystem {
             router: self.router.clone(),
             trans,
             pd_scheduler: workers.pd_worker.scheduler(),
+            split_check_scheduler: split_check_scheduler,
             region_scheduler,
             coprocessor_host,
         };
@@ -162,7 +169,7 @@ impl RaftBatchSystem {
         });
         for region_id in region_ids {
             self.router
-                .send(region_id, PeerMsg::new(region_id, PeerMsgPayload::Start));
+                .send(region_id, PeerMsg::Start);
         }
         Ok(())
     }
@@ -188,7 +195,7 @@ impl RaftBatchSystem {
     /// load_peers loads peers in this store. It scans the kv engine, loads all regions
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
-    fn load_peers(&self) -> Result<Vec<PeerFSM>> {
+    fn load_peers(&self) -> Result<Vec<PeerFsm>> {
         todo!()
     }
 }
@@ -278,6 +285,7 @@ pub(crate) struct GlobalContext {
     pub(crate) trans: Box<dyn Transport>,
     pub(crate) pd_scheduler: FutureScheduler<PdTask>,
     pub(crate) region_scheduler: Scheduler<RegionTask>,
+    pub(crate) split_check_scheduler: Scheduler<SplitCheckTask>,
     pub(crate) coprocessor_host: CoprocessorHost<kvengine::Engine>,
 }
 
@@ -288,13 +296,18 @@ pub(crate) struct RaftContext {
     pub(crate) raft_wb: rfengine::WriteBatch,
     pub(crate) pending_count: usize,
     pub(crate) local_stats: StoreStats,
+    pub(crate) is_disk_full: bool,
+    pub(crate) raft_metrics: RaftMetrics,
+    pub(crate) cfg: Config,
 }
 
 #[derive(Default)]
 pub(crate) struct StoreStats {
-    engine_total_bytes_written: u64,
-    engine_total_keys_written: u64,
-    is_busy: bool,
+    pub(crate) lock_cf_bytes_written: u64,
+    pub(crate) engine_total_bytes_written: u64,
+    pub(crate) engine_total_keys_written: u64,
+    pub(crate) engine_total_query_stats: QueryStats,
+    pub(crate) is_busy: bool,
 }
 
 impl RaftContext {
@@ -306,6 +319,9 @@ impl RaftContext {
             raft_wb: rfengine::WriteBatch::new(),
             pending_count: 0,
             local_stats: Default::default(),
+            is_disk_full: false,
+            raft_metrics: Default::default(),
+            cfg: global.cfg.value().clone(),
         }
     }
 
@@ -378,7 +394,7 @@ impl StoreMsgHandler {
         todo!()
     }
 
-    pub(crate) fn on_raft_message(&self, msg: Box<RaftMessage>) {
+    pub(crate) fn on_raft_message(&self, msg: RaftMessage) {
         todo!()
     }
 

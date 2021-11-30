@@ -13,12 +13,12 @@ use std::time::{Duration, Instant};
 use std::{cmp, io};
 
 use crate::store::cmd_resp::new_error;
-use crate::store::metrics::*;
-use crate::store::{is_epoch_stale, ConfChangeKind, KeysInfoFormatter};
+use crate::store::{ConfChangeKind, rlog};
 use crate::store::{
-    Callback, CasualMessage, PeerMsg, PeerMsgPayload, RaftCommand, StoreInfo, StoreMsg,
+    Callback, CasualMessage, PeerMsg, RaftCommand, StoreInfo, StoreMsg,
 };
 use crate::{RaftRouter, RaftStoreRouter};
+use raftstore::store::metrics::*;
 
 #[cfg(feature = "failpoints")]
 use fail::fail_point;
@@ -40,7 +40,7 @@ use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
-use raftstore::store::{QueryStats, ReadStats};
+use raftstore::store::{QueryStats, ReadStats, util as outil};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::sys::disk;
 use tikv_util::time::UnixSecs;
@@ -214,7 +214,7 @@ impl Display for Task {
                 f,
                 "ask split region {} with {}",
                 region.get_id(),
-                KeysInfoFormatter(split_keys.iter())
+                outil::KeysInfoFormatter(split_keys.iter())
             ),
             Task::Heartbeat(ref hb_task) => write!(
                 f,
@@ -589,7 +589,7 @@ where
         let f = async move {
             match resp.await {
                 Ok(Some(pd_region)) => {
-                    if is_epoch_stale(
+                    if outil::is_epoch_stale(
                         pd_region.get_region_epoch(),
                         local_region.get_region_epoch(),
                     ) {
@@ -729,7 +729,7 @@ where
                             source: "pd",
                         }
                     };
-                    if let Err(e) = router.send(region_id, PeerMsg::new(region_id, PeerMsgPayload::CasualMessage(msg))) {
+                    if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
                         error!("send halfsplit request failed"; "region_id" => region_id, "err" => ?e);
                     }
                 } else if resp.has_merge() {
@@ -875,7 +875,7 @@ where
                     let msg = CasualMessage::QueryRegionLeaderResp { region, leader };
                     if let Err(e) = router.send(
                         region_id,
-                        PeerMsg::new(region_id, PeerMsgPayload::CasualMessage(msg)),
+                        PeerMsg::CasualMessage(msg),
                     ) {
                         error!("send region info message failed"; "region_id" => region_id, "err" => ?e);
                     }
@@ -1101,7 +1101,7 @@ fn send_admin_request(
 
     req.set_admin_request(request);
 
-    if let Err(e) = router.send_command(req, callback) {
+    if let Err(e) = router.send_command(rlog::RaftLog::Request(req), callback) {
         error!(
             "send request failed";
             "region_id" => region_id, "cmd_type" => ?cmd_type, "err" => ?e,

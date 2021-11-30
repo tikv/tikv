@@ -18,6 +18,7 @@ use kvproto::raft_serverpb::RaftLocalState;
 use raft_proto::eraftpb;
 use rfengine;
 use tokio::sync::mpsc;
+use tikv_util::mpsc::Sender;
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -91,6 +92,13 @@ pub(crate) struct ReadyApplySnapshot {
     pub(crate) snap_data: SnapData,
 }
 
+pub struct ApplySnapResult {
+    // prev_region is the region before snapshot applied.
+    pub prev_region: metapb::Region,
+    pub region: metapb::Region,
+    pub destroyed_regions: Vec<metapb::Region>,
+}
+
 pub(crate) struct InvokeContext {
     pub(crate) region: metapb::Region,
     pub(crate) raft_state: RaftState,
@@ -113,7 +121,7 @@ pub(crate) struct PeerStorage {
     snap_tried_cnt: usize,
 
     // The ApplyState that is persisted to L0 file.
-    stable_apply_state: RaftApplyState,
+    pub(crate) stable_apply_state: RaftApplyState,
     split_stage: kvenginepb::SplitStage,
     initial_flushed: bool,
     shard_meta: kvengine::ShardMeta,
@@ -156,7 +164,7 @@ impl PeerStorage {
     pub(crate) fn new(
         engines: Engines,
         region: &metapb::Region,
-        region_sched: UnboundedSender<RegionTask>,
+        region_sched: Sender<RegionTask>,
         peer_id: u64,
         tag: String,
     ) -> Result<PeerStorage> {
@@ -205,18 +213,8 @@ impl PeerStorage {
     }
 
     #[inline]
-    pub fn set_applied_term(&mut self, applied_index_term: u64) {
-        self.apply_state.applied_index_term = applied_index_term;
-    }
-
-    #[inline]
     pub fn apply_state(&self) -> RaftApplyState {
         self.apply_state
-    }
-
-    #[inline]
-    pub fn applied_index_term(&self) -> u64 {
-        self.apply_state.applied_index_term
     }
 
     #[inline]
@@ -233,11 +231,6 @@ impl PeerStorage {
     #[inline]
     pub fn truncated_index(&self) -> u64 {
         self.apply_state.truncated_index
-    }
-
-    #[inline]
-    pub fn truncated_term(&self) -> u64 {
-        self.apply_state.truncated_index_term
     }
 
     pub fn region(&self) -> &metapb::Region {
@@ -316,6 +309,10 @@ impl PeerStorage {
         // JOB_STATUS_FAILED and JOB_STATUS_FINISHED.
         self.check_applying_snap() != CheckApplyingSnapStatus::Applying
     }
+
+    pub fn flush_cache_metrics(&mut self) {
+        todo!()
+    }
 }
 
 fn init_raft_state(
@@ -377,3 +374,14 @@ pub fn write_peer_state(
 }
 
 pub(crate) struct SnapData {}
+
+
+pub fn fetch_entries_to(
+    rf_engine: &rfengine::RFEngine,
+    region_id: u64,
+    low: u64,
+    high: u64,
+    max_size: u64,
+) -> std::result::Result<Vec<eraftpb::Entry>, engine_traits::Error>{
+    todo!()
+}

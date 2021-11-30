@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::store::{Callback, CasualMessage, PeerMsg, PeerMsgPayload, RaftCommand, StoreMsg};
+use crate::store::{Callback, CasualMessage, PeerMsg, RaftCommand, StoreMsg};
 use crate::{DiscardReason, Error, RaftRouter, Result};
 use crossbeam::channel::SendError;
 use dyn_clone::DynClone;
@@ -43,7 +43,7 @@ impl CasualRouter for RaftRouter {
     fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()> {
         if let Err(e) = self.send(
             region_id,
-            PeerMsg::new(region_id, PeerMsgPayload::CasualMessage(msg)),
+            PeerMsg::CasualMessage(msg),
         ) {
             return Err(Error::RegionNotFound(region_id));
         }
@@ -55,7 +55,7 @@ impl ProposalRouter for RaftRouter {
     #[inline]
     fn send(&self, cmd: RaftCommand) -> Result<()> {
         let region_id = cmd.request.get_header().get_region_id();
-        let msg = PeerMsg::new(region_id, PeerMsgPayload::RaftCommand(cmd));
+        let msg = PeerMsg::RaftCommand(cmd);
         self.send(region_id, msg)
     }
 }

@@ -3,6 +3,8 @@
 use crate::RaftRouter;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{self, Display, Formatter};
+use bytes::Bytes;
+use kvproto::metapb;
 use tikv_util::mpsc::{Receiver, Sender};
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
@@ -21,6 +23,12 @@ pub enum Task {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     },
+    RecoverSplit {
+        region: metapb::Region,
+        peer: metapb::Peer,
+        split_keys: Vec<Bytes>,
+        stage: kvenginepb::SplitStage,
+    }
 }
 
 impl Task {

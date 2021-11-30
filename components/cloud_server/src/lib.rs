@@ -31,10 +31,18 @@ mod transport;
 
 #[cfg(test)]
 mod tests {
+    use tikv::config::TiKvConfig;
+    use crate::tikv_server::run_tikv;
     use super::*;
 
     #[test]
     fn test_run() {
         println!("run")
+    }
+
+    #[test]
+    fn test_run_tikv() {
+        let config = TiKvConfig::default();
+        run_tikv(config);
     }
 }

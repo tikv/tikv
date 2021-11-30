@@ -8,6 +8,7 @@ use moka::sync::SegmentedCache;
 use slog_global::info;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
+use std::iter::Iterator;
 use std::ops::Deref;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -211,6 +212,29 @@ impl EngineCore {
             .map(|x| x.value().estimated_size.load(Ordering::Relaxed) + 1)
             .reduce(|x, y| x + y)
             .unwrap_or(0)
+    }
+
+    pub fn trigger_flush(&self, shard: Arc<Shard>) {
+        let g = &epoch::pin();
+        let mem_tbls = shard.get_mem_tbls(g);
+        for i in (0..mem_tbls.tbls.len()).rev() {
+            let mem_tbl = &mem_tbls.tbls[i];
+            if mem_tbl.is_applying() {
+                continue;
+            }
+            if i == 1 && shard.get_split_stage() == kvenginepb::SplitStage::PreSplit {
+                mem_tbl.set_split_stage(kvenginepb::SplitStage::PreSplitFlushDone);
+            }
+            info!("shard {}:{} trigger flush mem-table ts {}, size {}",
+                shard.id, shard.ver, mem_tbl.get_version(), mem_tbl.size());
+            self.flush_tx.send(FlushTask {
+                shard_id: shard.id,
+                shard_ver: shard.ver,
+                split_stage: shard.get_split_stage(),
+                mem_tbl: mem_tbl.clone(),
+                next_mem_tbl_size: 0,
+            }).unwrap();
+        }
     }
 }
 

@@ -1,16 +1,33 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI32};
+use std::sync::atomic::Ordering::{Acquire, Release};
+use protobuf::ProtobufEnum;
 
 use super::{Arena, SkipList};
 use crate::NUM_CFS;
 
-#[derive(Clone)]
 pub struct CFTable {
     tbls: [SkipList; NUM_CFS],
     arena: Arc<Arena>,
     ver: u64,
     props: Option<kvenginepb::Properties>,
+    applying: AtomicBool,
+    stage: AtomicI32,
+}
+
+impl Clone for CFTable {
+    fn clone(&self) -> Self {
+        Self {
+            tbls: self.tbls.clone(),
+            arena: self.arena.clone(),
+            ver: self.ver,
+            props: self.props.clone(),
+            applying: AtomicBool::new(self.is_applying()),
+            stage: AtomicI32::new(self.get_split_stage().value()),
+        }
+    }
 }
 
 impl CFTable {
@@ -25,6 +42,8 @@ impl CFTable {
             arena,
             ver: 0,
             props: None,
+            applying: AtomicBool::new(false),
+            stage: AtomicI32::new(kvenginepb::SplitStage::Initial.value()),
         }
     }
 
@@ -59,5 +78,21 @@ impl CFTable {
 
     pub fn get_version(&self) -> u64 {
         return self.ver;
+    }
+
+    pub fn set_applying(&self) {
+        self.applying.store(true, Release);
+    }
+
+    pub fn is_applying(&self) -> bool {
+        self.applying.load(Acquire)
+    }
+
+    pub fn set_split_stage(&self, stage: kvenginepb::SplitStage) {
+        self.stage.store(stage.value(), Release);
+    }
+
+    pub fn get_split_stage(&self) -> kvenginepb::SplitStage {
+        kvenginepb::SplitStage::from_i32(self.stage.load(Release)).unwrap()
     }
 }

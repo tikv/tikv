@@ -5,8 +5,8 @@ use bytes::{BufMut, Bytes, BytesMut};
 use kvproto::metapb;
 use tikv_util::codec::bytes::decode_bytes;
 
-const RAFT_STATE_KEY_BYTE: u8 = 1;
-const REGION_META_KEY_BYTE: u8 = 2;
+pub(crate) const RAFT_STATE_KEY_BYTE: u8 = 1;
+pub(crate) const REGION_META_KEY_BYTE: u8 = 2;
 pub(crate) const STORE_IDENT_KEY: &'static [u8] = &[3];
 pub(crate) const PREPARE_BOOTSTRAP_KEY: &'static [u8] = &[4];
 pub(crate) const KV_ENGINE_META_KEY: &'static [u8] = &[5];

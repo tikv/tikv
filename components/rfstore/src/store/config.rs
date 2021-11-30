@@ -54,6 +54,8 @@ pub struct Config {
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: ReadableDuration,
 
+    pub region_split_size: ReadableSize,
+
     pub pd_heartbeat_tick_interval: ReadableDuration,
 
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
@@ -83,6 +85,7 @@ impl Default for Config {
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             raft_log_gc_tick_interval: ReadableDuration::secs(10),
             split_region_check_tick_interval: ReadableDuration::secs(10),
+            region_split_size: ReadableSize::gb(1),
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             // Disable consistency check by default as it will hurt performance.

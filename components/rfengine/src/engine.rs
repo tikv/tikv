@@ -241,9 +241,9 @@ impl RFEngine {
         entries_map.insert(region_id, region_logs);
     }
 
-    pub fn iterate_region_states<F>(&self, region_id: u64, desc: bool, f: F)
+    pub fn iterate_region_states<F>(&self, region_id: u64, desc: bool, f: F) -> Result<()>
     where
-        F: Fn(&[u8], &[u8]),
+        F: Fn(&[u8], &[u8]) -> Result<()>,
     {
         let start_key = StateKey::new(region_id, &[]);
         let end_key = StateKey::new(region_id + 1, &[]);
@@ -251,28 +251,33 @@ impl RFEngine {
         let range = states.range(start_key..end_key);
         if desc {
             for (k, v) in range.rev() {
-                f(k.key.chunk(), v.chunk())
+                f(k.key.chunk(), v.chunk())?;
             }
         } else {
             for (k, v) in range {
-                f(k.key.chunk(), v.chunk())
+                f(k.key.chunk(), v.chunk())?;
             }
         }
+        Ok(())
     }
 
     pub fn iterate_all_states<F>(&self, desc: bool, f: F)
     where
-        F: Fn(u64, &[u8], &[u8]),
+        F: Fn(u64, &[u8], &[u8]) -> bool,
     {
         let states = self.states.read().unwrap();
         let iter = states.iter();
         if desc {
             for (k, v) in iter.rev() {
-                f(k.region_id, k.key.chunk(), v.chunk())
+                if !f(k.region_id, k.key.chunk(), v.chunk()) {
+                    break
+                }
             }
         } else {
             for (k, v) in iter {
-                f(k.region_id, k.key.chunk(), v.chunk())
+                if !f(k.region_id, k.key.chunk(), v.chunk()) {
+                    break
+                }
             }
         }
     }

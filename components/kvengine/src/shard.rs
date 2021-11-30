@@ -12,6 +12,7 @@ use std::{
     },
     time::Instant,
 };
+use std::iter::Iterator;
 
 use crate::*;
 use crate::{
@@ -398,9 +399,14 @@ impl Shard {
         load_resource(&self.split_ctx, g)
     }
 
-    pub(crate) fn get_split_keys<'a>(&self, g: &'a epoch::Guard) -> &'a Vec<Bytes> {
+    pub(crate) fn get_ref_split_keys<'a>(&self, g: &'a epoch::Guard) -> &'a Vec<Bytes> {
         let ctx = self.get_split_ctx(g);
         &ctx.split_keys
+    }
+
+    pub fn get_split_keys(&self) -> Vec<Bytes> {
+        let g = epoch::pin();
+        self.get_ref_split_keys(&g).clone()
     }
 
     pub(crate) fn get_mem_tbls<'a>(&self, g: &'a epoch::Guard) -> &'a Arc<MemTables> {
@@ -558,6 +564,30 @@ impl Shard {
 
     pub fn get_write_sequence(&self) -> u64 {
         self.write_sequence.load(Ordering::Acquire)
+    }
+
+    pub fn get_meta_sequence(&self) -> u64 {
+        self.meta_seq.load(Ordering::Acquire)
+    }
+
+    pub fn mark_mem_table_applying_flush(&self, commit_ts: u64) {
+        let g = &epoch::pin();
+        let shared = self.mem_tbls.load(Acquire, g);
+        let mems = unsafe { &shared.deref().tbls};
+        for mem in mems.iter().rev() {
+            let mem_version = mem.get_version();
+            if mem_version > commit_ts {
+                return;
+            }
+            if mem_version == commit_ts {
+                mem.set_applying();
+                break
+            }
+        }
+    }
+
+    pub fn get_estimated_size(&self) -> u64 {
+        self.estimated_size.load(Ordering::Relaxed)
     }
 }
 

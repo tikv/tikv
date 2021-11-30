@@ -5,6 +5,8 @@
 pub mod errors;
 pub mod router;
 pub mod store;
+pub mod mvcc;
 
 pub use self::errors::*;
 pub use router::*;
+pub use mvcc::*;

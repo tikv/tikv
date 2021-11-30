@@ -9,14 +9,14 @@ use std::time::{Duration, Instant};
 use tikv_util::mpsc::{Receiver, Sender};
 
 #[derive(Clone)]
-pub(crate) struct PeerState {
+pub(crate) struct PeerStates {
     pub(crate) applier: Arc<Mutex<Applier>>,
-    pub(crate) peer_fsm: Arc<Mutex<PeerFSM>>,
+    pub(crate) peer_fsm: Arc<Mutex<PeerFsm>>,
     pub(crate) closed: Arc<AtomicBool>,
 }
 
-impl PeerState {
-    pub(crate) fn new(applier: Applier, peer_fsm: PeerFSM) -> Self {
+impl PeerStates {
+    pub(crate) fn new(applier: Applier, peer_fsm: PeerFsm) -> Self {
         Self {
             applier: Arc::new(Mutex::new(applier)),
             peer_fsm: Arc::new(Mutex::new(peer_fsm)),
@@ -26,13 +26,13 @@ impl PeerState {
 }
 
 pub(crate) struct PeerInbox {
-    pub(crate) peer: PeerState,
+    pub(crate) peer: PeerStates,
     pub(crate) msgs: Vec<PeerMsg>,
 }
 
 pub(crate) struct RaftWorker {
     ctx: RaftContext,
-    receiver: Receiver<PeerMsg>,
+    receiver: Receiver<(u64, PeerMsg)>,
     router: RaftRouter,
     apply_sender: Sender<ApplyBatch>,
     inboxes: HashMap<u64, PeerInbox>,
@@ -43,7 +43,7 @@ pub(crate) struct RaftWorker {
 impl RaftWorker {
     pub(crate) fn new(
         ctx: GlobalContext,
-        receiver: Receiver<PeerMsg>,
+        receiver: Receiver<(u64, PeerMsg)>,
         router: RaftRouter,
     ) -> (Self, Receiver<ApplyBatch>) {
         let (apply_sender, apply_receiver) = tikv_util::mpsc::unbounded();
@@ -66,11 +66,11 @@ impl RaftWorker {
     pub(crate) fn run(&mut self) {
         self.receive_msgs();
         let mut readies = vec![];
-        for (_, inbox) in &self.inboxes {
+        self.inboxes.iter_mut().for_each( |(_, inbox) | {
             if let Some(ready) = self.process_inbox(inbox) {
                 readies.push(ready);
             }
-        }
+        });
         self.persist_state();
         self.post_persist_state(readies);
         self.ctx.flush_local_stats();
@@ -85,16 +85,15 @@ impl RaftWorker {
                 true
             }
         });
-        let mut res = self.receiver.recv_timeout(Duration::from_millis(10));
-        if res.is_ok() {
-            self.append_msg(res.unwrap())
+        if let Ok((region_id, msg)) = self.receiver.recv_timeout(Duration::from_millis(10)) {
+            self.append_msg(region_id, msg);
         }
         loop {
-            let res = self.receiver.try_recv();
-            if res.is_err() {
+            if let Ok((region_id, msg)) = self.receiver.try_recv() {
+                self.append_msg(region_id, msg);
+            } else {
                 break;
             }
-            self.append_msg(res.unwrap());
         }
         let now = Instant::now();
         if (now - self.last_tick).as_millis() as u64 > self.tick_millis {
@@ -102,13 +101,13 @@ impl RaftWorker {
             let peers = self.router.peers.clone();
             for x in peers.iter() {
                 let region_id = *x.key();
-                self.append_msg(PeerMsg::new(region_id, PeerMsgPayload::Tick));
+                self.append_msg(region_id, PeerMsg::Tick);
             }
         }
     }
 
-    fn append_msg(&mut self, msg: PeerMsg) {
-        self.get_inbox(msg.region_id).msgs.push(msg);
+    fn append_msg(&mut self, region_id: u64,  msg: PeerMsg) {
+        self.get_inbox(region_id).msgs.push(msg);
     }
 
     fn get_inbox(&mut self, region_id: u64) -> &mut PeerInbox {
@@ -127,13 +126,25 @@ impl RaftWorker {
         }
     }
 
-    fn process_inbox(&self, inbox: &PeerInbox) -> Option<ReadyICPair> {
-        todo!()
+    fn process_inbox(&mut self, inbox: &mut PeerInbox) -> Option<CollectedReady> {
+        let mut peer_fsm = inbox.peer.peer_fsm.lock().unwrap();
+        let mut h = PeerMsgHandler::new(&mut peer_fsm, &mut self.ctx);
+        if let Some(mut rd) = h.new_raft_ready() {
+            h.handle_raft_ready(&mut rd);
+            let mut apply_msgs = self.ctx.apply_msgs.msgs.drain(..);
+            let mut peer_batch = ApplyBatch {
+                msgs: vec![],
+            };
+            peer_batch.msgs.extend(apply_msgs);
+            self.apply_sender.send(peer_batch);
+            return Some(rd)
+        }
+        None
     }
 
     fn persist_state(&self) {}
 
-    fn post_persist_state(&self, readies: Vec<ReadyICPair>) {}
+    fn post_persist_state(&self, readies: Vec<CollectedReady>) {}
 }
 
 pub(crate) struct ApplyWorker {

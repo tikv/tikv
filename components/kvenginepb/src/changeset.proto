@@ -53,6 +53,7 @@ message Compaction {
 message Flush {
   L0Create l0Create = 1;
   Properties properties = 2;
+  uint64 commitTS = 3;
 }
 
 message Snapshot {

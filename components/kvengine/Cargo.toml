@@ -7,10 +7,8 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec"]
 protobuf-codec = [
     "protobuf/bytes",
-    "engine_traits/protobuf-codec"
 ]
 
 [dependencies]

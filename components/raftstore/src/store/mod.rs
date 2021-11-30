@@ -6,6 +6,8 @@ pub mod fsm;
 pub mod memory;
 pub mod msg;
 pub mod transport;
+pub mod metrics;
+pub mod local_metrics;
 
 #[macro_use]
 pub mod util;
@@ -14,8 +16,6 @@ mod async_io;
 mod bootstrap;
 mod compaction_guard;
 mod hibernate_state;
-mod local_metrics;
-mod metrics;
 mod peer;
 mod peer_storage;
 mod read_queue;
@@ -66,3 +66,4 @@ pub use self::worker::{
 pub use self::worker::{CheckLeaderRunner, CheckLeaderTask};
 pub use self::worker::{KeyEntry, LocalReader, RegionTask};
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};
+pub use self::worker::metrics as worker_metrics;

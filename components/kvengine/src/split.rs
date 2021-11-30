@@ -62,7 +62,7 @@ impl Engine {
                     dfs_opts,
                     cf,
                     lh,
-                    shard.get_split_keys(g),
+                    shard.get_ref_split_keys(g),
                     cs.mut_split_files(),
                 )
                 .await?;
@@ -96,7 +96,7 @@ impl Engine {
     ) -> Result<()> {
         let g = &epoch::pin();
         let l0s = load_resource(&shard.l0_tbls, g);
-        let split_keys = shard.get_split_keys(g);
+        let split_keys = shard.get_ref_split_keys(g);
         for l0 in &l0s.tbls {
             if !need_split_l0(split_keys, l0) {
                 continue;
