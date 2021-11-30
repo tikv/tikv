@@ -112,6 +112,7 @@ pub enum Collation {
     Utf8Mb4UnicodeCi = -224,
     Latin1Bin = -47,
     GbkBin = -87,
+    GbkChineseCi = -28,
 }
 
 impl Collation {
@@ -141,6 +142,27 @@ impl Collation {
 impl fmt::Display for Collation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self, f)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Charset {
+    UTF8,
+    UTF8Mb4,
+    Latin1,
+    GBK,
+}
+
+impl Charset {
+    pub fn from_name(name: &str) -> Result<Self, DataTypeError> {
+        match name {
+            "utf8mb4" | "utf8" => Ok(Charset::UTF8Mb4),
+            "latin1" => Ok(Charset::Latin1),
+            "gbk" => Ok(Charset::GBK),
+            _ => Err(DataTypeError::UnsupportedCharset {
+                name: String::from(name),
+            }),
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::cell::Cell;
 use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,7 +22,7 @@ use crate::errors::RAFTSTORE_IS_BUSY;
 use crate::store::util::{self, LeaseState, RegionReadProgress, RemoteLease};
 use crate::store::{
     cmd_resp, Callback, Peer, ProposalRouter, RaftCommand, ReadResponse, RegionSnapshot,
-    RequestInspector, RequestPolicy,
+    RequestInspector, RequestPolicy, TxnExt,
 };
 use crate::Error;
 use crate::Result;
@@ -39,6 +40,7 @@ use crate::store::fsm::store::StoreMeta;
 pub trait ReadExecutor<E: KvEngine> {
     fn get_engine(&self) -> &E;
     fn get_snapshot(&mut self, ts: Option<ThreadReadId>) -> Arc<E::Snapshot>;
+
     fn get_value(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
@@ -148,7 +150,7 @@ pub struct ReadDelegate {
 
     pub tag: String,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-    pub max_ts_sync_status: Arc<AtomicU64>,
+    pub txn_ext: Arc<TxnExt>,
     pub read_progress: Arc<RegionReadProgress>,
 
     // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
@@ -226,7 +228,7 @@ impl ReadDelegate {
             last_valid_ts: Timespec::new(0, 0),
             tag: format!("[region {}] {}", region_id, peer_id),
             txn_extra_op: peer.txn_extra_op.clone(),
-            max_ts_sync_status: peer.max_ts_sync_status.clone(),
+            txn_ext: peer.txn_ext.clone(),
             read_progress: peer.read_progress.clone(),
             track_ver: TrackVer::new(),
         }
@@ -601,7 +603,7 @@ where
                 };
                 cmd_resp::bind_term(&mut response.response, delegate.term);
                 if let Some(snap) = response.snapshot.as_mut() {
-                    snap.max_ts_sync_status = Some(delegate.max_ts_sync_status.clone());
+                    snap.txn_ext = Some(delegate.txn_ext.clone());
                 }
                 response.txn_extra_op = delegate.txn_extra_op.load();
                 cb.invoke_read(response);
@@ -964,7 +966,7 @@ mod tests {
                 leader_lease: Some(remote),
                 last_valid_ts: Timespec::new(0, 0),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
-                max_ts_sync_status: Arc::new(AtomicU64::new(0)),
+                txn_ext: Arc::new(TxnExt::default()),
                 read_progress: read_progress.clone(),
                 track_ver: TrackVer::new(),
             };
@@ -1205,7 +1207,7 @@ mod tests {
                 leader_lease: None,
                 last_valid_ts: Timespec::new(0, 0),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
-                max_ts_sync_status: Arc::new(AtomicU64::new(0)),
+                txn_ext: Arc::new(TxnExt::default()),
                 track_ver: TrackVer::new(),
                 read_progress: Arc::new(RegionReadProgress::new(&region, 0, 0, "".to_owned())),
             };

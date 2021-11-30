@@ -30,7 +30,7 @@ pub enum PluginError {
     ///
     /// If such an error appears, plugins can run some cleanup code and return early from the
     /// request. The error will be passed to the client and the client might retry the request.
-    Other(Box<dyn Any>),
+    Other(String, Box<dyn Any>),
 }
 
 impl fmt::Display for PluginError {
@@ -41,7 +41,7 @@ impl fmt::Display for PluginError {
             }
             PluginError::Timeout(d) => write!(f, "timeout after {:?}", d),
             PluginError::Canceled => write!(f, "request canceled"),
-            PluginError::Other(e) => write!(f, "{:?}", e),
+            PluginError::Other(s, _) => write!(f, "{}", s),
         }
     }
 }

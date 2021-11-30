@@ -7,9 +7,6 @@ use file_system::File;
 use futures::executor::block_on;
 use futures_io::AsyncRead;
 use kvproto::brpb as proto;
-#[cfg(feature = "prost-codec")]
-pub use kvproto::brpb::storage_backend::Backend;
-#[cfg(feature = "protobuf-codec")]
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 use slog_global::info;
 use std::f64::INFINITY;

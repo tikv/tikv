@@ -183,7 +183,7 @@ pub fn new_engine_opt(
     Ok(db)
 }
 
-pub(crate) fn db_exist(path: &str) -> bool {
+pub fn db_exist(path: &str) -> bool {
     let path = Path::new(path);
     if !path.exists() || !path.is_dir() {
         return false;

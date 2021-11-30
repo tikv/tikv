@@ -88,11 +88,13 @@ pub struct Config {
     pub max_grpc_send_msg_len: i32,
 
     // When merge raft messages into a batch message, leave a buffer.
+    #[online_config(skip)]
     pub raft_client_grpc_send_msg_buffer: usize,
 
     #[online_config(skip)]
     pub raft_client_queue_size: usize,
 
+    #[online_config(skip)]
     pub raft_msg_max_batch_size: usize,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
@@ -380,8 +382,7 @@ impl ConfigManager for ServerConfigManager {
     fn dispatch(&mut self, c: ConfigChange) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = c.clone();
-            self.config
-                .update(move |cfg: &mut Config| cfg.update(change));
+            self.config.update(move |cfg| cfg.update(change));
             if let Err(e) = self.tx.schedule(SnapTask::RefreshConfigEvent) {
                 error!("server configuration manager schedule refresh snapshot work task failed"; "err"=> ?e);
             }

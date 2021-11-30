@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 macro_rules! ctx {
     () => {
         fn get_ctx(&self) -> &crate::storage::Context {

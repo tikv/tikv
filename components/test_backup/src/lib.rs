@@ -83,6 +83,7 @@ impl TestSuite {
                     num_threads: 4,
                     batch_size: 8,
                     sst_max_size: ReadableSize(sst_max_size),
+                    ..Default::default()
                 },
                 sim.get_concurrency_manager(*id),
             );
@@ -297,6 +298,7 @@ impl TestSuite {
             backup_ts,
             IsolationLevel::Si,
             false,
+            Default::default(),
             Default::default(),
             false,
         );

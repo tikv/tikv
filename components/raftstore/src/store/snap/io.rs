@@ -85,7 +85,7 @@ where
         let file = if !should_encrypt {
             file.unwrap()
         } else {
-            encrypted_file.unwrap().finalize()
+            encrypted_file.unwrap().finalize().unwrap()
         };
         box_try!(file.sync_all());
     } else {
