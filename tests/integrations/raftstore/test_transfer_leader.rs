@@ -116,21 +116,17 @@ fn test_pd_transfer_leader_multi_target<T: Simulator>(cluster: &mut Cluster<T>) 
     cluster.run();
 
     cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     cluster.add_send_filter(IsolationFilterFactory::new(3));
     cluster.must_put(b"k2", b"v2");
     // append index of the cluster will finally be 2, 2, 1
-
-    // call command on this leader directly, must successfully.
-    let mut region = cluster.get_region(b"");
-    let mut req = new_request(
-        region.get_id(),
-        region.take_region_epoch(),
-        vec![new_get_cmd(b"k1")],
-        false,
-    );
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+    must_get_none(&cluster.get_engine(3), b"k2");
 
     // select multi target leaders to transfer
     // set `peer` to 3, make sure the new leader comes from `peers`
+    let mut region = cluster.get_region(b"");
     pd_client.transfer_leader(
         region.get_id(),
         new_peer(3, 3),
@@ -145,14 +141,18 @@ fn test_pd_transfer_leader_multi_target<T: Simulator>(cluster: &mut Cluster<T>) 
 
         if let Some(leader) = cluster.leader_of_region(1) {
             if leader.get_id() == 2 {
-                // make sure new leader apply an entry on its term
-                // so we can use its local reader safely
-                cluster.must_put(b"k2", b"v2");
                 break;
             }
         }
     }
 
+    // call command on this leader directly, must successfully.
+    let mut req = new_request(
+        region.get_id(),
+        region.take_region_epoch(),
+        vec![new_get_cmd(b"k1")],
+        false,
+    );
     assert!(cluster.leader_of_region(1) == Some(new_peer(2, 2)));
     let leader_id = cluster.leader_of_region(1).unwrap().id;
     req.mut_header().set_peer(new_peer(leader_id, leader_id));
