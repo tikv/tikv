@@ -122,6 +122,7 @@ pub struct PrewriteResult {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PessimisticLockRes {
     Values(Vec<Option<Value>>),
+    Existence(Vec<bool>),
     Empty,
 }
 
@@ -129,6 +130,7 @@ impl PessimisticLockRes {
     pub fn push(&mut self, value: Option<Value>) {
         match self {
             PessimisticLockRes::Values(v) => v.push(value),
+            PessimisticLockRes::Existence(v) => v.push(value.is_some()),
             _ => panic!("unexpected PessimisticLockRes"),
         }
     }
@@ -142,6 +144,10 @@ impl PessimisticLockRes {
                     (v.unwrap_or_default(), is_not_found)
                 })
                 .unzip(),
+            PessimisticLockRes::Existence(mut vals) => {
+                vals.iter_mut().for_each(|x| *x = !*x);
+                (vec![], vals)
+            }
             PessimisticLockRes::Empty => (vec![], vec![]),
         }
     }

@@ -2357,6 +2357,7 @@ pub mod test_util {
         start_ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
         return_values: bool,
+        check_existence: bool,
     ) -> PessimisticLockCommand {
         let primary = keys[0].0.clone().to_raw().unwrap();
         let for_update_ts: TimeStamp = for_update_ts.into();
@@ -2371,6 +2372,7 @@ pub mod test_util {
             return_values,
             for_update_ts.next(),
             OldValues::default(),
+            check_existence,
             Context::default(),
         )
     }
@@ -5880,9 +5882,13 @@ mod tests {
         let (key2, val2) = (Key::from_raw(b"key2"), b"val2".to_vec());
 
         // Key not exist
-        for &return_values in &[false, true] {
+        for &(return_values, check_existence) in
+            &[(false, false), (false, true), (true, false), (true, true)]
+        {
             let pessimistic_lock_res = if return_values {
                 PessimisticLockRes::Values(vec![None])
+            } else if check_existence {
+                PessimisticLockRes::Existence(vec![false])
             } else {
                 PessimisticLockRes::Empty
             };
@@ -5894,13 +5900,14 @@ mod tests {
                         10,
                         10,
                         return_values,
+                        check_existence,
                     ),
                     expect_pessimistic_lock_res_callback(tx.clone(), pessimistic_lock_res.clone()),
                 )
                 .unwrap();
             rx.recv().unwrap();
 
-            if return_values {
+            if return_values || check_existence {
                 assert_eq!(cm.max_ts(), 10.into());
             }
 
@@ -5912,6 +5919,7 @@ mod tests {
                         10,
                         10,
                         return_values,
+                        check_existence,
                     ),
                     expect_pessimistic_lock_res_callback(tx.clone(), pessimistic_lock_res.clone()),
                 )
@@ -5923,14 +5931,22 @@ mod tests {
 
         storage
             .sched_txn_command(
-                new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, false),
+                new_acquire_pessimistic_lock_command(
+                    vec![(key.clone(), false)],
+                    10,
+                    10,
+                    false,
+                    false,
+                ),
                 expect_pessimistic_lock_res_callback(tx.clone(), PessimisticLockRes::Empty),
             )
             .unwrap();
         rx.recv().unwrap();
 
         // KeyIsLocked
-        for &return_values in &[false, true] {
+        for &(return_values, check_existence) in
+            &[(false, false), (false, true), (true, false), (true, true)]
+        {
             storage
                 .sched_txn_command(
                     new_acquire_pessimistic_lock_command(
@@ -5938,6 +5954,7 @@ mod tests {
                         20,
                         20,
                         return_values,
+                        check_existence,
                     ),
                     expect_fail_callback(tx.clone(), 0, |e| match e {
                         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
@@ -5991,7 +6008,9 @@ mod tests {
         rx.recv().unwrap();
 
         // WriteConflict
-        for &return_values in &[false, true] {
+        for &(return_values, check_existence) in
+            &[(false, false), (false, true), (true, false), (true, true)]
+        {
             storage
                 .sched_txn_command(
                     new_acquire_pessimistic_lock_command(
@@ -5999,6 +6018,7 @@ mod tests {
                         15,
                         15,
                         return_values,
+                        check_existence,
                     ),
                     expect_fail_callback(tx.clone(), 0, |e| match e {
                         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
@@ -6015,9 +6035,13 @@ mod tests {
         assert_eq!(cm.max_ts(), 10.into());
 
         // Return multiple values
-        for &return_values in &[false, true] {
+        for &(return_values, check_existence) in
+            &[(false, false), (false, true), (true, false), (true, true)]
+        {
             let pessimistic_lock_res = if return_values {
                 PessimisticLockRes::Values(vec![Some(val.clone()), Some(val2.clone()), None])
+            } else if check_existence {
+                PessimisticLockRes::Existence(vec![true, true, false])
             } else {
                 PessimisticLockRes::Empty
             };
@@ -6032,13 +6056,14 @@ mod tests {
                         30,
                         30,
                         return_values,
+                        check_existence,
                     ),
                     expect_pessimistic_lock_res_callback(tx.clone(), pessimistic_lock_res),
                 )
                 .unwrap();
             rx.recv().unwrap();
 
-            if return_values {
+            if return_values || check_existence {
                 assert_eq!(cm.max_ts(), 30.into());
             }
 
@@ -6185,6 +6210,7 @@ mod tests {
                     false,
                     21.into(),
                     OldValues::default(),
+                    false,
                     Context::default(),
                 ),
                 expect_ok_callback(tx, 0),
@@ -6293,6 +6319,7 @@ mod tests {
                         keys.iter().map(|k| (k.clone(), false)).collect(),
                         ts,
                         ts,
+                        false,
                         false,
                     ),
                     expect_ok_callback(tx.clone(), 0),
@@ -6780,6 +6807,7 @@ mod tests {
                     200,
                     300,
                     false,
+                    false,
                 ),
                 expect_ok_callback(tx, 0),
             )
@@ -6854,6 +6882,7 @@ mod tests {
                     false,
                     0.into(),
                     OldValues::default(),
+                    false,
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -6875,6 +6904,7 @@ mod tests {
                     false,
                     0.into(),
                     OldValues::default(),
+                    false,
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -7093,6 +7123,7 @@ mod tests {
                 false,
                 TimeStamp::new(12),
                 OldValues::default(),
+                false,
                 Context::default(),
             ),
             pipelined_pessimistic_lock: true,
@@ -7117,6 +7148,7 @@ mod tests {
                 false,
                 TimeStamp::new(12),
                 OldValues::default(),
+                false,
                 Context::default(),
             ),
             pipelined_pessimistic_lock: false,
@@ -7150,6 +7182,7 @@ mod tests {
                     ],
                     10,
                     10,
+                    false,
                     false,
                 ),
                 expect_ok_callback(tx.clone(), 0),
