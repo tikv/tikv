@@ -255,17 +255,12 @@ fn test_destroy_uninitialized_peer_when_there_exists_old_peer() {
 
     // Remove 3 and add 4
     pd_client.must_add_peer(r1, new_learner_peer(4, 4));
-    // must_get_equal(&cluster.get_engine(4), b"k10", b"v1");
-
     pd_client.must_add_peer(r1, new_peer(4, 4));
     pd_client.must_remove_peer(r1, new_peer(3, 3));
 
     for i in 11..20 {
         cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
     }
-
-    // Add learner on store 5
-    pd_client.must_add_peer(r1, new_learner_peer(3, 5));
 
     // Ensure 5 drops all snapshot
     let (notify_tx, _notify_rx) = mpsc::channel();
@@ -274,6 +269,9 @@ fn test_destroy_uninitialized_peer_when_there_exists_old_peer() {
         .wl()
         .add_recv_filter(3, Box::new(DropSnapshotFilter::new(notify_tx)));
 
+    // Add learner 5 on store 3
+    pd_client.must_add_peer(r1, new_learner_peer(3, 5));
+
     for i in 21..30 {
         cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
     }
@@ -281,7 +279,7 @@ fn test_destroy_uninitialized_peer_when_there_exists_old_peer() {
     // Remove and destroy the uninitialized 5
     let peer_5 = new_learner_peer(3, 5);
     pd_client.must_remove_peer(r1, peer_5.clone());
-    cluster.must_destroy_peer(r1, 3, peer_5.clone());
+    cluster.must_destroy_peer(r1, 3, peer_5);
 
     let region = block_on(pd_client.get_region_by_id(r1)).unwrap();
     must_region_cleared(&cluster.get_all_engines(3), &region.unwrap());
