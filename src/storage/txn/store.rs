@@ -631,6 +631,7 @@ mod tests {
     use engine_traits::{IterOptions, ReadOptions};
     use kvproto::kvrpcpb::Context;
     use std::sync::Arc;
+    use tikv_kv::DummySnapshotExt;
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: TimeStamp = TimeStamp::new(10);
@@ -786,6 +787,7 @@ mod tests {
 
     impl Snapshot for MockRangeSnapshot {
         type Iter = MockRangeSnapshotIter;
+        type Ext<'a> = DummySnapshotExt;
 
         fn get(&self, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
@@ -807,6 +809,9 @@ mod tests {
         }
         fn upper_bound(&self) -> Option<&[u8]> {
             Some(self.end.as_slice())
+        }
+        fn ext(&self) -> DummySnapshotExt {
+            DummySnapshotExt
         }
     }
 

@@ -1115,16 +1115,13 @@ mod tests {
         ) -> EngineResult<()> {
             self.0.async_snapshot(
                 ctx,
-                Box::new(move |(cb_ctx, r)| {
-                    callback((
-                        cb_ctx,
-                        r.map(|snap| {
-                            let mut region = Region::default();
-                            // Add a peer to pass initialized check.
-                            region.mut_peers().push(Peer::default());
-                            RegionSnapshot::from_snapshot(snap, Arc::new(region))
-                        }),
-                    ))
+                Box::new(move |r| {
+                    callback(r.map(|snap| {
+                        let mut region = Region::default();
+                        // Add a peer to pass initialized check.
+                        region.mut_peers().push(Peer::default());
+                        RegionSnapshot::from_snapshot(snap, Arc::new(region))
+                    }))
                 }),
             )
         }
