@@ -1,14 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::num::NonZeroU64;
+use std::sync::Arc;
+
 use crate::{
     self as kv, Error, Error as KvError, ErrorInner, Iterator as EngineIterator,
-    Snapshot as EngineSnapshot,
+    Snapshot as EngineSnapshot, SnapshotExt,
 };
 use engine_traits::CfName;
 use engine_traits::{IterOptions, Peekable, ReadOptions, Snapshot};
-use raftstore::store::{RegionIterator, RegionSnapshot};
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
+use raftstore::store::{RegionIterator, RegionSnapshot, TxnExt};
 use raftstore::Error as RaftServerError;
-use std::sync::atomic::Ordering;
 use txn_types::{Key, Value};
 
 impl From<RaftServerError> for Error {
@@ -17,8 +20,40 @@ impl From<RaftServerError> for Error {
     }
 }
 
+pub struct RegionSnapshotExt<'a, S: Snapshot> {
+    snapshot: &'a RegionSnapshot<S>,
+}
+
+impl<'a, S: Snapshot> SnapshotExt for RegionSnapshotExt<'a, S> {
+    #[inline]
+    fn get_data_version(&self) -> Option<u64> {
+        self.snapshot.get_apply_index().ok()
+    }
+
+    fn is_max_ts_synced(&self) -> bool {
+        self.snapshot
+            .txn_ext
+            .as_ref()
+            .map(|txn_ext| txn_ext.is_max_ts_synced())
+            .unwrap_or(false)
+    }
+
+    fn get_term(&self) -> Option<NonZeroU64> {
+        self.snapshot.term
+    }
+
+    fn get_txn_extra_op(&self) -> TxnExtraOp {
+        self.snapshot.txn_extra_op
+    }
+
+    fn get_txn_ext(&self) -> Option<&Arc<TxnExt>> {
+        self.snapshot.txn_ext.as_ref()
+    }
+}
+
 impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
     type Iter = RegionIterator<S>;
+    type Ext<'a> = RegionSnapshotExt<'a, S>;
 
     fn get(&self, key: &Key) -> kv::Result<Option<Value>> {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
@@ -68,16 +103,8 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
         Some(self.get_end_key())
     }
 
-    #[inline]
-    fn get_data_version(&self) -> Option<u64> {
-        self.get_apply_index().ok()
-    }
-
-    fn is_max_ts_synced(&self) -> bool {
-        self.max_ts_sync_status
-            .as_ref()
-            .map(|v| v.load(Ordering::SeqCst) & 1 == 1)
-            .unwrap_or(false)
+    fn ext(&self) -> RegionSnapshotExt<'_, S> {
+        RegionSnapshotExt { snapshot: self }
     }
 }
 

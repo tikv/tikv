@@ -769,7 +769,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             &self.config.import,
             import_path,
             self.encryption_key_manager.clone(),
-            self.config.storage.enable_ttl,
+            self.config.storage.api_version(),
         )
         .unwrap();
         for (cf_name, compression_type) in &[
@@ -1270,7 +1270,7 @@ impl TiKVServer<RocksEngine> {
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
             &block_cache,
             Some(&self.region_info_accessor),
-            self.config.storage.enable_ttl,
+            self.config.storage.api_version(),
         );
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(
@@ -1354,7 +1354,7 @@ impl TiKVServer<RaftLogEngine> {
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
             &block_cache,
             Some(&self.region_info_accessor),
-            self.config.storage.enable_ttl,
+            self.config.storage.api_version(),
         );
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(

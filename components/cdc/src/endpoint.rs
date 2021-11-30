@@ -1410,7 +1410,6 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
 mod tests {
     use std::collections::BTreeMap;
     use std::fmt::Display;
-    use std::sync::atomic::AtomicU64;
     use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender};
 
     use collections::HashSet;
@@ -1519,7 +1518,7 @@ mod tests {
             leader_lease: None,
             last_valid_ts: Timespec::new(0, 0),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
-            max_ts_sync_status: Arc::new(AtomicU64::new(0)),
+            txn_ext: Arc::new(Default::default()),
             track_ver: TrackVer::new(),
             read_progress: Arc::new(RegionReadProgress::new(
                 &Region::default(),

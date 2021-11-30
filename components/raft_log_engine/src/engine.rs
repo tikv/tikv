@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, Result,
+    CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask,
+    Result,
 };
 use file_system::{IOOp, IORateLimiter, IOType};
 use kvproto::raft_serverpb::RaftLocalState;
@@ -246,8 +247,8 @@ impl RaftEngineReadOnly for RaftLogEngine {
 impl RaftEngine for RaftLogEngine {
     type LogBatch = RaftLogBatch;
 
-    fn log_batch(&self, _capacity: usize) -> Self::LogBatch {
-        RaftLogBatch::default()
+    fn log_batch(&self, capacity: usize) -> Self::LogBatch {
+        RaftLogBatch(LogBatch::with_capacity(capacity))
     }
 
     fn sync(&self) -> Result<()> {
@@ -297,8 +298,34 @@ impl RaftEngine for RaftLogEngine {
         Ok(())
     }
 
-    fn gc(&self, raft_group_id: u64, _from: u64, to: u64) -> Result<usize> {
-        Ok(self.0.compact_to(raft_group_id, to) as usize)
+    fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize> {
+        self.batch_gc(vec![RaftLogGCTask {
+            raft_group_id,
+            from,
+            to,
+        }])
+    }
+
+    fn batch_gc(&self, tasks: Vec<RaftLogGCTask>) -> Result<usize> {
+        let mut batch = self.log_batch(tasks.len());
+        let mut old_first_index = Vec::with_capacity(tasks.len());
+        for task in &tasks {
+            batch
+                .0
+                .add_command(task.raft_group_id, Command::Compact { index: task.to });
+            old_first_index.push(self.0.first_index(task.raft_group_id));
+        }
+
+        self.0.write(&mut batch.0, false).map_err(transfer_error)?;
+
+        let mut total = 0;
+        for (old_first_index, task) in old_first_index.iter().zip(tasks) {
+            let new_first_index = self.0.first_index(task.raft_group_id);
+            if let (Some(old), Some(new)) = (old_first_index, new_first_index) {
+                total += new.saturating_sub(*old);
+            }
+        }
+        Ok(total as usize)
     }
 
     fn purge_expired_files(&self) -> Result<Vec<u64>> {
