@@ -11862,6 +11862,13 @@
               "intervalFactor": 2,
               "legendFormat": "{{instance}}-total",
               "refId": "B"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_local_read_executed_stale_read_requests{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (instance)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{instance}}-stale-read",
+              "refId": "C"
             }
           ],
           "thresholds": [],

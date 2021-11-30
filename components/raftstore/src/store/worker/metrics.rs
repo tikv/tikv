@@ -123,4 +123,9 @@ lazy_static! {
         "Total number of requests directly executed by local reader."
     )
     .unwrap();
+    pub static ref LOCAL_READ_EXECUTED_STALE_READ_REQUESTS: IntCounter = register_int_counter!(
+        "tikv_raftstore_local_read_executed_stale_read_requests",
+        "Total number of stale read requests directly executed by local reader."
+    )
+    .unwrap();
 }
