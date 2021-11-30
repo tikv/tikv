@@ -2358,6 +2358,11 @@ pub struct TiKvConfig {
     #[online_config(hidden)]
     pub panic_when_unexpected_key_or_data: bool,
 
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(skip)]
+    pub enable_io_snoop: bool,
+
     #[online_config(skip)]
     pub abort_on_panic: bool,
 
@@ -2443,6 +2448,7 @@ impl Default for TiKvConfig {
             log_rotation_timespan: ReadableDuration::hours(24),
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
+            enable_io_snoop: true,
             abort_on_panic: false,
             memory_usage_limit: OptionReadableSize(None),
             memory_usage_high_water: 0.9,

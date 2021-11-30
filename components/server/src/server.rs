@@ -1047,6 +1047,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_io_utility(&mut self) -> BytesFetcher {
+        // The entrance of enabling io snooper is removed so it is always false
         let io_snooper_on = false;
 
         let limiter = Arc::new(
