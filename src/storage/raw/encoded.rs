@@ -66,6 +66,7 @@ impl<S: Snapshot> RawEncodeSnapshot<S> {
 
 impl<S: Snapshot> Snapshot for RawEncodeSnapshot<S> {
     type Iter = RawEncodeIterator<S::Iter>;
+    type Ext<'a> = S::Ext<'a>;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         self.map_value(self.snap.get(key))
@@ -105,13 +106,8 @@ impl<S: Snapshot> Snapshot for RawEncodeSnapshot<S> {
         self.snap.upper_bound()
     }
 
-    #[inline]
-    fn get_data_version(&self) -> Option<u64> {
-        self.snap.get_data_version()
-    }
-
-    fn is_max_ts_synced(&self) -> bool {
-        self.snap.is_max_ts_synced()
+    fn ext(&self) -> S::Ext<'_> {
+        self.snap.ext()
     }
 }
 
