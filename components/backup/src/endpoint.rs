@@ -200,13 +200,13 @@ async fn save_backup_file_worker(
     tx: UnboundedSender<BackupResponse>,
     storage: Arc<dyn ExternalStorage>,
 ) {
-    while let Ok(mut msg) = rx.recv().await {
+    while let Ok(msg) = rx.recv().await {
         let files = if msg.files.need_flush_keys() {
             match msg.files.save(&storage).await {
                 Ok(mut split_files) => {
                     for file in split_files.iter_mut() {
-                        file.set_start_key(std::mem::take(&mut msg.start_key));
-                        file.set_end_key(std::mem::take(&mut msg.end_key));
+                        file.set_start_key(msg.start_key.clone());
+                        file.set_end_key(msg.end_key.clone());
                         file.set_start_version(msg.start_version.into_inner());
                         file.set_end_version(msg.end_version.into_inner());
                     }
