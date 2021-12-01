@@ -188,6 +188,7 @@ impl FlowController {
 }
 
 const SMOOTHER_STALE_RECORD_THRESHOLD: f64 = 300.0; // 5min
+const SMOOTHER_TREND_TIME_RANGE_THRESHOLD: f64 = 120.0; // 2min
 
 // Smoother is a sliding window used to provide steadier flow statistics.
 struct Smoother<T, const CAP: usize>
@@ -236,6 +237,10 @@ where
         + FromPrimitive,
 {
     pub fn observe(&mut self, record: T) {
+        self.observe_with_time(record, Instant::now_coarse());
+    }
+
+    pub fn observe_with_time(&mut self, record: T, time: Instant) {
         if self.records.len() == CAP {
             let v = self.records.pop_front().unwrap().0;
             self.total -= v;
@@ -243,7 +248,7 @@ where
 
         self.total += record;
 
-        self.records.push_back((record, Instant::now_coarse()));
+        self.records.push_back((record, time));
         self.remove_stale_records();
     }
 
@@ -300,27 +305,47 @@ where
             return Trend::NoTrend;
         }
 
-        // calculate the average of left and right parts
-        let half = self.records.len() / 2;
-        let mut left = T::default();
-        let mut right = T::default();
-        for (i, r) in self.records.iter().enumerate() {
-            if i < half {
+        // If the lastest record is too old, no trend
+        if self.records.back().unwrap().1.saturating_elapsed_secs()
+            > SMOOTHER_STALE_RECORD_THRESHOLD / 2.0
+        {
+            return Trend::NoTrend;
+        }
+
+        // If the records doesn't cover a enough time range, no trend
+        let time_range = self.records.front().unwrap().1.saturating_elapsed_secs()
+            - self.records.back().unwrap().1.saturating_elapsed_secs();
+        if time_range < SMOOTHER_TREND_TIME_RANGE_THRESHOLD {
+            return Trend::NoTrend;
+        }
+
+        // Split the record into left and right by the middle of time range
+        let (mut left, mut left_cnt) = (T::default(), 0);
+        let (mut right, mut right_cnt) = (T::default(), 0);
+        for (_, r) in self.records.iter().enumerate() {
+            let elapsed_secs = r.1.saturating_elapsed_secs();
+            if elapsed_secs < time_range / 2.0 {
                 left += r.0;
-            } else if self.records.len() - i - 1 < half {
+                left_cnt += 1;
+            } else {
                 right += r.0;
+                right_cnt += 1;
             }
         }
 
-        // decide if there is a trend by the two averages
-        // adding 2 here is to give a tolerance
-        if right > left + FromPrimitive::from_u64(2).unwrap() {
-            Trend::Increasing
-        } else if left > right + FromPrimitive::from_u64(2).unwrap() {
-            Trend::Decreasing
-        } else {
-            Trend::NoTrend
+        // Decide if there is a trend by the two averages.
+        // Adding 2 here is to give a tolerance
+        if left_cnt > 0 && right_cnt > 0 {
+            let (l_avg, r_avg) = (left.as_() / left_cnt as f64, right.as_() / right_cnt as f64);
+            if r_avg > l_avg + 2.0 {
+                return Trend::Increasing;
+            }
+            if l_avg > r_avg + 2.0 {
+                return Trend::Decreasing;
+            }
         }
+
+        Trend::NoTrend;
     }
 }
 
@@ -1180,7 +1205,6 @@ mod tests {
         assert_eq!(smoother.get_recent(), 0);
         assert_eq!(smoother.get_max(), 5);
         assert_eq!(smoother.get_percentile_90(), 4);
-        assert_eq!(smoother.trend(), Trend::NoTrend);
 
         let mut smoother = Smoother::<f64, 5>::default();
         smoother.observe(1.0);
@@ -1194,6 +1218,99 @@ mod tests {
         assert!((smoother.get_recent() - 9.0).abs() < f64::EPSILON);
         assert!((smoother.get_max() - 9.0).abs() < f64::EPSILON);
         assert!((smoother.get_percentile_90() - 5.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_smoother_trend() {
+        // The time range is not enough
+        let mut smoother = Smoother::<u64, 6>::default();
+        let now = Instant::now_coarse();
+        smoother.observe_with_time(
+            1,
+            now.sub(Duration::from_secs(
+                (SMOOTHER_TREND_TIME_RANGE_THRESHOLD - 1.0) as u64,
+            )),
+        );
+        smoother.observe_with_time(
+            1,
+            now.sub(Duration::from_secs(
+                (SMOOTHER_TREND_TIME_RANGE_THRESHOLD - 2.0) as u64,
+            )),
+        );
+        smoother.observe_with_time(
+            1,
+            now.sub(Duration::from_secs(
+                (SMOOTHER_TREND_TIME_RANGE_THRESHOLD - 3.0) as u64,
+            )),
+        );
+        smoother.observe_with_time(4, now.sub(Duration::from_secs(2)));
+        smoother.observe_with_time(4, now.sub(Duration::from_secs(1)));
+        smoother.observe_with_time(4, now);
+        assert_eq!(smoother.trend(), Trend::NoTrend);
+
+        // Incresing trend, the left range contains 3 records, the right range contains 1 records.
+        let mut smoother = Smoother::<f64, 6>::default();
+        smoother.observe_with_time(
+            1.0,
+            now.sub(Duration::from_secs(
+                (SMOOTHER_TREND_TIME_RANGE_THRESHOLD - 1.0) as u64,
+            )),
+        );
+        smoother.observe_with_time(
+            1.0,
+            now.sub(Duration::from_secs(
+                (SMOOTHER_TREND_TIME_RANGE_THRESHOLD - 2.0) as u64,
+            )),
+        );
+        smoother.observe_with_time(
+            1.0,
+            now.sub(Duration::from_secs(
+                (SMOOTHER_TREND_TIME_RANGE_THRESHOLD - 3.0) as u64,
+            )),
+        );
+        smoother.observe_with_time(4.0, now);
         assert_eq!(smoother.trend(), Trend::Increasing);
+
+        // Decreasing trend, the left range contains 1 records, the right range contains 3 records.
+        let mut smoother = Smoother::<f32, 6>::default();
+        smoother.observe_with_time(
+            4.0,
+            now.sub(Duration::from_secs(
+                (SMOOTHER_TREND_TIME_RANGE_THRESHOLD - 1.0) as u64,
+            )),
+        );
+        smoother.observe_with_time(1.0, now.sub(Duration::from_secs(2)));
+        smoother.observe_with_time(2.0, now.sub(Duration::from_secs(1)));
+        smoother.observe_with_time(1.0, now);
+        assert_eq!(smoother.trend(), Trend::Decreasing);
+
+        // No trend, the left range contains 1 records, the right range contains 3 records.
+        let mut smoother = Smoother::<f32, 6>::default();
+        smoother.observe_with_time(
+            1.0,
+            now.sub(Duration::from_secs(
+                (SMOOTHER_TREND_TIME_RANGE_THRESHOLD - 1.0) as u64,
+            )),
+        );
+        smoother.observe_with_time(1.0, now.sub(Duration::from_secs(2)));
+        smoother.observe_with_time(3.0, now.sub(Duration::from_secs(1)));
+        smoother.observe_with_time(2.0, now);
+        assert_eq!(smoother.trend(), Trend::NoTrend);
+
+        // No trend, because the latest record is too old
+        let mut smoother = Smoother::<u32, 6>::default();
+        smoother.observe_with_time(
+            1,
+            now.sub(Duration::from_secs(
+                (SMOOTHER_STALE_RECORD_THRESHOLD - 1.0) as u64,
+            )),
+        );
+        smoother.observe_with_time(
+            5,
+            now.sub(Duration::from_secs(
+                (SMOOTHER_STALE_RECORD_THRESHOLD / 2.0 + 1.0) as u64,
+            )),
+        );
+        assert_eq!(smoother.trend(), Trend::NoTrend);
     }
 }
