@@ -8,6 +8,9 @@ extern crate lazy_static;
 extern crate test;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
+#[allow(unused_imports)]
+#[macro_use]
+extern crate more_asserts;
 
 mod file;
 mod iosnoop;

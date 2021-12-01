@@ -1325,6 +1325,7 @@ dependencies = [
  "lazy_static",
  "libc 0.2.100",
  "maligned",
+ "more-asserts",
  "nix 0.19.0",
  "online_config",
  "openssl",

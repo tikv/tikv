@@ -304,7 +304,6 @@ impl PriorityBasedIORateLimiter {
         self.bytes_available[priority as usize].load(Ordering::Relaxed) >= 0
     }
 
-    #[inline]
     fn request_imp(&self, priority: IOPriority, amount: usize) -> (usize, Option<Duration>) {
         debug_assert!(amount > 0);
         let priority_idx = priority as usize;
@@ -340,7 +339,7 @@ impl PriorityBasedIORateLimiter {
     }
 
     /// Updates and refills IO budgets for next epoch based on IO priority.
-    /// This method does **nothing** when high-priority IO rate limit equals zero.
+    /// This method is a no-op when high-priority IO rate limit equals zero.
     /// Here we provide best-effort priority control:
     /// 1) Limited IO budget is assigned to lower priority to ensure higher priority can at least
     ///    consume the same IO amount as the last few epochs without breaching global threshold.
@@ -354,9 +353,8 @@ impl PriorityBasedIORateLimiter {
             return;
         }
         debug_assert!(now >= locked.next_refill_time);
-        let elapsed_epochs = (now - locked.next_refill_time).as_secs_f32()
-            / DEFAULT_REFILL_PERIOD.as_secs_f32()
-            + 1.0;
+        let overflow_epochs =
+            (now - locked.next_refill_time).as_secs_f32() / DEFAULT_REFILL_PERIOD.as_secs_f32();
         locked.next_refill_time = now + DEFAULT_REFILL_PERIOD;
 
         debug_assert!(
@@ -384,14 +382,22 @@ impl PriorityBasedIORateLimiter {
                 }
                 self.bytes_per_epoch[p].store(budgets, Ordering::Relaxed);
             }
-            let max_refill = (budgets as f32 * elapsed_epochs) as i64;
+            let overflow_refill = (budgets as f32 * overflow_epochs) as i64;
             let r = self.bytes_available[p].fetch_update(
                 Ordering::Relaxed,
                 Ordering::Relaxed,
-                |unused| {
-                    let til_full = budgets as i64 - unused;
-                    budgets = std::cmp::max(unused, 1) as usize;
-                    Some(unused + std::cmp::min(max_refill, til_full))
+                |mut unused| {
+                    // Compensate for missing epochs.
+                    unused += overflow_refill;
+                    if unused > 0 {
+                        let res = budgets as i64;
+                        budgets = unused as usize;
+                        Some(res)
+                    } else {
+                        let res = unused + budgets as i64;
+                        budgets = 1;
+                        Some(res)
+                    }
                 },
             );
             debug_assert!(r.is_ok());
@@ -544,58 +550,67 @@ pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
+    use std::sync::Barrier;
 
     macro_rules! approximate_eq {
         ($left:expr, $right:expr) => {
-            assert!(($left) >= ($right) * 0.9);
-            assert!(($right) >= ($left) * 0.9);
+            assert_ge!(($left), ($right) * 0.95);
+            assert_le!(($left), ($right) / 0.95);
         };
     }
 
-    struct BackgroundContext {
-        threads: Vec<std::thread::JoinHandle<()>>,
-        stop: Option<Arc<AtomicBool>>,
-    }
-
-    impl Drop for BackgroundContext {
-        fn drop(&mut self) {
-            if let Some(stop) = &self.stop {
-                stop.store(true, Ordering::Relaxed);
-            }
-            for t in self.threads.drain(..) {
-                t.join().unwrap();
-            }
-        }
-    }
-
     #[derive(Debug, Clone, Copy)]
-    struct Request(IOType, IOOp, usize);
+    struct Request(IOType, IOOp, usize, Option<Duration>);
 
-    fn start_background_jobs(
-        limiter: &Arc<IORateLimiter>,
-        job_count: usize,
-        request: Request,
-        interval: Option<Duration>,
-    ) -> BackgroundContext {
-        let mut threads = vec![];
-        let stop = Arc::new(AtomicBool::new(false));
-        for _ in 0..job_count {
-            let stop = stop.clone();
-            let limiter = limiter.clone();
-            let t = std::thread::spawn(move || {
-                let Request(io_type, op, len) = request;
-                while !stop.load(Ordering::Relaxed) {
-                    limiter.request_with_skewed_clock(io_type, op, len);
-                    if let Some(interval) = interval {
-                        std::thread::sleep(interval);
-                    }
-                }
-            });
-            threads.push(t);
+    struct BackgroundContext {
+        limiter: Arc<IORateLimiter>,
+        requests: Vec<Request>,
+    }
+
+    impl BackgroundContext {
+        fn new(limiter: Arc<IORateLimiter>) -> Self {
+            Self {
+                limiter,
+                requests: Vec::new(),
+            }
         }
-        BackgroundContext {
-            threads,
-            stop: Some(stop),
+        fn add_background_jobs(&mut self, job_count: usize, request: Request) {
+            for _ in 0..job_count {
+                self.requests.push(request);
+            }
+        }
+        fn run(&self, duration: Duration) -> Duration {
+            let barrier = Arc::new(Barrier::new(self.requests.len()));
+            let stop = Arc::new(AtomicBool::new(false));
+            let mut threads: Vec<_> = self
+                .requests
+                .clone()
+                .into_iter()
+                .map(|r| {
+                    let barrier = barrier.clone();
+                    let limiter = self.limiter.clone();
+                    let stop = stop.clone();
+                    std::thread::spawn(move || {
+                        let Request(io_type, op, len, interval) = r;
+                        barrier.wait();
+                        let now = Instant::now();
+                        while !stop.load(Ordering::Relaxed) {
+                            limiter.request_with_skewed_clock(io_type, op, len);
+                            if let Some(interval) = interval {
+                                std::thread::sleep(interval);
+                            }
+                        }
+                        now.saturating_elapsed_secs()
+                    })
+                })
+                .collect();
+            std::thread::sleep(duration);
+            stop.store(true, Ordering::Relaxed);
+            let mut total = 0.0;
+            for t in threads.drain(..) {
+                total += t.join().unwrap();
+            }
+            Duration::from_secs_f64(total / self.requests.len() as f64)
         }
     }
 
@@ -608,46 +623,39 @@ mod tests {
         let stats = limiter.statistics().unwrap();
         // enable rate limit
         limiter.set_io_rate_limit(bytes_per_sec);
-        let t0 = Instant::now();
-        let _write_context = start_background_jobs(
-            &limiter,
+        let mut ctx = BackgroundContext::new(limiter.clone());
+        ctx.add_background_jobs(
             1, /*job_count*/
-            Request(IOType::ForegroundWrite, IOOp::Write, 10),
-            None, /*interval*/
+            Request(IOType::ForegroundWrite, IOOp::Write, 10, None),
         );
-        let _compaction_context = start_background_jobs(
-            &limiter,
+        ctx.add_background_jobs(
             1, /*job_count*/
-            Request(IOType::Compaction, IOOp::Write, 10),
-            None, /*interval*/
+            Request(IOType::Compaction, IOOp::Write, 10, None),
         );
-        std::thread::sleep(Duration::from_secs(1));
-        let t1 = Instant::now();
+        let duration = ctx.run(Duration::from_secs(1));
         approximate_eq!(
             stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64,
-            bytes_per_sec as f64 * (t1 - t0).as_secs_f64()
+            bytes_per_sec as f64 * duration.as_secs_f64()
         );
         // disable rate limit
         limiter.set_io_rate_limit(0);
         stats.reset();
-        std::thread::sleep(Duration::from_secs(1));
-        let t2 = Instant::now();
+        let duration = ctx.run(Duration::from_secs(1));
         assert!(
             stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64
-                > bytes_per_sec as f64 * (t2 - t1).as_secs_f64() * 4.0
+                > bytes_per_sec as f64 * duration.as_secs_f64() * 4.0
         );
         assert!(
             stats.fetch(IOType::Compaction, IOOp::Write) as f64
-                > bytes_per_sec as f64 * (t2 - t1).as_secs_f64() * 4.0
+                > bytes_per_sec as f64 * duration.as_secs_f64() * 4.0
         );
         // enable rate limit
         limiter.set_io_rate_limit(bytes_per_sec);
         stats.reset();
-        std::thread::sleep(Duration::from_secs(1));
-        let t3 = Instant::now();
+        let duration = ctx.run(Duration::from_secs(1));
         approximate_eq!(
             stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64,
-            bytes_per_sec as f64 * (t3 - t2).as_secs_f64()
+            bytes_per_sec as f64 * duration.as_secs_f64()
         );
     }
 
@@ -656,21 +664,15 @@ mod tests {
         limiter.set_io_rate_limit(bytes_per_sec);
         stats.reset();
         limiter.throughput_limiter.reset();
-        let actual_duration = {
-            let begin = Instant::now();
-            let _context = start_background_jobs(
-                limiter,
-                2, /*job_count*/
-                Request(IOType::ForegroundWrite, IOOp::Write, 10),
-                None, /*interval*/
-            );
-            std::thread::sleep(duration);
-            let end = Instant::now();
-            end.duration_since(begin)
-        };
+        let mut ctx = BackgroundContext::new(limiter.clone());
+        ctx.add_background_jobs(
+            2, /*job_count*/
+            Request(IOType::ForegroundWrite, IOOp::Write, 10, None),
+        );
+        let duration = ctx.run(duration);
         approximate_eq!(
             stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64,
-            bytes_per_sec as f64 * actual_duration.as_secs_f64()
+            bytes_per_sec as f64 * duration.as_secs_f64()
         );
     }
 
@@ -686,22 +688,15 @@ mod tests {
         verify_rate_limit(&limiter, bytes_per_sec, Duration::from_secs(2));
         limiter.set_io_priority(IOType::ForegroundWrite, IOPriority::High);
         let stats = limiter.statistics().unwrap();
-        stats.reset();
-        let duration = {
-            let begin = Instant::now();
-            let _context = start_background_jobs(
-                &limiter,
-                2, /*job_count*/
-                Request(IOType::ForegroundWrite, IOOp::Write, 10),
-                None, /*interval*/
-            );
-            std::thread::sleep(Duration::from_secs(2));
-            let end = Instant::now();
-            end.duration_since(begin)
-        };
-        assert!(
-            stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64
-                > bytes_per_sec as f64 * duration.as_secs_f64() * 1.5
+        let mut ctx = BackgroundContext::new(limiter.clone());
+        ctx.add_background_jobs(
+            2, /*job_count*/
+            Request(IOType::ForegroundWrite, IOOp::Write, 10, None),
+        );
+        let duration = ctx.run(Duration::from_secs(2));
+        assert_gt!(
+            stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64,
+            bytes_per_sec as f64 * duration.as_secs_f64() * 1.5
         );
     }
 
@@ -722,19 +717,17 @@ mod tests {
         let limiter = Arc::new(IORateLimiter::new_for_test());
         limiter.set_io_rate_limit(kbytes_per_sec * 1000);
         let stats = limiter.statistics().unwrap();
-        let duration = {
-            let begin = Instant::now();
-            // each thread request at most 1000 bytes per second
-            let _context = start_background_jobs(
-                &limiter,
-                actual_kbytes_per_sec, /*job_count*/
-                Request(IOType::Compaction, IOOp::Write, 1),
-                Some(Duration::from_millis(1)),
-            );
-            std::thread::sleep(Duration::from_secs(2));
-            let end = Instant::now();
-            end.duration_since(begin)
-        };
+        let mut ctx = BackgroundContext::new(limiter.clone());
+        ctx.add_background_jobs(
+            actual_kbytes_per_sec, /*job_count*/
+            Request(
+                IOType::Compaction,
+                IOOp::Write,
+                2,
+                Some(Duration::from_millis(2)),
+            ),
+        );
+        let duration = ctx.run(Duration::from_secs(2));
         approximate_eq!(
             stats.fetch(IOType::Compaction, IOOp::Write) as f64,
             actual_kbytes_per_sec as f64 * duration.as_secs_f64() * 1000.0
@@ -753,42 +746,35 @@ mod tests {
         limiter.set_io_priority(IOType::Import, IOPriority::Low);
         let stats = limiter.statistics().unwrap();
         let limiter = Arc::new(limiter);
-        let duration = {
-            let begin = Instant::now();
-            let _write = start_background_jobs(
-                &limiter,
-                1, /*job_count*/
-                Request(
-                    IOType::ForegroundWrite,
-                    IOOp::Write,
-                    write_work * bytes_per_sec / 100 / 1000,
-                ),
-                Some(Duration::from_millis(1)),
-            );
-            let _compaction = start_background_jobs(
-                &limiter,
-                1, /*job_count*/
-                Request(
-                    IOType::Compaction,
-                    IOOp::Write,
-                    compaction_work * bytes_per_sec / 100 / 1000,
-                ),
-                Some(Duration::from_millis(1)),
-            );
-            let _import = start_background_jobs(
-                &limiter,
-                1, /*job_count*/
-                Request(
-                    IOType::Import,
-                    IOOp::Write,
-                    import_work * bytes_per_sec / 100 / 1000,
-                ),
-                Some(Duration::from_millis(1)),
-            );
-            std::thread::sleep(Duration::from_secs(2));
-            let end = Instant::now();
-            end.duration_since(begin)
-        };
+        let mut ctx = BackgroundContext::new(limiter.clone());
+        ctx.add_background_jobs(
+            1, /*job_count*/
+            Request(
+                IOType::ForegroundWrite,
+                IOOp::Write,
+                write_work * bytes_per_sec / 100 / 1000 * 2,
+                Some(Duration::from_millis(2)),
+            ),
+        );
+        ctx.add_background_jobs(
+            1, /*job_count*/
+            Request(
+                IOType::Compaction,
+                IOOp::Write,
+                compaction_work * bytes_per_sec / 100 / 1000 * 2,
+                Some(Duration::from_millis(2)),
+            ),
+        );
+        ctx.add_background_jobs(
+            1, /*job_count*/
+            Request(
+                IOType::Import,
+                IOOp::Write,
+                import_work * bytes_per_sec / 100 / 1000 * 2,
+                Some(Duration::from_millis(2)),
+            ),
+        );
+        let duration = ctx.run(Duration::from_secs(2));
         let write_bytes = stats.fetch(IOType::ForegroundWrite, IOOp::Write);
         let compaction_bytes = stats.fetch(IOType::Compaction, IOOp::Write);
         let import_bytes = stats.fetch(IOType::Import, IOOp::Write);
