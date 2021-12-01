@@ -1,9 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use strum::EnumCount;
+
+use tikv_util::time::Instant;
 
 use crate::iosnoop::{fetch_io_bytes, flush_io_latency_metrics};
 use crate::metrics::{tls_flush, IO_BYTES_VEC};

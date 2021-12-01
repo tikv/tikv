@@ -979,7 +979,7 @@ fn exp_float_str_to_int_str<'a>(
     let int_cnt: i64;
     match dot_idx {
         None => {
-            digits.extend_from_slice(&valid_float[..e_idx].as_bytes());
+            digits.extend_from_slice(valid_float[..e_idx].as_bytes());
             // if digits.len() > i64::MAX,
             // then the input str has at least 9223372036854775808 chars,
             // which make the str >= 8388608.0 TB,
@@ -987,9 +987,9 @@ fn exp_float_str_to_int_str<'a>(
             int_cnt = digits.len() as i64;
         }
         Some(dot_idx) => {
-            digits.extend_from_slice(&valid_float[..dot_idx].as_bytes());
+            digits.extend_from_slice(valid_float[..dot_idx].as_bytes());
             int_cnt = digits.len() as i64;
-            digits.extend_from_slice(&valid_float[(dot_idx + 1)..e_idx].as_bytes());
+            digits.extend_from_slice(valid_float[(dot_idx + 1)..e_idx].as_bytes());
         }
     }
     // make `digits` immutable

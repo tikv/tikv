@@ -1,7 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{convert::TryInto, fmt::Display, io, sync::Arc};
 
-use cloud::blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, StringNonEmpty};
+use async_trait::async_trait;
+use cloud::blob::{
+    none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
+};
 use futures_util::{
     future::TryFutureExt,
     io::{AsyncRead, AsyncReadExt, Cursor},
@@ -9,16 +12,14 @@ use futures_util::{
 };
 use hyper::{client::HttpConnector, Body, Client, Request, Response, StatusCode};
 use hyper_tls::HttpsConnector;
-pub use kvproto::backup::{Bucket as InputBucket, CloudDynamic, Gcs as InputConfig};
+pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, Gcs as InputConfig};
 use tame_gcs::{
     common::{PredefinedAcl, StorageClass},
     objects::{InsertObjectOptional, Metadata, Object},
     types::{BucketName, ObjectId},
 };
 use tame_oauth::gcp::{ServiceAccountAccess, ServiceAccountInfo, TokenOrRequest};
-use tikv_util::stream::{
-    block_on_external_io, error_stream, retry, AsyncReadAsSyncStreamOfBytes, RetryError,
-};
+use tikv_util::stream::{error_stream, retry, AsyncReadAsSyncStreamOfBytes, RetryError};
 
 const GOOGLE_APIS: &str = "https://www.googleapis.com";
 const HARDCODED_ENDPOINTS_SUFFIX: &[&str] = &["upload/storage/v1/", "storage/v1/"];
@@ -111,7 +112,7 @@ fn deserialize_service_account_info(
 
 impl BlobConfig for Config {
     fn name(&self) -> &'static str {
-        &STORAGE_NAME
+        STORAGE_NAME
     }
 
     fn url(&self) -> io::Result<url::Url> {
@@ -390,15 +391,16 @@ fn parse_predefined_acl(acl: &str) -> Result<Option<PredefinedAcl>, &str> {
 
 const STORAGE_NAME: &str = "gcs";
 
+#[async_trait]
 impl BlobStorage for GCSStorage {
     fn config(&self) -> Box<dyn BlobConfig> {
         Box::new(self.config.clone()) as Box<dyn BlobConfig>
     }
 
-    fn put(
+    async fn put(
         &self,
         name: &str,
-        mut reader: Box<dyn AsyncRead + Send + Unpin>,
+        mut reader: PutResource,
         content_length: u64,
     ) -> io::Result<()> {
         if content_length == 0 {
@@ -422,31 +424,28 @@ impl BlobStorage for GCSStorage {
             ..Default::default()
         };
 
-        block_on_external_io(async move {
-            // FIXME: Switch to upload() API so we don't need to read the entire data into memory
-            // in order to retry.
-            let mut data = Vec::with_capacity(content_length as usize);
-            reader.read_to_end(&mut data).await?;
-            retry(|| async {
-                let data = Cursor::new(data.clone());
-                let req = Object::insert_multipart(
-                    &bucket,
-                    data,
-                    content_length,
-                    &metadata,
-                    Some(InsertObjectOptional {
-                        predefined_acl: self.config.predefined_acl,
-                        ..Default::default()
-                    }),
-                )
-                .map_err(RequestError::Gcs)?
-                .map(|reader| Body::wrap_stream(AsyncReadAsSyncStreamOfBytes::new(reader)));
-                self.make_request(req, tame_gcs::Scopes::ReadWrite).await
-            })
-            .await?;
-            Ok::<_, io::Error>(())
-        })?;
-        Ok(())
+        // FIXME: Switch to upload() API so we don't need to read the entire data into memory
+        // in order to retry.
+        let mut data = Vec::with_capacity(content_length as usize);
+        reader.read_to_end(&mut data).await?;
+        retry(|| async {
+            let data = Cursor::new(data.clone());
+            let req = Object::insert_multipart(
+                &bucket,
+                data,
+                content_length,
+                &metadata,
+                Some(InsertObjectOptional {
+                    predefined_acl: self.config.predefined_acl,
+                    ..Default::default()
+                }),
+            )
+            .map_err(RequestError::Gcs)?
+            .map(|reader| Body::wrap_stream(AsyncReadAsSyncStreamOfBytes::new(reader)));
+            self.make_request(req, tame_gcs::Scopes::ReadWrite).await
+        })
+        .await?;
+        Ok::<_, io::Error>(())
     }
 
     fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {

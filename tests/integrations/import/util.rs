@@ -22,7 +22,10 @@ const CLEANUP_SST_MILLIS: u64 = 10;
 pub fn new_cluster(cfg: TiKvConfig) -> (Cluster<ServerCluster>, Context) {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
-    cluster.cfg = cfg;
+    cluster.cfg = Config {
+        tikv: cfg,
+        prefer_mem: true,
+    };
     cluster.run();
 
     let region_id = 1;
@@ -133,15 +136,7 @@ pub fn send_write_sst(
     commit_ts: u64,
 ) -> Result<WriteResponse> {
     let mut r1 = WriteRequest::default();
-    // TODO rewrite following code blocks with cfg-if.
-    #[cfg(feature = "prost-codec")]
-    {
-        r1.chunk = Some(write_request::Chunk::Meta(meta.clone()));
-    }
-    #[cfg(not(feature = "prost-codec"))]
-    {
-        r1.set_meta(meta.clone());
-    }
+    r1.set_meta(meta.clone());
     let mut r2 = WriteRequest::default();
 
     let mut batch = WriteBatch::default();
@@ -155,14 +150,7 @@ pub fn send_write_sst(
     }
     batch.set_commit_ts(commit_ts);
     batch.set_pairs(pairs.into());
-    #[cfg(feature = "prost-codec")]
-    {
-        r2.chunk = Some(write_request::Chunk::Batch(batch));
-    }
-    #[cfg(not(feature = "prost-codec"))]
-    {
-        r2.set_batch(batch);
-    }
+    r2.set_batch(batch);
 
     let reqs: Vec<_> = vec![r1, r2]
         .into_iter()

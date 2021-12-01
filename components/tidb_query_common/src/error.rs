@@ -67,6 +67,12 @@ impl From<std::string::FromUtf8Error> for EvaluateError {
     }
 }
 
+impl From<serde_json::Error> for EvaluateError {
+    fn from(err: serde_json::Error) -> Self {
+        EvaluateError::Other(format!("invalid json value: {:?}", err))
+    }
+}
+
 impl ErrorCodeExt for EvaluateError {
     fn error_code(&self) -> ErrorCode {
         match self {

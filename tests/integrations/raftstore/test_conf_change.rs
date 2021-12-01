@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::*;
+use std::time::Duration;
 
 use futures::executor::block_on;
 
@@ -19,6 +19,7 @@ use raftstore::store::util::is_learner;
 use raftstore::Result;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -595,35 +596,20 @@ fn test_transfer_leader_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.disable_default_operator();
 
     let region_id = cluster.run_conf_change();
-    let cfg = cluster.cfg.clone();
     cluster.must_put(b"k1", b"v1");
 
     // Test adding nodes.
-    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
     pd_client.must_add_peer(region_id, new_peer(2, 2));
-    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     pd_client.must_add_peer(region_id, new_peer(3, 3));
+
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-    // transfer to all followers
-    let mut leader_id = cluster.leader_of_region(region_id).unwrap().get_id();
-    for peer in cluster.get_region(b"").get_peers() {
-        if peer.get_id() == leader_id {
-            continue;
-        }
-        cluster.transfer_leader(region_id, peer.clone());
-        cluster.reset_leader_of_region(region_id);
-        assert_ne!(
-            cluster.leader_of_region(region_id).unwrap().get_id(),
-            peer.get_id()
-        );
+
+    cluster.must_put(b"k2", b"v2");
+    for id in 1..=3 {
+        must_get_equal(&cluster.get_engine(id), b"k2", b"v2");
     }
 
-    // Test transfer leader after a safe duration.
-    thread::sleep(cfg.raft_store.raft_reject_transfer_leader_duration.into());
-    assert_eq!(
-        cluster.leader_of_region(region_id).unwrap().get_id(),
-        leader_id
-    );
+    // Any up-to-date follower can become leader.
     cluster.transfer_leader(region_id, new_peer(3, 3));
     // Retry for more stability
     for _ in 0..20 {
@@ -634,7 +620,7 @@ fn test_transfer_leader_safe<T: Simulator>(cluster: &mut Cluster<T>) {
         break;
     }
     assert_eq!(cluster.leader_of_region(region_id).unwrap().get_id(), 3);
-    leader_id = 3;
+    let leader_id = 3;
 
     // Cannot transfer when removed peer
     pd_client.must_remove_peer(region_id, new_peer(2, 2));
@@ -759,7 +745,6 @@ fn test_server_safe_conf_change() {
 fn test_server_transfer_leader_safe() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    configure_for_transfer_leader(&mut cluster);
     test_transfer_leader_safe(&mut cluster);
 }
 
@@ -944,5 +929,5 @@ fn test_conf_change_fast() {
     pd_client.must_add_peer(r1, new_learner_peer(2, 2));
     pd_client.must_add_peer(r1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
-    assert!(timer.elapsed() < Duration::from_secs(5));
+    assert!(timer.saturating_elapsed() < Duration::from_secs(5));
 }

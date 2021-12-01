@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::kv::WriteData;
@@ -7,8 +8,8 @@ use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{MvccTxn, SnapshotReader};
 use crate::storage::txn::actions::check_txn_status::*;
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
-    WriteResult,
+    Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
+    WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot, TxnStatus};
@@ -63,7 +64,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
     /// situation, `self.start_ts` is T2's `start_ts`, `caller_start_ts` is T1's `start_ts`, and
     /// the `current_ts` is literally the timestamp when this function is invoked; it may not be
     /// accurate.
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, mut context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut new_max_ts = self.lock_ts;
         if !self.current_ts.is_max() && self.current_ts > new_max_ts {
             new_max_ts = self.current_ts;
@@ -74,8 +75,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         context.concurrency_manager.update_max_ts(new_max_ts);
 
         let mut txn = MvccTxn::new(self.lock_ts, context.concurrency_manager);
-        let mut reader =
-            SnapshotReader::new(self.lock_ts, snapshot, !self.ctx.get_not_fill_cache());
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new(self.lock_ts, snapshot, !self.ctx.get_not_fill_cache()),
+            &mut context.statistics,
+        );
 
         fail_point!("check_txn_status", |err| Err(
             crate::storage::mvcc::Error::from(crate::storage::mvcc::txn::make_txn_error(
@@ -117,9 +120,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             released_locks.wake_up(context.lock_mgr);
         }
 
-        context.statistics.add(&reader.take_statistics());
         let pr = ProcessResult::TxnStatus { txn_status };
-        let write_data = WriteData::from_modifies(txn.into_modifies());
+        let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write: write_data,
@@ -140,10 +143,12 @@ pub mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::commands::{pessimistic_rollback, WriteCommand, WriteContext};
+    use crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT;
     use crate::storage::txn::tests::*;
     use crate::storage::{types::TxnStatus, ProcessResult, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+    use tikv_util::deadline::Deadline;
     use txn_types::Key;
     use txn_types::WriteType;
 
@@ -172,6 +177,7 @@ pub mod tests {
             rollback_if_not_exist,
             force_sync_commit,
             resolving_pessimistic_lock,
+            deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
         let result = command
             .process_write(
@@ -217,6 +223,7 @@ pub mod tests {
             rollback_if_not_exist,
             force_sync_commit,
             resolving_pessimistic_lock,
+            deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
         assert!(
             command
@@ -920,6 +927,7 @@ pub mod tests {
             1,
             /* min_commit_ts */ TimeStamp::zero(),
             /* max_commit_ts */ TimeStamp::zero(),
+            false,
         );
         must_success(
             &engine,
@@ -1041,6 +1049,7 @@ pub mod tests {
             1,
             /* min_commit_ts */ TimeStamp::zero(),
             /* max_commit_ts */ TimeStamp::zero(),
+            false,
         );
         must_success(
             &engine,

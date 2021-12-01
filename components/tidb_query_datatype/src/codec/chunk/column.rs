@@ -195,7 +195,7 @@ impl Column {
                             col.append_null();
                         }
                         Some(val) => {
-                            col.append_decimal(&val)?;
+                            col.append_decimal(val)?;
                         }
                     }
                 }
@@ -207,7 +207,7 @@ impl Column {
                             col.append_null();
                         }
                         Some(val) => {
-                            col.append_bytes(&val)?;
+                            col.append_bytes(val)?;
                         }
                     }
                 }

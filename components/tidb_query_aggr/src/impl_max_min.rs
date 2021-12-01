@@ -184,7 +184,7 @@ where
             return Ok(());
         }
 
-        if C::sort_compare(&self.extremum.as_ref().unwrap(), &value.as_ref().unwrap())? == E::ORD {
+        if C::sort_compare(self.extremum.as_ref().unwrap(), value.as_ref().unwrap())? == E::ORD {
             self.extremum = value.map(|x| x.into_owned_value());
         }
         Ok(())
@@ -257,11 +257,7 @@ where
 
         if value.is_some()
             && (self.extremum.is_none()
-                || extreme_ref
-                    .unwrap()
-                    .as_str()?
-                    .cmp(&value.unwrap().as_str()?)
-                    == E::ORD)
+                || extreme_ref.unwrap().as_str()?.cmp(value.unwrap().as_str()?) == E::ORD)
         {
             self.extremum = value.map(|x| x.into_owned_value());
         }
@@ -912,7 +908,7 @@ mod tests {
                     &mut ctx,
                     &src_schema,
                     columns,
-                    &logical_rows,
+                    logical_rows,
                     logical_rows.len(),
                 )
                 .unwrap();
@@ -929,7 +925,7 @@ mod tests {
                     &mut ctx,
                     &src_schema,
                     columns,
-                    &logical_rows,
+                    logical_rows,
                     logical_rows.len(),
                 )
                 .unwrap();

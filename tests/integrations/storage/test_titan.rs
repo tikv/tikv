@@ -165,7 +165,7 @@ fn test_delete_files_in_range_for_titan() {
     let kv_db_opts = cfg.rocksdb.build_opt();
     let kv_cfs_opts = cfg
         .rocksdb
-        .build_cf_opts(&cache, None, cfg.storage.enable_ttl);
+        .build_cf_opts(&cache, None, cfg.storage.api_version());
 
     let raft_path = path.path().join(Path::new("titan"));
     let engines = Engines::new(
@@ -410,7 +410,7 @@ fn test_delete_files_in_range_for_titan() {
     r.set_start_key(b"a".to_vec());
     r.set_end_key(b"z".to_vec());
     let snapshot = RegionSnapshot::<RocksSnapshot>::from_raw(engines1.kv, r);
-    let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
+    let mut scanner = ScannerBuilder::new(snapshot, 10.into())
         .range(Some(Key::from_raw(b"a")), None)
         .build()
         .unwrap();

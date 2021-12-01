@@ -244,7 +244,7 @@ mod tests {
             handle.delay(::std::time::Instant::now() + std::time::Duration::from_millis(100));
         let timer = Instant::now();
         block_on(delay.compat()).unwrap();
-        assert!(timer.elapsed() >= Duration::from_millis(100));
+        assert!(timer.saturating_elapsed() >= Duration::from_millis(100));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::mvcc::MvccReader;
 use crate::storage::txn::commands::{
     find_mvcc_infos_by_key, Command, CommandExt, ReadCommand, TypedCommand,
@@ -23,7 +24,7 @@ impl CommandExt for MvccByStartTs {
     ctx!();
     tag!(start_ts_mvcc);
     ts!(start_ts);
-    command_method!(readonly, bool, true);
+    property!(readonly);
 
     fn write_bytes(&self) -> usize {
         0

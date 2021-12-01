@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use engine_rocks::file_system::get_env as get_inspected_env;
+use engine_rocks::get_env;
 use engine_rocks::raw::DBOptions;
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
@@ -21,7 +21,7 @@ use txn_types::{Key, Value};
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
-    write_modifies, Callback, CbContext, Engine, Error, ErrorInner, ExtCallback,
+    write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner, ExtCallback,
     Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
 };
 
@@ -53,10 +53,8 @@ impl Runnable for Runner {
 
     fn run(&mut self, t: Task) {
         match t {
-            Task::Write(modifies, cb) => {
-                cb((CbContext::new(), write_modifies(&self.0.kv, modifies)))
-            }
-            Task::Snapshot(cb) => cb((CbContext::new(), Ok(Arc::new(self.0.kv.snapshot())))),
+            Task::Write(modifies, cb) => cb(write_modifies(&self.0.kv, modifies)),
+            Task::Snapshot(cb) => cb(Ok(Arc::new(self.0.kv.snapshot()))),
             Task::Pause(dur) => std::thread::sleep(dur),
         }
     }
@@ -103,8 +101,7 @@ impl RocksEngine {
         };
         let worker = Worker::new("engine-rocksdb");
         let mut db_opts = DBOptions::new();
-        let env = get_inspected_env(None, io_rate_limiter).unwrap();
-        db_opts.set_env(env);
+        db_opts.set_env(get_env(None /*key_manager*/, io_rate_limiter).unwrap());
         let db = Arc::new(engine_rocks::raw_util::new_engine(
             &path,
             Some(db_opts),
@@ -230,6 +227,7 @@ impl Engine for RocksEngine {
 
 impl Snapshot for Arc<RocksSnapshot> {
     type Iter = RocksEngineIterator;
+    type Ext<'a> = DummySnapshotExt;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get"; "key" => %key);
@@ -257,6 +255,10 @@ impl Snapshot for Arc<RocksSnapshot> {
     fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
         trace!("RocksSnapshot: create cf iterator");
         Ok(self.iterator_cf_opt(cf, iter_opt)?)
+    }
+
+    fn ext(&self) -> DummySnapshotExt {
+        DummySnapshotExt
     }
 }
 

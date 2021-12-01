@@ -117,7 +117,7 @@ pub fn locate_2_args_utf8<C: Collator>(substr: BytesRef, s: BytesRef) -> Result<
     let offset = if C::IS_CASE_INSENSITIVE {
         find_str(&s.to_lowercase(), &substr.to_lowercase())
     } else {
-        find_str(&s, &substr)
+        find_str(s, substr)
     };
     Ok(Some(offset.map_or(0, |i| 1 + i as i64)))
 }
@@ -146,7 +146,7 @@ pub fn locate_3_args_utf8<C: Collator>(
     let offset = if C::IS_CASE_INSENSITIVE {
         find_str(&s[start..].to_lowercase(), &substr.to_lowercase())
     } else {
-        find_str(&s[start..], &substr)
+        find_str(&s[start..], substr)
     };
     Ok(Some(offset.map_or(0, |i| pos + i as i64)))
 }
@@ -260,14 +260,14 @@ pub fn lpad(arg: BytesRef, len: &Int, pad: BytesRef, writer: BytesWriter) -> Res
             // Write full pads
             let num_pads = (target_len - arg.len()) / pad.len();
             for _ in 0..num_pads {
-                writer.partial_write(&pad);
+                writer.partial_write(pad);
             }
 
             // Write last incomplete pad (might be none)
             let last_pad_len = (target_len - arg.len()) % pad.len();
             writer.partial_write(&pad[..last_pad_len]);
 
-            writer.partial_write(&arg);
+            writer.partial_write(arg);
             Ok(writer.finish())
         }
     }
@@ -323,12 +323,12 @@ pub fn rpad(arg: BytesRef, len: &Int, pad: BytesRef, writer: BytesWriter) -> Res
         }
         Some(target_len) => {
             let mut writer = writer.begin();
-            writer.partial_write(&arg);
+            writer.partial_write(arg);
 
             // Write full pads
             let num_pads = (target_len - arg.len()) / pad.len();
             for _ in 0..num_pads {
-                writer.partial_write(&pad);
+                writer.partial_write(pad);
             }
 
             // Write last incomplete pad (might be none)
@@ -416,16 +416,16 @@ pub fn replace(
     if from_str.is_empty() {
         return Ok(writer.write_ref(Some(s)));
     }
-    let mut dest = Vec::with_capacity(s.len());
     let mut last = 0;
+    let mut writer = writer.begin();
     while let Some(mut start) = twoway::find_bytes(&s[last..], from_str) {
         start += last;
-        dest.extend_from_slice(&s[last..start]);
-        dest.extend_from_slice(to_str);
+        writer.partial_write(&s[last..start]);
+        writer.partial_write(to_str);
         last = start + from_str.len();
     }
-    dest.extend_from_slice(&s[last..]);
-    Ok(writer.write(Some(dest)))
+    writer.partial_write(&s[last..]);
+    Ok(writer.finish())
 }
 
 #[rpn_fn(writer)]
@@ -497,7 +497,7 @@ pub fn insert(
     }
     let mut ret = Vec::with_capacity(newstr.len() + s.len());
     ret.extend_from_slice(&s[0..upos - 1]);
-    ret.extend_from_slice(&newstr);
+    ret.extend_from_slice(newstr);
     ret.extend_from_slice(&s[upos + ulen - 1..]);
     Ok(writer.write(Some(ret)))
 }
@@ -527,7 +527,8 @@ pub fn right_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<Bytes
 #[inline]
 pub fn upper_utf8(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     let s = str::from_utf8(arg)?;
-    Ok(writer.write_ref(Some(s.to_uppercase().as_bytes())))
+    let res = s.chars().flat_map(char::to_uppercase);
+    Ok(writer.write_from_char_iter(res))
 }
 
 #[rpn_fn(writer)]
@@ -542,7 +543,8 @@ pub fn upper(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 #[inline]
 pub fn lower_utf8(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     let s = str::from_utf8(arg)?;
-    Ok(writer.write_ref(Some(s.to_lowercase().as_bytes())))
+    let res = s.chars().flat_map(char::to_lowercase);
+    Ok(writer.write_from_char_iter(res))
 }
 
 #[rpn_fn(writer)]
@@ -671,7 +673,7 @@ fn elt_validator(expr: &tipb::Expr) -> Result<()> {
     assert!(children.len() >= 2);
     super::function::validate_expr_return_type(&children[0], EvalType::Int)?;
     for child in children.iter().skip(1) {
-        super::function::validate_expr_return_type(&child, EvalType::Bytes)?;
+        super::function::validate_expr_return_type(child, EvalType::Bytes)?;
     }
     Ok(())
 }
@@ -711,7 +713,7 @@ pub fn substring_index(
     let mut remaining_pattern_count = count.abs();
     let mut bound = 0;
     while remaining_pattern_count > 0 {
-        if let Some(offset) = finder(&remaining, delim) {
+        if let Some(offset) = finder(remaining, delim) {
             if count > 0 {
                 bound += offset + delim.len();
                 remaining = &s[bound..];
@@ -750,7 +752,7 @@ pub fn strcmp<C: Collator>(left: BytesRef, right: BytesRef) -> Result<Option<i64
 #[rpn_fn]
 #[inline]
 pub fn instr(s: BytesRef, substr: BytesRef) -> Result<Option<Int>> {
-    Ok(twoway::find_bytes(&s, &substr)
+    Ok(twoway::find_bytes(s, substr)
         .map(|i| 1 + i as i64)
         .or(Some(0)))
 }

@@ -1,21 +1,24 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_traits::KvEngine;
 use pd_client::FeatureGate;
 use std::cmp::Ordering;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{mpsc, Arc};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
-use std::time::{Duration, Instant};
-use tikv_util::worker::FutureScheduler;
+use std::time::Duration;
+use tikv_util::time::Instant;
+use tikv_util::worker::Scheduler;
 use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
 
+use super::compaction_filter::is_compaction_filter_allowed;
 use super::config::GcWorkerConfigManager;
 use super::gc_worker::{sync_gc, GcSafePointProvider, GcTask};
-use super::{is_compaction_filter_allowed, Result};
+use super::Result;
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 10;
 
@@ -215,7 +218,7 @@ impl GcManagerHandle {
 /// Controls how GC runs automatically on the TiKV.
 /// It polls safe point periodically, and when the safe point is updated, `GcManager` will start to
 /// scan all regions (whose leader is on this TiKV), and does GC on all those regions.
-pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider> {
+pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider, E: KvEngine> {
     cfg: AutoGcConfig<S, R>,
 
     /// The current safe point. `GcManager` will try to update it periodically. When `safe_point` is
@@ -225,7 +228,7 @@ pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider> {
     safe_point_last_check_time: Instant,
 
     /// Used to schedule `GcTask`s.
-    worker_scheduler: FutureScheduler<GcTask>,
+    worker_scheduler: Scheduler<GcTask<E>>,
 
     /// Holds the running status. It will tell us if `GcManager` should stop working and exit.
     gc_manager_ctx: GcManagerContext,
@@ -234,14 +237,14 @@ pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider> {
     feature_gate: FeatureGate,
 }
 
-impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static> GcManager<S, R> {
+impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcManager<S, R, E> {
     pub fn new(
         cfg: AutoGcConfig<S, R>,
         safe_point: Arc<AtomicU64>,
-        worker_scheduler: FutureScheduler<GcTask>,
+        worker_scheduler: Scheduler<GcTask<E>>,
         cfg_tracker: GcWorkerConfigManager,
         feature_gate: FeatureGate,
-    ) -> GcManager<S, R> {
+    ) -> GcManager<S, R, E> {
         GcManager {
             cfg,
             safe_point,
@@ -488,7 +491,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static> GcManager<S, R> {
         need_rewind: &mut bool,
         end: &mut Option<Key>,
     ) {
-        if self.safe_point_last_check_time.elapsed() < self.cfg.poll_safe_point_interval
+        if self.safe_point_last_check_time.saturating_elapsed() < self.cfg.poll_safe_point_interval
             && !self.cfg.always_check_safe_point
         {
             // Skip this check.
@@ -616,6 +619,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static> GcManager<S, R> {
 mod tests {
     use super::*;
     use crate::storage::Callback;
+    use engine_rocks::RocksEngine;
     use kvproto::metapb;
     use raft::StateRole;
     use raftstore::coprocessor::Result as CopResult;
@@ -624,9 +628,9 @@ mod tests {
     use std::collections::BTreeMap;
     use std::mem;
     use std::sync::mpsc::{channel, Receiver, Sender};
-    use tikv_util::worker::{FutureRunnable, FutureWorker};
+    use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker, Runnable};
 
-    fn take_callback(t: &mut GcTask) -> Callback<()> {
+    fn take_callback(t: &mut GcTask<RocksEngine>) -> Callback<()> {
         let callback = match t {
             GcTask::Gc {
                 ref mut callback, ..
@@ -669,11 +673,13 @@ mod tests {
     }
 
     struct MockGcRunner {
-        tx: Sender<GcTask>,
+        tx: Sender<GcTask<RocksEngine>>,
     }
 
-    impl FutureRunnable<GcTask> for MockGcRunner {
-        fn run(&mut self, mut t: GcTask) {
+    impl Runnable for MockGcRunner {
+        type Task = GcTask<RocksEngine>;
+
+        fn run(&mut self, mut t: GcTask<RocksEngine>) {
             let cb = take_callback(&mut t);
             self.tx.send(t).unwrap();
             cb(Ok(()));
@@ -683,17 +689,17 @@ mod tests {
     /// A set of utilities that helps testing `GcManager`.
     /// The safe_point polling interval is set to 100 ms.
     struct GcManagerTestUtil {
-        gc_manager: Option<GcManager<MockSafePointProvider, MockRegionInfoProvider>>,
-        worker: FutureWorker<GcTask>,
+        gc_manager: Option<GcManager<MockSafePointProvider, MockRegionInfoProvider, RocksEngine>>,
+        worker: LazyWorker<GcTask<RocksEngine>>,
         safe_point_sender: Sender<TimeStamp>,
-        gc_task_receiver: Receiver<GcTask>,
+        gc_task_receiver: Receiver<GcTask<RocksEngine>>,
     }
 
     impl GcManagerTestUtil {
         pub fn new(regions: BTreeMap<Vec<u8>, RegionInfo>) -> Self {
-            let mut worker = FutureWorker::new("test-gc-worker");
             let (gc_task_sender, gc_task_receiver) = channel();
-            worker.start(MockGcRunner { tx: gc_task_sender }).unwrap();
+            let worker = WorkerBuilder::new("test-gc-manager").create();
+            let scheduler = worker.start("gc-manager", MockGcRunner { tx: gc_task_sender });
 
             let (safe_point_sender, safe_point_receiver) = channel();
 
@@ -710,20 +716,20 @@ mod tests {
             let gc_manager = GcManager::new(
                 cfg,
                 Arc::new(AtomicU64::new(0)),
-                worker.scheduler(),
+                scheduler,
                 GcWorkerConfigManager::default(),
                 Default::default(),
             );
             Self {
                 gc_manager: Some(gc_manager),
-                worker,
+                worker: worker.lazy_build("gc-manager"),
                 safe_point_sender,
                 gc_task_receiver,
             }
         }
 
         /// Collect `GcTask`s that `GcManager` tried to execute.
-        pub fn collect_scheduled_tasks(&self) -> Vec<GcTask> {
+        pub fn collect_scheduled_tasks(&self) -> Vec<GcTask<RocksEngine>> {
             self.gc_task_receiver.try_iter().collect()
         }
 
@@ -732,7 +738,7 @@ mod tests {
         }
 
         pub fn stop(&mut self) {
-            self.worker.stop().unwrap().join().unwrap();
+            self.worker.stop();
         }
     }
 

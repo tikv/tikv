@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::mvcc::{
     metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
     ErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
@@ -23,6 +24,11 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     fail_point!("acquire_pessimistic_lock", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
+
+    // Update max_ts for Insert operation to guarante linearizability and snapshot isolation
+    if should_not_exist {
+        txn.concurrency_manager.update_max_ts(for_update_ts);
+    }
 
     fn pessimistic_lock(
         primary: &[u8],
@@ -63,7 +69,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 None => OldValue::None,
             })
         } else {
-            reader.get_old_value(&key, for_update_ts, prev_write_loaded, prev_write)
+            reader.get_old_value(key, for_update_ts, prev_write_loaded, prev_write)
         }
     }
 
@@ -1007,5 +1013,70 @@ pub mod tests {
         old_value_random(key, require_old_value_none, tests);
         let require_old_value_none = true;
         old_value_random(key, require_old_value_none, tests_require_old_value_none);
+    }
+
+    #[test]
+    fn test_acquire_pessimistic_lock_should_not_exist() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (key, value) = (b"k", b"val");
+
+        // T1: start_ts = 3, commit_ts = 5, put key:value
+        must_succeed(&engine, key, key, 3, 3);
+        must_pessimistic_prewrite_put(&engine, key, value, key, 3, 3, true);
+        must_commit(&engine, key, 3, 5);
+
+        // T2: start_ts = 15, acquire pessimistic lock on k, with should_not_exist flag set.
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let min_commit_ts = TimeStamp::zero();
+        let cm = ConcurrencyManager::new(min_commit_ts);
+        let start_ts = TimeStamp::new(15);
+        let for_update_ts = TimeStamp::new(15);
+        let need_old_value = true;
+        let need_value = false;
+        let mut txn = MvccTxn::new(start_ts, cm.clone());
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+        let _res = acquire_pessimistic_lock(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(key),
+            key,
+            true,
+            0,
+            for_update_ts,
+            need_value,
+            min_commit_ts,
+            need_old_value,
+        )
+        .unwrap_err();
+
+        assert_eq!(cm.max_ts().into_inner(), 15);
+
+        // T3: start_ts = 8, commit_ts = max_ts + 1 = 16, prewrite a DELETE operation on k
+        must_succeed(&engine, key, key, 8, 8);
+        must_pessimistic_prewrite_delete(&engine, key, key, 8, 8, true);
+        must_commit(&engine, key, 8, cm.max_ts().into_inner() + 1);
+
+        // T1: start_ts = 10, repeatedly acquire pessimistic lock on k, with should_not_exist flag set
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let start_ts = TimeStamp::new(10);
+        let for_update_ts = TimeStamp::new(10);
+        let need_old_value = true;
+        let need_value = false;
+        let mut txn = MvccTxn::new(start_ts, cm);
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+        let _res = acquire_pessimistic_lock(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(key),
+            key,
+            true,
+            0,
+            for_update_ts,
+            need_value,
+            min_commit_ts,
+            need_old_value,
+        )
+        .unwrap_err();
     }
 }

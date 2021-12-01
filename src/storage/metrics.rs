@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::mem;
 
 use crate::server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerGcKeysDetail};
-use crate::storage::kv::{FlowStatsReporter, Statistics};
+use crate::storage::kv::{FlowStatsReporter, PerfStatisticsDelta, Statistics};
 use collections::HashMap;
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb;
@@ -20,6 +20,7 @@ use raftstore::store::ReadStats;
 struct StorageLocalMetrics {
     local_scan_details: HashMap<CommandKind, Statistics>,
     local_read_stats: ReadStats,
+    local_perf_stats: HashMap<CommandKind, PerfStatisticsDelta>,
 }
 
 thread_local! {
@@ -27,8 +28,18 @@ thread_local! {
         StorageLocalMetrics {
             local_scan_details: HashMap::default(),
             local_read_stats:ReadStats::default(),
+            local_perf_stats: HashMap::default(),
         }
     );
+}
+
+macro_rules! tls_flush_perf_stats {
+    ($tag:ident, $local_stats:ident, $stat:ident) => {
+        STORAGE_ROCKSDB_PERF_COUNTER_STATIC
+            .get($tag)
+            .$stat
+            .inc_by($local_stats.0.$stat as u64);
+    };
 }
 
 pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
@@ -52,6 +63,57 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
             let mut read_stats = ReadStats::default();
             mem::swap(&mut read_stats, &mut m.local_read_stats);
             reporter.report_read_stats(read_stats);
+        }
+
+        for (req_tag, perf_stats) in m.local_perf_stats.drain() {
+            tls_flush_perf_stats!(req_tag, perf_stats, user_key_comparison_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_cache_hit_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_read_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_read_byte);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_read_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_cache_index_hit_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, index_block_read_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_cache_filter_hit_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, filter_block_read_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_checksum_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_decompress_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, get_read_bytes);
+            tls_flush_perf_stats!(req_tag, perf_stats, iter_read_bytes);
+            tls_flush_perf_stats!(req_tag, perf_stats, internal_key_skipped_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, internal_delete_skipped_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, internal_recent_skipped_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, get_snapshot_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, get_from_memtable_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, get_from_memtable_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, get_post_process_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, get_from_output_files_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, seek_on_memtable_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, seek_on_memtable_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, next_on_memtable_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, prev_on_memtable_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, seek_child_seek_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, seek_child_seek_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, seek_min_heap_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, seek_max_heap_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, seek_internal_seek_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, db_mutex_lock_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, db_condition_wait_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, read_index_block_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, read_filter_block_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, new_table_block_iter_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, new_table_iterator_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_seek_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, find_table_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, bloom_memtable_hit_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, bloom_memtable_miss_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, bloom_sst_hit_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, bloom_sst_miss_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, get_cpu_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, iter_next_cpu_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, iter_prev_cpu_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, iter_seek_cpu_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, encrypt_data_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, decrypt_data_nanos);
         }
     });
 }
@@ -106,6 +168,15 @@ pub fn tls_collect_query_batch(
     });
 }
 
+pub fn tls_collect_perf_stats(cmd: CommandKind, perf_stats: &PerfStatisticsDelta) {
+    TLS_STORAGE_METRICS.with(|m| {
+        *(m.borrow_mut()
+            .local_perf_stats
+            .entry(cmd)
+            .or_insert_with(Default::default)) += *perf_stats;
+    })
+}
+
 make_auto_flush_static_metric! {
     pub label_enum CommandKind {
         get,
@@ -141,6 +212,7 @@ make_auto_flush_static_metric! {
         raw_get_key_ttl,
         raw_compare_and_swap,
         raw_atomic_store,
+        raw_checksum,
     }
 
     pub label_enum CommandStageKind {
@@ -196,6 +268,57 @@ make_auto_flush_static_metric! {
         unlocked,
     }
 
+    pub label_enum PerfMetric {
+        user_key_comparison_count,
+        block_cache_hit_count,
+        block_read_count,
+        block_read_byte,
+        block_read_time,
+        block_cache_index_hit_count,
+        index_block_read_count,
+        block_cache_filter_hit_count,
+        filter_block_read_count,
+        block_checksum_time,
+        block_decompress_time,
+        get_read_bytes,
+        iter_read_bytes,
+        internal_key_skipped_count,
+        internal_delete_skipped_count,
+        internal_recent_skipped_count,
+        get_snapshot_time,
+        get_from_memtable_time,
+        get_from_memtable_count,
+        get_post_process_time,
+        get_from_output_files_time,
+        seek_on_memtable_time,
+        seek_on_memtable_count,
+        next_on_memtable_count,
+        prev_on_memtable_count,
+        seek_child_seek_time,
+        seek_child_seek_count,
+        seek_min_heap_time,
+        seek_max_heap_time,
+        seek_internal_seek_time,
+        db_mutex_lock_nanos,
+        db_condition_wait_nanos,
+        read_index_block_nanos,
+        read_filter_block_nanos,
+        new_table_block_iter_nanos,
+        new_table_iterator_nanos,
+        block_seek_nanos,
+        find_table_nanos,
+        bloom_memtable_hit_count,
+        bloom_memtable_miss_count,
+        bloom_sst_hit_count,
+        bloom_sst_miss_count,
+        get_cpu_nanos,
+        iter_next_cpu_nanos,
+        iter_prev_cpu_nanos,
+        iter_seek_cpu_nanos,
+        encrypt_data_nanos,
+        decrypt_data_nanos,
+    }
+
     pub struct CommandScanDetails: LocalIntCounter {
         "req" => CommandKind,
         "cf" => GcKeysCF,
@@ -242,6 +365,11 @@ make_auto_flush_static_metric! {
     pub struct CheckMemLockHistogramVec: LocalHistogram {
         "type" => CommandKind,
         "result" => CheckMemLockResult,
+    }
+
+    pub struct PerfCounter: LocalIntCounter {
+        "req" => CommandKind,
+        "metric" => PerfMetric,
     }
 }
 
@@ -303,6 +431,82 @@ lazy_static! {
         "Total number of pending commands."
     )
     .unwrap();
+    pub static ref SCHED_WRITE_FLOW_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_write_flow",
+        "The write flow passed through at scheduler level."
+    )
+    .unwrap();
+    pub static ref SCHED_THROTTLE_FLOW_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_throttle_flow",
+        "The throttled write flow at scheduler level."
+    )
+    .unwrap();
+       pub static ref SCHED_L0_TARGET_FLOW_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_l0_target_flow",
+        "The target flow of L0."
+    )
+    .unwrap();
+
+    pub static ref SCHED_MEMTABLE_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_scheduler_memtable",
+        "The number of memtables.",
+        &["cf"]
+    )
+    .unwrap();
+    pub static ref SCHED_L0_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_scheduler_l0",
+        "The number of l0 files.",
+        &["cf"]
+    )
+    .unwrap();
+    pub static ref SCHED_L0_AVG_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_scheduler_l0_avg",
+        "The number of average l0 files.",
+        &["cf"]
+    )
+    .unwrap();
+    pub static ref SCHED_FLUSH_FLOW_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_scheduler_flush_flow",
+        "The speed of flush flow.",
+        &["cf"]
+    )
+    .unwrap();
+    pub static ref SCHED_L0_FLOW_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_scheduler_l0_flow",
+        "The speed of l0 compaction flow.",
+        &["cf"]
+    )
+    .unwrap();
+    pub static ref SCHED_THROTTLE_ACTION_COUNTER: IntCounterVec = {
+        register_int_counter_vec!(
+            "tikv_scheduler_throttle_action_total",
+            "Total number of actions for flow control.",
+            &["cf", "type"]
+        )
+        .unwrap()
+    };
+    pub static ref SCHED_DISCARD_RATIO_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_discard_ratio",
+        "The discard ratio for flow control."
+    )
+    .unwrap();
+    pub static ref SCHED_THROTTLE_CF_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_scheduler_throttle_cf",
+        "The CF being throttled.",
+        &["cf"]
+    ).unwrap();
+    pub static ref SCHED_PENDING_COMPACTION_BYTES_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_scheduler_pending_compaction_bytes",
+        "The number of pending compaction bytes.",
+        &["type"]
+    )
+    .unwrap();
+    pub static ref SCHED_THROTTLE_TIME: Histogram =
+        register_histogram!(
+            "tikv_scheduler_throttle_duration_seconds",
+            "Bucketed histogram of peer commits logs duration.",
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
     pub static ref SCHED_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_command_duration_seconds",
         "Bucketed histogram of command execution",
@@ -393,4 +597,14 @@ lazy_static! {
     .unwrap();
     pub static ref CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC: CheckMemLockHistogramVec =
         auto_flush_from!(CHECK_MEM_LOCK_DURATION_HISTOGRAM, CheckMemLockHistogramVec);
+
+    pub static ref STORAGE_ROCKSDB_PERF_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_storage_rocksdb_perf",
+        "Total number of RocksDB internal operations from PerfContext",
+        &["req", "metric"]
+    )
+    .unwrap();
+
+    pub static ref STORAGE_ROCKSDB_PERF_COUNTER_STATIC: PerfCounter =
+        auto_flush_from!(STORAGE_ROCKSDB_PERF_COUNTER, PerfCounter);
 }

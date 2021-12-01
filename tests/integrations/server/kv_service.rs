@@ -34,7 +34,7 @@ use tikv::import::SSTImporter;
 use tikv::server;
 use tikv::server::gc_worker::sync_gc;
 use tikv::server::service::{batch_commands_request, batch_commands_response};
-use tikv_util::worker::{dummy_scheduler, FutureWorker};
+use tikv_util::worker::{dummy_scheduler, LazyWorker};
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
@@ -242,12 +242,18 @@ fn test_rawkv_ttl() {
     std::thread::sleep(Duration::from_secs(1));
 
     let mut get_req = RawGetRequest::default();
-    get_req.set_context(ctx);
+    get_req.set_context(ctx.clone());
     get_req.key = k;
     let get_resp = client.raw_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(get_resp.error.is_empty());
     assert!(get_resp.value.is_empty());
+
+    // Can't run transaction commands with TTL enabled.
+    let mut prewrite_req = PrewriteRequest::default();
+    prewrite_req.set_context(ctx);
+    let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
+    assert!(!prewrite_resp.get_errors().is_empty());
 }
 
 #[test]
@@ -941,14 +947,14 @@ fn test_double_run_node() {
     let router = cluster.sim.rl().get_router(id).unwrap();
     let mut sim = cluster.sim.wl();
     let node = sim.get_node(id).unwrap();
-    let pd_worker = FutureWorker::new("test-pd-worker");
+    let pd_worker = LazyWorker::new("test-pd-worker");
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
-        Arc::new(SSTImporter::new(&ImportConfig::default(), dir, None).unwrap())
+        Arc::new(SSTImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
@@ -1147,7 +1153,7 @@ fn test_empty_commands() {
             }
         }
     });
-    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
 #[test]
@@ -1661,10 +1667,10 @@ fn test_forwarding_reconnect() {
     let mut req = RawGetRequest::default();
     req.set_context(ctx);
     // Large timeout value to ensure the error is from proxy instead of client.
-    let timer = std::time::Instant::now();
+    let timer = tikv_util::time::Instant::now();
     let timeout = Duration::from_secs(5);
     let res = client.raw_get_opt(&req, call_opt.clone().timeout(timeout));
-    let elapsed = timer.elapsed();
+    let elapsed = timer.saturating_elapsed();
     assert!(elapsed < timeout, "{:?}", elapsed);
     // Because leader server is shutdown, reconnecting has to be timeout.
     match res {
@@ -1705,16 +1711,16 @@ fn test_get_lock_wait_info_api() {
 
     let mut ctx1 = ctx.clone();
     ctx1.set_resource_group_tag(b"resource_group_tag1".to_vec());
-    must_kv_pessimistic_lock(&client, ctx1, b"a".to_vec(), 20);
+    kv_pessimistic_lock_with_ttl(&client, ctx1, vec![b"a".to_vec()], 20, 20, false, 5000);
     let mut ctx2 = ctx.clone();
     let handle = thread::spawn(move || {
         ctx2.set_resource_group_tag(b"resource_group_tag2".to_vec());
-        kv_pessimistic_lock_with_ttl(&client2, ctx2, vec![b"a".to_vec()], 30, 30, false, 1000);
+        kv_pessimistic_lock_with_ttl(&client2, ctx2, vec![b"a".to_vec()], 30, 30, false, 5000);
     });
 
     let mut entries = None;
-    for _retry in 0..100 {
-        thread::sleep(Duration::from_millis(10));
+    for _retry in 0..200 {
+        thread::sleep(Duration::from_millis(25));
         // The lock should be in waiting state here.
         let req = GetLockWaitInfoRequest::default();
         let resp = client.get_lock_wait_info(&req).unwrap();

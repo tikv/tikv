@@ -1,12 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{
     Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
 };
 use crate::storage::txn::commands::{
-    Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ReaderWithStats, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
+    WriteResult,
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot, TxnStatus};
@@ -41,11 +43,13 @@ impl CommandExt for TxnHeartBeat {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, mut context: WriteContext<'_, L>) -> Result<WriteResult> {
         // TxnHeartBeat never remove locks. No need to wake up waiters.
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
-        let mut reader =
-            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache());
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache()),
+            &mut context.statistics,
+        );
         fail_point!("txn_heart_beat", |err| Err(
             crate::storage::mvcc::Error::from(crate::storage::mvcc::txn::make_txn_error(
                 err,
@@ -64,7 +68,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
                 lock
             }
             _ => {
-                context.statistics.add(&reader.take_statistics());
                 return Err(MvccError::from(MvccErrorInner::TxnNotFound {
                     start_ts: self.start_ts,
                     key: self.primary_key.into_raw()?,
@@ -73,11 +76,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
             }
         };
 
-        context.statistics.add(&reader.take_statistics());
         let pr = ProcessResult::TxnStatus {
             txn_status: TxnStatus::uncommitted(lock, false),
         };
-        let write_data = WriteData::from_modifies(txn.into_modifies());
+        let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write: write_data,
@@ -97,10 +100,12 @@ pub mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::commands::WriteCommand;
+    use crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT;
     use crate::storage::txn::tests::*;
     use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+    use tikv_util::deadline::Deadline;
 
     pub fn must_success<E: Engine>(
         engine: &E,
@@ -118,6 +123,7 @@ pub mod tests {
             primary_key: Key::from_raw(primary_key),
             start_ts,
             advise_ttl,
+            deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
         let result = command
             .process_write(
@@ -157,6 +163,7 @@ pub mod tests {
             primary_key: Key::from_raw(primary_key),
             start_ts,
             advise_ttl,
+            deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
         assert!(
             command

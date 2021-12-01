@@ -6,15 +6,13 @@ use std::mem;
 use std::result::Result;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
 };
-use engine_rocks::{
-    RocksEngine, RocksMvccProperties, RocksUserCollectedPropertiesNoRc, RocksWriteBatch,
-};
+use engine_rocks::{RocksEngine, RocksMvccProperties, RocksWriteBatch};
 use engine_traits::{
     KvEngine, MiscExt, Mutable, MvccProperties, WriteBatch, WriteBatchExt, WriteOptions,
 };
@@ -22,7 +20,8 @@ use file_system::{IOType, WithIOType};
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use raftstore::coprocessor::RegionInfoProvider;
-use tikv_util::worker::FutureScheduler;
+use tikv_util::time::Instant;
+use tikv_util::worker::{ScheduleError, Scheduler};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use crate::server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager};
@@ -44,7 +43,7 @@ struct GcContext {
     safe_point: Arc<AtomicU64>,
     cfg_tracker: GcWorkerConfigManager,
     feature_gate: FeatureGate,
-    gc_scheduler: FutureScheduler<GcTask>,
+    gc_scheduler: Scheduler<GcTask<RocksEngine>>,
     region_info_provider: Arc<dyn RegionInfoProvider + 'static>,
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
@@ -63,9 +62,10 @@ lazy_static! {
     )
     .unwrap();
     // A counter for errors met by `WriteCompactionFilter`.
-    static ref GC_COMPACTION_FAILURE: IntCounter = register_int_counter!(
+    static ref GC_COMPACTION_FAILURE: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_failure",
-        "Compaction filter meets failure"
+        "Compaction filter meets failure",
+        &["type"]
     )
     .unwrap();
     // A counter for skip performing GC in compactions.
@@ -93,21 +93,30 @@ lazy_static! {
         "Compaction filter orphan versions for default CF",
         &["tag"]
     ).unwrap();
+
+    pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED: IntCounter = register_int_counter!(
+        "tikv_gc_compaction_filter_mvcc_deletion_handled",
+        "MVCC deletion from compaction filter handled"
+    )
+    .unwrap();
 }
 
-pub trait CompactionFilterInitializer {
+pub trait CompactionFilterInitializer<EK>
+where
+    EK: KvEngine,
+{
     fn init_compaction_filter(
         &self,
         store_id: u64,
         safe_point: Arc<AtomicU64>,
         cfg_tracker: GcWorkerConfigManager,
         feature_gate: FeatureGate,
-        gc_scheduler: FutureScheduler<GcTask>,
+        gc_scheduler: Scheduler<GcTask<EK>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
     );
 }
 
-impl<EK> CompactionFilterInitializer for EK
+impl<EK> CompactionFilterInitializer<EK> for EK
 where
     EK: KvEngine,
 {
@@ -117,21 +126,21 @@ where
         _safe_point: Arc<AtomicU64>,
         _cfg_tracker: GcWorkerConfigManager,
         _feature_gate: FeatureGate,
-        _gc_scheduler: FutureScheduler<GcTask>,
+        _gc_scheduler: Scheduler<GcTask<EK>>,
         _region_info_provider: Arc<dyn RegionInfoProvider>,
     ) {
         info!("Compaction filter is not supported for this engine.");
     }
 }
 
-impl CompactionFilterInitializer for RocksEngine {
+impl CompactionFilterInitializer<RocksEngine> for RocksEngine {
     fn init_compaction_filter(
         &self,
         store_id: u64,
         safe_point: Arc<AtomicU64>,
         cfg_tracker: GcWorkerConfigManager,
         feature_gate: FeatureGate,
-        gc_scheduler: FutureScheduler<GcTask>,
+        gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
     ) {
         info!("initialize GC context for compaction filter");
@@ -234,7 +243,7 @@ struct WriteCompactionFilter {
     encountered_errors: bool,
 
     write_batch: RocksWriteBatch,
-    gc_scheduler: FutureScheduler<GcTask>,
+    gc_scheduler: Scheduler<GcTask<RocksEngine>>,
     // A key batch which is going to be sent to the GC worker.
     mvcc_deletions: Vec<Key>,
     // The count of records covered the current mvcc-deletion mark. The mvcc-deletion
@@ -265,7 +274,7 @@ impl WriteCompactionFilter {
         engine: RocksEngine,
         safe_point: u64,
         context: &CompactionFilterContext,
-        gc_scheduler: FutureScheduler<GcTask>,
+        gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         regions_provider: (u64, Arc<dyn RegionInfoProvider>),
     ) -> Self {
         // Safe point must have been initialized.
@@ -306,10 +315,21 @@ impl WriteCompactionFilter {
 
     // `log_on_error` indicates whether to print an error log on scheduling failures.
     // It's only enabled for `GcTask::OrphanVersions`.
-    fn schedule_gc_task(&self, task: GcTask, log_on_error: bool) {
-        if let Err(e) = self.gc_scheduler.schedule(task) {
-            if log_on_error {
-                error!("compaction filter schedule {} fail", e.0);
+    fn schedule_gc_task(&self, task: GcTask<RocksEngine>, log_on_error: bool) {
+        match self.gc_scheduler.schedule(task) {
+            Ok(_) => {}
+            Err(e) => {
+                if log_on_error {
+                    error!("compaction filter schedule {} fail", e);
+                }
+                match e {
+                    ScheduleError::Full(_) => {
+                        GC_COMPACTION_FAILURE.with_label_values(&["full"]).inc();
+                    }
+                    ScheduleError::Stopped(_) => {
+                        GC_COMPACTION_FAILURE.with_label_values(&["stopped"]).inc();
+                    }
+                }
             }
         }
     }
@@ -492,7 +512,7 @@ struct CompactionFilterStats {
 impl CompactionFilterStats {
     fn need_report(&self) -> bool {
         self.versions.get() >= 1024 * 1024 // 1M versions.
-            || self.last_report.get().elapsed() >= Duration::from_secs(60)
+            || self.last_report.get().saturating_elapsed() >= Duration::from_secs(60)
     }
 
     fn prepare_report(&self) -> (usize, usize) {
@@ -535,7 +555,7 @@ impl Drop for WriteCompactionFilter {
 
         #[cfg(any(test, feature = "failpoints"))]
         for callback in &self.callbacks_on_drop {
-            callback(&self);
+            callback(self);
         }
     }
 }
@@ -558,7 +578,7 @@ impl CompactionFilter for WriteCompactionFilter {
             Ok(decision) => decision,
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
-                GC_COMPACTION_FAILURE.inc();
+                GC_COMPACTION_FAILURE.with_label_values(&["filter"]).inc();
                 self.encountered_errors = true;
                 CompactionFilterDecision::Keep
             }
@@ -631,10 +651,7 @@ fn check_need_gc(
     let (mut sum_props, mut needs_gc) = (MvccProperties::new(), 0);
     for i in 0..context.file_numbers().len() {
         let table_props = context.table_properties(i);
-        let user_props = unsafe {
-            &*(table_props.user_collected_properties() as *const _
-                as *const RocksUserCollectedPropertiesNoRc)
-        };
+        let user_props = table_props.user_collected_properties();
         if let Ok(props) = RocksMvccProperties::decode(user_props) {
             sum_props.add(&props);
             let (sst_needs_gc, skip_more_checks) = check_props(&props);
@@ -661,9 +678,9 @@ pub mod test_utils {
     use engine_rocks::util::get_cf_handle;
     use engine_rocks::RocksEngine;
     use engine_traits::{SyncMutable, CF_WRITE};
-    use futures::channel::mpsc::{unbounded, UnboundedReceiver};
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tikv_util::config::VersionTrack;
+    use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
 
     /// Do a global GC with the given safe point.
     pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
@@ -692,22 +709,23 @@ pub mod test_utils {
         pub start: Option<&'a [u8]>,
         pub end: Option<&'a [u8]>,
         pub target_level: Option<usize>,
-        pub gc_scheduler: FutureScheduler<GcTask>,
-        pub gc_receiver: UnboundedReceiver<Option<GcTask>>,
+        pub gc_scheduler: Scheduler<GcTask<RocksEngine>>,
+        pub gc_receiver: ReceiverWrapper<GcTask<RocksEngine>>,
         pub(super) callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
     }
 
     impl<'a> TestGCRunner<'a> {
         pub fn new(safe_point: u64) -> Self {
-            let (tx, rx) = unbounded();
+            let (gc_scheduler, gc_receiver) = dummy_scheduler();
+
             TestGCRunner {
                 safe_point,
                 ratio_threshold: None,
                 start: None,
                 end: None,
                 target_level: None,
-                gc_scheduler: FutureScheduler::new("test-gc-sched", tx),
-                gc_receiver: rx,
+                gc_scheduler,
+                gc_receiver,
                 callbacks_on_drop: vec![],
             }
         }
@@ -880,9 +898,10 @@ pub mod tests {
         let mut gc_and_check = |expect_tasks: bool, prefix: &[u8]| {
             gc_runner.safe_point(500).gc(&raw_engine);
 
-            if let Ok(Some(task)) = gc_runner.gc_receiver.try_next() {
+            // Wait up to 1 second, and treat as no task if timeout.
+            if let Ok(Some(task)) = gc_runner.gc_receiver.recv_timeout(Duration::new(1, 0)) {
                 assert!(expect_tasks, "a GC task is expected");
-                match task.unwrap() {
+                match task {
                     GcTask::GcKeys { keys, .. } => {
                         assert_eq!(keys.len(), 1);
                         let got = keys[0].as_encoded();

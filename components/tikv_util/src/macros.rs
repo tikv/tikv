@@ -2,70 +2,6 @@
 
 //! The macros crate contains all useful needed macros.
 
-/// Gets the count of macro's arguments.
-///
-/// # Examples
-///
-/// ```
-/// # #[macro_use] extern crate tikv_util;
-/// # fn main() {
-/// assert_eq!(count_args!(), 0);
-/// assert_eq!(count_args!(1), 1);
-/// assert_eq!(count_args!(1, 2), 2);
-/// assert_eq!(count_args!(1, 2, 3), 3);
-/// # }
-/// ```
-#[macro_export]
-macro_rules! count_args {
-    () => { 0 };
-    ($head:expr $(, $tail:expr)*) => { 1 + $crate::count_args!($($tail),*) };
-}
-
-/// Initializes a `HashMap` with specified key-value pairs.
-///
-/// # Examples
-///
-/// ```
-/// # #[macro_use] extern crate tikv_util;
-/// # fn main() {
-/// // empty map
-/// let m: tikv_util::collections::HashMap<u8, u8> = map!();
-/// assert!(m.is_empty());
-///
-/// // one initial kv pairs.
-/// let m = map!("key" => "value");
-/// assert_eq!(m.len(), 1);
-/// assert_eq!(m["key"], "value");
-///
-/// // initialize with multiple kv pairs.
-/// let m = map!("key1" => "value1", "key2" => "value2");
-/// assert_eq!(m.len(), 2);
-/// assert_eq!(m["key1"], "value1");
-/// assert_eq!(m["key2"], "value2");
-/// # }
-/// ```
-#[macro_export]
-macro_rules! map {
-    () => {
-        {
-            collections::HashMap::default()
-        }
-    };
-    ( $( $k:expr => $v:expr ),+ ) => {
-        {
-            let mut temp_map =
-                collections::HashMap::with_capacity_and_hasher(
-                    $crate::count_args!($(($k, $v)),+),
-                    Default::default()
-                );
-            $(
-                temp_map.insert($k, $v);
-            )+
-            temp_map
-        }
-    };
-}
-
 /// A shortcut to box an error.
 #[macro_export]
 macro_rules! box_err {
@@ -96,7 +32,7 @@ macro_rules! box_try {
 macro_rules! slow_log {
     (T $t:expr, $($arg:tt)*) => {{
         if $t.is_slow() {
-            warn!(#"slow_log_by_timer", $($arg)*; "takes" => $crate::logger::LogCost($crate::time::duration_to_ms($t.elapsed())));
+            warn!(#"slow_log_by_timer", $($arg)*; "takes" => $crate::logger::LogCost($crate::time::duration_to_ms($t.saturating_elapsed())));
         }
     }};
     ($n:expr, $($arg:tt)*) => {{

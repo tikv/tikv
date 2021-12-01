@@ -13,7 +13,7 @@ use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
 use crate::{
-    Callback as EngineCallback, CbContext, Engine, Error as EngineError,
+    Callback as EngineCallback, DummySnapshotExt, Engine, Error as EngineError,
     ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, Snapshot, WriteData,
 };
 
@@ -94,7 +94,7 @@ impl Engine for BTreeEngine {
         if batch.modifies.is_empty() {
             return Err(EngineError::from(EngineErrorInner::EmptyRequest));
         }
-        cb((CbContext::new(), write_modifies(&self, batch.modifies)));
+        cb(write_modifies(self, batch.modifies));
 
         Ok(())
     }
@@ -105,7 +105,7 @@ impl Engine for BTreeEngine {
         _ctx: SnapContext<'_>,
         cb: EngineCallback<Self::Snap>,
     ) -> EngineResult<()> {
-        cb((CbContext::new(), Ok(BTreeEngineSnapshot::new(&self))));
+        cb(Ok(BTreeEngineSnapshot::new(self)));
         Ok(())
     }
 }
@@ -226,6 +226,7 @@ impl Iterator for BTreeEngineIterator {
 
 impl Snapshot for BTreeEngineSnapshot {
     type Iter = BTreeEngineIterator;
+    type Ext<'a> = DummySnapshotExt;
 
     fn get(&self, key: &Key) -> EngineResult<Option<Value>> {
         self.get_cf(CF_DEFAULT, key)
@@ -249,6 +250,9 @@ impl Snapshot for BTreeEngineSnapshot {
     fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
         let tree = self.inner_engine.get_cf(cf);
         Ok(BTreeEngineIterator::new(tree, iter_opt))
+    }
+    fn ext(&self) -> DummySnapshotExt {
+        DummySnapshotExt
     }
 }
 

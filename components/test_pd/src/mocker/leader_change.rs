@@ -44,6 +44,12 @@ impl LeaderChange {
     }
 }
 
+impl Default for LeaderChange {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 const DEAD_ID: u64 = 1000;
 const DEAD_NAME: &str = "walking_dead";
 const DEAD_URL: &str = "127.0.0.1:65534";
@@ -72,7 +78,7 @@ impl PdMocker for LeaderChange {
     fn get_region_by_id(&self, _: &GetRegionByIdRequest) -> Option<Result<GetRegionResponse>> {
         let inner = self.inner.lock().unwrap();
         let now = Instant::now();
-        if now.duration_since(inner.r.ts) > LeaderChange::get_leader_interval() {
+        if now.saturating_duration_since(inner.r.ts) > LeaderChange::get_leader_interval() {
             return Some(Err("not leader".to_owned()));
         }
         Some(Ok(GetRegionResponse::default()))

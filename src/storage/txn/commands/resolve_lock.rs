@@ -1,11 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE};
+use crate::storage::mvcc::{
+    Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE,
+};
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, ResolveLockReadPhase, ResponsePolicy, TypedCommand,
-    WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ReaderWithStats, ReleasedLocks, ResolveLockReadPhase, ResponsePolicy,
+    TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::{cleanup, commit, Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, Snapshot};
@@ -47,9 +50,7 @@ command! {
 impl CommandExt for ResolveLock {
     ctx!();
     tag!(resolve_lock);
-
-    command_method!(readonly, bool, false);
-    command_method!(is_sys_cmd, bool, true);
+    property!(is_sys_cmd);
 
     fn write_bytes(&self) -> usize {
         self.key_locks
@@ -62,12 +63,18 @@ impl CommandExt for ResolveLock {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
-    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(
+        mut self,
+        snapshot: S,
+        mut context: WriteContext<'_, L>,
+    ) -> Result<WriteResult> {
         let (ctx, txn_status, key_locks) = (self.ctx, self.txn_status, self.key_locks);
 
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
-        let mut reader =
-            SnapshotReader::new(TimeStamp::zero(), snapshot, !ctx.get_not_fill_cache());
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new(TimeStamp::zero(), snapshot, !ctx.get_not_fill_cache()),
+            &mut context.statistics,
+        );
 
         let mut scan_key = self.scan_key.take();
         let rows = key_locks.len();
@@ -89,7 +96,18 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                     false,
                 )?
             } else if commit_ts > current_lock.ts {
-                commit(&mut txn, &mut reader, current_key.clone(), commit_ts)?
+                // Continue to resolve locks if the not found committed locks are pessimistic type.
+                // They could be left if the transaction is finally committed and pessimistic conflict
+                // retry happens during execution.
+                match commit(&mut txn, &mut reader, current_key.clone(), commit_ts) {
+                    Ok(res) => res,
+                    Err(MvccError(box MvccErrorInner::TxnLockNotFound { .. }))
+                        if current_lock.is_pessimistic_lock() =>
+                    {
+                        None
+                    }
+                    Err(err) => return Err(err.into()),
+                }
             } else {
                 return Err(Error::from(ErrorInner::InvalidTxnTso {
                     start_ts: current_lock.ts,
@@ -111,15 +129,21 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
             .into_iter()
             .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr));
 
-        context.statistics.add(&reader.take_statistics());
         let pr = if scan_key.is_none() {
             ProcessResult::Res
         } else {
+            let next_cmd = ResolveLockReadPhase {
+                ctx: ctx.clone(),
+                deadline: self.deadline,
+                txn_status,
+                scan_key,
+            };
             ProcessResult::NextCommand {
-                cmd: ResolveLockReadPhase::new(txn_status, scan_key.take(), ctx.clone()).into(),
+                cmd: Command::ResolveLockReadPhase(next_cmd),
             }
         };
-        let write_data = WriteData::from_modifies(txn.into_modifies());
+        let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx,
             to_be_write: write_data,

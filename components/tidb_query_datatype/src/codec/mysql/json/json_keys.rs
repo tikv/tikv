@@ -30,7 +30,7 @@ impl<'a> JsonRef<'a> {
                 None => Ok(None),
             }
         } else {
-            json_keys(&self)
+            json_keys(self)
         }
     }
 }

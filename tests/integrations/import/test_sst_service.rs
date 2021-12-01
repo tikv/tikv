@@ -1,10 +1,11 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures::executor::block_on;
+use futures::stream::StreamExt;
 use tempfile::Builder;
 
 use kvproto::import_sstpb::*;
-use kvproto::kvrpcpb::*;
+use kvproto::kvrpcpb::Context;
 use kvproto::tikvpb::*;
 
 use super::util::*;
@@ -332,4 +333,64 @@ fn test_ingest_multiple_sst() {
     // Check ingested kvs
     check_ingested_kvs(&tikv, &ctx, sst_range1);
     check_ingested_kvs_cf(&tikv, &ctx, "write", sst_range2);
+}
+
+#[test]
+fn test_duplicate_and_close() {
+    let (_cluster, ctx, _, import) = new_cluster_and_tikv_import_client();
+    let mut req = SwitchModeRequest::default();
+    req.set_mode(SwitchMode::Import);
+    import.switch_mode(&req).unwrap();
+
+    let data_count: u64 = 4096;
+    for commit_ts in 0..4 {
+        let mut meta = new_sst_meta(0, 0);
+        meta.set_region_id(ctx.get_region_id());
+        meta.set_region_epoch(ctx.get_region_epoch().clone());
+
+        let mut keys = vec![];
+        let mut values = vec![];
+        for i in 1000..data_count {
+            let key = i.to_string();
+            keys.push(key.as_bytes().to_vec());
+            values.push(key.as_bytes().to_vec());
+        }
+        let resp = send_write_sst(&import, &meta, keys, values, commit_ts).unwrap();
+        for m in resp.metas.into_iter() {
+            let mut ingest = IngestRequest::default();
+            ingest.set_context(ctx.clone());
+            ingest.set_sst(m.clone());
+            let resp = import.ingest(&ingest).unwrap();
+            assert!(!resp.has_error());
+        }
+    }
+
+    let mut duplicate = DuplicateDetectRequest::default();
+    duplicate.set_context(ctx.clone());
+    duplicate.set_start_key((0 as u64).to_string().as_bytes().to_vec());
+    let mut stream = import.duplicate_detect(&duplicate).unwrap();
+    let ret = block_on(async move {
+        let mut ret: Vec<KvPair> = vec![];
+        while let Some(resp) = stream.next().await {
+            match resp {
+                Ok(mut resp) => {
+                    if resp.has_key_error() {
+                        break;
+                    } else if resp.has_region_error() {
+                        break;
+                    }
+                    let pairs = resp.take_pairs();
+                    ret.append(&mut pairs.into());
+                }
+                Err(e) => {
+                    println!("receive error: {:?}", e);
+                    break;
+                }
+            }
+        }
+        ret
+    });
+    assert_eq!(ret.len(), (data_count - 1000) as usize * 4);
+    req.set_mode(SwitchMode::Normal);
+    import.switch_mode(&req).unwrap();
 }

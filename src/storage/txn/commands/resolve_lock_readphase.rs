@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::mvcc::MvccReader;
 use crate::storage::txn::commands::{Command, CommandExt, ReadCommand, ResolveLock, TypedCommand};
 use crate::storage::txn::sched_pool::tls_collect_keyread_histogram_vec;
@@ -27,8 +28,12 @@ command! {
 impl CommandExt for ResolveLockReadPhase {
     ctx!();
     tag!(resolve_lock);
-    command_method!(readonly, bool, true);
-    command_method!(write_bytes, usize, 0);
+    property!(readonly);
+
+    fn write_bytes(&self) -> usize {
+        0
+    }
+
     gen_lock!(empty);
 }
 
@@ -58,8 +63,15 @@ impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
                 // All locks are scanned
                 None
             };
+            let next_cmd = ResolveLock {
+                ctx,
+                deadline: self.deadline,
+                txn_status,
+                scan_key: next_scan_key,
+                key_locks: kv_pairs,
+            };
             Ok(ProcessResult::NextCommand {
-                cmd: ResolveLock::new(txn_status, next_scan_key, kv_pairs, ctx).into(),
+                cmd: Command::ResolveLock(next_cmd),
             })
         }
     }

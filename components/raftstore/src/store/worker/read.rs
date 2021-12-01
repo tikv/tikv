@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::cell::Cell;
 use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,7 +22,7 @@ use crate::errors::RAFTSTORE_IS_BUSY;
 use crate::store::util::{self, LeaseState, RegionReadProgress, RemoteLease};
 use crate::store::{
     cmd_resp, Callback, Peer, ProposalRouter, RaftCommand, ReadResponse, RegionSnapshot,
-    RequestInspector, RequestPolicy,
+    RequestInspector, RequestPolicy, TxnExt,
 };
 use crate::Error;
 use crate::Result;
@@ -39,6 +40,7 @@ use crate::store::fsm::store::StoreMeta;
 pub trait ReadExecutor<E: KvEngine> {
     fn get_engine(&self) -> &E;
     fn get_snapshot(&mut self, ts: Option<ThreadReadId>) -> Arc<E::Snapshot>;
+
     fn get_value(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
@@ -148,7 +150,7 @@ pub struct ReadDelegate {
 
     pub tag: String,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-    pub max_ts_sync_status: Arc<AtomicU64>,
+    pub txn_ext: Arc<TxnExt>,
     pub read_progress: Arc<RegionReadProgress>,
 
     // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
@@ -196,6 +198,12 @@ impl TrackVer {
     }
 }
 
+impl Default for TrackVer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Clone for TrackVer {
     fn clone(&self) -> Self {
         TrackVer {
@@ -220,7 +228,7 @@ impl ReadDelegate {
             last_valid_ts: Timespec::new(0, 0),
             tag: format!("[region {}] {}", region_id, peer_id),
             txn_extra_op: peer.txn_extra_op.clone(),
-            max_ts_sync_status: peer.max_ts_sync_status.clone(),
+            txn_ext: peer.txn_ext.clone(),
             read_progress: peer.read_progress.clone(),
             track_ver: TrackVer::new(),
         }
@@ -588,13 +596,14 @@ where
                             cb.invoke_read(resp);
                             return;
                         }
+                        self.metrics.local_executed_stale_read_requests += 1;
                         response
                     }
                     _ => unreachable!(),
                 };
                 cmd_resp::bind_term(&mut response.response, delegate.term);
                 if let Some(snap) = response.snapshot.as_mut() {
-                    snap.max_ts_sync_status = Some(delegate.max_ts_sync_status.clone());
+                    snap.txn_ext = Some(delegate.txn_ext.clone());
                 }
                 response.txn_extra_op = delegate.txn_extra_op.load();
                 cb.invoke_read(response);
@@ -603,7 +612,7 @@ where
             Ok(None) => self.redirect(RaftCommand::new(req, cb)),
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
-                if let Some(ref delegate) = self.delegates.get(&req.get_header().get_region_id()) {
+                if let Some(delegate) = self.delegates.get(&req.get_header().get_region_id()) {
                     cmd_resp::bind_term(&mut response, delegate.term);
                 }
                 cb.invoke_read(ReadResponse {
@@ -696,6 +705,7 @@ const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 #[derive(Clone)]
 struct ReadMetrics {
     local_executed_requests: u64,
+    local_executed_stale_read_requests: u64,
     local_executed_snapshot_cache_hit: u64,
     // TODO: record rejected_by_read_quorum.
     rejected_by_store_id_mismatch: u64,
@@ -717,6 +727,7 @@ impl Default for ReadMetrics {
     fn default() -> ReadMetrics {
         ReadMetrics {
             local_executed_requests: 0,
+            local_executed_stale_read_requests: 0,
             local_executed_snapshot_cache_hit: 0,
             rejected_by_store_id_mismatch: 0,
             rejected_by_peer_id_mismatch: 0,
@@ -736,7 +747,9 @@ impl Default for ReadMetrics {
 
 impl ReadMetrics {
     pub fn maybe_flush(&mut self) {
-        if self.last_flush_time.elapsed() >= Duration::from_millis(METRICS_FLUSH_INTERVAL) {
+        if self.last_flush_time.saturating_elapsed()
+            >= Duration::from_millis(METRICS_FLUSH_INTERVAL)
+        {
             self.flush();
             self.last_flush_time = Instant::now();
         }
@@ -806,6 +819,10 @@ impl ReadMetrics {
         if self.local_executed_requests > 0 {
             LOCAL_READ_EXECUTED_REQUESTS.inc_by(self.local_executed_requests);
             self.local_executed_requests = 0;
+        }
+        if self.local_executed_stale_read_requests > 0 {
+            LOCAL_READ_EXECUTED_STALE_READ_REQUESTS.inc_by(self.local_executed_stale_read_requests);
+            self.local_executed_stale_read_requests = 0;
         }
     }
 }
@@ -949,7 +966,7 @@ mod tests {
                 leader_lease: Some(remote),
                 last_valid_ts: Timespec::new(0, 0),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
-                max_ts_sync_status: Arc::new(AtomicU64::new(0)),
+                txn_ext: Arc::new(TxnExt::default()),
                 read_progress: read_progress.clone(),
                 track_ver: TrackVer::new(),
             };
@@ -1190,7 +1207,7 @@ mod tests {
                 leader_lease: None,
                 last_valid_ts: Timespec::new(0, 0),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
-                max_ts_sync_status: Arc::new(AtomicU64::new(0)),
+                txn_ext: Arc::new(TxnExt::default()),
                 track_ver: TrackVer::new(),
                 read_progress: Arc::new(RegionReadProgress::new(&region, 0, 0, "".to_owned())),
             };

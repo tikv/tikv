@@ -2,9 +2,8 @@
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-
+use std::mem;
 use std::sync::Arc;
-use std::time::Instant;
 
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
@@ -24,6 +23,8 @@ use tidb_query_executors::{
     interface::BatchExecutor, runner::MAX_TIME_SLICE, BatchTableScanExecutor,
 };
 use tidb_query_expr::BATCH_MAX_SIZE;
+use tikv_alloc::trace::{MemoryTraceGuard, TraceEvent};
+use tikv_util::time::Instant;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use yatp::task::future::reschedule;
 
@@ -31,6 +32,7 @@ use super::cmsketch::CmSketch;
 use super::fmsketch::FmSketch;
 use super::histogram::Histogram;
 use crate::coprocessor::dag::TiKVStorage;
+use crate::coprocessor::MEMTRACE_ANALYZE;
 use crate::coprocessor::*;
 use crate::storage::{Snapshot, SnapshotStore, Statistics};
 
@@ -59,6 +61,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
             req_ctx.bypass_locks.clone(),
+            req_ctx.access_locks.clone(),
             false,
         );
         Ok(Self {
@@ -100,7 +103,6 @@ impl<S: Snapshot> AnalyzeContext<S> {
 
     async fn handle_full_sampling(builder: &mut RowSampleBuilder<S>) -> Result<Vec<u8>> {
         let sample_res = builder.collect_column_stats().await?;
-
         let res_data = {
             let res = sample_res.into_proto();
             box_try!(res.write_to_bytes())
@@ -137,7 +139,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         while let Some((key, _)) = scanner.next()? {
             row_count += 1;
             if row_count >= BATCH_MAX_SIZE {
-                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
                     reschedule().await;
                     time_slice_start = Instant::now();
                 }
@@ -210,7 +212,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
 
 #[async_trait]
 impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
-    async fn handle_request(&mut self) -> Result<Response> {
+    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
                 let req = self.req.take_idx_req();
@@ -274,14 +276,15 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
         };
         match ret {
             Ok(data) => {
+                let memory_size = data.capacity();
                 let mut resp = Response::default();
                 resp.set_data(data);
-                Ok(resp)
+                Ok(MEMTRACE_ANALYZE.trace_guard(resp, memory_size))
             }
             Err(Error::Other(e)) => {
                 let mut resp = Response::default();
                 resp.set_other_error(e);
-                Ok(resp)
+                Ok(resp.into())
             }
             Err(e) => Err(e),
         }
@@ -298,6 +301,7 @@ struct RowSampleBuilder<S: Snapshot> {
 
     max_sample_size: usize,
     max_fm_sketch_size: usize,
+    sample_rate: f64,
     columns_info: Vec<tipb::ColumnInfo>,
     column_groups: Vec<tipb::AnalyzeColumnGroup>,
 }
@@ -327,9 +331,25 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             data: table_scanner,
             max_sample_size: req.get_sample_size() as usize,
             max_fm_sketch_size: req.get_sketch_size() as usize,
+            sample_rate: req.get_sample_rate(),
             columns_info,
             column_groups: req.take_column_groups().into(),
         })
+    }
+
+    fn new_collector(&mut self) -> Box<dyn RowSampleCollector> {
+        if self.max_sample_size > 0 {
+            return Box::new(ReservoirRowSampleCollector::new(
+                self.max_sample_size,
+                self.max_fm_sketch_size,
+                self.columns_info.len() + self.column_groups.len(),
+            ));
+        }
+        Box::new(BernoulliRowSampleCollector::new(
+            self.sample_rate,
+            self.max_fm_sketch_size,
+            self.columns_info.len() + self.column_groups.len(),
+        ))
     }
 
     async fn collect_column_stats(&mut self) -> Result<AnalyzeSamplingResult> {
@@ -337,13 +357,9 @@ impl<S: Snapshot> RowSampleBuilder<S> {
 
         let mut is_drained = false;
         let mut time_slice_start = Instant::now();
-        let mut collector = RowSampleCollector::new(
-            self.max_sample_size,
-            self.max_fm_sketch_size,
-            self.columns_info.len() + self.column_groups.len(),
-        );
+        let mut collector = self.new_collector();
         while !is_drained {
-            let time_slice_elapsed = time_slice_start.elapsed();
+            let time_slice_elapsed = time_slice_start.saturating_elapsed();
             if time_slice_elapsed > MAX_TIME_SLICE {
                 reschedule().await;
                 time_slice_start = Instant::now();
@@ -387,7 +403,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                     }
                     column_vals.push(val);
                 }
-                collector.count += 1;
+                collector.mut_base().count += 1;
                 collector.collect_column_group(
                     &column_vals,
                     &collation_key_vals,
@@ -401,51 +417,71 @@ impl<S: Snapshot> RowSampleBuilder<S> {
     }
 }
 
+trait RowSampleCollector: Send {
+    fn mut_base(&mut self) -> &mut BaseRowSampleCollector;
+    fn collect_column_group(
+        &mut self,
+        columns_val: &[Vec<u8>],
+        collation_keys_val: &[Vec<u8>],
+        columns_info: &[tipb::ColumnInfo],
+        column_groups: &[tipb::AnalyzeColumnGroup],
+    );
+    fn collect_column(
+        &mut self,
+        columns_val: Vec<Vec<u8>>,
+        collation_keys_val: Vec<Vec<u8>>,
+        columns_info: &[tipb::ColumnInfo],
+    );
+    fn sampling(&mut self, data: Vec<Vec<u8>>);
+    fn to_proto(&mut self) -> tipb::RowSampleCollector;
+    fn get_reported_memory_usage(&mut self) -> usize {
+        self.mut_base().reported_memory_usage
+    }
+    fn get_memory_usage(&mut self) -> usize {
+        self.mut_base().memory_usage
+    }
+}
+
 #[derive(Clone)]
-struct RowSampleCollector {
-    samples: BinaryHeap<Reverse<(i64, Vec<Vec<u8>>)>>,
+struct BaseRowSampleCollector {
     null_count: Vec<i64>,
     count: u64,
-    max_sample_size: usize,
     fm_sketches: Vec<FmSketch>,
     rng: StdRng,
     total_sizes: Vec<i64>,
     row_buf: Vec<u8>,
+    memory_usage: usize,
+    reported_memory_usage: usize,
 }
 
-impl Default for RowSampleCollector {
+impl Default for BaseRowSampleCollector {
     fn default() -> Self {
-        RowSampleCollector {
-            samples: BinaryHeap::new(),
+        BaseRowSampleCollector {
             null_count: vec![],
             count: 0,
-            max_sample_size: 0,
             fm_sketches: vec![],
             rng: StdRng::from_entropy(),
             total_sizes: vec![],
             row_buf: Vec::new(),
+            memory_usage: 0,
+            reported_memory_usage: 0,
         }
     }
 }
 
-impl RowSampleCollector {
-    fn new(
-        max_sample_size: usize,
-        max_fm_sketch_size: usize,
-        col_and_group_len: usize,
-    ) -> RowSampleCollector {
-        RowSampleCollector {
-            samples: BinaryHeap::new(),
+impl BaseRowSampleCollector {
+    fn new(max_fm_sketch_size: usize, col_and_group_len: usize) -> BaseRowSampleCollector {
+        BaseRowSampleCollector {
             null_count: vec![0; col_and_group_len],
             count: 0,
-            max_sample_size,
             fm_sketches: vec![FmSketch::new(max_fm_sketch_size); col_and_group_len],
             rng: StdRng::from_entropy(),
             total_sizes: vec![0; col_and_group_len],
             row_buf: Vec::new(),
+            memory_usage: 0,
+            reported_memory_usage: 0,
         }
     }
-
     pub fn collect_column_group(
         &mut self,
         columns_val: &[Vec<u8>],
@@ -485,7 +521,7 @@ impl RowSampleCollector {
 
     pub fn collect_column(
         &mut self,
-        columns_val: Vec<Vec<u8>>,
+        columns_val: &[Vec<u8>],
         collation_keys_val: Vec<Vec<u8>>,
         columns_info: &[tipb::ColumnInfo],
     ) {
@@ -501,26 +537,203 @@ impl RowSampleCollector {
             }
             self.total_sizes[i] += columns_val[i].len() as i64;
         }
+    }
+
+    pub fn fill_proto(&mut self, proto_collector: &mut tipb::RowSampleCollector) {
+        proto_collector.set_null_counts(self.null_count.clone());
+        proto_collector.set_count(self.count as i64);
+        let pb_fm_sketches = mem::take(&mut self.fm_sketches)
+            .into_iter()
+            .map(|fm_sketch| fm_sketch.into_proto())
+            .collect();
+        proto_collector.set_fm_sketch(pb_fm_sketches);
+        proto_collector.set_total_size(self.total_sizes.clone());
+    }
+
+    fn report_memory_usage(&mut self, on_finish: bool) {
+        let diff = self.memory_usage as isize - self.reported_memory_usage as isize;
+        if on_finish || diff.abs() > 1024 * 1024 {
+            let event = if diff >= 0 {
+                TraceEvent::Add(diff as usize)
+            } else {
+                TraceEvent::Sub(-diff as usize)
+            };
+            MEMTRACE_ANALYZE.trace(event);
+            self.reported_memory_usage = self.memory_usage;
+        }
+    }
+}
+
+#[derive(Clone)]
+struct BernoulliRowSampleCollector {
+    base: BaseRowSampleCollector,
+    samples: Vec<Vec<Vec<u8>>>,
+    sample_rate: f64,
+}
+
+impl BernoulliRowSampleCollector {
+    fn new(
+        sample_rate: f64,
+        max_fm_sketch_size: usize,
+        col_and_group_len: usize,
+    ) -> BernoulliRowSampleCollector {
+        BernoulliRowSampleCollector {
+            base: BaseRowSampleCollector::new(max_fm_sketch_size, col_and_group_len),
+            samples: Vec::new(),
+            sample_rate,
+        }
+    }
+}
+
+impl Default for BernoulliRowSampleCollector {
+    fn default() -> Self {
+        BernoulliRowSampleCollector {
+            base: Default::default(),
+            samples: Vec::new(),
+            sample_rate: 0.0,
+        }
+    }
+}
+
+impl RowSampleCollector for BernoulliRowSampleCollector {
+    fn mut_base(&mut self) -> &mut BaseRowSampleCollector {
+        &mut self.base
+    }
+    fn collect_column_group(
+        &mut self,
+        columns_val: &[Vec<u8>],
+        collation_keys_val: &[Vec<u8>],
+        columns_info: &[tipb::ColumnInfo],
+        column_groups: &[tipb::AnalyzeColumnGroup],
+    ) {
+        self.base.collect_column_group(
+            columns_val,
+            collation_keys_val,
+            columns_info,
+            column_groups,
+        );
+    }
+    fn collect_column(
+        &mut self,
+        columns_val: Vec<Vec<u8>>,
+        collation_keys_val: Vec<Vec<u8>>,
+        columns_info: &[tipb::ColumnInfo],
+    ) {
+        self.base
+            .collect_column(&columns_val, collation_keys_val, columns_info);
+        self.sampling(columns_val);
+    }
+    fn sampling(&mut self, data: Vec<Vec<u8>>) {
+        let cur_rng = self.base.rng.gen_range(0.0, 1.0);
+        if cur_rng >= self.sample_rate {
+            return;
+        }
+        self.base.memory_usage += data.iter().map(|x| x.capacity()).sum::<usize>();
+        self.base.report_memory_usage(false);
+        self.samples.push(data);
+    }
+    fn to_proto(&mut self) -> tipb::RowSampleCollector {
+        self.base.memory_usage = 0;
+        self.base.report_memory_usage(true);
+        let mut s = tipb::RowSampleCollector::default();
+        let samples = mem::take(&mut self.samples)
+            .into_iter()
+            .map(|row| {
+                let mut pb_sample = tipb::RowSample::default();
+                pb_sample.set_row(row.into());
+                pb_sample
+            })
+            .collect();
+        s.set_samples(samples);
+        self.base.fill_proto(&mut s);
+        s
+    }
+}
+
+#[derive(Clone)]
+struct ReservoirRowSampleCollector {
+    base: BaseRowSampleCollector,
+    samples: BinaryHeap<Reverse<(i64, Vec<Vec<u8>>)>>,
+    max_sample_size: usize,
+}
+
+impl Default for ReservoirRowSampleCollector {
+    fn default() -> Self {
+        ReservoirRowSampleCollector {
+            base: Default::default(),
+            samples: BinaryHeap::new(),
+            max_sample_size: 0,
+        }
+    }
+}
+
+impl ReservoirRowSampleCollector {
+    fn new(
+        max_sample_size: usize,
+        max_fm_sketch_size: usize,
+        col_and_group_len: usize,
+    ) -> ReservoirRowSampleCollector {
+        ReservoirRowSampleCollector {
+            base: BaseRowSampleCollector::new(max_fm_sketch_size, col_and_group_len),
+            samples: BinaryHeap::new(),
+            max_sample_size,
+        }
+    }
+}
+
+impl RowSampleCollector for ReservoirRowSampleCollector {
+    fn mut_base(&mut self) -> &mut BaseRowSampleCollector {
+        &mut self.base
+    }
+    fn collect_column_group(
+        &mut self,
+        columns_val: &[Vec<u8>],
+        collation_keys_val: &[Vec<u8>],
+        columns_info: &[tipb::ColumnInfo],
+        column_groups: &[tipb::AnalyzeColumnGroup],
+    ) {
+        self.base.collect_column_group(
+            columns_val,
+            collation_keys_val,
+            columns_info,
+            column_groups,
+        );
+    }
+
+    fn collect_column(
+        &mut self,
+        columns_val: Vec<Vec<u8>>,
+        collation_keys_val: Vec<Vec<u8>>,
+        columns_info: &[tipb::ColumnInfo],
+    ) {
+        self.base
+            .collect_column(&columns_val, collation_keys_val, columns_info);
         self.sampling(columns_val);
     }
 
-    pub fn sampling(&mut self, data: Vec<Vec<u8>>) {
-        let cur_rng = self.rng.gen_range(0, i64::MAX);
+    fn sampling(&mut self, data: Vec<Vec<u8>>) {
+        let mut need_push = false;
+        let cur_rng = self.base.rng.gen_range(0, i64::MAX);
         if self.samples.len() < self.max_sample_size {
-            self.samples.push(Reverse((cur_rng, data)));
-            return;
+            need_push = true;
+        } else if self.samples.peek().unwrap().0.0 < cur_rng {
+            need_push = true;
+            let (_, evicted) = self.samples.pop().unwrap().0;
+            self.base.memory_usage -= evicted.iter().map(|x| x.capacity()).sum::<usize>();
         }
-        if self.samples.len() == self.max_sample_size && self.samples.peek().unwrap().0.0 < cur_rng
-        {
-            self.samples.pop();
+
+        if need_push {
+            self.base.memory_usage += data.iter().map(|x| x.capacity()).sum::<usize>();
             self.samples.push(Reverse((cur_rng, data)));
+            self.base.report_memory_usage(false);
         }
     }
 
-    pub fn into_proto(self) -> tipb::RowSampleCollector {
+    fn to_proto(&mut self) -> tipb::RowSampleCollector {
+        self.base.memory_usage = 0;
+        self.base.report_memory_usage(true);
         let mut s = tipb::RowSampleCollector::default();
-        let samples = self
-            .samples
+        let samples = mem::take(&mut self.samples)
             .into_iter()
             .map(|r_tuple| {
                 let mut pb_sample = tipb::RowSample::default();
@@ -530,16 +743,15 @@ impl RowSampleCollector {
             })
             .collect();
         s.set_samples(samples);
-        s.set_null_counts(self.null_count);
-        s.set_count(self.count as i64);
-        let pb_fm_sketches = self
-            .fm_sketches
-            .into_iter()
-            .map(|fm_sketch| fm_sketch.into_proto())
-            .collect();
-        s.set_fm_sketch(pb_fm_sketches);
-        s.set_total_size(self.total_sizes);
+        self.base.fill_proto(&mut s);
         s
+    }
+}
+
+impl Drop for BaseRowSampleCollector {
+    fn drop(&mut self) {
+        self.memory_usage = 0;
+        self.report_memory_usage(true);
     }
 }
 
@@ -638,7 +850,7 @@ impl<S: Snapshot> SampleBuilder<S> {
         let mut common_handle_cms = CmSketch::new(self.cm_sketch_depth, self.cm_sketch_width);
         let mut common_handle_fms = FmSketch::new(self.max_fm_sketch_size);
         while !is_drained {
-            let time_slice_elapsed = time_slice_start.elapsed();
+            let time_slice_elapsed = time_slice_start.saturating_elapsed();
             if time_slice_elapsed > MAX_TIME_SLICE {
                 reschedule().await;
                 time_slice_start = Instant::now();
@@ -855,23 +1067,28 @@ impl SampleCollector {
     }
 }
 
-#[derive(Default)]
 struct AnalyzeSamplingResult {
-    row_sample_collector: RowSampleCollector,
+    row_sample_collector: Box<dyn RowSampleCollector>,
 }
 
 impl AnalyzeSamplingResult {
-    fn new(row_sample_collector: RowSampleCollector) -> AnalyzeSamplingResult {
+    fn new(row_sample_collector: Box<dyn RowSampleCollector>) -> AnalyzeSamplingResult {
         AnalyzeSamplingResult {
             row_sample_collector,
         }
     }
 
-    fn into_proto(self) -> tipb::AnalyzeColumnsResp {
-        let pb_collector = self.row_sample_collector.into_proto();
+    fn into_proto(mut self) -> tipb::AnalyzeColumnsResp {
+        let pb_collector = self.row_sample_collector.to_proto();
         let mut res = tipb::AnalyzeColumnsResp::default();
         res.set_row_collector(pb_collector);
         res
+    }
+}
+
+impl Default for AnalyzeSamplingResult {
+    fn default() -> Self {
+        AnalyzeSamplingResult::new(Box::new(ReservoirRowSampleCollector::default()))
     }
 }
 
@@ -985,7 +1202,7 @@ mod tests {
     }
 
     #[test]
-    fn test_row_sample_collector() {
+    fn test_row_reservoir_sample_collector() {
         let sample_num = 20;
         let row_num = 100;
         let loop_cnt = 1000;
@@ -996,16 +1213,79 @@ mod tests {
                 datum::encode_value(&mut EvalContext::default(), &[Datum::I64(i as i64)]).unwrap(),
             );
         }
-        for _loop_i in 0..loop_cnt {
-            let mut collector = RowSampleCollector::new(sample_num, 1000, 1);
+        for loop_i in 0..loop_cnt {
+            let mut collector = ReservoirRowSampleCollector::new(sample_num, 1000, 1);
             for row in &nums {
                 collector.sampling([row.clone()].to_vec());
             }
             assert_eq!(collector.samples.len(), sample_num);
-            for sample in collector.samples.into_vec() {
+            for sample in &collector.samples {
                 *item_cnt.entry(sample.0.1[0].clone()).or_insert(0) += 1;
             }
+
+            // Test memory usage tracing is correct.
+            collector.mut_base().report_memory_usage(true);
+            assert_eq!(
+                collector.get_reported_memory_usage(),
+                collector.get_memory_usage()
+            );
+            if loop_i % 2 == 0 {
+                collector.to_proto();
+                assert_eq!(collector.get_memory_usage(), 0);
+                assert_eq!(MEMTRACE_ANALYZE.sum(), 0);
+            }
+            drop(collector);
+            assert_eq!(MEMTRACE_ANALYZE.sum(), 0);
         }
+
+        let exp_freq = sample_num as f64 * loop_cnt as f64 / row_num as f64;
+        let delta = 0.5;
+        for (_, v) in item_cnt.into_iter() {
+            assert!(
+                v as f64 >= exp_freq / (1.0 + delta) && v as f64 <= exp_freq * (1.0 + delta),
+                "v: {}",
+                v
+            );
+        }
+    }
+
+    #[test]
+    fn test_row_bernoulli_sample_collector() {
+        let sample_num = 20;
+        let row_num = 100;
+        let loop_cnt = 1000;
+        let mut item_cnt: HashMap<Vec<u8>, usize> = HashMap::new();
+        let mut nums: Vec<Vec<u8>> = Vec::with_capacity(row_num);
+        for i in 0..row_num {
+            nums.push(
+                datum::encode_value(&mut EvalContext::default(), &[Datum::I64(i as i64)]).unwrap(),
+            );
+        }
+        for loop_i in 0..loop_cnt {
+            let mut collector =
+                BernoulliRowSampleCollector::new(sample_num as f64 / row_num as f64, 1000, 1);
+            for row in &nums {
+                collector.sampling([row.clone()].to_vec());
+            }
+            for sample in &collector.samples {
+                *item_cnt.entry(sample[0].clone()).or_insert(0) += 1;
+            }
+
+            // Test memory usage tracing is correct.
+            collector.mut_base().report_memory_usage(true);
+            assert_eq!(
+                collector.get_reported_memory_usage(),
+                collector.get_memory_usage()
+            );
+            if loop_i % 2 == 0 {
+                collector.to_proto();
+                assert_eq!(collector.get_memory_usage(), 0);
+                assert_eq!(MEMTRACE_ANALYZE.sum(), 0);
+            }
+            drop(collector);
+            assert_eq!(MEMTRACE_ANALYZE.sum(), 0);
+        }
+
         let exp_freq = sample_num as f64 * loop_cnt as f64 / row_num as f64;
         let delta = 0.5;
         for (_, v) in item_cnt.into_iter() {

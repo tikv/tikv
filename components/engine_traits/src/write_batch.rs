@@ -126,4 +126,7 @@ pub trait WriteBatch<E: WriteBatchExt + Sized>: Mutable {
     ///
     /// Additionally pops the last save point from the save point stack.
     fn rollback_to_save_point(&mut self) -> Result<()>;
+
+    /// Merge another WriteBatch to itself
+    fn merge(&mut self, src: Self);
 }

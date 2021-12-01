@@ -3,7 +3,6 @@
 use std::sync::{Arc, RwLock};
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
 use fail::fail_point;
 use kvproto::metapb::{Peer, Region};
@@ -43,7 +42,7 @@ impl CdcObserver {
         }
     }
 
-    pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<RocksEngine>) {
+    pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<impl KvEngine>) {
         // use 0 as the priority of the cmd observer. CDC should have a higher priority than
         // the `resolved-ts`'s cmd observer
         coprocessor_host
@@ -195,7 +194,7 @@ mod tests {
         let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
-        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, Cmd::default());
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,
@@ -213,7 +212,7 @@ mod tests {
 
         // Stop observing cmd
         observe_info.cdc_id.stop_observing();
-        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, Cmd::default());
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,

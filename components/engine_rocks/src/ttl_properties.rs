@@ -2,12 +2,12 @@
 
 use std::collections::HashMap;
 
+use crate::decode_properties::DecodeProperties;
 use crate::{RocksEngine, UserProperties};
-use engine_traits::util::get_expire_ts;
-use engine_traits::{
-    DecodeProperties, Range, Result, TableProperties, TablePropertiesCollection,
-    TablePropertiesExt, TtlProperties, TtlPropertiesExt,
-};
+use engine_traits::key_prefix;
+use engine_traits::raw_value::RawValue;
+use engine_traits::{Range, Result, TtlProperties, TtlPropertiesExt};
+use kvproto::kvrpcpb::ApiVersion;
 use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory};
 use tikv_util::error;
 
@@ -48,7 +48,7 @@ impl TtlPropertiesExt for RocksEngine {
 
         let mut res = Vec::new();
         for (file_name, v) in collection.iter() {
-            let prop = match RocksTtlProperties::decode(&v.user_collected_properties()) {
+            let prop = match RocksTtlProperties::decode(v.user_collected_properties()) {
                 Ok(v) => v,
                 Err(_) => continue,
             };
@@ -58,9 +58,9 @@ impl TtlPropertiesExt for RocksEngine {
     }
 }
 
-#[derive(Default)]
 /// Can only be used for default CF.
 pub struct TtlPropertiesCollector {
+    api_version: ApiVersion,
     prop: TtlProperties,
 }
 
@@ -69,31 +69,45 @@ impl TablePropertiesCollector for TtlPropertiesCollector {
         if entry_type != DBEntryType::Put {
             return;
         }
-        // only consider data keys
+        // Only consider data keys.
         if !key.starts_with(keys::DATA_PREFIX_KEY) {
             return;
         }
-
-        let expire_ts = match get_expire_ts(&value) {
-            Ok(ts) => ts,
-            Err(e) => {
-                error!("failed to get expire ts";
-                    "key" => log_wrappers::Value::key(key),
-                    "value" => log_wrappers::Value::value(value),
-                    "err" => %e,
-                );
-                0
+        // Only consider raw keys.
+        match self.api_version {
+            // TTL is not enabled in V1.
+            ApiVersion::V1 => unreachable!(),
+            // In V1TTL, txnkv is disabled, so all data keys are raw keys.
+            ApiVersion::V1ttl => (),
+            ApiVersion::V2 => {
+                let origin_key = &key[keys::DATA_PREFIX_KEY.len()..];
+                if !key_prefix::is_raw_key(origin_key) {
+                    return;
+                }
             }
-        };
-        if expire_ts == 0 {
-            return;
         }
 
-        self.prop.max_expire_ts = std::cmp::max(self.prop.max_expire_ts, expire_ts);
-        if self.prop.min_expire_ts == 0 {
-            self.prop.min_expire_ts = expire_ts;
-        } else {
-            self.prop.min_expire_ts = std::cmp::min(self.prop.min_expire_ts, expire_ts);
+        match RawValue::from_bytes(value, self.api_version) {
+            Ok(RawValue {
+                expire_ts: Some(expire_ts),
+                ..
+            }) => {
+                self.prop.max_expire_ts = std::cmp::max(self.prop.max_expire_ts, expire_ts);
+                if self.prop.min_expire_ts == 0 {
+                    self.prop.min_expire_ts = expire_ts;
+                } else {
+                    self.prop.min_expire_ts = std::cmp::min(self.prop.min_expire_ts, expire_ts);
+                }
+            }
+            Err(err) => {
+                error!(
+                    "failed to get expire ts";
+                    "key" => log_wrappers::Value::key(key),
+                    "value" => log_wrappers::Value::value(value),
+                    "err" => %err,
+                );
+            }
+            _ => {}
         }
     }
 
@@ -105,28 +119,48 @@ impl TablePropertiesCollector for TtlPropertiesCollector {
     }
 }
 
-pub struct TtlPropertiesCollectorFactory {}
+pub struct TtlPropertiesCollectorFactory {
+    pub api_version: ApiVersion,
+}
 
-impl TablePropertiesCollectorFactory for TtlPropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(TtlPropertiesCollector::default())
+impl TablePropertiesCollectorFactory<TtlPropertiesCollector> for TtlPropertiesCollectorFactory {
+    fn create_table_properties_collector(&mut self, _: u32) -> TtlPropertiesCollector {
+        TtlPropertiesCollector {
+            api_version: self.api_version,
+            prop: Default::default(),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine_traits::util::append_expire_ts;
     use tikv_util::time::UnixSecs;
 
     #[test]
     fn test_ttl_properties() {
+        test_ttl_properties_impl(ApiVersion::V1ttl);
+        test_ttl_properties_impl(ApiVersion::V2);
+    }
+
+    fn test_ttl_properties_impl(api_version: ApiVersion) {
         let get_properties = |case: &[(&'static str, u64)]| -> Result<TtlProperties> {
-            let mut collector = TtlPropertiesCollector::default();
+            let mut collector = TtlPropertiesCollector {
+                api_version,
+                prop: Default::default(),
+            };
             for &(k, ts) in case {
-                let mut v = vec![0; 10];
-                append_expire_ts(&mut v, ts);
-                collector.add(k.as_bytes(), &v, DBEntryType::Put, 0, 0);
+                let v = RawValue {
+                    user_value: &[0; 10][..],
+                    expire_ts: Some(ts),
+                };
+                collector.add(
+                    k.as_bytes(),
+                    &v.to_bytes(api_version),
+                    DBEntryType::Put,
+                    0,
+                    0,
+                );
             }
             for &(k, _) in case {
                 let v = vec![0; 10];
@@ -137,23 +171,28 @@ mod tests {
         };
 
         let case1 = [
-            ("za", 0),
-            ("zb", UnixSecs::now().into_inner()),
-            ("zc", 1),
-            ("zd", u64::MAX),
-            ("ze", 0),
+            ("zr\0a", 0),
+            ("zr\0b", UnixSecs::now().into_inner()),
+            ("zr\0c", 1),
+            ("zr\0d", u64::MAX),
+            ("zr\0e", 0),
         ];
         let props = get_properties(&case1).unwrap();
         assert_eq!(props.max_expire_ts, u64::MAX);
-        assert_eq!(props.min_expire_ts, 1);
+        match api_version {
+            ApiVersion::V1 => unreachable!(),
+            ApiVersion::V1ttl => assert_eq!(props.min_expire_ts, 1),
+            // expire_ts = 0 is no longer a special case in API V2
+            ApiVersion::V2 => assert_eq!(props.min_expire_ts, 0),
+        }
 
-        let case2 = [("za", 0)];
+        let case2 = [("zr\0a", 0)];
         assert!(get_properties(&case2).is_err());
 
         let case3 = [];
         assert!(get_properties(&case3).is_err());
 
-        let case4 = [("za", 1)];
+        let case4 = [("zr\0a", 1)];
         let props = get_properties(&case4).unwrap();
         assert_eq!(props.max_expire_ts, 1);
         assert_eq!(props.min_expire_ts, 1);
