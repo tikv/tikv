@@ -1,5 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-use etcd_client::{DeleteOptions, EventType, GetOptions, SortOrder, SortTarget, WatchOptions};
+use etcd_client::{
+    DeleteOptions, EventType, GetOptions, SortOrder, SortTarget, Txn, TxnOp, WatchOptions,
+};
 use std::pin::Pin;
 use std::sync::Arc;
 use tikv_util::warn;
@@ -118,6 +120,32 @@ impl MetaStore for EtcdStore {
 
         self.0.lock().await.delete(key, Some(opt)).await?;
         Ok(())
+    }
+
+    async fn txn(&self, t: super::Transaction) -> Result<()> {
+        self.0.lock().await.txn(t.into()).await?;
+        Ok(())
+    }
+}
+
+impl Into<Txn> for super::Transaction {
+    fn into(self) -> Txn {
+        let txn = Txn::default();
+        txn.and_then(
+            self.into_ops()
+                .into_iter()
+                .map(|op| match op {
+                    super::TransactionOp::Put(mut pair) => {
+                        TxnOp::put(pair.take_key(), pair.take_value(), None)
+                    }
+                    super::TransactionOp::Delete(rng) => {
+                        let mut opt = DeleteOptions::new();
+                        let key = prepare_opt!(opt, rng);
+                        TxnOp::delete(key, Some(opt))
+                    }
+                })
+                .collect::<Vec<_>>(),
+        )
     }
 }
 

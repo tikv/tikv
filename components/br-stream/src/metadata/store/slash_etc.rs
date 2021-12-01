@@ -81,19 +81,9 @@ impl Snapshot for WithRevision<SlashEtcStore> {
     }
 }
 
-#[async_trait]
-impl MetaStore for SlashEtcStore {
-    type Snap = WithRevision<Self>;
-
-    async fn snapshot(&self) -> Result<Self::Snap> {
-        Ok(WithRevision {
-            inner: self.clone(),
-            revision: self.lock().await.revision,
-        })
-    }
-
-    async fn set(&self, mut pair: crate::metadata::keys::KeyValue) -> Result<()> {
-        let mut data = self.lock().await;
+impl SlashEtc {
+    async fn set(&mut self, mut pair: crate::metadata::keys::KeyValue) -> Result<()> {
+        let data = self;
         data.revision += 1;
         for sub in data.subs.values() {
             if pair.key() < sub.end_key.as_slice() && pair.key() >= sub.start_key.as_slice() {
@@ -108,6 +98,50 @@ impl MetaStore for SlashEtcStore {
         }
         data.items.insert(pair.take_key(), pair.take_value());
         Ok(())
+    }
+
+    async fn delete(&mut self, keys: crate::metadata::store::Keys) -> Result<()> {
+        let mut data = self;
+        let (start_key, end_key) = keys.into_bound();
+        data.revision += 1;
+        for mut victim in data
+            .items
+            .range::<[u8], _>((
+                Bound::Included(start_key.as_slice()),
+                Bound::Excluded(end_key.as_slice()),
+            ))
+            .map(|(k, _)| k.clone())
+            .collect::<Vec<_>>()
+        {
+            data.items.remove(&victim);
+
+            for sub in data.subs.values() {
+                if victim.as_slice() < sub.end_key.as_slice()
+                    && victim.as_slice() >= sub.start_key.as_slice()
+                {
+                    sub.tx
+                        .send(KvEvent {
+                            kind: KvEventType::Delete,
+                            pair: KeyValue(MetaKey(std::mem::take(&mut victim)), vec![]),
+                        })
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl MetaStore for SlashEtcStore {
+    type Snap = WithRevision<Self>;
+
+    async fn snapshot(&self) -> Result<Self::Snap> {
+        Ok(WithRevision {
+            inner: self.clone(),
+            revision: self.lock().await.revision,
+        })
     }
 
     async fn watch(
@@ -144,33 +178,12 @@ impl MetaStore for SlashEtcStore {
         })
     }
 
-    async fn delete(&self, keys: crate::metadata::store::Keys) -> Result<()> {
+    async fn txn(&self, txn: super::Transaction) -> Result<()> {
         let mut data = self.lock().await;
-        let (start_key, end_key) = keys.into_bound();
-        data.revision += 1;
-        for mut victim in data
-            .items
-            .range::<[u8], _>((
-                Bound::Included(start_key.as_slice()),
-                Bound::Excluded(end_key.as_slice()),
-            ))
-            .map(|(k, _)| k.clone())
-            .collect::<Vec<_>>()
-        {
-            data.items.remove(&victim);
-
-            for sub in data.subs.values() {
-                if victim.as_slice() < sub.end_key.as_slice()
-                    && victim.as_slice() >= sub.start_key.as_slice()
-                {
-                    sub.tx
-                        .send(KvEvent {
-                            kind: KvEventType::Delete,
-                            pair: KeyValue(MetaKey(std::mem::take(&mut victim)), vec![]),
-                        })
-                        .await
-                        .unwrap();
-                }
+        for op in txn.into_ops() {
+            match op {
+                super::TransactionOp::Put(kv) => data.set(kv).await?,
+                super::TransactionOp::Delete(range) => data.delete(range).await?,
             }
         }
         Ok(())

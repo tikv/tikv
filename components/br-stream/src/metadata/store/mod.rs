@@ -19,6 +19,33 @@ use tokio_stream::Stream;
 pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
+#[derive(Debug, Default)]
+pub struct Transaction {
+    ops: Vec<TransactionOp>,
+}
+
+impl Transaction {
+    fn into_ops(self) -> Vec<TransactionOp> {
+        self.ops
+    }
+
+    fn put(mut self, kv: KeyValue) -> Self {
+        self.ops.push(TransactionOp::Put(kv));
+        self
+    }
+
+    fn delete(mut self, keys: Keys) -> Self {
+        self.ops.push(TransactionOp::Delete(keys));
+        self
+    }
+}
+
+#[derive(Debug)]
+pub enum TransactionOp {
+    Put(KeyValue),
+    Delete(Keys),
+}
+
 /// A simple wrapper for items associated with a revision.
 ///
 /// Maybe implement Deref<Target = T> for it?
@@ -109,12 +136,20 @@ pub trait MetaStore: Clone + Send + Sync {
     /// Take a consistency snapshot from the store.
     /// Use the current timestamp.
     async fn snapshot(&self) -> Result<Self::Snap>;
-    /// Set a key in the store.
-    async fn set(&self, pair: KeyValue) -> Result<()>;
-    /// Delete some keys.
-    async fn delete(&self, keys: Keys) -> Result<()>;
     /// Watch change of some keys from the store.
     /// Can be canceled then by polling the `cancel` future in the Subscription.
     async fn watch(&self, keys: Keys, start_rev: i64) -> Result<KvChangeSubscription>;
-    // Maybe also support txn, and make default implementation for `set` and `delete`?
+    /// Execute an atomic write (write batch) over the store.
+    /// Maybe support etcd-like compare operations?
+    async fn txn(&self, txn: Transaction) -> Result<()>;
+
+    /// Set a key in the store.
+    /// Maybe rename it to `put` to keeping consistency with etcd?
+    async fn set(&self, pair: KeyValue) -> Result<()> {
+        self.txn(Transaction::default().put(pair)).await
+    }
+    /// Delete some keys.
+    async fn delete(&self, keys: Keys) -> Result<()> {
+        self.txn(Transaction::default().delete(keys)).await
+    }
 }
