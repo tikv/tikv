@@ -1475,12 +1475,12 @@ fn calculate_region_cpu_records(
     region_cpu_records: &mut HashMap<u64, u32>,
 ) {
     for (tag, record) in &records.records {
-        let record_store_id = tag.infos.store_id;
+        let record_store_id = tag.store_id;
         if record_store_id != store_id {
             continue;
         }
         // Reporting a region heartbeat later will clear the corresponding record.
-        *region_cpu_records.entry(tag.infos.region_id).or_insert(0) += record.cpu_time;
+        *region_cpu_records.entry(tag.region_id).or_insert(0) += record.cpu_time;
     }
 }
 
@@ -2098,7 +2098,7 @@ mod tests {
     }
 
     use metapb::Peer;
-    use resource_metering::{RawRecord, ResourceMeteringTag};
+    use resource_metering::{RawRecord, TagInfos};
 
     #[test]
     fn test_calculate_region_cpu_records() {
@@ -2121,7 +2121,7 @@ mod tests {
                     context.set_peer(peer);
                     context.set_region_id(region_id);
                     context.set_resource_group_tag(resource_group_tag);
-                    let resource_tag = ResourceMeteringTag::from_rpc_context(&context);
+                    let resource_tag = Arc::new(TagInfos::from_rpc_context(&context));
 
                     let mut records = HashMap::default();
                     records.insert(resource_tag, RawRecord { cpu_time: 10 });

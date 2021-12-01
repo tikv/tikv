@@ -28,6 +28,7 @@ use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
 use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
+use resource_metering::ResourceTagFactory;
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
@@ -45,6 +46,7 @@ pub fn create_raft_storage<S, EK, R: FlowStatsReporter>(
     pipelined_pessimistic_lock: Arc<AtomicBool>,
     flow_controller: Arc<FlowController>,
     reporter: R,
+    tag_factory: ResourceTagFactory,
 ) -> Result<Storage<RaftKv<EK, S>, LockManager>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
@@ -59,6 +61,7 @@ where
         pipelined_pessimistic_lock,
         flow_controller,
         reporter,
+        tag_factory,
     )?;
     Ok(store)
 }

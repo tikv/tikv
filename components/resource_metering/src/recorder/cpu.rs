@@ -30,7 +30,6 @@ impl SubRecorder for CpuRecorder {
             fail_point!(
                 "cpu-record-test-filter",
                 cur_tag.as_ref().map_or(false, |t| !t
-                    .infos
                     .extra_attachment
                     .starts_with(crate::TEST_TAG_PREFIX)),
                 |_| {}

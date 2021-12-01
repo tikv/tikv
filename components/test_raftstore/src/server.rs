@@ -42,6 +42,7 @@ use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
     store::msg::RaftCmdExtraOpts,
 };
+use resource_metering::ResourceTagFactory;
 use security::SecurityManager;
 use tikv::coprocessor;
 use tikv::coprocessor_v2;
@@ -318,6 +319,7 @@ impl Simulator for ServerCluster {
             lock_mgr.get_pipelined(),
             Arc::new(FlowController::empty()),
             pd_sender,
+            ResourceTagFactory::new_for_test(),
         )?;
         self.storages.insert(node_id, raft_engine);
 
@@ -366,6 +368,7 @@ impl Simulator for ServerCluster {
             cop_read_pool.handle(),
             concurrency_manager.clone(),
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;

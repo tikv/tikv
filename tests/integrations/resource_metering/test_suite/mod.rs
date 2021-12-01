@@ -43,14 +43,6 @@ pub struct TestSuite {
 impl TestSuite {
     pub fn new() -> Self {
         fail::cfg("cpu-record-test-filter", "return").unwrap();
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
-            engine,
-            DummyLockManager {},
-            ApiVersion::V1,
-        )
-        .build()
-        .unwrap();
 
         let mut reporter = Box::new(LazyWorker::new("resource-metering-reporter"));
         let scheduler = reporter.scheduler();
@@ -60,15 +52,16 @@ impl TestSuite {
 
         let resource_metering_cfg = tikv_cfg.resource_metering.clone();
         let cfg_controller = ConfigController::new(tikv_cfg);
+        let (recorder_handle, tag_factory) = init_recorder(
+            resource_metering_cfg.enabled,
+            resource_metering_cfg.precision.as_millis(),
+        );
         cfg_controller.register(
             Module::ResourceMetering,
             Box::new(ConfigManager::new(
                 resource_metering_cfg.clone(),
                 scheduler.clone(),
-                init_recorder(
-                    resource_metering_cfg.enabled,
-                    resource_metering_cfg.precision.as_millis(),
-                ),
+                recorder_handle,
             )),
         );
         let env = Arc::new(Environment::new(2));
@@ -79,6 +72,16 @@ impl TestSuite {
             resource_metering_cfg,
             scheduler.clone(),
         ));
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
+            engine,
+            DummyLockManager {},
+            ApiVersion::V1,
+        )
+        .set_tag_factory(tag_factory)
+        .build()
+        .unwrap();
 
         let (tx, rx) = unbounded();
 

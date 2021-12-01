@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::collector::{Collector, CollectorReg, COLLECTOR_REG_CHAN};
-use crate::localstorage::{register_storage_chan_tx, LocalStorage, LocalStorageRef};
-use crate::{utils, RawRecords, SharedTagPtr};
+use crate::localstorage::{LocalStorage, LocalStorageRef};
+use crate::{utils, RawRecords, ResourceTagFactory, SharedTagPtr};
 
 use std::io;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
@@ -238,12 +238,12 @@ impl RecorderBuilder {
     /// Spawn a new thread that executes the main loop of the [Recorder].
     ///
     /// This function does not return the `Recorder` instance directly, instead
-    /// it returns a [RecorderHandle] that is used to control the execution.
-    pub fn spawn(self) -> io::Result<RecorderHandle> {
+    /// it returns a [RecorderHandle] that is used to control the execution, and
+    /// a [ResourceTagFactory] that is used for construction of resource tag.
+    pub fn spawn(self) -> io::Result<(RecorderHandle, ResourceTagFactory)> {
         let pause = Arc::new(AtomicBool::new(!self.enable));
         let precision_ms = self.precision_ms.clone();
         let (tx, rx) = unbounded();
-        register_storage_chan_tx(tx);
         let now = Instant::now();
         let mut recorder = Recorder {
             pause: pause.clone(),
@@ -259,7 +259,12 @@ impl RecorderBuilder {
         thread::Builder::new()
             .name("resource-metering-recorder".to_owned())
             .spawn(move || recorder.run())
-            .map(move |h| RecorderHandle::new(h, pause, precision_ms))
+            .map(move |h| {
+                (
+                    RecorderHandle::new(h, pause, precision_ms),
+                    ResourceTagFactory::new(tx),
+                )
+            })
     }
 }
 
@@ -326,10 +331,10 @@ impl RecorderHandle {
     }
 }
 
-/// Constructs a default [Recorder], spawn it and return the corresponding [RecorderHandle].
+/// Constructs a default [Recorder], spawn it and return the corresponding [RecorderHandle] and [ResourceTagFactory].
 ///
 /// This function is intended to simplify external use.
-pub fn init_recorder(enable: bool, precision_ms: u64) -> RecorderHandle {
+pub fn init_recorder(enable: bool, precision_ms: u64) -> (RecorderHandle, ResourceTagFactory) {
     RecorderBuilder::default()
         .enable(enable)
         .precision_ms(Arc::new(AtomicU64::new(precision_ms)))
@@ -341,7 +346,6 @@ pub fn init_recorder(enable: bool, precision_ms: u64) -> RecorderHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::localstorage::STORAGE;
     use std::sync::atomic::AtomicUsize;
 
     #[test]
@@ -390,12 +394,9 @@ mod tests {
     #[test]
     fn test_recorder() {
         let (tx, rx) = unbounded();
-        register_storage_chan_tx(tx);
-        std::thread::spawn(|| {
-            STORAGE.with(|_| {});
-        })
-        .join()
-        .unwrap();
+        let tag_factory = ResourceTagFactory::new(tx);
+        tag_factory.register_local_storage(&LocalStorage::default());
+
         let now = Instant::now();
         let mut recorder = Recorder {
             pause: Arc::new(AtomicBool::new(false)),

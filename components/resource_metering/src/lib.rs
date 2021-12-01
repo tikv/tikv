@@ -5,14 +5,6 @@
 #![feature(shrink_to)]
 #![feature(hash_drain_filter)]
 
-use crate::localstorage::STORAGE;
-
-use std::pin::Pin;
-use std::sync::atomic::AtomicPtr;
-use std::sync::atomic::Ordering::SeqCst;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-
 mod client;
 mod collector;
 mod config;
@@ -34,6 +26,16 @@ pub use reporter::{Reporter, Task};
 
 pub const TEST_TAG_PREFIX: &[u8] = b"__resource_metering::tests::";
 
+use crate::localstorage::{LocalStorage, LocalStorageRef, STORAGE};
+
+use std::pin::Pin;
+use std::sync::atomic::AtomicPtr;
+use std::sync::atomic::Ordering::SeqCst;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
+use crossbeam::channel::Sender;
+
 /// This structure is used as a label to distinguish different request contexts.
 ///
 /// In order to associate `ResourceMeteringTag` with a certain piece of code logic,
@@ -41,23 +43,14 @@ pub const TEST_TAG_PREFIX: &[u8] = b"__resource_metering::tests::";
 /// future context. It is used in the main business logic of TiKV.
 ///
 /// [Future]: futures::Future
-#[derive(Debug, Default, Eq, PartialEq, Clone, Hash)]
 pub struct ResourceMeteringTag {
-    pub infos: Arc<TagInfos>,
-}
-
-impl From<Arc<TagInfos>> for ResourceMeteringTag {
-    fn from(infos: Arc<TagInfos>) -> Self {
-        Self { infos }
-    }
+    infos: Arc<TagInfos>,
+    tag_factory: ResourceTagFactory,
 }
 
 impl ResourceMeteringTag {
-    /// Get data from [Context] and construct [ResourceMeteringTag].
-    ///
-    /// [Context]: kvproto::kvrpcpb::Context
-    pub fn from_rpc_context(context: &kvproto::kvrpcpb::Context) -> Self {
-        Arc::new(TagInfos::from_rpc_context(context)).into()
+    fn new(infos: Arc<TagInfos>, tag_factory: ResourceTagFactory) -> Self {
+        Self { infos, tag_factory }
     }
 
     /// This method is used to provide [ResourceMeteringTag] with the ability
@@ -70,15 +63,28 @@ impl ResourceMeteringTag {
     ///
     /// [STORAGE]: crate::localstorage::STORAGE
     pub fn attach(&self) -> Guard {
-        STORAGE.with(|s| {
-            if s.is_set.get() {
+        STORAGE.with(move |s| {
+            let ls = s.take().unwrap_or_else(move || self.register());
+
+            if ls.is_set.get() {
                 panic!("nested attachment is not allowed")
             }
-            let prev = s.shared_ptr.swap(self.clone());
+            let prev = ls.shared_ptr.swap(self.infos.clone());
             assert!(prev.is_none());
-            s.is_set.set(true);
-            Guard { _tag: self.clone() }
+            ls.is_set.set(true);
+
+            s.set(Some(ls));
+
+            Guard {
+                _tag: self.infos.clone(),
+            }
         })
+    }
+
+    fn register(&self) -> LocalStorage {
+        let storage = LocalStorage::default();
+        self.tag_factory.register_local_storage(&storage);
+        storage
     }
 }
 
@@ -90,17 +96,49 @@ impl ResourceMeteringTag {
 ///
 /// [ResourceMeteringTag]: crate::ResourceMeteringTag
 /// [ResourceMeteringTag::attach]: crate::ResourceMeteringTag::attach
-#[derive(Default)]
 pub struct Guard {
-    _tag: ResourceMeteringTag,
+    _tag: Arc<TagInfos>,
 }
 
 impl Drop for Guard {
     fn drop(&mut self) {
         STORAGE.with(|s| {
-            while s.shared_ptr.take().is_none() {}
-            s.is_set.set(false);
+            // safe to `unwrap` as the construction guarantees it cannot be `None`
+            let ls = s.take().unwrap();
+
+            while ls.shared_ptr.take().is_none() {}
+            ls.is_set.set(false);
+            s.set(Some(ls));
         })
+    }
+}
+
+#[derive(Clone)]
+pub struct ResourceTagFactory {
+    tx: Sender<LocalStorageRef>,
+}
+
+impl ResourceTagFactory {
+    fn new(tx: Sender<LocalStorageRef>) -> Self {
+        Self { tx }
+    }
+
+    pub fn new_for_test() -> Self {
+        let (tx, _) = crossbeam::channel::unbounded();
+        Self { tx }
+    }
+
+    pub fn new_tag(&self, context: &kvproto::kvrpcpb::Context) -> ResourceMeteringTag {
+        let tag_infos = TagInfos::from_rpc_context(context);
+        ResourceMeteringTag::new(Arc::new(tag_infos), self.clone())
+    }
+
+    fn register_local_storage(&self, storage: &LocalStorage) {
+        let lsr = LocalStorageRef {
+            id: utils::thread_id(),
+            storage: storage.clone(),
+        };
+        let _ = self.tx.send(lsr);
     }
 }
 
@@ -183,7 +221,7 @@ pub struct TagInfos {
 }
 
 impl TagInfos {
-    fn from_rpc_context(context: &kvproto::kvrpcpb::Context) -> Self {
+    pub fn from_rpc_context(context: &kvproto::kvrpcpb::Context) -> Self {
         let peer = context.get_peer();
         Self {
             store_id: peer.get_store_id(),
@@ -205,20 +243,20 @@ pub struct SharedTagPtr {
 
 impl SharedTagPtr {
     /// Gets the tag under the pointer and replace the original value with null.
-    pub fn take(&self) -> Option<ResourceMeteringTag> {
+    pub fn take(&self) -> Option<Arc<TagInfos>> {
         let prev = self.ptr.swap(std::ptr::null_mut(), SeqCst);
-        (!prev.is_null()).then(|| unsafe { ResourceMeteringTag::from(Arc::from_raw(prev as _)) })
+        (!prev.is_null()).then(|| unsafe { Arc::from_raw(prev as _) })
     }
 
     /// Gets the tag under the pointer and replace the original value with parameter v.
-    pub fn swap(&self, v: ResourceMeteringTag) -> Option<ResourceMeteringTag> {
-        let ptr = Arc::into_raw(v.infos);
+    pub fn swap(&self, v: Arc<TagInfos>) -> Option<Arc<TagInfos>> {
+        let ptr = Arc::into_raw(v);
         let prev = self.ptr.swap(ptr as _, SeqCst);
-        (!prev.is_null()).then(|| unsafe { ResourceMeteringTag::from(Arc::from_raw(prev as _)) })
+        (!prev.is_null()).then(|| unsafe { Arc::from_raw(prev as _) })
     }
 
     /// Gets a clone of the tag under the pointer and put it back.
-    pub fn take_clone(&self) -> Option<ResourceMeteringTag> {
+    pub fn take_clone(&self) -> Option<Arc<TagInfos>> {
         self.take().map(|req_tag| {
             let tag = req_tag.clone();
             // Put it back as quickly as possible.
@@ -231,12 +269,15 @@ impl SharedTagPtr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossbeam::channel::unbounded;
 
     #[test]
     fn test_attach() {
         // Use a thread created by ourself. If we use unit test thread directly,
         // the test results may be affected by parallel testing.
         std::thread::spawn(|| {
+            let (tx, _rx) = unbounded();
+            let tag_factory = ResourceTagFactory::new(tx);
             let tag = ResourceMeteringTag {
                 infos: Arc::new(TagInfos {
                     store_id: 1,
@@ -244,23 +285,28 @@ mod tests {
                     peer_id: 3,
                     extra_attachment: b"12345".to_vec(),
                 }),
+                tag_factory,
             };
             {
                 let guard = tag.attach();
-                assert_eq!(guard._tag.infos, tag.infos);
+                assert_eq!(guard._tag, tag.infos);
                 STORAGE.with(|s| {
-                    let local_tag = s.shared_ptr.take();
+                    let ls = s.take().unwrap();
+                    let local_tag = ls.shared_ptr.take();
                     assert!(local_tag.is_some());
-                    let local_tag = local_tag.unwrap();
-                    assert_eq!(local_tag.infos, tag.infos);
-                    assert_eq!(local_tag.infos, guard._tag.infos);
-                    assert!(s.shared_ptr.swap(local_tag).is_none());
+                    let tag_infos = local_tag.unwrap();
+                    assert_eq!(tag_infos, tag.infos);
+                    assert_eq!(tag_infos, guard._tag);
+                    assert!(ls.shared_ptr.swap(tag_infos).is_none());
+                    s.set(Some(ls));
                 });
                 // drop here.
             }
             STORAGE.with(|s| {
-                let local_tag = s.shared_ptr.take();
+                let ls = s.take().unwrap();
+                let local_tag = ls.shared_ptr.take();
                 assert!(local_tag.is_none());
+                s.set(Some(ls));
             });
         })
         .join()

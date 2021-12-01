@@ -96,7 +96,7 @@ use kvproto::pdpb::QueryKind;
 use raftstore::store::util::build_key_range;
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
-use resource_metering::{FutureExt, ResourceMeteringTag};
+use resource_metering::{FutureExt, ResourceTagFactory};
 use std::{
     borrow::Cow,
     iter,
@@ -148,6 +148,8 @@ pub struct Storage<E: Engine, L: LockManager> {
     // Fields below are storage configurations.
     max_key_size: usize,
 
+    tag_factory: ResourceTagFactory,
+
     api_version: ApiVersion,
 }
 
@@ -168,6 +170,7 @@ impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
             max_key_size: self.max_key_size,
             concurrency_manager: self.concurrency_manager.clone(),
             api_version: self.api_version,
+            tag_factory: self.tag_factory.clone(),
         }
     }
 }
@@ -215,6 +218,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
         flow_controller: Arc<FlowController>,
         reporter: R,
+        tag_factory: ResourceTagFactory,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -224,6 +228,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             pipelined_pessimistic_lock,
             flow_controller,
             reporter,
+            tag_factory.clone(),
         );
 
         info!("Storage started.");
@@ -236,6 +241,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
             api_version: config.api_version(),
+            tag_factory,
         })
     }
 
@@ -430,7 +436,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.tag_factory.new_tag(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
@@ -541,8 +547,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // The resource tags of these batched requests are not the same, and it is quite expensive
         // to distinguish them, so we can find random one of them as a representative.
         let rand_index = rand::thread_rng().gen_range(0, requests.len());
-        let resource_tag =
-            ResourceMeteringTag::from_rpc_context(requests[rand_index].get_context());
+        let resource_tag = self.tag_factory.new_tag(requests[rand_index].get_context());
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -700,7 +705,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.tag_factory.new_tag(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
@@ -825,7 +830,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.tag_factory.new_tag(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
 
         let res = self.read_pool.spawn_handle(
@@ -969,7 +974,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.tag_factory.new_tag(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
         // Do not allow replica read for scan_lock.
         ctx.set_replica_read(false);
@@ -1193,7 +1198,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.tag_factory.new_tag(&ctx);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -1265,7 +1270,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // The resource tags of these batched requests are not the same, and it is quite expensive
         // to distinguish them, so we can find random one of them as a representative.
         let rand_index = rand::thread_rng().gen_range(0, gets.len());
-        let resource_tag = ResourceMeteringTag::from_rpc_context(gets[rand_index].get_context());
+        let resource_tag = self.tag_factory.new_tag(gets[rand_index].get_context());
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -1359,7 +1364,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.tag_factory.new_tag(&ctx);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -1650,7 +1655,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.tag_factory.new_tag(&ctx);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -1753,7 +1758,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_batch_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.tag_factory.new_tag(&ctx);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -1868,7 +1873,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_get_key_ttl;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.tag_factory.new_tag(&ctx);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -2024,7 +2029,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_checksum;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.tag_factory.new_tag(&ctx);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -2160,6 +2165,7 @@ pub struct TestStorageBuilder<E: Engine, L: LockManager> {
     config: Config,
     pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
     lock_mgr: L,
+    tag_factory: ResourceTagFactory,
 }
 
 impl TestStorageBuilder<RocksEngine, DummyLockManager> {
@@ -2203,6 +2209,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             config,
             pipelined_pessimistic_lock: Arc::new(atomic::AtomicBool::new(false)),
             lock_mgr,
+            tag_factory: ResourceTagFactory::new_for_test(),
         }
     }
 
@@ -2233,6 +2240,11 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
         self
     }
 
+    pub fn set_tag_factory(mut self, tag_factory: ResourceTagFactory) -> Self {
+        self.tag_factory = tag_factory;
+        self
+    }
+
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E, L>> {
         let read_pool = build_read_pool_for_test(
@@ -2249,6 +2261,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             self.pipelined_pessimistic_lock,
             Arc::new(FlowController::empty()),
             DummyReporter,
+            self.tag_factory,
         )
     }
 }

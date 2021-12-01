@@ -139,7 +139,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{RawRecord, ResourceMeteringTag, TagInfos};
+    use crate::{RawRecord, TagInfos};
     use collections::HashMap;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::SeqCst;
@@ -171,14 +171,12 @@ mod tests {
         assert_eq!(r.get_interval(), Duration::from_secs(120));
         let mut records = HashMap::default();
         records.insert(
-            ResourceMeteringTag {
-                infos: Arc::new(TagInfos {
-                    store_id: 0,
-                    region_id: 0,
-                    peer_id: 0,
-                    extra_attachment: b"12345".to_vec(),
-                }),
-            },
+            Arc::new(TagInfos {
+                store_id: 0,
+                region_id: 0,
+                peer_id: 0,
+                extra_attachment: b"12345".to_vec(),
+            }),
             RawRecord { cpu_time: 1 },
         );
         r.run(Task::Records(Arc::new(RawRecords {

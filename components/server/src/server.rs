@@ -625,6 +625,36 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 .unwrap(),
         );
 
+        // Start resource metering.
+        let mut reporter_worker = WorkerBuilder::new("resource-metering-reporter")
+            .pending_capacity(30)
+            .create()
+            .lazy_build("resource-metering-reporter");
+        let reporter_scheduler = reporter_worker.scheduler();
+        let mut resource_metering_client = resource_metering::GrpcClient::default();
+        resource_metering_client.set_env(self.env.clone());
+        let reporter = resource_metering::Reporter::new(
+            resource_metering_client,
+            self.config.resource_metering.clone(),
+            reporter_scheduler.clone(),
+        );
+        reporter_worker.start_with_timer(reporter);
+        self.to_stop.push(Box::new(reporter_worker));
+
+        let (recorder_handle, tag_factory) = resource_metering::init_recorder(
+            self.config.resource_metering.enabled,
+            self.config.resource_metering.precision.as_millis(),
+        );
+        let cfg_manager = resource_metering::ConfigManager::new(
+            self.config.resource_metering.clone(),
+            reporter_scheduler,
+            recorder_handle,
+        );
+        cfg_controller.register(
+            tikv::config::Module::ResourceMetering,
+            Box::new(cfg_manager),
+        );
+
         let storage_read_pool_handle = if self.config.readpool.storage.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
@@ -645,6 +675,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             lock_mgr.get_pipelined(),
             flow_controller,
             pd_sender.clone(),
+            tag_factory.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -743,6 +774,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 cop_read_pool_handle,
                 self.concurrency_manager.clone(),
                 engine_rocks::raw_util::to_raw_perf_level(self.config.coprocessor.perf_level),
+                tag_factory,
             ),
             coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
             self.router.clone(),
@@ -898,34 +930,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             rts_worker.start_with_timer(rts_endpoint);
             self.to_stop.push(rts_worker);
         }
-
-        // Start resource metering.
-        let mut reporter_worker = WorkerBuilder::new("resource-metering-reporter")
-            .pending_capacity(30)
-            .create()
-            .lazy_build("resource-metering-reporter");
-        let reporter_scheduler = reporter_worker.scheduler();
-        let mut resource_metering_client = resource_metering::GrpcClient::default();
-        resource_metering_client.set_env(self.env.clone());
-        let reporter = resource_metering::Reporter::new(
-            resource_metering_client,
-            self.config.resource_metering.clone(),
-            reporter_scheduler.clone(),
-        );
-        reporter_worker.start_with_timer(reporter);
-        self.to_stop.push(Box::new(reporter_worker));
-        let cfg_manager = resource_metering::ConfigManager::new(
-            self.config.resource_metering.clone(),
-            reporter_scheduler,
-            resource_metering::init_recorder(
-                self.config.resource_metering.enabled,
-                self.config.resource_metering.precision.as_millis(),
-            ),
-        );
-        cfg_controller.register(
-            tikv::config::Module::ResourceMetering,
-            Box::new(cfg_manager),
-        );
 
         self.servers = Some(Servers {
             lock_mgr,
