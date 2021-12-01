@@ -106,7 +106,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 should_not_exist,
                 self.lock_ttl,
                 self.for_update_ts,
-                self.return_values || self.check_existence,
+                self.return_values,
+                self.check_existence,
                 self.min_commit_ts,
                 need_old_value,
             ) {
