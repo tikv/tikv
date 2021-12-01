@@ -16,6 +16,7 @@ path = "bin/playground.rs"
 [dependencies]
 
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
+prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
 async-trait = { version = "0.1" }
 thiserror = "1"
 bytes = "0.4"

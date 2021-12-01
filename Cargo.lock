@@ -410,6 +410,7 @@ dependencies = [
  "hex 0.4.2",
  "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git?branch=br-stream)",
  "lazy_static",
+ "prometheus",
  "protobuf",
  "regex",
  "slog",
