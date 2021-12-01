@@ -169,13 +169,6 @@ impl KvWriter {
     fn need_flush_keys(&self) -> bool {
         match self {
             Self::TiDB(writer) => writer.need_flush_keys(),
-            Self::Raw(_) => false,
-        }
-    }
-
-    fn is_raw_kv(&self) -> bool {
-        match self {
-            Self::TiDB(_) => false,
             Self::Raw(_) => true,
         }
     }
@@ -208,13 +201,14 @@ async fn save_backup_file_worker(
     storage: Arc<dyn ExternalStorage>,
 ) {
     while let Ok(mut msg) = rx.recv().await {
-        let is_raw_kv = msg.files.is_raw_kv();
         let files = if msg.files.need_flush_keys() {
             match msg.files.save(&storage).await {
                 Ok(mut split_files) => {
                     for file in split_files.iter_mut() {
                         file.set_start_key(std::mem::take(&mut msg.start_key));
                         file.set_end_key(std::mem::take(&mut msg.end_key));
+                        file.set_start_version(msg.start_version.into_inner());
+                        file.set_end_version(msg.end_version.into_inner());
                     }
                     Ok(split_files)
                 }
@@ -236,15 +230,7 @@ async fn save_backup_file_worker(
                 );
                 response.set_error(e.into());
             }
-            Ok(mut files) => {
-                for file in files.iter_mut() {
-                    if is_raw_kv {
-                        file.set_start_key(msg.start_key.clone());
-                        file.set_end_key(msg.end_key.clone());
-                    }
-                    file.set_start_version(msg.start_version.into_inner());
-                    file.set_end_version(msg.end_version.into_inner());
-                }
+            Ok(files) => {
                 response.set_files(files.into());
             }
         }
@@ -502,11 +488,13 @@ impl BackupRange {
         let start_key = self
             .start_key
             .clone()
-            .map_or_else(Vec::new, |k| k.into_raw().unwrap());
+            .map(Key::into_encoded)
+            .unwrap_or_default();
         let end_key = self
             .end_key
             .clone()
-            .map_or_else(Vec::new, |k| k.into_raw().unwrap());
+            .map(Key::into_encoded)
+            .unwrap_or_default();
         let msg = InMemBackupFiles {
             files: KvWriter::Raw(writer),
             start_key,
