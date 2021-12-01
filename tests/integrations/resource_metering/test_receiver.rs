@@ -9,14 +9,14 @@ use test_util::alloc_port;
 use tikv_util::config::ReadableDuration;
 
 #[test]
-pub fn test_alter_receiver_addr() {
+pub fn test_alter_receiver_address() {
     let port = alloc_port();
     let mut test_suite = TestSuite::new(resource_metering::Config {
         enabled: true,
-        receiver_address: "".to_string(),
-        report_receiver_interval: ReadableDuration::millis(500),
+        receiver_address: format!("127.0.0.1:{}", port),
+        report_receiver_interval: ReadableDuration::secs(3),
         max_resource_groups: 5000,
-        precision: ReadableDuration::millis(100),
+        precision: ReadableDuration::secs(1),
     });
     test_suite.start_receiver_at(port);
 
@@ -25,15 +25,8 @@ pub fn test_alter_receiver_addr() {
     test_suite.setup_workload(vec!["req-1", "req-2"]);
 
     // | Address | Enabled |
-    // |   x     |    o    |
-    sleep(Duration::from_millis(550));
-    assert!(test_suite.fetch_reported_cpu_time().is_empty());
-
-    // | Address | Enabled |
     // |   o     |    o    |
-    test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
-    sleep(Duration::from_millis(550));
-    let res = test_suite.fetch_reported_cpu_time();
+    let res = test_suite.block_receive_one();
     assert!(res.contains_key("req-1"));
     assert!(res.contains_key("req-2"));
 
@@ -41,15 +34,13 @@ pub fn test_alter_receiver_addr() {
     // |   !     |    o    |
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port + 1));
     test_suite.flush_receiver();
-    sleep(Duration::from_millis(550));
-    assert!(test_suite.fetch_reported_cpu_time().is_empty());
+    sleep(Duration::from_millis(3500));
+    assert!(test_suite.nonblock_receiver_all().is_empty());
 
     // | Address | Enabled |
     // |   o     |    o    |
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
-    test_suite.flush_receiver();
-    sleep(Duration::from_millis(550));
-    let res = test_suite.fetch_reported_cpu_time();
+    let res = test_suite.block_receive_one();
     assert!(res.contains_key("req-1"));
     assert!(res.contains_key("req-2"));
 }
@@ -60,9 +51,9 @@ pub fn test_receiver_blocking() {
     let mut test_suite = TestSuite::new(resource_metering::Config {
         enabled: true,
         receiver_address: format!("127.0.0.1:{}", port),
-        report_receiver_interval: ReadableDuration::millis(500),
+        report_receiver_interval: ReadableDuration::secs(3),
         max_resource_groups: 5000,
-        precision: ReadableDuration::millis(100),
+        precision: ReadableDuration::secs(1),
     });
     test_suite.start_receiver_at(port);
 
@@ -72,8 +63,7 @@ pub fn test_receiver_blocking() {
 
     // | Block Receiver |
     // |       x        |
-    sleep(Duration::from_millis(550));
-    let res = test_suite.fetch_reported_cpu_time();
+    let res = test_suite.block_receive_one();
     assert!(res.contains_key("req-1"));
     assert!(res.contains_key("req-2"));
 
@@ -81,23 +71,17 @@ pub fn test_receiver_blocking() {
     // |       o        |
     test_suite.block_receiver();
     test_suite.flush_receiver();
-    sleep(Duration::from_millis(550));
-    assert!(test_suite.fetch_reported_cpu_time().is_empty());
-
-    // Workload
-    // [req-3, req-4]
-    test_suite.cancel_workload();
-    test_suite.setup_workload(vec!["req-3", "req-4"]);
+    sleep(Duration::from_millis(3500));
+    assert!(test_suite.nonblock_receiver_all().is_empty());
 
     // | Block Receiver |
     // |       x        |
     test_suite.unblock_receiver();
-    sleep(Duration::from_millis(1100));
+    sleep(Duration::from_millis(3500));
     test_suite.flush_receiver();
-    sleep(Duration::from_millis(550));
-    let res = test_suite.fetch_reported_cpu_time();
-    assert!(res.contains_key("req-3"));
-    assert!(res.contains_key("req-4"));
+    let res = test_suite.block_receive_one();
+    assert!(res.contains_key("req-1"));
+    assert!(res.contains_key("req-2"));
 }
 
 #[test]
@@ -106,9 +90,9 @@ pub fn test_receiver_shutdown() {
     let mut test_suite = TestSuite::new(resource_metering::Config {
         enabled: true,
         receiver_address: format!("127.0.0.1:{}", port),
-        report_receiver_interval: ReadableDuration::millis(500),
+        report_receiver_interval: ReadableDuration::secs(3),
         max_resource_groups: 5000,
-        precision: ReadableDuration::millis(100),
+        precision: ReadableDuration::secs(1),
     });
     test_suite.start_receiver_at(port);
 
@@ -118,8 +102,7 @@ pub fn test_receiver_shutdown() {
 
     // | Receiver Alive |
     // |       o        |
-    sleep(Duration::from_millis(550));
-    let res = test_suite.fetch_reported_cpu_time();
+    let res = test_suite.block_receive_one();
     assert!(res.contains_key("req-1"));
     assert!(res.contains_key("req-2"));
 
@@ -132,14 +115,13 @@ pub fn test_receiver_shutdown() {
     // |       x        |
     test_suite.shutdown_receiver();
     test_suite.flush_receiver();
-    sleep(Duration::from_millis(550));
-    assert!(test_suite.fetch_reported_cpu_time().is_empty());
+    sleep(Duration::from_millis(3500));
+    assert!(test_suite.nonblock_receiver_all().is_empty());
 
     // | Receiver Alive |
     // |       o        |
     test_suite.start_receiver_at(port);
-    sleep(Duration::from_millis(550));
-    let res = test_suite.fetch_reported_cpu_time();
+    let res = test_suite.block_receive_one();
     assert!(res.contains_key("req-3"));
     assert!(res.contains_key("req-4"));
 }

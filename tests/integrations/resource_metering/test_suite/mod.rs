@@ -4,6 +4,7 @@ mod mock_receiver_server;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::channel::oneshot;
@@ -205,30 +206,43 @@ impl TestSuite {
         }
     }
 
-    pub fn fetch_reported_cpu_time(&self) -> HashMap<String, (Vec<u64>, Vec<u32>)> {
+    pub fn nonblock_receiver_all(&self) -> HashMap<String, (Vec<u64>, Vec<u32>)> {
         let mut res = HashMap::new();
-        self.rx
-            .try_iter()
-            .flat_map(|r| r.into_iter())
-            .for_each(|r| {
-                let tag = String::from_utf8_lossy(
-                    (!r.get_resource_group_tag().is_empty())
-                        .then(|| r.resource_group_tag.split_at(TEST_TAG_PREFIX.len()).1)
-                        .unwrap_or(b""),
-                )
-                .into_owned();
-                let (ts, cpu_time) = res.entry(tag).or_insert((vec![], vec![]));
-                ts.extend(&r.record_list_timestamp_sec);
-                cpu_time.extend(&r.record_list_cpu_time_ms);
-            });
-
+        for r in self.rx.try_recv() {
+            Self::merge_records(&mut res, r);
+        }
         res
     }
 
+    pub fn block_receive_one(&self) -> HashMap<String, (Vec<u64>, Vec<u32>)> {
+        let records = self.rx.recv().unwrap();
+        let mut res = HashMap::new();
+        Self::merge_records(&mut res, records);
+        res
+    }
+
+    fn merge_records(
+        map: &mut HashMap<String, (Vec<u64>, Vec<u32>)>,
+        records: Vec<ResourceUsageRecord>,
+    ) {
+        for r in records {
+            let tag = String::from_utf8_lossy(
+                (!r.get_resource_group_tag().is_empty())
+                    .then(|| r.resource_group_tag.split_at(TEST_TAG_PREFIX.len()).1)
+                    .unwrap_or(b""),
+            )
+            .into_owned();
+            let (ts, cpu_time) = map.entry(tag).or_insert((vec![], vec![]));
+            ts.extend(&r.record_list_timestamp_sec);
+            cpu_time.extend(&r.record_list_cpu_time_ms);
+        }
+    }
+
     pub fn flush_receiver(&self) {
-        let _ = self
-            .rx
-            .recv_timeout(self.get_current_cfg().report_receiver_interval.0);
+        while let Ok(_) = self.rx.try_recv() {}
+        let _ = self.rx.recv_timeout(
+            self.get_current_cfg().report_receiver_interval.0 + Duration::from_millis(500),
+        );
     }
 }
 
