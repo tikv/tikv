@@ -44,7 +44,7 @@ use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use protobuf::Message;
-use resource_metering::{register_collector, Collector, CollectorHandle, RawRecords};
+use resource_metering::{Collector, CollectorHandle, CollectorRegistry, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -704,6 +704,7 @@ where
         concurrency_manager: ConcurrencyManager,
         snap_mgr: SnapManager,
         remote: Remote<yatp::task::future::TaskCell>,
+        collector_registry: CollectorRegistry,
     ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
@@ -711,8 +712,8 @@ where
             error!("failed to start stats collector, error = {:?}", e);
         }
 
-        let _region_cpu_records_collector =
-            register_collector(Box::new(RegionCPUMeteringCollector::new(scheduler.clone())));
+        let _region_cpu_records_collector = collector_registry
+            .register(Box::new(RegionCPUMeteringCollector::new(scheduler.clone())));
 
         Runner {
             store_id,

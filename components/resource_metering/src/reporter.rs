@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::collector::{register_collector, CollectorHandle, CollectorImpl};
+use crate::collector::{CollectorHandle, CollectorImpl, CollectorRegistry};
 use crate::{Client, Config, RawRecords, Records};
 
 use std::fmt::{self, Display, Formatter};
@@ -24,6 +24,7 @@ pub struct Reporter<C> {
     client: C,
     config: Config,
     scheduler: Scheduler<Task>,
+    collector_registry: CollectorRegistry,
     collector: Option<CollectorHandle>,
     records: Records,
 }
@@ -63,15 +64,21 @@ impl<C> Reporter<C>
 where
     C: Client + Send,
 {
-    pub fn new(client: C, config: Config, scheduler: Scheduler<Task>) -> Self {
+    pub fn new(
+        client: C,
+        config: Config,
+        collector_registry: CollectorRegistry,
+        scheduler: Scheduler<Task>,
+    ) -> Self {
         let collector = config
             .should_report()
-            .then(|| register_collector(Box::new(CollectorImpl::new(scheduler.clone()))));
+            .then(|| collector_registry.register(Box::new(CollectorImpl::new(scheduler.clone()))));
         Self {
             client,
             config,
             scheduler,
             collector,
+            collector_registry,
             records: Records::default(),
         }
     }
@@ -87,9 +94,10 @@ where
             self.reset();
         }
         if self.collector.is_none() {
-            self.collector = Some(register_collector(Box::new(CollectorImpl::new(
-                self.scheduler.clone(),
-            ))));
+            self.collector = Some(
+                self.collector_registry
+                    .register(Box::new(CollectorImpl::new(self.scheduler.clone()))),
+            );
         }
     }
 
@@ -160,7 +168,8 @@ mod tests {
     #[test]
     fn test_reporter() {
         let scheduler = LazyWorker::new("test-worker").scheduler();
-        let mut r = Reporter::new(MockClient, Config::default(), scheduler);
+        let collector_registry = CollectorRegistry::new_for_test();
+        let mut r = Reporter::new(MockClient, Config::default(), collector_registry, scheduler);
         r.run(Task::ConfigChange(Config {
             enabled: false,
             receiver_address: "abc".to_string(),

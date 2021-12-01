@@ -17,8 +17,7 @@ pub mod utils;
 pub(crate) mod metrics;
 
 pub use client::{Client, GrpcClient};
-pub use collector::Collector;
-pub use collector::{register_collector, CollectorHandle, CollectorId};
+pub use collector::{Collector, CollectorHandle, CollectorId, CollectorRegistry};
 pub use config::{Config, ConfigManager};
 pub use model::*;
 pub use recorder::{init_recorder, CpuRecorder, Recorder, RecorderBuilder, RecorderHandle};

@@ -42,7 +42,7 @@ use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
     store::msg::RaftCmdExtraOpts,
 };
-use resource_metering::ResourceTagFactory;
+use resource_metering::{CollectorRegistry, ResourceTagFactory};
 use security::SecurityManager;
 use tikv::coprocessor;
 use tikv::coprocessor_v2;
@@ -472,6 +472,7 @@ impl Simulator for ServerCluster {
             split_check_scheduler,
             auto_split_controller,
             concurrency_manager.clone(),
+            CollectorRegistry::new_for_test(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

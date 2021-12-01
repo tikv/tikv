@@ -82,6 +82,7 @@ use crate::store::{
 };
 use crate::Result;
 use concurrency_manager::ConcurrencyManager;
+use resource_metering::CollectorRegistry;
 use tikv_util::future::poll_future_notify;
 
 type Key = Vec<u8>;
@@ -1249,6 +1250,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         auto_split_controller: AutoSplitController,
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
         concurrency_manager: ConcurrencyManager,
+        collector_registry: CollectorRegistry,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1361,6 +1363,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 concurrency_manager,
                 mgr,
                 pd_client,
+                collector_registry,
             )?;
         } else {
             self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatch>(
@@ -1371,6 +1374,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 concurrency_manager,
                 mgr,
                 pd_client,
+                collector_registry,
             )?;
         }
         Ok(())
@@ -1385,6 +1389,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         snap_mgr: SnapManager,
         pd_client: Arc<C>,
+        collector_registry: CollectorRegistry,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1451,6 +1456,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             concurrency_manager,
             snap_mgr,
             workers.pd_worker.remote(),
+            collector_registry,
         );
         assert!(workers.pd_worker.start_with_timer(pd_runner));
 

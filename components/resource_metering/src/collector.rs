@@ -7,8 +7,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 
-use crossbeam::channel::{unbounded, Receiver, Sender};
-use lazy_static::lazy_static;
+use crossbeam::channel::{bounded, Sender};
 use tikv_util::warn;
 use tikv_util::worker::Scheduler;
 
@@ -32,6 +31,40 @@ use tikv_util::worker::Scheduler;
 /// [RunnableWithTimer]: tikv_util::worker::RunnableWithTimer
 pub trait Collector: Send {
     fn collect(&self, records: Arc<RawRecords>);
+}
+
+#[derive(Clone)]
+pub struct CollectorRegistry {
+    tx: Sender<CollectorReg>,
+}
+
+impl CollectorRegistry {
+    pub(crate) fn new(tx: Sender<CollectorReg>) -> Self {
+        Self { tx }
+    }
+
+    pub fn new_for_test() -> Self {
+        let (tx, _) = bounded(1024);
+        Self { tx }
+    }
+
+    pub fn register(&self, collector: Box<dyn Collector>) -> CollectorHandle {
+        static NEXT_COLLECTOR_ID: AtomicU64 = AtomicU64::new(1);
+        let id = CollectorId(NEXT_COLLECTOR_ID.fetch_add(1, Relaxed));
+
+        if self
+            .tx
+            .send(CollectorReg::Register { collector, id })
+            .is_ok()
+        {
+            CollectorHandle {
+                id,
+                tx: Some(self.tx.clone()),
+            }
+        } else {
+            CollectorHandle { id, tx: None }
+        }
+    }
 }
 
 /// A [Collector] implementation for scheduling [RawRecords].
@@ -61,10 +94,6 @@ impl CollectorImpl {
     }
 }
 
-lazy_static! {
-    pub static ref COLLECTOR_REG_CHAN: (Sender<CollectorReg>, Receiver<CollectorReg>) = unbounded();
-}
-
 #[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Hash)]
 pub struct CollectorId(pub u64);
 
@@ -80,24 +109,22 @@ pub enum CollectorReg {
 
 pub struct CollectorHandle {
     id: CollectorId,
+    tx: Option<Sender<CollectorReg>>,
 }
 
 impl Drop for CollectorHandle {
     fn drop(&mut self) {
-        COLLECTOR_REG_CHAN
-            .0
-            .send(CollectorReg::Unregister { id: self.id })
-            .ok();
-    }
-}
+        if self.tx.is_none() {
+            return;
+        }
 
-/// Dynamically registering a collector.
-pub fn register_collector(collector: Box<dyn Collector>) -> CollectorHandle {
-    static NEXT_COLLECTOR_ID: AtomicU64 = AtomicU64::new(1);
-    let id = CollectorId(NEXT_COLLECTOR_ID.fetch_add(1, Relaxed));
-    COLLECTOR_REG_CHAN
-        .0
-        .send(CollectorReg::Register { collector, id })
-        .ok();
-    CollectorHandle { id }
+        if let Err(err) = self
+            .tx
+            .as_ref()
+            .unwrap()
+            .send(CollectorReg::Unregister { id: self.id })
+        {
+            warn!("failed to unregister collector"; "err" => ?err);
+        }
+    }
 }
