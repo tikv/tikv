@@ -871,6 +871,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.pd_client.clone(),
             cdc_scheduler.clone(),
             self.router.clone(),
+            self.engines.as_ref().unwrap().engines.kv.clone(),
             cdc_ob,
             engines.store_meta.clone(),
             self.concurrency_manager.clone(),

@@ -101,6 +101,8 @@ impl<S: Snapshot> ScannerBuilder<S> {
     /// Set the hint for the minimum commit ts we want to scan.
     ///
     /// Default is empty.
+    ///
+    /// NOTE: user should be careful to use it with `ExtraOp::ReadOldValue`.
     #[inline]
     pub fn hint_min_ts(mut self, min_ts: Option<TimeStamp>) -> Self {
         self.0.hint_min_ts = min_ts;
@@ -110,6 +112,8 @@ impl<S: Snapshot> ScannerBuilder<S> {
     /// Set the hint for the maximum commit ts we want to scan.
     ///
     /// Default is empty.
+    ///
+    /// NOTE: user should be careful to use it with `ExtraOp::ReadOldValue`.
     #[inline]
     pub fn hint_max_ts(mut self, max_ts: Option<TimeStamp>) -> Self {
         self.0.hint_max_ts = max_ts;
@@ -532,12 +536,17 @@ pub(crate) fn load_data_by_lock<S: Snapshot, I: Iterator>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::kv::SEEK_BOUND;
-    use crate::storage::kv::{Engine, RocksEngine, TestEngineBuilder};
+    use crate::storage::kv::{
+        Engine, PerfStatisticsInstant, RocksEngine, TestEngineBuilder, SEEK_BOUND,
+    };
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
     use crate::storage::txn::tests::*;
-    use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
+    use crate::storage::txn::{
+        Error as TxnError, ErrorInner as TxnErrorInner, TxnEntry, TxnEntryScanner,
+    };
+    use engine_traits::MiscExt;
+    use txn_types::OldValue;
 
     // Collect data from the scanner and assert it equals to `expected`, which is a collection of
     // (raw_key, value).
@@ -883,5 +892,70 @@ mod tests {
         test_met_newer_ts_data_impl(false, true);
         test_met_newer_ts_data_impl(true, false);
         test_met_newer_ts_data_impl(true, true);
+    }
+
+    #[test]
+    fn test_old_value_with_hint_min_ts() {
+        let engine = TestEngineBuilder::new().build_without_cache().unwrap();
+        let create_scanner = |from_ts: u64| {
+            let snap = engine.snapshot(Default::default()).unwrap();
+            ScannerBuilder::new(snap, TimeStamp::max())
+                .fill_cache(false)
+                .hint_min_ts(Some(from_ts.into()))
+                .build_delta_scanner(from_ts.into(), ExtraOp::ReadOldValue)
+                .unwrap()
+        };
+
+        // Create the initial data with CF_WRITE L0: |zkey_110, zkey1_160|
+        must_prewrite_put(&engine, b"zkey", b"value", b"zkey", 100);
+        must_commit(&engine, b"zkey", 100, 110);
+        must_prewrite_put(&engine, b"zkey1", b"value", b"zkey1", 150);
+        must_commit(&engine, b"zkey1", 150, 160);
+        engine.kv_engine().flush_cf(CF_WRITE, true).unwrap();
+        must_prewrite_delete(&engine, b"zkey", b"zkey", 200);
+
+        let tests = vec![
+            // `zkey_110` is filtered, so no old value and block reads is 0.
+            (200, OldValue::seek_write(b"zkey", 200), 0),
+            // Old value can be found as expected.
+            (100, OldValue::value(b"value".to_vec()), 1),
+            // `zkey_110` isn't filtered, so needs to read 1 block from CF_WRITE.
+            // But we can't ensure whether it's the old value or not.
+            (150, OldValue::seek_write(b"zkey", 200), 1),
+        ];
+        for (from_ts, expected_old_value, block_reads) in tests {
+            let mut scanner = create_scanner(from_ts);
+            let perf_instant = PerfStatisticsInstant::new();
+            match scanner.next_entry().unwrap().unwrap() {
+                TxnEntry::Prewrite { old_value, .. } => assert_eq!(old_value, expected_old_value),
+                TxnEntry::Commit { .. } => unreachable!(),
+            }
+            let delta = perf_instant.delta().0;
+            assert_eq!(delta.block_read_count, block_reads);
+        }
+
+        // CF_WRITE L0: |zkey_110, zkey1_160|, |zkey_210|
+        must_commit(&engine, b"zkey", 200, 210);
+        engine.kv_engine().flush_cf(CF_WRITE, false).unwrap();
+
+        let tests = vec![
+            // `zkey_110` is filtered, so no old value and block reads is 0.
+            (200, OldValue::seek_write(b"zkey", 209), 0),
+            // Old value can be found as expected.
+            (100, OldValue::value(b"value".to_vec()), 1),
+            // `zkey_110` isn't filtered, so needs to read 1 block from CF_WRITE.
+            // But we can't ensure whether it's the old value or not.
+            (150, OldValue::seek_write(b"zkey", 209), 1),
+        ];
+        for (from_ts, expected_old_value, block_reads) in tests {
+            let mut scanner = create_scanner(from_ts);
+            let perf_instant = PerfStatisticsInstant::new();
+            match scanner.next_entry().unwrap().unwrap() {
+                TxnEntry::Prewrite { .. } => unreachable!(),
+                TxnEntry::Commit { old_value, .. } => assert_eq!(old_value, expected_old_value),
+            }
+            let delta = perf_instant.delta().0;
+            assert_eq!(delta.block_read_count, block_reads);
+        }
     }
 }
