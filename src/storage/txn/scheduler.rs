@@ -34,6 +34,7 @@ use futures::compat::Future01CompatExt;
 use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
 use resource_metering::{FutureExt, ResourceMeteringTag};
+use tikv_kv::{Snapshot, SnapshotExt};
 use tikv_util::{time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::TimeStamp;
 
@@ -469,59 +470,39 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 };
                 // The program is currently in scheduler worker threads.
                 // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
-                match unsafe {
-                    with_tls_engine(|engine: &E| kv::snapshot_for_write(engine, snap_ctx))
-                }
-                .await
+                match unsafe { with_tls_engine(|engine: &E| kv::snapshot(engine, snap_ctx)) }.await
                 {
-                    Ok((cb_ctx, snapshot)) => {
-                        debug!(
-                            "receive snapshot finish msg";
-                            "cid" => task.cid, "cb_ctx" => ?cb_ctx
-                        );
-
-                        match snapshot {
-                            Ok(snapshot) => {
-                                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
-
-                                if !sched
-                                    .inner
-                                    .get_task_slot(task.cid)
-                                    .get(&task.cid)
-                                    .unwrap()
-                                    .try_own()
-                                {
-                                    sched.finish_with_err(
-                                        task.cid,
-                                        StorageErrorInner::DeadlineExceeded,
-                                    );
-                                    return;
-                                }
-
-                                if let Some(term) = cb_ctx.term {
-                                    task.cmd.ctx_mut().set_term(term);
-                                }
-                                task.extra_op = cb_ctx.txn_extra_op;
-
-                                debug!(
-                                    "process cmd with snapshot";
-                                    "cid" => task.cid, "cb_ctx" => ?cb_ctx
-                                );
-                                sched.process(snapshot, task).await;
-                            }
-                            Err(err) => {
-                                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
-
-                                info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
-                                sched.finish_with_err(task.cid, Error::from(err));
-                            }
+                    Ok(snapshot) => {
+                        SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
+                        let term = snapshot.ext().get_term();
+                        let extra_op = snapshot.ext().get_txn_extra_op();
+                        if !sched
+                            .inner
+                            .get_task_slot(task.cid)
+                            .get(&task.cid)
+                            .unwrap()
+                            .try_own()
+                        {
+                            sched.finish_with_err(task.cid, StorageErrorInner::DeadlineExceeded);
+                            return;
                         }
-                    }
-                    Err(e) => {
-                        SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
-                        info!("engine async_snapshot failed"; "err" => ?e);
-                        sched.finish_with_err(task.cid, e);
+                        if let Some(term) = term {
+                            task.cmd.ctx_mut().set_term(term.get());
+                        }
+                        task.extra_op = extra_op;
+
+                        debug!(
+                            "process cmd with snapshot";
+                            "cid" => task.cid, "term" => ?term, "extra_op" => ?extra_op,
+                        );
+                        sched.process(snapshot, task).await;
+                    }
+                    Err(err) => {
+                        SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
+
+                        info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
+                        sched.finish_with_err(task.cid, Error::from(err));
                     }
                 }
             })
@@ -876,7 +857,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
                     let write_size = to_be_write.size();
                     // The callback to receive async results of write prepare from the storage engine.
-                    let engine_cb = Box::new(move |(_, result): (_, EngineResult<()>)| {
+                    let engine_cb = Box::new(move |result: EngineResult<()>| {
                         sched_pool
                             .spawn(async move {
                                 fail_point!("scheduler_async_write_finish");

@@ -1,7 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::util::{append_expire_ts, ttl_to_expire_ts};
+use engine_traits::raw_value::{ttl_to_expire_ts, RawValue};
 use kvproto::import_sstpb::*;
+use kvproto::kvrpcpb::ApiVersion;
 use std::sync::Arc;
 
 use encryption::DataKeyManager;
@@ -138,7 +139,7 @@ pub struct RawSSTWriter<E: KvEngine> {
     default_path: ImportPath,
     default_meta: SstMeta,
     key_manager: Option<Arc<DataKeyManager>>,
-    enable_ttl: bool,
+    api_version: ApiVersion,
 }
 
 impl<E: KvEngine> RawSSTWriter<E> {
@@ -147,7 +148,7 @@ impl<E: KvEngine> RawSSTWriter<E> {
         default_path: ImportPath,
         default_meta: SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
-        enable_ttl: bool,
+        api_version: ApiVersion,
     ) -> Self {
         RawSSTWriter {
             default,
@@ -157,7 +158,7 @@ impl<E: KvEngine> RawSSTWriter<E> {
             default_deletes: 0,
             default_meta,
             key_manager,
-            enable_ttl,
+            api_version,
         }
     }
 
@@ -181,22 +182,28 @@ impl<E: KvEngine> RawSSTWriter<E> {
     pub fn write(&mut self, mut batch: RawWriteBatch) -> Result<()> {
         let start = Instant::now_coarse();
 
-        if self.enable_ttl {
-            let ttl = batch.get_ttl();
-            let expire_ts = ttl_to_expire_ts(ttl);
-            for mut m in batch.take_pairs().into_iter() {
-                if m.get_op() == PairOp::Put {
-                    append_expire_ts(m.mut_value(), expire_ts);
-                }
-                self.put(m.get_key(), m.get_value(), m.get_op())?;
-            }
+        let expire_ts = if batch.get_ttl() == 0 {
+            None
         } else {
-            if batch.get_ttl() != 0 {
-                return Err(crate::Error::TTLNotEnabled);
+            match self.api_version {
+                ApiVersion::V1 => return Err(crate::Error::TTLNotEnabled),
+                ApiVersion::V1ttl | ApiVersion::V2 => ttl_to_expire_ts(batch.get_ttl()),
             }
-            for m in batch.take_pairs().into_iter() {
-                self.put(m.get_key(), m.get_value(), m.get_op())?;
-            }
+        };
+
+        for m in batch.take_pairs().into_iter() {
+            match m.get_op() {
+                PairOp::Put => {
+                    let value = RawValue {
+                        user_value: m.get_value(),
+                        expire_ts,
+                    };
+                    self.put(m.get_key(), &value.to_bytes(self.api_version), PairOp::Put)?;
+                }
+                PairOp::Delete => {
+                    self.put(m.get_key(), &[], PairOp::Delete)?;
+                }
+            };
         }
 
         IMPORT_LOCAL_WRITE_CHUNK_DURATION_VEC
@@ -249,7 +256,7 @@ mod tests {
 
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
 
@@ -288,13 +295,18 @@ mod tests {
     }
 
     #[test]
-    fn test_raw_write_sst() {
+    fn test_raw_write_sst_ttl() {
+        test_raw_write_sst_ttl_impl(ApiVersion::V1ttl);
+        test_raw_write_sst_ttl_impl(ApiVersion::V2);
+    }
+
+    fn test_raw_write_sst_ttl_impl(api_version: ApiVersion) {
         let mut meta = SstMeta::default();
         meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
 
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, true).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
 
@@ -320,11 +332,23 @@ mod tests {
         w.write(batch).unwrap();
         assert_eq!(w.default_entries, 1);
         assert_eq!(w.default_deletes, 1);
-        // ttl takes 8 more bytes
-        assert_eq!(
-            w.default_bytes as usize,
-            b"zk1".len() + b"short_value".len() + 8 + b"zk2".len()
-        );
+        match api_version {
+            ApiVersion::V1ttl => {
+                // ttl takes 8 more bytes
+                assert_eq!(
+                    w.default_bytes as usize,
+                    b"zk1".len() + b"short_value".len() + 8 + b"zk2".len()
+                );
+            }
+            ApiVersion::V2 => {
+                // ttl takes 8 more bytes and meta take 1 more byte
+                assert_eq!(
+                    w.default_bytes as usize,
+                    b"zk1".len() + b"short_value".len() + b"zk2".len() + 9
+                );
+            }
+            _ => unreachable!(),
+        }
 
         let metas = w.finish().unwrap();
         assert_eq!(metas.len(), 1);
@@ -337,7 +361,7 @@ mod tests {
 
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
 
