@@ -260,7 +260,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for CrypterReader<R> {
             _ => return poll,
         };
         if let Some(crypter) = inner.crypter.as_mut() {
-            if let Err(e) = crypter.do_crypter_in_place(buf) {
+            if let Err(e) = crypter.do_crypter_in_place(&mut buf[..read_count]) {
                 return Poll::Ready(Err(e));
             }
         }
@@ -643,5 +643,27 @@ mod tests {
                 .into_inner();
             assert_eq!(plaintext, written);
         }
+    }
+
+    #[test]
+    fn test_do_crypter_in_place() {
+        let iv = Iv::new_ctr();
+        let key = iv.as_slice().clone();
+        let mut crypter_core = CrypterCore::new(EncryptionMethod::Aes128Ctr, key, Mode::Encrypt, iv).unwrap();
+
+        let mut buf1 = "pingcap 01234567890abcdefg".as_bytes().to_vec();
+        let mut buf2 = buf1.clone();
+        let buflen = buf1.len() / 2;
+        
+        let r = crypter_core.do_crypter_in_place(&mut buf1[..]);
+        assert_eq!(r.is_ok(), true);
+
+        let r = crypter_core.reset_crypter(0);
+        assert_eq!(r.is_ok(), true);
+        let r = crypter_core.do_crypter_in_place(&mut buf2[..buflen]);
+        assert_eq!(r.is_ok(), true);
+        let r = crypter_core.do_crypter_in_place(&mut buf2[buflen..]);
+        assert_eq!(r.is_ok(), true);
+        assert_eq!(buf1, buf2);
     }
 }
