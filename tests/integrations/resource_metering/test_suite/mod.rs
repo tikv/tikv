@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::channel::oneshot;
 use futures::{select, FutureExt};
-use grpcio::{Environment, Server};
+use grpcio::Environment;
 use kvproto::kvrpcpb::{ApiVersion, Context};
 use kvproto::resource_usage_agent::ResourceUsageRecord;
 use mock_receiver_server::MockReceiverServer;
@@ -17,13 +17,12 @@ use tempfile::TempDir;
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{RocksEngine, Storage, TestEngineBuilder, TestStorageBuilder};
-use tikv_util::config::ReadableDuration;
 use tikv_util::worker::LazyWorker;
 use tokio::runtime::{self, Runtime};
 use txn_types::TimeStamp;
 
 pub struct TestSuite {
-    receiver_server: Option<Server>,
+    receiver_server: Option<MockReceiverServer>,
 
     storage: Storage<RocksEngine, DummyLockManager>,
     reporter: Option<Box<LazyWorker<Task>>>,
@@ -41,25 +40,22 @@ pub struct TestSuite {
 }
 
 impl TestSuite {
-    pub fn new() -> Self {
+    pub fn new(cfg: resource_metering::Config) -> Self {
         fail::cfg("cpu-record-test-filter", "return").unwrap();
 
         let mut reporter = Box::new(LazyWorker::new("resource-metering-reporter"));
         let scheduler = reporter.scheduler();
 
         let (mut tikv_cfg, dir) = TiKvConfig::with_tmp().unwrap();
-        tikv_cfg.resource_metering.report_receiver_interval = ReadableDuration::secs(5);
+        tikv_cfg.resource_metering = cfg.clone();
 
-        let resource_metering_cfg = tikv_cfg.resource_metering.clone();
         let cfg_controller = ConfigController::new(tikv_cfg);
-        let (recorder_handle, tag_factory) = init_recorder(
-            resource_metering_cfg.enabled,
-            resource_metering_cfg.precision.as_millis(),
-        );
+        let (recorder_handle, collector_registry, tag_factory) =
+            init_recorder(cfg.enabled, cfg.precision.as_millis());
         cfg_controller.register(
             Module::ResourceMetering,
             Box::new(ConfigManager::new(
-                resource_metering_cfg.clone(),
+                cfg.clone(),
                 scheduler.clone(),
                 recorder_handle,
             )),
@@ -69,7 +65,8 @@ impl TestSuite {
         reporter_client.set_env(env.clone());
         reporter.start_with_timer(resource_metering::Reporter::new(
             reporter_client,
-            resource_metering_cfg,
+            cfg,
+            collector_registry,
             scheduler.clone(),
         ));
 
@@ -148,16 +145,23 @@ impl TestSuite {
     pub fn start_receiver_at(&mut self, port: u16) {
         assert!(self.receiver_server.is_none());
 
-        let mut receiver_server =
-            MockReceiverServer::new(self.tx.clone()).build_server(port, self.env.clone());
-        receiver_server.start();
+        let mut receiver_server = MockReceiverServer::new(self.tx.clone());
+        receiver_server.start_server(port, self.env.clone());
         self.receiver_server = Some(receiver_server);
     }
 
     pub fn shutdown_receiver(&mut self) {
         if let Some(mut receiver) = self.receiver_server.take() {
-            self.rt.block_on(receiver.shutdown()).unwrap();
+            self.rt.block_on(receiver.shutdown_server());
         }
+    }
+
+    pub fn block_receiver(&mut self) {
+        self.receiver_server.as_ref().unwrap().block();
+    }
+
+    pub fn unblock_receiver(&mut self) {
+        self.receiver_server.as_ref().unwrap().unblock();
     }
 
     pub fn setup_workload(&mut self, tags: Vec<impl Into<String>>) {
@@ -226,23 +230,10 @@ impl TestSuite {
             .rx
             .recv_timeout(self.get_current_cfg().report_receiver_interval.0);
     }
-
-    pub fn reset(&mut self) {
-        self.cfg_enabled(false);
-        self.cfg_receiver_address("");
-        self.cancel_workload();
-        self.flush_receiver();
-        self.cfg_precision("1s");
-        self.cfg_report_receiver_interval("5s");
-        self.cfg_max_resource_groups(5000);
-        self.shutdown_receiver();
-    }
 }
 
 impl Drop for TestSuite {
     fn drop(&mut self) {
-        self.reset();
         self.reporter.take().unwrap().stop_worker();
-        fail::remove("cpu-record-test-filter");
     }
 }

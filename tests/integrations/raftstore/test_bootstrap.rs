@@ -14,6 +14,7 @@ use engine_traits::{Engines, Peekable, ALL_CFS, CF_RAFT};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::{bootstrap_store, fsm, AutoSplitController, SnapManager};
+use resource_metering::CollectorRegistry;
 use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::server::Node;
@@ -115,6 +116,7 @@ fn test_node_bootstrap_with_prepared_data() {
         split_check_scheduler,
         AutoSplitController::default(),
         ConcurrencyManager::new(1.into()),
+        CollectorRegistry::new_for_test(),
     )
     .unwrap();
     assert!(
