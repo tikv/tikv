@@ -910,12 +910,13 @@ impl<E: Engine> AssertionStorage<E> {
         &self,
         cf: String,
         start_key: Vec<u8>,
+        end_key: Option<Vec<u8>>,
         limit: usize,
         expect: Vec<(&[u8], &[u8])>,
     ) {
         let result: Vec<KvPair> = self
             .store
-            .raw_scan(self.ctx.clone(), cf, start_key, None, limit)
+            .raw_scan(self.ctx.clone(), cf, start_key, end_key, limit)
             .unwrap()
             .into_iter()
             .map(|x| x.unwrap())
@@ -927,9 +928,15 @@ impl<E: Engine> AssertionStorage<E> {
         assert_eq!(result, expect);
     }
 
-    pub fn raw_scan_err(&self, cf: String, start_key: Vec<u8>, limit: usize) {
+    pub fn raw_scan_err(
+        &self,
+        cf: String,
+        start_key: Vec<u8>,
+        end_key: Option<Vec<u8>>,
+        limit: usize,
+    ) {
         self.store
-            .raw_scan(self.ctx.clone(), cf, start_key, None, limit)
+            .raw_scan(self.ctx.clone(), cf, start_key, end_key, limit)
             .unwrap_err();
     }
 

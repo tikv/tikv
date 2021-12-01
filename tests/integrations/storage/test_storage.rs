@@ -738,23 +738,37 @@ fn test_txn_store_rawkv() {
     store.raw_put_ok("".to_string(), b"k1".to_vec(), b"v1".to_vec());
     store.raw_put_ok("".to_string(), b"k2".to_vec(), b"v2".to_vec());
     store.raw_put_ok("".to_string(), b"k3".to_vec(), b"v3".to_vec());
-    store.raw_scan_ok("".to_string(), b"".to_vec(), 1, vec![(b"k1", b"v1")]);
-    store.raw_scan_ok("".to_string(), b"k1".to_vec(), 1, vec![(b"k1", b"v1")]);
-    store.raw_scan_ok("".to_string(), b"k10".to_vec(), 1, vec![(b"k2", b"v2")]);
+    store.raw_scan_ok("".to_string(), b"".to_vec(), None, 1, vec![(b"k1", b"v1")]);
+    store.raw_scan_ok(
+        "".to_string(),
+        b"k1".to_vec(),
+        None,
+        1,
+        vec![(b"k1", b"v1")],
+    );
+    store.raw_scan_ok(
+        "".to_string(),
+        b"k10".to_vec(),
+        None,
+        1,
+        vec![(b"k2", b"v2")],
+    );
     store.raw_scan_ok(
         "".to_string(),
         b"".to_vec(),
+        None,
         2,
         vec![(b"k1", b"v1"), (b"k2", b"v2")],
     );
     store.raw_scan_ok(
         "".to_string(),
         b"k1".to_vec(),
+        None,
         5,
         vec![(b"k1", b"v1"), (b"k2", b"v2"), (b"k3", b"v3")],
     );
-    store.raw_scan_ok("".to_string(), b"".to_vec(), 0, vec![]);
-    store.raw_scan_ok("".to_string(), b"k5".to_vec(), 1, vec![]);
+    store.raw_scan_ok("".to_string(), b"".to_vec(), None, 0, vec![]);
+    store.raw_scan_ok("".to_string(), b"k5".to_vec(), None, 1, vec![]);
 }
 
 #[test]
@@ -773,6 +787,7 @@ fn test_txn_store_rawkv_cf() {
     store.raw_scan_ok(
         CF_DEFAULT.to_string(),
         b"".to_vec(),
+        None,
         3,
         vec![(b"k1", b"v1"), (b"k2", b"v2")],
     );
@@ -963,13 +978,44 @@ fn test_txn_store_rawkv_api_version() {
 
             store.raw_batch_put_ok(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
 
-            store.raw_scan_ok(cf.to_owned(), key.to_vec(), 100, vec![(key, b"value")]);
-            store.raw_batch_scan_ok(
+            store.raw_scan_ok(
                 cf.to_owned(),
-                vec![range.clone()],
+                key.to_vec(),
+                Some(RAW_KEY_CASE_Z.to_vec()),
                 100,
                 vec![(key, b"value")],
             );
+            store.raw_batch_scan_ok(
+                cf.to_owned(),
+                vec![range_raw_z.clone()],
+                100,
+                vec![(key, b"value")],
+            );
+            {
+                // unbounded end key
+                match storage_api_version {
+                    ApiVersion::V1 | ApiVersion::V1ttl => {
+                        store.raw_scan_ok(
+                            cf.to_owned(),
+                            key.to_vec(),
+                            None,
+                            100,
+                            vec![(key, b"value")],
+                        );
+                        store.raw_batch_scan_ok(
+                            cf.to_owned(),
+                            vec![range.clone()],
+                            100,
+                            vec![(key, b"value")],
+                        );
+                    }
+                    ApiVersion::V2 => {
+                        // unbounded key is prohibitted in V2.
+                        store.raw_scan_err(cf.to_owned(), key.to_vec(), None, 100);
+                        store.raw_batch_scan_err(cf.to_owned(), vec![range.clone()], 100);
+                    }
+                }
+            }
 
             store.raw_compare_and_swap_atomic_ok(
                 cf.to_owned(),
@@ -1001,8 +1047,13 @@ fn test_txn_store_rawkv_api_version() {
 
             store.raw_batch_put_err(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
 
-            store.raw_scan_err(cf.to_owned(), key.to_vec(), 100);
-            store.raw_batch_scan_err(cf.to_owned(), vec![range.clone()], 100);
+            store.raw_scan_err(
+                cf.to_owned(),
+                key.to_vec(),
+                Some(RAW_KEY_CASE_Z.to_vec()),
+                100,
+            );
+            store.raw_batch_scan_err(cf.to_owned(), vec![range_raw_z.clone()], 100);
 
             store.raw_compare_and_swap_atomic_err(
                 cf.to_owned(),
