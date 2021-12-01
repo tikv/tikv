@@ -1573,7 +1573,7 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn destroy_peer(
+    pub fn gc_peer(
         &mut self,
         region_id: u64,
         node_id: u64,
@@ -1590,9 +1590,9 @@ impl<T: Simulator> Cluster<T> {
         router.send_raft_message(message)
     }
 
-    pub fn must_destroy_peer(&mut self, region_id: u64, node_id: u64, peer: metapb::Peer) {
+    pub fn must_gc_peer(&mut self, region_id: u64, node_id: u64, peer: metapb::Peer) {
         for _ in 0..250 {
-            self.destroy_peer(region_id, node_id, peer.clone()).unwrap();
+            self.gc_peer(region_id, node_id, peer.clone()).unwrap();
             if self.region_local_state(region_id, node_id).get_state() == PeerState::Tombstone {
                 return;
             }
@@ -1600,7 +1600,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         panic!(
-            "destroy peer timeout: region id {}, node id {}, peer {:?}",
+            "gc peer timeout: region id {}, node id {}, peer {:?}",
             region_id, node_id, peer
         );
     }

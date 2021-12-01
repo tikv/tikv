@@ -213,6 +213,7 @@ fn test_stale_peer_destroy_when_apply_snapshot() {
     must_get_none(&cluster.get_engine(3), b"k1");
 }
 
+/// Test if destroy a uninitialized peer through tombstone msg would allow a staled peer be created again.
 #[test]
 fn test_destroy_uninitialized_peer_when_there_exists_old_peer() {
     // 4 stores cluster.
@@ -273,7 +274,7 @@ fn test_destroy_uninitialized_peer_when_there_exists_old_peer() {
     // Remove and destroy the uninitialized 5
     let peer_5 = new_learner_peer(3, 5);
     pd_client.must_remove_peer(r1, peer_5.clone());
-    cluster.must_destroy_peer(r1, 3, peer_5);
+    cluster.must_gc_peer(r1, 3, peer_5);
 
     let region = block_on(pd_client.get_region_by_id(r1)).unwrap();
     must_region_cleared(&cluster.get_all_engines(3), &region.unwrap());
