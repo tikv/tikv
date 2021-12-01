@@ -520,8 +520,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let process_wall_time =
                         stage_finished_ts.saturating_duration_since(stage_snap_recv_ts);
                     let latency_stats = StageLatencyStats {
-                        schedule_wait_time: duration_to_ms(schedule_wait_time),
-                        snapshot_wait_time: duration_to_ms(snapshot_wait_time),
+                        schedule_wait_time_ms: duration_to_ms(schedule_wait_time),
+                        snapshot_wait_time_ms: duration_to_ms(snapshot_wait_time),
                         wait_wall_time_ms: duration_to_ms(wait_wall_time),
                         process_wall_time_ms: duration_to_ms(process_wall_time),
                     };
@@ -830,8 +830,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let process_wall_time =
                         stage_finished_ts.saturating_duration_since(stage_snap_recv_ts);
                     let latency_stats = StageLatencyStats {
-                        schedule_wait_time: duration_to_ms(schedule_wait_time),
-                        snapshot_wait_time: duration_to_ms(snapshot_wait_time),
+                        schedule_wait_time_ms: duration_to_ms(schedule_wait_time),
+                        snapshot_wait_time_ms: duration_to_ms(snapshot_wait_time),
                         wait_wall_time_ms: duration_to_ms(wait_wall_time),
                         process_wall_time_ms: duration_to_ms(process_wall_time),
                     };

@@ -266,8 +266,8 @@ impl StatisticsSummary {
 /// ```
 #[derive(Debug, Default, Copy, Clone)]
 pub struct StageLatencyStats {
-    pub schedule_wait_time: u64,
-    pub snapshot_wait_time: u64,
+    pub schedule_wait_time_ms: u64,
+    pub snapshot_wait_time_ms: u64,
     pub wait_wall_time_ms: u64,
     pub process_wall_time_ms: u64,
 }
