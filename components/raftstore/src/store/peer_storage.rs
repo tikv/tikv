@@ -1208,17 +1208,20 @@ where
         let raft_wb = task.raft_wb.as_mut().unwrap();
         let kv_wb = task.kv_wb.as_mut().unwrap();
 
+        let last_index = snap.get_metadata().get_index();
         if self.is_initialized() {
             // we can only delete the old data when the peer is initialized.
-            self.clear_meta(kv_wb, raft_wb)?;
+            let local_last_index = self.raft_state.get_last_index();
+            if last_index <= local_last_index {
+                raft_wb.cut_logs(self.get_region_id(), last_index, local_last_index + 1u64);
+            }
+            self.cache = EntryCache::default();
         }
         // Write its source peers' `RegionLocalState` together with itself for atomicity
         for r in destroy_regions {
             write_peer_state(kv_wb, r, PeerState::Tombstone, None)?;
         }
         write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
-
-        let last_index = snap.get_metadata().get_index();
 
         self.raft_state.set_last_index(last_index);
         self.last_term = snap.get_metadata().get_term();
@@ -2518,7 +2521,7 @@ mod tests {
 
         let td3 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let ents = &[new_entry(3, 3), new_entry(4, 3)];
-        let mut s3 = new_storage_from_ents(sched, &td3, ents);
+        let mut s3 = new_storage_from_ents(sched.clone(), &td3, ents);
         validate_cache(&s3, &ents[1..]);
         let mut write_task = WriteTask::new(s3.get_region_id(), s3.peer_id, 1);
         let snap_region = s3.apply_snapshot(&snap1, &mut write_task, &[]).unwrap();
@@ -2531,6 +2534,32 @@ mod tests {
         assert_eq!(s3.apply_state.get_truncated_state().get_index(), 6);
         assert_eq!(s3.apply_state.get_truncated_state().get_term(), 6);
         validate_cache(&s3, &[]);
+
+        let td4 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let ents = &[
+            new_entry(3, 3),
+            new_entry(4, 3),
+            new_entry(5, 3),
+            new_entry(6, 3),
+            new_entry(7, 3),
+            new_entry(8, 4),
+        ];
+        let mut s4 = new_storage_from_ents(sched, &td4, ents);
+        validate_cache(&s4, &ents[1..]);
+        let mut write_task = WriteTask::new(s4.get_region_id(), s4.peer_id, 1);
+        let snap_region = s4.apply_snapshot(&snap1, &mut write_task, &[]).unwrap();
+        let mut snap_data = RaftSnapshotData::default();
+        snap_data.merge_from_bytes(snap1.get_data()).unwrap();
+        assert_eq!(snap_region, snap_data.take_region());
+        assert_eq!(s4.last_term, snap1.get_metadata().get_term());
+        assert_eq!(s4.apply_state.get_applied_index(), 6);
+        assert_eq!(s4.raft_state.get_last_index(), 6);
+        assert_eq!(s4.apply_state.get_truncated_state().get_index(), 6);
+        assert_eq!(s4.apply_state.get_truncated_state().get_term(), 6);
+        validate_cache(&s4, &[]);
+
+        assert_eq!(s4.last_index(), 6);
+        assert_eq!(s4.first_index(), 7);
     }
 
     #[test]
