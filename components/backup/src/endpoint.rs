@@ -15,7 +15,7 @@ use external_storage::{BackendConfig, HdfsConfig};
 use external_storage_export::{create_storage, ExternalStorage};
 use file_system::{IOType, WithIOType};
 use futures::channel::mpsc::*;
-use futures::{Future, SinkExt};
+use futures::Future;
 use kvproto::brpb::*;
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
@@ -23,9 +23,8 @@ use kvproto::metapb::*;
 use online_config::OnlineConfig;
 
 use raft::StateRole;
-use raftstore::coprocessor::{RawConsistencyCheckObserver, RegionInfoProvider};
+use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
-use raftstore::RegionInfo;
 use tikv::config::BackupConfig;
 use tikv::storage::kv::{CursorBuilder, Engine, ScanMode, SnapContext};
 use tikv::storage::mvcc::Error as MvccError;
@@ -271,7 +270,6 @@ impl BackupRange {
         concurrency_manager: ConcurrencyManager,
         backup_ts: TimeStamp,
         begin_ts: TimeStamp,
-        storage: &LimitedStorage,
         saver: async_channel::Sender<InMemBackupFiles>,
     ) -> Result<Statistics> {
         assert!(!self.is_raw_kv);
@@ -336,15 +334,11 @@ impl BackupRange {
 
         let start_scan = Instant::now();
         let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
-        let mut last_key = self
+        let mut next_file_start_key = self
             .start_key
             .clone()
             .map_or_else(Vec::new, |k| k.into_raw().unwrap());
-        let mut cur_key = self
-            .end_key
-            .clone()
-            .map_or_else(Vec::new, |k| k.into_raw().unwrap());
-        let mut writer = writer_builder.build(last_key.clone())?;
+        let mut writer = writer_builder.build(next_file_start_key.clone())?;
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
                 error!(?e; "backup scan entries failed");
@@ -357,7 +351,7 @@ impl BackupRange {
 
             let entries = batch.drain();
             if writer.need_split_keys() {
-                cur_key = entries.as_slice().get(0).map_or_else(
+                let this_end_key = entries.as_slice().get(0).map_or_else(
                     || Err(Error::Other(box_err!("get entry error: nothing in batch"))),
                     |x| {
                         x.to_key().map(|k| k.into_raw().unwrap()).map_err(|e| {
@@ -366,20 +360,23 @@ impl BackupRange {
                         })
                     },
                 )?;
+                let this_start_key = next_file_start_key.clone();
                 let msg = InMemBackupFiles {
                     files: KvWriter::TiDB(writer),
-                    start_key: last_key.clone(),
-                    end_key: cur_key.clone(),
+                    start_key: this_start_key,
+                    end_key: this_end_key.clone(),
                     start_version: begin_ts,
                     end_version: backup_ts,
                     region: self.region.clone(),
                 };
                 saver.send(msg).await?;
-                last_key = cur_key.clone();
-                writer = writer_builder.build(cur_key.clone()).or_else(|e| {
-                    error_unknown!(?e; "backup writer failed");
-                    Err(e)
-                })?;
+                next_file_start_key = this_end_key;
+                writer = writer_builder
+                    .build(next_file_start_key.clone())
+                    .map_err(|e| {
+                        error_unknown!(?e; "backup writer failed");
+                        e
+                    })?;
             }
 
             // Build sst files.
@@ -395,7 +392,7 @@ impl BackupRange {
         drop(snap_store);
         let msg = InMemBackupFiles {
             files: KvWriter::TiDB(writer),
-            start_key: last_key,
+            start_key: next_file_start_key,
             end_key: self
                 .end_key
                 .clone()
@@ -864,6 +861,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     //
                     // Anyway, even tokio itself doesn't recommend to use it unless the lock guard needs to be `Send`.
                     // (See https://tokio.rs/tokio/tutorial/shared-state)
+                    // Use &mut and mark the type for making rust-analyzer happy.
                     let progress: &mut Progress<_> = &mut prs.lock().unwrap();
                     let batch = progress.forward(batch_size);
                     if batch.is_empty() {
@@ -928,7 +926,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                                 concurrency_manager.clone(),
                                 backup_ts,
                                 start_ts,
-                                &storage,
                                 saver_tx.clone(),
                             )
                             .await;
