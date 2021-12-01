@@ -621,15 +621,15 @@ fn test_serde_custom_tikv_config() {
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
         gc_ratio_threshold: 1.2,
-        max_key_size: 8192,
+        max_key_size: 4096,
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
         reserve_space: ReadableSize::gb(10),
         enable_async_apply_prewrite: true,
+        api_version: 1,
         enable_ttl: true,
         ttl_check_poll_interval: ReadableDuration::hours(0),
-        api_version: 1,
         flow_control: FlowControlConfig {
             enable: false,
             l0_files_threshold: 10,
@@ -730,6 +730,7 @@ fn test_serde_custom_tikv_config() {
         incremental_scan_threads: 3,
         incremental_scan_concurrency: 4,
         incremental_scan_speed_limit: ReadableSize(7),
+        incremental_scan_ts_filter_ratio: 0.7,
         old_value_cache_memory_quota: ReadableSize::mb(14),
         sink_memory_quota: ReadableSize::mb(7),
     };

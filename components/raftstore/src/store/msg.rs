@@ -227,7 +227,6 @@ pub enum StoreTick {
     CompactLockCf,
     ConsistencyCheck,
     CleanupImportSST,
-    RaftEnginePurge,
 }
 
 impl StoreTick {
@@ -240,7 +239,6 @@ impl StoreTick {
             StoreTick::CompactLockCf => RaftEventDurationType::compact_lock_cf,
             StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
             StoreTick::CleanupImportSST => RaftEventDurationType::cleanup_import_sst,
-            StoreTick::RaftEnginePurge => RaftEventDurationType::raft_engine_purge,
         }
     }
 }
