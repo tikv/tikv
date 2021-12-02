@@ -772,10 +772,10 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         config: BackupConfig,
         concurrency_manager: ConcurrencyManager,
     ) -> Endpoint<E, R> {
-        let config_manager = ConfigManager(Arc::new(RwLock::new(config)));
         let pool = ControlThreadPool::new();
+        let rt = create_tokio_runtime(config.io_thread_size, "backup-io").unwrap();
+        let config_manager = ConfigManager(Arc::new(RwLock::new(config)));
         let softlimit = SoftLimitKeeper::new(config_manager.clone());
-        let rt = create_tokio_runtime(2, "backup-io").unwrap();
         rt.spawn(softlimit.clone().run());
         Endpoint {
             store_id,
