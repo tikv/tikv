@@ -1,26 +1,22 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::BorrowMut;
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::fs::File;
-use std::io::BufRead;
-use std::io::BufReader;
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
-use std::sync::MutexGuard;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex, MutexGuard,
+};
 use std::time::Duration;
 
-use nix::unistd::getpid;
-use nix::unistd::gettid;
-use nix::unistd::Pid;
+use nix::unistd::{getpid, gettid, Pid};
 use strum::EnumCount;
 use thread_local::ThreadLocal;
 
-use crate::IOBytes;
-use crate::IOType;
+use crate::{IOBytes, IOType};
 
 lazy_static! {
     static ref THREAD_IO_SENTINEL_VEC: ThreadLocal<Arc<ThreadIOSentinel>> = ThreadLocal::new();
@@ -32,82 +28,12 @@ thread_local! {
         Arc::new(ThreadIOSentinel::current_default())
     ).clone();
 
-    static THREAD_IO_PRIVATE: RefCell<ThreadIOPrivate> = RefCell::new(ThreadIOPrivate::default())
+    static THREAD_IO_PRIVATE: Cell<ThreadIOPrivate> = Cell::new(ThreadIOPrivate::default())
 }
 
 struct ThreadIOSentinel {
     id: ThreadID,
     bytes: [AtomicIOBytes; IOType::COUNT],
-}
-
-struct ThreadID {
-    pid: Pid,
-    tid: Pid,
-}
-
-struct ThreadIOPrivate {
-    io_type: IOType,
-    last_bytes: IOBytes,
-}
-
-struct AtomicIOBytes {
-    read: AtomicU64,
-    write: AtomicU64,
-}
-
-pub fn fetch_all_thread_io_bytes(io_type: IOType) -> IOBytes {
-    THREAD_IO_SENTINEL_VEC.iter().for_each(|sentinel| {
-        fetch_sentinel(sentinel, None);
-    });
-    THREAD_IO_TOTAL[io_type as usize].load(Ordering::Relaxed)
-}
-
-fn fetch_sentinel(sentinel: &ThreadIOSentinel, new_io_type: Option<IOType>) {
-    let io_bytes = fetch_exact_thread_io_bytes(&sentinel.id);
-
-    THREAD_IO_PRIVATE.with(|private| {
-        let io_type = private.borrow().io_type;
-        let last_io_bytes = private.borrow().last_bytes;
-
-        sentinel.bytes[io_type as usize].fetch_add(io_bytes - last_io_bytes, Ordering::Relaxed);
-        THREAD_IO_TOTAL[io_type as usize].fetch_add(io_bytes - last_io_bytes, Ordering::Relaxed);
-        private.borrow_mut().last_bytes = io_bytes;
-        if let Some(new_io_type) = new_io_type {
-            private.borrow_mut().io_type = new_io_type;
-        }
-    })
-}
-
-pub fn set_io_type(new_io_type: IOType) {
-    THREAD_IO_SENTINEL.with(|sentinel| {
-        fetch_sentinel(sentinel, Some(new_io_type));
-    })
-}
-
-pub fn get_io_type() -> IOType {
-    THREAD_IO_PRIVATE.with(|private| private.borrow().io_type)
-}
-
-pub(crate) fn fetch_buffered_thread_io_bytes(io_type: IOType) -> IOBytes {
-    THREAD_IO_SENTINEL.with(|sentinel| sentinel.bytes[io_type as usize].load(Ordering::Relaxed))
-}
-
-pub(crate) fn fetch_thread_io_bytes(_io_type: IOType) -> IOBytes {
-    fetch_exact_thread_io_bytes(&ThreadID::current())
-}
-
-fn fetch_exact_thread_io_bytes(id: &ThreadID) -> IOBytes {
-    let io_file_path = PathBuf::from("/proc")
-        .join(format!("{}", id.pid))
-        .join("task")
-        .join(format!("{}", id.tid))
-        .join("io");
-
-    if let Ok(io_file) = File::open(io_file_path) {
-        return IOBytes::from_io_file(io_file);
-    }
-
-    IOBytes::default()
 }
 
 impl ThreadIOSentinel {
@@ -119,6 +45,11 @@ impl ThreadIOSentinel {
     }
 }
 
+struct ThreadID {
+    pid: Pid,
+    tid: Pid,
+}
+
 impl ThreadID {
     fn current() -> ThreadID {
         ThreadID {
@@ -128,39 +59,15 @@ impl ThreadID {
     }
 }
 
-impl Default for ThreadIOPrivate {
-    fn default() -> ThreadIOPrivate {
-        ThreadIOPrivate {
-            io_type: IOType::Other,
-            last_bytes: IOBytes::default(),
-        }
-    }
+#[derive(Clone, Copy)]
+struct ThreadIOPrivate {
+    io_type: IOType,
+    last_bytes: IOBytes,
 }
 
-impl IOBytes {
-    fn from_io_file<R: std::io::Read>(r: R) -> IOBytes {
-        let reader = BufReader::new(r);
-        let mut io_bytes = IOBytes::default();
-
-        for line in reader.lines().flatten() {
-            if line.is_empty() || !line.contains(' ') {
-                continue;
-            }
-            let mut s = line.split_whitespace();
-
-            if let (Some(field), Some(value)) = (s.next(), s.next()) {
-                if let Ok(value) = u64::from_str(value) {
-                    match &field[..field.len() - 1] {
-                        "read_bytes" => io_bytes.read = value,
-                        "write_bytes" => io_bytes.write = value,
-                        _ => continue,
-                    }
-                }
-            }
-        }
-
-        io_bytes
-    }
+struct AtomicIOBytes {
+    read: AtomicU64,
+    write: AtomicU64,
 }
 
 impl Default for AtomicIOBytes {
@@ -190,6 +97,88 @@ impl AtomicIOBytes {
     fn fetch_add(&self, other: IOBytes, order: Ordering) {
         self.read.fetch_add(other.read, order);
         self.write.fetch_add(other.write, order);
+    }
+}
+
+pub fn fetch_all_thread_io_bytes(io_type: IOType) -> IOBytes {
+    THREAD_IO_SENTINEL_VEC.iter().for_each(|sentinel| {
+        flush_sentinel(sentinel, None);
+    });
+    THREAD_IO_TOTAL[io_type as usize].load(Ordering::Relaxed)
+}
+
+fn flush_sentinel(sentinel: &ThreadIOSentinel, new_io_type: Option<IOType>) {
+    let io_bytes = fetch_exact_thread_io_bytes(&sentinel.id);
+
+    THREAD_IO_PRIVATE.with(|private_cell| {
+        let mut private = private_cell.get();
+        let io_type = private.io_type;
+        let last_io_bytes = private.last_bytes;
+
+        sentinel.bytes[io_type as usize].fetch_add(io_bytes - last_io_bytes, Ordering::Relaxed);
+        THREAD_IO_TOTAL[io_type as usize].fetch_add(io_bytes - last_io_bytes, Ordering::Relaxed);
+        private.last_bytes = io_bytes;
+        if let Some(new_io_type) = new_io_type {
+            private.io_type = new_io_type;
+        }
+        private_cell.set(private)
+    })
+}
+
+pub fn set_io_type(new_io_type: IOType) {
+    THREAD_IO_SENTINEL.with(|sentinel| {
+        flush_sentinel(sentinel, Some(new_io_type));
+    })
+}
+
+pub fn get_io_type() -> IOType {
+    THREAD_IO_PRIVATE.with(|private| private.get().io_type)
+}
+
+fn fetch_thread_io_bytes(_io_type: IOType) -> IOBytes {
+    fetch_exact_thread_io_bytes(&ThreadID::current())
+}
+
+fn fetch_exact_thread_io_bytes(id: &ThreadID) -> IOBytes {
+    let io_file_path = PathBuf::from("/proc")
+        .join(format!("{}", id.pid))
+        .join("task")
+        .join(format!("{}", id.tid))
+        .join("io");
+
+    if let Ok(io_file) = File::open(io_file_path) {
+        let reader = BufReader::new(io_file);
+        let mut io_bytes = IOBytes::default();
+
+        for line in reader.lines().flatten() {
+            if line.is_empty() || !line.contains(' ') {
+                continue;
+            }
+            let mut s = line.split_whitespace();
+
+            if let (Some(field), Some(value)) = (s.next(), s.next()) {
+                if let Ok(value) = u64::from_str(value) {
+                    match &field[..field.len() - 1] {
+                        "read_bytes" => io_bytes.read = value,
+                        "write_bytes" => io_bytes.write = value,
+                        _ => continue,
+                    }
+                }
+            }
+        }
+
+        return io_bytes;
+    }
+
+    IOBytes::default()
+}
+
+impl Default for ThreadIOPrivate {
+    fn default() -> ThreadIOPrivate {
+        ThreadIOPrivate {
+            io_type: IOType::Other,
+            last_bytes: IOBytes::default(),
+        }
     }
 }
 
