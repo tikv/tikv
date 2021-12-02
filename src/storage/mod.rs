@@ -4311,16 +4311,10 @@ mod tests {
     }
 
     fn test_raw_scan_impl(api_version: ApiVersion) {
-        let make_end_key = |reverse: bool| -> Option<Vec<u8>> {
-            if let ApiVersion::V2 = api_version {
-                if reverse {
-                    Some(b"r\0\0".to_vec())
-                } else {
-                    Some(b"r\0z".to_vec())
-                }
-            } else {
-                None
-            }
+        let (end_key, end_key_reverse_scan) = if let ApiVersion::V2 = api_version {
+            (Some(b"r\0z".to_vec()), Some(b"r\0\0".to_vec()))
+        } else {
+            (None, None)
         };
 
         let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
@@ -4383,7 +4377,7 @@ mod tests {
                 ctx.clone(),
                 "".to_string(),
                 b"r\0".to_vec(),
-                make_end_key(false),
+                end_key.clone(),
                 20,
                 true,
                 false,
@@ -4397,7 +4391,7 @@ mod tests {
                 ctx.clone(),
                 "".to_string(),
                 b"r\0c2".to_vec(),
-                make_end_key(false),
+                end_key.clone(),
                 20,
                 true,
                 false,
@@ -4415,7 +4409,7 @@ mod tests {
                 ctx.clone(),
                 "".to_string(),
                 b"r\0".to_vec(),
-                make_end_key(false),
+                end_key.clone(),
                 20,
                 false,
                 false,
@@ -4429,7 +4423,7 @@ mod tests {
                 ctx.clone(),
                 "".to_string(),
                 b"r\0c2".to_vec(),
-                make_end_key(false),
+                end_key,
                 20,
                 false,
                 false,
@@ -4448,7 +4442,7 @@ mod tests {
                 ctx.clone(),
                 "".to_string(),
                 b"r\0z".to_vec(),
-                make_end_key(true),
+                end_key_reverse_scan.clone(),
                 20,
                 false,
                 true,
@@ -4468,7 +4462,7 @@ mod tests {
                 ctx.clone(),
                 "".to_string(),
                 b"r\0z".to_vec(),
-                make_end_key(true),
+                end_key_reverse_scan,
                 5,
                 false,
                 true,
@@ -4713,20 +4707,18 @@ mod tests {
     }
 
     fn test_raw_batch_scan_impl(api_version: ApiVersion) {
-        let make_ranges_for_api_v2 = |ranges: &mut Vec<KeyRange>, last_end_key: Vec<u8>| {
-            if let ApiVersion::V2 = api_version {
-                let ranges_len = ranges.len();
-                for i in 0..ranges_len {
-                    if ranges[i].get_end_key().is_empty() {
-                        let end_key = if i + 1 == ranges_len {
-                            last_end_key.clone()
-                        } else {
-                            ranges[i + 1].get_start_key().to_owned()
-                        };
-                        ranges[i].set_end_key(end_key);
-                    }
-                }
-            }
+        let make_ranges = |delimiters: Vec<Vec<u8>>| -> Vec<KeyRange> {
+            delimiters
+                .windows(2)
+                .map(|key_pair| {
+                    let mut range = KeyRange::default();
+                    range.set_start_key(key_pair[0].clone());
+                    if let ApiVersion::V2 = api_version {
+                        range.set_end_key(key_pair[1].clone());
+                    };
+                    range
+                })
+                .collect()
         };
 
         let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
@@ -4801,15 +4793,12 @@ mod tests {
             Some((b"r\0c3".to_vec(), b"cc33".to_vec())),
             Some((b"r\0d".to_vec(), b"dd".to_vec())),
         ];
-        let mut ranges: Vec<KeyRange> = vec![b"r\0a".to_vec(), b"r\0b".to_vec(), b"r\0c".to_vec()]
-            .into_iter()
-            .map(|k| {
-                let mut range = KeyRange::default();
-                range.set_start_key(k);
-                range
-            })
-            .collect();
-        make_ranges_for_api_v2(&mut ranges, b"r\0z".to_vec());
+        let ranges: Vec<KeyRange> = make_ranges(vec![
+            b"r\0a".to_vec(),
+            b"r\0b".to_vec(),
+            b"r\0c".to_vec(),
+            b"r\0z".to_vec(),
+        ]);
         expect_multi_values(
             results,
             block_on(storage.raw_batch_scan(
@@ -4930,16 +4919,12 @@ mod tests {
             Some((b"r\0a2".to_vec(), b"aa22".to_vec())),
             Some((b"r\0a1".to_vec(), b"aa11".to_vec())),
         ];
-        let mut ranges: Vec<KeyRange> =
-            vec![b"r\0c3".to_vec(), b"r\0b3".to_vec(), b"r\0a3".to_vec()]
-                .into_iter()
-                .map(|s| {
-                    let mut range = KeyRange::default();
-                    range.set_start_key(s);
-                    range
-                })
-                .collect();
-        make_ranges_for_api_v2(&mut ranges, b"r\0".to_vec());
+        let ranges: Vec<KeyRange> = make_ranges(vec![
+            b"r\0c3".to_vec(),
+            b"r\0b3".to_vec(),
+            b"r\0a3".to_vec(),
+            b"r\0".to_vec(),
+        ]);
         expect_multi_values(
             results,
             block_on(storage.raw_batch_scan(ctx.clone(), "".to_string(), ranges, 2, false, true))
