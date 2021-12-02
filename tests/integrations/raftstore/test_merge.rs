@@ -1214,7 +1214,7 @@ fn test_merge_snapshot_demote() {
 
     let region = pd_client.get_region(b"k1").unwrap();
     pd_client.must_add_peer(region.get_id(), new_peer(2, 2));
-    pd_client.must_add_peer(region.get_id(), new_peer(3, 3));
+    pd_client.must_add_peer(region.get_id(), new_learner_peer(3, 3));
 
     cluster.must_split(&region, b"k2");
 
@@ -1241,16 +1241,7 @@ fn test_merge_snapshot_demote() {
 
     // Now demote r2 on store 3 to learner, so its meta will be changed.
     let r2_on_store3 = find_peer(&r2, 3).unwrap().to_owned();
-    pd_client.must_joint_confchange(
-        r2.get_id(),
-        vec![
-            (ConfChangeType::AddLearnerNode, new_learner_peer(4, 4)),
-            (
-                ConfChangeType::AddLearnerNode,
-                new_learner_peer(3, r2_on_store3.get_id()),
-            ),
-        ],
-    );
+    pd_client.must_add_peer(r2.get_id(), new_peer(3, r2_on_store3.get_id()));
 
     cluster.clear_send_filters();
     // Now snapshot should be generated and merge on store 3 should be aborted.
