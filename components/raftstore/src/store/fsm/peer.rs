@@ -12,9 +12,7 @@ use std::{cmp, mem, u64};
 use batch_system::{BasicMailbox, Fsm};
 use collections::HashMap;
 use engine_traits::CF_RAFT;
-use engine_traits::{
-    Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatch, WriteBatchExt, WriteOptions,
-};
+use engine_traits::{Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatch, WriteOptions};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use keys::{self, enc_end_key, enc_start_key};
@@ -399,7 +397,7 @@ where
             if self.batch_req_size > (cfg.raft_entry_max_size.0 as f64 * 0.4) as u64 {
                 return true;
             }
-            if batch_req.get_requests().len() > <E as WriteBatchExt>::WRITE_BATCH_MAX_KEYS {
+            if batch_req.get_requests().len() > cfg.cmd_batch_max_key_num {
                 return true;
             }
         }
@@ -636,12 +634,16 @@ where
         if self.fsm.batch_req_builder.request.is_none() {
             return;
         }
-        if !force
-            && self.ctx.cfg.cmd_batch_concurrent_ready_max_count != 0
-            && self.fsm.peer.unpersisted_ready_len()
-                >= self.ctx.cfg.cmd_batch_concurrent_ready_max_count
-        {
-            return;
+        if !force {
+            if (self.ctx.cfg.cmd_batch_persist_max_count != 0
+                && self.fsm.peer.unpersisted_ready_len()
+                    >= self.ctx.cfg.cmd_batch_persist_max_count)
+                || (self.ctx.cfg.cmd_batch_apply_max_count != 0
+                    && self.fsm.peer.leader_applying_idx.len()
+                        >= self.ctx.cfg.cmd_batch_apply_max_count)
+            {
+                return;
+            }
         }
         fail_point!("propose_batch_raft_command", !force, |_| {});
         let (request, callback) = self

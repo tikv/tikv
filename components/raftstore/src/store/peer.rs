@@ -586,6 +586,8 @@ where
     persisted_number: u64,
     /// The context of applying snapshot.
     apply_snap_ctx: Option<ApplySnapshotContext>,
+    /// The applying index of each committed entries batch on leader.
+    pub leader_applying_idx: VecDeque<u64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -696,6 +698,7 @@ where
             unpersisted_ready: None,
             persisted_number: 0,
             apply_snap_ctx: None,
+            leader_applying_idx: VecDeque::default(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2227,6 +2230,9 @@ where
         }
         if let Some(last_entry) = committed_entries.last() {
             self.last_applying_idx = last_entry.get_index();
+            if self.is_leader() {
+                self.leader_applying_idx.push_back(last_entry.get_index());
+            }
             if self.last_applying_idx >= self.last_urgent_proposal_idx {
                 // Urgent requests are flushed, make it lazy again.
                 self.raft_group.skip_bcast_commit(true);
@@ -2648,6 +2654,13 @@ where
         if !self.is_leader() {
             self.mut_store()
                 .compact_cache_to(apply_state.applied_index + 1);
+        }
+
+        while let Some(index) = self.leader_applying_idx.front() {
+            if applied_index < *index {
+                break;
+            }
+            self.leader_applying_idx.pop_front();
         }
 
         let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;

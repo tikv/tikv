@@ -14,7 +14,8 @@ use tikv_util::HandyRwLock;
 #[test]
 fn test_async_io_commit_without_leader_persist() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = 0;
+    // Disable cmd batch
+    cluster.cfg.raft_store.cmd_batch = false;
     cluster.cfg.raft_store.store_io_pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
