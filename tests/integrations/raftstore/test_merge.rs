@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use kvproto::raft_cmdpb::CmdType;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
-use raft::eraftpb::ConfChangeType;
 use raft::eraftpb::MessageType;
 
 use engine_rocks::Compat;
