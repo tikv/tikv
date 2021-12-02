@@ -1199,71 +1199,6 @@ fn test_merge_remove_target_peer_isolated() {
         must_get_none(&cluster.get_engine(3), format!("k{}", i).as_bytes());
     }
 }
-<<<<<<< HEAD
-=======
-
-#[test]
-fn test_sync_max_ts_after_region_merge() {
-    use tikv::storage::{Engine, Snapshot};
-
-    let mut cluster = new_server_cluster(0, 3);
-    configure_for_merge(&mut cluster);
-    cluster.run();
-
-    // Transfer leader to node 1 first to ensure all operations happen on node 1
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-
-    cluster.must_put(b"k1", b"v1");
-    cluster.must_put(b"k3", b"v3");
-
-    let region = cluster.get_region(b"k1");
-    cluster.must_split(&region, b"k2");
-    let left = cluster.get_region(b"k1");
-    let right = cluster.get_region(b"k3");
-
-    let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
-    let storage = cluster
-        .sim
-        .read()
-        .unwrap()
-        .storages
-        .get(&1)
-        .unwrap()
-        .clone();
-    let wait_for_synced = |cluster: &mut Cluster<ServerCluster>| {
-        let region_id = right.get_id();
-        let leader = cluster.leader_of_region(region_id).unwrap();
-        let epoch = cluster.get_region_epoch(region_id);
-        let mut ctx = Context::default();
-        ctx.set_region_id(region_id);
-        ctx.set_peer(leader);
-        ctx.set_region_epoch(epoch);
-        let snap_ctx = SnapContext {
-            pb_ctx: &ctx,
-            ..Default::default()
-        };
-        let snapshot = storage.snapshot(snap_ctx).unwrap();
-        let txn_ext = snapshot.txn_ext.clone().unwrap();
-        for retry in 0..10 {
-            if txn_ext.is_max_ts_synced() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(1 << retry));
-        }
-        assert!(snapshot.ext().is_max_ts_synced());
-    };
-
-    wait_for_synced(&mut cluster);
-    let max_ts = cm.max_ts();
-
-    cluster.pd_client.trigger_tso_failure();
-    // Merge left to right
-    cluster.pd_client.must_merge(left.get_id(), right.get_id());
-
-    wait_for_synced(&mut cluster);
-    let new_max_ts = cm.max_ts();
-    assert!(new_max_ts > max_ts);
-}
 
 /// If a follower is demoted by a snapshot, its meta will be changed. The case is to ensure
 /// asserts in code can tolerate the change.
@@ -1322,4 +1257,3 @@ fn test_merge_snapshot_demote() {
     cluster.must_put(b"k4", b"v4");
     must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }
->>>>>>> 3b68ccd11... raftstore: relax merge result check (#11478)
