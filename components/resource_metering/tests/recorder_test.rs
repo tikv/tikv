@@ -4,10 +4,8 @@
 #[cfg(target_os = "linux")]
 mod linux {
     use collections::HashMap;
-    use resource_metering::{
-        register_collector, Collector, RawRecord, RawRecords, RecorderBuilder, TEST_TAG_PREFIX,
-    };
     use resource_metering::{utils, ResourceTagFactory};
+    use resource_metering::{Collector, RawRecord, RawRecords, RecorderBuilder, TEST_TAG_PREFIX};
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
     use std::time::Duration;
@@ -190,7 +188,7 @@ mod linux {
         // let collector = MockCollector::default();
         // let records = collector.records.clone();
 
-        let (handle, tag_factory) = RecorderBuilder::default()
+        let (handle, collector_registry, tag_factory) = RecorderBuilder::default()
             .add_sub_recorder(Box::new(resource_metering::CpuRecorder::default()))
             .spawn()
             .unwrap();
@@ -200,7 +198,7 @@ mod linux {
         // Heavy CPU only with 1 thread
         {
             let collector = DummyCollector::default();
-            let _handle = register_collector(Box::new(collector.clone()));
+            let _handle = collector_registry.register(Box::new(collector.clone()));
 
             let (handle, expected) = Operations::begin(tag_factory.clone())
                 .then(SetContext("ctx-0"))
@@ -215,7 +213,7 @@ mod linux {
         // Sleep only with 1 thread
         {
             let collector = DummyCollector::default();
-            let _handle = register_collector(Box::new(collector.clone()));
+            let _handle = collector_registry.register(Box::new(collector.clone()));
 
             let (handle, expected) = Operations::begin(tag_factory.clone())
                 .then(SetContext("ctx-0"))
@@ -230,7 +228,7 @@ mod linux {
         // Hybrid workload with 1 thread
         {
             let collector = DummyCollector::default();
-            let _handle = register_collector(Box::new(collector.clone()));
+            let _handle = collector_registry.register(Box::new(collector.clone()));
 
             let (handle, expected) = Operations::begin(tag_factory.clone())
                 .then(SetContext("ctx-0"))
@@ -253,7 +251,7 @@ mod linux {
         // Heavy CPU with 3 threads
         {
             let collector = DummyCollector::default();
-            let _handle = register_collector(Box::new(collector.clone()));
+            let _handle = collector_registry.register(Box::new(collector.clone()));
 
             let (handle0, expected0) = Operations::begin(tag_factory.clone())
                 .then(SetContext("ctx-0"))
@@ -280,7 +278,7 @@ mod linux {
         // Hybrid workload with 3 threads
         {
             let collector = DummyCollector::default();
-            let _handle = register_collector(Box::new(collector.clone()));
+            let _handle = collector_registry.register(Box::new(collector.clone()));
 
             let (handle0, expected0) = Operations::begin(tag_factory.clone())
                 .then(SetContext("ctx-0"))
