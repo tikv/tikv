@@ -65,7 +65,7 @@ sse = ["tikv/sse"]
 portable = ["tikv/portable"]
 
 [dependencies]
-fail = "0.4"
+fail = "0.5"
 batch-system = { path = "../components/batch-system", default-features = false }
 crc64fast = "0.1"
 crossbeam = "0.8"
@@ -82,6 +82,7 @@ pd_client = { path = "../components/pd_client", default-features = false }
 protobuf = { version = "2.8", features = ["bytes"] }
 more-asserts = "0.2"
 raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
+raft_log_engine = { path = "../components/raft_log_engine", default-features = false }
 raftstore = { path = "../components/raftstore", default-features = false }
 rand = "0.8.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
