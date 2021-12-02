@@ -2642,8 +2642,8 @@ impl Peer {
             return;
         }
 
-        let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
-        if pending_snapshot
+        if self.is_applying_snapshot()
+            || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
         {
             info!(
@@ -2651,7 +2651,6 @@ impl Peer {
                 "region_id" =>self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "from" => msg.get_from(),
-                "pending_snapshot" => pending_snapshot,
             );
             return;
         }
