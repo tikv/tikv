@@ -345,7 +345,7 @@ where
             }
         }
 
-        Trend::NoTrend;
+        Trend::NoTrend
     }
 }
 
