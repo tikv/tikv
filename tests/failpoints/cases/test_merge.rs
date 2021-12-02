@@ -1294,6 +1294,9 @@ fn test_merge_election_and_restart() {
     cluster.clear_send_filters();
     fail::remove("after_handle_catch_up_logs_for_merge");
     cluster.start().unwrap();
+
+    // Wait for region elected to avoid timeout and backoff.
+    cluster.leader_of_region(r2.get_id());
     // If merge can be resumed correctly, the put should succeed.
     cluster.must_put(b"k14", b"v14");
     // If logs from different term are process correctly, store 2 should have latest updates.
