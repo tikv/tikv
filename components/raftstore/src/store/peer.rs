@@ -2779,7 +2779,7 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         mut cb: Callback<EK::Snapshot>,
-        req: RaftCmdRequest,
+        mut req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
         disk_full_opt: DiskFullOpt,
     ) -> bool {
@@ -2820,7 +2820,7 @@ where
                     &mut stores,
                     &mut maybe_transfer_leader,
                 ) {
-                    self.propose_normal(ctx, req)
+                    self.propose_normal(ctx, &mut req)
                 } else {
                     // If leader node is disk full, try to transfer leader to a node with disk usage normal to
                     // keep write availablity not downback.
@@ -2892,6 +2892,7 @@ where
                         || req_admin_cmd_type == Some(AdminCmdType::ChangePeerV2),
                     index: idx,
                     term: self.term(),
+                    cmd: Some(req),
                     cb,
                     propose_time: None,
                     must_pass_epoch_check: has_applied_to_current_term,
@@ -3348,12 +3349,13 @@ where
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
         if self.leader_lease.inspect(Some(now)) == LeaseState::Suspect {
-            let req = RaftCmdRequest::default();
-            if let Ok(Either::Left(index)) = self.propose_normal(poll_ctx, req) {
+            let mut req = RaftCmdRequest::default();
+            if let Ok(Either::Left(index)) = self.propose_normal(poll_ctx, &mut req) {
                 let p = Proposal {
                     is_conf_change: false,
                     index,
                     term: self.term(),
+                    cmd: Some(req),
                     cb: Callback::None,
                     propose_time: Some(now),
                     must_pass_epoch_check: false,
@@ -3515,7 +3517,7 @@ where
     fn propose_normal<T>(
         &mut self,
         poll_ctx: &mut PollContext<EK, ER, T>,
-        mut req: RaftCmdRequest,
+        req: &mut RaftCmdRequest,
     ) -> Result<Either<u64, u64>> {
         if self.pending_merge_state.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge
@@ -3528,10 +3530,7 @@ where
         if self.has_applied_to_current_term() {
             // Only when applied index's term is equal to current leader's term, the information
             // in epoch checker is up to date and can be used to check epoch.
-            if let Some(index) = self
-                .cmd_epoch_checker
-                .propose_check_epoch(&req, self.term())
-            {
+            if let Some(index) = self.cmd_epoch_checker.propose_check_epoch(req, self.term()) {
                 return Ok(Either::Right(index));
             }
         } else if req.has_admin_request() {
@@ -3546,7 +3545,7 @@ where
         }
 
         // TODO: validate request for unexpected changes.
-        let ctx = match self.pre_propose(poll_ctx, &mut req) {
+        let ctx = match self.pre_propose(poll_ctx, req) {
             Ok(ctx) => ctx,
             Err(e) => {
                 warn!(
@@ -4822,6 +4821,7 @@ mod tests {
                 is_conf_change: false,
                 index,
                 term: gen_term(index),
+                cmd: None,
                 cb: Callback::write(Box::new(|_| {})),
                 propose_time: Some(u64_to_timespec(index)),
                 must_pass_epoch_check: false,
@@ -4895,6 +4895,7 @@ mod tests {
             pq.push(Proposal {
                 index,
                 term,
+                cmd: None,
                 cb,
                 is_conf_change: false,
                 propose_time: None,

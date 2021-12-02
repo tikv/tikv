@@ -92,6 +92,7 @@ where
 {
     pub index: u64,
     pub term: u64,
+    pub cmd: Option<RaftCmdRequest>,
     pub cb: Option<Callback<S>>,
 }
 
@@ -99,10 +100,11 @@ impl<S> PendingCmd<S>
 where
     S: Snapshot,
 {
-    fn new(index: u64, term: u64, cb: Callback<S>) -> PendingCmd<S> {
+    fn new(index: u64, term: u64, cmd: Option<RaftCmdRequest>, cb: Callback<S>) -> PendingCmd<S> {
         PendingCmd {
             index,
             term,
+            cmd,
             cb: Some(cb),
         }
     }
@@ -1038,7 +1040,9 @@ where
         let data = entry.get_data();
 
         if !data.is_empty() {
-            let cmd = util::parse_data_at(data, index, &self.tag);
+            let cmd = self
+                .take_pending_normal_cmd(index, term)
+                .unwrap_or_else(|| util::parse_data_at(data, index, &self.tag));
 
             if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
                 self.priority = Priority::Low;
@@ -1126,7 +1130,33 @@ where
         }
     }
 
-    fn find_pending(
+    /// Take the pending normal command.
+    /// Note that the `PendingCmd` of this index and term is not popped.
+    fn take_pending_normal_cmd(&mut self, index: u64, term: u64) -> Option<RaftCmdRequest> {
+        while let Some(mut head) = self.pending_cmds.pop_normal(index, term) {
+            if head.term == term {
+                if head.index == index {
+                    let cmd = head.cmd.take();
+                    self.pending_cmds.normals.push_front(head);
+                    return cmd;
+                } else {
+                    panic!(
+                        "{} unexpected callback at term {}, found index {}, expected {}",
+                        self.tag, term, head.index, index
+                    );
+                }
+            } else {
+                // Because of the lack of original RaftCmdRequest, we skip calling
+                // coprocessor here.
+                notify_stale_command(self.region_id(), self.id(), self.term, head);
+            }
+        }
+        None
+    }
+
+    /// Take the pending callback.
+    /// Note that the `PendingCmd` of this index and term is popped if any.
+    fn take_pending_cb(
         &mut self,
         index: u64,
         term: u64,
@@ -1195,7 +1225,7 @@ where
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
-        let cmd_cb = self.find_pending(index, term, is_conf_change_cmd(&cmd));
+        let cmd_cb = self.take_pending_cb(index, term, is_conf_change_cmd(&cmd));
         let cmd = Cmd::new(index, cmd, resp);
         apply_ctx
             .applied_batch
@@ -2941,6 +2971,7 @@ where
     pub is_conf_change: bool,
     pub index: u64,
     pub term: u64,
+    pub cmd: Option<RaftCmdRequest>,
     pub cb: Callback<S>,
     /// `propose_time` is set to the last time when a peer starts to renew lease.
     pub propose_time: Option<Timespec>,
@@ -3298,13 +3329,13 @@ where
         let propose_num = props_drainer.len();
         if self.delegate.stopped {
             for p in props_drainer {
-                let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
+                let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cmd, p.cb);
                 notify_stale_command(region_id, peer_id, self.delegate.term, cmd);
             }
             return;
         }
         for p in props_drainer {
-            let cmd = PendingCmd::new(p.index, p.term, p.cb);
+            let cmd = PendingCmd::new(p.index, p.term, p.cmd, p.cb);
             if p.is_conf_change {
                 if let Some(cmd) = self.delegate.pending_cmds.take_conf_change() {
                     // if it loses leadership before conf change is replicated, there may be
@@ -3979,7 +4010,7 @@ where
                     // So only shutdown needs to be checked here.
                     if !tikv_util::thread_group::is_shutdown(!cfg!(test)) {
                         for p in apply.cbs.drain(..) {
-                            let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
+                            let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cmd, p.cb);
                             notify_region_removed(apply.region_id, apply.peer_id, cmd);
                         }
                     }
@@ -4435,6 +4466,7 @@ mod tests {
             is_conf_change,
             index,
             term,
+            cmd: None,
             cb,
             propose_time: None,
             must_pass_epoch_check: false,
@@ -5823,7 +5855,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<KvTestSnapshot>::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::<KvTestSnapshot>::new(1, 1, None, Callback::None);
         });
         res.unwrap_err();
     }
@@ -5831,7 +5863,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak_dtor_not_abort() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<KvTestSnapshot>::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::<KvTestSnapshot>::new(1, 1, None, Callback::None);
             panic!("Don't abort");
             // It would abort and fail if there was a double-panic in PendingCmd dtor.
         });
