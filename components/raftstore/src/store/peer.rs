@@ -821,14 +821,22 @@ where
         }
         let log_term = self.get_index_term(log_idx);
 
-        let last_log_term = entries.last().unwrap().term;
-        if last_log_term > self.term() {
+        let last_log = entries.last().unwrap();
+        if last_log.term > self.term() {
             // Hack: In normal flow, when leader sends the entries, it will use a term that's not less
             // than the last log term. And follower will update its states correctly. For merge, we append
             // the log without raft, so we have to take care of term explicitly to get correct metadata.
+            info!(
+                "become follower for new logs";
+                "new_log_term" => last_log.term,
+                "new_log_index" => last_log.index,
+                "term" => self.term(),
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
             self.raft_group
                 .raft
-                .become_follower(last_log_term, INVALID_ID);
+                .become_follower(last_log.term, INVALID_ID);
         }
 
         self.raft_group
