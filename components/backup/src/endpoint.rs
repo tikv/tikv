@@ -882,7 +882,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     let ct = to_sst_compression_type(request.compression_type);
 
                     let stat = if is_raw_kv {
-                        let result = brange
+                        brange
                             .backup_raw_kv_to_file(
                                 engine,
                                 db.clone(),
@@ -894,8 +894,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                                 request.cipher.clone(),
                                 saver_tx.clone(),
                             )
-                            .await;
-                        result
+                            .await
                     } else {
                         let writer_builder = BackupWriterBuilder::new(
                             store_id,
@@ -907,7 +906,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                             sst_max_size,
                             request.cipher.clone(),
                         );
-                        let result = brange
+                        brange
                             .backup(
                                 writer_builder,
                                 engine,
@@ -916,8 +915,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                                 start_ts,
                                 saver_tx.clone(),
                             )
-                            .await;
-                        result
+                            .await
                     };
                     match stat {
                         Err(err) => {
