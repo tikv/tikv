@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 use crate::storage::kv::Modify;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -14,6 +15,15 @@ pub struct GcInfo {
     pub found_versions: usize,
     pub deleted_versions: usize,
     pub is_completed: bool,
+}
+
+impl GcInfo {
+    pub fn report_metrics(&self) {
+        MVCC_VERSIONS_HISTOGRAM.observe(self.found_versions as f64);
+        if self.deleted_versions > 0 {
+            GC_DELETE_VERSIONS_HISTOGRAM.observe(self.deleted_versions as f64);
+        }
+    }
 }
 
 /// `ReleasedLock` contains the information of the lock released by `commit`, `rollback` and so on.

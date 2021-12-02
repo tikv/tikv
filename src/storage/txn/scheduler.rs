@@ -23,6 +23,7 @@
 
 use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,6 +35,7 @@ use futures::compat::Future01CompatExt;
 use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
 use resource_metering::{FutureExt, ResourceMeteringTag};
+use tikv_kv::{Snapshot, SnapshotExt};
 use tikv_util::{time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::TimeStamp;
 
@@ -184,6 +186,8 @@ struct SchedulerInner<L: LockManager> {
 
     flow_controller: Arc<FlowController>,
 
+    control_mutex: Arc<tokio::sync::Mutex<bool>>,
+
     lock_mgr: L,
 
     concurrency_manager: ConcurrencyManager,
@@ -283,10 +287,10 @@ impl<L: LockManager> SchedulerInner<L> {
 /// Scheduler which schedules the execution of `storage::Command`s.
 #[derive(Clone)]
 pub struct Scheduler<E: Engine, L: LockManager> {
-    // `engine` is `None` means currently the program is in scheduler worker threads.
-    engine: Option<E>,
     inner: Arc<SchedulerInner<L>>,
-    control_mutex: Arc<tokio::sync::Mutex<bool>>,
+    // The engine can be fetched from the thread local storage of scheduler threads.
+    // So, we don't store the engine here.
+    _engine: PhantomData<E>,
 }
 
 unsafe impl<E: Engine, L: LockManager> Send for Scheduler<E, L> {}
@@ -321,11 +325,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 "sched-worker-pool",
             ),
             high_priority_pool: SchedPool::new(
-                engine.clone(),
+                engine,
                 std::cmp::max(1, config.scheduler_worker_pool_size / 2),
                 reporter,
                 "sched-high-pri-pool",
             ),
+            control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
             lock_mgr,
             concurrency_manager,
             pipelined_pessimistic_lock,
@@ -338,9 +343,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             "initialized the transaction scheduler"
         );
         Scheduler {
-            engine: Some(engine),
             inner,
-            control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
+            _engine: PhantomData,
         }
     }
 
@@ -469,59 +473,39 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 };
                 // The program is currently in scheduler worker threads.
                 // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
-                match unsafe {
-                    with_tls_engine(|engine: &E| kv::snapshot_for_write(engine, snap_ctx))
-                }
-                .await
+                match unsafe { with_tls_engine(|engine: &E| kv::snapshot(engine, snap_ctx)) }.await
                 {
-                    Ok((cb_ctx, snapshot)) => {
-                        debug!(
-                            "receive snapshot finish msg";
-                            "cid" => task.cid, "cb_ctx" => ?cb_ctx
-                        );
-
-                        match snapshot {
-                            Ok(snapshot) => {
-                                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
-
-                                if !sched
-                                    .inner
-                                    .get_task_slot(task.cid)
-                                    .get(&task.cid)
-                                    .unwrap()
-                                    .try_own()
-                                {
-                                    sched.finish_with_err(
-                                        task.cid,
-                                        StorageErrorInner::DeadlineExceeded,
-                                    );
-                                    return;
-                                }
-
-                                if let Some(term) = cb_ctx.term {
-                                    task.cmd.ctx_mut().set_term(term);
-                                }
-                                task.extra_op = cb_ctx.txn_extra_op;
-
-                                debug!(
-                                    "process cmd with snapshot";
-                                    "cid" => task.cid, "cb_ctx" => ?cb_ctx
-                                );
-                                sched.process(snapshot, task).await;
-                            }
-                            Err(err) => {
-                                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
-
-                                info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
-                                sched.finish_with_err(task.cid, Error::from(err));
-                            }
+                    Ok(snapshot) => {
+                        SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
+                        let term = snapshot.ext().get_term();
+                        let extra_op = snapshot.ext().get_txn_extra_op();
+                        if !sched
+                            .inner
+                            .get_task_slot(task.cid)
+                            .get(&task.cid)
+                            .unwrap()
+                            .try_own()
+                        {
+                            sched.finish_with_err(task.cid, StorageErrorInner::DeadlineExceeded);
+                            return;
                         }
-                    }
-                    Err(e) => {
-                        SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
-                        info!("engine async_snapshot failed"; "err" => ?e);
-                        sched.finish_with_err(task.cid, e);
+                        if let Some(term) = term {
+                            task.cmd.ctx_mut().set_term(term.get());
+                        }
+                        task.extra_op = extra_op;
+
+                        debug!(
+                            "process cmd with snapshot";
+                            "cid" => task.cid, "term" => ?term, "extra_op" => ?extra_op,
+                        );
+                        sched.process(snapshot, task).await;
+                    }
+                    Err(err) => {
+                        SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
+
+                        info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
+                        sched.finish_with_err(task.cid, Error::from(err));
                     }
                 }
             })
@@ -876,7 +860,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
                     let write_size = to_be_write.size();
                     // The callback to receive async results of write prepare from the storage engine.
-                    let engine_cb = Box::new(move |(_, result): (_, EngineResult<()>)| {
+                    let engine_cb = Box::new(move |result: EngineResult<()>| {
                         sched_pool
                             .spawn(async move {
                                 fail_point!("scheduler_async_write_finish");
@@ -916,7 +900,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             // The delay may exceed 1s, and the speed limit is changed every second.
                             // If the speed of next second is larger than the one of first second,
                             // without the mutex, the write flow can't throttled strictly.
-                            let _guard = self.control_mutex.lock().await;
+                            let control_mutex = self.inner.control_mutex.clone();
+                            let _guard = control_mutex.lock().await;
                             let delay = self.inner.flow_controller.consume(write_size);
                             let delay_end = Instant::now_coarse() + delay;
                             while !self.inner.flow_controller.is_unlimited() {

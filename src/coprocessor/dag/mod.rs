@@ -24,6 +24,7 @@ pub struct DagHandlerBuilder<S: Store + 'static> {
     batch_row_limit: usize,
     is_streaming: bool,
     is_cache_enabled: bool,
+    paging_size: Option<u64>,
 }
 
 impl<S: Store + 'static> DagHandlerBuilder<S> {
@@ -35,6 +36,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
         batch_row_limit: usize,
         is_streaming: bool,
         is_cache_enabled: bool,
+        paging_size: Option<u64>,
     ) -> Self {
         DagHandlerBuilder {
             req,
@@ -45,6 +47,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
             batch_row_limit,
             is_streaming,
             is_cache_enabled,
+            paging_size,
         }
     }
 
@@ -64,6 +67,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
             self.is_cache_enabled,
             self.batch_row_limit,
             self.is_streaming,
+            self.paging_size,
         )?
         .into_boxed())
     }
@@ -84,6 +88,7 @@ impl BatchDAGHandler {
         is_cache_enabled: bool,
         streaming_batch_limit: usize,
         is_streaming: bool,
+        paging_size: Option<u64>,
     ) -> Result<Self> {
         Ok(Self {
             runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request(
@@ -93,6 +98,7 @@ impl BatchDAGHandler {
                 deadline,
                 streaming_batch_limit,
                 is_streaming,
+                paging_size,
             )?,
             data_version,
         })
@@ -120,15 +126,19 @@ impl RequestHandler for BatchDAGHandler {
 }
 
 fn handle_qe_response(
-    result: tidb_query_common::Result<SelectResponse>,
+    result: tidb_query_common::Result<(SelectResponse, Option<IntervalRange>)>,
     can_be_cached: bool,
     data_version: Option<u64>,
 ) -> Result<Response> {
     use tidb_query_common::error::ErrorInner;
 
     match result {
-        Ok(sel_resp) => {
+        Ok((sel_resp, range)) => {
             let mut resp = Response::default();
+            if let Some(range) = range {
+                resp.mut_range().set_start(range.lower_inclusive);
+                resp.mut_range().set_end(range.upper_exclusive);
+            }
             resp.set_data(box_try!(sel_resp.write_to_bytes()));
             resp.set_can_be_cached(can_be_cached);
             resp.set_is_cache_hit(false);

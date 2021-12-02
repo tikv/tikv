@@ -6,7 +6,7 @@ mod forward;
 
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
-use txn_types::{Key, TimeStamp, TsSet, Value, Write, WriteRef, WriteType};
+use txn_types::{Key, Lock, LockType, TimeStamp, TsSet, Value, Write, WriteRef, WriteType};
 
 use self::backward::BackwardKvScanner;
 use self::forward::{
@@ -88,9 +88,21 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
+    /// Set locks that the scanner can read through. Locks with start_ts in the specified set will be
+    /// accessed during scanning.
+    ///
+    /// Default is empty.
+    #[inline]
+    pub fn access_locks(mut self, locks: TsSet) -> Self {
+        self.0.access_locks = locks;
+        self
+    }
+
     /// Set the hint for the minimum commit ts we want to scan.
     ///
     /// Default is empty.
+    ///
+    /// NOTE: user should be careful to use it with `ExtraOp::ReadOldValue`.
     #[inline]
     pub fn hint_min_ts(mut self, min_ts: Option<TimeStamp>) -> Self {
         self.0.hint_min_ts = min_ts;
@@ -100,6 +112,8 @@ impl<S: Snapshot> ScannerBuilder<S> {
     /// Set the hint for the maximum commit ts we want to scan.
     ///
     /// Default is empty.
+    ///
+    /// NOTE: user should be careful to use it with `ExtraOp::ReadOldValue`.
     #[inline]
     pub fn hint_max_ts(mut self, max_ts: Option<TimeStamp>) -> Self {
         self.0.hint_max_ts = max_ts;
@@ -229,6 +243,7 @@ pub struct ScannerConfig<S: Snapshot> {
     desc: bool,
 
     bypass_locks: TsSet,
+    access_locks: TsSet,
 
     check_has_newer_ts_data: bool,
 }
@@ -247,6 +262,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             ts,
             desc: false,
             bypass_locks: Default::default(),
+            access_locks: Default::default(),
             check_has_newer_ts_data: false,
         }
     }
@@ -471,15 +487,66 @@ where
     Ok(None)
 }
 
+pub(crate) fn load_data_by_lock<S: Snapshot, I: Iterator>(
+    current_user_key: &Key,
+    cfg: &ScannerConfig<S>,
+    default_cursor: &mut Cursor<I>,
+    lock: Lock,
+    statistics: &mut Statistics,
+) -> Result<Option<Value>> {
+    match lock.lock_type {
+        LockType::Put => {
+            if cfg.omit_value {
+                return Ok(Some(vec![]));
+            }
+            match lock.short_value {
+                Some(value) => {
+                    // Value is carried in `lock`.
+                    Ok(Some(value.to_vec()))
+                }
+                None => {
+                    let value = if cfg.desc {
+                        near_reverse_load_data_by_write(
+                            default_cursor,
+                            current_user_key,
+                            lock.ts,
+                            statistics,
+                        )
+                    } else {
+                        near_load_data_by_write(
+                            default_cursor,
+                            current_user_key,
+                            lock.ts,
+                            statistics,
+                        )
+                    }?;
+                    Ok(Some(value))
+                }
+            }
+        }
+        LockType::Delete => Ok(None),
+        LockType::Lock | LockType::Pessimistic => {
+            // Only when fails to call `Lock::check_ts_conflict()`, the function is called, so it's
+            // unreachable here.
+            unreachable!()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::kv::SEEK_BOUND;
-    use crate::storage::kv::{Engine, RocksEngine, TestEngineBuilder};
+    use crate::storage::kv::{
+        Engine, PerfStatisticsInstant, RocksEngine, TestEngineBuilder, SEEK_BOUND,
+    };
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
     use crate::storage::txn::tests::*;
-    use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
+    use crate::storage::txn::{
+        Error as TxnError, ErrorInner as TxnErrorInner, TxnEntry, TxnEntryScanner,
+    };
+    use engine_traits::MiscExt;
+    use txn_types::OldValue;
 
     // Collect data from the scanner and assert it equals to `expected`, which is a collection of
     // (raw_key, value).
@@ -613,7 +680,7 @@ mod tests {
         ];
 
         if desc {
-            expected_result = expected_result.into_iter().rev().collect();
+            expected_result.reverse();
         }
 
         let scanner = ScannerBuilder::new(snapshot.clone(), 30.into())
@@ -702,6 +769,52 @@ mod tests {
         test_scan_bypass_locks_impl(true);
     }
 
+    fn test_scan_access_locks_impl(desc: bool) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        for i in 0..=6 {
+            must_prewrite_put(&engine, &[i], &[b'v', i], &[i], 10);
+            must_commit(&engine, &[i], 10, 20);
+        }
+
+        must_prewrite_put(&engine, &[0], &[b'v', 0, 0], &[0], 30);
+        must_prewrite_delete(&engine, &[1], &[1], 40);
+        must_prewrite_lock(&engine, &[2], &[2], 50);
+        must_prewrite_put(&engine, &[3], &[b'v', 3, 3], &[3], 60);
+        must_prewrite_put(&engine, &[4], &[b'v', 4, 4], &[4], 70);
+        must_prewrite_put(&engine, &[5], &[b'v', 5, 5], &[5], 80);
+
+        let bypass_locks = TsSet::from_u64s(vec![70]);
+        let access_locks = TsSet::from_u64s(vec![30, 40, 50]);
+
+        let mut expected_result = vec![
+            (vec![0], Some(vec![b'v', 0, 0])), /* access */
+            /* vec![1] access */
+            (vec![2], Some(vec![b'v', 2])), /* ignore */
+            (vec![3], None),                /* locked */
+            (vec![4], Some(vec![b'v', 4])), /* bypass */
+            (vec![5], Some(vec![b'v', 5])), /* ignore */
+            (vec![6], Some(vec![b'v', 6])), /* no lock */
+        ];
+        if desc {
+            expected_result.reverse();
+        }
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let scanner = ScannerBuilder::new(snapshot, 75.into())
+            .desc(desc)
+            .bypass_locks(bypass_locks)
+            .access_locks(access_locks)
+            .build()
+            .unwrap();
+        check_scan_result(scanner, &expected_result);
+    }
+
+    #[test]
+    fn test_scan_access_locks() {
+        test_scan_access_locks_impl(false);
+        test_scan_access_locks_impl(true);
+    }
+
     fn must_met_newer_ts_data<E: Engine>(
         engine: &E,
         scanner_ts: impl Into<TimeStamp>,
@@ -779,5 +892,70 @@ mod tests {
         test_met_newer_ts_data_impl(false, true);
         test_met_newer_ts_data_impl(true, false);
         test_met_newer_ts_data_impl(true, true);
+    }
+
+    #[test]
+    fn test_old_value_with_hint_min_ts() {
+        let engine = TestEngineBuilder::new().build_without_cache().unwrap();
+        let create_scanner = |from_ts: u64| {
+            let snap = engine.snapshot(Default::default()).unwrap();
+            ScannerBuilder::new(snap, TimeStamp::max())
+                .fill_cache(false)
+                .hint_min_ts(Some(from_ts.into()))
+                .build_delta_scanner(from_ts.into(), ExtraOp::ReadOldValue)
+                .unwrap()
+        };
+
+        // Create the initial data with CF_WRITE L0: |zkey_110, zkey1_160|
+        must_prewrite_put(&engine, b"zkey", b"value", b"zkey", 100);
+        must_commit(&engine, b"zkey", 100, 110);
+        must_prewrite_put(&engine, b"zkey1", b"value", b"zkey1", 150);
+        must_commit(&engine, b"zkey1", 150, 160);
+        engine.kv_engine().flush_cf(CF_WRITE, true).unwrap();
+        must_prewrite_delete(&engine, b"zkey", b"zkey", 200);
+
+        let tests = vec![
+            // `zkey_110` is filtered, so no old value and block reads is 0.
+            (200, OldValue::seek_write(b"zkey", 200), 0),
+            // Old value can be found as expected.
+            (100, OldValue::value(b"value".to_vec()), 1),
+            // `zkey_110` isn't filtered, so needs to read 1 block from CF_WRITE.
+            // But we can't ensure whether it's the old value or not.
+            (150, OldValue::seek_write(b"zkey", 200), 1),
+        ];
+        for (from_ts, expected_old_value, block_reads) in tests {
+            let mut scanner = create_scanner(from_ts);
+            let perf_instant = PerfStatisticsInstant::new();
+            match scanner.next_entry().unwrap().unwrap() {
+                TxnEntry::Prewrite { old_value, .. } => assert_eq!(old_value, expected_old_value),
+                TxnEntry::Commit { .. } => unreachable!(),
+            }
+            let delta = perf_instant.delta().0;
+            assert_eq!(delta.block_read_count, block_reads);
+        }
+
+        // CF_WRITE L0: |zkey_110, zkey1_160|, |zkey_210|
+        must_commit(&engine, b"zkey", 200, 210);
+        engine.kv_engine().flush_cf(CF_WRITE, false).unwrap();
+
+        let tests = vec![
+            // `zkey_110` is filtered, so no old value and block reads is 0.
+            (200, OldValue::seek_write(b"zkey", 209), 0),
+            // Old value can be found as expected.
+            (100, OldValue::value(b"value".to_vec()), 1),
+            // `zkey_110` isn't filtered, so needs to read 1 block from CF_WRITE.
+            // But we can't ensure whether it's the old value or not.
+            (150, OldValue::seek_write(b"zkey", 209), 1),
+        ];
+        for (from_ts, expected_old_value, block_reads) in tests {
+            let mut scanner = create_scanner(from_ts);
+            let perf_instant = PerfStatisticsInstant::new();
+            match scanner.next_entry().unwrap().unwrap() {
+                TxnEntry::Prewrite { .. } => unreachable!(),
+                TxnEntry::Commit { old_value, .. } => assert_eq!(old_value, expected_old_value),
+            }
+            let delta = perf_instant.delta().0;
+            assert_eq!(delta.block_read_count, block_reads);
+        }
     }
 }

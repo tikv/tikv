@@ -308,6 +308,7 @@ impl BackupRange {
             IsolationLevel::Si,
             false, /* fill_cache */
             Default::default(),
+            Default::default(),
             false,
         );
         let start_key = self.start_key.clone();
