@@ -52,17 +52,16 @@ impl CollectorRegistry {
         static NEXT_COLLECTOR_ID: AtomicU64 = AtomicU64::new(1);
         let id = CollectorId(NEXT_COLLECTOR_ID.fetch_add(1, Relaxed));
 
-        if self
-            .tx
-            .send(CollectorReg::Register { collector, id })
-            .is_ok()
-        {
-            CollectorHandle {
+        let reg_msg = CollectorReg::Register { collector, id };
+        match self.tx.send(reg_msg) {
+            Ok(_) => CollectorHandle {
                 id,
                 tx: Some(self.tx.clone()),
+            },
+            Err(err) => {
+                warn!("failed to register collector"; "err" => ?err);
+                CollectorHandle { id, tx: None }
             }
-        } else {
-            CollectorHandle { id, tx: None }
         }
     }
 }

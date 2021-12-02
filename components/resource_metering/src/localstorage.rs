@@ -2,11 +2,11 @@
 
 use crate::SharedTagPtr;
 
-use std::cell::Cell;
+use std::cell::RefCell;
 
 thread_local! {
     /// `STORAGE` is a thread-localized instance of [LocalStorage].
-    pub static STORAGE: Cell<Option<LocalStorage>> = Cell::new(None);
+    pub static STORAGE: RefCell<LocalStorage> = RefCell::new(LocalStorage::default());
 }
 
 /// `LocalStorage` is a thread-local structure that contains all necessary data of submodules.
@@ -15,7 +15,9 @@ thread_local! {
 /// need to be stored centrally in `LocalStorage`.
 #[derive(Clone, Default)]
 pub struct LocalStorage {
-    pub is_set: Cell<bool>,
+    pub registered: bool,
+    pub register_failed_times: u32,
+    pub is_set: bool,
     pub shared_ptr: SharedTagPtr,
 }
 
@@ -25,5 +27,7 @@ pub struct LocalStorage {
 #[derive(Clone)]
 pub struct LocalStorageRef {
     pub id: usize,
-    pub storage: LocalStorage, // TODO: change to shared_ptr
+
+    // TODO(zhongzc): change to shared_ptr to keep `LocalStorage` one per thread.
+    pub storage: LocalStorage,
 }

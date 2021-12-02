@@ -4,6 +4,7 @@
 
 #![feature(shrink_to)]
 #![feature(hash_drain_filter)]
+#![feature(core_intrinsics)]
 
 mod client;
 mod collector;
@@ -23,10 +24,12 @@ pub use model::*;
 pub use recorder::{init_recorder, CpuRecorder, Recorder, RecorderBuilder, RecorderHandle};
 pub use reporter::{Reporter, Task};
 
+pub const MAX_THREAD_REGISTER_RETRY: u32 = 10;
 pub const TEST_TAG_PREFIX: &[u8] = b"__resource_metering::tests::";
 
 use crate::localstorage::{LocalStorage, LocalStorageRef, STORAGE};
 
+use std::intrinsics::unlikely;
 use std::pin::Pin;
 use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::Ordering::SeqCst;
@@ -34,6 +37,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crossbeam::channel::Sender;
+use tikv_util::warn;
 
 /// This structure is used as a label to distinguish different request contexts.
 ///
@@ -63,27 +67,24 @@ impl ResourceMeteringTag {
     /// [STORAGE]: crate::localstorage::STORAGE
     pub fn attach(&self) -> Guard {
         STORAGE.with(move |s| {
-            let ls = s.take().unwrap_or_else(move || self.register());
+            let mut ls = s.borrow_mut();
 
-            if ls.is_set.get() {
-                panic!("nested attachment is not allowed")
+            if unlikely(!ls.registered && ls.register_failed_times < MAX_THREAD_REGISTER_RETRY) {
+                ls.registered = self.tag_factory.register_local_storage(&ls);
+                if !ls.registered {
+                    ls.register_failed_times += 1;
+                }
             }
+
+            assert!(!ls.is_set, "nested attachment is not allowed");
             let prev = ls.shared_ptr.swap(self.infos.clone());
             assert!(prev.is_none());
-            ls.is_set.set(true);
-
-            s.set(Some(ls));
+            ls.is_set = true;
 
             Guard {
                 _tag: self.infos.clone(),
             }
         })
-    }
-
-    fn register(&self) -> LocalStorage {
-        let storage = LocalStorage::default();
-        self.tag_factory.register_local_storage(&storage);
-        storage
     }
 }
 
@@ -102,12 +103,9 @@ pub struct Guard {
 impl Drop for Guard {
     fn drop(&mut self) {
         STORAGE.with(|s| {
-            // safe to `unwrap` as the construction guarantees it cannot be `None`
-            let ls = s.take().unwrap();
-
+            let mut ls = s.borrow_mut();
             while ls.shared_ptr.take().is_none() {}
-            ls.is_set.set(false);
-            s.set(Some(ls));
+            ls.is_set = false;
         })
     }
 }
@@ -132,12 +130,18 @@ impl ResourceTagFactory {
         ResourceMeteringTag::new(Arc::new(tag_infos), self.clone())
     }
 
-    fn register_local_storage(&self, storage: &LocalStorage) {
+    fn register_local_storage(&self, storage: &LocalStorage) -> bool {
         let lsr = LocalStorageRef {
             id: utils::thread_id(),
             storage: storage.clone(),
         };
-        let _ = self.tx.send(lsr);
+        match self.tx.send(lsr) {
+            Ok(_) => true,
+            Err(err) => {
+                warn!("failed to register thread"; "err" => ?err);
+                false
+            }
+        }
     }
 }
 
@@ -290,22 +294,20 @@ mod tests {
                 let guard = tag.attach();
                 assert_eq!(guard._tag, tag.infos);
                 STORAGE.with(|s| {
-                    let ls = s.take().unwrap();
+                    let ls = s.borrow_mut();
                     let local_tag = ls.shared_ptr.take();
                     assert!(local_tag.is_some());
                     let tag_infos = local_tag.unwrap();
                     assert_eq!(tag_infos, tag.infos);
                     assert_eq!(tag_infos, guard._tag);
                     assert!(ls.shared_ptr.swap(tag_infos).is_none());
-                    s.set(Some(ls));
                 });
                 // drop here.
             }
             STORAGE.with(|s| {
-                let ls = s.take().unwrap();
+                let ls = s.borrow_mut();
                 let local_tag = ls.shared_ptr.take();
                 assert!(local_tag.is_none());
-                s.set(Some(ls));
             });
         })
         .join()
