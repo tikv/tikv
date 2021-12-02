@@ -642,6 +642,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
 
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
         fail_point!("cdc_before_handle_multi_batch", |_| {});
+        let mut statistics = Statistics::default();
         for batch in multi {
             let region_id = batch.region_id;
             let mut deregister = None;
@@ -650,7 +651,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     // Skip the batch if the delegate has failed.
                     continue;
                 }
-                if let Err(e) = delegate.on_batch(batch, &old_value_cb, &mut self.old_value_cache) {
+                if let Err(e) = delegate.on_batch(batch, &old_value_cb, &mut self.old_value_cache, &mut statistics) {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the delegate.
                     deregister = Some(Deregister::Delegate {

@@ -15,7 +15,7 @@ use crate::metrics::*;
 use crate::Result;
 
 pub(crate) type OldValueCallback =
-    Box<dyn Fn(Key, TimeStamp, &mut OldValueCache) -> (Option<Vec<u8>>, Option<Statistics>) + Send>;
+    Box<dyn Fn(Key, TimeStamp, &mut OldValueCache, &mut Statistics) -> Result<Option<Vec<u8>>> + Send>;
 
 #[derive(Default)]
 pub struct OldValueCacheSizePolicy(usize);
@@ -82,16 +82,6 @@ impl<S: EngineSnapshot> OldValueReader<S> {
         Self { snapshot }
     }
 
-    fn get_value_default(&self, key: &Key, statistics: &mut Statistics) -> Option<Value> {
-        statistics.data.get += 1;
-        let mut opts = ReadOptions::new();
-        opts.set_fill_cache(false);
-        self.snapshot
-            .get_cf_opt(opts, CF_DEFAULT, key)
-            .unwrap()
-            .map(|v| v.deref().to_vec())
-    }
-
     /// If `on_one_user_key` is true the cursor's upper bound will be set to the most early
     /// version of `key`.
     pub fn new_write_cursor(&self, key: &Key, on_one_user_key: bool) -> Cursor<S::Iter> {
@@ -126,40 +116,7 @@ impl<S: EngineSnapshot> OldValueReader<S> {
             None => Some(self.new_write_cursor(key, true)),
         };
         let write_cursor = cursor.unwrap_or_else(|| new_cursor.as_mut().unwrap());
-
-        let (user_key, seek_ts) = Key::split_on_ts_for(key.as_encoded()).unwrap();
-        if write_cursor.near_seek(key, &mut statistics.write)?
-            && Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key)
-        {
-            let mut old_value = None;
-            while Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key) {
-                let write = WriteRef::parse(write_cursor.value(&mut statistics.write)).unwrap();
-                old_value = match write.write_type {
-                    WriteType::Put if write.check_gc_fence_as_latest_version(seek_ts) => {
-                        match write.short_value {
-                            Some(short_value) => Some(short_value.to_vec()),
-                            None => {
-                                let key =
-                                    key.clone().truncate_ts().unwrap().append_ts(write.start_ts);
-                                self.get_value_default(&key, statistics)
-                            }
-                        }
-                    }
-                    WriteType::Delete | WriteType::Put => None,
-                    WriteType::Rollback | WriteType::Lock => {
-                        if !write_cursor.next(&mut statistics.write) {
-                            None
-                        } else {
-                            continue;
-                        }
-                    }
-                };
-                break;
-            }
-            Ok(old_value)
-        } else {
-            Ok(None)
-        }
+        near_seek_old_value(&self.snapshot, key, write_cursor, statistics)
     }
 }
 
@@ -189,7 +146,7 @@ pub fn get_old_value<S: EngineSnapshot>(
                         let start = Instant::now();
                         let mut opts = ReadOptions::new();
                         opts.set_fill_cache(false);
-                        let value = reader.get_value_default(&prev_key, &mut statistics);
+                        let value = get_value_default(&reader.snapshot, &prev_key, &mut statistics);
                         CDC_OLD_VALUE_DURATION_HISTOGRAM
                             .with_label_values(&["get"])
                             .observe(start.saturating_elapsed().as_secs_f64());
@@ -217,6 +174,60 @@ pub fn get_old_value<S: EngineSnapshot>(
         old_value_cache.miss_none_count += 1;
     }
     (value, Some(statistics))
+}
+
+fn get_value_default<S: EngineSnapshot>(
+    snapshot: &S,
+    key: &Key,
+    statistics: &mut Statistics,
+) -> Option<Value> {
+    statistics.data.get += 1;
+    let mut opts = ReadOptions::new();
+    opts.set_fill_cache(false);
+    snapshot
+        .get_cf_opt(opts, CF_DEFAULT, key)
+        .unwrap()
+        .map(|v| v.deref().to_vec())
+}
+
+fn near_seek_old_value<S: EngineSnapshot>(
+    snapshot: &S,
+    key: &Key,
+    write_cursor: &mut Cursor<S::Iter>,
+    statistics: &mut Statistics,
+) -> Result<Option<Value>> {
+    let (user_key, seek_ts) = Key::split_on_ts_for(key.as_encoded()).unwrap();
+    if write_cursor.near_seek(key, &mut statistics.write)?
+        && Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key)
+    {
+        let mut old_value = None;
+        while Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key) {
+            let write = WriteRef::parse(write_cursor.value(&mut statistics.write)).unwrap();
+            old_value = match write.write_type {
+                WriteType::Put if write.check_gc_fence_as_latest_version(seek_ts) => {
+                    match write.short_value {
+                        Some(short_value) => Some(short_value.to_vec()),
+                        None => {
+                            let key = key.clone().truncate_ts().unwrap().append_ts(write.start_ts);
+                            get_value_default(snapshot, &key, statistics)
+                        }
+                    }
+                }
+                WriteType::Delete | WriteType::Put => None,
+                WriteType::Rollback | WriteType::Lock => {
+                    if !write_cursor.next(&mut statistics.write) {
+                        None
+                    } else {
+                        continue;
+                    }
+                }
+            };
+            break;
+        }
+        Ok(old_value)
+    } else {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
