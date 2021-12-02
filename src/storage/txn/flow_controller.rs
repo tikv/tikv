@@ -188,7 +188,7 @@ impl FlowController {
 }
 
 const SMOOTHER_STALE_RECORD_THRESHOLD: f64 = 300.0; // 5min
-const SMOOTHER_TREND_TIME_RANGE_THRESHOLD: f64 = 120.0; // 2min
+const SMOOTHER_TREND_TIME_RANGE_THRESHOLD: f64 = 60.0; // 1min
 
 // Smoother is a sliding window used to provide steadier flow statistics.
 struct Smoother<T, const CAP: usize>
@@ -359,7 +359,12 @@ where
 // And all of them are collected from the hook of RocksDB's event listener.
 struct CFFlowChecker {
     // Memtable related
-    last_num_memtables: Smoother<u64, 20>,
+    // Assume the write flow is about 100MB/s, since the memtable size of 
+    // write & default cf is 128MB, so there are about 300 flush events in 5
+    // minutes, we will observe the number of memtables about 300 times. We
+    // set the capacity of `last_num_memtables` to 512 to make sure we keep
+    // enough fresh record in the most cases.
+    last_num_memtables: Smoother<u64, 512>,
     memtable_debt: f64,
     memtable_init_speed: bool,
 
@@ -370,20 +375,22 @@ struct CFFlowChecker {
     // considering L0 compactions nearly includes all L0 files in a round.
     // So to evaluate the accumulation of L0 files, here only records the number
     // of L0 files right after L0 compactions.
-    long_term_num_l0_files: Smoother<u64, 20>,
+    long_term_num_l0_files: Smoother<u64, 512>,
 
     // L0 production flow related
     last_flush_bytes: u64,
     last_flush_bytes_time: Instant,
-    short_term_l0_production_flow: Smoother<u64, 10>,
+    short_term_l0_production_flow: Smoother<u64, 512>,
 
     // L0 consumption flow related
     last_l0_bytes: u64,
     last_l0_bytes_time: Instant,
-    short_term_l0_consumption_flow: Smoother<u64, 3>,
+    short_term_l0_consumption_flow: Smoother<u64, 512>,
 
     // Pending compaction bytes related
-    long_term_pending_bytes: Smoother<f64, 60>,
+    // When the write flow is about 100MB/s, we observed that the compaction ops 
+    // is about 2.5, it means there are 750 compaction events in 5 minutes.
+    long_term_pending_bytes: Smoother<f64, 1024>,
     pending_bytes_before_unsafe_destroy_range: Option<f64>,
 
     // On start related markers. Because after restart, the memtable, l0 files
