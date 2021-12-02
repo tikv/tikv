@@ -23,6 +23,7 @@
 
 use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -185,6 +186,8 @@ struct SchedulerInner<L: LockManager> {
 
     flow_controller: Arc<FlowController>,
 
+    control_mutex: Arc<tokio::sync::Mutex<bool>>,
+
     lock_mgr: L,
 
     concurrency_manager: ConcurrencyManager,
@@ -284,10 +287,10 @@ impl<L: LockManager> SchedulerInner<L> {
 /// Scheduler which schedules the execution of `storage::Command`s.
 #[derive(Clone)]
 pub struct Scheduler<E: Engine, L: LockManager> {
-    // `engine` is `None` means currently the program is in scheduler worker threads.
-    engine: Option<E>,
     inner: Arc<SchedulerInner<L>>,
-    control_mutex: Arc<tokio::sync::Mutex<bool>>,
+    // The engine can be fetched from the thread local storage of scheduler threads.
+    // So, we don't store the engine here.
+    _engine: PhantomData<E>,
 }
 
 unsafe impl<E: Engine, L: LockManager> Send for Scheduler<E, L> {}
@@ -322,11 +325,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 "sched-worker-pool",
             ),
             high_priority_pool: SchedPool::new(
-                engine.clone(),
+                engine,
                 std::cmp::max(1, config.scheduler_worker_pool_size / 2),
                 reporter,
                 "sched-high-pri-pool",
             ),
+            control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
             lock_mgr,
             concurrency_manager,
             pipelined_pessimistic_lock,
@@ -339,9 +343,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             "initialized the transaction scheduler"
         );
         Scheduler {
-            engine: Some(engine),
             inner,
-            control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
+            _engine: PhantomData,
         }
     }
 
@@ -897,7 +900,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             // The delay may exceed 1s, and the speed limit is changed every second.
                             // If the speed of next second is larger than the one of first second,
                             // without the mutex, the write flow can't throttled strictly.
-                            let _guard = self.control_mutex.lock().await;
+                            let control_mutex = self.inner.control_mutex.clone();
+                            let _guard = control_mutex.lock().await;
                             let delay = self.inner.flow_controller.consume(write_size);
                             let delay_end = Instant::now_coarse() + delay;
                             while !self.inner.flow_controller.is_unlimited() {

@@ -2244,6 +2244,13 @@ pub struct CdcConfig {
     pub incremental_scan_threads: usize,
     pub incremental_scan_concurrency: usize,
     pub incremental_scan_speed_limit: ReadableSize,
+    /// `TsFilter` can increase speed and decrease resource usage when incremental content is much
+    /// less than total content. However in other cases, `TsFilter` can make performance worse
+    /// because it needs to re-fetch old row values if they are required.
+    ///
+    /// `TsFilter` will be enabled if `incremental/total <= incremental_scan_ts_filter_ratio`.
+    /// Set `incremental_scan_ts_filter_ratio` to 0 will disable it.
+    pub incremental_scan_ts_filter_ratio: f64,
     pub sink_memory_quota: ReadableSize,
     pub old_value_cache_memory_quota: ReadableSize,
     // Deprecated! preserved for compatibility check.
@@ -2265,6 +2272,7 @@ impl Default for CdcConfig {
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
+            incremental_scan_ts_filter_ratio: 0.2,
             // 512MB memory for CDC sink.
             sink_memory_quota: ReadableSize::mb(512),
             // 512MB memory for old value cache.
@@ -2286,6 +2294,14 @@ impl CdcConfig {
         if self.incremental_scan_concurrency < self.incremental_scan_threads {
             return Err(
                 "cdc.incremental-scan-concurrency must be larger than cdc.incremental-scan-threads"
+                    .into(),
+            );
+        }
+        if self.incremental_scan_ts_filter_ratio < 0.0
+            || self.incremental_scan_ts_filter_ratio > 1.0
+        {
+            return Err(
+                "cdc.incremental-scan-ts-filter-ratio should be larger than 0 and less than 1"
                     .into(),
             );
         }
