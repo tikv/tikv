@@ -2307,8 +2307,13 @@ where
                 // Compact all cached entries instead of half evict.
                 self.mut_store().evict_cache(false);
             }
-            ctx.apply_router
-                .schedule_task(self.region_id, ApplyTask::apply(apply));
+            if self.is_leader() {
+                ctx.apply_router
+                    .schedule_task_high_pri(self.region_id, ApplyTask::apply(apply));
+            } else {
+                ctx.apply_router
+                    .schedule_task(self.region_id, ApplyTask::apply(apply));
+            }
         }
         fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
     }
