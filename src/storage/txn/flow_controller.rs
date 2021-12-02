@@ -359,7 +359,7 @@ where
 // And all of them are collected from the hook of RocksDB's event listener.
 struct CFFlowChecker {
     // Memtable related
-    // Assume the write flow is about 100MB/s, since the memtable size of 
+    // Assume the write flow is about 100MB/s, since the memtable size of
     // write & default cf is 128MB, so there are about 300 flush events in 5
     // minutes, we will observe the number of memtables about 300 times. We
     // set the capacity of `last_num_memtables` to 512 to make sure we keep
@@ -388,7 +388,7 @@ struct CFFlowChecker {
     short_term_l0_consumption_flow: Smoother<u64, 512>,
 
     // Pending compaction bytes related
-    // When the write flow is about 100MB/s, we observed that the compaction ops 
+    // When the write flow is about 100MB/s, we observed that the compaction ops
     // is about 2.5, it means there are 750 compaction events in 5 minutes.
     long_term_pending_bytes: Smoother<f64, 1024>,
     pending_bytes_before_unsafe_destroy_range: Option<f64>,
