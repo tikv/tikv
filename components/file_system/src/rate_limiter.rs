@@ -219,10 +219,10 @@ impl PriorityBasedIORateLimiter {
             loop {
                 if to_wait > MAX_DURATION_PER_WAIT {
                     std::thread::sleep(MAX_DURATION_PER_WAIT);
+                    to_wait -= MAX_DURATION_PER_WAIT;
                     if self.recheck(priority) {
                         break;
                     }
-                    to_wait -= MAX_DURATION_PER_WAIT;
                 } else {
                     std::thread::sleep(to_wait);
                     break;
@@ -241,10 +241,10 @@ impl PriorityBasedIORateLimiter {
             loop {
                 if to_wait > MAX_DURATION_PER_WAIT {
                     tokio::time::sleep(MAX_DURATION_PER_WAIT).await;
+                    to_wait -= MAX_DURATION_PER_WAIT;
                     if self.recheck(priority) {
                         break;
                     }
-                    to_wait -= MAX_DURATION_PER_WAIT;
                 } else {
                     tokio::time::sleep(wait).await;
                     break;
@@ -270,10 +270,10 @@ impl PriorityBasedIORateLimiter {
             loop {
                 if to_wait > MAX_DURATION_PER_WAIT {
                     std::thread::sleep(skewed_duration(MAX_DURATION_PER_WAIT));
+                    to_wait -= MAX_DURATION_PER_WAIT;
                     if self.recheck(priority) {
                         break;
                     }
-                    to_wait -= MAX_DURATION_PER_WAIT;
                 } else {
                     std::thread::sleep(skewed_duration(to_wait));
                     break;
@@ -311,7 +311,7 @@ impl PriorityBasedIORateLimiter {
         {
             let now = Instant::now_coarse();
             let mut locked = self.protected.lock();
-            if locked.next_refill_time <= now {
+            if now >= locked.next_refill_time {
                 self.refill(&mut locked, now);
             } else if !self.recheck(priority) {
                 wait = locked.next_refill_time - now;
@@ -365,18 +365,18 @@ impl PriorityBasedIORateLimiter {
                 self.bytes_per_epoch[p].store(budgets, Ordering::Relaxed);
             }
             let refill = budgets as f32 * total_epochs;
-            let r = self.bytes_available[p].fetch_update(
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-                |unused| {
-                    let available = std::cmp::min(budgets as i64, refill as i64 + unused);
-                    let average_usage = ((budgets as f32 - unused as f32) / total_epochs) as usize;
-                    // Must be non-zero.
-                    budgets = budgets.saturating_sub(average_usage) + 1;
-                    Some(available)
-                },
-            );
-            debug_assert!(r.is_ok());
+            let old_available = self.bytes_available[p]
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |unused| {
+                    Some(std::cmp::min(budgets as i64, unused + refill as i64))
+                })
+                .unwrap();
+            let average_usage = ((budgets as f32 - old_available as f32) / total_epochs) as usize;
+            // Must be non-zero.
+            budgets = if budgets > average_usage {
+                budgets - average_usage
+            } else {
+                1
+            };
         }
     }
 
@@ -529,8 +529,8 @@ mod tests {
 
     macro_rules! approximate_eq {
         ($left:expr, $right:expr) => {
-            assert_ge!(($left), ($right) * 0.95);
-            assert_le!(($left), ($right) / 0.95);
+            assert_ge!(($left) as f64, ($right) as f64 * 0.95);
+            assert_le!(($left) as f64, ($right) as f64 / 0.95);
         };
     }
 
@@ -607,27 +607,27 @@ mod tests {
         let duration = Duration::from_secs(1);
         ctx.run(duration);
         approximate_eq!(
-            stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64,
+            stats.fetch(IOType::ForegroundWrite, IOOp::Write),
             bytes_per_sec as f64 * duration.as_secs_f64()
         );
         // disable rate limit
         limiter.set_io_rate_limit(0);
         stats.reset();
         ctx.run(duration);
-        assert!(
-            stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64
-                > bytes_per_sec as f64 * duration.as_secs_f64() * 4.0
+        assert_gt!(
+            stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64,
+            bytes_per_sec as f64 * duration.as_secs_f64() * 4.0
         );
-        assert!(
-            stats.fetch(IOType::Compaction, IOOp::Write) as f64
-                > bytes_per_sec as f64 * duration.as_secs_f64() * 4.0
+        assert_gt!(
+            stats.fetch(IOType::Compaction, IOOp::Write) as f64,
+            bytes_per_sec as f64 * duration.as_secs_f64() * 4.0
         );
         // enable rate limit
         limiter.set_io_rate_limit(bytes_per_sec);
         stats.reset();
         ctx.run(duration);
         approximate_eq!(
-            stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64,
+            stats.fetch(IOType::ForegroundWrite, IOOp::Write),
             bytes_per_sec as f64 * duration.as_secs_f64()
         );
     }
@@ -669,7 +669,7 @@ mod tests {
         ctx.run(duration);
         assert_gt!(
             stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64,
-            bytes_per_sec as f64 * duration.as_secs_f64() * 1.5
+            bytes_per_sec as f64 * duration.as_secs_f64() * 4.0
         );
     }
 
@@ -703,7 +703,7 @@ mod tests {
         let duration = Duration::from_secs(2);
         ctx.run(duration);
         approximate_eq!(
-            stats.fetch(IOType::Compaction, IOOp::Write) as f64,
+            stats.fetch(IOType::Compaction, IOOp::Write),
             actual_kbytes_per_sec as f64 * duration.as_secs_f64() * 1000.0
         );
     }
@@ -754,11 +754,9 @@ mod tests {
         let compaction_bytes = stats.fetch(IOType::Compaction, IOOp::Write);
         let import_bytes = stats.fetch(IOType::Import, IOOp::Write);
         let total_bytes = write_bytes + compaction_bytes + import_bytes;
-        approximate_eq!((compaction_bytes + write_bytes) as f64, total_bytes as f64);
-        approximate_eq!(
-            total_bytes as f64,
-            bytes_per_sec as f64 * duration.as_secs_f64()
-        );
+        // approximate_eq!(write_bytes, total_bytes * write_work / 100);
+        approximate_eq!(compaction_bytes + write_bytes, total_bytes);
+        approximate_eq!(total_bytes, bytes_per_sec as f64 * duration.as_secs_f64());
     }
 
     #[bench]
