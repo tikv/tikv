@@ -393,6 +393,7 @@ impl Delegate {
         batch: CmdBatch,
         old_value_cb: &OldValueCallback,
         old_value_cache: &mut OldValueCache,
+        statistics: &mut Statistics,
     ) -> Result<()> {
         // Stale CmdBatch, drop it silently.
         if batch.cdc_id != self.handle.id {
@@ -417,6 +418,7 @@ impl Delegate {
                     request.requests.into(),
                     old_value_cb,
                     old_value_cache,
+                    statistics,
                     is_one_pc,
                 )?;
             } else {
@@ -522,6 +524,7 @@ impl Delegate {
         requests: Vec<Request>,
         old_value_cb: &OldValueCallback,
         old_value_cache: &mut OldValueCache,
+        statistics: &mut Statistics,
         is_one_pc: bool,
     ) -> Result<()> {
         let txn_extra_op = self.txn_extra_op;
@@ -529,7 +532,7 @@ impl Delegate {
             if txn_extra_op == TxnExtraOp::ReadOldValue {
                 let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
                 let start = Instant::now();
-                let (old_value, statistics) = old_value_cb(key, read_old_ts, old_value_cache);
+                let (old_value, statistics) = old_value_cb(key, read_old_ts, old_value_cache, statistics);
                 row.old_value = old_value.unwrap_or_default();
                 CDC_OLD_VALUE_DURATION_HISTOGRAM
                     .with_label_values(&["all"])
