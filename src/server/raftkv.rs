@@ -5,7 +5,9 @@ use std::{
     borrow::Cow,
     fmt::{self, Debug, Display, Formatter},
     io::Error as IoError,
-    mem, result,
+    mem,
+    num::NonZeroU64,
+    result,
     sync::Arc,
     time::Duration,
 };
@@ -41,8 +43,8 @@ use txn_types::{Key, TimeStamp, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::storage::kv::{
-    write_modifies, Callback, CbContext, Engine, Error as KvError, ErrorInner as KvErrorInner,
-    ExtCallback, Modify, SnapContext, WriteData,
+    write_modifies, Callback, Engine, Error as KvError, ErrorInner as KvErrorInner, ExtCallback,
+    Modify, SnapContext, WriteData,
 };
 use crate::storage::{self, kv};
 
@@ -114,12 +116,6 @@ where
     Snap(RegionSnapshot<S>),
 }
 
-fn new_ctx(resp: &RaftCmdResponse) -> CbContext {
-    let mut cb_ctx = CbContext::new();
-    cb_ctx.term = Some(resp.get_header().get_current_term());
-    cb_ctx
-}
-
 fn check_raft_cmd_response(resp: &mut RaftCmdResponse) -> Result<()> {
     if resp.get_header().has_error() {
         return Err(Error::RequestFailed(resp.take_header().take_error()));
@@ -128,32 +124,31 @@ fn check_raft_cmd_response(resp: &mut RaftCmdResponse) -> Result<()> {
     Ok(())
 }
 
-fn on_write_result<S>(mut write_resp: WriteResponse) -> (CbContext, Result<CmdRes<S>>)
+fn on_write_result<S>(mut write_resp: WriteResponse) -> Result<CmdRes<S>>
 where
     S: Snapshot,
 {
-    let cb_ctx = new_ctx(&write_resp.response);
     if let Err(e) = check_raft_cmd_response(&mut write_resp.response) {
-        return (cb_ctx, Err(e));
+        return Err(e);
     }
     let resps = write_resp.response.take_responses();
-    (cb_ctx, Ok(CmdRes::Resp(resps.into())))
+    Ok(CmdRes::Resp(resps.into()))
 }
 
-fn on_read_result<S>(mut read_resp: ReadResponse<S>) -> (CbContext, Result<CmdRes<S>>)
+fn on_read_result<S>(mut read_resp: ReadResponse<S>) -> Result<CmdRes<S>>
 where
     S: Snapshot,
 {
-    let mut cb_ctx = new_ctx(&read_resp.response);
-    cb_ctx.txn_extra_op = read_resp.txn_extra_op;
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response) {
-        return (cb_ctx, Err(e));
+        return Err(e);
     }
     let resps = read_resp.response.take_responses();
-    if let Some(snapshot) = read_resp.snapshot {
-        (cb_ctx, Ok(CmdRes::Snap(snapshot)))
+    if let Some(mut snapshot) = read_resp.snapshot {
+        snapshot.term = NonZeroU64::new(read_resp.response.get_header().get_current_term());
+        snapshot.txn_extra_op = read_resp.txn_extra_op;
+        Ok(CmdRes::Snap(snapshot))
     } else {
-        (cb_ctx, Ok(CmdRes::Resp(resps.into())))
+        Ok(CmdRes::Resp(resps.into()))
     }
 }
 
@@ -223,8 +218,7 @@ where
                 ctx.read_id,
                 cmd,
                 StoreCallback::Read(Box::new(move |resp| {
-                    let (cb_ctx, res) = on_read_result(resp);
-                    cb((cb_ctx, res.map_err(Error::into)));
+                    cb(on_read_result(resp).map_err(Error::into));
                 })),
             )
             .map_err(From::from)
@@ -275,8 +269,7 @@ where
 
         let cb = StoreCallback::write_ext(
             Box::new(move |resp| {
-                let (cb_ctx, res) = on_write_result(resp);
-                write_cb((cb_ctx, res.map_err(Error::into)));
+                write_cb(on_write_result(resp).map_err(Error::into));
             }),
             proposed_cb,
             committed_cb,
@@ -392,23 +385,22 @@ where
         self.exec_write_requests(
             ctx,
             batch,
-            Box::new(move |(cb_ctx, res)| match res {
+            Box::new(move |res| match res {
                 Ok(CmdRes::Resp(_)) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .write
                         .observe(begin_instant.saturating_elapsed_secs());
                     fail_point!("raftkv_async_write_finish");
-                    write_cb((cb_ctx, Ok(())))
+                    write_cb(Ok(()))
                 }
-                Ok(CmdRes::Snap(_)) => write_cb((
-                    cb_ctx,
-                    Err(box_err!("unexpect snapshot, should mutate instead.")),
-                )),
+                Ok(CmdRes::Snap(_)) => {
+                    write_cb(Err(box_err!("unexpect snapshot, should mutate instead.")))
+                }
                 Err(e) => {
                     let status_kind = get_status_kind_from_engine_error(&e);
                     ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
-                    write_cb((cb_ctx, Err(e)))
+                    write_cb(Err(e))
                 }
             }),
             proposed_cb,
@@ -438,7 +430,7 @@ where
         self.exec_snapshot(
             ctx,
             req,
-            Box::new(move |(cb_ctx, res)| match res {
+            Box::new(move |res| match res {
                 Ok(CmdRes::Resp(mut r)) => {
                     let e = if r
                         .get(0)
@@ -450,19 +442,19 @@ where
                     } else {
                         invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()
                     };
-                    cb((cb_ctx, Err(e)))
+                    cb(Err(e))
                 }
                 Ok(CmdRes::Snap(s)) => {
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .snapshot
                         .observe(begin_instant.saturating_elapsed_secs());
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
-                    cb((cb_ctx, Ok(s)))
+                    cb(Ok(s))
                 }
                 Err(e) => {
                     let status_kind = get_status_kind_from_engine_error(&e);
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
-                    cb((cb_ctx, Err(e)))
+                    cb(Err(e))
                 }
             }),
         )

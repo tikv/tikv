@@ -109,7 +109,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                     if self.return_values {
                         res.as_mut().unwrap().push(val);
                     }
-                    if old_value.valid() {
+                    if old_value.resolved() {
                         let key = k.append_ts(txn.start_ts);
                         // MutationType is unknown in AcquirePessimisticLock stage.
                         let mutation_type = None;

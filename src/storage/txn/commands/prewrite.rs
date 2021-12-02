@@ -27,6 +27,7 @@ use crate::storage::{
 use engine_traits::CF_WRITE;
 use kvproto::kvrpcpb::ExtraOp;
 use std::mem;
+use tikv_kv::SnapshotExt;
 use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
 
 use super::ReaderWithStats;
@@ -389,7 +390,8 @@ impl<K: PrewriteKind> Prewriter<K> {
     // If it is possibly stale due to leader transfer or region merge, return an error.
     // TODO: Fallback to non-async commit if not synced instead of returning an error.
     fn check_max_ts_synced(&self, snapshot: &impl Snapshot) -> Result<()> {
-        if (self.secondary_keys.is_some() || self.try_one_pc) && !snapshot.is_max_ts_synced() {
+        if (self.secondary_keys.is_some() || self.try_one_pc) && !snapshot.ext().is_max_ts_synced()
+        {
             Err(ErrorInner::MaxTimestampNotSynced {
                 region_id: self.ctx.get_region_id(),
                 start_ts: self.start_ts,
@@ -483,7 +485,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                     if need_min_commit_ts && final_min_commit_ts < ts {
                         final_min_commit_ts = ts;
                     }
-                    if old_value.valid() {
+                    if old_value.resolved() {
                         let key = key.append_ts(txn.start_ts);
                         self.old_values
                             .insert(key, (old_value, Some(mutation_type)));
@@ -760,7 +762,7 @@ mod tests {
     use super::*;
     use crate::storage::txn::actions::acquire_pessimistic_lock::tests::must_pessimistic_locked;
     use crate::storage::txn::actions::tests::{
-        must_pessimistic_prewrite_put_async_commit, must_prewrite_put,
+        must_pessimistic_prewrite_put_async_commit, must_prewrite_delete, must_prewrite_put,
         must_prewrite_put_async_commit,
     };
     use crate::storage::{
@@ -1308,8 +1310,17 @@ mod tests {
         #[derive(Clone)]
         struct MockSnapshot;
 
+        struct MockSnapshotExt;
+
+        impl SnapshotExt for MockSnapshotExt {
+            fn is_max_ts_synced(&self) -> bool {
+                false
+            }
+        }
+
         impl Snapshot for MockSnapshot {
             type Iter = KvTestEngineIterator;
+            type Ext<'a> = MockSnapshotExt;
 
             fn get(&self, _: &Key) -> Result<Option<Value>> {
                 unimplemented!()
@@ -1326,8 +1337,8 @@ mod tests {
             fn iter_cf(&self, _: CfName, _: IterOptions) -> Result<Self::Iter> {
                 unimplemented!()
             }
-            fn is_max_ts_synced(&self) -> bool {
-                false
+            fn ext(&self) -> MockSnapshotExt {
+                MockSnapshotExt
             }
         }
 
@@ -1509,6 +1520,63 @@ mod tests {
             let result = cmd.cmd.process_write(snap, context).unwrap();
             assert_eq!(result.response_policy, case.expected);
         }
+    }
+
+    // this test for prewrite with should_not_exist flag
+    #[test]
+    fn test_prewrite_should_not_exist() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        // concurency_manager.max_tx = 5
+        let cm = ConcurrencyManager::new(5.into());
+        let mut statistics = Statistics::default();
+
+        let (key, value) = (b"k", b"val");
+
+        // T1: start_ts = 3, commit_ts = 5, put key:value
+        must_prewrite_put(&engine, key, value, key, 3);
+        must_commit(&engine, key, 3, 5);
+
+        // T2: start_ts = 15, prewrite on k, with should_not_exist flag set.
+        let res = prewrite_with_cm(
+            &engine,
+            cm.clone(),
+            &mut statistics,
+            vec![Mutation::CheckNotExists(Key::from_raw(key))],
+            key.to_vec(),
+            15,
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            res,
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::AlreadyExist { .. }
+            )))
+        ));
+
+        assert_eq!(cm.max_ts().into_inner(), 15);
+
+        // T3: start_ts = 8, commit_ts = max_ts + 1 = 16, prewrite a DELETE operation on k
+        must_prewrite_delete(&engine, key, key, 8);
+        must_commit(&engine, key, 8, cm.max_ts().into_inner() + 1);
+
+        // T1: start_ts = 10, reapeatly prewrite on k, with should_not_exist flag set
+        let res = prewrite_with_cm(
+            &engine,
+            cm,
+            &mut statistics,
+            vec![Mutation::CheckNotExists(Key::from_raw(key))],
+            key.to_vec(),
+            10,
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            res,
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::WriteConflict { .. }
+            )))
+        ));
     }
 
     #[test]
