@@ -69,7 +69,7 @@ use crate::store::worker::{
 use crate::store::PdTask;
 use crate::store::{
     util, AbstractPeer, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTicks,
-    RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
+    RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey,
 };
 use crate::{Error, Result};
 
@@ -621,6 +621,7 @@ where
                 PeerMsg::UpdateRegionForUnsafeRecover(region) => {
                     self.on_update_region_for_unsafe_recover(region)
                 }
+                PeerMsg::Cleaned(merge_by_target) => self.on_meta_cleaned(merge_by_target),
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -1827,21 +1828,7 @@ where
                             "peer_id" => self.fsm.peer_id(),
                             "target_peer" => ?target,
                         );
-                        if self.handle_destroy_peer(job) {
-                            // It's not frequent, so use 0 as `heap_size` is ok.
-                            let store_msg = StoreMsg::RaftMessage(InspectedRaftMessage {
-                                heap_size: 0,
-                                msg: msg.clone(),
-                            });
-                            if let Err(e) = self.ctx.router.send_control(store_msg) {
-                                info!(
-                                    "failed to send back store message, are we shutting down?";
-                                    "region_id" => self.fsm.region_id(),
-                                    "peer_id" => self.fsm.peer_id(),
-                                    "err" => %e,
-                                );
-                            }
-                        }
+                        self.handle_destroy_peer(job);
                     }
                     None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
                 }
@@ -2250,22 +2237,26 @@ where
         }
     }
 
-    fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
+    fn handle_destroy_peer(&mut self, job: DestroyPeerJob) {
         // The initialized flag implicitly means whether apply fsm exists or not.
         if job.initialized {
             // Destroy the apply fsm first, wait for the reply msg from apply fsm
             self.ctx
                 .apply_router
                 .schedule_task(job.region_id, ApplyTask::destroy(job.region_id, false));
-            false
         } else {
             // Destroy the peer fsm directly
-            self.destroy_peer(false)
+            self.destroy_peer(false);
         }
     }
 
+    /// Does the real destroy task which includes:
+    /// 1. Set the region to tombstone;
+    /// 2. Clear data;
+    /// 3. Notify all pending requests.
+    ///
     // [PerformanceCriticalPath] TODO: spin off the I/O code (self.fsm.peer.destroy)
-    fn destroy_peer(&mut self, merged_by_target: bool) -> bool {
+    fn destroy_peer(&mut self, merged_by_target: bool) {
         fail_point!("destroy_peer");
         // Mark itself as pending_remove
         self.fsm.peer.pending_remove = true;
@@ -2290,7 +2281,7 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "merged_by_target" => merged_by_target,
             );
-            return false;
+            return ;
         }
 
         info!(
@@ -2341,24 +2332,39 @@ where
                 "err" => %e,
             );
         }
-        let is_initialized = self.fsm.peer.is_initialized();
-        if let Err(e) = self.fsm.peer.destroy(
-            &self.ctx.engines,
-            &mut self.ctx.perf_context,
+        self.fsm.peer.destroy_all_pending_requests();
+
+        let store = self.fsm.peer.get_store();
+        let task = RegionTask::ClearMeta {
+            peer_id: self.fsm.peer_id(),
+            tag: self.fsm.peer.tag.clone(),
+            region: store.region().clone(),
+            raft_state: store.raft_local_state().clone(),
+            merge_state: self.fsm.peer.merge_state().cloned(),
+            notifier: Box::new(self.ctx.router.clone()),
             merged_by_target,
-        ) {
-            // If not panic here, the peer will be recreated in the next restart,
-            // then it will be gc again. But if some overlap region is created
-            // before restarting, the gc action will delete the overlap region's
-            // data too.
-            panic!("{} destroy err {:?}", self.fsm.peer.tag, e);
+        };
+
+        if let Err(e) = self.ctx.region_scheduler.must_schedule(task) {
+            panic!(
+                "failed to schedule clear meta task, region_id={}, peer_id={}, err={}",
+                self.fsm.region_id(),
+                self.fsm.peer_id(),
+                e
+            );
         }
+    }
+
+    fn on_meta_cleaned(&mut self, merged_by_target: bool) {
+        let mut meta = self.ctx.store_meta.lock().unwrap();
+        let region_id = self.region_id();
 
         // Some places use `force_send().unwrap()` if the StoreMeta lock is held.
         // So in here, it's necessary to held the StoreMeta lock when closing the router.
         self.ctx.router.close(region_id);
         self.fsm.stop();
 
+        let is_initialized = self.fsm.peer.is_initialized();
         if is_initialized
             && !merged_by_target
             && meta
@@ -2423,8 +2429,6 @@ where
             }
         }
         meta.leaders.remove(&region_id);
-
-        true
     }
 
     // Update some region infos

@@ -72,9 +72,10 @@ use crate::store::peer_storage;
 use crate::store::transport::Transport;
 use crate::store::util::{is_initial_msg, RegionReadProgressRegistry};
 use crate::store::worker::{
-    AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
-    CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
-    RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
+    AutoSplitController, CleanedNotifier, CleanupRunner, CleanupSSTRunner, CleanupSSTTask,
+    CleanupTask, CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
+    PdRunner, RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask,
+    SplitCheckTask,
 };
 use crate::store::{
     util, Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
@@ -195,6 +196,17 @@ where
 
     fn deref(&self) -> &BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>> {
         &self.router
+    }
+}
+
+impl<EK, ER> CleanedNotifier for RaftRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn notify_cleaned(&self, region_id: u64, merged_by_target: bool) {
+        self.router
+            .try_send(region_id, PeerMsg::Cleaned(merged_by_target));
     }
 }
 
@@ -1268,7 +1280,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         };
         mgr.init()?;
         let region_runner = RegionRunner::new(
-            engines.kv.clone(),
+            engines.clone(),
             mgr.clone(),
             cfg.value().snap_apply_batch_size.0 as usize,
             cfg.value().use_delete_range,

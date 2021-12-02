@@ -11,9 +11,7 @@ use std::{cmp, mem, u64, usize};
 use bitflags::bitflags;
 use crossbeam::atomic::AtomicCell;
 use crossbeam::channel::TrySendError;
-use engine_traits::{
-    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions,
-};
+use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
@@ -26,7 +24,7 @@ use kvproto::raft_cmdpb::{
     RaftCmdRequest, RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
-    ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
+    ExtraMessage, ExtraMessageType, MergeState, RaftApplyState, RaftMessage,
 };
 use kvproto::replication_modepb::{
     DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
@@ -73,9 +71,7 @@ use txn_types::WriteBatchFlags;
 use super::cmd_resp;
 use super::local_metrics::{RaftMetrics, RaftReadyMetrics};
 use super::metrics::*;
-use super::peer_storage::{
-    write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage,
-};
+use super::peer_storage::{CheckApplyingSnapStatus, HandleReadyResult, PeerStorage};
 use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
 use super::util::{
@@ -892,71 +888,14 @@ where
         })
     }
 
-    /// Does the real destroy task which includes:
-    /// 1. Set the region to tombstone;
-    /// 2. Clear data;
-    /// 3. Notify all pending requests.
-    pub fn destroy(
-        &mut self,
-        engines: &Engines<EK, ER>,
-        perf_context: &mut EK::PerfContext,
-        keep_data: bool,
-    ) -> Result<()> {
-        fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
-        let t = TiInstant::now();
-
-        let region = self.region().clone();
-        info!(
-            "begin to destroy";
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-        );
-
-        // Set Tombstone state explicitly
-        let mut kv_wb = engines.kv.write_batch();
-        let mut raft_wb = engines.raft.log_batch(1024);
-        self.mut_store().clear_meta(&mut kv_wb, &mut raft_wb)?;
-        write_peer_state(
-            &mut kv_wb,
-            &region,
-            PeerState::Tombstone,
-            self.pending_merge_state.clone(),
-        )?;
-        // write kv rocksdb first in case of restart happen between two write
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
-        kv_wb.write_opt(&write_opts)?;
-
-        perf_context.start_observe();
-        engines.raft.consume(&mut raft_wb, true)?;
-        perf_context.report_metrics();
-
-        if self.get_store().is_initialized() && !keep_data {
-            // If we meet panic when deleting data and raft log, the dirty data
-            // will be cleared by a newer snapshot applying or restart.
-            if let Err(e) = self.get_store().clear_data() {
-                error!(?e;
-                    "failed to schedule clear data task";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                );
-            }
-        }
-
-        self.pending_reads.clear_all(Some(region.get_id()));
+    pub fn destroy_all_pending_requests(&mut self) {
+        fail_point!("raft_store_skip_destroy_peer", |_| {});
+        let region_id = self.get_store().get_region_id();
+        self.pending_reads.clear_all(Some(region_id));
 
         for Proposal { cb, .. } in self.proposals.queue.drain(..) {
-            apply::notify_req_region_removed(region.get_id(), cb);
+            apply::notify_req_region_removed(region_id, cb);
         }
-
-        info!(
-            "peer destroy itself";
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-            "takes" => ?t.saturating_elapsed(),
-        );
-
-        Ok(())
     }
 
     #[inline]
@@ -1759,6 +1698,11 @@ where
     #[inline]
     fn is_splitting(&self) -> bool {
         self.last_committed_split_idx > self.get_store().applied_index()
+    }
+
+    #[inline]
+    pub fn merge_state(&self) -> Option<&MergeState> {
+        self.pending_merge_state.as_ref()
     }
 
     #[inline]

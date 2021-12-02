@@ -10,9 +10,12 @@ use std::time::Duration;
 use std::u64;
 
 use engine_traits::{DeleteStrategy, Range, CF_LOCK, CF_RAFT};
-use engine_traits::{KvEngine, Mutable, WriteBatch};
+use engine_traits::{Engines, KvEngine, Mutable, RaftEngine, WriteBatch, WriteOptions};
 use fail::fail_point;
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
+use kvproto::metapb::Region;
+use kvproto::raft_serverpb::{
+    MergeState, PeerState, RaftApplyState, RaftLocalState, RegionLocalState,
+};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use tikv_util::time::Instant;
 use tikv_util::{box_err, box_try, defer, error, info, thd_name, warn};
@@ -25,7 +28,8 @@ use crate::store::peer_storage::{
 use crate::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
 use crate::store::transport::CasualRouter;
 use crate::store::{
-    self, check_abort, ApplyOptions, CasualMessage, SnapEntry, SnapKey, SnapManager,
+    self, check_abort, peer_storage, util as raftstore_util, write_peer_state, ApplyOptions,
+    CasualMessage, SnapEntry, SnapKey, SnapManager,
 };
 use yatp::pool::{Builder, ThreadPool};
 use yatp::task::future::TaskCell;
@@ -53,8 +57,13 @@ pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 200; // 200 milliseconds
 
 const CLEANUP_MAX_REGION_COUNT: usize = 64;
 
+pub trait CleanedNotifier: Send {
+    fn notify_cleaned(&self, region_id: u64, merged_by_target: bool);
+}
+
 /// Region related task
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub enum Task<S> {
     Gen {
         region_id: u64,
@@ -77,6 +86,16 @@ pub enum Task<S> {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     },
+    ClearMeta {
+        peer_id: u64,
+        tag: String,
+        region: Region,
+        raft_state: RaftLocalState,
+        merge_state: Option<MergeState>,
+        #[derivative(Debug = "ignore")]
+        notifier: Box<dyn CleanedNotifier>,
+        merged_by_target: bool,
+    },
 }
 
 impl<S> Task<S> {
@@ -91,7 +110,7 @@ impl<S> Task<S> {
 
 impl<S> Display for Task<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match *self {
+        match self {
             Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
             Task::Apply { region_id, .. } => write!(f, "Snap apply for {}", region_id),
             Task::Destroy {
@@ -105,6 +124,7 @@ impl<S> Display for Task<S> {
                 log_wrappers::Value::key(start_key),
                 log_wrappers::Value::key(end_key)
             ),
+            Task::ClearMeta { region, .. } => write!(f, "Clear meta for {}", region.get_id()),
         }
     }
 }
@@ -602,10 +622,12 @@ where
     }
 }
 
-pub struct Runner<EK, R>
+pub struct Runner<EK, ER, R>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
+    engines: Engines<EK, ER>,
     pool: ThreadPool<TaskCell>,
     ctx: SnapContext<EK, R>,
     // we may delay some apply tasks if level 0 files to write stall threshold,
@@ -615,25 +637,28 @@ where
     clean_stale_check_interval: Duration,
 }
 
-impl<EK, R> Runner<EK, R>
+impl<EK, ER, R> Runner<EK, ER, R>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK>,
 {
     pub fn new(
-        engine: EK,
+        engines: Engines<EK, ER>,
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
         coprocessor_host: CoprocessorHost<EK>,
         router: R,
-    ) -> Runner<EK, R> {
+    ) -> Runner<EK, ER, R> {
+        let kv_engine = engines.kv.clone();
         Runner {
+            engines,
             pool: Builder::new(thd_name!("snap-generator"))
                 .max_thread_count(GENERATE_POOL_SIZE)
                 .build_future_pool(),
             ctx: SnapContext {
-                engine,
+                engine: kv_engine,
                 mgr,
                 batch_size,
                 use_delete_range,
@@ -661,11 +686,76 @@ where
             }
         }
     }
+
+    fn destroy_region(&mut self, region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) {
+        fail_point!("on_region_worker_destroy", true, |_| {});
+        // try to delay the range deletion because
+        // there might be a coprocessor request related to this range
+        self.ctx
+            .insert_pending_delete_range(region_id, &start_key, &end_key);
+        self.ctx.clean_stale_ranges();
+    }
+
+    fn clear_meta(
+        &mut self,
+        peer_id: u64,
+        region: Region,
+        raft_state: RaftLocalState,
+        merge_state: Option<MergeState>,
+        merged_by_target: bool,
+        notifier: Box<dyn CleanedNotifier>,
+    ) -> crate::Result<()> {
+        let t = Instant::now();
+
+        info!(
+            "begin to destroy";
+            "region_id" => region.get_id(),
+            "peer_id" => peer_id,
+        );
+
+        // Set Tombstone state explicitly
+        let mut kv_wb = self.engines.kv.write_batch();
+        let mut raft_wb = self.engines.raft.log_batch(1024);
+        peer_storage::clear_meta(
+            &self.engines,
+            &mut kv_wb,
+            &mut raft_wb,
+            region.get_id(),
+            &raft_state,
+        )?;
+        write_peer_state(&mut kv_wb, &region, PeerState::Tombstone, merge_state)?;
+
+        // write kv rocksdb first in case of restart happen between two write
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        kv_wb.write_opt(&write_opts)?;
+
+        self.engines.raft.consume(&mut raft_wb, true)?;
+
+        info!(
+            "peer destroy itself";
+            "region_id" => region.get_id(),
+            "peer_id" => peer_id,
+            "takes" => ?t.saturating_elapsed(),
+        );
+
+        notifier.notify_cleaned(region.get_id(), merged_by_target);
+        if raftstore_util::is_region_initialized(&region) && !merged_by_target {
+            self.destroy_region(
+                region.get_id(),
+                keys::enc_start_key(&region),
+                keys::enc_end_key(&region),
+            );
+        }
+
+        Ok(())
+    }
 }
 
-impl<EK, R> Runnable for Runner<EK, R>
+impl<EK, ER, R> Runnable for Runner<EK, ER, R>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
     type Task = Task<EK::Snapshot>;
@@ -713,13 +803,30 @@ where
                 region_id,
                 start_key,
                 end_key,
+            } => self.destroy_region(region_id, start_key, end_key),
+            Task::ClearMeta {
+                peer_id,
+                tag,
+                region,
+                raft_state,
+                merge_state,
+                notifier,
+                merged_by_target,
             } => {
-                fail_point!("on_region_worker_destroy", true, |_| {});
-                // try to delay the range deletion because
-                // there might be a coprocessor request related to this range
-                self.ctx
-                    .insert_pending_delete_range(region_id, &start_key, &end_key);
-                self.ctx.clean_stale_ranges();
+                if let Err(err) = self.clear_meta(
+                    peer_id,
+                    region,
+                    raft_state,
+                    merge_state,
+                    merged_by_target,
+                    notifier,
+                ) {
+                    // If not panic here, the peer will be recreated in the next restart,
+                    // then it will be gc again. But if some overlap region is created
+                    // before restarting, the gc action will delete the overlap region's
+                    // data too.
+                    panic!("{} destroy err {:?}", tag, err);
+                }
             }
         }
     }
@@ -729,9 +836,10 @@ where
     }
 }
 
-impl<EK, R> RunnableWithTimer for Runner<EK, R>
+impl<EK, ER, R> RunnableWithTimer for Runner<EK, ER, R>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
     fn on_timeout(&mut self) {
@@ -869,7 +977,7 @@ mod tests {
         let sched = worker.scheduler();
         let (router, _) = mpsc::sync_channel(11);
         let mut runner = RegionRunner::new(
-            engine.kv.clone(),
+            engine.clone(),
             mgr,
             0,
             false,
@@ -973,7 +1081,7 @@ mod tests {
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
-            engine.kv.clone(),
+            engine.clone(),
             mgr,
             0,
             true,

@@ -850,6 +850,11 @@ where
     }
 
     #[inline]
+    pub fn raft_local_state(&self) -> &RaftLocalState {
+        &self.raft_state
+    }
+
+    #[inline]
     pub fn apply_state(&self) -> &RaftApplyState {
         &self.apply_state
     }
@@ -2104,7 +2109,7 @@ mod tests {
         let mut s = new_storage_from_ents(sched.clone(), &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
-            s.engines.kv.clone(),
+            s.engines.clone(),
             mgr,
             0,
             true,
@@ -2481,7 +2486,7 @@ mod tests {
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
         let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
-            s1.engines.kv.clone(),
+            s1.engines.clone(),
             mgr,
             0,
             true,

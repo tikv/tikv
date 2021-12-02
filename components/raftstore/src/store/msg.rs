@@ -512,6 +512,8 @@ pub enum PeerMsg<EK: KvEngine> {
     UpdateReplicationMode,
     Destroy(u64),
     UpdateRegionForUnsafeRecover(metapb::Region),
+    /// All data has been cleaned.
+    Cleaned(bool),
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
@@ -543,6 +545,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::UpdateRegionForUnsafeRecover(region) => {
                 write!(fmt, "Update Region {} to {:?}", region.get_id(), region)
             }
+            PeerMsg::Cleaned(_) => write!(fmt, "Cleaned"),
         }
     }
 }
