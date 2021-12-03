@@ -1248,21 +1248,15 @@ mod tests {
         let now = Instant::now_coarse();
         smoother.observe_with_time(
             1,
-            now.sub(Duration::from_secs(
-                (SMOOTHER_TIME_RANGE_THRESHOLD as f64 - 1.0) as u64,
-            )),
+            now.sub(Duration::from_secs(SMOOTHER_TIME_RANGE_THRESHOLD - 1)),
         );
         smoother.observe_with_time(
             1,
-            now.sub(Duration::from_secs(
-                (SMOOTHER_TIME_RANGE_THRESHOLD as f64 - 2.0) as u64,
-            )),
+            now.sub(Duration::from_secs(SMOOTHER_TIME_RANGE_THRESHOLD - 2)),
         );
         smoother.observe_with_time(
             1,
-            now.sub(Duration::from_secs(
-                (SMOOTHER_TIME_RANGE_THRESHOLD as f64 - 3.0) as u64,
-            )),
+            now.sub(Duration::from_secs(SMOOTHER_TIME_RANGE_THRESHOLD - 3)),
         );
         smoother.observe_with_time(4, now.sub(Duration::from_secs(2)));
         smoother.observe_with_time(4, now.sub(Duration::from_secs(1)));
@@ -1278,21 +1272,15 @@ mod tests {
         >::default();
         smoother.observe_with_time(
             1.0,
-            now.sub(Duration::from_secs(
-                (SMOOTHER_TIME_RANGE_THRESHOLD as f64 - 1.0) as u64,
-            )),
+            now.sub(Duration::from_secs(SMOOTHER_TIME_RANGE_THRESHOLD + 1)),
         );
         smoother.observe_with_time(
             1.0,
-            now.sub(Duration::from_secs(
-                (SMOOTHER_TIME_RANGE_THRESHOLD as f64 - 2.0) as u64,
-            )),
+            now.sub(Duration::from_secs(SMOOTHER_TIME_RANGE_THRESHOLD)),
         );
         smoother.observe_with_time(
             1.0,
-            now.sub(Duration::from_secs(
-                (SMOOTHER_TIME_RANGE_THRESHOLD as f64 - 3.0) as u64,
-            )),
+            now.sub(Duration::from_secs(SMOOTHER_TIME_RANGE_THRESHOLD - 1)),
         );
         smoother.observe_with_time(4.0, now);
         assert_eq!(smoother.trend(), Trend::Increasing);
@@ -1306,9 +1294,7 @@ mod tests {
         >::default();
         smoother.observe_with_time(
             4.0,
-            now.sub(Duration::from_secs(
-                (SMOOTHER_TIME_RANGE_THRESHOLD as f64 - 1.0) as u64,
-            )),
+            now.sub(Duration::from_secs(SMOOTHER_TIME_RANGE_THRESHOLD + 1)),
         );
         smoother.observe_with_time(1.0, now.sub(Duration::from_secs(2)));
         smoother.observe_with_time(2.0, now.sub(Duration::from_secs(1)));
@@ -1324,9 +1310,7 @@ mod tests {
         >::default();
         smoother.observe_with_time(
             1.0,
-            now.sub(Duration::from_secs(
-                (SMOOTHER_TIME_RANGE_THRESHOLD as f64 - 1.0) as u64,
-            )),
+            now.sub(Duration::from_secs(SMOOTHER_TIME_RANGE_THRESHOLD + 1)),
         );
         smoother.observe_with_time(1.0, now.sub(Duration::from_secs(2)));
         smoother.observe_with_time(3.0, now.sub(Duration::from_secs(1)));
@@ -1342,15 +1326,7 @@ mod tests {
         >::default();
         smoother.observe_with_time(
             1,
-            now.sub(Duration::from_secs(
-                (SMOOTHER_STALE_RECORD_THRESHOLD as f64 - 1.0) as u64,
-            )),
-        );
-        smoother.observe_with_time(
-            5,
-            now.sub(Duration::from_secs(
-                (SMOOTHER_STALE_RECORD_THRESHOLD as f64 / 2.0 + 1.0) as u64,
-            )),
+            now.sub(Duration::from_secs(SMOOTHER_STALE_RECORD_THRESHOLD + 1)),
         );
         assert_eq!(smoother.trend(), Trend::NoTrend);
     }
