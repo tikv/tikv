@@ -281,6 +281,7 @@ fn test_destroy_uninitialized_peer_when_there_exists_old_peer() {
 
     // Unisolate 1 and try wakeup 3
     cluster.clear_send_filters();
+    cluster.sim.wl().clear_recv_filters(3);
     cluster.partition(vec![1, 3], vec![2, 4]);
 
     sleep_until_election_triggered(&cluster.cfg);
