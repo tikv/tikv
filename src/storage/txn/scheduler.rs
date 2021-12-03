@@ -57,6 +57,7 @@ use crate::storage::txn::{
     sched_pool::{tls_collect_read_duration, tls_collect_scan_details, SchedPool},
     Error, ProcessResult,
 };
+use crate::storage::DynamicConfigs;
 use crate::storage::{
     get_priority_tag, kv::FlowStatsReporter, types::StorageCallback, Error as StorageError,
     ErrorInner as StorageErrorInner,
@@ -194,6 +195,8 @@ struct SchedulerInner<L: LockManager> {
 
     pipelined_pessimistic_lock: Arc<AtomicBool>,
 
+    in_memory_pessimistic_lock: Arc<AtomicBool>,
+
     enable_async_apply_prewrite: bool,
 }
 
@@ -302,7 +305,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         lock_mgr: L,
         concurrency_manager: ConcurrencyManager,
         config: &Config,
-        pipelined_pessimistic_lock: Arc<AtomicBool>,
+        dynamic_configs: DynamicConfigs,
         flow_controller: Arc<FlowController>,
         reporter: R,
     ) -> Self {
@@ -333,7 +336,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
             lock_mgr,
             concurrency_manager,
-            pipelined_pessimistic_lock,
+            pipelined_pessimistic_lock: dynamic_configs.pipelined_pessimistic_lock,
+            in_memory_pessimistic_lock: dynamic_configs.in_memory_pessimistic_lock,
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
             flow_controller,
         });
@@ -722,11 +726,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let priority = task.cmd.priority();
         let ts = task.cmd.ts();
         let scheduler = self.clone();
-        let pipelined_pessimistic_lock = self
-            .inner
-            .pipelined_pessimistic_lock
-            .load(Ordering::Relaxed);
-        let pipelined = pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
+        let pipelined = self.pessimistic_lock_mode() == PessimisticLockMode::Pipelined
+            && task.cmd.can_be_pipelined();
 
         let deadline = task.cmd.deadline();
         let write_result = {
@@ -967,6 +968,34 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             false
         }
     }
+
+    fn pessimistic_lock_mode(&self) -> PessimisticLockMode {
+        let pipelined = self
+            .inner
+            .pipelined_pessimistic_lock
+            .load(Ordering::Relaxed);
+        let in_memory = self
+            .inner
+            .in_memory_pessimistic_lock
+            .load(Ordering::Relaxed);
+        if pipelined && in_memory {
+            PessimisticLockMode::InMemory
+        } else if pipelined {
+            PessimisticLockMode::Pipelined
+        } else {
+            PessimisticLockMode::Sync
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum PessimisticLockMode {
+    // Return success only if the pessimistic lock is persisted.
+    Sync,
+    // Return success after the pessimistic lock is proposed successfully.
+    Pipelined,
+    // Try to store pessimistic locks only in the memory.
+    InMemory,
 }
 
 #[cfg(test)]
@@ -1129,7 +1158,10 @@ mod tests {
             DummyLockManager,
             ConcurrencyManager::new(1.into()),
             &config,
-            Arc::new(AtomicBool::new(true)),
+            DynamicConfigs {
+                pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
+                in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+            },
             Arc::new(FlowController::empty()),
             DummyReporter,
         );
@@ -1181,7 +1213,10 @@ mod tests {
             DummyLockManager,
             ConcurrencyManager::new(1.into()),
             &config,
-            Arc::new(AtomicBool::new(true)),
+            DynamicConfigs {
+                pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
+                in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+            },
             Arc::new(FlowController::empty()),
             DummyReporter,
         );
@@ -1233,7 +1268,10 @@ mod tests {
             DummyLockManager,
             ConcurrencyManager::new(1.into()),
             &config,
-            Arc::new(AtomicBool::new(true)),
+            DynamicConfigs {
+                pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
+                in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+            },
             Arc::new(FlowController::empty()),
             DummyReporter,
         );
@@ -1293,7 +1331,10 @@ mod tests {
             DummyLockManager,
             ConcurrencyManager::new(1.into()),
             &config,
-            Arc::new(AtomicBool::new(true)),
+            DynamicConfigs {
+                pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
+                in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+            },
             Arc::new(FlowController::empty()),
             DummyReporter,
         );
@@ -1327,5 +1368,55 @@ mod tests {
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
         assert!(block_on(f).is_ok());
+    }
+
+    #[test]
+    fn test_pessimistic_lock_mode() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let config = Config {
+            scheduler_concurrency: 1024,
+            scheduler_worker_pool_size: 1,
+            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
+            enable_async_apply_prewrite: false,
+            ..Default::default()
+        };
+        let scheduler = Scheduler::new(
+            engine,
+            DummyLockManager,
+            ConcurrencyManager::new(1.into()),
+            &config,
+            DynamicConfigs {
+                pipelined_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+                in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+            },
+            Arc::new(FlowController::empty()),
+            DummyReporter,
+        );
+        // Use sync mode if pipelined_pessimistic_lock is false.
+        assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);
+        // Use sync mode even when in_memory is true.
+        scheduler
+            .inner
+            .in_memory_pessimistic_lock
+            .store(true, Ordering::SeqCst);
+        assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);
+        // Mode is InMemory when both pipelined and in_memory is true.
+        scheduler
+            .inner
+            .pipelined_pessimistic_lock
+            .store(true, Ordering::SeqCst);
+        assert_eq!(
+            scheduler.pessimistic_lock_mode(),
+            PessimisticLockMode::InMemory
+        );
+        // Mode is Pipelined when only pipelined is true.
+        scheduler
+            .inner
+            .in_memory_pessimistic_lock
+            .store(false, Ordering::SeqCst);
+        assert_eq!(
+            scheduler.pessimistic_lock_mode(),
+            PessimisticLockMode::Pipelined
+        );
     }
 }
