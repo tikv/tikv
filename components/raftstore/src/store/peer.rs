@@ -813,7 +813,7 @@ where
             // There are maybe some logs not included in CommitMergeRequest's entries, like CompactLog,
             // so the commit index may exceed the last index of the entires from CommitMergeRequest.
             // If that, no need to append
-            if self.raft_group.raft.raft_log.committed - log_idx > entries.len() as u64 {
+            if self.raft_group.raft.raft_log.committed - log_idx >= entries.len() as u64 {
                 return None;
             }
             entries = &entries[(self.raft_group.raft.raft_log.committed - log_idx) as usize..];
