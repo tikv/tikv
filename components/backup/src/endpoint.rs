@@ -615,7 +615,7 @@ impl<R: RegionInfoProvider> Progress<R> {
 
 struct ControlThreadPool {
     size: usize,
-    workers: Option<Arc<Runtime>>,
+    workers: Option<Runtime>,
 }
 
 impl ControlThreadPool {
@@ -631,14 +631,7 @@ impl ControlThreadPool {
         F: Future<Output = ()> + Send + 'static,
     {
         let workers = self.workers.as_ref().unwrap();
-        let w = workers.clone();
-        workers.spawn(async move {
-            func.await;
-            // Debug service requires jobs in the old thread pool continue to run even after
-            // the pool is recreated. So the pool needs to be ref counted and dropped after
-            // task has finished.
-            drop(w);
-        });
+        workers.spawn(func);
     }
 
     /// Lazily adjust the thread pool's size
@@ -651,10 +644,9 @@ impl ControlThreadPool {
         }
         // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
         //   adapt it.
-        let workers = Arc::new(
-            create_tokio_runtime(new_size, "bkwkr")
-                .expect("failed to create tokio runtime for backup worker."),
-        );
+        let workers = create_tokio_runtime(new_size, "bkwkr")
+            .expect("failed to create tokio runtime for backup worker.");
+
         self.workers = Some(workers);
         self.size = new_size;
         BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64);
