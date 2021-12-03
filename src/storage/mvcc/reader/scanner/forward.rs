@@ -56,6 +56,7 @@ pub trait ScanPolicy<S: Snapshot> {
 pub enum HandleRes<T> {
     Return(T),
     Skip(Key),
+    MoveToNext,
 }
 
 pub struct Cursors<S: Snapshot> {
@@ -270,6 +271,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                         return Ok(Some(output));
                     }
                     HandleRes::Skip(key) => key,
+                    HandleRes::MoveToNext => continue,
                 };
             }
             if has_write {
@@ -391,7 +393,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                 )
                 .map(|val| match val {
                     Some(v) => HandleRes::Return((current_user_key, v)),
-                    None => HandleRes::Skip(current_user_key),
+                    None => HandleRes::MoveToNext,
                 })
                 .map_err(Into::into);
             }
