@@ -213,13 +213,13 @@ mod tests {
         // The sequence should be:
         // 1. future gets polled
         //   1.1 future gets woken
-        //      1.1.1 future marks NOTIFIED 
+        //      1.1.1 future marks NOTIFIED
         //   1.2 future returns Poll::Pending
         // 2. future finishes polling, then re-poll
         //   2.1 future gets woken
         //     2.1.1 future marks NOTIFIED
         //   2.2 future returns Poll::Ready
-        // 3. future gets ready, ignore NOTIFIED 
+        // 3. future gets ready, ignore NOTIFIED
         assert_eq!(poll_times.load(Ordering::SeqCst), 2);
     }
 }
