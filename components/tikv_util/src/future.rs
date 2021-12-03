@@ -86,7 +86,7 @@ const IDLE: u8 = 0;
 /// The future is being polled by some thread.
 const POLLING: u8 = 1;
 /// The future is woken when being polled.
-const PENDING: u8 = 2;
+const NOTIFIED: u8 = 2;
 
 /// A waker that will poll the future immediately when waking up.
 struct PollAtWake {
@@ -113,7 +113,7 @@ impl PollAtWake {
                 POLLING => {
                     match arc_self.state.compare_exchange_weak(
                         POLLING,
-                        PENDING,
+                        NOTIFIED,
                         Ordering::SeqCst,
                         Ordering::SeqCst,
                     ) {
@@ -122,7 +122,7 @@ impl PollAtWake {
                         Err(s) => state = s,
                     }
                 }
-                PENDING => {
+                NOTIFIED => {
                     // It will be polled again, so we don't need to do anything here.
                     return;
                 }
@@ -158,10 +158,10 @@ impl PollAtWake {
             {
                 Ok(_) => return,
                 Err(s) => {
-                    if s == PENDING {
-                        // Only this thread can change the state from PENDING, so it has to succeed.
+                    if s == NOTIFIED {
+                        // Only this thread can change the state from NOTIFIED, so it has to succeed.
                         match arc_self.state.compare_exchange(
-                            PENDING,
+                            NOTIFIED,
                             POLLING,
                             Ordering::SeqCst,
                             Ordering::SeqCst,
@@ -213,13 +213,13 @@ mod tests {
         // The sequence should be:
         // 1. future gets polled
         //   1.1 future gets woken
-        //      1.1.1 future marks PENDING
+        //      1.1.1 future marks NOTIFIED 
         //   1.2 future returns Poll::Pending
         // 2. future finishes polling, then re-poll
         //   2.1 future gets woken
-        //     2.1.1 future marks PENDING
+        //     2.1.1 future marks NOTIFIED
         //   2.2 future returns Poll::Ready
-        // 3. future gets ready, ignore PENDING
+        // 3. future gets ready, ignore NOTIFIED 
         assert_eq!(poll_times.load(Ordering::SeqCst), 2);
     }
 }
