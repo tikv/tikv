@@ -82,7 +82,7 @@ use crate::storage::{
 use concurrency_manager::ConcurrencyManager;
 
 use engine_traits::{
-    key_prefix::{self, KeyPrefix},
+    key_prefix,
     raw_value::{ttl_to_expire_ts, RawValue},
     CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
@@ -375,14 +375,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cmd: CommandKind,
         keys: impl IntoIterator<Item = impl AsRef<[u8]>>,
     ) -> Result<()> {
-        let make_invalid_key_prefix_err = |key| {
-            Err(Error::from(ErrorInner::InvalidKeyPrefix {
-                cmd,
-                key_prefix: KeyPrefix::parse(key).0,
-                key: log_wrappers::hex_encode_upper(key),
-            }))
-        };
-
         match (storage_api_version, req_api_version) {
             (ApiVersion::V1, ApiVersion::V1) => {}
             (ApiVersion::V1ttl, ApiVersion::V1) if Self::is_raw_command(cmd) => {
@@ -392,26 +384,27 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 // For compatibility, accept TiDB request only.
                 for key in keys {
                     if !key_prefix::is_tidb_key(key.as_ref()) {
-                        return make_invalid_key_prefix_err(key.as_ref());
+                        return Err(ErrorInner::invalid_key_prefix(cmd, key.as_ref()).into());
                     }
                 }
             }
             (ApiVersion::V2, ApiVersion::V2) if Self::is_raw_command(cmd) => {
                 for key in keys {
                     if !key_prefix::is_raw_key(key.as_ref()) {
-                        return make_invalid_key_prefix_err(key.as_ref());
+                        return Err(ErrorInner::invalid_key_prefix(cmd, key.as_ref()).into());
                     }
                 }
             }
             (ApiVersion::V2, ApiVersion::V2) if Self::is_txn_command(cmd) => {
                 for key in keys {
                     if !key_prefix::is_txn_key(key.as_ref()) {
-                        return make_invalid_key_prefix_err(key.as_ref());
+                        return Err(ErrorInner::invalid_key_prefix(cmd, key.as_ref()).into());
                     }
                 }
             }
             _ => {
                 return Err(Error::from(ErrorInner::ApiVersionNotMatched {
+                    cmd,
                     storage_api_version,
                     req_api_version,
                 }));
