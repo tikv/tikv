@@ -362,9 +362,8 @@ fn disk_hardware_info(collector: &mut Vec<ServerInfoItem>) {
     system.refresh_disks();
     let disks = system.get_disks();
     for disk in disks {
-        let file_sys = std::str::from_utf8(disk.get_file_system())
-            .unwrap_or("unknown");
-        if file_sys == "rootfs"{
+        let file_sys = std::str::from_utf8(disk.get_file_system()).unwrap_or("unknown");
+        if file_sys == "rootfs" {
             continue;
         }
         let total = disk.get_total_space();
