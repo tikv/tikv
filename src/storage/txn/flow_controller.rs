@@ -325,7 +325,7 @@ where
             // Split the record into left and right by the middle of time range
             for (_, r) in self.records.iter().enumerate() {
                 let elapsed_secs = r.1.saturating_elapsed_secs();
-                if elapsed_secs < time_span / 2.0 {
+                if elapsed_secs > time_span / 2.0 {
                     left += r.0;
                     left_cnt += 1;
                 } else {
