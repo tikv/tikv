@@ -630,7 +630,10 @@ impl ControlThreadPool {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let workers = self.workers.as_ref().unwrap();
+        let workers = self
+            .workers
+            .as_ref()
+            .expect("ControlThreadPool: please call adjust_with() before spawn()");
         workers.spawn(func);
     }
 
@@ -644,9 +647,11 @@ impl ControlThreadPool {
         }
         // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
         //   adapt it.
+        if let Some(wkrs) = self.workers.take() {
+            wkrs.shutdown_background();
+        }
         let workers = create_tokio_runtime(new_size, "bkwkr")
             .expect("failed to create tokio runtime for backup worker.");
-
         self.workers = Some(workers);
         self.size = new_size;
         BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64);
@@ -1595,5 +1600,14 @@ pub mod tests {
         let (task, _) = Task::new(req, tx).unwrap();
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 3);
+
+        // for testing whether dropping the pool before all tasks finished causes panic.
+        // but the panic must be checked manually... (It may panic at tokio runtime threads...)
+        let mut pool = ControlThreadPool::new();
+        pool.adjust_with(1);
+        pool.spawn(async { tokio::time::sleep(Duration::from_millis(100)).await });
+        pool.adjust_with(2);
+        drop(pool);
+        std::thread::sleep(Duration::from_millis(150));
     }
 }
