@@ -1582,7 +1582,7 @@ pub mod tests {
         req.set_end_version(1);
         req.set_storage_backend(make_noop_backend());
 
-        let (tx, _) = unbounded();
+        let (tx, rx) = unbounded();
 
         // expand thread pool is needed
         endpoint.get_config_manager().set_num_threads(15);
@@ -1600,6 +1600,10 @@ pub mod tests {
         let (task, _) = Task::new(req, tx).unwrap();
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 3);
+
+        // make sure all tasks can finish properly.
+        let responses = block_on(rx.collect::<Vec<_>>());
+        assert_eq!(responses.len(), 3);
 
         // for testing whether dropping the pool before all tasks finished causes panic.
         // but the panic must be checked manually... (It may panic at tokio runtime threads...)
