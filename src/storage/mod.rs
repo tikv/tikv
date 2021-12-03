@@ -100,7 +100,10 @@ use resource_metering::{FutureExt, ResourceMeteringTag};
 use std::{
     borrow::Cow,
     iter,
-    sync::{atomic, Arc},
+    sync::{
+        atomic::{self, AtomicBool},
+        Arc,
+    },
 };
 use tikv_util::time::{Instant, ThreadReadId};
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
@@ -212,7 +215,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         read_pool: ReadPoolHandle,
         lock_mgr: L,
         concurrency_manager: ConcurrencyManager,
-        pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
+        dynamic_switches: DynamicConfigs,
         flow_controller: Arc<FlowController>,
         reporter: R,
     ) -> Result<Self> {
@@ -221,7 +224,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             lock_mgr,
             concurrency_manager.clone(),
             config,
-            pipelined_pessimistic_lock,
+            dynamic_switches,
             flow_controller,
             reporter,
         );
@@ -2078,6 +2081,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 }
 
+pub struct DynamicConfigs {
+    pub pipelined_pessimistic_lock: Arc<AtomicBool>,
+    pub in_memory_pessimistic_lock: Arc<AtomicBool>,
+}
+
 fn get_priority_tag(priority: CommandPri) -> CommandPriority {
     match priority {
         CommandPri::Low => CommandPriority::low,
@@ -2158,7 +2166,8 @@ pub fn point_key_range(key: Key) -> KeyRange {
 pub struct TestStorageBuilder<E: Engine, L: LockManager> {
     engine: E,
     config: Config,
-    pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
+    pipelined_pessimistic_lock: Arc<AtomicBool>,
+    in_memory_pessimistic_lock: Arc<AtomicBool>,
     lock_mgr: L,
 }
 
@@ -2201,7 +2210,8 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
         Self {
             engine,
             config,
-            pipelined_pessimistic_lock: Arc::new(atomic::AtomicBool::new(false)),
+            pipelined_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+            in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             lock_mgr,
         }
     }
@@ -2222,6 +2232,12 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
 
     pub fn async_apply_prewrite(mut self, enabled: bool) -> Self {
         self.config.enable_async_apply_prewrite = enabled;
+        self
+    }
+
+    pub fn in_memory_pessimistic_lock(self, enabled: bool) -> Self {
+        self.in_memory_pessimistic_lock
+            .store(enabled, atomic::Ordering::Relaxed);
         self
     }
 
@@ -2246,7 +2262,10 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             ReadPool::from(read_pool).handle(),
             self.lock_mgr,
             ConcurrencyManager::new(1.into()),
-            self.pipelined_pessimistic_lock,
+            DynamicConfigs {
+                pipelined_pessimistic_lock: self.pipelined_pessimistic_lock,
+                in_memory_pessimistic_lock: self.in_memory_pessimistic_lock,
+            },
             Arc::new(FlowController::empty()),
             DummyReporter,
         )
