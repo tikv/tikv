@@ -20,6 +20,7 @@ use self::deadlock::{Detector, RoleChangeNotifier};
 use self::waiter_manager::WaiterManager;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
+use crate::storage::DynamicConfigs as StorageDynamicConfigs;
 use crate::storage::{
     lock_manager::{Lock, LockManager as LockManagerTrait, WaitTimeout},
     ProcessResult, StorageCallback,
@@ -61,6 +62,8 @@ pub struct LockManager {
     detected: Arc<[CachePadded<Mutex<HashSet<TimeStamp>>>]>,
 
     pipelined: Arc<AtomicBool>,
+
+    in_memory: Arc<AtomicBool>,
 }
 
 impl Clone for LockManager {
@@ -73,12 +76,13 @@ impl Clone for LockManager {
             waiter_count: self.waiter_count.clone(),
             detected: self.detected.clone(),
             pipelined: self.pipelined.clone(),
+            in_memory: self.in_memory.clone(),
         }
     }
 }
 
 impl LockManager {
-    pub fn new(pipelined: bool) -> Self {
+    pub fn new(cfg: &Config) -> Self {
         let waiter_mgr_worker = FutureWorker::new("waiter-manager");
         let detector_worker = FutureWorker::new("deadlock-detector");
         let mut detected = Vec::with_capacity(DETECTED_SLOTS_NUM);
@@ -91,7 +95,8 @@ impl LockManager {
             detector_worker: Some(detector_worker),
             waiter_count: Arc::new(AtomicUsize::new(0)),
             detected: detected.into(),
-            pipelined: Arc::new(AtomicBool::new(pipelined)),
+            pipelined: Arc::new(AtomicBool::new(cfg.pipelined)),
+            in_memory: Arc::new(AtomicBool::new(cfg.in_memory)),
         }
     }
 
@@ -210,11 +215,15 @@ impl LockManager {
             self.waiter_mgr_scheduler.clone(),
             self.detector_scheduler.clone(),
             self.pipelined.clone(),
+            self.in_memory.clone(),
         )
     }
 
-    pub fn get_pipelined(&self) -> Arc<AtomicBool> {
-        self.pipelined.clone()
+    pub fn get_storage_dynamic_configs(&self) -> StorageDynamicConfigs {
+        StorageDynamicConfigs {
+            pipelined_pessimistic_lock: self.pipelined.clone(),
+            in_memory_pessimistic_lock: self.in_memory.clone(),
+        }
     }
 
     fn add_to_detected(&self, txn_ts: TimeStamp) {
@@ -310,12 +319,13 @@ mod tests {
     fn start_lock_manager() -> LockManager {
         let mut coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
 
-        let mut lock_mgr = LockManager::new(false);
         let cfg = Config {
             wait_for_lock_timeout: ReadableDuration::millis(3000),
             wake_up_delay_duration: ReadableDuration::millis(100),
-            ..Default::default()
+            pipelined: false,
+            in_memory: false,
         };
+        let mut lock_mgr = LockManager::new(&cfg);
 
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
         lock_mgr
@@ -503,7 +513,11 @@ mod tests {
 
     #[bench]
     fn bench_lock_mgr_clone(b: &mut test::Bencher) {
-        let lock_mgr = LockManager::new(false);
+        let lock_mgr = LockManager::new(&Config {
+            pipelined: false,
+            in_memory: false,
+            ..Default::default()
+        });
         b.iter(|| {
             test::black_box(lock_mgr.clone());
         });

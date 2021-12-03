@@ -722,6 +722,7 @@ fn test_serde_custom_tikv_config() {
         wait_for_lock_timeout: ReadableDuration::millis(10),
         wake_up_delay_duration: ReadableDuration::millis(100),
         pipelined: false,
+        in_memory: true,
     };
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),
