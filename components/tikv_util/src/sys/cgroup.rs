@@ -398,6 +398,35 @@ mod tests {
     }
 
     #[test]
+    fn test_cgroup_without_mountinfo() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path().to_str().unwrap();
+        std::fs::copy("/proc/self/stat", &format!("{}/stat", dir)).unwrap();
+
+        let mut f = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&format!("{}/mountinfo", dir))
+            .unwrap();
+        f.write_all(b"1663 1661 0:27 /../../../../../.. /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup cgroup rw\n").unwrap();
+
+        let cgroups = parse_proc_cgroup_v1("3:cpu:/\n");
+        let mount_points = {
+            let infos = Process::new_with_root(PathBuf::from(dir))
+                .and_then(|x| x.mountinfo())
+                .unwrap();
+            parse_mountinfos_v2(infos)
+        };
+        let cgroup_sys = CGroupSys {
+            cgroups,
+            mount_points,
+            is_v2: true,
+        };
+
+        assert_eq!(cgroup_sys.cpu_quota(), None);
+    }
+
+    #[test]
     fn test_parse_proc_cgroup_v1() {
         let content = r#"
             10:cpuset:/test-cpuset
