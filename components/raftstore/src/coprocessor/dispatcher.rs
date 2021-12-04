@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath] called by Fsm on_ready_compute_hash
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
@@ -8,6 +9,7 @@ use engine_traits::{CfName, KvEngine};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{ComputeHashRequest, RaftCmdRequest};
+use protobuf::Message;
 use raft::eraftpb;
 use tikv_util::box_try;
 
@@ -505,7 +507,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
         for batch in &cmd_batches {
             for cmd in &batch.cmds {
-                self.post_apply(&batch.region, &cmd);
+                self.post_apply(Region::default_instance(), cmd);
             }
         }
         for observer in &self.registry.cmd_observers {
@@ -731,7 +733,7 @@ mod tests {
         assert_all!(&[&ob.called], &[55]);
 
         let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
-        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, Cmd::default());
         host.on_flush_applied_cmd_batch(cb.level, vec![cb], &PanicEngine);
         // `post_apply` + `on_flush_applied_cmd_batch` => 13 + 6 = 19

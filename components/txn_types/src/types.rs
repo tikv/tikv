@@ -255,6 +255,28 @@ pub enum MutationType {
 
 /// A row mutation.
 #[derive(Debug, Clone)]
+pub enum RawMutation {
+    /// Put `Value` into `Key` with TTL. The TTL will overwrite the existing TTL value.
+    Put { key: Key, value: Value, ttl: u64 },
+    /// Delete `Key`.
+    Delete { key: Key },
+}
+
+impl RawMutation {
+    pub fn key(&self) -> &Key {
+        match self {
+            RawMutation::Put {
+                ref key,
+                value: _,
+                ttl: _,
+            } => key,
+            RawMutation::Delete { ref key } => key,
+        }
+    }
+}
+
+/// A row mutation.
+#[derive(Debug, Clone)]
 pub enum Mutation {
     /// Put `Value` into `Key`, overwriting any existing value.
     Put((Key, Value)),
@@ -325,19 +347,21 @@ impl From<kvrpcpb::Mutation> for Mutation {
     }
 }
 
-/// `OldValue` is used by cdc to read the previous value associated with some key during the prewrite process
+/// `OldValue` is used by cdc to read the previous value associated with some key during the
+/// prewrite process.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OldValue {
-    /// A real `OldValue`
+    /// A real `OldValue`.
     Value { value: Value },
-    /// A timestamp of an old value in case a value is not inlined in Write
+    /// A timestamp of an old value in case a value is not inlined in Write.
     ValueTimeStamp { start_ts: TimeStamp },
-    /// `None` means we don't found a previous value
+    /// `None` means we don't found a previous value.
     None,
-    /// `Unspecified` means one of the following:
-    ///   - The user doesn't care about the previous value
-    ///   - We don't sure if there is a previous value
+    /// The user doesn't care about the previous value.
     Unspecified,
+    /// Not sure whether the old value exists or not. users can seek CF_WRITE to the give position
+    /// to take a look.
+    SeekWrite(Key),
 }
 
 impl Default for OldValue {
@@ -347,16 +371,45 @@ impl Default for OldValue {
 }
 
 impl OldValue {
-    pub fn valid(&self) -> bool {
-        !matches!(self, OldValue::Unspecified)
+    pub fn value(value: Value) -> Self {
+        OldValue::Value { value }
+    }
+
+    pub fn seek_write(raw_user_key: &[u8], ts: u64) -> Self {
+        let key = Key::from_raw(raw_user_key).append_ts(ts.into());
+        OldValue::SeekWrite(key)
+    }
+
+    /// `resolved` means it's either something or `None`.
+    pub fn resolved(&self) -> bool {
+        match self {
+            Self::Value { .. } | Self::ValueTimeStamp { .. } | Self::None => true,
+            Self::Unspecified | Self::SeekWrite(_) => false,
+        }
+    }
+
+    /// The finalized `OldValue::Value` content, or `None` for `OldValue::Unspecified`.
+    ///
+    /// # Panics
+    ///
+    /// Panic if it's `OldValue::ValueTimeStamp` or `OldValue::SeekWrite`.
+    pub fn finalized(self) -> Option<Value> {
+        match self {
+            Self::Value { value } => Some(value),
+            Self::None | Self::Unspecified => None,
+            _ => panic!("OldValue must be finalized"),
+        }
     }
 
     pub fn size(&self) -> usize {
-        let value_size = match self {
+        self.value_size() + std::mem::size_of::<OldValue>()
+    }
+
+    pub fn value_size(&self) -> usize {
+        match self {
             OldValue::Value { value } => value.len(),
             _ => 0,
-        };
-        value_size + std::mem::size_of::<OldValue>()
+        }
     }
 }
 
@@ -546,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn test_old_value_valid() {
+    fn test_old_value_resolved() {
         let cases = vec![
             (OldValue::Unspecified, false),
             (OldValue::None, true),
@@ -554,7 +607,7 @@ mod tests {
             (OldValue::ValueTimeStamp { start_ts: 0.into() }, true),
         ];
         for (old_value, v) in cases {
-            assert_eq!(old_value.valid(), v);
+            assert_eq!(old_value.resolved(), v);
         }
     }
 }

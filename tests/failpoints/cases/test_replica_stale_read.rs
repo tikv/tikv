@@ -1,80 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::executor::block_on;
-use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::{Context, GetResponse, Mutation, Op};
+use kvproto::kvrpcpb::Op;
 use kvproto::metapb::Peer;
-use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use std::sync::Arc;
 use test_raftstore::*;
-use tikv_util::HandyRwLock;
-
-// A helpful wrapper to make the test logic clear
-struct PeerClient {
-    cli: TikvClient,
-    ctx: Context,
-}
-
-impl PeerClient {
-    fn new(cluster: &Cluster<ServerCluster>, region_id: u64, peer: Peer) -> PeerClient {
-        let cli = {
-            let env = Arc::new(Environment::new(1));
-            let channel =
-                ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(peer.get_store_id()));
-            TikvClient::new(channel)
-        };
-        let ctx = {
-            let epoch = cluster.get_region_epoch(region_id);
-            let mut ctx = Context::default();
-            ctx.set_region_id(region_id);
-            ctx.set_peer(peer);
-            ctx.set_region_epoch(epoch);
-            ctx
-        };
-        PeerClient { cli, ctx }
-    }
-
-    fn kv_read(&self, key: Vec<u8>, ts: u64) -> GetResponse {
-        kv_read(&self.cli, self.ctx.clone(), key, ts)
-    }
-
-    fn must_kv_read_equal(&self, key: Vec<u8>, val: Vec<u8>, ts: u64) {
-        must_kv_read_equal(&self.cli, self.ctx.clone(), key, val, ts)
-    }
-
-    fn must_kv_write(&self, pd_client: &TestPdClient, kvs: Vec<Mutation>, pk: Vec<u8>) -> u64 {
-        must_kv_write(pd_client, &self.cli, self.ctx.clone(), kvs, pk)
-    }
-
-    fn must_kv_prewrite(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
-        must_kv_prewrite(&self.cli, self.ctx.clone(), muts, pk, ts)
-    }
-
-    fn must_kv_prewrite_async_commit(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
-        must_kv_prewrite_with(&self.cli, self.ctx.clone(), muts, pk, ts, true, false)
-    }
-
-    fn must_kv_prewrite_one_pc(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
-        must_kv_prewrite_with(&self.cli, self.ctx.clone(), muts, pk, ts, false, true)
-    }
-
-    fn must_kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: u64, commit_ts: u64) {
-        must_kv_commit(
-            &self.cli,
-            self.ctx.clone(),
-            keys,
-            start_ts,
-            commit_ts,
-            commit_ts,
-        )
-    }
-
-    fn must_kv_pessimistic_lock(&self, key: Vec<u8>, ts: u64) {
-        must_kv_pessimistic_lock(&self.cli, self.ctx.clone(), key, ts)
-    }
-}
 
 fn prepare_for_stale_read(leader: Peer) -> (Cluster<ServerCluster>, Arc<TestPdClient>, PeerClient) {
     prepare_for_stale_read_before_run(leader, None)
@@ -102,10 +33,6 @@ fn prepare_for_stale_read_before_run(
     fail::cfg(on_step_read_index_msg, "panic").unwrap();
 
     (cluster, pd_client, leader_client)
-}
-
-fn get_tso(pd_client: &TestPdClient) -> u64 {
-    block_on(pd_client.get_tso()).unwrap().into_inner()
 }
 
 // Testing how data replication could effect stale read service

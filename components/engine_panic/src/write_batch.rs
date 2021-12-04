@@ -57,6 +57,9 @@ impl WriteBatch<PanicEngine> for PanicWriteBatch {
     fn rollback_to_save_point(&mut self) -> Result<()> {
         panic!()
     }
+    fn merge(&mut self, src: Self) {
+        panic!()
+    }
 }
 
 impl Mutable for PanicWriteBatch {

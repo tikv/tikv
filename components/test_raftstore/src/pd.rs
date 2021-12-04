@@ -134,7 +134,7 @@ impl Operator {
         match *self {
             Operator::AddPeer { ref peer, .. } => {
                 if let Either::Left(ref peer) = *peer {
-                    let conf_change_type = if is_learner(&peer) {
+                    let conf_change_type = if is_learner(peer) {
                         ConfChangeType::AddLearnerNode
                     } else {
                         ConfChangeType::AddNode
@@ -184,7 +184,7 @@ impl Operator {
             } => {
                 let mut cps = Vec::with_capacity(to_add_peers.len() + remove_peers.len());
                 for peer in to_add_peers.iter() {
-                    let conf_change_type = if is_learner(&peer) {
+                    let conf_change_type = if is_learner(peer) {
                         ConfChangeType::AddLearnerNode
                     } else {
                         ConfChangeType::AddNode
@@ -503,7 +503,15 @@ impl PdCluster {
             region.get_region_epoch().clone(),
         );
         assert!(end_key > start_key);
+        let created_by_unsafe_recover = (!start_key.is_empty() || !end_key.is_empty())
+            && incoming_epoch.get_version() == 1
+            && incoming_epoch.get_conf_ver() == 1;
         let overlaps = self.get_overlap(start_key, end_key);
+        if created_by_unsafe_recover {
+            // Allow recreated region by unsafe recover to overwrite other regions with a "older"
+            // epoch.
+            return Ok(overlaps);
+        }
         for r in overlaps.iter() {
             if incoming_epoch.get_version() < r.get_region_epoch().get_version() {
                 return Err(box_err!("epoch {:?} is stale.", incoming_epoch));
@@ -527,14 +535,18 @@ impl PdCluster {
     ) -> Result<pdpb::RegionHeartbeatResponse> {
         let overlaps = self.check_put_region(region.clone())?;
         let same_region = {
-            let (ver, conf_ver) = (
+            let (ver, conf_ver, start_key, end_key) = (
                 region.get_region_epoch().get_version(),
                 region.get_region_epoch().get_conf_ver(),
+                region.get_start_key(),
+                region.get_end_key(),
             );
             overlaps.len() == 1
                 && overlaps[0].get_id() == region.get_id()
                 && overlaps[0].get_region_epoch().get_version() == ver
                 && overlaps[0].get_region_epoch().get_conf_ver() == conf_ver
+                && overlaps[0].get_start_key() == start_key
+                && overlaps[0].get_end_key() == end_key
         };
         if !same_region {
             debug!("region changed"; "from" => ?overlaps, "to" => ?region, "leader" => ?leader);
@@ -1295,9 +1307,13 @@ impl PdClient for TestPdClient {
 
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
         self.check_bootstrap()?;
-        if let Some(region) = self.cluster.rl().get_region(data_key(key)) {
-            if check_key_in_region(key, &region).is_ok() {
-                return Ok(region);
+
+        for _ in 1..500 {
+            sleep_ms(10);
+            if let Some(region) = self.cluster.rl().get_region(data_key(key)) {
+                if check_key_in_region(key, &region).is_ok() {
+                    return Ok(region);
+                }
             }
         }
 
@@ -1479,7 +1495,11 @@ impl PdClient for TestPdClient {
         Box::pin(ok(resp))
     }
 
-    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<pdpb::StoreHeartbeatResponse> {
+    fn store_heartbeat(
+        &self,
+        stats: pdpb::StoreStats,
+        _: Option<pdpb::StoreReport>,
+    ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         if let Err(e) = self.check_bootstrap() {
             return Box::pin(err(e));
         }

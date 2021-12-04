@@ -259,7 +259,7 @@ impl<'a> ScalarValueRef<'a> {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
-                    Some(ref val) => {
+                    Some(val) => {
                         output.write_evaluable_datum_bytes(val)?;
                     }
                 }
@@ -343,7 +343,7 @@ impl<'a> ScalarValueRef<'a> {
             TT = [Real, Decimal, DateTime, Duration, Json, Enum],
             match (self, other) {
                 (ScalarValueRef::TT(v1), ScalarValueRef::TT(v2)) => v1.cmp(v2),
-                (ScalarValueRef::Int(v1), ScalarValueRef::Int(v2)) => compare_int(&v1.cloned(), &v2.cloned(), &field_type),
+                (ScalarValueRef::Int(v1), ScalarValueRef::Int(v2)) => compare_int(&v1.cloned(), &v2.cloned(), field_type),
                 (ScalarValueRef::Bytes(None), ScalarValueRef::Bytes(None)) => Ordering::Equal,
                 (ScalarValueRef::Bytes(Some(_)), ScalarValueRef::Bytes(None)) => Ordering::Greater,
                 (ScalarValueRef::Bytes(None), ScalarValueRef::Bytes(Some(_))) => Ordering::Less,

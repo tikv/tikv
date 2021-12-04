@@ -20,6 +20,12 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     ) -> Result<usize>;
 }
 
+pub struct RaftLogGCTask {
+    pub raft_group_id: u64,
+    pub from: u64,
+    pub to: u64,
+}
+
 pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     type LogBatch: RaftLogBatch;
 
@@ -59,6 +65,14 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     /// Generally, `from` can be passed in `0`.
     fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize>;
 
+    fn batch_gc(&self, tasks: Vec<RaftLogGCTask>) -> Result<usize> {
+        let mut total = 0;
+        for task in tasks {
+            total += self.gc(task.raft_group_id, task.from, task.to)?;
+        }
+        Ok(total)
+    }
+
     /// Purge expired logs files and return a set of Raft group ids
     /// which needs to be compacted ASAP.
     fn purge_expired_files(&self) -> Result<Vec<u64>>;
@@ -93,7 +107,14 @@ pub trait RaftLogBatch: Send {
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
 
+    /// The data size of this RaftLogBatch.
+    fn persist_size(&self) -> usize;
+
+    /// Whether it is empty or not.
     fn is_empty(&self) -> bool;
+
+    /// Merge another RaftLogBatch to itself.
+    fn merge(&mut self, _: Self);
 }
 
 #[derive(Clone, Copy, Default)]

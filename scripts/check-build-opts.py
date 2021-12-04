@@ -11,7 +11,6 @@
 # In particular it verifies that these configurations work:
 #
 # - The default
-# - With `prost-codec`
 # - With `test-engines-panic`
 #
 # Requires Python 3.6+
@@ -39,12 +38,6 @@ def cargo_check_default():
 def cargo_test_default():
     cargo_run_default("test", ["--no-run"])
 
-def cargo_check_codec(codec):
-    cargo_run_codec("check", [], codec)
-
-def cargo_test_codec(codec):
-    cargo_run_codec("test", ["--no-run"], codec)
-
 def cargo_check_test_engines(test_engine):
     cargo_run_test_engines("check", [], test_engine)
 
@@ -57,33 +50,15 @@ def cargo_run_default(cmd, extra_args):
         args += extra_args
         run_and_collect_errors(args)
 
-def cargo_run_codec(cmd, extra_args, codec):
-    for (crate, path) in crates:
-        (has_protobuf_features, has_test_engine_features) = get_features(path)
-
-        if not has_protobuf_features:
-            continue
-
-        args = ["cargo", cmd, "-p", crate, "--no-default-features"]
-        args += extra_args
-        if has_protobuf_features:
-            args += ["--features", f"{codec}-codec"]
-        if has_test_engine_features:
-            args += ["--features", "test-engines-rocksdb"]
-
-        run_and_collect_errors(args)
-
 def cargo_run_test_engines(cmd, extra_args, test_engine):
     for (crate, path) in crates:
-        (has_protobuf_features, has_test_engine_features) = get_features(path)
+        has_test_engine_features = get_features(path)
 
         if not has_test_engine_features:
             continue
 
         args = ["cargo", cmd, "-p", crate, "--no-default-features"]
         args += extra_args
-        if has_protobuf_features:
-            args += ["--features", "protobuf-codec"]
         if has_test_engine_features:
             args += ["--features", f"test-engines-{test_engine}"]
 
@@ -103,21 +78,16 @@ def get_features(path):
     s = f.read()
     f.close()
 
-    has_protobuf_features = "protobuf-codec" in s
     has_test_engine_features = "test-engines-rocksdb" in s
 
-    return (has_protobuf_features, has_test_engine_features)
+    return has_test_engine_features
 
 print()
 
 cargo_check_default()
-cargo_check_codec("prost")
-cargo_check_codec("protobuf")
 cargo_check_test_engines("panic")
 cargo_check_test_engines("rocksdb")
 cargo_test_default()
-cargo_test_codec("prost")
-cargo_test_codec("protobuf")
 cargo_test_test_engines("panic")
 cargo_test_test_engines("rocksdb")
 

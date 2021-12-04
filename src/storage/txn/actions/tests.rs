@@ -24,6 +24,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
     txn_size: u64,
     min_commit_ts: TimeStamp,
     max_commit_ts: TimeStamp,
+    is_retry_request: bool,
 ) {
     let ctx = Context::default();
     let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -54,9 +55,10 @@ pub fn must_prewrite_put_impl<E: Engine>(
             lock_ttl,
             min_commit_ts,
             need_old_value: false,
+            is_retry_request,
         },
         mutation,
-        &secondary_keys,
+        secondary_keys,
         is_pessimistic_lock,
     )
     .unwrap();
@@ -83,6 +85,7 @@ pub fn must_prewrite_put<E: Engine>(
         0,
         TimeStamp::default(),
         TimeStamp::default(),
+        false,
     );
 }
 
@@ -108,6 +111,7 @@ pub fn must_pessimistic_prewrite_put<E: Engine>(
         0,
         TimeStamp::default(),
         TimeStamp::default(),
+        false,
     );
 }
 
@@ -134,6 +138,7 @@ pub fn must_pessimistic_prewrite_put_with_ttl<E: Engine>(
         0,
         TimeStamp::default(),
         TimeStamp::default(),
+        false,
     );
 }
 
@@ -163,6 +168,7 @@ pub fn must_prewrite_put_for_large_txn<E: Engine>(
         0,
         min_commit_ts,
         TimeStamp::default(),
+        false,
     );
 }
 
@@ -189,6 +195,7 @@ pub fn must_prewrite_put_async_commit<E: Engine>(
         0,
         min_commit_ts.into(),
         TimeStamp::default(),
+        false,
     );
 }
 
@@ -217,6 +224,7 @@ pub fn must_pessimistic_prewrite_put_async_commit<E: Engine>(
         0,
         min_commit_ts.into(),
         TimeStamp::default(),
+        false,
     );
 }
 
@@ -240,6 +248,7 @@ fn default_txn_props(
         lock_ttl: 0,
         min_commit_ts: TimeStamp::default(),
         need_old_value: false,
+        is_retry_request: false,
     }
 }
 fn must_prewrite_put_err_impl<E: Engine>(
@@ -247,9 +256,12 @@ fn must_prewrite_put_err_impl<E: Engine>(
     key: &[u8],
     value: &[u8],
     pk: &[u8],
+    secondary_keys: &Option<Vec<Vec<u8>>>,
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
     is_pessimistic_lock: bool,
+    max_commit_ts: impl Into<TimeStamp>,
+    is_retry_request: bool,
 ) -> Error {
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let for_update_ts = for_update_ts.into();
@@ -258,11 +270,19 @@ fn must_prewrite_put_err_impl<E: Engine>(
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
     let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
+    let commit_kind = if secondary_keys.is_some() {
+        CommitKind::Async(max_commit_ts.into())
+    } else {
+        CommitKind::TwoPc
+    };
+    let mut props = default_txn_props(ts, pk, for_update_ts);
+    props.is_retry_request = is_retry_request;
+    props.commit_kind = commit_kind;
 
     prewrite(
         &mut txn,
         &mut reader,
-        &default_txn_props(ts, pk, for_update_ts),
+        &props,
         mutation,
         &None,
         is_pessimistic_lock,
@@ -277,7 +297,18 @@ pub fn must_prewrite_put_err<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
 ) -> Error {
-    must_prewrite_put_err_impl(engine, key, value, pk, ts, TimeStamp::zero(), false)
+    must_prewrite_put_err_impl(
+        engine,
+        key,
+        value,
+        pk,
+        &None,
+        ts,
+        TimeStamp::zero(),
+        false,
+        0,
+        false,
+    )
 }
 
 pub fn must_pessimistic_prewrite_put_err<E: Engine>(
@@ -294,9 +325,37 @@ pub fn must_pessimistic_prewrite_put_err<E: Engine>(
         key,
         value,
         pk,
+        &None,
         ts,
         for_update_ts,
         is_pessimistic_lock,
+        0,
+        false,
+    )
+}
+
+pub fn must_retry_pessimistic_prewrite_put_err<E: Engine>(
+    engine: &E,
+    key: &[u8],
+    value: &[u8],
+    pk: &[u8],
+    secondary_keys: &Option<Vec<Vec<u8>>>,
+    ts: impl Into<TimeStamp>,
+    for_update_ts: impl Into<TimeStamp>,
+    is_pessimistic_lock: bool,
+    max_commit_ts: impl Into<TimeStamp>,
+) -> Error {
+    must_prewrite_put_err_impl(
+        engine,
+        key,
+        value,
+        pk,
+        secondary_keys,
+        ts,
+        for_update_ts,
+        is_pessimistic_lock,
+        max_commit_ts,
+        true,
     )
 }
 

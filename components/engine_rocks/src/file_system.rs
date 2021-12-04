@@ -6,7 +6,7 @@ use rocksdb::FileSystemInspector as DBFileSystemInspector;
 use std::sync::Arc;
 
 // Use engine::Env directly since Env is not abstracted.
-pub fn get_env(
+pub(crate) fn get_env(
     base_env: Option<Arc<Env>>,
     limiter: Option<Arc<file_system::IORateLimiter>>,
 ) -> Result<Arc<Env>, String> {

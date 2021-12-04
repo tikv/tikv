@@ -24,7 +24,7 @@ pub fn pi() -> Result<Option<Real>> {
 #[rpn_fn]
 #[inline]
 pub fn crc32(arg: BytesRef) -> Result<Option<Int>> {
-    Ok(Some(i64::from(file_system::calc_crc32_bytes(&arg))))
+    Ok(Some(i64::from(file_system::calc_crc32_bytes(arg))))
 }
 
 #[inline]

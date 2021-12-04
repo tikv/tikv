@@ -55,6 +55,9 @@ pub enum Error {
     #[error("peer is not leader for region {0}, leader may {1:?}")]
     NotLeader(u64, Option<metapb::Peer>),
 
+    #[error("store ids {0:?}, errmsg {1}")]
+    DiskFull(Vec<u64>, String),
+
     #[error(
         "key {} is not in region key range [{}, {}) for region {}",
         log_wrappers::Value::key(.0),
@@ -83,13 +86,6 @@ pub enum Error {
 
     #[error("Protobuf {0}")]
     Protobuf(#[from] ProtobufError),
-
-    #[cfg(feature = "prost-codec")]
-    #[error("DecodeError {0}")]
-    ProstDecode(#[from] prost::DecodeError),
-
-    #[cfg(feature = "prost-codec")]
-    ProstEncode(#[from] prost::EncodeError),
 
     #[error("Codec {0}")]
     Codec(#[from] codec::Error),
@@ -147,6 +143,10 @@ impl From<Error> for errorpb::Error {
                     errorpb.mut_not_leader().set_leader(leader);
                 }
                 errorpb.mut_not_leader().set_region_id(region_id);
+            }
+            Error::DiskFull(store_id, reason) => {
+                errorpb.mut_disk_full().set_store_id(store_id);
+                errorpb.mut_disk_full().set_reason(reason)
             }
             Error::RaftEntryTooLarge {
                 region_id,
@@ -265,6 +265,7 @@ impl ErrorCodeExt for Error {
             Error::StoreNotMatch { .. } => error_code::raftstore::STORE_NOT_MATCH,
             Error::RegionNotFound(_) => error_code::raftstore::REGION_NOT_FOUND,
             Error::NotLeader(..) => error_code::raftstore::NOT_LEADER,
+            Error::DiskFull(..) => error_code::raftstore::DISK_FULL,
             Error::StaleCommand => error_code::raftstore::STALE_COMMAND,
             Error::RegionNotInitialized(_) => error_code::raftstore::REGION_NOT_INITIALIZED,
             Error::KeyNotInRegion(..) => error_code::raftstore::KEY_NOT_IN_REGION,
@@ -282,10 +283,6 @@ impl ErrorCodeExt for Error {
             Error::Snapshot(e) => e.error_code(),
             Error::SstImporter(e) => e.error_code(),
             Error::Encryption(e) => e.error_code(),
-            #[cfg(feature = "prost-codec")]
-            Error::ProstDecode(_) => error_code::raftstore::PROTOBUF,
-            #[cfg(feature = "prost-codec")]
-            Error::ProstEncode(_) => error_code::raftstore::PROTOBUF,
             Error::DataIsNotReady { .. } => error_code::raftstore::DATA_IS_NOT_READY,
             Error::DeadlineExceeded => error_code::raftstore::DEADLINE_EXCEEDED,
 

@@ -17,7 +17,7 @@ pub use std::time::Duration;
 #[inline]
 pub fn duration_to_ms(d: Duration) -> u64 {
     let nanos = u64::from(d.subsec_nanos());
-    // Most of case, we can't have so large Duration, so here just panic if overflow now.
+    // If Duration is too large, the result may be overflow.
     d.as_secs() * 1_000 + (nanos / 1_000_000)
 }
 
@@ -25,15 +25,22 @@ pub fn duration_to_ms(d: Duration) -> u64 {
 #[inline]
 pub fn duration_to_sec(d: Duration) -> f64 {
     let nanos = f64::from(d.subsec_nanos());
-    // Most of case, we can't have so large Duration, so here just panic if overflow now.
     d.as_secs() as f64 + (nanos / 1_000_000_000.0)
+}
+
+/// Converts Duration to microseconds.
+#[inline]
+pub fn duration_to_us(d: Duration) -> u64 {
+    let nanos = u64::from(d.subsec_nanos());
+    // If Duration is too large, the result may be overflow.
+    d.as_secs() * 1_000_000 + (nanos / 1_000)
 }
 
 /// Converts Duration to nanoseconds.
 #[inline]
-pub fn duration_to_nanos(d: Duration) -> u64 {
+pub fn duration_to_ns(d: Duration) -> u64 {
     let nanos = u64::from(d.subsec_nanos());
-    // Most of case, we can't have so large Duration, so here just panic if overflow now.
+    // If Duration is too large, the result may be overflow.
     d.as_secs() * 1_000_000_000 + nanos
 }
 
@@ -277,10 +284,6 @@ impl Instant {
         Instant::MonotonicCoarse(monotonic_coarse_now())
     }
 
-    // This function may panic if the current time is earlier than this
-    // instant. Deprecated.
-    // pub fn elapsed(&self) -> Duration;
-
     pub fn saturating_elapsed(&self) -> Duration {
         match *self {
             Instant::Monotonic(t) => {
@@ -490,6 +493,7 @@ impl BlockingClock for CoarseClock {
 
 /// A limiter which uses the coarse clock for measurement.
 pub type Limiter = async_speed_limit::Limiter<CoarseClock>;
+pub type Consume = async_speed_limit::limiter::Consume<CoarseClock, ()>;
 
 /// ReadId to judge whether the read requests come from the same GRPC stream.
 #[derive(Eq, PartialEq, Clone, Debug)]
@@ -511,6 +515,12 @@ impl ThreadReadId {
             sequence,
             create_time: monotonic_raw_now(),
         }
+    }
+}
+
+impl Default for ThreadReadId {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -558,7 +568,8 @@ mod tests {
             let exp_sec = ms as f64 / 1000.0;
             let act_sec = duration_to_sec(d);
             assert!((act_sec - exp_sec).abs() < f64::EPSILON);
-            assert_eq!(ms * 1_000_000, duration_to_nanos(d));
+            assert_eq!(ms * 1_000, duration_to_us(d));
+            assert_eq!(ms * 1_000_000, duration_to_ns(d));
         }
     }
 

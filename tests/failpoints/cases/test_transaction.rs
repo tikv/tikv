@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures::executor::block_on;
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{ApiVersion, Context};
 use std::{sync::mpsc::channel, thread, time::Duration};
 use storage::mvcc::tests::must_get;
 use storage::mvcc::{self, tests::must_locked};
@@ -45,6 +45,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -74,7 +75,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
         .unwrap();
     // sleep a while so prewrite gets max ts before get is triggered
     thread::sleep(Duration::from_millis(200));
-    match block_on(storage.get(Context::default(), Key::from_raw(b"k"), 100.into())) {
+    match block_on(storage.get(Context::default(), b"k".to_vec(), 100.into())) {
         // In this case, min_commit_ts is smaller than the start ts, but the lock is visible
         // to the get.
         Err(storage::Error(box storage::ErrorInner::Txn(txn::Error(
@@ -94,6 +95,7 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -101,7 +103,7 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
     // Suppose snapshot was before updating max_ts, after sleeping for 500ms the following prewrite should complete.
     fail::cfg("after-snapshot", "sleep(500)").unwrap();
     let read_ts = 20.into();
-    let get_fut = storage.get(Context::default(), Key::from_raw(b"j"), read_ts);
+    let get_fut = storage.get(Context::default(), b"j".to_vec(), read_ts);
     thread::sleep(Duration::from_millis(100));
     fail::remove("after-snapshot");
     let (prewrite_tx, prewrite_rx) = channel();
@@ -137,12 +139,13 @@ fn test_update_max_ts_before_scan_memory_locks() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
 
     fail::cfg("before-storage-check-memory-locks", "sleep(500)").unwrap();
-    let get_fut = storage.get(Context::default(), Key::from_raw(b"k"), 100.into());
+    let get_fut = storage.get(Context::default(), b"k".to_vec(), 100.into());
 
     thread::sleep(Duration::from_millis(200));
 
@@ -185,6 +188,7 @@ macro_rules! lock_release_test {
             let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
                 engine,
                 DummyLockManager {},
+                ApiVersion::V1,
             )
             .build()
             .unwrap();
@@ -263,6 +267,7 @@ fn test_max_commit_ts_error() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -320,6 +325,7 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();

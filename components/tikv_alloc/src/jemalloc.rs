@@ -124,10 +124,8 @@ mod profiling {
     const PROF_DUMP: &[u8] = b"prof.dump\0";
 
     pub fn activate_prof() -> ProfResult<()> {
-        info!("start profiler");
         unsafe {
             if let Err(e) = tikv_jemalloc_ctl::raw::update(PROF_ACTIVE, true) {
-                error!("failed to activate profiling: {}", e);
                 return Err(ProfError::JemallocError(format!(
                     "failed to activate profiling: {}",
                     e
@@ -138,10 +136,8 @@ mod profiling {
     }
 
     pub fn deactivate_prof() -> ProfResult<()> {
-        info!("stop profiler");
         unsafe {
             if let Err(e) = tikv_jemalloc_ctl::raw::update(PROF_ACTIVE, false) {
-                error!("failed to deactivate profiling: {}", e);
                 return Err(ProfError::JemallocError(format!(
                     "failed to deactivate profiling: {}",
                     e
@@ -155,20 +151,15 @@ mod profiling {
     pub fn dump_prof(path: &str) -> ProfResult<()> {
         let mut bytes = CString::new(path)?.into_bytes_with_nul();
         let ptr = bytes.as_mut_ptr() as *mut c_char;
-        let res = unsafe { tikv_jemalloc_ctl::raw::write(PROF_DUMP, ptr) };
-        match res {
-            Err(e) => {
-                error!("failed to dump the profile to {:?}: {}", path, e);
-                Err(ProfError::JemallocError(format!(
+        unsafe {
+            if let Err(e) = tikv_jemalloc_ctl::raw::write(PROF_DUMP, ptr) {
+                return Err(ProfError::JemallocError(format!(
                     "failed to dump the profile to {:?}: {}",
                     path, e
-                )))
-            }
-            Ok(_) => {
-                info!("dump profile to {}", path);
-                Ok(())
+                )));
             }
         }
+        Ok(())
     }
 
     #[cfg(test)]

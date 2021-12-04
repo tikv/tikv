@@ -4,9 +4,8 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use collections::HashSet;
-
 use super::make_rpc_error;
+use collections::HashSet;
 use engine_traits::{KvEngine, CF_WRITE};
 use file_system::{set_io_type, IOType};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
@@ -16,11 +15,10 @@ use futures::TryFutureExt;
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
+use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::{errorpb, kvrpcpb::Context};
 
-#[cfg(feature = "prost-codec")]
-use kvproto::import_sstpb::write_request::*;
-#[cfg(feature = "protobuf-codec")]
+use kvproto::import_sstpb::RawWriteRequest_oneof_chunk as RawChunk;
 use kvproto::import_sstpb::WriteRequest_oneof_chunk as Chunk;
 use kvproto::import_sstpb::*;
 
@@ -28,7 +26,7 @@ use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::{Callback, RegionSnapshot};
+use raftstore::store::{Callback, RaftCmdExtraOpts, RegionSnapshot};
 use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Instant, Limiter};
@@ -100,6 +98,7 @@ where
         let p = sst_meta_to_path(meta)?;
         Ok(slots.insert(p))
     }
+
     fn release_lock(task_slots: &Arc<Mutex<HashSet<PathBuf>>>, meta: &SstMeta) -> Result<bool> {
         let mut slots = task_slots.lock().unwrap();
         let p = sst_meta_to_path(meta)?;
@@ -116,7 +115,7 @@ where
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
         let (cb, future) = paired_future_callback();
-        if let Err(e) = router.send_command(cmd, Callback::Read(cb)) {
+        if let Err(e) = router.send_command(cmd, Callback::Read(cb), RaftCmdExtraOpts::default()) {
             return Err(e.into());
         }
         let mut res = future.await.map_err(|_| {
@@ -137,6 +136,7 @@ where
             term: header.get_current_term(),
         })
     }
+
     fn check_write_stall(&self) -> Option<errorpb::Error> {
         if self.importer.get_mode() == SwitchMode::Normal
             && self
@@ -192,7 +192,7 @@ where
             // must execute after geting a snapshot from raftstore to make sure that the
             // current leader has applied to current term.
             for sst in ssts.iter() {
-                if !importer.exist(&sst) {
+                if !importer.exist(sst) {
                     warn!(
                         "sst [{:?}] not exist. we may retry an operation that has already succeeded",
                         sst
@@ -208,7 +208,9 @@ where
             }
 
             let (cb, future) = paired_future_callback();
-            if let Err(e) = router.send_command(cmd, Callback::write(cb)) {
+            if let Err(e) =
+                router.send_command(cmd, Callback::write(cb), RaftCmdExtraOpts::default())
+            {
                 resp.set_error(e.into());
                 return Ok(resp);
             }
@@ -222,6 +224,68 @@ where
             Ok(resp)
         }
     }
+}
+
+#[macro_export]
+macro_rules! impl_write {
+    ($fn:ident, $req_ty:ident, $resp_ty:ident, $chunk_ty:ident, $writer_fn:ident) => {
+        fn $fn(
+            &mut self,
+            _ctx: RpcContext<'_>,
+            stream: RequestStream<$req_ty>,
+            sink: ClientStreamingSink<$resp_ty>,
+        ) {
+            let import = self.importer.clone();
+            let engine = self.engine.clone();
+            let (rx, buf_driver) =
+                create_stream_with_buffer(stream, self.cfg.stream_channel_window);
+            let mut rx = rx.map_err(Error::from);
+
+            let timer = Instant::now_coarse();
+            let label = stringify!($fn);
+            let handle_task = async move {
+                let res = async move {
+                    let first_req = rx.try_next().await?;
+                    let meta = match first_req {
+                        Some(r) => match r.chunk {
+                            Some($chunk_ty::Meta(m)) => m,
+                            _ => return Err(Error::InvalidChunk),
+                        },
+                        _ => return Err(Error::InvalidChunk),
+                    };
+
+                    let writer = match import.$writer_fn(&engine, meta) {
+                        Ok(w) => w,
+                        Err(e) => {
+                            error!("build writer failed {:?}", e);
+                            return Err(Error::InvalidChunk);
+                        }
+                    };
+                    let writer = rx
+                        .try_fold(writer, |mut writer, req| async move {
+                            let batch = match req.chunk {
+                                Some($chunk_ty::Batch(b)) => b,
+                                _ => return Err(Error::InvalidChunk),
+                            };
+                            writer.write(batch)?;
+                            Ok(writer)
+                        })
+                        .await?;
+
+                    let metas = writer.finish()?;
+                    import.verify_checksum(&metas)?;
+                    let mut resp = $resp_ty::default();
+                    resp.set_metas(metas.into());
+                    Ok(resp)
+                }
+                .await;
+                crate::send_rpc_response!(res, sink, label, timer);
+            };
+
+            self.threads.spawn_ok(buf_driver);
+            self.threads.spawn_ok(handle_task);
+        }
+    };
 }
 
 impl<E, Router> ImportSst for ImportSSTService<E, Router>
@@ -328,11 +392,18 @@ where
             // a download task.
             // Unfortunately, this currently can't happen because the S3Storage
             // is not Send + Sync. See the documentation of S3Storage for reason.
+            let cipher = req
+                .cipher_info
+                .to_owned()
+                .into_option()
+                .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
+
             let res = importer.download::<E>(
                 req.get_sst(),
                 req.get_storage_backend(),
                 req.get_name(),
                 req.get_rewrite_rule(),
+                cipher,
                 limiter,
                 engine,
             );
@@ -522,64 +593,6 @@ where
         ctx.spawn(ctx_task);
     }
 
-    fn write(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        stream: RequestStream<WriteRequest>,
-        sink: ClientStreamingSink<WriteResponse>,
-    ) {
-        let label = "write";
-        let timer = Instant::now_coarse();
-        let import = self.importer.clone();
-        let engine = self.engine.clone();
-        let (rx, buf_driver) = create_stream_with_buffer(stream, self.cfg.stream_channel_window);
-        let mut rx = rx.map_err(Error::from);
-
-        let handle_task = async move {
-            let res = async move {
-                let first_req = rx.try_next().await?;
-                let meta = match first_req {
-                    Some(r) => match r.chunk {
-                        Some(Chunk::Meta(m)) => m,
-                        _ => return Err(Error::InvalidChunk),
-                    },
-                    _ => return Err(Error::InvalidChunk),
-                };
-
-                let writer = match import.new_writer::<E>(&engine, meta) {
-                    Ok(w) => w,
-                    Err(e) => {
-                        error!("build writer failed {:?}", e);
-                        return Err(Error::InvalidChunk);
-                    }
-                };
-                let writer = rx
-                    .try_fold(writer, |mut writer, req| async move {
-                        let start = Instant::now_coarse();
-                        let batch = match req.chunk {
-                            Some(Chunk::Batch(b)) => b,
-                            _ => return Err(Error::InvalidChunk),
-                        };
-                        writer.write(batch)?;
-                        IMPORT_WRITE_CHUNK_DURATION.observe(start.saturating_elapsed_secs());
-                        Ok(writer)
-                    })
-                    .await?;
-
-                writer.finish().map(|metas| {
-                    let mut resp = WriteResponse::default();
-                    resp.set_metas(metas.into());
-                    resp
-                })
-            }
-            .await;
-            crate::send_rpc_response!(res, sink, label, timer);
-        };
-
-        self.threads.spawn_ok(buf_driver);
-        self.threads.spawn_ok(handle_task);
-    }
-
     fn duplicate_detect(
         &mut self,
         _ctx: RpcContext<'_>,
@@ -646,6 +659,16 @@ where
         };
         self.threads.spawn_ok(handle_task);
     }
+
+    impl_write!(write, WriteRequest, WriteResponse, Chunk, new_txn_writer);
+
+    impl_write!(
+        raw_write,
+        RawWriteRequest,
+        RawWriteResponse,
+        RawChunk,
+        new_raw_writer
+    );
 }
 
 // add error statistics from pb error response

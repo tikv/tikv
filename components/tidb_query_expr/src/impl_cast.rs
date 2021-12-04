@@ -13,6 +13,7 @@ use tipb::{Expr, FieldType};
 use crate::types::RpnExpressionBuilder;
 use crate::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
 use tidb_query_common::Result;
+use tidb_query_datatype::codec::collation::Encoding;
 use tidb_query_datatype::codec::convert::*;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
@@ -1435,6 +1436,18 @@ fn cast_enum_as_json(extra: &RpnFnCallExtra, val: Option<EnumRef>) -> Result<Opt
         None => Ok(None),
         Some(val) => cast_string_as_json(extra, Some(val.name())),
     }
+}
+
+#[rpn_fn]
+#[inline]
+fn to_binary<E: Encoding>(val: BytesRef) -> Result<Option<Bytes>> {
+    Ok(Some(E::encode(val)?))
+}
+
+#[rpn_fn]
+#[inline]
+fn from_binary<E: Encoding>(val: BytesRef) -> Result<Option<Bytes>> {
+    Ok(Some(E::decode(val)?))
 }
 
 #[cfg(test)]
@@ -4266,6 +4279,65 @@ mod tests {
     }
 
     #[test]
+    fn test_to_binary() {
+        let cases = vec![
+            ("a".as_bytes().to_vec(), "utf8mb4", Some(vec![0x61])),
+            ("a".as_bytes().to_vec(), "gbk", Some(vec![0x61])),
+            (
+                "一".as_bytes().to_vec(),
+                "utf8mb4",
+                Some(vec![0xe4, 0xb8, 0x80]),
+            ),
+            ("一".as_bytes().to_vec(), "gbk", Some(vec![0xd2, 0xbb])),
+        ];
+
+        for (v, charset, expected) in cases {
+            let result = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(
+                    v,
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .charset(charset)
+                        .build(),
+                )
+                .evaluate(ScalarFuncSig::ToBinary)
+                .unwrap();
+            assert_eq!(expected, result);
+        }
+    }
+
+    #[test]
+    fn test_from_binary() {
+        let cases = vec![
+            (vec![0x61], "utf8mb4", Some("a".as_bytes().to_vec())),
+            (vec![0x61], "gbk", Some("a".as_bytes().to_vec())),
+            (
+                vec![0xe4, 0xb8, 0x80],
+                "utf8mb4",
+                Some("一".as_bytes().to_vec()),
+            ),
+            (vec![0xd2, 0xbb], "gbk", Some("一".as_bytes().to_vec())),
+        ];
+
+        for (v, charset, expected) in cases {
+            let result = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(
+                    v,
+                    FieldTypeBuilder::new().tp(FieldTypeTp::String).build(),
+                )
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .charset(charset)
+                        .build(),
+                )
+                .evaluate(ScalarFuncSig::FromBinary)
+                .unwrap();
+            assert_eq!(expected, result);
+        }
+    }
+
+    #[test]
     fn test_decimal_as_string() {
         test_none_with_ctx_and_extra(cast_any_as_string::<Decimal>);
 
@@ -6102,7 +6174,7 @@ mod tests {
                                 } else {
                                     max_val_str = "838:59:59";
                                 }
-                                let max_expect = Duration::parse(&mut ctx, &max_val_str, fsp);
+                                let max_expect = Duration::parse(&mut ctx, max_val_str, fsp);
                                 let log = format!(
                                     "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
                                     func_name,

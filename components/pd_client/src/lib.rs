@@ -5,6 +5,7 @@ extern crate tikv_alloc;
 mod client;
 mod feature_gate;
 pub mod metrics;
+mod tso;
 mod util;
 
 mod config;
@@ -41,6 +42,9 @@ pub struct RegionStat {
     pub approximate_size: u64,
     pub approximate_keys: u64,
     pub last_report_ts: UnixSecs,
+    // cpu_usage is the CPU time usage of the leader region since the last heartbeat,
+    // which is calculated by cpu_time_delta/heartbeat_reported_interval.
+    pub cpu_usage: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -214,7 +218,11 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Sends store statistics regularly.
-    fn store_heartbeat(&self, _stats: pdpb::StoreStats) -> PdFuture<pdpb::StoreHeartbeatResponse> {
+    fn store_heartbeat(
+        &self,
+        _stats: pdpb::StoreStats,
+        _report: Option<pdpb::StoreReport>,
+    ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         unimplemented!();
     }
 

@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 //! Functionality for handling optimistic and pessimistic prewrites. These are separate commands
 //! (although maybe they shouldn't be since there is only one protobuf), but
 //! handling of the commands is similar. We therefore have a single type (Prewriter) to handle both
@@ -26,6 +27,7 @@ use crate::storage::{
 use engine_traits::CF_WRITE;
 use kvproto::kvrpcpb::ExtraOp;
 use std::mem;
+use tikv_kv::SnapshotExt;
 use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
 
 use super::ReaderWithStats;
@@ -388,7 +390,8 @@ impl<K: PrewriteKind> Prewriter<K> {
     // If it is possibly stale due to leader transfer or region merge, return an error.
     // TODO: Fallback to non-async commit if not synced instead of returning an error.
     fn check_max_ts_synced(&self, snapshot: &impl Snapshot) -> Result<()> {
-        if (self.secondary_keys.is_some() || self.try_one_pc) && !snapshot.is_max_ts_synced() {
+        if (self.secondary_keys.is_some() || self.try_one_pc) && !snapshot.ext().is_max_ts_synced()
+        {
             Err(ErrorInner::MaxTimestampNotSynced {
                 region_id: self.ctx.get_region_id(),
                 start_ts: self.start_ts,
@@ -423,6 +426,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             lock_ttl: self.lock_ttl,
             min_commit_ts: self.min_commit_ts,
             need_old_value: extra_op == ExtraOp::ReadOldValue,
+            is_retry_request: self.ctx.is_retry_request,
         };
 
         let async_commit_pk = self
@@ -435,7 +439,7 @@ impl<K: PrewriteKind> Prewriter<K> {
         let mut final_min_commit_ts = TimeStamp::zero();
         let mut locks = Vec::new();
 
-        // Furthur check whether the prewrited transaction has been committed
+        // Further check whether the prewrited transaction has been committed
         // when encountering a WriteConflict or PessimisticLockNotFound error.
         // This extra check manages to make prewrite idempotent after the transaction
         // was committed.
@@ -444,6 +448,7 @@ impl<K: PrewriteKind> Prewriter<K> {
         // whether the transaction has been committed, so the error is still returned.
         fn check_committed_record_on_err(
             prewrite_result: MvccResult<(TimeStamp, OldValue)>,
+            txn: &mut MvccTxn,
             reader: &mut SnapshotReader<impl Snapshot>,
             key: &Key,
         ) -> Result<(Vec<std::result::Result<(), StorageError>>, TimeStamp)> {
@@ -451,7 +456,10 @@ impl<K: PrewriteKind> Prewriter<K> {
                 TxnCommitRecord::SingleRecord { commit_ts, write }
                     if write.write_type != WriteType::Rollback =>
                 {
-                    info!("prewrited transaction has been committed"; "start_ts" => reader.start_ts, "commit_ts" => commit_ts);
+                    info!("prewrited transaction has been committed";
+                        "start_ts" => reader.start_ts, "commit_ts" => commit_ts,
+                        "key" => ?key, "write_type" => ?write.write_type);
+                    txn.clear();
                     Ok((vec![], commit_ts))
                 }
                 _ => Err(prewrite_result.unwrap_err().into()),
@@ -463,6 +471,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             let m = m.into_mutation();
             let key = m.key().clone();
             let mutation_type = m.mutation_type();
+
             let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
             if Some(m.key()) == async_commit_pk {
                 secondaries = &self.secondary_keys;
@@ -476,7 +485,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                     if need_min_commit_ts && final_min_commit_ts < ts {
                         final_min_commit_ts = ts;
                     }
-                    if old_value.valid() {
+                    if old_value.resolved() {
                         let key = key.append_ts(txn.start_ts);
                         self.old_values
                             .insert(key, (old_value, Some(mutation_type)));
@@ -487,10 +496,10 @@ impl<K: PrewriteKind> Prewriter<K> {
                     conflict_commit_ts,
                     ..
                 })) if conflict_commit_ts > start_ts => {
-                    return check_committed_record_on_err(prewrite_result, reader, &key);
+                    return check_committed_record_on_err(prewrite_result, txn, reader, &key);
                 }
                 Err(MvccError(box MvccErrorInner::PessimisticLockNotFound { .. })) => {
-                    return check_committed_record_on_err(prewrite_result, reader, &key);
+                    return check_committed_record_on_err(prewrite_result, txn, reader, &key);
                 }
                 Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) | Ok((..)) => {
                     // fallback to not using async commit or 1pc
@@ -555,9 +564,12 @@ impl<K: PrewriteKind> Prewriter<K> {
             // If an error (KeyIsLocked or WriteConflict) occurs before, these lock guards
             // are dropped along with `txn` automatically.
             let lock_guards = txn.take_guards();
+            let mut to_be_write = WriteData::new(txn.into_modifies(), extra);
+            to_be_write.set_disk_full_opt(self.ctx.get_disk_full_opt());
+
             WriteResult {
                 ctx: self.ctx,
-                to_be_write: WriteData::new(txn.into_modifies(), extra),
+                to_be_write,
                 rows,
                 pr,
                 lock_info: None,
@@ -750,7 +762,7 @@ mod tests {
     use super::*;
     use crate::storage::txn::actions::acquire_pessimistic_lock::tests::must_pessimistic_locked;
     use crate::storage::txn::actions::tests::{
-        must_pessimistic_prewrite_put_async_commit, must_prewrite_put,
+        must_pessimistic_prewrite_put_async_commit, must_prewrite_delete, must_prewrite_put,
         must_prewrite_put_async_commit,
     };
     use crate::storage::{
@@ -1292,14 +1304,23 @@ mod tests {
     #[test]
     fn test_out_of_sync_max_ts() {
         use crate::storage::{kv::Result, CfName, ConcurrencyManager, DummyLockManager, Value};
-        use engine_rocks::RocksEngineIterator;
+        use engine_test::kv::KvTestEngineIterator;
         use engine_traits::{IterOptions, ReadOptions};
         use kvproto::kvrpcpb::ExtraOp;
         #[derive(Clone)]
         struct MockSnapshot;
 
+        struct MockSnapshotExt;
+
+        impl SnapshotExt for MockSnapshotExt {
+            fn is_max_ts_synced(&self) -> bool {
+                false
+            }
+        }
+
         impl Snapshot for MockSnapshot {
-            type Iter = RocksEngineIterator;
+            type Iter = KvTestEngineIterator;
+            type Ext<'a> = MockSnapshotExt;
 
             fn get(&self, _: &Key) -> Result<Option<Value>> {
                 unimplemented!()
@@ -1316,8 +1337,8 @@ mod tests {
             fn iter_cf(&self, _: CfName, _: IterOptions) -> Result<Self::Iter> {
                 unimplemented!()
             }
-            fn is_max_ts_synced(&self) -> bool {
-                false
+            fn ext(&self) -> MockSnapshotExt {
+                MockSnapshotExt
             }
         }
 
@@ -1499,6 +1520,63 @@ mod tests {
             let result = cmd.cmd.process_write(snap, context).unwrap();
             assert_eq!(result.response_policy, case.expected);
         }
+    }
+
+    // this test for prewrite with should_not_exist flag
+    #[test]
+    fn test_prewrite_should_not_exist() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        // concurency_manager.max_tx = 5
+        let cm = ConcurrencyManager::new(5.into());
+        let mut statistics = Statistics::default();
+
+        let (key, value) = (b"k", b"val");
+
+        // T1: start_ts = 3, commit_ts = 5, put key:value
+        must_prewrite_put(&engine, key, value, key, 3);
+        must_commit(&engine, key, 3, 5);
+
+        // T2: start_ts = 15, prewrite on k, with should_not_exist flag set.
+        let res = prewrite_with_cm(
+            &engine,
+            cm.clone(),
+            &mut statistics,
+            vec![Mutation::CheckNotExists(Key::from_raw(key))],
+            key.to_vec(),
+            15,
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            res,
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::AlreadyExist { .. }
+            )))
+        ));
+
+        assert_eq!(cm.max_ts().into_inner(), 15);
+
+        // T3: start_ts = 8, commit_ts = max_ts + 1 = 16, prewrite a DELETE operation on k
+        must_prewrite_delete(&engine, key, key, 8);
+        must_commit(&engine, key, 8, cm.max_ts().into_inner() + 1);
+
+        // T1: start_ts = 10, reapeatly prewrite on k, with should_not_exist flag set
+        let res = prewrite_with_cm(
+            &engine,
+            cm,
+            &mut statistics,
+            vec![Mutation::CheckNotExists(Key::from_raw(key))],
+            key.to_vec(),
+            10,
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            res,
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::WriteConflict { .. }
+            )))
+        ));
     }
 
     #[test]
@@ -1689,6 +1767,152 @@ mod tests {
             }
             res => panic!("unexpected result {:?}", res),
         }
+    }
+
+    #[test]
+    fn test_repeated_pessimistic_prewrite_1pc() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(1.into());
+        let mut statistics = Statistics::default();
+
+        must_acquire_pessimistic_lock(&engine, b"k2", b"k2", 5, 5);
+        // The second key needs a pessimistic lock
+        let mutations = vec![
+            (Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())), false),
+            (Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())), true),
+        ];
+        let res = pessimistic_prewrite_with_cm(
+            &engine,
+            cm.clone(),
+            &mut statistics,
+            mutations.clone(),
+            b"k2".to_vec(),
+            5,
+            5,
+            Some(100),
+        )
+        .unwrap();
+        let commit_ts = res.one_pc_commit_ts;
+        cm.update_max_ts(commit_ts.next());
+        // repeate the prewrite
+        let res = pessimistic_prewrite_with_cm(
+            &engine,
+            cm,
+            &mut statistics,
+            mutations,
+            b"k2".to_vec(),
+            5,
+            5,
+            Some(100),
+        )
+        .unwrap();
+        // The new commit ts should be same as before.
+        assert_eq!(res.one_pc_commit_ts, commit_ts);
+        must_seek_write(&engine, b"k1", 100, 5, commit_ts, WriteType::Put);
+        must_seek_write(&engine, b"k2", 100, 5, commit_ts, WriteType::Put);
+    }
+
+    #[test]
+    fn test_repeated_prewrite_non_pessimistic_lock() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(1.into());
+        let mut statistics = Statistics::default();
+
+        let cm = &cm;
+        let mut prewrite_with_retry_flag =
+            |key: &[u8],
+             value: &[u8],
+             pk: &[u8],
+             secondary_keys,
+             ts: u64,
+             is_pessimistic_lock,
+             is_retry_request| {
+                let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
+                let mut ctx = Context::default();
+                ctx.set_is_retry_request(is_retry_request);
+                let cmd = PrewritePessimistic::new(
+                    vec![(mutation, is_pessimistic_lock)],
+                    pk.to_vec(),
+                    ts.into(),
+                    100,
+                    ts.into(),
+                    1,
+                    (ts + 1).into(),
+                    0.into(),
+                    secondary_keys,
+                    false,
+                    ctx,
+                );
+                prewrite_command(&engine, cm.clone(), &mut statistics, cmd)
+            };
+
+        must_acquire_pessimistic_lock(&engine, b"k1", b"k1", 10, 10);
+        must_pessimistic_prewrite_put_async_commit(
+            &engine,
+            b"k1",
+            b"v1",
+            b"k1",
+            &Some(vec![b"k2".to_vec()]),
+            10,
+            10,
+            true,
+            15,
+        );
+        must_pessimistic_prewrite_put_async_commit(
+            &engine,
+            b"k2",
+            b"v2",
+            b"k1",
+            &Some(vec![]),
+            10,
+            10,
+            false,
+            15,
+        );
+
+        // The transaction may be committed by another reader.
+        must_commit(&engine, b"k1", 10, 20);
+        must_commit(&engine, b"k2", 10, 20);
+
+        // This is a re-sent prewrite.
+        prewrite_with_retry_flag(b"k2", b"v2", b"k1", Some(vec![]), 10, false, true).unwrap();
+        // Commit repeatedly, these operations should have no effect.
+        must_commit(&engine, b"k1", 10, 25);
+        must_commit(&engine, b"k2", 10, 25);
+
+        // Seek from 30, we should read commit_ts = 20 instead of 25.
+        must_seek_write(&engine, b"k1", 30, 10, 20, WriteType::Put);
+        must_seek_write(&engine, b"k2", 30, 10, 20, WriteType::Put);
+
+        // Write another version to the keys.
+        must_prewrite_put(&engine, b"k1", b"v11", b"k1", 35);
+        must_prewrite_put(&engine, b"k2", b"v22", b"k1", 35);
+        must_commit(&engine, b"k1", 35, 40);
+        must_commit(&engine, b"k2", 35, 40);
+
+        // A retrying non-pessimistic-lock prewrite request should not skip constraint checks.
+        // Here it should take no effect, even there's already a newer version
+        // after it. (No matter if it's async commit).
+        prewrite_with_retry_flag(b"k2", b"v2", b"k1", Some(vec![]), 10, false, true).unwrap();
+        must_unlocked(&engine, b"k2");
+
+        prewrite_with_retry_flag(b"k2", b"v2", b"k1", None, 10, false, true).unwrap();
+        must_unlocked(&engine, b"k2");
+        // Committing still does nothing.
+        must_commit(&engine, b"k2", 10, 25);
+        // Try a different txn start ts (which haven't been successfully committed before).
+        // It should report a WriteConflict.
+        let err = prewrite_with_retry_flag(b"k2", b"v2", b"k1", None, 11, false, true).unwrap_err();
+        assert!(matches!(
+            err,
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::WriteConflict { .. }
+            )))
+        ));
+        must_unlocked(&engine, b"k2");
+        // However conflict still won't be checked if there's a non-retry request arriving.
+        prewrite_with_retry_flag(b"k2", b"v2", b"k1", None, 10, false, false).unwrap();
+        must_locked(&engine, b"k2", 10);
     }
 
     #[test]

@@ -4,12 +4,15 @@ mod batch;
 mod config;
 mod fsm;
 mod mailbox;
+mod metrics;
 mod router;
 
 #[cfg(feature = "test-runner")]
 pub mod test_runner;
 
-pub use self::batch::{create_system, BatchRouter, BatchSystem, HandlerBuilder, PollHandler};
+pub use self::batch::{
+    create_system, BatchRouter, BatchSystem, HandleResult, HandlerBuilder, PollHandler,
+};
 pub use self::config::Config;
 pub use self::fsm::{Fsm, Priority};
 pub use self::mailbox::{BasicMailbox, Mailbox};

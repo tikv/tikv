@@ -13,11 +13,11 @@ mod write;
 
 use std::io;
 
-pub use lock::{Lock, LockType};
+pub use lock::{Lock, LockType, PessimisticLock};
 pub use timestamp::{TimeStamp, TsSet};
 pub use types::{
-    is_short_value, Key, KvPair, Mutation, MutationType, OldValue, OldValues, TxnExtra,
-    TxnExtraScheduler, Value, WriteBatchFlags, SHORT_VALUE_MAX_LEN,
+    is_short_value, Key, KvPair, Mutation, MutationType, OldValue, OldValues, RawMutation,
+    TxnExtra, TxnExtraScheduler, Value, WriteBatchFlags, SHORT_VALUE_MAX_LEN,
 };
 pub use write::{Write, WriteRef, WriteType};
 

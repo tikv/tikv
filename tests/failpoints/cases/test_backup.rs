@@ -3,7 +3,7 @@
 use std::{thread, time::Duration};
 
 use futures::{executor::block_on, StreamExt};
-use kvproto::backup::Error_oneof_detail;
+use kvproto::brpb::Error_oneof_detail;
 use kvproto::kvrpcpb::*;
 use tempfile::Builder;
 use test_backup::*;

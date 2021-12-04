@@ -5,13 +5,15 @@
 use crate::config::BLOCK_CACHE_RATE;
 use crate::server::ttl::TTLCheckerTask;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
+use crate::storage::txn::flow_controller::FlowController;
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
-use engine_rocks::RocksEngine;
-use engine_traits::{CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
+use engine_traits::{ColumnFamilyOptions, KvEngine, CF_DEFAULT};
 use file_system::{get_io_rate_limiter, IOPriority, IORateLimitMode, IORateLimiter, IOType};
+use kvproto::kvrpcpb::ApiVersion;
 use libc::c_int;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use std::error::Error;
+use std::sync::Arc;
 use strum::IntoEnumIterator;
 use tikv_util::config::{self, OptionReadableSize, ReadableDuration, ReadableSize};
 use tikv_util::sys::SysQuota;
@@ -19,7 +21,7 @@ use tikv_util::worker::Scheduler;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
-const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
+const DEFAULT_MAX_KEY_SIZE: usize = 8 * 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 1024 * 512;
 const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
 
@@ -54,9 +56,13 @@ pub struct Config {
     #[online_config(skip)]
     pub enable_async_apply_prewrite: bool,
     #[online_config(skip)]
+    pub api_version: u8,
+    #[online_config(skip)]
     pub enable_ttl: bool,
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
+    #[online_config(submodule)]
+    pub flow_control: FlowControlConfig,
     #[online_config(submodule)]
     pub block_cache: BlockCacheConfig,
     #[online_config(submodule)]
@@ -75,8 +81,10 @@ impl Default for Config {
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),
             enable_async_apply_prewrite: false,
+            api_version: 1,
             enable_ttl: false,
             ttl_check_poll_interval: ReadableDuration::hours(12),
+            flow_control: FlowControlConfig::default(),
             block_cache: BlockCacheConfig::default(),
             io_rate_limit: IORateLimitConfig::default(),
         }
@@ -96,31 +104,52 @@ impl Config {
             );
             self.scheduler_concurrency = MAX_SCHED_CONCURRENCY;
         }
-        self.io_rate_limit.validate()
+        if !matches!(self.api_version, 1 | 2) {
+            return Err("storage.api_version can only be set to 1 or 2.".into());
+        }
+        if self.api_version == 2 && !self.enable_ttl {
+            warn!("storage.enable_ttl is deprecated in API V2 since API V2 forces to enable TTL.");
+            self.enable_ttl = true;
+        };
+        self.io_rate_limit.validate()?;
+
+        Ok(())
     }
-}
 
-pub struct StorageConfigManger {
-    kvdb: RocksEngine,
-    shared_block_cache: bool,
-    ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
-}
-
-impl StorageConfigManger {
-    pub fn new(
-        kvdb: RocksEngine,
-        shared_block_cache: bool,
-        ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
-    ) -> StorageConfigManger {
-        StorageConfigManger {
-            kvdb,
-            shared_block_cache,
-            ttl_checker_scheduler,
+    pub fn api_version(&self) -> ApiVersion {
+        match self.api_version {
+            1 if self.enable_ttl => ApiVersion::V1ttl,
+            1 => ApiVersion::V1,
+            2 => ApiVersion::V2,
+            _ => unreachable!(),
         }
     }
 }
 
-impl ConfigManager for StorageConfigManger {
+pub struct StorageConfigManger<EK: KvEngine> {
+    kvdb: EK,
+    shared_block_cache: bool,
+    ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
+    flow_controller: Arc<FlowController>,
+}
+
+impl<EK: KvEngine> StorageConfigManger<EK> {
+    pub fn new(
+        kvdb: EK,
+        shared_block_cache: bool,
+        ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
+        flow_controller: Arc<FlowController>,
+    ) -> Self {
+        StorageConfigManger {
+            kvdb,
+            shared_block_cache,
+            ttl_checker_scheduler,
+            flow_controller,
+        }
+    }
+}
+
+impl<EK: KvEngine> ConfigManager for StorageConfigManger<EK> {
     fn dispatch(&mut self, mut change: ConfigChange) -> CfgResult<()> {
         if let Some(ConfigValue::Module(mut block_cache)) = change.remove("block_cache") {
             if !self.shared_block_cache {
@@ -146,6 +175,25 @@ impl ConfigManager for StorageConfigManger {
             self.ttl_checker_scheduler
                 .schedule(TTLCheckerTask::UpdatePollInterval(interval.into()))
                 .unwrap();
+        } else if let Some(ConfigValue::Module(mut flow_control)) = change.remove("flow_control") {
+            if let Some(v) = flow_control.remove("enable") {
+                let enable: bool = v.into();
+                if enable {
+                    for cf in self.kvdb.cf_names() {
+                        self.kvdb
+                            .set_options_cf(cf, &[("disable_write_stall", "true")])
+                            .unwrap();
+                    }
+                    self.flow_controller.enable(true);
+                } else {
+                    for cf in self.kvdb.cf_names() {
+                        self.kvdb
+                            .set_options_cf(cf, &[("disable_write_stall", "false")])
+                            .unwrap();
+                    }
+                    self.flow_controller.enable(false);
+                }
+            }
         }
         if let Some(ConfigValue::Module(mut io_rate_limit)) = change.remove("io_rate_limit") {
             let limiter = match get_io_rate_limiter() {
@@ -166,6 +214,33 @@ impl ConfigManager for StorageConfigManger {
             }
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct FlowControlConfig {
+    pub enable: bool,
+    #[online_config(skip)]
+    pub soft_pending_compaction_bytes_limit: ReadableSize,
+    #[online_config(skip)]
+    pub hard_pending_compaction_bytes_limit: ReadableSize,
+    #[online_config(skip)]
+    pub memtables_threshold: u64,
+    #[online_config(skip)]
+    pub l0_files_threshold: u64,
+}
+
+impl Default for FlowControlConfig {
+    fn default() -> FlowControlConfig {
+        FlowControlConfig {
+            enable: true,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(1024),
+            memtables_threshold: 5,
+            l0_files_threshold: 20,
+        }
     }
 }
 

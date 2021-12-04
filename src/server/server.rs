@@ -125,6 +125,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             Arc::clone(&grpc_thread_load),
             cfg.value().enable_request_batch,
             proxy,
+            cfg.value().reject_messages_on_memory_ratio,
         );
 
         let addr = SocketAddr::from_str(&cfg.value().addr)?;
@@ -406,6 +407,7 @@ mod tests {
     use crate::server::TestRaftStoreRouter;
     use crate::storage::TestStorageBuilder;
     use grpcio::EnvBuilder;
+    use kvproto::kvrpcpb::ApiVersion;
     use raftstore::store::transport::Transport;
     use raftstore::store::*;
 
@@ -459,7 +461,7 @@ mod tests {
             ..Default::default()
         };
 
-        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
+        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
             .build()
             .unwrap();
 
@@ -473,9 +475,11 @@ mod tests {
                 .build(),
         );
 
+        let (tx, _rx) = mpsc::channel();
         let mut gc_worker = GcWorker::new(
             storage.get_engine(),
             router.clone(),
+            tx,
             Default::default(),
             Default::default(),
         );

@@ -30,6 +30,12 @@ impl<S: Snapshot> DummySinker<S> {
     }
 }
 
+impl<S: Snapshot> Default for DummySinker<S> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<S: Snapshot> CmdSinker<S> for DummySinker<S> {
     fn sink_cmd(&mut self, _sink_cmd: Vec<SinkCmd>) {}
 

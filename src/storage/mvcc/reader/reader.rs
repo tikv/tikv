@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use crate::storage::mvcc::{
     default_not_found_error,
@@ -45,7 +46,7 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     pub fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
         Ok(self
             .reader
-            .get_write(&key, ts, Some(self.start_ts))?
+            .get_write(key, ts, Some(self.start_ts))?
             .is_some())
     }
 
@@ -377,7 +378,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         self.create_lock_cursor()?;
         let cursor = self.lock_cursor.as_mut().unwrap();
         let ok = match start {
-            Some(ref x) => cursor.seek(x, &mut self.statistics.lock)?,
+            Some(x) => cursor.seek(x, &mut self.statistics.lock)?,
             None => cursor.seek_to_first(&mut self.statistics.lock),
         };
         if !ok {
@@ -545,7 +546,7 @@ pub mod tests {
     impl RegionEngine {
         pub fn new(db: &Arc<DB>, region: &Region) -> RegionEngine {
             RegionEngine {
-                db: Arc::clone(&db),
+                db: Arc::clone(db),
                 region: region.clone(),
             }
         }
@@ -611,6 +612,7 @@ pub mod tests {
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
                 need_old_value: false,
+                is_retry_request: false,
             }
         }
 
@@ -778,8 +780,10 @@ pub mod tests {
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_write_buffer_size(32 * 1024 * 1024);
         if with_properties {
-            let f = Box::new(MvccPropertiesCollectorFactory::default());
-            cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
+            cf_opts.add_table_properties_collector_factory(
+                "tikv.test-collector",
+                MvccPropertiesCollectorFactory::default(),
+            );
         }
         let cfs_opts = vec![
             CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
@@ -877,7 +881,7 @@ pub mod tests {
         let path = dir.path().to_str().unwrap();
         let region = make_region(1, vec![0], vec![]);
 
-        let db = open_db(&path, true);
+        let db = open_db(path, true);
         let mut engine = RegionEngine::new(&db, &region);
 
         let key1 = &[1];

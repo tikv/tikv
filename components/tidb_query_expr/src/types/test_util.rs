@@ -159,3 +159,9 @@ impl RpnFnScalarEvaluator {
         result.map(|v| v.into())
     }
 }
+
+impl Default for RpnFnScalarEvaluator {
+    fn default() -> Self {
+        Self::new()
+    }
+}

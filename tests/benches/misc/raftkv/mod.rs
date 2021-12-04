@@ -12,14 +12,13 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::{
-    cmd_resp, util, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand,
-    ReadResponse, RegionSnapshot, SignificantMsg, StoreMsg, StoreRouter, WriteResponse,
+    cmd_resp, util, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter,
+    RaftCmdExtraOpts, RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg, StoreMsg,
+    StoreRouter, WriteResponse,
 };
 use raftstore::Result;
 use tempfile::{Builder, TempDir};
-use tikv::storage::kv::{
-    Callback as EngineCallback, CbContext, Modify, Result as EngineResult, WriteData,
-};
+use tikv::storage::kv::{Callback as EngineCallback, Modify, WriteData};
 use tikv::storage::Engine;
 use tikv::{
     server::raftkv::{CmdRes, RaftKv},
@@ -101,8 +100,13 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
 
     fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {}
 
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksSnapshot>) -> Result<()> {
-        self.invoke(RaftCommand::new(req, cb));
+    fn send_command(
+        &self,
+        req: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+        extra_opts: RaftCmdExtraOpts,
+    ) -> Result<()> {
+        self.invoke(RaftCommand::new_ext(req, cb, extra_opts));
         Ok(())
     }
 }
@@ -114,7 +118,7 @@ impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
     ) -> Result<()> {
-        self.send_command(req, cb)
+        self.send_command(req, cb, RaftCmdExtraOpts::default())
     }
 
     fn release_snapshot_cache(&self) {}
@@ -142,22 +146,18 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
     };
 
     b.iter(|| {
-        let cb1: EngineCallback<RegionSnapshot<RocksSnapshot>> = Box::new(
-            move |(_, res): (CbContext, EngineResult<RegionSnapshot<RocksSnapshot>>)| {
-                assert!(res.is_ok());
-            },
-        );
-        let cb2: EngineCallback<CmdRes<RocksSnapshot>> = Box::new(
-            move |(ctx, res): (CbContext, EngineResult<CmdRes<RocksSnapshot>>)| {
-                if let Ok(CmdRes::Snap(snap)) = res {
-                    cb1((ctx, Ok(snap)));
-                }
-            },
-        );
+        let cb1: EngineCallback<RegionSnapshot<RocksSnapshot>> = Box::new(move |res| {
+            assert!(res.is_ok());
+        });
+        let cb2: EngineCallback<CmdRes<RocksSnapshot>> = Box::new(move |res| {
+            if let Ok(CmdRes::Snap(snap)) = res {
+                cb1(Ok(snap));
+            }
+        });
         let cb: Callback<RocksSnapshot> =
             Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
                 let res = CmdRes::Snap(resp.snapshot.unwrap());
-                cb2((CbContext::new(), Ok(res)));
+                cb2(Ok(res));
             }));
         cb.invoke_read(resp.clone());
     });

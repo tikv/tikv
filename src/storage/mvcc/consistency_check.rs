@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath] called by raftstore
 use std::cmp::Ordering;
 use std::convert::TryInto;
 use std::marker::PhantomData;
@@ -236,7 +237,7 @@ impl MvccInfoObserver for MvccInfoCollector {
             return Ok(false);
         }
 
-        let write = box_try!(WriteRef::parse(&value));
+        let write = box_try!(WriteRef::parse(value));
         let mut write_info = MvccWrite::default();
         match write.write_type {
             WriteType::Put => write_info.set_type(Op::Put),
@@ -246,7 +247,7 @@ impl MvccInfoObserver for MvccInfoCollector {
         }
         write_info.set_start_ts(write.start_ts.into_inner());
         write_info.set_commit_ts(commit_ts.into_inner());
-        if let Some(ref value) = write.short_value {
+        if let Some(value) = write.short_value {
             write_info.set_short_value(value.to_vec());
         }
 
@@ -373,7 +374,7 @@ impl MvccInfoObserver for MvccChecksum {
             return Ok(true);
         }
 
-        let write = box_try!(WriteRef::parse(&value));
+        let write = box_try!(WriteRef::parse(value));
         let start_ts = write.start_ts.into_inner();
 
         self.digest.update(key);

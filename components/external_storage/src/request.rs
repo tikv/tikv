@@ -3,11 +3,8 @@
 use anyhow::Context;
 use futures::executor::block_on;
 use futures_io::{AsyncRead, AsyncWrite};
-use kvproto::backup as proto;
-#[cfg(feature = "prost-codec")]
-pub use kvproto::backup::storage_backend::Backend;
-#[cfg(feature = "protobuf-codec")]
-pub use kvproto::backup::StorageBackend_oneof_backend as Backend;
+use kvproto::brpb as proto;
+pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 use std::io::{self, ErrorKind};
 use tikv_util::time::Limiter;
 use tokio::runtime::Runtime;

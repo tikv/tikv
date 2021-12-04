@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -9,7 +8,7 @@ use kvproto::kvrpcpb::Context;
 use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
-use tikv::storage::kv::SnapContext;
+use tikv::storage::kv::{SnapContext, SnapshotExt};
 use tikv_util::config::*;
 
 fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -195,14 +194,14 @@ fn test_sync_max_ts_after_leader_transfer() {
             ..Default::default()
         };
         let snapshot = storage.snapshot(snap_ctx).unwrap();
-        let max_ts_sync_status = snapshot.max_ts_sync_status.clone().unwrap();
+        let txn_ext = snapshot.txn_ext.clone().unwrap();
         for retry in 0..10 {
-            if max_ts_sync_status.load(Ordering::SeqCst) & 1 == 1 {
+            if txn_ext.is_max_ts_synced() {
                 break;
             }
             thread::sleep(Duration::from_millis(1 << retry));
         }
-        assert!(snapshot.is_max_ts_synced());
+        assert!(snapshot.ext().is_max_ts_synced());
     };
 
     cluster.must_transfer_leader(1, new_peer(1, 1));
