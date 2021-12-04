@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::mem::MaybeUninit;
 use std::num::IntErrorKind;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 // ## Differences between cgroup v1 and v2:
 // ### memory subsystem, memory limitation
@@ -207,7 +207,7 @@ fn parse_mountinfos_v2(infos: Vec<MountInfo>) -> HashMap<String, (String, PathBu
 // `root` is mounted on `mount_point`. `path` is a sub path of `root`.
 // This is used to build an absolute path starts with `mount_point`.
 fn build_path(path: &str, root: &str, mount_point: &Path) -> PathBuf {
-    let abs_root = normalize_path(Path::new(root));
+    let abs_root = super::super::config::normalize_path(Path::new(root));
     let root = abs_root.to_str().unwrap();
     assert!(path.starts_with('/') && root.starts_with('/'));
 
@@ -215,33 +215,6 @@ fn build_path(path: &str, root: &str, mount_point: &Path) -> PathBuf {
     let mut absolute = mount_point.to_owned();
     absolute.push(relative);
     absolute
-}
-
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut components = path.components().peekable();
-    let mut ret = if let Some(c @ Component::Prefix(..)) = components.peek().cloned() {
-        components.next();
-        PathBuf::from(c.as_os_str())
-    } else {
-        PathBuf::new()
-    };
-
-    for component in components {
-        match component {
-            Component::Prefix(..) => unreachable!(),
-            Component::RootDir => {
-                ret.push(component.as_os_str());
-            }
-            Component::CurDir => {}
-            Component::ParentDir => {
-                ret.pop();
-            }
-            Component::Normal(c) => {
-                ret.push(c);
-            }
-        }
-    }
-    ret
 }
 
 fn parse_memory_max(line: &str) -> i64 {

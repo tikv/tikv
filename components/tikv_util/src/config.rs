@@ -532,34 +532,33 @@ impl<'de> Deserialize<'de> for ReadableDuration {
     }
 }
 
+pub fn normalize_path<P: AsRef<Path>>(path: P) -> PathBuf {
+    use std::path::Component;
+    let mut components = path.as_ref().components().peekable();
+    let mut ret = PathBuf::new();
+
+    while let Some(c @ (Component::Prefix(..) | Component::RootDir)) = components.peek().cloned() {
+        components.next();
+        ret.push(c.as_os_str());
+    }
+
+    for component in components {
+        match component {
+            Component::Prefix(..) | Component::RootDir => unreachable!(),
+            Component::CurDir => {}
+            c @ Component::ParentDir => {
+                if !ret.pop() {
+                    ret.push(c.as_os_str());
+                }
+            }
+            Component::Normal(c) => ret.push(c),
+        }
+    }
+    ret
+}
+
 /// Normalizes the path and canonicalizes its longest physically existing sub-path.
 fn canonicalize_non_existing_path<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
-    fn normalize(path: &Path) -> PathBuf {
-        use std::path::Component;
-        let mut components = path.components().peekable();
-        let mut ret = PathBuf::new();
-
-        while let Some(c @ (Component::Prefix(..) | Component::RootDir)) =
-            components.peek().cloned()
-        {
-            components.next();
-            ret.push(c.as_os_str());
-        }
-
-        for component in components {
-            match component {
-                Component::Prefix(..) | Component::RootDir => unreachable!(),
-                Component::CurDir => {}
-                c @ Component::ParentDir => {
-                    if !ret.pop() {
-                        ret.push(c.as_os_str());
-                    }
-                }
-                Component::Normal(c) => ret.push(c),
-            }
-        }
-        ret
-    }
     fn try_canonicalize_normalized_path(path: &Path) -> std::io::Result<PathBuf> {
         use std::path::Component;
         let mut components = path.components().peekable();
@@ -607,7 +606,7 @@ fn canonicalize_non_existing_path<P: AsRef<Path>>(path: P) -> std::io::Result<Pa
         }
         Ok(ret)
     }
-    try_canonicalize_normalized_path(&normalize(path.as_ref()))
+    try_canonicalize_normalized_path(&normalize_path(path))
 }
 
 /// Normalizes the path and canonicalizes its longest physically existing sub-path.
