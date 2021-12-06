@@ -1427,7 +1427,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
                     );
                     return;
                 }
-<<<<<<< HEAD
                 match downstream_state
                     .compare_exchange(DownstreamState::Uninitialized, DownstreamState::Normal)
                 {
@@ -1440,11 +1439,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
                             "state" => ?state);
                     }
                 }
-=======
-                let _ = downstream_state
-                    .compare_exchange(DownstreamState::Uninitialized, DownstreamState::Normal);
-                info!("cdc downstream is initialized"; "downstream_id" => ?downstream_id);
->>>>>>> 913fbe895...  cdc: send all observed events before sending init event (#11098)
                 cb();
             }
             Task::TxnExtra(txn_extra) => {
