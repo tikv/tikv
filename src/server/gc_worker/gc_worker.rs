@@ -1076,6 +1076,10 @@ mod tests {
                         let bytes = keys::data_key(key.as_encoded());
                         *key = Key::from_encoded(bytes);
                     }
+                    Modify::PessimisticLock(ref mut key, _) => {
+                        let bytes = keys::data_key(key.as_encoded());
+                        *key = Key::from_encoded(bytes);
+                    }
                     Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
                         let bytes = keys::data_key(key1.as_encoded());
                         *key1 = Key::from_encoded(bytes);
@@ -1098,6 +1102,9 @@ mod tests {
                     *key = Key::from_encoded(keys::data_key(key.as_encoded()));
                 }
                 Modify::Put(_, ref mut key, _) => {
+                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
+                }
+                Modify::PessimisticLock(ref mut key, _) => {
                     *key = Key::from_encoded(keys::data_key(key.as_encoded()));
                 }
                 Modify::DeleteRange(_, ref mut start_key, ref mut end_key, _) => {
