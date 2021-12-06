@@ -41,4 +41,9 @@ lazy_static! {
         "Soft limit applied to the backup thread pool."
     )
     .unwrap();
+    pub static ref BACKUP_SCAN_WAIT_FOR_WRITER_HISTOGRAM : Histogram = register_histogram!(
+        "tikv_backup_scan_wait_for_writer_seconds",
+        "The time backup scanner wait for available writer."
+    )
+    .unwrap();
 }

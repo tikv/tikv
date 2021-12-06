@@ -8,6 +8,7 @@ use std::sync::atomic::*;
 use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use async_channel::SendError;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, CfName, SstCompressionType};
@@ -247,6 +248,22 @@ async fn save_backup_file_worker(
     }
 }
 
+/// Send the save task to the save worker.
+/// Record the wait time at the same time.
+async fn send_to_worker_with_metrics(
+    tx: &async_channel::Sender<InMemBackupFiles>,
+    files: InMemBackupFiles,
+) -> std::result::Result<(), SendError<InMemBackupFiles>> {
+    let files = match tx.try_send(files) {
+        Ok(_) => return Ok(()),
+        Err(e) => e.into_inner(),
+    };
+    let begin = Instant::now();
+    tx.send(files).await?;
+    BACKUP_SCAN_WAIT_FOR_WRITER_HISTOGRAM.observe(begin.saturating_elapsed_secs());
+    Ok(())
+}
+
 impl BackupRange {
     /// Get entries from the scanner and save them to storage
     async fn backup<E: Engine>(
@@ -356,7 +373,7 @@ impl BackupRange {
                     end_version: backup_ts,
                     region: self.region.clone(),
                 };
-                saver.send(msg).await?;
+                send_to_worker_with_metrics(&saver, msg).await?;
                 next_file_start_key = this_end_key;
                 writer = writer_builder
                     .build(next_file_start_key.clone())
@@ -388,7 +405,7 @@ impl BackupRange {
             end_version: backup_ts,
             region: self.region.clone(),
         };
-        saver.send(msg).await?;
+        send_to_worker_with_metrics(&saver, msg).await?;
 
         let stat = scanner.take_statistics();
         Ok(stat)
@@ -504,7 +521,7 @@ impl BackupRange {
             end_version: TimeStamp::zero(),
             region: self.region.clone(),
         };
-        saver_tx.send(msg).await?;
+        send_to_worker_with_metrics(&saver_tx, msg).await?;
         Ok(stat)
     }
 }
@@ -837,6 +854,13 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             };
 
             loop {
+                // when get the guard, release it until we finish scanning a batch, 
+                // because if we were suspended during scanning, 
+                // the region info have higher possibility to change (then we must compensate that by the fine-grained backup).
+                let guard = limit.guard().await;
+                if let Err(e) = guard {
+                    warn!("failed to retrieve limit guard, omitting."; "err" => %e);
+                };
                 let (batch, is_raw_kv, cf) = {
                     // Release lock as soon as possible.
                     // It is critical to speed up backup, otherwise workers are
@@ -860,11 +884,10 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 };
 
                 for brange in batch {
+                    // wake up the scheduler for each loop for awaking tasks waiting for some lock or channels.
+                    // because the softlimit permit is held by current task, there isn't risk of being suspended for long time.
+                    tokio::task::yield_now().await;
                     let engine = engine.clone();
-                    let guard = limit.guard().await;
-                    if let Err(e) = guard {
-                        warn!("failed to retrieve limit guard, omitting."; "err" => %e);
-                    }
                     if request.cancel.load(Ordering::SeqCst) {
                         warn!("backup task has canceled"; "range" => ?brange);
                         return;
