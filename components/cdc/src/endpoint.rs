@@ -12,17 +12,7 @@ use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
-<<<<<<< HEAD
-use grpcio::{ChannelBuilder, Environment};
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    event::Event as Event_oneof_event, ChangeDataRequest,
-    DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event, ResolvedTs,
-};
-#[cfg(not(feature = "prost-codec"))]
-=======
 use grpcio::Environment;
->>>>>>> 1e9f0b3a4... resolved_ts: return early after regions already had quorum (#11352)
 use kvproto::cdcpb::{
     ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
     DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event, Event_oneof_event,
