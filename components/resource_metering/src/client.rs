@@ -45,14 +45,23 @@ pub struct GrpcClient {
 impl Client for GrpcClient {
     fn upload_records(&mut self, records: Arc<Records>) {
         let address = { self.address.lock().unwrap().clone() };
+        let record_cnt = records.records.len() + if records.others.is_empty() { 0 } else { 1 };
+
         if address.is_empty() {
             self.client.take();
+            IGNORED_DATA_COUNTER
+                .with_label_values(&["report"])
+                .inc_by(record_cnt as _);
+            warn!("receiver address is empty, discarding the new report data");
             return;
         }
 
         let handle = self.limiter.try_acquire();
         if handle.is_none() {
-            IGNORED_DATA_COUNTER.with_label_values(&["report"]).inc();
+            IGNORED_DATA_COUNTER
+                .with_label_values(&["report"])
+                .inc_by(record_cnt as _);
+            warn!("the last report has not been completed, discarding the new report data");
             return;
         }
         // address won't be empty here
@@ -64,7 +73,9 @@ impl Client for GrpcClient {
         let call_opt = CallOption::default().timeout(Duration::from_secs(2));
         let call = client.report_opt(call_opt);
         if let Err(err) = &call {
-            IGNORED_DATA_COUNTER.with_label_values(&["report"]).inc();
+            IGNORED_DATA_COUNTER
+                .with_label_values(&["report"])
+                .inc_by(record_cnt as _);
             warn!("failed to connect to receiver"; "error" => ?err);
             return;
         }
@@ -73,6 +84,9 @@ impl Client for GrpcClient {
             let _hd = handle;
 
             let _t = REPORT_DURATION_HISTOGRAM.start_timer();
+            REPORT_DATA_COUNTER
+                .with_label_values(&["to_send"])
+                .inc_by(record_cnt as _);
             for (tag, record) in &records.records {
                 let mut req = ResourceUsageRecord::default();
                 req.set_resource_group_tag(tag.clone());

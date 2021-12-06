@@ -11,7 +11,7 @@ use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::channel::oneshot;
 use futures::{select, FutureExt};
 use grpcio::{ChannelBuilder, Environment, Server};
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{ApiVersion, Context};
 use kvproto::resource_usage_agent::{ResourceMeteringPubSubClient, ResourceUsageRecord};
 use mock_receiver_server::MockReceiverServer;
 use resource_metering::{init_recorder, Config, ConfigManager, Task, TEST_TAG_PREFIX};
@@ -23,7 +23,7 @@ use tikv::storage::{RocksEngine, Storage, TestEngineBuilder, TestStorageBuilder}
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::LazyWorker;
 use tokio::runtime::{self, Runtime};
-use txn_types::{Key, TimeStamp};
+use txn_types::TimeStamp;
 
 pub struct TestSuite {
     publisher_server_port: u16,
@@ -50,9 +50,13 @@ impl TestSuite {
     pub fn new() -> Self {
         fail::cfg("cpu-record-test-filter", "return").unwrap();
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilder::from_engine_and_lock_mgr(engine, DummyLockManager {})
-            .build()
-            .unwrap();
+        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
+            engine,
+            DummyLockManager {},
+            ApiVersion::V1,
+        )
+        .build()
+        .unwrap();
 
         let mut reporter = Box::new(LazyWorker::new("resource-metering-reporter"));
         let scheduler = reporter.scheduler();
@@ -196,7 +200,7 @@ impl TestSuite {
                         t.extend_from_slice(tag.as_bytes());
                         t
                     });
-                    storage.get(ctx, Key::from_raw(b""), TimeStamp::new(0))
+                    storage.get(ctx, b"".to_vec(), TimeStamp::new(0))
                 }))
                 .fuse();
 

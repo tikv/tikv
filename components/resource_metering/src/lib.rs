@@ -18,12 +18,13 @@ mod client;
 mod collector;
 mod config;
 mod localstorage;
-pub(crate) mod metrics;
 mod model;
 mod publisher;
 mod recorder;
 mod reporter;
 pub mod utils;
+
+pub(crate) mod metrics;
 
 pub use client::{Client, GrpcClient};
 pub use collector::Collector;

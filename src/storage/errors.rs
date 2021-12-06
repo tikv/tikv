@@ -5,19 +5,20 @@ use std::error::Error as StdError;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 
+use engine_traits::key_prefix::KeyPrefix;
+use kvproto::kvrpcpb::ApiVersion;
 use kvproto::{errorpb, kvrpcpb};
 use thiserror::Error;
-
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use tikv_util::deadline::DeadlineError;
-use txn_types::{KvPair, TimeStamp};
 
 use crate::storage::{
     kv::{self, Error as KvError, ErrorInner as KvErrorInner},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
-    Result,
+    CommandKind, Result,
 };
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use tikv_util::deadline::DeadlineError;
+use txn_types::{KvPair, TimeStamp};
 
 #[derive(Debug, Error)]
 /// Detailed errors for storage operations. This enum also unifies code for basic error
@@ -64,6 +65,30 @@ pub enum ErrorInner {
 
     #[error("The length of ttls does not equal to the length of pairs")]
     TTLsLenNotEqualsToPairs,
+
+    #[error("Api version in request does not match with TiKV storage, cmd: {:?}, storage: {:?}, request: {:?}", .cmd, .storage_api_version, .req_api_version)]
+    ApiVersionNotMatched {
+        cmd: CommandKind,
+        storage_api_version: ApiVersion,
+        req_api_version: ApiVersion,
+    },
+
+    #[error("Key prefix mismatched with the request mode, cmd: {:?}, key_prefix: {:?}, key: {}", .cmd, .key_prefix, .key)]
+    InvalidKeyPrefix {
+        cmd: CommandKind,
+        key_prefix: KeyPrefix,
+        key: String,
+    },
+}
+
+impl ErrorInner {
+    pub fn invalid_key_prefix(cmd: CommandKind, key: &[u8]) -> Self {
+        ErrorInner::InvalidKeyPrefix {
+            cmd,
+            key_prefix: KeyPrefix::parse(key).0,
+            key: log_wrappers::hex_encode_upper(key),
+        }
+    }
 }
 
 impl From<DeadlineError> for ErrorInner {
@@ -111,6 +136,8 @@ impl ErrorCodeExt for Error {
             ErrorInner::TTLsLenNotEqualsToPairs => {
                 error_code::storage::TTLS_LEN_NOT_EQUALS_TO_PAIRS
             }
+            ErrorInner::ApiVersionNotMatched { .. } => error_code::storage::API_VERSION_NOT_MATCHED,
+            ErrorInner::InvalidKeyPrefix { .. } => error_code::storage::INVALID_KEY_PREFIX,
         }
     }
 }

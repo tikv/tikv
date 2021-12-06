@@ -6,7 +6,7 @@ use prometheus::*;
 lazy_static! {
     pub static ref STAT_TASK_COUNT: IntCounter = register_int_counter!(
         "tikv_resource_metering_stat_task_count",
-        "Counter of stat_task call"
+        "Counter of times to read the stat of tasks from procfs"
     )
     .unwrap();
     pub static ref REPORT_DURATION_HISTOGRAM: Histogram = register_histogram!(
