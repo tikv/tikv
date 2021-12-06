@@ -24,13 +24,9 @@ use txn_types::TimeStamp;
 use crate::endpoint::Task;
 use crate::errors::Result;
 
-<<<<<<< HEAD
-pub struct AdvanceTsWorker<T, E: KvEngine> {
-=======
 const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 
-pub struct AdvanceTsWorker<E: KvEngine> {
->>>>>>> ad2846652... resolved_ts: fix coroutine leaking (#10976)
+pub struct AdvanceTsWorker<T, E: KvEngine> {
     store_meta: Arc<Mutex<StoreMeta>>,
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
@@ -63,12 +59,8 @@ impl<T, E: KvEngine> AdvanceTsWorker<T, E> {
         let worker = Builder::new()
             .threaded_scheduler()
             .thread_name("advance-ts")
-<<<<<<< HEAD
             .core_threads(1)
-=======
-            .worker_threads(1)
             .enable_time()
->>>>>>> ad2846652... resolved_ts: fix coroutine leaking (#10976)
             .build()
             .unwrap();
         Self {
