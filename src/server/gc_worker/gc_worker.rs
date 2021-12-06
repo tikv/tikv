@@ -1135,7 +1135,7 @@ mod tests {
     ) {
         let scan_res = block_on(storage.scan(
             Context::default(),
-            Key::from_encoded_slice(b""),
+            b"".to_vec(),
             None,
             expected_data.len() + 1,
             0,
