@@ -369,14 +369,9 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     assert!(res.min_commit_ts.is_zero());
     assert!(res.one_pc_commit_ts.is_zero());
 
-    let locks = block_on(storage.scan_lock(
-        Context::default(),
-        20.into(),
-        Some(Key::from_raw(b"k1")),
-        None,
-        2,
-    ))
-    .unwrap();
+    let locks =
+        block_on(storage.scan_lock(Context::default(), 20.into(), Some(b"k1".to_vec()), None, 2))
+            .unwrap();
     assert_eq!(locks.len(), 2);
     assert_eq!(locks[0].get_key(), b"k1");
     assert!(locks[0].get_use_async_commit());

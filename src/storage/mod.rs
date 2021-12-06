@@ -82,7 +82,7 @@ use crate::storage::{
 use concurrency_manager::ConcurrencyManager;
 
 use engine_traits::{
-    key_prefix::{self, KeyPrefix},
+    key_prefix,
     raw_value::{ttl_to_expire_ts, RawValue},
     CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
@@ -100,7 +100,10 @@ use resource_metering::{FutureExt, ResourceMeteringTag};
 use std::{
     borrow::Cow,
     iter,
-    sync::{atomic, Arc},
+    sync::{
+        atomic::{self, AtomicBool},
+        Arc,
+    },
 };
 use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
@@ -212,7 +215,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         read_pool: ReadPoolHandle,
         lock_mgr: L,
         concurrency_manager: ConcurrencyManager,
-        pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
+        dynamic_switches: DynamicConfigs,
         flow_controller: Arc<FlowController>,
         reporter: R,
     ) -> Result<Self> {
@@ -221,7 +224,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             lock_mgr,
             concurrency_manager.clone(),
             config,
-            pipelined_pessimistic_lock,
+            dynamic_switches,
             flow_controller,
             reporter,
         );
@@ -369,46 +372,42 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ///   * Request of V1 from TiDB, for compatiblity.
     ///   * Request of V2 with legal prefix.
     /// See rfc https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md for detail.
-    fn check_api_version<'a>(
+    fn check_api_version(
         storage_api_version: ApiVersion,
         req_api_version: ApiVersion,
         cmd: CommandKind,
-        keys: impl IntoIterator<Item = &'a [u8]>,
+        keys: impl IntoIterator<Item = impl AsRef<[u8]>>,
     ) -> Result<()> {
-        let make_invalid_key_prefix_err = |key| {
-            Err(Error::from(ErrorInner::InvalidKeyPrefix {
-                cmd,
-                key_prefix: KeyPrefix::parse(key).0,
-                key: log_wrappers::hex_encode_upper(key),
-            }))
-        };
-
         match (storage_api_version, req_api_version) {
-            (ApiVersion::V1 | ApiVersion::V1ttl, ApiVersion::V1) => {}
+            (ApiVersion::V1, ApiVersion::V1) => {}
+            (ApiVersion::V1ttl, ApiVersion::V1) if Self::is_raw_command(cmd) => {
+                // storage api_version = V1ttl, allow RawKV request only.
+            }
             (ApiVersion::V2, ApiVersion::V1) if Self::is_txn_command(cmd) => {
                 // For compatibility, accept TiDB request only.
                 for key in keys {
-                    if !key_prefix::is_tidb_key(key) {
-                        return make_invalid_key_prefix_err(key);
+                    if !key_prefix::is_tidb_key(key.as_ref()) {
+                        return Err(ErrorInner::invalid_key_prefix(cmd, key.as_ref()).into());
                     }
                 }
             }
             (ApiVersion::V2, ApiVersion::V2) if Self::is_raw_command(cmd) => {
                 for key in keys {
-                    if !key_prefix::is_raw_key(key) {
-                        return make_invalid_key_prefix_err(key);
+                    if !key_prefix::is_raw_key(key.as_ref()) {
+                        return Err(ErrorInner::invalid_key_prefix(cmd, key.as_ref()).into());
                     }
                 }
             }
             (ApiVersion::V2, ApiVersion::V2) if Self::is_txn_command(cmd) => {
                 for key in keys {
-                    if !key_prefix::is_txn_key(key) {
-                        return make_invalid_key_prefix_err(key);
+                    if !key_prefix::is_txn_key(key.as_ref()) {
+                        return Err(ErrorInner::invalid_key_prefix(cmd, key.as_ref()).into());
                     }
                 }
             }
             _ => {
                 return Err(Error::from(ErrorInner::ApiVersionNotMatched {
+                    cmd,
                     storage_api_version,
                     req_api_version,
                 }));
@@ -452,12 +451,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version(
-                    api_version,
-                    ctx.api_version,
-                    CMD,
-                    iter::once(&raw_key[..]),
-                )?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, [&raw_key])?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
@@ -595,12 +589,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         QueryKind::Get,
                     );
 
-                    Self::check_api_version(
-                        api_version,
-                        ctx.api_version,
-                        CMD,
-                        iter::once(raw_key),
-                    )?;
+                    Self::check_api_version(api_version, ctx.api_version, CMD, [raw_key])?;
 
                     let start_ts = req.get_version().into();
                     let isolation_level = ctx.get_isolation_level();
@@ -751,12 +740,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version(
-                    api_version,
-                    ctx.api_version,
-                    CMD,
-                    raw_keys.iter().map(|x| &x[..]),
-                )?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, &raw_keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
@@ -864,19 +848,24 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     pub fn scan(
         &self,
         mut ctx: Context,
-        start_key: Key,
-        end_key: Option<Key>,
+        raw_start_key: Vec<u8>,
+        raw_end_key: Option<Vec<u8>>,
         limit: usize,
         sample_step: usize,
         start_ts: TimeStamp,
         key_only: bool,
         reverse_scan: bool,
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
+        let (start_key, end_key) = (
+            Key::from_raw(&raw_start_key),
+            raw_end_key.as_ref().map(|x| Key::from_raw(&x[..])),
+        );
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
+        let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -899,7 +888,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                // TODO: check_api_version
+                let raw_keys = Some(raw_start_key)
+                    .into_iter()
+                    .chain(raw_end_key.into_iter());
+                Self::check_api_version(api_version, ctx.api_version, CMD, raw_keys)?;
 
                 let (mut start_key, mut end_key) = (Some(start_key), end_key);
                 if reverse_scan {
@@ -1012,15 +1004,20 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         &self,
         mut ctx: Context,
         max_ts: TimeStamp,
-        start_key: Option<Key>,
-        end_key: Option<Key>,
+        raw_start_key: Option<Vec<u8>>,
+        raw_end_key: Option<Vec<u8>>,
         limit: usize,
     ) -> impl Future<Output = Result<Vec<LockInfo>>> {
+        let (start_key, end_key) = (
+            raw_start_key.as_ref().map(|x| Key::from_raw(&x[..])),
+            raw_end_key.as_ref().map(|x| Key::from_raw(&x[..])),
+        );
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
+        let api_version = self.api_version;
         // Do not allow replica read for scan_lock.
         ctx.set_replica_read(false);
 
@@ -1046,7 +1043,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                // TODO: check_api_version
+                let raw_keys = raw_start_key.into_iter().chain(raw_end_key.into_iter());
+                Self::check_api_version(api_version, ctx.api_version, CMD, raw_keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
@@ -1205,12 +1203,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     pub fn delete_range(
         &self,
         ctx: Context,
-        start_key: Key,
-        end_key: Key,
+        raw_start_key: Vec<u8>,
+        raw_end_key: Vec<u8>,
         notify_only: bool,
         callback: Callback<()>,
     ) -> Result<()> {
-        // TODO: check_api_version
+        let (start_key, end_key) = (Key::from_raw(&raw_start_key), Key::from_raw(&raw_end_key));
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::delete_range,
+            [raw_start_key, raw_end_key],
+        )?;
 
         let mut modifies = Vec::with_capacity(DATA_CFS.len());
         for cf in DATA_CFS {
@@ -1262,7 +1266,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&key[..]))?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1333,7 +1337,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(CMD)
                     .observe(gets.len() as f64);
 
-                // TODO: check_api_version
+                for get in &gets {
+                    Self::check_api_version(
+                        api_version,
+                        get.get_context().api_version,
+                        CMD,
+                        [get.get_key()],
+                    )?;
+                }
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let read_id = Some(ThreadReadId::new());
@@ -1430,12 +1441,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version(
-                    api_version,
-                    ctx.api_version,
-                    CMD,
-                    keys.iter().map(|x| &x[..]),
-                )?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, &keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1502,7 +1508,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_put;
         let api_version = self.api_version;
 
-        Self::check_api_version(api_version, ctx.api_version, CMD, iter::once(&key[..]))?;
+        Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
         if self.api_version == ApiVersion::V1 && ttl != 0 {
@@ -1539,7 +1545,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
-        // TODO: check_api_version
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::raw_batch_put,
+            pairs.iter().map(|(ref k, _)| k),
+        )?;
+
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
 
         check_key_size!(
@@ -1592,7 +1604,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        // TODO: check_api_version
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::raw_delete,
+            [&key],
+        )?;
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
 
@@ -1620,15 +1637,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         end_key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        // TODO: check_api_version
-
-        check_key_size!(
-            Some(&start_key)
-                .into_iter()
-                .chain(Some(&end_key).into_iter()),
-            self.max_key_size,
-            callback
-        );
+        let keys = [&start_key, &end_key];
+        check_key_size!(keys.iter(), self.max_key_size, callback);
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::raw_delete_range,
+            keys,
+        )?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let start_key = Key::from_encoded(start_key);
@@ -1655,7 +1671,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
-        // TODO: check_api_version
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::raw_batch_delete,
+            &keys,
+        )?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
@@ -1721,7 +1742,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                // TODO: check_api_version
+                Self::check_api_version(
+                    api_version,
+                    ctx.api_version,
+                    CMD,
+                    [&start_key, end_key.as_ref().unwrap_or(&vec![])], // Api V2 prohibit unbounded range. Empty key will be treated as invalid prefix.
+                )?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1813,7 +1839,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                // TODO: check_api_version
+                let keys = ranges
+                    .iter()
+                    .flat_map(|range| [range.get_start_key(), range.get_end_key()]);
+                Self::check_api_version(api_version, ctx.api_version, CMD, keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1937,7 +1966,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                // TODO: check_api_version
+                Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1984,7 +2013,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttl: u64,
         cb: Callback<(Option<Value>, bool)>,
     ) -> Result<()> {
-        // TODO: check_api_version
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::raw_compare_and_swap,
+            [&key],
+        )?;
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
 
         if self.api_version == ApiVersion::V1 && ttl != 0 {
@@ -2010,7 +2044,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
-        // TODO: check_api_version
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::raw_atomic_store,
+            pairs.iter().map(|(ref k, _)| k),
+        )?;
+
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let mutations = match self.api_version {
             ApiVersion::V1 => {
@@ -2053,7 +2093,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
-        // TODO: check_api_version
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::raw_atomic_store,
+            &keys,
+        )?;
+
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let muations = keys
             .into_iter()
@@ -2084,7 +2130,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
-                // TODO: check_api_version
                 if let ApiVersion::V1 | ApiVersion::V1ttl = api_version {
                     return Err(box_err!("raw_checksum is only available in API V2"));
                 }
@@ -2092,6 +2137,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 if algorithm != ChecksumAlgorithm::Crc64Xor {
                     return Err(box_err!("unknown checksum algorithm {:?}", algorithm));
                 }
+
+                let keys = ranges
+                    .iter()
+                    .flat_map(|range| [range.get_start_key(), range.get_end_key()]);
+                Self::check_api_version(api_version, ctx.api_version, CMD, keys)?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -2126,6 +2176,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 .await?
         }
     }
+}
+
+pub struct DynamicConfigs {
+    pub pipelined_pessimistic_lock: Arc<AtomicBool>,
+    pub in_memory_pessimistic_lock: Arc<AtomicBool>,
 }
 
 fn get_priority_tag(priority: CommandPri) -> CommandPriority {
@@ -2208,7 +2263,8 @@ pub fn point_key_range(key: Key) -> KeyRange {
 pub struct TestStorageBuilder<E: Engine, L: LockManager> {
     engine: E,
     config: Config,
-    pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
+    pipelined_pessimistic_lock: Arc<AtomicBool>,
+    in_memory_pessimistic_lock: Arc<AtomicBool>,
     lock_mgr: L,
 }
 
@@ -2232,8 +2288,7 @@ impl FlowStatsReporter for DummyReporter {
 }
 
 impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
-    pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L, api_version: ApiVersion) -> Self {
-        let mut config = Config::default();
+    fn set_api_version_to_config(api_version: ApiVersion, config: &mut Config) {
         match api_version {
             ApiVersion::V1 => {
                 config.api_version = 1;
@@ -2248,10 +2303,16 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
                 config.enable_ttl = true
             }
         };
+    }
+
+    pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L, api_version: ApiVersion) -> Self {
+        let mut config = Config::default();
+        Self::set_api_version_to_config(api_version, &mut config);
         Self {
             engine,
             config,
-            pipelined_pessimistic_lock: Arc::new(atomic::AtomicBool::new(false)),
+            pipelined_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+            in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             lock_mgr,
         }
     }
@@ -2275,11 +2336,14 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
         self
     }
 
+    pub fn in_memory_pessimistic_lock(self, enabled: bool) -> Self {
+        self.in_memory_pessimistic_lock
+            .store(enabled, atomic::Ordering::Relaxed);
+        self
+    }
+
     pub fn set_api_version(mut self, api_version: ApiVersion) -> Self {
-        self.config.api_version = match api_version {
-            ApiVersion::V1 | ApiVersion::V1ttl => 1,
-            ApiVersion::V2 => 2,
-        };
+        Self::set_api_version_to_config(api_version, &mut self.config);
         self
     }
 
@@ -2296,7 +2360,10 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             ReadPool::from(read_pool).handle(),
             self.lock_mgr,
             ConcurrencyManager::new(1.into()),
-            self.pipelined_pessimistic_lock,
+            DynamicConfigs {
+                pipelined_pessimistic_lock: self.pipelined_pessimistic_lock,
+                in_memory_pessimistic_lock: self.in_memory_pessimistic_lock,
+            },
             Arc::new(FlowController::empty()),
             DummyReporter,
         )
@@ -2690,7 +2757,7 @@ mod tests {
             },
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"x"),
+                b"x".to_vec(),
                 None,
                 1000,
                 0,
@@ -2760,7 +2827,7 @@ mod tests {
             vec![None, None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 1000,
                 0,
@@ -2775,7 +2842,7 @@ mod tests {
             vec![None, None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 1000,
                 0,
@@ -2790,8 +2857,8 @@ mod tests {
             vec![None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
-                Some(Key::from_raw(b"c")),
+                b"\x00".to_vec(),
+                Some(b"c".to_vec()),
                 1000,
                 0,
                 5.into(),
@@ -2805,8 +2872,8 @@ mod tests {
             vec![None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
-                Some(Key::from_raw(b"b")),
+                b"\xff".to_vec(),
+                Some(b"b".to_vec()),
                 1000,
                 0,
                 5.into(),
@@ -2820,7 +2887,7 @@ mod tests {
             vec![None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 2,
                 0,
@@ -2835,7 +2902,7 @@ mod tests {
             vec![None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 2,
                 0,
@@ -2871,7 +2938,7 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 1000,
                 0,
@@ -2890,7 +2957,7 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 1000,
                 0,
@@ -2908,7 +2975,7 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 1000,
                 2,
@@ -2926,7 +2993,7 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 1000,
                 2,
@@ -2941,7 +3008,7 @@ mod tests {
             vec![Some((b"a".to_vec(), b"aa".to_vec()))],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 1,
                 2,
@@ -2956,7 +3023,7 @@ mod tests {
             vec![Some((b"c".to_vec(), b"cc".to_vec()))],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 1,
                 2,
@@ -2974,8 +3041,8 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
-                Some(Key::from_raw(b"c")),
+                b"\x00".to_vec(),
+                Some(b"c".to_vec()),
                 1000,
                 0,
                 5.into(),
@@ -2992,8 +3059,8 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
-                Some(Key::from_raw(b"b")),
+                b"\xff".to_vec(),
+                Some(b"b".to_vec()),
                 1000,
                 0,
                 5.into(),
@@ -3011,7 +3078,7 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 2,
                 0,
@@ -3029,7 +3096,7 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 2,
                 0,
@@ -3103,7 +3170,7 @@ mod tests {
             vec![None, None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 1000,
                 0,
@@ -3118,7 +3185,7 @@ mod tests {
             vec![None, None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 1000,
                 0,
@@ -3133,8 +3200,8 @@ mod tests {
             vec![None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
-                Some(Key::from_raw(b"c")),
+                b"\x00".to_vec(),
+                Some(b"c".to_vec()),
                 1000,
                 0,
                 5.into(),
@@ -3148,8 +3215,8 @@ mod tests {
             vec![None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
-                Some(Key::from_raw(b"b")),
+                b"\xff".to_vec(),
+                Some(b"b".to_vec()),
                 1000,
                 0,
                 5.into(),
@@ -3163,7 +3230,7 @@ mod tests {
             vec![None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 2,
                 0,
@@ -3178,7 +3245,7 @@ mod tests {
             vec![None, None],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 2,
                 0,
@@ -3214,7 +3281,7 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 1000,
                 0,
@@ -3233,7 +3300,7 @@ mod tests {
             ],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 1000,
                 0,
@@ -3248,8 +3315,8 @@ mod tests {
             vec![Some((b"a".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
-                Some(Key::from_raw(b"c")),
+                b"\x00".to_vec(),
+                Some(b"c".to_vec()),
                 1000,
                 0,
                 5.into(),
@@ -3263,8 +3330,8 @@ mod tests {
             vec![Some((b"c".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
-                Some(Key::from_raw(b"b")),
+                b"\xff".to_vec(),
+                Some(b"b".to_vec()),
                 1000,
                 0,
                 5.into(),
@@ -3279,7 +3346,7 @@ mod tests {
             vec![Some((b"a".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\x00"),
+                b"\x00".to_vec(),
                 None,
                 2,
                 0,
@@ -3294,7 +3361,7 @@ mod tests {
             vec![Some((b"c".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
             block_on(storage.scan(
                 Context::default(),
-                Key::from_raw(b"\xff"),
+                b"\xff".to_vec(),
                 None,
                 2,
                 0,
@@ -3859,8 +3926,8 @@ mod tests {
         storage
             .delete_range(
                 Context::default(),
-                Key::from_raw(b"x"),
-                Key::from_raw(b"z"),
+                b"x".to_vec(),
+                b"z".to_vec(),
                 false,
                 expect_ok_callback(tx.clone(), 5),
             )
@@ -3886,8 +3953,8 @@ mod tests {
         storage
             .delete_range(
                 Context::default(),
-                Key::from_raw(b""),
-                Key::from_raw(&[255]),
+                b"".to_vec(),
+                vec![255],
                 false,
                 expect_ok_callback(tx, 9),
             )
@@ -4188,6 +4255,7 @@ mod tests {
             .iter()
             .map(|&(ref k, _)| {
                 let mut req = RawGetRequest::default();
+                req.set_context(ctx.clone());
                 req.set_key(k.clone());
                 ids.push(ids.len() as u64);
                 req
@@ -4313,6 +4381,12 @@ mod tests {
     }
 
     fn test_raw_scan_impl(api_version: ApiVersion) {
+        let (end_key, end_key_reverse_scan) = if let ApiVersion::V2 = api_version {
+            (Some(b"r\0z".to_vec()), Some(b"r\0\0".to_vec()))
+        } else {
+            (None, None)
+        };
+
         let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
             .build()
             .unwrap();
@@ -4373,7 +4447,7 @@ mod tests {
                 ctx.clone(),
                 "".to_string(),
                 b"r\0".to_vec(),
-                None,
+                end_key.clone(),
                 20,
                 true,
                 false,
@@ -4387,7 +4461,7 @@ mod tests {
                 ctx.clone(),
                 "".to_string(),
                 b"r\0c2".to_vec(),
-                None,
+                end_key.clone(),
                 20,
                 true,
                 false,
@@ -4405,7 +4479,7 @@ mod tests {
                 ctx.clone(),
                 "".to_string(),
                 b"r\0".to_vec(),
-                None,
+                end_key.clone(),
                 20,
                 false,
                 false,
@@ -4419,7 +4493,7 @@ mod tests {
                 ctx.clone(),
                 "".to_string(),
                 b"r\0c2".to_vec(),
-                None,
+                end_key,
                 20,
                 false,
                 false,
@@ -4438,7 +4512,7 @@ mod tests {
                 ctx.clone(),
                 "".to_string(),
                 b"r\0z".to_vec(),
-                None,
+                end_key_reverse_scan.clone(),
                 20,
                 false,
                 true,
@@ -4458,7 +4532,7 @@ mod tests {
                 ctx.clone(),
                 "".to_string(),
                 b"r\0z".to_vec(),
-                None,
+                end_key_reverse_scan,
                 5,
                 false,
                 true,
@@ -4703,6 +4777,20 @@ mod tests {
     }
 
     fn test_raw_batch_scan_impl(api_version: ApiVersion) {
+        let make_ranges = |delimiters: Vec<Vec<u8>>| -> Vec<KeyRange> {
+            delimiters
+                .windows(2)
+                .map(|key_pair| {
+                    let mut range = KeyRange::default();
+                    range.set_start_key(key_pair[0].clone());
+                    if let ApiVersion::V2 = api_version {
+                        range.set_end_key(key_pair[1].clone());
+                    };
+                    range
+                })
+                .collect()
+        };
+
         let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
             .build()
             .unwrap();
@@ -4775,14 +4863,12 @@ mod tests {
             Some((b"r\0c3".to_vec(), b"cc33".to_vec())),
             Some((b"r\0d".to_vec(), b"dd".to_vec())),
         ];
-        let ranges: Vec<KeyRange> = vec![b"r\0a".to_vec(), b"r\0b".to_vec(), b"r\0c".to_vec()]
-            .into_iter()
-            .map(|k| {
-                let mut range = KeyRange::default();
-                range.set_start_key(k);
-                range
-            })
-            .collect();
+        let ranges: Vec<KeyRange> = make_ranges(vec![
+            b"r\0a".to_vec(),
+            b"r\0b".to_vec(),
+            b"r\0c".to_vec(),
+            b"r\0z".to_vec(),
+        ]);
         expect_multi_values(
             results,
             block_on(storage.raw_batch_scan(
@@ -4903,14 +4989,12 @@ mod tests {
             Some((b"r\0a2".to_vec(), b"aa22".to_vec())),
             Some((b"r\0a1".to_vec(), b"aa11".to_vec())),
         ];
-        let ranges: Vec<KeyRange> = vec![b"r\0c3".to_vec(), b"r\0b3".to_vec(), b"r\0a3".to_vec()]
-            .into_iter()
-            .map(|s| {
-                let mut range = KeyRange::default();
-                range.set_start_key(s);
-                range
-            })
-            .collect();
+        let ranges: Vec<KeyRange> = make_ranges(vec![
+            b"r\0c3".to_vec(),
+            b"r\0b3".to_vec(),
+            b"r\0a3".to_vec(),
+            b"r\0".to_vec(),
+        ]);
         expect_multi_values(
             results,
             block_on(storage.raw_batch_scan(ctx.clone(), "".to_string(), ranges, 2, false, true))
@@ -5119,7 +5203,7 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             100.into(),
-            Some(Key::from_raw(b"a")),
+            Some(b"a".to_vec()),
             None,
             10,
         ))
@@ -5129,7 +5213,7 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             100.into(),
-            Some(Key::from_raw(b"y")),
+            Some(b"y".to_vec()),
             None,
             10,
         ))
@@ -5161,7 +5245,7 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             101.into(),
-            Some(Key::from_raw(b"b")),
+            Some(b"b".to_vec()),
             None,
             4,
         ))
@@ -5179,7 +5263,7 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             101.into(),
-            Some(Key::from_raw(b"b")),
+            Some(b"b".to_vec()),
             None,
             0,
         ))
@@ -5198,8 +5282,8 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             101.into(),
-            Some(Key::from_raw(b"b")),
-            Some(Key::from_raw(b"c")),
+            Some(b"b".to_vec()),
+            Some(b"c".to_vec()),
             0,
         ))
         .unwrap();
@@ -5208,8 +5292,8 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             101.into(),
-            Some(Key::from_raw(b"b")),
-            Some(Key::from_raw(b"z")),
+            Some(b"b".to_vec()),
+            Some(b"z".to_vec()),
             4,
         ))
         .unwrap();
@@ -5226,8 +5310,8 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             101.into(),
-            Some(Key::from_raw(b"b")),
-            Some(Key::from_raw(b"z")),
+            Some(b"b".to_vec()),
+            Some(b"z".to_vec()),
             3,
         ))
         .unwrap();
@@ -5258,8 +5342,8 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             101.into(),
-            Some(Key::from_raw(b"b")),
-            Some(Key::from_raw(b"z")),
+            Some(b"b".to_vec()),
+            Some(b"z".to_vec()),
             0,
         ))
         .unwrap();
@@ -5280,8 +5364,8 @@ mod tests {
         block_on(storage.scan_lock(
             Context::default(),
             101.into(),
-            Some(Key::from_raw(b"b")),
-            Some(Key::from_raw(b"z")),
+            Some(b"b".to_vec()),
+            Some(b"z".to_vec()),
             1,
         ))
         .unwrap_err();
@@ -5291,8 +5375,8 @@ mod tests {
         let res = block_on(storage.scan_lock(
             Context::default(),
             101.into(),
-            Some(Key::from_raw(b"b")),
-            Some(Key::from_raw(b"z")),
+            Some(b"b".to_vec()),
+            Some(b"z".to_vec()),
             0,
         ))
         .unwrap();
@@ -6671,16 +6755,16 @@ mod tests {
             block_on(storage.scan(ctx, start_key, end_key, 10, 0, 100.into(), false, reverse))
         };
         let key_error =
-            extract_key_error(&scan(ctx.clone(), Key::from_raw(b"a"), None, false).unwrap_err());
+            extract_key_error(&scan(ctx.clone(), b"a".to_vec(), None, false).unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");
         ctx.set_resolved_locks(vec![10]);
-        assert!(scan(ctx.clone(), Key::from_raw(b"a"), None, false).is_ok());
+        assert!(scan(ctx.clone(), b"a".to_vec(), None, false).is_ok());
         ctx.take_resolved_locks();
         let key_error =
-            extract_key_error(&scan(ctx.clone(), Key::from_raw(b"\xff"), None, true).unwrap_err());
+            extract_key_error(&scan(ctx.clone(), b"\xff".to_vec(), None, true).unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");
         ctx.set_resolved_locks(vec![10]);
-        assert!(scan(ctx.clone(), Key::from_raw(b"\xff"), None, false).is_ok());
+        assert!(scan(ctx.clone(), b"\xff".to_vec(), None, false).is_ok());
         ctx.take_resolved_locks();
         // Ignore memory locks in resolved or committed locks.
 
@@ -6779,9 +6863,9 @@ mod tests {
                 Some((k1.clone(), v1.clone())),
                 Some((k2.clone(), v2.clone())),
             ];
-            let mut key = Key::from_raw(b"\x00");
+            let mut key = b"\x00".to_vec();
             if *desc {
-                key = Key::from_raw(b"\xff");
+                key = b"\xff".to_vec();
                 values.reverse();
             }
             expect_multi_values(
@@ -7408,12 +7492,20 @@ mod tests {
                 vec![RAW_KEY_CASE],
                 None,
             ),
+            // storage api_version = V1ttl, allow RawKV request only.
             (
                 ApiVersion::V1ttl,
                 ApiVersion::V1,
                 CommandKind::raw_get,
                 vec![RAW_KEY_CASE],
                 None,
+            ),
+            (
+                ApiVersion::V1ttl,
+                ApiVersion::V1,
+                CommandKind::get,
+                vec![TIDB_KEY_CASE],
+                Some(API_VERSION_NOT_MATCHED),
             ),
             // storage api_version = V1, reject V2 request.
             (
@@ -7484,14 +7576,14 @@ mod tests {
             ),
         ];
 
-        for (i, &(storage_api_version, req_api_version, cmd, ref keys, err)) in
-            test_data.iter().enumerate()
+        for (i, (storage_api_version, req_api_version, cmd, keys, err)) in
+            test_data.into_iter().enumerate()
         {
             let res = Storage::<RocksEngine, DummyLockManager>::check_api_version(
                 storage_api_version,
                 req_api_version,
                 cmd,
-                keys.clone(),
+                keys,
             );
             if let Some(err) = err {
                 assert!(res.is_err(), "case {}", i);

@@ -169,6 +169,7 @@ impl TestSuiteBuilder {
                 pd_cli.clone(),
                 worker.scheduler(),
                 raft_router,
+                cluster.engines[id].kv.clone(),
                 cdc_ob,
                 cluster.store_metas[id].clone(),
                 cm.clone(),
