@@ -416,11 +416,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         Ok(())
     }
 
-    pub fn check_api_version_ext<'a>(
+    /// Check api version for external use.
+    pub fn check_api_version_ext(
         &self,
         req_api_version: ApiVersion,
         cmd: CommandKind,
-        keys: impl IntoIterator<Item = &'a [u8]>,
+        keys: impl IntoIterator<Item = impl AsRef<[u8]>>,
     ) -> Result<()> {
         Self::check_api_version(self.api_version, req_api_version, cmd, keys)
     }
@@ -1093,23 +1094,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         }
     }
 
-    // The entry point of all transaction commands. It checks transaction-specific constraints.
-    pub fn sched_txn_command<T: StorageCallbackType>(
-        &self,
-        cmd: TypedCommand<T>,
-        callback: Callback<T>,
-    ) -> Result<()> {
-        if self.api_version == ApiVersion::V1ttl {
-            return Err(box_err!(
-                "can't sched txn cmd({}) in API V1 with TTL enabled",
-                cmd.cmd.tag()
-            ));
-        }
-        self.sched_command(cmd, callback)
-    }
-
     // The entry point of the storage scheduler. Not only transaction commands need to access keys serially.
-    fn sched_command<T: StorageCallbackType>(
+    pub fn sched_txn_command<T: StorageCallbackType>(
         &self,
         cmd: TypedCommand<T>,
         callback: Callback<T>,
@@ -1992,7 +1978,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             self.api_version,
             ctx,
         );
-        self.sched_command(cmd, cb)
+        self.sched_txn_command(cmd, cb)
     }
 
     pub fn raw_batch_put_atomic(
@@ -2042,7 +2028,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             }
         };
         let cmd = RawAtomicStore::new(cf, mutations, self.api_version, ctx);
-        self.sched_command(cmd, callback)
+        self.sched_txn_command(cmd, callback)
     }
 
     pub fn raw_batch_delete_atomic(
@@ -2067,7 +2053,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             })
             .collect();
         let cmd = RawAtomicStore::new(cf, muations, self.api_version, ctx);
-        self.sched_command(cmd, callback)
+        self.sched_txn_command(cmd, callback)
     }
 
     pub fn raw_checksum(

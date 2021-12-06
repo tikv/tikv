@@ -14,6 +14,7 @@ use crate::server::Error;
 use crate::server::Proxy;
 use crate::server::Result as ServerResult;
 use crate::storage::{
+    self,
     errors::{
         extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
         extract_region_error, map_kv_pairs,
@@ -1861,7 +1862,9 @@ macro_rules! txn_command_future {
             $req: $req_ty,
         ) -> impl Future<Output = ServerResult<$resp_ty>> {
             let (cb, f) = paired_future_callback();
-            let res = $pre_check.and($storage.sched_txn_command($req.into(), cb));
+            let res = $pre_check.and_then(|_| -> storage::Result<()> {
+                $storage.sched_txn_command($req.into(), cb)
+            });
 
             async move {
                 let $v = match res {
@@ -1885,10 +1888,7 @@ macro_rules! txn_command_future {
 
 #[inline]
 fn get_keys_from_mutation(mutations: &[kvrpcpb::Mutation]) -> impl IntoIterator<Item = &[u8]> {
-    mutations
-        .iter()
-        .map(|m| m.get_key())
-        .filter(|x| !x.is_empty())
+    mutations.iter().map(|m| m.get_key())
 }
 
 txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse,
@@ -1896,26 +1896,30 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse,
         storage.check_api_version_ext(req.get_context().api_version, CommandKind::prewrite, get_keys_from_mutation(req.get_mutations()))
     }};
     (v, resp) {{
-    if let Ok(v) = &v {
-        resp.set_min_commit_ts(v.min_commit_ts.into_inner());
-        resp.set_one_pc_commit_ts(v.one_pc_commit_ts.into_inner());
-    }
-    resp.set_errors(extract_key_errors(v.map(|v| v.locks)).into());
-}});
+        if let Ok(v) = &v {
+            resp.set_min_commit_ts(v.min_commit_ts.into_inner());
+            resp.set_one_pc_commit_ts(v.one_pc_commit_ts.into_inner());
+        }
+        resp.set_errors(extract_key_errors(v.map(|v| v.locks)).into());
+    }}
+);
+
 txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse,
     (req, storage) {{
         storage.check_api_version_ext(req.get_context().api_version, CommandKind::acquire_pessimistic_lock, get_keys_from_mutation(req.get_mutations()))
     }};
     (v, resp) {
-    match v {
-        Ok(Ok(res)) => {
-            let (values, not_founds) = res.into_values_and_not_founds();
-            resp.set_values(values.into());
-            resp.set_not_founds(not_founds);
-        },
-        Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
+        match v {
+            Ok(Ok(res)) => {
+                let (values, not_founds) = res.into_values_and_not_founds();
+                resp.set_values(values.into());
+                resp.set_not_founds(not_founds);
+            },
+            Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
+        }
     }
-});
+);
+
 txn_command_future!(future_pessimistic_rollback, PessimisticRollbackRequest, PessimisticRollbackResponse, (v, resp) {
     resp.set_errors(extract_key_errors(v).into())
 });

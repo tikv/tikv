@@ -23,7 +23,9 @@ use raft::eraftpb;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{raw::Writable, Compat};
-use engine_traits::{MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{
+    key_prefix, MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+};
 use pd_client::PdClient;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{fsm::store::StoreMeta, AutoSplitController, SnapManager};
@@ -34,7 +36,6 @@ use tikv::import::SSTImporter;
 use tikv::server;
 use tikv::server::gc_worker::sync_gc;
 use tikv::server::service::{batch_commands_request, batch_commands_response};
-use tikv::storage::key_prefix::{RAW_KEY_PREFIX, TXN_KEY_PREFIX};
 use tikv_util::worker::{dummy_scheduler, LazyWorker};
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType, TimeStamp};
@@ -1747,29 +1748,57 @@ fn test_get_lock_wait_info_api() {
 #[test]
 fn test_api_version() {
     const TIDB_KEY_CASE: &[u8] = b"t_a";
-    const TXN_KEY_CASE: &[u8] = &[TXN_KEY_PREFIX, 0, b'a'];
-    const RAW_KEY_CASE: &[u8] = &[RAW_KEY_PREFIX, 0, b'a'];
+    const TXN_KEY_CASE: &[u8] = &[key_prefix::TXN_KEY_PREFIX, 0, b'a'];
+    const RAW_KEY_CASE: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'a'];
 
     let test_data = vec![
         // config api_version = V1|V1ttl, for backward compatible.
-        (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, true),
-        (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, true),
-        (ApiVersion::V1ttl, ApiVersion::V1, TXN_KEY_CASE, false),
+        (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, None),
+        (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, None),
+        // storage api_version = V1ttl, allow RawKV request only.
+        (
+            ApiVersion::V1ttl,
+            ApiVersion::V1,
+            TXN_KEY_CASE,
+            Some("ApiVersionNotMatched"),
+        ),
         // config api_version = V1, reject V2 request.
-        (ApiVersion::V1, ApiVersion::V2, TIDB_KEY_CASE, false),
+        (
+            ApiVersion::V1,
+            ApiVersion::V2,
+            TIDB_KEY_CASE,
+            Some("ApiVersionNotMatched"),
+        ),
         // config api_version = V2.
         // backward compatible for TiDB request, and TiDB request only.
-        (ApiVersion::V2, ApiVersion::V1, TIDB_KEY_CASE, true),
-        (ApiVersion::V2, ApiVersion::V1, TXN_KEY_CASE, false),
+        (ApiVersion::V2, ApiVersion::V1, TIDB_KEY_CASE, None),
+        (
+            ApiVersion::V2,
+            ApiVersion::V1,
+            TXN_KEY_CASE,
+            Some("InvalidKeyPrefix"),
+        ),
         // V2 api validation.
-        (ApiVersion::V2, ApiVersion::V2, TXN_KEY_CASE, true),
-        (ApiVersion::V2, ApiVersion::V2, RAW_KEY_CASE, false),
-        (ApiVersion::V2, ApiVersion::V2, TIDB_KEY_CASE, false),
+        (ApiVersion::V2, ApiVersion::V2, TXN_KEY_CASE, None),
+        (
+            ApiVersion::V2,
+            ApiVersion::V2,
+            RAW_KEY_CASE,
+            Some("InvalidKeyPrefix"),
+        ),
+        (
+            ApiVersion::V2,
+            ApiVersion::V2,
+            TIDB_KEY_CASE,
+            Some("InvalidKeyPrefix"),
+        ),
     ];
 
-    for (config_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
+    for (i, (storage_api_version, req_api_version, key, errcode)) in
+        test_data.into_iter().enumerate()
+    {
         let (cluster, leader, mut ctx) =
-            must_new_and_configure_cluster(|cluster| match config_api_version {
+            must_new_and_configure_cluster(|cluster| match storage_api_version {
                 ApiVersion::V1 => {
                     cluster.cfg.storage.api_version = 1;
                     cluster.cfg.storage.enable_ttl = false;
@@ -1780,7 +1809,7 @@ fn test_api_version() {
                 }
                 ApiVersion::V2 => {
                     cluster.cfg.storage.api_version = 2;
-                    cluster.cfg.storage.enable_ttl = false;
+                    cluster.cfg.storage.enable_ttl = true;
                 }
             });
         let env = Arc::new(Environment::new(1));
@@ -1793,7 +1822,43 @@ fn test_api_version() {
         let (k, v) = (key.to_vec(), b"value".to_vec());
         let mut ts = 0;
 
-        if is_legal {
+        if let Some(errcode) = errcode {
+            let expect_err = |errs: &[KeyError]| {
+                let expect_prefix = format!("Error({}", errcode);
+                assert!(errs.len() > 0, "case {}", i);
+                assert!(
+                    errs[0].get_abort().starts_with(&expect_prefix), // e.g. Error(ApiVersionNotMatched { storage_api_version: V1, req_api_version: V2 })
+                    "case {}: errs[0]: {:?}, expected: {}",
+                    i,
+                    errs[0],
+                    expect_prefix,
+                );
+            };
+
+            // Prewrite
+            ts += 1;
+            let prewrite_start_version = ts;
+            let mut mutation = Mutation::default();
+            mutation.set_op(Op::Put);
+            mutation.set_key(k.clone());
+            mutation.set_value(v.clone());
+            let res = try_kv_prewrite(
+                &client,
+                ctx.clone(),
+                vec![mutation],
+                k.clone(),
+                prewrite_start_version,
+            );
+            expect_err(res.get_errors());
+
+            // Pessimistic Lock
+            ts += 1;
+            let resp = kv_pessimistic_lock(&client, ctx.clone(), vec![k.clone()], ts, ts, false);
+            assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+            assert_eq!(resp.errors.len(), 1);
+            assert!(!resp.errors[0].has_locked(), "{:?}", resp.get_errors());
+            expect_err(resp.get_errors());
+        } else {
             // Prewrite
             ts += 1;
             let prewrite_start_version = ts;
@@ -1841,38 +1906,6 @@ fn test_api_version() {
             assert!(!get_resp.has_region_error());
             assert!(!get_resp.has_error());
             assert!(get_resp.get_exec_details_v2().has_time_detail());
-        } else {
-            let expect_err = |errs: &[KeyError]| {
-                assert!(errs.len() > 0);
-                assert!(
-                    errs[0].get_abort().starts_with("Error(Other") // Error(Other("[src/storage/mod.rs:1081]: can't sched txn cmd(prewrite) with TTL enabled"))
-                    || errs[0].get_abort().starts_with("Error(ApiVersionNotMatched") // Error(ApiVersionNotMatched { storage_api_version: V1, req_api_version: V2 })
-                );
-            };
-
-            // Prewrite
-            ts += 1;
-            let prewrite_start_version = ts;
-            let mut mutation = Mutation::default();
-            mutation.set_op(Op::Put);
-            mutation.set_key(k.clone());
-            mutation.set_value(v.clone());
-            let res = try_kv_prewrite(
-                &client,
-                ctx.clone(),
-                vec![mutation],
-                k.clone(),
-                prewrite_start_version,
-            );
-            expect_err(res.get_errors());
-
-            // Pessimistic Lock
-            ts += 1;
-            let resp = kv_pessimistic_lock(&client, ctx.clone(), vec![k.clone()], ts, ts, false);
-            assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
-            assert_eq!(resp.errors.len(), 1);
-            assert!(!resp.errors[0].has_locked(), "{:?}", resp.get_errors());
-            expect_err(resp.get_errors());
         }
     }
 }
