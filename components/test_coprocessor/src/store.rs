@@ -196,7 +196,7 @@ impl<E: Engine> Store<E> {
         self.store
             .scan(
                 Context::default(),
-                Key::from_encoded(vec![]),
+                vec![],
                 None,
                 100_000,
                 false,
