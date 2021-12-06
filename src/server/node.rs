@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -12,6 +12,7 @@ use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::kv::FlowStatsReporter;
 use crate::storage::txn::flow_controller::FlowController;
+use crate::storage::DynamicConfigs as StorageDynamicConfigs;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::key_prefix::TIDB_RANGES_COMPLEMENT;
@@ -42,7 +43,7 @@ pub fn create_raft_storage<S, EK, R: FlowStatsReporter>(
     read_pool: ReadPoolHandle,
     lock_mgr: LockManager,
     concurrency_manager: ConcurrencyManager,
-    pipelined_pessimistic_lock: Arc<AtomicBool>,
+    dynamic_configs: StorageDynamicConfigs,
     flow_controller: Arc<FlowController>,
     reporter: R,
 ) -> Result<Storage<RaftKv<EK, S>, LockManager>>
@@ -56,7 +57,7 @@ where
         read_pool,
         lock_mgr,
         concurrency_manager,
-        pipelined_pessimistic_lock,
+        dynamic_configs,
         flow_controller,
         reporter,
     )?;
