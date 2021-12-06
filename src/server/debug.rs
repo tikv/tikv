@@ -905,10 +905,11 @@ fn dump_default_cf_properties(
         .collect::<Vec<_>>()
         .join(", ");
 
-    let mut res = vec![];
-    res.push(("defaultcf.num_entries".to_owned(), num_entries.to_string()));
-    res.push(("defaultcf.num_files".to_owned(), num_files.to_string()));
-    res.push(("defaultcf.sst_files".to_owned(), sst_files));
+    let res = vec![
+        ("defaultcf.num_entries".to_owned(), num_entries.to_string()),
+        ("defaultcf.num_files".to_owned(), num_files.to_string()),
+        ("defaultcf.sst_files".to_owned(), sst_files),
+    ];
     Ok(res)
 }
 
