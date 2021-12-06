@@ -244,6 +244,25 @@ impl Display for Key {
     }
 }
 
+/// Convert a maybe unbounded raw key into `Option`, for a explicit meaning of "Unbounded".
+///
+/// # Example
+///
+/// ```
+/// use txn_types::raw_key_maybe_unbounded_into_option;
+///
+/// assert_eq!(raw_key_maybe_unbounded_into_option(b"".to_vec()), None);
+/// assert_eq!(raw_key_maybe_unbounded_into_option(b"abc".to_vec()), Some(b"abc".to_vec()));
+/// ```
+#[inline]
+pub fn raw_key_maybe_unbounded_into_option(raw_key: Vec<u8>) -> Option<Vec<u8>> {
+    if raw_key.is_empty() {
+        None
+    } else {
+        Some(raw_key)
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum MutationType {
     Put,
