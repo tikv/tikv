@@ -6,7 +6,7 @@ use crate::storage::kv::Modify;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use std::fmt;
-use txn_types::{Key, Lock, TimeStamp, Value};
+use txn_types::{Key, Lock, PessimisticLock, TimeStamp, Value};
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -101,6 +101,10 @@ impl MvccTxn {
 
     pub(crate) fn put_locks_for_1pc(&mut self, key: Key, lock: Lock, remove_pessimstic_lock: bool) {
         self.locks_for_1pc.push((key, lock, remove_pessimstic_lock));
+    }
+
+    pub(crate) fn put_pessimistic_lock(&mut self, key: Key, lock: PessimisticLock) {
+        self.modifies.push(Modify::PessimisticLock(key, lock))
     }
 
     pub(crate) fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
