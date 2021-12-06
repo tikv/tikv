@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use test::{black_box, Bencher};
 
 use engine_rocks::RocksSnapshot;
@@ -9,7 +11,7 @@ use tikv::storage::{Engine, SnapshotStore, Statistics, Store};
 use txn_types::{Key, Mutation};
 
 fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
-    let store = SyncTestStorageBuilder::new().build().unwrap();
+    let store = SyncTestStorageBuilder::default().build().unwrap();
     let mut mutations = Vec::new();
     let mut keys = Vec::new();
     for i in 0..30000 {
@@ -29,17 +31,18 @@ fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
     store.commit(Context::default(), keys, 1, 2).unwrap();
 
     let engine = store.get_engine();
-    let db = engine.get_rocksdb();
+    let db = engine.get_rocksdb().get_sync_db();
     db.compact_range_cf(db.cf_handle("write").unwrap(), None, None);
     db.compact_range_cf(db.cf_handle("default").unwrap(), None, None);
     db.compact_range_cf(db.cf_handle("lock").unwrap(), None, None);
 
-    let snapshot = engine.snapshot(&Context::default()).unwrap();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
     let store = SnapshotStore::new(
         snapshot,
         10.into(),
         IsolationLevel::Si,
         true,
+        Default::default(),
         Default::default(),
         false,
     );

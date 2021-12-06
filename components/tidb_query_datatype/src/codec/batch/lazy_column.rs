@@ -7,10 +7,11 @@ use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 
 use crate::codec::chunk::{ChunkColumnEncoder, Column};
-use crate::codec::data_type::{match_template_evaluable, VectorValue};
+use crate::codec::data_type::{ChunkedVec, LogicalRows, VectorValue};
 use crate::codec::datum_codec::RawDatumDecoder;
 use crate::codec::Result;
 use crate::expr::EvalContext;
+use crate::match_template_evaltype;
 
 /// A container stores an array of datums, which can be either raw (not decoded), or decoded into
 /// the `VectorValue` type.
@@ -157,7 +158,7 @@ impl LazyBatchColumn {
         &mut self,
         ctx: &mut EvalContext,
         field_type: &FieldType,
-        logical_rows: &[usize],
+        logical_rows: LogicalRows,
     ) -> Result<()> {
         if self.is_decoded() {
             return Ok(());
@@ -168,14 +169,31 @@ impl LazyBatchColumn {
 
         let mut decoded_column = VectorValue::with_capacity(raw_vec_len, eval_type);
 
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match &mut decoded_column {
                 VectorValue::TT(vec) => {
-                    for _ in 0..raw_vec_len {
-                        vec.push(None);
-                    }
-                    for row_index in logical_rows {
-                        vec[*row_index] = raw_vec[*row_index].decode(field_type, ctx)?;
+                    match logical_rows {
+                        LogicalRows::Identical { size } => {
+                            for i in 0..size {
+                                vec.push(raw_vec[i].decode(field_type, ctx)?);
+                            }
+                            for _ in size..raw_vec_len {
+                                vec.push(None);
+                            }
+                        }
+                        LogicalRows::Ref { logical_rows } => {
+                            let mut decode_bitmap = vec![false; raw_vec_len];
+                            for row_index in logical_rows {
+                                decode_bitmap[*row_index] = true;
+                            }
+                            for i in 0..raw_vec_len {
+                                if decode_bitmap[i] {
+                                    vec.push(raw_vec[i].decode(field_type, ctx)?);
+                                } else {
+                                    vec.push(None);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -191,8 +209,8 @@ impl LazyBatchColumn {
         ctx: &mut EvalContext,
         field_type: &FieldType,
     ) -> Result<()> {
-        let logical_rows: Vec<_> = (0..self.len()).collect();
-        self.ensure_decoded(ctx, field_type, &logical_rows)
+        let logical_rows = LogicalRows::Identical { size: self.len() };
+        self.ensure_decoded(ctx, field_type, logical_rows)
     }
 
     /// Returns maximum encoded size.
@@ -216,7 +234,7 @@ impl LazyBatchColumn {
     pub fn encode(
         &self,
         row_index: usize,
-        field_type: &FieldType,
+        field_type: &impl FieldTypeAccessor,
         ctx: &mut EvalContext,
         output: &mut Vec<u8>,
     ) -> Result<()> {
@@ -280,12 +298,12 @@ mod tests {
             assert!(col.is_decoded());
             assert_eq!(col.len(), 0);
             assert_eq!(col.capacity(), 0);
-            assert_eq!(col.decoded().as_int_slice(), &[]);
+            assert_eq!(col.decoded().to_int_vec(), &[]);
             {
                 assert!(col.is_decoded());
                 assert_eq!(col.len(), 0);
                 assert_eq!(col.capacity(), 0);
-                assert_eq!(col.decoded().as_int_slice(), &[]);
+                assert_eq!(col.decoded().to_int_vec(), &[]);
             }
         }
 
@@ -328,13 +346,17 @@ mod tests {
         }
 
         // Non-empty raw to non-empty decoded.
-        col.ensure_decoded(&mut ctx, &FieldTypeTp::Long.into(), &[2, 0])
-            .unwrap();
+        col.ensure_decoded(
+            &mut ctx,
+            &FieldTypeTp::Long.into(),
+            LogicalRows::from_slice(&[2, 0]),
+        )
+        .unwrap();
         assert!(col.is_decoded());
         assert_eq!(col.len(), 3);
         assert_eq!(col.capacity(), 3);
         // Element 1 is None because it is not referred in `logical_rows` and we don't decode it.
-        assert_eq!(col.decoded().as_int_slice(), &[Some(32), None, Some(10)]);
+        assert_eq!(col.decoded().to_int_vec(), &[Some(32), None, Some(10)]);
 
         {
             // Clone non-empty decoded LazyBatchColumn.
@@ -342,16 +364,20 @@ mod tests {
             assert!(col.is_decoded());
             assert_eq!(col.len(), 3);
             assert_eq!(col.capacity(), 3);
-            assert_eq!(col.decoded().as_int_slice(), &[Some(32), None, Some(10)]);
+            assert_eq!(col.decoded().to_int_vec(), &[Some(32), None, Some(10)]);
         }
 
         // Decode a decoded column, even using a different logical rows, does not have effect.
-        col.ensure_decoded(&mut ctx, &FieldTypeTp::Long.into(), &[0, 1])
-            .unwrap();
+        col.ensure_decoded(
+            &mut ctx,
+            &FieldTypeTp::Long.into(),
+            LogicalRows::from_slice(&[0, 1]),
+        )
+        .unwrap();
         assert!(col.is_decoded());
         assert_eq!(col.len(), 3);
         assert_eq!(col.capacity(), 3);
-        assert_eq!(col.decoded().as_int_slice(), &[Some(32), None, Some(10)]);
+        assert_eq!(col.decoded().to_int_vec(), &[Some(32), None, Some(10)]);
     }
 }
 
@@ -391,10 +417,10 @@ mod benches {
         for _ in 0..1000 {
             column.mut_raw().push(datum_raw.as_slice());
         }
-        let logical_rows: Vec<_> = (0..1000).collect();
+        let logical_rows = LogicalRows::Identical { size: 1000 };
 
         column
-            .ensure_decoded(&mut ctx, &FieldTypeTp::LongLong.into(), &logical_rows)
+            .ensure_decoded(&mut ctx, &FieldTypeTp::LongLong.into(), logical_rows)
             .unwrap();
 
         b.iter(|| {
@@ -421,7 +447,7 @@ mod benches {
         for _ in 0..1000 {
             column.mut_raw().push(datum_raw.as_slice());
         }
-        let logical_rows: Vec<_> = (0..1000).collect();
+        let logical_rows = LogicalRows::Identical { size: 1000 };
 
         let ft = FieldTypeTp::LongLong.into();
         b.iter(|| {
@@ -429,7 +455,7 @@ mod benches {
             col.ensure_decoded(
                 test::black_box(&mut ctx),
                 test::black_box(&ft),
-                &logical_rows,
+                logical_rows,
             )
             .unwrap();
             test::black_box(&col);
@@ -455,18 +481,18 @@ mod benches {
         for _ in 0..1000 {
             column.mut_raw().push(datum_raw.as_slice());
         }
-        let logical_rows: Vec<_> = (0..1000).collect();
+        let logical_rows = LogicalRows::Identical { size: 1000 };
 
         let ft = FieldTypeTp::LongLong.into();
 
-        column.ensure_decoded(&mut ctx, &ft, &logical_rows).unwrap();
+        column.ensure_decoded(&mut ctx, &ft, logical_rows).unwrap();
 
         b.iter(|| {
             let mut col = test::black_box(&column).clone();
             col.ensure_decoded(
                 test::black_box(&mut ctx),
                 test::black_box(&ft),
-                &logical_rows,
+                logical_rows,
             )
             .unwrap();
             test::black_box(&col);

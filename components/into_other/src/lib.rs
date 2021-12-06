@@ -17,11 +17,17 @@ impl IntoOther<ProtoError> for EngineTraitsError {
         let mut errorpb = ProtoError::default();
         errorpb.set_message(format!("{}", self));
 
-        if let EngineTraitsError::NotInRange(key, region_id, start_key, end_key) = self {
+        if let EngineTraitsError::NotInRange {
+            key,
+            region_id,
+            start,
+            end,
+        } = self
+        {
             errorpb.mut_key_not_in_region().set_key(key);
             errorpb.mut_key_not_in_region().set_region_id(region_id);
-            errorpb.mut_key_not_in_region().set_start_key(start_key);
-            errorpb.mut_key_not_in_region().set_end_key(end_key);
+            errorpb.mut_key_not_in_region().set_start_key(start);
+            errorpb.mut_key_not_in_region().set_end_key(end);
         }
 
         errorpb

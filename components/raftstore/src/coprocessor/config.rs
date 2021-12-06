@@ -3,11 +3,16 @@
 use super::Result;
 use crate::store::SplitCheckTask;
 
-use configuration::{ConfigChange, ConfigManager, Configuration};
+use engine_traits::perf_level_serde;
+use engine_traits::PerfLevel;
+use online_config::{ConfigChange, ConfigManager, OnlineConfig};
+use serde::{Deserialize, Serialize};
+
+use tikv_util::box_err;
 use tikv_util::config::ReadableSize;
 use tikv_util::worker::Scheduler;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
@@ -30,6 +35,25 @@ pub struct Config {
     /// And the number of keys in [a,b), [b,c), [c,d) will be region_split_keys.
     pub region_max_keys: u64,
     pub region_split_keys: u64,
+
+    /// ConsistencyCheckMethod can not be chanaged dynamically.
+    #[online_config(skip)]
+    pub consistency_check_method: ConsistencyCheckMethod,
+
+    #[serde(with = "perf_level_serde")]
+    #[online_config(skip)]
+    pub perf_level: PerfLevel,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConsistencyCheckMethod {
+    /// Does consistency check for regions based on raw data. Only used when
+    /// raw APIs are enabled and MVCC-GC is disabled.
+    Raw = 0,
+
+    /// Does consistency check for regions based on MVCC.
+    Mvcc = 1,
 }
 
 /// Default region split size.
@@ -49,6 +73,8 @@ impl Default for Config {
             region_max_size: split_size / 2 * 3,
             region_split_keys: SPLIT_KEYS,
             region_max_keys: SPLIT_KEYS / 2 * 3,
+            consistency_check_method: ConsistencyCheckMethod::Mvcc,
+            perf_level: PerfLevel::EnableCount,
         }
     }
 }

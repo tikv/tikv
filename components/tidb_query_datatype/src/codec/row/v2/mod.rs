@@ -19,5 +19,4 @@ mod row_slice;
 pub use self::compat_v1::*;
 pub use self::row_slice::*;
 
-#[cfg(test)]
-mod encoder;
+pub mod encoder_for_test;

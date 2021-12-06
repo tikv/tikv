@@ -12,15 +12,24 @@ struct Bucket {
     lower_bound: Vec<u8>,
     // the number of repeats of the bucket's upper_bound, it can be used to find popular values.
     repeats: u64,
+    // the number of distinct value in this bucket. 0 for not maintained.
+    ndv: u64,
 }
 
 impl Bucket {
-    fn new(count: u64, upper_bound: Vec<u8>, lower_bound: Vec<u8>, repeats: u64) -> Bucket {
+    fn new(
+        count: u64,
+        upper_bound: Vec<u8>,
+        lower_bound: Vec<u8>,
+        repeats: u64,
+        with_ndv: bool,
+    ) -> Bucket {
         Bucket {
             count,
             upper_bound,
             lower_bound,
             repeats,
+            ndv: if with_ndv { 1 } else { 0 },
         }
     }
 
@@ -31,10 +40,13 @@ impl Bucket {
 
     // insert a item bigger than current upper_bound,
     // we need data to set as upper_bound
-    fn append(&mut self, data: Vec<u8>) {
+    fn append(&mut self, data: Vec<u8>, ndv_inc: bool) {
         self.upper_bound = data;
         self.count += 1;
         self.repeats = 1;
+        if ndv_inc {
+            self.ndv += 1;
+        }
     }
 
     fn into_proto(self) -> tipb::Bucket {
@@ -43,6 +55,7 @@ impl Bucket {
         bucket.set_count(self.count as i64);
         bucket.set_lower_bound(self.lower_bound);
         bucket.set_upper_bound(self.upper_bound);
+        bucket.set_ndv(self.ndv as i64);
         bucket
     }
 }
@@ -82,7 +95,7 @@ impl Histogram {
     }
 
     // insert a data bigger than or equal to the max value in current histogram.
-    pub fn append(&mut self, data: &[u8]) {
+    pub fn append(&mut self, data: &[u8], with_bucket_ndv: bool) {
         if let Some(bucket) = self.buckets.last_mut() {
             // The new item has the same value as last bucket value, to ensure that
             // a same value only stored in a single bucket, we do not increase bucket
@@ -98,7 +111,10 @@ impl Histogram {
         }
 
         if !self.is_last_bucket_full() {
-            self.buckets.last_mut().unwrap().append(data.to_vec());
+            self.buckets
+                .last_mut()
+                .unwrap()
+                .append(data.to_vec(), with_bucket_ndv);
             return;
         }
 
@@ -107,8 +123,13 @@ impl Histogram {
         if let Some(bucket) = self.buckets.last() {
             count += bucket.count
         }
-        self.buckets
-            .push(Bucket::new(count, data.to_vec(), data.to_vec(), 1));
+        self.buckets.push(Bucket::new(
+            count,
+            data.to_vec(),
+            data.to_vec(),
+            1,
+            with_bucket_ndv,
+        ));
     }
 
     // check whether the last bucket is full.
@@ -133,6 +154,7 @@ impl Histogram {
             mem::swap(&mut left[0].upper_bound, &mut right[0].upper_bound);
             left[0].count = right[0].count;
             left[0].repeats = right[0].repeats;
+            left[0].ndv += right[0].ndv
         }
         for id in 1..bucket_num {
             let (left, right) = self.buckets.split_at_mut(id * 2);
@@ -144,6 +166,7 @@ impl Histogram {
             mem::swap(&mut left[id].upper_bound, &mut right[1].upper_bound);
             left[id].count = right[1].count;
             left[id].repeats = right[1].repeats;
+            left[id].ndv = right[0].ndv + right[1].ndv
         }
         self.buckets.drain(bucket_num..);
         self.per_bucket_limit *= 2;
@@ -168,7 +191,7 @@ mod tests {
 
         for item in (0..3).map(Datum::I64) {
             let bytes = datum::encode_value(&mut EvalContext::default(), &[item]).unwrap();
-            hist.append(&bytes);
+            hist.append(&bytes, false);
         }
         // b0: [0]
         // b1: [1]
@@ -179,7 +202,7 @@ mod tests {
 
         // bucket is full now, need to merge
         let bytes = datum::encode_value(&mut EvalContext::default(), &[Datum::I64(3)]).unwrap();
-        hist.append(&bytes);
+        hist.append(&bytes, false);
         // b0: [0, 1]
         // b1: [2, 3]
         assert_eq!(hist.per_bucket_limit, 2);
@@ -189,7 +212,7 @@ mod tests {
         // push repeated item
         for item in repeat(3).take(3).map(Datum::I64) {
             let bytes = datum::encode_value(&mut EvalContext::default(), &[item]).unwrap();
-            hist.append(&bytes);
+            hist.append(&bytes, false);
         }
 
         // b1: [0, 1]
@@ -200,7 +223,7 @@ mod tests {
 
         for item in repeat(4).take(4).map(Datum::I64) {
             let bytes = datum::encode_value(&mut EvalContext::default(), &[item]).unwrap();
-            hist.append(&bytes);
+            hist.append(&bytes, false);
         }
         // b0: [0, 1]
         // b1: [2, 3, 3, 3, 3]
@@ -211,7 +234,7 @@ mod tests {
 
         // bucket is full now, need to merge
         let bytes = datum::encode_value(&mut EvalContext::default(), &[Datum::I64(5)]).unwrap();
-        hist.append(&bytes);
+        hist.append(&bytes, false);
         // b0: [0, 1, 2, 3, 3, 3, 3]
         // b1: [4, 4, 4, 4, 4]
         // b2: [5]
@@ -225,13 +248,22 @@ mod tests {
         let buckets_num = 1;
         let mut hist = Histogram::new(buckets_num);
         assert_eq!(hist.buckets.len(), 0);
-        hist.append(&datum::encode_value(&mut EvalContext::default(), &[Datum::I64(1)]).unwrap());
+        hist.append(
+            &datum::encode_value(&mut EvalContext::default(), &[Datum::I64(1)]).unwrap(),
+            false,
+        );
         assert_eq!(hist.buckets.len(), 1);
         assert_eq!(hist.per_bucket_limit, 1);
-        hist.append(&datum::encode_value(&mut EvalContext::default(), &[Datum::I64(2)]).unwrap());
+        hist.append(
+            &datum::encode_value(&mut EvalContext::default(), &[Datum::I64(2)]).unwrap(),
+            false,
+        );
         assert_eq!(hist.buckets.len(), 1);
         assert_eq!(hist.per_bucket_limit, 2);
-        hist.append(&datum::encode_value(&mut EvalContext::default(), &[Datum::I64(3)]).unwrap());
+        hist.append(
+            &datum::encode_value(&mut EvalContext::default(), &[Datum::I64(3)]).unwrap(),
+            false,
+        );
         assert_eq!(hist.per_bucket_limit, 4);
     }
 }

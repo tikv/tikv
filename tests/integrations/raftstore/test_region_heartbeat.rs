@@ -3,11 +3,11 @@
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use test_raftstore::*;
 use tikv_util::config::*;
-use tikv_util::time::UnixSecs as PdInstant;
+use tikv_util::time::{Instant, UnixSecs as PdInstant};
 use tikv_util::HandyRwLock;
 
 fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<u64>) {
@@ -64,14 +64,17 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
     wait_down_peers(cluster, 0, None);
     wait_down_peers(cluster, 1, Some(1));
     assert!(
-        cluster.get_down_peers()[&1].get_down_seconds() < down_secs + timer.elapsed().as_secs()
+        cluster.get_down_peers()[&1].get_down_seconds()
+            < down_secs + timer.saturating_elapsed().as_secs()
     );
 
     // Ensure that node will not reuse the previous peer heartbeats.
     cluster.must_transfer_leader(1, leader);
     wait_down_peers(cluster, 0, None);
     wait_down_peers(cluster, 1, Some(1));
-    assert!(cluster.get_down_peers()[&1].get_down_seconds() < timer.elapsed().as_secs() + 1);
+    assert!(
+        cluster.get_down_peers()[&1].get_down_seconds() < timer.saturating_elapsed().as_secs() + 1
+    );
 }
 
 #[test]
@@ -180,8 +183,6 @@ fn test_region_heartbeat_timestamp() {
     panic!("reported ts should be updated");
 }
 
-// FIXME(nrc) failing on CI only
-#[cfg(feature = "protobuf-codec")]
 #[test]
 fn test_region_heartbeat_term() {
     let mut cluster = new_server_cluster(0, 3);

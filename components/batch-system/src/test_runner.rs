@@ -3,7 +3,10 @@
 //! A sample Handler for test and micro-benchmark purpose.
 
 use crate::*;
+use derive_more::{Add, AddAssign};
 use std::borrow::Cow;
+use std::ops::DerefMut;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tikv_util::mpsc;
 
@@ -12,7 +15,7 @@ pub enum Message {
     /// `Runner` will do simple calculation for the given times.
     Loop(usize),
     /// `Runner` will call the callback directly.
-    Callback(Box<dyn FnOnce(&mut Runner) + Send + 'static>),
+    Callback(Box<dyn FnOnce(&Handler, &mut Runner) + Send + 'static>),
 }
 
 /// A simple runner used for benchmarking only.
@@ -24,6 +27,7 @@ pub struct Runner {
     /// Result of the calculation triggered by `Message::Loop`.
     /// Stores it inside `Runner` to avoid accidental optimization.
     res: usize,
+    priority: Priority,
 }
 
 impl Fsm for Runner {
@@ -40,6 +44,10 @@ impl Fsm for Runner {
     fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>> {
         self.mailbox.take()
     }
+
+    fn get_priority(&self) -> Priority {
+        self.priority
+    }
 }
 
 impl Runner {
@@ -51,8 +59,13 @@ impl Runner {
             mailbox: None,
             sender: None,
             res: 0,
+            priority: Priority::Normal,
         });
         (tx, fsm)
+    }
+
+    pub fn set_priority(&mut self, priority: Priority) {
+        self.priority = priority
     }
 }
 
@@ -61,15 +74,18 @@ pub struct HandleMetrics {
     pub begin: usize,
     pub control: usize,
     pub normal: usize,
+    pub pause: usize,
 }
 
 pub struct Handler {
     local: HandleMetrics,
     metrics: Arc<Mutex<HandleMetrics>>,
+    priority: Priority,
+    pause_counter: Arc<AtomicUsize>,
 }
 
 impl Handler {
-    fn handle(&mut self, r: &mut Runner) -> Option<usize> {
+    fn handle(&mut self, r: &mut Runner) {
         for _ in 0..16 {
             match r.recv.try_recv() {
                 Ok(Message::Loop(count)) => {
@@ -79,11 +95,14 @@ impl Handler {
                         r.res %= count + 1;
                     }
                 }
-                Ok(Message::Callback(cb)) => cb(r),
+                Ok(Message::Callback(cb)) => cb(self, r),
                 Err(_) => break,
             }
         }
-        Some(0)
+    }
+
+    pub fn get_priority(&self) -> Priority {
+        self.priority
     }
 }
 
@@ -94,29 +113,37 @@ impl PollHandler<Runner, Runner> for Handler {
 
     fn handle_control(&mut self, control: &mut Runner) -> Option<usize> {
         self.local.control += 1;
-        self.handle(control)
+        self.handle(control);
+        Some(0)
     }
 
-    fn handle_normal(&mut self, normal: &mut Runner) -> Option<usize> {
+    fn handle_normal(&mut self, normal: &mut impl DerefMut<Target = Runner>) -> HandleResult {
         self.local.normal += 1;
-        self.handle(normal)
+        self.handle(normal);
+        HandleResult::stop_at(0, false)
     }
 
-    fn end(&mut self, _normals: &mut [Box<Runner>]) {
+    fn end(&mut self, _normals: &mut [Option<impl DerefMut<Target = Runner>>]) {
         let mut c = self.metrics.lock().unwrap();
         *c += self.local;
         self.local = HandleMetrics::default();
+    }
+
+    fn pause(&mut self) {
+        self.pause_counter.fetch_add(1, Ordering::SeqCst);
     }
 }
 
 pub struct Builder {
     pub metrics: Arc<Mutex<HandleMetrics>>,
+    pub pause_counter: Arc<AtomicUsize>,
 }
 
 impl Builder {
     pub fn new() -> Builder {
         Builder {
             metrics: Arc::default(),
+            pause_counter: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -124,10 +151,12 @@ impl Builder {
 impl HandlerBuilder<Runner, Runner> for Builder {
     type Handler = Handler;
 
-    fn build(&mut self) -> Handler {
+    fn build(&mut self, priority: Priority) -> Handler {
         Handler {
             local: HandleMetrics::default(),
             metrics: self.metrics.clone(),
+            priority,
+            pause_counter: self.pause_counter.clone(),
         }
     }
 }

@@ -5,7 +5,6 @@ use std::sync::*;
 use std::thread;
 use std::time::Duration;
 
-use rand;
 use rand::Rng;
 
 use kvproto::raft_cmdpb::RaftCmdResponse;
@@ -33,9 +32,6 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.must_get(key), Some(value.to_vec()));
 
-    let region_id = cluster.get_region_id(b"");
-    let prev_last_index = cluster.raft_local_state(region_id, 1).get_last_index();
-
     // sleep 200ms in case the commit packet is dropped by simulated transport.
     thread::sleep(Duration::from_millis(200));
 
@@ -60,10 +56,6 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
             .is_none()
     });
 
-    let last_index = cluster.raft_local_state(region_id, 1).get_last_index();
-    let apply_state = cluster.apply_state(region_id, 1);
-    assert!(apply_state.get_last_commit_index() < last_index);
-    assert!(apply_state.get_last_commit_index() >= prev_last_index);
     // TODO add epoch not match test cases.
 }
 
@@ -90,9 +82,12 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.must_put(key2, value2);
     cluster.must_delete(key1);
-    must_get_none(&cluster.engines[&last_leader.get_store_id()].kv, key2);
+    must_get_none(
+        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
+        key2,
+    );
     must_get_equal(
-        &cluster.engines[&last_leader.get_store_id()].kv,
+        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
         key1,
         value1,
     );
@@ -101,11 +96,14 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run_node(last_leader.get_store_id()).unwrap();
 
     must_get_equal(
-        &cluster.engines[&last_leader.get_store_id()].kv,
+        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
         key2,
         value2,
     );
-    must_get_none(&cluster.engines[&last_leader.get_store_id()].kv, key1);
+    must_get_none(
+        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
+        key1,
+    );
 }
 
 fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -130,12 +128,13 @@ fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
 
 fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize) {
     cluster.run();
+    let leader = cluster.leader_of_region(1);
 
     let half = (count as u64 + 1) / 2;
     for i in 1..=half {
         cluster.stop_node(i);
     }
-    if let Some(leader) = cluster.leader_of_region(1) {
+    if let Some(leader) = leader {
         if leader.get_store_id() > half {
             cluster.stop_node(leader.get_store_id());
         }
@@ -157,7 +156,7 @@ fn test_multi_random_restart<T: Simulator>(
     let mut value = [0u8; 5];
 
     for i in 1..restart_count {
-        let id = 1 + rng.gen_range(0, node_count as u64);
+        let id = 1 + rng.gen_range(0..node_count as u64);
         cluster.stop_node(id);
 
         let key = i.to_string().into_bytes();
@@ -183,26 +182,6 @@ fn test_multi_node_base() {
     test_multi_base(&mut cluster)
 }
 
-fn test_multi_drop_packet<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.run();
-    cluster.add_send_filter(CloneFilterFactory(DropPacketFilter::new(30)));
-    test_multi_base_after_bootstrap(cluster);
-}
-
-#[test]
-fn test_multi_node_latency() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_multi_latency(&mut cluster);
-}
-
-#[test]
-fn test_multi_node_drop_packet() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_multi_drop_packet(&mut cluster);
-}
-
 #[test]
 fn test_multi_server_base() {
     let count = 5;
@@ -216,6 +195,13 @@ fn test_multi_latency<T: Simulator>(cluster: &mut Cluster<T>) {
         30,
     ))));
     test_multi_base_after_bootstrap(cluster);
+}
+
+#[test]
+fn test_multi_node_latency() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_multi_latency(&mut cluster);
 }
 
 #[test]
@@ -243,6 +229,19 @@ fn test_multi_server_random_latency() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     test_multi_random_latency(&mut cluster);
+}
+
+fn test_multi_drop_packet<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.run();
+    cluster.add_send_filter(CloneFilterFactory(DropPacketFilter::new(30)));
+    test_multi_base_after_bootstrap(cluster);
+}
+
+#[test]
+fn test_multi_node_drop_packet() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_multi_drop_packet(&mut cluster);
 }
 
 #[test]
@@ -466,11 +465,12 @@ fn test_node_leader_change_with_log_overlap() {
         .get_node_router(1)
         .send_command(
             put_req,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 called_.store(true, Ordering::SeqCst);
                 assert!(resp.response.get_header().has_error());
                 assert!(resp.response.get_header().get_error().has_stale_command());
             })),
+            RaftCmdExtraOpts::default(),
         )
         .unwrap();
 
@@ -718,9 +718,10 @@ fn test_node_dropped_proposal() {
         .get_node_router(1)
         .send_command(
             put_req,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 let _ = tx.send(resp.response);
             })),
+            RaftCmdExtraOpts::default(),
         )
         .unwrap();
 

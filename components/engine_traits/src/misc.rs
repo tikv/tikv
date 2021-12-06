@@ -5,105 +5,40 @@
 //!
 //! FIXME: Things here need to be moved elsewhere.
 
-use crate::cf_defs::CF_LOCK;
 use crate::cf_names::CFNamesExt;
 use crate::errors::Result;
-use crate::iterable::{Iterable, Iterator};
-use crate::mutable::Mutable;
-use crate::options::IterOptions;
+use crate::flow_control_factors::FlowControlFactorsExt;
 use crate::range::Range;
-use crate::write_batch::{WriteBatch, WriteBatchExt};
 
-use tikv_util::keybuilder::KeyBuilder;
+#[derive(Clone, Debug)]
+pub enum DeleteStrategy {
+    /// Delete the SST files that are fullly fit in range. However, the SST files that are partially
+    /// overlapped with the range will not be touched.
+    DeleteFiles,
+    /// Delete the data stored in Titan.
+    DeleteBlobs,
+    /// Scan for keys and then delete. Useful when we know the keys in range are not too many.
+    DeleteByKey,
+    /// Delete by range. Note that this is experimental and you should check whether it is enbaled
+    /// in config before using it.
+    DeleteByRange,
+    /// Delete by ingesting a SST file with deletions. Useful when the number of ranges is too many.
+    DeleteByWriter { sst_path: String },
+}
 
-// FIXME: Find somewhere else to put this?
-pub const MAX_DELETE_BATCH_SIZE: usize = 32 * 1024;
-
-pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
-    fn is_titan(&self) -> bool {
-        false
-    }
-
+pub trait MiscExt: CFNamesExt + FlowControlFactorsExt {
     fn flush(&self, sync: bool) -> Result<()>;
 
     fn flush_cf(&self, cf: &str, sync: bool) -> Result<()>;
 
-    fn delete_files_in_range_cf(
-        &self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-        include_end: bool,
-    ) -> Result<()>;
-
-    fn delete_all_in_range(
-        &self,
-        start_key: &[u8],
-        end_key: &[u8],
-        use_delete_range: bool,
-    ) -> Result<()> {
-        if start_key >= end_key {
-            return Ok(());
-        }
-
+    fn delete_all_in_range(&self, strategy: DeleteStrategy, ranges: &[Range]) -> Result<()> {
         for cf in self.cf_names() {
-            self.delete_all_in_range_cf(cf, start_key, end_key, use_delete_range)?;
+            self.delete_ranges_cf(cf, strategy.clone(), ranges)?;
         }
-
         Ok(())
     }
 
-    fn delete_all_in_range_cf(
-        &self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-        use_delete_range: bool,
-    ) -> Result<()> {
-        let mut wb = self.write_batch();
-        if use_delete_range && cf != CF_LOCK {
-            wb.delete_range_cf(cf, start_key, end_key)?;
-        } else {
-            let start = KeyBuilder::from_slice(start_key, 0, 0);
-            let end = KeyBuilder::from_slice(end_key, 0, 0);
-            let mut iter_opt = IterOptions::new(Some(start), Some(end), false);
-            if self.is_titan() {
-                // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
-                // to avoid referring to missing blob files.
-                iter_opt.set_key_only(true);
-            }
-            let mut it = self.iterator_cf_opt(cf, iter_opt)?;
-            let mut it_valid = it.seek(start_key.into())?;
-            while it_valid {
-                wb.delete_cf(cf, it.key())?;
-                if wb.data_size() >= MAX_DELETE_BATCH_SIZE {
-                    // Can't use write_without_wal here.
-                    // Otherwise it may cause dirty data when applying snapshot.
-                    self.write(&wb)?;
-                    wb.clear();
-                }
-                it_valid = it.next()?;
-            }
-        }
-
-        if wb.count() > 0 {
-            self.write(&wb)?;
-        }
-
-        Ok(())
-    }
-
-    fn delete_all_files_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-        if start_key >= end_key {
-            return Ok(());
-        }
-
-        for cf in self.cf_names() {
-            self.delete_files_in_range_cf(cf, start_key, end_key, false)?;
-        }
-
-        Ok(())
-    }
+    fn delete_ranges_cf(&self, cf: &str, strategy: DeleteStrategy, ranges: &[Range]) -> Result<()>;
 
     /// Return the approximate number of records and size in the range of memtables of the cf.
     fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)>;
@@ -125,9 +60,10 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
     ///      so you shouldn't expect to be able to read data from the range using existing snapshots
     ///      any more.
     ///
-    /// Ref: https://github.com/facebook/rocksdb/wiki/Delete-A-Range-Of-Keys
+    /// Ref: <https://github.com/facebook/rocksdb/wiki/Delete-A-Range-Of-Keys>
     fn roughly_cleanup_ranges(&self, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<()>;
 
+    /// The path to the directory on the filesystem where the database is stored
     fn path(&self) -> &str;
 
     fn sync_wal(&self) -> Result<()>;
@@ -143,4 +79,15 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
     fn get_latest_sequence_number(&self) -> u64;
 
     fn get_oldest_snapshot_sequence_number(&self) -> Option<u64>;
+
+    fn get_total_sst_files_size_cf(&self, cf: &str) -> Result<Option<u64>>;
+
+    fn get_range_entries_and_versions(
+        &self,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<Option<(u64, u64)>>;
+
+    fn is_stalled_or_stopped(&self) -> bool;
 }

@@ -1,8 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::thread;
-use std::time::Duration;
-
+use lazy_static::lazy_static;
 use prometheus::*;
 
 #[cfg(target_os = "linux")]
@@ -33,40 +31,9 @@ pub use self::metrics_reader::HistogramReader;
 
 mod metrics_reader;
 
-/// Runs a background Prometheus client.
-pub fn run_prometheus(
-    interval: Duration,
-    address: &str,
-    job: &str,
-) -> Option<thread::JoinHandle<()>> {
-    if interval == Duration::from_secs(0) {
-        return None;
-    }
-
-    let job = job.to_owned();
-    let address = address.to_owned();
-    let handler = thread::Builder::new()
-        .name("promepusher".to_owned())
-        .spawn(move || loop {
-            let metric_families = prometheus::gather();
-
-            let res = prometheus::push_metrics(
-                &job,
-                prometheus::hostname_grouping_key(),
-                &address,
-                metric_families,
-                None,
-            );
-            if let Err(e) = res {
-                error!("fail to push metrics"; "err" => ?e);
-            }
-
-            thread::sleep(interval);
-        })
-        .unwrap();
-
-    Some(handler)
-}
+use kvproto::pdpb;
+use std::collections::HashMap;
+pub type RecordPairVec = Vec<pdpb::RecordPair>;
 
 pub fn dump() -> String {
     let mut buffer = vec![];
@@ -87,4 +54,15 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+}
+
+pub fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
+    m.into_iter()
+        .map(|(k, v)| {
+            let mut pair = pdpb::RecordPair::default();
+            pair.set_key(k);
+            pair.set_value(v);
+            pair
+        })
+        .collect()
 }

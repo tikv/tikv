@@ -14,8 +14,10 @@ impl RocksReadOptions {
 }
 
 impl From<engine_traits::ReadOptions> for RocksReadOptions {
-    fn from(_opts: engine_traits::ReadOptions) -> Self {
-        RocksReadOptions(RawReadOptions::default())
+    fn from(opts: engine_traits::ReadOptions) -> Self {
+        let mut r = RawReadOptions::default();
+        r.fill_cache(opts.fill_cache());
+        RocksReadOptions(r)
     }
 }
 
@@ -37,6 +39,7 @@ impl From<engine_traits::WriteOptions> for RocksWriteOptions {
     fn from(opts: engine_traits::WriteOptions) -> Self {
         let mut r = RawWriteOptions::default();
         r.set_sync(opts.sync());
+        r.set_no_slowdown(opts.no_slowdown());
         RocksWriteOptions(r)
     }
 }
@@ -57,6 +60,7 @@ impl From<engine_traits::IterOptions> for RocksReadOptions {
 fn build_read_opts(iter_opts: engine_traits::IterOptions) -> RawReadOptions {
     let mut opts = RawReadOptions::new();
     opts.fill_cache(iter_opts.fill_cache());
+    opts.set_max_skippable_internal_keys(iter_opts.max_skippable_internal_keys());
     if iter_opts.key_only() {
         opts.set_titan_key_only(true);
     }
@@ -67,8 +71,10 @@ fn build_read_opts(iter_opts: engine_traits::IterOptions) -> RawReadOptions {
     }
 
     if iter_opts.hint_min_ts().is_some() || iter_opts.hint_max_ts().is_some() {
-        let ts_filter = TsFilter::new(iter_opts.hint_min_ts(), iter_opts.hint_max_ts());
-        opts.set_table_filter(Box::new(ts_filter))
+        opts.set_table_filter(TsFilter::new(
+            iter_opts.hint_min_ts(),
+            iter_opts.hint_max_ts(),
+        ))
     }
 
     let (lower, upper) = iter_opts.build_bounds();

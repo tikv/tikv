@@ -4,28 +4,14 @@
 #![feature(cell_update)]
 #![feature(shrink_to)]
 #![feature(div_duration)]
-
-#[macro_use]
-extern crate bitflags;
-#[macro_use(fail_point)]
-extern crate fail;
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate prometheus;
-#[macro_use]
-extern crate quick_error;
-#[macro_use]
-extern crate serde_derive;
-#[macro_use]
-extern crate serde_with;
-#[macro_use]
-extern crate slog_global;
-#[macro_use]
-extern crate tikv_util;
+#![feature(min_specialization)]
+#![feature(box_patterns)]
+#![recursion_limit = "256"]
 
 #[cfg(test)]
 extern crate test;
+#[macro_use]
+extern crate derivative;
 
 pub mod coprocessor;
 pub mod errors;
@@ -33,3 +19,10 @@ pub mod router;
 pub mod store;
 pub use self::coprocessor::{RegionInfo, RegionInfoAccessor, SeekRegionCallback};
 pub use self::errors::{DiscardReason, Error, Result};
+
+// `bytes::Bytes` is generated for `bytes` in protobuf.
+fn bytes_capacity(b: &bytes::Bytes) -> usize {
+    // NOTE: For deserialized raft messages, `len` equals capacity.
+    // This is used to report memory usage to metrics.
+    b.len()
+}

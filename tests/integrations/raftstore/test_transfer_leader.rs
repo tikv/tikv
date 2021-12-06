@@ -4,9 +4,11 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use kvproto::kvrpcpb::Context;
 use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
+use tikv::storage::kv::{SnapContext, SnapshotExt};
 use tikv_util::config::*;
 
 fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -160,4 +162,58 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
 fn test_server_transfer_leader_during_snapshot() {
     let mut cluster = new_server_cluster(0, 3);
     test_transfer_leader_during_snapshot(&mut cluster);
+}
+
+#[test]
+fn test_sync_max_ts_after_leader_transfer() {
+    use tikv::storage::{Engine, Snapshot};
+
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
+    cluster.run();
+
+    let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
+    let storage = cluster
+        .sim
+        .read()
+        .unwrap()
+        .storages
+        .get(&1)
+        .unwrap()
+        .clone();
+    let wait_for_synced = |cluster: &mut Cluster<ServerCluster>| {
+        let region_id = 1;
+        let leader = cluster.leader_of_region(region_id).unwrap();
+        let epoch = cluster.get_region_epoch(region_id);
+        let mut ctx = Context::default();
+        ctx.set_region_id(region_id);
+        ctx.set_peer(leader);
+        ctx.set_region_epoch(epoch);
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = storage.snapshot(snap_ctx).unwrap();
+        let txn_ext = snapshot.txn_ext.clone().unwrap();
+        for retry in 0..10 {
+            if txn_ext.is_max_ts_synced() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1 << retry));
+        }
+        assert!(snapshot.ext().is_max_ts_synced());
+    };
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    wait_for_synced(&mut cluster);
+    let max_ts = cm.max_ts();
+
+    cluster.pd_client.trigger_tso_failure();
+    // Transfer the leader out and back
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    wait_for_synced(&mut cluster);
+    let new_max_ts = cm.max_ts();
+    assert!(new_max_ts > max_ts);
 }

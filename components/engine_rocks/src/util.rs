@@ -7,6 +7,7 @@ use crate::raw_util::new_engine as new_engine_raw;
 use crate::raw_util::new_engine_opt as new_engine_opt_raw;
 use crate::raw_util::CFOptions;
 use crate::rocks_metrics_defs::*;
+use engine_traits::Engines;
 use engine_traits::Range;
 use engine_traits::CF_DEFAULT;
 use engine_traits::{Error, Result};
@@ -14,6 +15,27 @@ use rocksdb::Range as RocksRange;
 use rocksdb::{CFHandle, SliceTransform, DB};
 use std::str::FromStr;
 use std::sync::Arc;
+use tikv_util::box_err;
+
+pub fn new_temp_engine(path: &tempfile::TempDir) -> Engines<RocksEngine, RocksEngine> {
+    let raft_path = path.path().join(std::path::Path::new("raft"));
+    Engines::new(
+        new_engine(
+            path.path().to_str().unwrap(),
+            None,
+            engine_traits::ALL_CFS,
+            None,
+        )
+        .unwrap(),
+        new_engine(
+            raft_path.to_str().unwrap(),
+            None,
+            &[engine_traits::CF_DEFAULT],
+            None,
+        )
+        .unwrap(),
+    )
+}
 
 pub fn new_default_engine(path: &str) -> Result<RocksEngine> {
     let engine =
@@ -130,8 +152,13 @@ pub fn get_cf_num_blob_files_at_level(engine: &DB, handle: &CFHandle, level: usi
 }
 
 /// Gets the number of immutable mem-table of given column family.
-pub fn get_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<u64> {
+pub fn get_cf_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<u64> {
     engine.get_property_int_cf(handle, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE)
+}
+
+/// Gets the amount of pending compaction bytes of given column family.
+pub fn get_cf_pending_compaction_bytes(engine: &DB, handle: &CFHandle) -> Option<u64> {
+    engine.get_property_int_cf(handle, ROCKSDB_PENDING_COMPACTION_BYTES)
 }
 
 pub struct FixedSuffixSliceTransform {

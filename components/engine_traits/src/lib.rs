@@ -126,8 +126,8 @@
 //!   for this is that associated types cannot contain lifetimes. That requires
 //!   "generic associated types". See
 //!
-//!   - [https://github.com/rust-lang/rfcs/pull/1598](https://github.com/rust-lang/rfcs/pull/1598)
-//!   - [https://github.com/rust-lang/rust/issues/44265](https://github.com/rust-lang/rust/issues/44265)
+//!   - <https://github.com/rust-lang/rfcs/pull/1598>
+//!   - <https://github.com/rust-lang/rust/issues/44265>
 //!
 //! - Traits can't have mutually-recursive associated types. That is, if
 //!   `KvEngine` has a `Snapshot` associated type, `Snapshot` can't then have a
@@ -251,15 +251,15 @@
 //! - "Plain old data" types in `engine` can be moved directly into
 //!   `engine_traits` and reexported from `engine` to ease the transition.
 //!   Likewise `engine_rocks` can temporarily call code from inside `engine`.
+#![feature(min_specialization)]
+#![feature(assert_matches)]
 
-#![recursion_limit = "200"]
-
-#[macro_use]
-extern crate quick_error;
-#[allow(unused_extern_crates)]
-extern crate tikv_alloc;
-#[macro_use]
+#[cfg(test)]
+extern crate serde_derive;
 extern crate slog_global;
+extern crate tikv_alloc;
+#[macro_use(fail_point)]
+extern crate fail;
 
 // These modules contain traits that need to be implemented by engines, either
 // they are required by KvEngine or are an associated type of KvEngine. It is
@@ -267,8 +267,6 @@ extern crate slog_global;
 //
 // Many of these define "extension" traits, that end in `Ext`.
 
-mod cf_handle;
-pub use crate::cf_handle::*;
 mod cf_names;
 pub use crate::cf_names::*;
 mod cf_options;
@@ -281,6 +279,8 @@ mod db_vector;
 pub use crate::db_vector::*;
 mod engine;
 pub use crate::engine::*;
+mod file_system;
+pub use crate::file_system::*;
 mod import;
 pub use import::*;
 mod misc;
@@ -289,14 +289,24 @@ mod snapshot;
 pub use crate::snapshot::*;
 mod sst;
 pub use crate::sst::*;
-mod table_properties;
-pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
 mod encryption;
 pub use crate::encryption::*;
-mod properties;
-pub use crate::properties::*;
+mod mvcc_properties;
+mod sst_partitioner;
+pub use crate::sst_partitioner::*;
+mod range_properties;
+pub use crate::mvcc_properties::*;
+pub use crate::range_properties::*;
+mod ttl_properties;
+pub use crate::ttl_properties::*;
+mod perf_context;
+pub use crate::perf_context::*;
+mod flow_control_factors;
+pub use crate::flow_control_factors::*;
+mod table_properties;
+pub use crate::table_properties::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
@@ -321,12 +331,14 @@ mod options;
 pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
+mod raft_engine;
+pub use raft_engine::{CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask};
 
 // These modules need further scrutiny
 
-pub mod metrics_flusher;
-pub use crate::metrics_flusher::*;
 pub mod compaction_job;
+pub mod key_prefix;
+pub mod raw_value;
 pub mod util;
 pub use compaction_job::*;
 

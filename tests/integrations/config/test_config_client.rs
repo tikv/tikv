@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use configuration::{ConfigChange, Configuration};
+use online_config::{ConfigChange, OnlineConfig};
 use raftstore::store::Config as RaftstoreConfig;
 use std::collections::HashMap;
 use std::fs::File;
@@ -18,7 +18,7 @@ fn change(name: &str, value: &str) -> HashMap<String, String> {
 fn test_update_config() {
     let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
     let cfg_controller = ConfigController::new(cfg);
-    let mut cfg = cfg_controller.get_current().clone();
+    let mut cfg = cfg_controller.get_current();
 
     // normal update
     cfg_controller
@@ -51,7 +51,7 @@ fn test_update_config() {
 
 #[test]
 fn test_dispatch_change() {
-    use configuration::ConfigManager;
+    use online_config::ConfigManager;
     use std::error::Error;
     use std::result::Result;
 
@@ -67,7 +67,7 @@ fn test_dispatch_change() {
 
     let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
     let cfg_controller = ConfigController::new(cfg);
-    let mut cfg = cfg_controller.get_current().clone();
+    let mut cfg = cfg_controller.get_current();
     let mgr = CfgManager(Arc::new(Mutex::new(cfg.raft_store.clone())));
     cfg_controller.register(Module::Raftstore, Box::new(mgr.clone()));
 
@@ -91,10 +91,6 @@ fn test_write_update_to_file() {
         let c = r#"
 ## comment should be reserve
 [raftstore]
-
-## comment should be reserve
-# comment with one `#` should also be reserve
-sync-log = true
 
 # config that comment out by one `#` should be update in place
 ## pd-heartbeat-tick-interval = "30s"
@@ -131,7 +127,6 @@ blob-run-mode = "normal"
             "raftstore.pd-heartbeat-tick-interval".to_owned(),
             "1h".to_owned(),
         );
-        change.insert("raftstore.sync-log".to_owned(), "false".to_owned());
         change.insert(
             "coprocessor.region-split-keys".to_owned(),
             "10000".to_owned(),
@@ -158,10 +153,6 @@ blob-run-mode = "normal"
     let expect = r#"
 ## comment should be reserve
 [raftstore]
-
-## comment should be reserve
-# comment with one `#` should also be reserve
-sync-log = false
 
 # config that comment out by one `#` should be update in place
 ## pd-heartbeat-tick-interval = "30s"

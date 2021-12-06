@@ -1,7 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use kvproto::metapb::PeerRole;
 use raft::{Progress, ProgressState, StateRole};
-use raftstore::store::Peer;
+use raftstore::store::{AbstractPeer, GroupState};
 use std::collections::HashMap;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -104,11 +105,12 @@ impl<'a> From<raft::Status<'a>> for RaftStatus {
         let mut voters = HashMap::new();
         let mut learners = HashMap::new();
         if let Some(progress) = status.progress {
-            for (id, voter) in progress.voters() {
-                voters.insert(*id, RaftProgress::new(voter));
-            }
-            for (id, learner) in progress.learners() {
-                learners.insert(*id, RaftProgress::new(learner));
+            for (id, pr) in progress.iter() {
+                if progress.conf().voters().contains(*id) {
+                    voters.insert(*id, RaftProgress::new(pr));
+                } else {
+                    learners.insert(*id, RaftProgress::new(pr));
+                }
             }
         }
         Self {
@@ -123,6 +125,25 @@ impl<'a> From<raft::Status<'a>> for RaftStatus {
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+pub enum RaftPeerRole {
+    Voter,
+    Learner,
+    IncomingVoter,
+    DemotingVoter,
+}
+
+impl From<PeerRole> for RaftPeerRole {
+    fn from(role: PeerRole) -> Self {
+        match role {
+            PeerRole::Voter => RaftPeerRole::Voter,
+            PeerRole::Learner => RaftPeerRole::Learner,
+            PeerRole::IncomingVoter => RaftPeerRole::IncomingVoter,
+            PeerRole::DemotingVoter => RaftPeerRole::DemotingVoter,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct Epoch {
     pub conf_ver: u64,
     pub version: u64,
@@ -132,7 +153,7 @@ pub struct Epoch {
 pub struct RegionPeer {
     pub id: u64,
     pub store_id: u64,
-    pub is_learner: bool,
+    pub role: RaftPeerRole,
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -151,7 +172,6 @@ pub struct RaftTruncatedState {
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct RaftApplyState {
     pub applied_index: u64,
-    pub last_commit_index: u64,
     pub commit_index: u64,
     pub commit_term: u64,
     pub truncated_state: RaftTruncatedState,
@@ -160,6 +180,7 @@ pub struct RaftApplyState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegionMeta {
     pub id: u64,
+    pub group_state: GroupState,
     pub start_key: Vec<u8>,
     pub end_key: Vec<u8>,
     pub epoch: Epoch,
@@ -170,11 +191,9 @@ pub struct RegionMeta {
 }
 
 impl RegionMeta {
-    pub fn new(peer: &Peer) -> Self {
-        let raft_group = &peer.raft_group;
-        let store = raft_group.store();
-        let region = store.region();
-        let apply_state = store.apply_state();
+    pub fn new(abstract_peer: &dyn AbstractPeer) -> Self {
+        let region = abstract_peer.region();
+        let apply_state = abstract_peer.apply_state();
         let epoch = region.get_region_epoch();
         let start_key = region.get_start_key();
         let end_key = region.get_end_key();
@@ -184,12 +203,13 @@ impl RegionMeta {
             peers.push(RegionPeer {
                 id: peer.get_id(),
                 store_id: peer.get_store_id(),
-                is_learner: peer.get_is_learner(),
+                role: peer.get_role().into(),
             });
         }
 
         Self {
             id: region.get_id(),
+            group_state: abstract_peer.group_state(),
             start_key: start_key.to_owned(),
             end_key: end_key.to_owned(),
             epoch: Epoch {
@@ -197,23 +217,21 @@ impl RegionMeta {
                 version: epoch.get_version(),
             },
             peers,
-            merge_state: peer
-                .pending_merge_state
-                .as_ref()
+            merge_state: abstract_peer
+                .pending_merge_state()
                 .map(|state| RegionMergeState {
                     min_index: state.get_min_index(),
                     commit: state.get_commit(),
                     region_id: state.get_target().get_id(),
                 }),
-            raft_status: raft_group.status().into(),
+            raft_status: abstract_peer.raft_status().into(),
             raft_apply: RaftApplyState {
                 applied_index: apply_state.get_applied_index(),
-                last_commit_index: apply_state.get_last_commit_index(),
                 commit_index: apply_state.get_commit_index(),
                 commit_term: apply_state.get_commit_term(),
                 truncated_state: RaftTruncatedState {
-                    index: store.truncated_index(),
-                    term: store.truncated_term(),
+                    index: apply_state.get_truncated_state().get_index(),
+                    term: apply_state.get_truncated_state().get_term(),
                 },
             },
         }

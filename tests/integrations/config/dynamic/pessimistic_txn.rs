@@ -1,4 +1,6 @@
-use std::sync::{mpsc, Arc};
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
+use std::sync::{atomic::Ordering, mpsc, Arc};
 use std::time::Duration;
 
 use security::SecurityManager;
@@ -35,7 +37,7 @@ fn setup(
     DetectorScheduler,
     LockManager,
 ) {
-    let mut lock_mgr = LockManager::new();
+    let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
     let pd_client = Arc::new(TestPdClient::new(0, true));
     let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
     lock_mgr
@@ -90,6 +92,8 @@ fn test_lock_manager_cfg_update() {
     let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
     cfg.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(DEFAULT_TIMEOUT);
     cfg.pessimistic_txn.wake_up_delay_duration = ReadableDuration::millis(DEFAULT_DELAY);
+    cfg.pessimistic_txn.pipelined = false;
+    cfg.pessimistic_txn.in_memory = false;
     cfg.validate().unwrap();
     let (cfg_controller, waiter, deadlock, mut lock_mgr) = setup(cfg);
 
@@ -161,6 +165,40 @@ fn test_lock_manager_cfg_update() {
     validate_dead_lock(&deadlock, move |ttl: u64| {
         assert_eq!(ttl, 4321);
     });
+
+    // update pipelined
+    assert!(
+        !lock_mgr
+            .get_storage_dynamic_configs()
+            .pipelined_pessimistic_lock
+            .load(Ordering::SeqCst)
+    );
+    cfg_controller
+        .update_config("pessimistic-txn.pipelined", "true")
+        .unwrap();
+    assert!(
+        lock_mgr
+            .get_storage_dynamic_configs()
+            .pipelined_pessimistic_lock
+            .load(Ordering::SeqCst)
+    );
+
+    // update in-memory
+    assert!(
+        !lock_mgr
+            .get_storage_dynamic_configs()
+            .in_memory_pessimistic_lock
+            .load(Ordering::SeqCst)
+    );
+    cfg_controller
+        .update_config("pessimistic-txn.in-memory", "true")
+        .unwrap();
+    assert!(
+        lock_mgr
+            .get_storage_dynamic_configs()
+            .in_memory_pessimistic_lock
+            .load(Ordering::SeqCst)
+    );
 
     lock_mgr.stop();
 }

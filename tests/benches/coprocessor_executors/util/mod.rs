@@ -35,7 +35,6 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
     executors: &[PbExecutor],
     ranges: &[KeyRange],
     store: &Store<RocksEngine>,
-    enable_batch: bool,
 ) -> Box<dyn RequestHandler> {
     use tipb::DagRequest;
 
@@ -50,8 +49,8 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
         64,
         false,
         false,
+        None,
     )
-    .enable_batch_if_possible(enable_batch)
     .build()
     .unwrap()
 }

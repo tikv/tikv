@@ -1,9 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use configuration::ConfigValue;
-pub use rocksdb::PerfLevel;
+use online_config::ConfigValue;
 use rocksdb::{DBCompressionType, DBInfoLogLevel, DBTitanDBBlobRunMode};
+use serde::{Deserialize, Serialize};
 use std::str::FromStr;
+
+use rocksdb::{CompactionPriority, DBCompactionStyle, DBRateLimiterMode, DBRecoveryMode};
+
+use tikv_util::numeric_enum_serializing_mod;
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -141,6 +145,73 @@ pub mod compression_type_level_serde {
     }
 }
 
+pub mod compression_type_serde {
+    use std::fmt;
+
+    use serde::de::{Error, Unexpected, Visitor};
+    use serde::{Deserializer, Serializer};
+
+    use rocksdb::DBCompressionType;
+
+    pub fn serialize<S>(t: &DBCompressionType, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let name = match *t {
+            DBCompressionType::No => "no",
+            DBCompressionType::Snappy => "snappy",
+            DBCompressionType::Zlib => "zlib",
+            DBCompressionType::Bz2 => "bzip2",
+            DBCompressionType::Lz4 => "lz4",
+            DBCompressionType::Lz4hc => "lz4hc",
+            DBCompressionType::Zstd => "zstd",
+            DBCompressionType::ZstdNotFinal => "zstd-not-final",
+            DBCompressionType::Disable => "disable",
+        };
+        serializer.serialize_str(name)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<DBCompressionType, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StrVistor;
+        impl<'de> Visitor<'de> for StrVistor {
+            type Value = DBCompressionType;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(formatter, "a compression type")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<DBCompressionType, E>
+            where
+                E: Error,
+            {
+                let str = match &*value.trim().to_lowercase() {
+                    "no" => DBCompressionType::No,
+                    "snappy" => DBCompressionType::Snappy,
+                    "zlib" => DBCompressionType::Zlib,
+                    "bzip2" => DBCompressionType::Bz2,
+                    "lz4" => DBCompressionType::Lz4,
+                    "lz4hc" => DBCompressionType::Lz4hc,
+                    "zstd" => DBCompressionType::Zstd,
+                    "zstd-not-final" => DBCompressionType::ZstdNotFinal,
+                    "disable" => DBCompressionType::Disable,
+                    _ => {
+                        return Err(E::invalid_value(
+                            Unexpected::Other(&"invalid compression type".to_string()),
+                            &self,
+                        ));
+                    }
+                };
+                Ok(str)
+            }
+        }
+
+        deserializer.deserialize_str(StrVistor)
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BlobRunMode {
@@ -155,9 +226,9 @@ impl From<BlobRunMode> for ConfigValue {
     }
 }
 
-impl Into<BlobRunMode> for ConfigValue {
-    fn into(self) -> BlobRunMode {
-        if let ConfigValue::BlobRunMode(s) = self {
+impl From<ConfigValue> for BlobRunMode {
+    fn from(c: ConfigValue) -> BlobRunMode {
+        if let ConfigValue::BlobRunMode(s) = c {
             match s.as_str() {
                 "kNormal" => BlobRunMode::Normal,
                 "kReadOnly" => BlobRunMode::ReadOnly,
@@ -165,7 +236,7 @@ impl Into<BlobRunMode> for ConfigValue {
                 m => panic!("expect: kNormal, kReadOnly or kFallback, got: {:?}", m),
             }
         } else {
-            panic!("expect: ConfigValue::BlobRunMode, got: {:?}", self);
+            panic!("expect: ConfigValue::BlobRunMode, got: {:?}", c);
         }
     }
 }
@@ -185,9 +256,9 @@ impl FromStr for BlobRunMode {
     }
 }
 
-impl Into<DBTitanDBBlobRunMode> for BlobRunMode {
-    fn into(self) -> DBTitanDBBlobRunMode {
-        match self {
+impl From<BlobRunMode> for DBTitanDBBlobRunMode {
+    fn from(m: BlobRunMode) -> DBTitanDBBlobRunMode {
+        match m {
             BlobRunMode::Normal => DBTitanDBBlobRunMode::Normal,
             BlobRunMode::ReadOnly => DBTitanDBBlobRunMode::ReadOnly,
             BlobRunMode::Fallback => DBTitanDBBlobRunMode::Fallback,
@@ -195,109 +266,31 @@ impl Into<DBTitanDBBlobRunMode> for BlobRunMode {
     }
 }
 
-macro_rules! numeric_enum_mod {
-    ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
-        pub mod $name {
-            use std::fmt;
-
-            use serde::{Serializer, Deserializer};
-            use serde::de::{self, Unexpected, Visitor};
-            use rocksdb::$enum;
-
-            pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
-                where S: Serializer
-            {
-                serializer.serialize_i64(*mode as i64)
-            }
-
-            pub fn deserialize<'de, D>(deserializer: D) -> Result<$enum, D::Error>
-                where D: Deserializer<'de>
-            {
-                struct EnumVisitor;
-
-                impl<'de> Visitor<'de> for EnumVisitor {
-                    type Value = $enum;
-
-                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                        write!(formatter, concat!("valid ", stringify!($enum)))
-                    }
-
-                    fn visit_i64<E>(self, value: i64) -> Result<$enum, E>
-                        where E: de::Error
-                    {
-                        match value {
-                            $( $value => Ok($enum::$variant), )*
-                            _ => Err(E::invalid_value(Unexpected::Signed(value), &self))
-                        }
-                    }
-                }
-
-                deserializer.deserialize_i64(EnumVisitor)
-            }
-
-            #[cfg(test)]
-            mod tests {
-                use toml;
-                use rocksdb::$enum;
-
-                #[test]
-                fn test_serde() {
-                    #[derive(Serialize, Deserialize, PartialEq)]
-                    struct EnumHolder {
-                        #[serde(with = "super")]
-                        e: $enum,
-                    }
-
-                    let cases = vec![
-                        $(($enum::$variant, $value), )*
-                    ];
-                    for (e, v) in cases {
-                        let holder = EnumHolder { e };
-                        let res = toml::to_string(&holder).unwrap();
-                        let exp = format!("e = {}\n", v);
-                        assert_eq!(res, exp);
-                        let h: EnumHolder = toml::from_str(&exp).unwrap();
-                        assert!(h == holder);
-                    }
-                }
-            }
-        }
-    }
-}
-
-numeric_enum_mod! {compaction_pri_serde CompactionPriority {
+numeric_enum_serializing_mod! {compaction_pri_serde CompactionPriority {
     ByCompensatedSize = 0,
     OldestLargestSeqFirst = 1,
     OldestSmallestSeqFirst = 2,
     MinOverlappingRatio = 3,
 }}
 
-numeric_enum_mod! {rate_limiter_mode_serde DBRateLimiterMode {
+numeric_enum_serializing_mod! {rate_limiter_mode_serde DBRateLimiterMode {
     ReadOnly = 1,
     WriteOnly = 2,
     AllIo = 3,
 }}
 
-numeric_enum_mod! {compaction_style_serde DBCompactionStyle {
+numeric_enum_serializing_mod! {compaction_style_serde DBCompactionStyle {
     Level = 0,
     Universal = 1,
+    Fifo = 2,
+    None = 3,
 }}
 
-numeric_enum_mod! {recovery_mode_serde DBRecoveryMode {
+numeric_enum_serializing_mod! {recovery_mode_serde DBRecoveryMode {
     TolerateCorruptedTailRecords = 0,
     AbsoluteConsistency = 1,
     PointInTime = 2,
     SkipAnyCorruptedRecords = 3,
-}}
-
-numeric_enum_mod! {perf_level_serde PerfLevel {
-    Uninitialized = 0,
-    Disable = 1,
-    EnableCount = 2,
-    EnableTimeExceptForMutex = 3,
-    EnableTimeAndCPUTimeExceptForMutex = 4,
-    EnableTime = 5,
-    OutOfBounds = 6,
 }}
 
 #[cfg(test)]
@@ -341,18 +334,22 @@ mod tests {
 
         // length is wrong.
         assert!(toml::from_str::<CompressionTypeHolder>("tp = [\"no\"]").is_err());
-        assert!(toml::from_str::<CompressionTypeHolder>(
-            r#"tp = [
+        assert!(
+            toml::from_str::<CompressionTypeHolder>(
+                r#"tp = [
             "no", "no", "no", "no", "no", "no", "no", "no"
         ]"#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
         // value is wrong.
-        assert!(toml::from_str::<CompressionTypeHolder>(
-            r#"tp = [
+        assert!(
+            toml::from_str::<CompressionTypeHolder>(
+                r#"tp = [
             "no", "no", "no", "no", "no", "no", "yes"
         ]"#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
     }
 }

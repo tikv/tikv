@@ -15,7 +15,7 @@ const CHAR_CARRIAGE_RETURN: char = '\x0D';
 
 impl<'a> JsonRef<'a> {
     /// `unquote` recognizes the escape sequences shown in:
-    /// https://dev.mysql.com/doc/refman/5.7/en/json-modification-functions.html#
+    /// <https://dev.mysql.com/doc/refman/5.7/en/json-modification-functions.html>
     /// json-unquote-character-escape-sequences
     ///
     /// See `Unquote()` in TiDB `json/binary_function.go`

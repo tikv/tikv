@@ -1,18 +1,17 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath] Common key utitlies.
+
 //! TiKV key building
 
-#[macro_use]
-extern crate derive_more;
-#[macro_use]
-extern crate failure;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-use byteorder::{BigEndian, ByteOrder};
-
-use kvproto::metapb::Region;
 use std::mem;
+
+use byteorder::{BigEndian, ByteOrder};
+use kvproto::metapb::Region;
+use thiserror::Error;
 
 pub mod rewrite;
 
@@ -40,6 +39,8 @@ pub const PREPARE_BOOTSTRAP_KEY: &[u8] = &[LOCAL_PREFIX, 0x02];
 // with different prefixes.
 pub const REGION_RAFT_PREFIX: u8 = 0x02;
 pub const REGION_RAFT_PREFIX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_RAFT_PREFIX];
+pub const REGION_RAFT_MIN_KEY: &[u8] = &[LOCAL_PREFIX, REGION_RAFT_PREFIX];
+pub const REGION_RAFT_MAX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_RAFT_PREFIX + 1];
 pub const REGION_META_PREFIX: u8 = 0x03;
 pub const REGION_META_PREFIX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
 pub const REGION_META_MIN_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
@@ -131,6 +132,17 @@ pub fn decode_raft_log_key(key: &[u8]) -> Result<(u64, u64)> {
     Ok((region_id, index))
 }
 
+/// Get the region id and log type from raft key.
+pub fn decode_raft_key(key: &[u8]) -> Result<(u64, u8)> {
+    let suffix_idx = REGION_RAFT_PREFIX_KEY.len() + mem::size_of::<u64>();
+    let expect_key_len = suffix_idx + mem::size_of::<u8>();
+    if key.len() < expect_key_len || !key.starts_with(REGION_RAFT_PREFIX_KEY) {
+        return Err(Error::InvalidRaftLogKey(key.to_owned()));
+    }
+    let region_id = BigEndian::read_u64(&key[REGION_RAFT_PREFIX_KEY.len()..suffix_idx]);
+    Ok((region_id, key[suffix_idx]))
+}
+
 pub fn raft_log_prefix(region_id: u64) -> [u8; 11] {
     make_region_prefix(region_id, RAFT_LOG_SUFFIX)
 }
@@ -197,11 +209,17 @@ pub fn data_key(key: &[u8]) -> Vec<u8> {
     v
 }
 
+pub fn data_key_with_buffer(key: &[u8], buffer: &mut Vec<u8>) {
+    buffer.clear();
+    buffer.extend_from_slice(DATA_PREFIX_KEY);
+    buffer.extend_from_slice(key);
+}
+
 pub fn origin_key(key: &[u8]) -> &[u8] {
     assert!(
         validate_data_key(key),
         "invalid data key {}",
-        hex::encode_upper(key)
+        &log_wrappers::Value::key(key)
     );
     &key[DATA_PREFIX_KEY.len()..]
 }
@@ -271,21 +289,13 @@ pub fn next_key(key: &[u8]) -> Vec<u8> {
     }
 }
 
-#[derive(Debug, Display, Fail)]
+#[derive(Debug, Error)]
 pub enum Error {
-    #[display(fmt = "{} is not a valid raft log key", "hex::encode_upper(_0)")]
+    #[error("{} is not a valid raft log key", log_wrappers::Value(.0))]
     InvalidRaftLogKey(Vec<u8>),
-    #[display(
-        fmt = "invalid region {} key length for key {}",
-        "_0",
-        "hex::encode_upper(_1)"
-    )]
+    #[error("invalid region {0} key length for key {}", log_wrappers::Value(.1))]
     InvalidRegionKeyLength(String, Vec<u8>),
-    #[display(
-        fmt = "invalid region {} prefix for key {}",
-        "_0",
-        "hex::encode_upper(_1)"
-    )]
+    #[error("invalid region {0} prefix for key {}", log_wrappers::Value(.1))]
     InvalidRegionPrefix(String, Vec<u8>),
 }
 
@@ -418,8 +428,13 @@ mod tests {
 
     #[test]
     fn test_data_key() {
-        assert!(validate_data_key(&data_key(b"abc")));
         assert!(!validate_data_key(b"abc"));
+        assert!(validate_data_key(&data_key(b"abc")));
+        let mut buffer = vec![];
+        data_key_with_buffer(b"abc", &mut buffer);
+        assert_eq!(buffer, data_key(b"abc"));
+        data_key_with_buffer(b"cde", &mut buffer);
+        assert_eq!(buffer, data_key(b"cde"));
 
         let mut region = Region::default();
         // uninitialised region should not be passed in `enc_start_key` and `enc_end_key`.

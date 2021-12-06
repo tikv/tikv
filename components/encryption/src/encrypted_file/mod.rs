@@ -1,22 +1,23 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::{rename, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
-use std::time::Instant;
 
+use file_system::{rename, File, OpenOptions};
 use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
+use tikv_util::time::Instant;
 
 use crate::master_key::*;
 use crate::metrics::*;
 use crate::Result;
+use slog_global::error;
 
 mod header;
-use header::*;
+pub use header::*;
 
-const TMP_FILE_SUFFIX: &str = ".tmp";
+pub const TMP_FILE_SUFFIX: &str = "tmp";
 
 /// An file encrypted by master key.
 pub struct EncryptedFile<'a> {
@@ -27,7 +28,7 @@ pub struct EncryptedFile<'a> {
 impl<'a> EncryptedFile<'a> {
     /// New an `EncryptedFile`.
     ///
-    /// It's different from `std::fs::File`, it does not hold a reference
+    /// It's different from `file_system::File`, it does not hold a reference
     /// to the file or open the file, util we actually read or write.
     pub fn new(base: &'a Path, name: &'a str) -> EncryptedFile<'a> {
         EncryptedFile { base, name }
@@ -44,14 +45,14 @@ impl<'a> EncryptedFile<'a> {
             Ok(mut f) => {
                 let mut buf = Vec::new();
                 f.read_to_end(&mut buf)?;
-                let (_, content) = Header::parse(&buf)?;
+                let (_, content, _) = Header::parse(&buf)?;
                 let mut encrypted_content = EncryptedContent::default();
                 encrypted_content.merge_from_bytes(content)?;
                 let plaintext = master_key.decrypt(&encrypted_content)?;
 
                 ENCRYPT_DECRPTION_FILE_HISTOGRAM
                     .with_label_values(&[self.name, "read"])
-                    .observe(start.elapsed().as_secs_f64());
+                    .observe(start.saturating_elapsed().as_secs_f64());
 
                 Ok(plaintext)
             }
@@ -70,14 +71,21 @@ impl<'a> EncryptedFile<'a> {
             .create(true)
             .write(true)
             .open(&tmp_path)
-            .unwrap();
+            .map_err(|e| {
+                error!(
+                    "EncryptedFile::write open failed";
+                    "path" => %tmp_path.display(),
+                    "error" => %e,
+                );
+                e
+            })?;
 
         // Encrypt the content.
         let encrypted_content = master_key
-            .encrypt(&plaintext_content)?
+            .encrypt(plaintext_content)?
             .write_to_bytes()
             .unwrap();
-        let header = Header::new(&encrypted_content);
+        let header = Header::new(&encrypted_content, Version::V1);
         tmp_file.write_all(&header.to_bytes())?;
         tmp_file.write_all(&encrypted_content)?;
         tmp_file.sync_all()?;
@@ -89,7 +97,7 @@ impl<'a> EncryptedFile<'a> {
 
         ENCRYPT_DECRPTION_FILE_HISTOGRAM
             .with_label_values(&[self.name, "write"])
-            .observe(start.elapsed().as_secs_f64());
+            .observe(start.saturating_elapsed().as_secs_f64());
 
         // TODO GC broken temp files if necessary.
         Ok(())

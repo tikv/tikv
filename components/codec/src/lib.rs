@@ -2,13 +2,8 @@
 
 #![cfg_attr(test, feature(test))]
 #![feature(core_intrinsics)]
-#![feature(ptr_offset_from)]
-#![feature(specialization)]
+#![feature(min_specialization)]
 
-#[macro_use]
-extern crate static_assertions;
-#[macro_use]
-extern crate failure;
 #[cfg(test)]
 extern crate test;
 #[allow(unused_extern_crates)]
