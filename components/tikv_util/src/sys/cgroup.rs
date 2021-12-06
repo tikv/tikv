@@ -415,12 +415,12 @@ mod tests {
             let infos = Process::new_with_root(PathBuf::from(dir))
                 .and_then(|x| x.mountinfo())
                 .unwrap();
-            parse_mountinfos_v2(infos)
+            parse_mountinfos_v1(infos)
         };
         let cgroup_sys = CGroupSys {
             cgroups,
             mount_points,
-            is_v2: true,
+            is_v2: false,
         };
 
         assert_eq!(cgroup_sys.cpu_quota(), None);
