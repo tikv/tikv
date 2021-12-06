@@ -2183,14 +2183,15 @@ impl TestStorageBuilder<RocksEngine, DummyLockManager> {
     }
 }
 
+/// An `Engine` with `TxnExt`. It is used for test purpose.
 #[derive(Clone)]
-pub struct TxnEngine<E: Engine> {
+pub struct TxnTestEngine<E: Engine> {
     engine: E,
     txn_ext: Arc<TxnExt>,
 }
 
-impl<E: Engine> Engine for TxnEngine<E> {
-    type Snap = TxnSnapshot<E::Snap>;
+impl<E: Engine> Engine for TxnTestEngine<E> {
+    type Snap = TxnTestSnapshot<E::Snap>;
     type Local = E::Local;
 
     fn kv_engine(&self) -> Self::Local {
@@ -2203,7 +2204,7 @@ impl<E: Engine> Engine for TxnEngine<E> {
         end_key: &[u8],
     ) -> tikv_kv::Result<Self::Snap> {
         let snapshot = self.engine.snapshot_on_kv_engine(start_key, end_key)?;
-        Ok(TxnSnapshot {
+        Ok(TxnTestSnapshot {
             snapshot,
             txn_ext: self.txn_ext.clone(),
         })
@@ -2221,9 +2222,9 @@ impl<E: Engine> Engine for TxnEngine<E> {
         let txn_ext = self.txn_ext.clone();
         self.engine.async_snapshot(
             ctx,
-            Box::new(
-                move |snapshot| cb(snapshot.map(|snapshot| TxnSnapshot { snapshot, txn_ext })),
-            ),
+            Box::new(move |snapshot| {
+                cb(snapshot.map(|snapshot| TxnTestSnapshot { snapshot, txn_ext }))
+            }),
         )
     }
 
@@ -2238,14 +2239,14 @@ impl<E: Engine> Engine for TxnEngine<E> {
 }
 
 #[derive(Clone)]
-pub struct TxnSnapshot<S: Snapshot> {
+pub struct TxnTestSnapshot<S: Snapshot> {
     snapshot: S,
     txn_ext: Arc<TxnExt>,
 }
 
-impl<S: Snapshot> Snapshot for TxnSnapshot<S> {
+impl<S: Snapshot> Snapshot for TxnTestSnapshot<S> {
     type Iter = S::Iter;
-    type Ext<'a> = TxnSnapshotExt<'a>;
+    type Ext<'a> = TxnTestSnapshotExt<'a>;
 
     fn get(&self, key: &Key) -> tikv_kv::Result<Option<Value>> {
         self.snapshot.get(key)
@@ -2277,13 +2278,13 @@ impl<S: Snapshot> Snapshot for TxnSnapshot<S> {
     }
 
     fn ext(&self) -> Self::Ext<'_> {
-        TxnSnapshotExt(&self.txn_ext)
+        TxnTestSnapshotExt(&self.txn_ext)
     }
 }
 
-pub struct TxnSnapshotExt<'a>(&'a Arc<TxnExt>);
+pub struct TxnTestSnapshotExt<'a>(&'a Arc<TxnExt>);
 
-impl<'a> SnapshotExt for TxnSnapshotExt<'a> {
+impl<'a> SnapshotExt for TxnTestSnapshotExt<'a> {
     fn get_txn_ext(&self) -> Option<&Arc<TxnExt>> {
         Some(self.0)
     }
@@ -2378,8 +2379,8 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
         )
     }
 
-    pub fn build_for_txn(self, txn_ext: Arc<TxnExt>) -> Result<Storage<TxnEngine<E>, L>> {
-        let engine = TxnEngine {
+    pub fn build_for_txn(self, txn_ext: Arc<TxnExt>) -> Result<Storage<TxnTestEngine<E>, L>> {
+        let engine = TxnTestEngine {
             engine: self.engine,
             txn_ext,
         };

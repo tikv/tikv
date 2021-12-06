@@ -904,7 +904,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     fail_point!("scheduler_async_write_finish");
 
                     let ok = result.is_ok();
-                    if ok {
+                    if ok && !locks_to_be_removed.is_empty() {
                         // Lock CF mutations should overwrite memory pessimistic locks
                         if let Some(mut pessimistic_locks) = txn_ext
                             .as_ref()
