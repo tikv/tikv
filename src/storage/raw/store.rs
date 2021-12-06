@@ -189,10 +189,11 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
                     cursor.value(statistics).to_owned()
                 },
             )));
-            if pairs.len() >= limit {
+            if pairs.len() < limit {
+                cursor.next(statistics);
+            }else{
                 break;
             }
-            cursor.next(statistics);
         }
         Ok(pairs)
     }
@@ -240,10 +241,11 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
                     cursor.value(statistics).to_owned()
                 },
             )));
-            if pairs.len() >= limit {
+            if pairs.len() < limit {
+                cursor.next(statistics);
+            }else{
                 break;
             }
-            cursor.prev(statistics);
         }
         Ok(pairs)
     }
