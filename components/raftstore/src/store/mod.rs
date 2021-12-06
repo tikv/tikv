@@ -3,13 +3,17 @@
 pub mod cmd_resp;
 pub mod config;
 pub mod fsm;
+pub mod memory;
 pub mod msg;
 pub mod transport;
 
 #[macro_use]
 pub mod util;
 
+mod async_io;
 mod bootstrap;
+mod compaction_guard;
+mod hibernate_state;
 mod local_metrics;
 mod metrics;
 mod peer;
@@ -18,17 +22,22 @@ mod read_queue;
 mod region_snapshot;
 mod replication_mode;
 mod snap;
+mod txn_ext;
 mod worker;
 
 pub use self::bootstrap::{
     bootstrap_store, clear_prepare_bootstrap_cluster, clear_prepare_bootstrap_key, initial_region,
     prepare_bootstrap_cluster,
 };
+pub use self::compaction_guard::CompactionGuardGeneratorFactory;
 pub use self::config::Config;
 pub use self::fsm::{DestroyPeerJob, RaftRouter, StoreInfo};
+pub use self::hibernate_state::{GroupState, HibernateState};
+pub use self::memory::*;
 pub use self::msg::{
-    Callback, CasualMessage, MergeResultKind, PeerMsg, PeerTicks, RaftCommand, ReadCallback,
-    ReadResponse, SignificantMsg, StoreMsg, StoreTick, WriteCallback, WriteResponse,
+    Callback, CasualMessage, ExtCallback, InspectedRaftMessage, MergeResultKind, PeerMsg,
+    PeerTicks, RaftCmdExtraOpts, RaftCommand, ReadCallback, ReadResponse, SignificantMsg, StoreMsg,
+    StoreTick, WriteCallback, WriteResponse,
 };
 pub use self::peer::{
     AbstractPeer, Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy,
@@ -38,18 +47,22 @@ pub use self::peer_storage::{
     PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX,
     RAFT_INIT_LOG_TERM,
 };
+pub use self::read_queue::ReadIndexContext;
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::replication_mode::{GlobalReplicationState, StoreGroup};
 pub use self::snap::{
     check_abort, copy_snapshot,
     snap_io::{apply_sst_cf_file, build_sst_cf_file},
-    ApplyOptions, Error as SnapError, GenericSnapshot, SnapEntry, SnapKey, SnapManager,
-    SnapManagerBuilder, Snapshot, SnapshotStatistics,
+    ApplyOptions, Error as SnapError, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder,
+    Snapshot, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
+pub use self::txn_ext::{PeerPessimisticLocks, TxnExt};
+pub use self::util::{RegionReadProgress, RegionReadProgressRegistry};
 pub use self::worker::{
-    AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, ReadDelegate, ReadStats,
-    SplitConfig, SplitConfigManager,
+    AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, QueryStats, ReadDelegate,
+    ReadStats, SplitConfig, SplitConfigManager, TrackVer, WriteStats,
 };
+pub use self::worker::{CheckLeaderRunner, CheckLeaderTask};
 pub use self::worker::{KeyEntry, LocalReader, RegionTask};
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};

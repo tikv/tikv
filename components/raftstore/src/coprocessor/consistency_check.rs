@@ -51,7 +51,7 @@ impl<E: KvEngine> ConsistencyCheckObserver<E> for Raw<E> {
         }
         assert_eq!(context[0], ConsistencyCheckMethod::Raw as u8);
         *context = &context[1..];
-        compute_hash_on_raw(region, snap).map(|sum| Some(sum))
+        compute_hash_on_raw(region, snap).map(Some)
     }
 }
 
@@ -59,7 +59,7 @@ fn compute_hash_on_raw<S: Snapshot>(region: &Region, snap: &S) -> Result<u32> {
     let region_id = region.get_id();
     let mut digest = crc32fast::Hasher::new();
     let mut cf_names = snap.cf_names();
-    cf_names.sort();
+    cf_names.sort_unstable();
 
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
@@ -85,12 +85,12 @@ fn compute_hash_on_raw<S: Snapshot>(region: &Region, snap: &S) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine_rocks::RocksEngine;
+    use engine_test::kv::KvTestEngine;
 
     #[test]
     fn test_update_context() {
         let mut context = Vec::new();
-        let observer = Raw::<RocksEngine>::default();
+        let observer = Raw::<KvTestEngine>::default();
         assert!(observer.update_context(&mut context));
         assert_eq!(context.len(), 1);
         assert_eq!(context[0], ConsistencyCheckMethod::Raw as u8);

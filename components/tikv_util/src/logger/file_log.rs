@@ -288,7 +288,7 @@ mod tests {
         // Rotate normally
         logger.flush().unwrap();
 
-        let mut new_path = PathBuf::from(path).into_os_string();
+        let mut new_path = path.into_os_string();
         new_path.push(suffix);
 
         assert!(file_exists(new_path));
@@ -327,7 +327,7 @@ mod tests {
         // Rotate normally
         logger.flush().unwrap();
 
-        let mut new_path = PathBuf::from(path).into_os_string();
+        let mut new_path = path.into_os_string();
         new_path.push(suffix);
 
         assert!(!file_exists(new_path));
@@ -346,7 +346,7 @@ mod tests {
         .build()
         .unwrap();
 
-        let mut new_path = PathBuf::from(path).into_os_string();
+        let mut new_path = path.into_os_string();
         new_path.push(suffix);
 
         // Should not rotate.
@@ -389,7 +389,7 @@ mod tests {
         .build()
         .unwrap();
 
-        let mut new_path = PathBuf::from(path).into_os_string();
+        let mut new_path = path.into_os_string();
         new_path.push(suffix);
 
         logger.write_all(&[0xff; 2048]).unwrap();
@@ -431,7 +431,7 @@ mod tests {
         .build()
         .unwrap();
 
-        let mut new_path = PathBuf::from(path).into_os_string();
+        let mut new_path = path.into_os_string();
         new_path.push(suffix);
 
         logger.write_all(&[0xff; 2048]).unwrap();
@@ -459,7 +459,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let mut new_path = PathBuf::from(path).into_os_string();
+        let mut new_path = path.into_os_string();
         new_path.push(suffix);
 
         // Rename failed.

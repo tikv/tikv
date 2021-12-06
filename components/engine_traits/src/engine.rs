@@ -17,17 +17,21 @@ pub trait KvEngine:
     + WriteBatchExt
     + DBOptionsExt
     + CFNamesExt
-    + CFHandleExt
+    + CFOptionsExt
     + ImportExt
     + SstExt
-    + TablePropertiesExt
     + CompactExt
     + RangePropertiesExt
+    + MvccPropertiesExt
+    + TtlPropertiesExt
+    + TablePropertiesExt
+    + PerfContextExt
     + MiscExt
     + Send
     + Sync
     + Clone
     + Debug
+    + Unpin
     + 'static
 {
     /// A consistent read-only snapshot of the database

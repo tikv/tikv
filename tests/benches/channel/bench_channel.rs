@@ -5,8 +5,8 @@ use std::{thread, usize};
 use test::Bencher;
 
 use crossbeam::channel;
-use futures03::executor::block_on;
-use futures03::stream::StreamExt;
+use futures::executor::block_on;
+use futures::stream::StreamExt;
 use tikv_util::mpsc;
 
 #[bench]

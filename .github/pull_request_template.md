@@ -10,15 +10,9 @@ PR Title Format:
 2. *: what's changed
 -->
 
-### What problem does this PR solve?
-
-Issue Number: close #xxx <!-- REMOVE this line if no issue to close -->
-
-Problem Summary:
-
 ### What is changed and how it works?
 
-Proposal: [xxx](url) <!-- REMOVE this line if not applicable -->
+Close #xxx <!-- Associate issue that describes the problem the PR tries to solve. -->
 
 What's Changed:
 
@@ -45,3 +39,9 @@ Side effects
 - Breaking backward compatibility
 
 ### Release note <!-- bugfixes or new feature need a release note -->
+
+```release-note
+Please add a release note.
+If you don't think this PR needs a release note then fill it with None.
+If this PR will be picked to release branch, then a release note is probably required.
+```

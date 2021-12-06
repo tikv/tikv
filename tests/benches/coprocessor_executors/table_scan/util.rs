@@ -7,14 +7,11 @@ use criterion::black_box;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::ColumnInfo;
-use tipb::TableScan;
 
 use test_coprocessor::*;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_normal_executors::Executor;
-use tidb_query_normal_executors::TableScanExecutor;
-use tidb_query_vec_executors::interface::*;
-use tidb_query_vec_executors::BatchTableScanExecutor;
+use tidb_query_datatype::expr::EvalConfig;
+use tidb_query_executors::interface::*;
+use tidb_query_executors::BatchTableScanExecutor;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::coprocessor::RequestHandler;
 use tikv::storage::{RocksEngine, Statistics, Store as TxnStore};
@@ -23,44 +20,6 @@ use crate::util::executor_descriptor::table_scan;
 use crate::util::scan_bencher;
 
 pub type TableScanParam = ();
-
-pub struct NormalTableScanExecutorBuilder<T: TxnStore + 'static> {
-    _phantom: PhantomData<T>,
-}
-
-impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
-    for NormalTableScanExecutorBuilder<T>
-{
-    type T = T;
-    type E = Box<dyn Executor<StorageStats = Statistics>>;
-    type P = TableScanParam;
-
-    fn build(
-        columns: &[ColumnInfo],
-        ranges: &[KeyRange],
-        store: &Store<RocksEngine>,
-        _: (),
-    ) -> Self::E {
-        let mut req = TableScan::default();
-        req.set_columns(columns.into());
-
-        let mut executor = TableScanExecutor::table_scan(
-            black_box(req),
-            black_box(EvalContext::default()),
-            black_box(ranges.to_vec()),
-            black_box(TiKVStorage::new(
-                ToTxnStore::<Self::T>::to_store(store),
-                false,
-            )),
-            black_box(false),
-        )
-        .unwrap();
-        // There is a step of building scanner in the first `next()` which cost time,
-        // so we next() before hand.
-        executor.next().unwrap().unwrap();
-        Box::new(executor) as Box<dyn Executor<StorageStats = Statistics>>
-    }
-}
 
 pub struct BatchTableScanExecutorBuilder<T: TxnStore + 'static> {
     _phantom: PhantomData<T>,
@@ -88,6 +47,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScan
             black_box(vec![]),
             black_box(false),
             black_box(false),
+            black_box(vec![]),
         )
         .unwrap();
         // There is a step of building scanner in the first `next()` which cost time,
@@ -119,10 +79,6 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorDAGHandlerBuilder
     }
 }
 
-pub type NormalTableScanNext1Bencher<T> =
-    scan_bencher::NormalScanNext1Bencher<NormalTableScanExecutorBuilder<T>>;
-pub type NormalTableScanNext1024Bencher<T> =
-    scan_bencher::NormalScanNext1024Bencher<NormalTableScanExecutorBuilder<T>>;
 pub type BatchTableScanNext1024Bencher<T> =
     scan_bencher::BatchScanNext1024Bencher<BatchTableScanExecutorBuilder<T>>;
 pub type TableScanDAGBencher<T> = scan_bencher::ScanDAGBencher<TableScanExecutorDAGBuilder<T>>;

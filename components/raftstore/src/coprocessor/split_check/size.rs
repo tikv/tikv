@@ -1,13 +1,13 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::marker::PhantomData;
-use std::mem;
 use std::sync::{Arc, Mutex};
 
 use engine_traits::{KvEngine, Range};
 use error_code::ErrorCodeExt;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
+use tikv_util::{box_try, debug, info, warn};
 
 use crate::store::{CasualMessage, CasualRouter};
 
@@ -76,7 +76,7 @@ where
             self.split_keys.pop();
         }
         if !self.split_keys.is_empty() {
-            mem::replace(&mut self.split_keys, vec![])
+            std::mem::take(&mut self.split_keys)
         } else {
             vec![]
         }
@@ -90,8 +90,6 @@ where
         Ok(box_try!(get_approximate_split_keys(
             engine,
             region,
-            self.split_size,
-            self.max_size,
             self.batch_split_limit,
         )))
     }
@@ -132,7 +130,7 @@ where
         let region_id = region.get_id();
         let region_size = match get_region_approximate_size(
             engine,
-            &region,
+            region,
             host.cfg.region_max_size.0 * host.cfg.batch_split_limit,
         ) {
             Ok(size) => size,
@@ -174,7 +172,7 @@ where
                 "threshold" => host.cfg.region_max_size.0,
             );
             // when meet large region use approximate way to produce split keys
-            if region_size >= host.cfg.region_max_size.0 * host.cfg.batch_split_limit * 2 {
+            if region_size >= host.cfg.region_max_size.0 * host.cfg.batch_split_limit {
                 policy = CheckPolicy::Approximate
             }
             // Need to check size.
@@ -205,36 +203,15 @@ pub fn get_region_approximate_size(
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
-    Ok(box_try!(db.get_range_approximate_size(
-        range,
-        region.get_id(),
-        large_threshold
-    )))
-}
-
-pub fn get_region_approximate_size_cf(
-    db: &impl KvEngine,
-    cfname: &str,
-    region: &Region,
-    large_threshold: u64,
-) -> Result<u64> {
-    let start_key = keys::enc_start_key(region);
-    let end_key = keys::enc_end_key(region);
-    let range = Range::new(&start_key, &end_key);
-    Ok(box_try!(db.get_range_approximate_size_cf(
-        cfname,
-        range,
-        region.get_id(),
-        large_threshold
-    )))
+    Ok(box_try!(
+        db.get_range_approximate_size(range, large_threshold)
+    ))
 }
 
 /// Get region approximate split keys based on default, write and lock cf.
 fn get_approximate_split_keys(
     db: &impl KvEngine,
     region: &Region,
-    split_size: u64,
-    max_size: u64,
     batch_split_limit: u64,
 ) -> Result<Vec<Vec<u8>>> {
     let start_key = keys::enc_start_key(region);
@@ -242,10 +219,7 @@ fn get_approximate_split_keys(
     let range = Range::new(&start_key, &end_key);
     Ok(box_try!(db.get_range_approximate_split_keys(
         range,
-        region.get_id(),
-        split_size,
-        max_size,
-        batch_split_limit
+        batch_split_limit as usize
     )))
 }
 
@@ -254,23 +228,18 @@ pub mod tests {
     use super::Checker;
     use crate::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
     use crate::store::{CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
-    use engine_rocks::properties::RangePropertiesCollectorFactory;
-    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions, Writable};
-    use engine_rocks::raw_util::{new_engine_opt, CFOptions};
-    use engine_rocks::{Compat, RocksEngine};
+    use collections::HashSet;
+    use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
+    use engine_test::kv::KvTestEngine;
     use engine_traits::CF_LOCK;
     use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
+    use engine_traits::{MiscExt, SyncMutable};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;
     use std::sync::mpsc;
-    use std::sync::Arc;
-    use std::{
-        iter::{self, FromIterator},
-        u64,
-    };
+    use std::{iter, u64};
     use tempfile::Builder;
-    use tikv_util::collections::HashSet;
     use tikv_util::config::ReadableSize;
     use tikv_util::worker::Runnable;
     use txn_types::Key;
@@ -278,7 +247,7 @@ pub mod tests {
     use super::*;
 
     fn must_split_at_impl(
-        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
         ignore_split_keys: bool,
@@ -310,7 +279,7 @@ pub mod tests {
     }
 
     pub fn must_split_at(
-        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
     ) {
@@ -321,22 +290,21 @@ pub mod tests {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
-        let cfs_with_range_prop = HashSet::from_iter(cfs_with_range_prop.iter().cloned());
+        let cfs_with_range_prop: HashSet<_> = cfs_with_range_prop.iter().cloned().collect();
         let mut cf_opt = ColumnFamilyOptions::new();
-        let f = Box::new(RangePropertiesCollectorFactory::default());
-        cf_opt.add_table_properties_collector_factory("tikv.range-collector", f);
+        cf_opt.set_no_range_properties(true);
 
         let cfs_opts = ALL_CFS
             .iter()
             .map(|cf| {
                 if cfs_with_range_prop.contains(cf) {
-                    CFOptions::new(cf, cf_opt.clone())
-                } else {
                     CFOptions::new(cf, ColumnFamilyOptions::new())
+                } else {
+                    CFOptions::new(cf, cf_opt.clone())
                 }
             })
             .collect();
-        let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
@@ -347,23 +315,20 @@ pub mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let mut cfg = Config::default();
-        cfg.region_max_size = ReadableSize(100);
-        cfg.region_split_size = ReadableSize(60);
-        cfg.batch_split_limit = 5;
+        let cfg = Config {
+            region_max_size: ReadableSize(100),
+            region_split_size: ReadableSize(60),
+            batch_split_limit: 5,
+            ..Default::default()
+        };
 
-        let mut runnable = SplitCheckRunner::new(
-            engine.c().clone(),
-            tx.clone(),
-            CoprocessorHost::new(tx),
-            cfg,
-        );
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
 
-        let cf_handle = engine.cf_handle(data_cf).unwrap();
         // so split key will be [z0006]
         for i in 0..7 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
-            engine.put_cf(&cf_handle, &s, &s).unwrap();
+            engine.put_cf(data_cf, &s, &s).unwrap();
         }
 
         runnable.run(SplitCheckTask::split_check(
@@ -381,12 +346,12 @@ pub mod tests {
 
         for i in 7..11 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
-            engine.put_cf(&cf_handle, &s, &s).unwrap();
+            engine.put_cf(data_cf, &s, &s).unwrap();
         }
 
         // Approximate size of memtable is inaccurate for small data,
         // we flush it to SST so we can use the size properties instead.
-        engine.flush_cf(&cf_handle, true).unwrap();
+        engine.flush_cf(data_cf, true).unwrap();
 
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
@@ -398,9 +363,9 @@ pub mod tests {
         // so split keys will be [z0006, z0012]
         for i in 11..19 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
-            engine.put_cf(&cf_handle, &s, &s).unwrap();
+            engine.put_cf(data_cf, &s, &s).unwrap();
         }
-        engine.flush_cf(&cf_handle, true).unwrap();
+        engine.flush_cf(data_cf, true).unwrap();
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             true,
@@ -410,11 +375,11 @@ pub mod tests {
 
         // for test batch_split_limit
         // so split kets will be [z0006, z0012, z0018, z0024, z0030]
-        for i in 19..51 {
+        for i in 19..41 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
-            engine.put_cf(&cf_handle, &s, &s).unwrap();
+            engine.put_cf(data_cf, &s, &s).unwrap();
         }
-        engine.flush_cf(&cf_handle, true).unwrap();
+        engine.flush_cf(data_cf, true).unwrap();
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             true,
@@ -452,21 +417,20 @@ pub mod tests {
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opt = ColumnFamilyOptions::new();
-        let f = Box::new(RangePropertiesCollectorFactory::default());
-        cf_opt.add_table_properties_collector_factory("tikv.range-collector", f);
+        cf_opt.set_no_range_properties(true);
 
         let cfs_opts = ALL_CFS
             .iter()
             .map(|cf| {
                 if cf != &CF_LOCK {
-                    CFOptions::new(cf, cf_opt.clone())
-                } else {
                     CFOptions::new(cf, ColumnFamilyOptions::new())
+                } else {
+                    CFOptions::new(cf, cf_opt.clone())
                 }
             })
             .collect();
 
-        let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
@@ -477,25 +441,25 @@ pub mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let mut cfg = Config::default();
-        cfg.region_max_size = ReadableSize(100);
-        cfg.region_split_size = ReadableSize(60);
-        cfg.batch_split_limit = 5;
+        let cfg = Config {
+            region_max_size: ReadableSize(100),
+            region_split_size: ReadableSize(60),
+            batch_split_limit: 5,
+            ..Default::default()
+        };
 
         let mut runnable = SplitCheckRunner::new(
-            engine.c().clone(),
+            engine.clone(),
             tx.clone(),
-            CoprocessorHost::new(tx.clone()),
-            cfg.clone(),
+            CoprocessorHost::new(tx.clone(), cfg.clone()),
         );
 
         for cf in LARGE_CFS {
-            let cf_handle = engine.cf_handle(cf).unwrap();
             for i in 0..7 {
                 let s = keys::data_key(format!("{:04}", i).as_bytes());
-                engine.put_cf(&cf_handle, &s, &s).unwrap();
+                engine.put_cf(cf, &s, &s).unwrap();
             }
-            engine.flush_cf(&cf_handle, true).unwrap();
+            engine.flush_cf(cf, true).unwrap();
         }
 
         for policy in &[CheckPolicy::Scan, CheckPolicy::Approximate] {
@@ -510,24 +474,23 @@ pub mod tests {
         // Reopen the engine and all cfs have range properties.
         let cfs_opts = ALL_CFS
             .iter()
-            .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
+            .map(|cf| {
+                let mut cf_opts = ColumnFamilyOptions::new();
+                cf_opts.set_no_range_properties(true);
+                CFOptions::new(cf, cf_opts)
+            })
             .collect();
-        let engine = Arc::new(new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap());
+        let engine = engine_test::kv::new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
 
-        let mut runnable = SplitCheckRunner::new(
-            engine.c().clone(),
-            tx.clone(),
-            CoprocessorHost::new(tx),
-            cfg,
-        );
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
 
         // Flush a sst of CF_LOCK with range properties.
-        let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
         for i in 7..15 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
-            engine.put_cf(&cf_handle, &s, &s).unwrap();
+            engine.put_cf(CF_LOCK, &s, &s).unwrap();
         }
-        engine.flush_cf(&cf_handle, true).unwrap();
+        engine.flush_cf(CF_LOCK, true).unwrap();
         for policy in &[CheckPolicy::Scan, CheckPolicy::Approximate] {
             runnable.run(SplitCheckTask::split_check(region.clone(), true, *policy));
             // Ignore the split keys. Only check whether it can split or not.
@@ -542,12 +505,12 @@ pub mod tests {
         let mut ctx = ObserverContext::new(&region);
         loop {
             let data = KeyEntry::new(b"zxxxx".to_vec(), 0, 4, CF_WRITE);
-            if SplitChecker::<RocksEngine>::on_kv(&mut checker, &mut ctx, &data) {
+            if SplitChecker::<KvTestEngine>::on_kv(&mut checker, &mut ctx, &data) {
                 break;
             }
         }
 
-        assert!(!SplitChecker::<RocksEngine>::split_keys(&mut checker).is_empty());
+        assert!(!SplitChecker::<KvTestEngine>::split_keys(&mut checker).is_empty());
     }
 
     #[test]
@@ -557,12 +520,12 @@ pub mod tests {
         let mut ctx = ObserverContext::new(&region);
         for _ in 0..2 {
             let data = KeyEntry::new(b"zxxxx".to_vec(), 0, 5, CF_WRITE);
-            if SplitChecker::<RocksEngine>::on_kv(&mut checker, &mut ctx, &data) {
+            if SplitChecker::<KvTestEngine>::on_kv(&mut checker, &mut ctx, &data) {
                 break;
             }
         }
 
-        assert!(!SplitChecker::<RocksEngine>::split_keys(&mut checker).is_empty());
+        assert!(!SplitChecker::<KvTestEngine>::split_keys(&mut checker).is_empty());
     }
 
     fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Region {
@@ -588,31 +551,30 @@ pub mod tests {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
+        cf_opts.set_no_range_properties(true);
 
         let cfs_opts = LARGE_CFS
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let engine =
-            Arc::new(engine_rocks::raw_util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
+        let engine = engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
 
         let region = make_region(1, vec![], vec![]);
         assert_eq!(
-            get_approximate_split_keys(engine.c(), &region, 3, 5, 1).is_err(),
+            get_approximate_split_keys(&engine, &region, 1).is_err(),
             true
         );
 
-        let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
         let mut big_value = Vec::with_capacity(256);
         big_value.extend(iter::repeat(b'v').take(256));
         for i in 0..100 {
             let k = format!("key_{:03}", i).into_bytes();
             let k = keys::data_key(Key::from_raw(&k).as_encoded());
-            engine.put_cf(cf_handle, &k, &big_value).unwrap();
-            engine.flush_cf(cf_handle, true).unwrap();
+            engine.put_cf(CF_DEFAULT, &k, &big_value).unwrap();
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
         }
         assert_eq!(
-            get_approximate_split_keys(engine.c(), &region, 3, 5, 1).is_err(),
+            get_approximate_split_keys(&engine, &region, 1).is_err(),
             true
         );
     }
@@ -627,32 +589,26 @@ pub mod tests {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let f = Box::new(RangePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
         let cfs_opts = LARGE_CFS
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let engine =
-            Arc::new(engine_rocks::raw_util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
+        let engine = engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
 
-        let cf_handle = engine.cf_handle(data_cf).unwrap();
         let mut big_value = Vec::with_capacity(256);
         big_value.extend(iter::repeat(b'v').take(256));
-
-        // total size for one key and value
-        const ENTRY_SIZE: u64 = 256 + 9;
 
         for i in 0..4 {
             let k = format!("key_{:03}", i).into_bytes();
             let k = keys::data_key(Key::from_raw(&k).as_encoded());
-            engine.put_cf(cf_handle, &k, &big_value).unwrap();
+            engine.put_cf(data_cf, &k, &big_value).unwrap();
             // Flush for every key so that we can know the exact middle key.
-            engine.flush_cf(cf_handle, true).unwrap();
+            engine.flush_cf(data_cf, true).unwrap();
         }
         let region = make_region(1, vec![], vec![]);
-        let split_keys =
-            get_approximate_split_keys(engine.c(), &region, 3 * ENTRY_SIZE, 5 * ENTRY_SIZE, 1)
+
+        assert_eq!(
+            get_approximate_split_keys(&engine, &region, 0)
                 .unwrap()
                 .into_iter()
                 .map(|k| {
@@ -660,76 +616,73 @@ pub mod tests {
                         .into_raw()
                         .unwrap()
                 })
-                .collect::<Vec<Vec<u8>>>();
-
-        assert_eq!(split_keys.is_empty(), true);
-
+                .next()
+                .is_none(),
+            true
+        );
         for i in 4..5 {
             let k = format!("key_{:03}", i).into_bytes();
             let k = keys::data_key(Key::from_raw(&k).as_encoded());
-            engine.put_cf(cf_handle, &k, &big_value).unwrap();
+            engine.put_cf(data_cf, &k, &big_value).unwrap();
             // Flush for every key so that we can know the exact middle key.
-            engine.flush_cf(cf_handle, true).unwrap();
+            engine.flush_cf(data_cf, true).unwrap();
         }
-        let split_keys =
-            get_approximate_split_keys(engine.c(), &region, 3 * ENTRY_SIZE, 5 * ENTRY_SIZE, 5)
-                .unwrap()
-                .into_iter()
-                .map(|k| {
-                    Key::from_encoded_slice(keys::origin_key(&k))
-                        .into_raw()
-                        .unwrap()
-                })
-                .collect::<Vec<Vec<u8>>>();
+        let split_keys = get_approximate_split_keys(&engine, &region, 1)
+            .unwrap()
+            .into_iter()
+            .map(|k| {
+                Key::from_encoded_slice(keys::origin_key(&k))
+                    .into_raw()
+                    .unwrap()
+            })
+            .collect::<Vec<Vec<u8>>>();
 
         assert_eq!(split_keys, vec![b"key_002".to_vec()]);
 
         for i in 5..10 {
             let k = format!("key_{:03}", i).into_bytes();
             let k = keys::data_key(Key::from_raw(&k).as_encoded());
-            engine.put_cf(cf_handle, &k, &big_value).unwrap();
+            engine.put_cf(data_cf, &k, &big_value).unwrap();
             // Flush for every key so that we can know the exact middle key.
-            engine.flush_cf(cf_handle, true).unwrap();
+            engine.flush_cf(data_cf, true).unwrap();
         }
-        let split_keys =
-            get_approximate_split_keys(engine.c(), &region, 3 * ENTRY_SIZE, 5 * ENTRY_SIZE, 5)
-                .unwrap()
-                .into_iter()
-                .map(|k| {
-                    Key::from_encoded_slice(keys::origin_key(&k))
-                        .into_raw()
-                        .unwrap()
-                })
-                .collect::<Vec<Vec<u8>>>();
+        let split_keys = get_approximate_split_keys(&engine, &region, 2)
+            .unwrap()
+            .into_iter()
+            .map(|k| {
+                Key::from_encoded_slice(keys::origin_key(&k))
+                    .into_raw()
+                    .unwrap()
+            })
+            .collect::<Vec<Vec<u8>>>();
 
-        assert_eq!(split_keys, vec![b"key_002".to_vec(), b"key_005".to_vec()]);
+        assert_eq!(split_keys, vec![b"key_003".to_vec(), b"key_006".to_vec()]);
 
         for i in 10..20 {
             let k = format!("key_{:03}", i).into_bytes();
             let k = keys::data_key(Key::from_raw(&k).as_encoded());
-            engine.put_cf(cf_handle, &k, &big_value).unwrap();
+            engine.put_cf(data_cf, &k, &big_value).unwrap();
             // Flush for every key so that we can know the exact middle key.
-            engine.flush_cf(cf_handle, true).unwrap();
+            engine.flush_cf(data_cf, true).unwrap();
         }
-        let split_keys =
-            get_approximate_split_keys(engine.c(), &region, 3 * ENTRY_SIZE, 5 * ENTRY_SIZE, 5)
-                .unwrap()
-                .into_iter()
-                .map(|k| {
-                    Key::from_encoded_slice(keys::origin_key(&k))
-                        .into_raw()
-                        .unwrap()
-                })
-                .collect::<Vec<Vec<u8>>>();
+        let split_keys = get_approximate_split_keys(&engine, &region, 5)
+            .unwrap()
+            .into_iter()
+            .map(|k| {
+                Key::from_encoded_slice(keys::origin_key(&k))
+                    .into_raw()
+                    .unwrap()
+            })
+            .collect::<Vec<Vec<u8>>>();
 
         assert_eq!(
             split_keys,
             vec![
-                b"key_002".to_vec(),
-                b"key_005".to_vec(),
-                b"key_008".to_vec(),
-                b"key_011".to_vec(),
-                b"key_014".to_vec(),
+                b"key_003".to_vec(),
+                b"key_006".to_vec(),
+                b"key_010".to_vec(),
+                b"key_013".to_vec(),
+                b"key_016".to_vec(),
             ]
         );
     }
@@ -751,14 +704,11 @@ pub mod tests {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let f = Box::new(RangePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.range-collector", f);
         let cfs_opts = LARGE_CFS
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db =
-            Arc::new(engine_rocks::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
         let cf_size = 2 + 1024 + 2 + 2048 + 2 + 4096;
@@ -767,19 +717,14 @@ pub mod tests {
                 let k1 = keys::data_key(key.as_bytes());
                 let v1 = vec![0; vlen as usize];
                 assert_eq!(k1.len(), 2);
-                let cf = db.cf_handle(cfname).unwrap();
-                db.put_cf(cf, &k1, &v1).unwrap();
-                db.flush_cf(cf, true).unwrap();
+                db.put_cf(cfname, &k1, &v1).unwrap();
+                db.flush_cf(cfname, true).unwrap();
             }
         }
 
         let region = make_region(1, vec![], vec![]);
-        let size = get_region_approximate_size(db.c(), &region, 0).unwrap();
+        let size = get_region_approximate_size(&db, &region, 0).unwrap();
         assert_eq!(size, cf_size * LARGE_CFS.len() as u64);
-        for cfname in LARGE_CFS {
-            let size = get_region_approximate_size_cf(db.c(), cfname, &region, 0).unwrap();
-            assert_eq!(size, cf_size);
-        }
     }
 
     #[test]
@@ -792,14 +737,11 @@ pub mod tests {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_disable_auto_compactions(true);
-        let f = Box::new(RangePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.range-collector", f);
         let cfs_opts = LARGE_CFS
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db =
-            Arc::new(engine_rocks::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let mut cf_size = 0;
         for i in 0..100 {
@@ -807,18 +749,17 @@ pub mod tests {
             let k2 = keys::data_key(format!("k9{}", i).as_bytes());
             let v = vec![0; 4096];
             cf_size += k1.len() + k2.len() + v.len() * 2;
-            let cf = db.cf_handle("default").unwrap();
-            db.put_cf(cf, &k1, &v).unwrap();
-            db.put_cf(cf, &k2, &v).unwrap();
-            db.flush_cf(cf, true).unwrap();
+            db.put_cf(CF_DEFAULT, &k1, &v).unwrap();
+            db.put_cf(CF_DEFAULT, &k2, &v).unwrap();
+            db.flush_cf(CF_DEFAULT, true).unwrap();
         }
 
         let region = make_region(1, vec![], vec![]);
-        let size = get_region_approximate_size(db.c(), &region, 0).unwrap();
+        let size = get_region_approximate_size(&db, &region, 0).unwrap();
         assert_eq!(size, cf_size as u64);
 
         let region = make_region(1, b"k2".to_vec(), b"k8".to_vec());
-        let size = get_region_approximate_size(db.c(), &region, 0).unwrap();
+        let size = get_region_approximate_size(&db, &region, 0).unwrap();
         assert_eq!(size, 0);
     }
 
@@ -834,32 +775,28 @@ pub mod tests {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_disable_auto_compactions(true);
-        let f = Box::new(RangePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.range-collector", f);
         let cfs_opts = LARGE_CFS
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db =
-            Arc::new(engine_rocks::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let mut cf_size = 0;
-        let cf = db.cf_handle("default").unwrap();
         for i in 0..10 {
             let v = vec![0; 4096];
             for j in 10000 * i..10000 * (i + 1) {
                 let k1 = keys::data_key(format!("k1{:0100}", j).as_bytes());
                 let k2 = keys::data_key(format!("k9{:0100}", j).as_bytes());
                 cf_size += k1.len() + k2.len() + v.len() * 2;
-                db.put_cf(cf, &k1, &v).unwrap();
-                db.put_cf(cf, &k2, &v).unwrap();
+                db.put_cf(CF_DEFAULT, &k1, &v).unwrap();
+                db.put_cf(CF_DEFAULT, &k2, &v).unwrap();
             }
-            db.flush_cf(cf, true).unwrap();
+            db.flush_cf(CF_DEFAULT, true).unwrap();
         }
 
         let region = make_region(1, vec![], vec![]);
         b.iter(|| {
-            let size = get_region_approximate_size(db.c(), &region, 0).unwrap();
+            let size = get_region_approximate_size(&db, &region, 0).unwrap();
             assert_eq!(size, cf_size as u64);
         })
     }

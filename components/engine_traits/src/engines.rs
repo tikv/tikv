@@ -1,10 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use raft_engine::RaftEngine;
-
 use crate::engine::KvEngine;
 use crate::errors::Result;
 use crate::options::WriteOptions;
+use crate::raft_engine::RaftEngine;
+use crate::write_batch::WriteBatch;
 
 #[derive(Clone, Debug)]
 pub struct Engines<K, R> {
@@ -21,11 +21,11 @@ impl<K: KvEngine, R: RaftEngine> Engines<K, R> {
     }
 
     pub fn write_kv(&self, wb: &K::WriteBatch) -> Result<()> {
-        self.kv.write(wb)
+        wb.write()
     }
 
     pub fn write_kv_opt(&self, wb: &K::WriteBatch, opts: &WriteOptions) -> Result<()> {
-        self.kv.write_opt(wb, opts)
+        wb.write_opt(opts)
     }
 
     pub fn sync_kv(&self) -> Result<()> {

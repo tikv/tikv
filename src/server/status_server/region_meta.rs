@@ -2,7 +2,7 @@
 
 use kvproto::metapb::PeerRole;
 use raft::{Progress, ProgressState, StateRole};
-use raftstore::store::AbstractPeer;
+use raftstore::store::{AbstractPeer, GroupState};
 use std::collections::HashMap;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -105,11 +105,12 @@ impl<'a> From<raft::Status<'a>> for RaftStatus {
         let mut voters = HashMap::new();
         let mut learners = HashMap::new();
         if let Some(progress) = status.progress {
-            for (id, voter) in progress.voters() {
-                voters.insert(*id, RaftProgress::new(voter));
-            }
-            for (id, learner) in progress.learners() {
-                learners.insert(*id, RaftProgress::new(learner));
+            for (id, pr) in progress.iter() {
+                if progress.conf().voters().contains(*id) {
+                    voters.insert(*id, RaftProgress::new(pr));
+                } else {
+                    learners.insert(*id, RaftProgress::new(pr));
+                }
             }
         }
         Self {
@@ -171,7 +172,6 @@ pub struct RaftTruncatedState {
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct RaftApplyState {
     pub applied_index: u64,
-    pub last_commit_index: u64,
     pub commit_index: u64,
     pub commit_term: u64,
     pub truncated_state: RaftTruncatedState,
@@ -180,6 +180,7 @@ pub struct RaftApplyState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegionMeta {
     pub id: u64,
+    pub group_state: GroupState,
     pub start_key: Vec<u8>,
     pub end_key: Vec<u8>,
     pub epoch: Epoch,
@@ -208,6 +209,7 @@ impl RegionMeta {
 
         Self {
             id: region.get_id(),
+            group_state: abstract_peer.group_state(),
             start_key: start_key.to_owned(),
             end_key: end_key.to_owned(),
             epoch: Epoch {
@@ -225,7 +227,6 @@ impl RegionMeta {
             raft_status: abstract_peer.raft_status().into(),
             raft_apply: RaftApplyState {
                 applied_index: apply_state.get_applied_index(),
-                last_commit_index: apply_state.get_last_commit_index(),
                 commit_index: apply_state.get_commit_index(),
                 commit_term: apply_state.get_commit_term(),
                 truncated_state: RaftTruncatedState {

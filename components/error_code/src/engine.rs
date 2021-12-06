@@ -9,6 +9,6 @@ define_error_codes!(
     IO => ("IO", "", ""),
     CF_NAME => ("CFName", "", ""),
     CODEC => ("Codec", "", ""),
-
-    UNKNOWN => ("Unknown", "", "")
+    DATALOSS => ("DataLoss", "", ""),
+    DATACOMPACTED => ("DataCompacted", "", "")
 );

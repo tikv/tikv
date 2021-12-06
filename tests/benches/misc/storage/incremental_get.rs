@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use test::{black_box, Bencher};
 
 use engine_rocks::RocksSnapshot;
@@ -34,12 +36,13 @@ fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
     db.compact_range_cf(db.cf_handle("default").unwrap(), None, None);
     db.compact_range_cf(db.cf_handle("lock").unwrap(), None, None);
 
-    let snapshot = engine.snapshot(&Context::default()).unwrap();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
     let store = SnapshotStore::new(
         snapshot,
         10.into(),
         IsolationLevel::Si,
         true,
+        Default::default(),
         Default::default(),
         false,
     );

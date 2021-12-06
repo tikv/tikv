@@ -37,9 +37,14 @@ pub use checksum::checksum_crc64_xor;
 use crate::storage::mvcc::TimeStamp;
 use crate::storage::Statistics;
 use async_trait::async_trait;
+use engine_rocks::PerfLevel;
 use kvproto::{coprocessor as coppb, kvrpcpb};
+use lazy_static::lazy_static;
 use metrics::ReqTag;
 use rand::prelude::*;
+use std::sync::Arc;
+use tidb_query_common::execute_stats::ExecSummary;
+use tikv_alloc::{mem_trace, Id, MemoryTrace, MemoryTraceGuard};
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
 use txn_types::TsSet;
@@ -54,7 +59,7 @@ type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 #[async_trait]
 pub trait RequestHandler: Send {
     /// Processes current request and produces a response.
-    async fn handle_request(&mut self) -> Result<coppb::Response> {
+    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<coppb::Response>> {
         panic!("unary request is not supported for this handler");
     }
 
@@ -68,6 +73,11 @@ pub trait RequestHandler: Send {
         // Do nothing by default
     }
 
+    /// Collects scan executor time in this request handler so far.
+    fn collect_scan_summary(&mut self, _dest: &mut ExecSummary) {
+        // Do nothing by default
+    }
+
     fn into_boxed(self) -> Box<dyn RequestHandler>
     where
         Self: 'static + Sized,
@@ -77,7 +87,7 @@ pub trait RequestHandler: Send {
 }
 
 type RequestHandlerBuilder<Snap> =
-    Box<dyn for<'a> FnOnce(Snap, &'a ReqContext) -> Result<Box<dyn RequestHandler>> + Send>;
+    Box<dyn for<'a> FnOnce(Snap, &ReqContext) -> Result<Box<dyn RequestHandler>> + Send>;
 
 /// Encapsulate the `kvrpcpb::Context` to provide some extra properties.
 #[derive(Debug, Clone)]
@@ -88,11 +98,8 @@ pub struct ReqContext {
     /// The rpc context carried in the request
     pub context: kvrpcpb::Context,
 
-    /// The first range of the request
-    pub first_range: Option<coppb::KeyRange>,
-
-    /// The length of the range
-    pub ranges_len: usize,
+    /// Scan ranges of this request
+    pub ranges: Vec<coppb::KeyRange>,
 
     /// The deadline of the request
     pub deadline: Deadline,
@@ -106,8 +113,13 @@ pub struct ReqContext {
     /// The transaction start_ts of the request
     pub txn_start_ts: TimeStamp,
 
-    /// The set of timestamps of locks that can be bypassed during the reading.
+    /// The set of timestamps of locks that can be bypassed during the reading
+    /// because either they will be rolled back or their commit_ts > read request's start_ts.
     pub bypass_locks: TsSet,
+
+    /// The set of timestamps of locks that value in it can be accessed during the reading
+    /// because they will be committed and their commit_ts <= read request's start_ts.
+    pub access_locks: TsSet,
 
     /// The data version to match. If it matches the underlying data version,
     /// request will not be processed (i.e. cache hit).
@@ -120,21 +132,26 @@ pub struct ReqContext {
 
     /// The upper bound key in ranges of the request
     pub upper_bound: Vec<u8>,
+
+    /// Perf level
+    pub perf_level: PerfLevel,
 }
 
 impl ReqContext {
     pub fn new(
         tag: ReqTag,
         mut context: kvrpcpb::Context,
-        ranges: &[coppb::KeyRange],
+        ranges: Vec<coppb::KeyRange>,
         max_handle_duration: Duration,
         peer: Option<String>,
         is_desc_scan: Option<bool>,
         txn_start_ts: TimeStamp,
         cache_match_version: Option<u64>,
+        perf_level: PerfLevel,
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
+        let access_locks = TsSet::from_u64s(context.take_committed_locks());
         let lower_bound = match ranges.first().as_ref() {
             Some(range) => range.start.clone(),
             None => vec![],
@@ -150,12 +167,13 @@ impl ReqContext {
             peer,
             is_desc_scan,
             txn_start_ts,
-            first_range: ranges.first().cloned(),
-            ranges_len: ranges.len(),
+            ranges,
             bypass_locks,
+            access_locks,
             cache_match_version,
             lower_bound,
             upper_bound,
+            perf_level,
         }
     }
 
@@ -163,13 +181,14 @@ impl ReqContext {
     pub fn default_for_test() -> Self {
         Self::new(
             ReqTag::test,
-            kvrpcpb::Context::default(),
-            &[],
+            Default::default(),
+            Vec::new(),
             Duration::from_secs(100),
             None,
             None,
             TimeStamp::max(),
             None,
+            PerfLevel::EnableCount,
         )
     }
 
@@ -193,6 +212,12 @@ impl ReqContext {
             base
         }
     }
+}
+
+lazy_static! {
+    pub static ref MEMTRACE_ROOT: Arc<MemoryTrace> = mem_trace!(coprocessor, [analyze]);
+    pub static ref MEMTRACE_ANALYZE: Arc<MemoryTrace> =
+        MEMTRACE_ROOT.sub_trace(Id::Name("analyze"));
 }
 
 #[cfg(test)]

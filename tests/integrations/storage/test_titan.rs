@@ -12,8 +12,8 @@ use engine_rocks::util::new_temp_engine;
 use engine_rocks::RocksEngine;
 use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
 use engine_traits::{
-    CompactExt, Engines, KvEngine, MiscExt, SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT,
-    CF_WRITE,
+    CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt, Range, SstWriter, SstWriterBuilder,
+    ALL_CFS, CF_DEFAULT, CF_WRITE,
 };
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
@@ -39,21 +39,25 @@ fn test_turnoff_titan() {
 
     let size = 5;
     for i in 0..size {
-        assert!(cluster
-            .put(
-                format!("k{:02}0", i).as_bytes(),
-                format!("v{}", i).as_bytes(),
-            )
-            .is_ok());
+        assert!(
+            cluster
+                .put(
+                    format!("k{:02}0", i).as_bytes(),
+                    format!("v{}", i).as_bytes(),
+                )
+                .is_ok()
+        );
     }
     cluster.must_flush_cf(CF_DEFAULT, true);
     for i in 0..size {
-        assert!(cluster
-            .put(
-                format!("k{:02}1", i).as_bytes(),
-                format!("v{}", i).as_bytes(),
-            )
-            .is_ok());
+        assert!(
+            cluster
+                .put(
+                    format!("k{:02}1", i).as_bytes(),
+                    format!("v{}", i).as_bytes(),
+                )
+                .is_ok()
+        );
     }
     cluster.must_flush_cf(CF_DEFAULT, true);
     for i in cluster.get_node_ids().into_iter() {
@@ -90,8 +94,7 @@ fn test_turnoff_titan() {
     for i in cluster.get_node_ids().into_iter() {
         let db = cluster.get_engine(i);
         let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
-        let mut opt = Vec::new();
-        opt.push(("blob_run_mode", "kFallback"));
+        let opt = vec![("blob_run_mode", "kFallback")];
         assert!(db.set_options_cf(handle, &opt).is_ok());
     }
     cluster.compact_data();
@@ -160,7 +163,9 @@ fn test_delete_files_in_range_for_titan() {
     cfg.rocksdb.defaultcf.titan.sample_ratio = 1.0;
     cfg.rocksdb.defaultcf.titan.min_blob_size = ReadableSize(0);
     let kv_db_opts = cfg.rocksdb.build_opt();
-    let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
+    let kv_cfs_opts = cfg
+        .rocksdb
+        .build_cf_opts(&cache, None, cfg.storage.api_version());
 
     let raft_path = path.path().join(Path::new("titan"));
     let engines = Engines::new(
@@ -307,17 +312,32 @@ fn test_delete_files_in_range_for_titan() {
     // so we set key_only for Titan.
     engines
         .kv
-        .delete_all_files_in_range(
-            &data_key(Key::from_raw(b"a").as_encoded()),
-            &data_key(Key::from_raw(b"b").as_encoded()),
+        .delete_all_in_range(
+            DeleteStrategy::DeleteFiles,
+            &[Range::new(
+                &data_key(Key::from_raw(b"a").as_encoded()),
+                &data_key(Key::from_raw(b"b").as_encoded()),
+            )],
         )
         .unwrap();
     engines
         .kv
         .delete_all_in_range(
-            &data_key(Key::from_raw(b"a").as_encoded()),
-            &data_key(Key::from_raw(b"b").as_encoded()),
-            false,
+            DeleteStrategy::DeleteByKey,
+            &[Range::new(
+                &data_key(Key::from_raw(b"a").as_encoded()),
+                &data_key(Key::from_raw(b"b").as_encoded()),
+            )],
+        )
+        .unwrap();
+    engines
+        .kv
+        .delete_all_in_range(
+            DeleteStrategy::DeleteBlobs,
+            &[Range::new(
+                &data_key(Key::from_raw(b"a").as_encoded()),
+                &data_key(Key::from_raw(b"b").as_encoded()),
+            )],
         )
         .unwrap();
 
@@ -389,8 +409,8 @@ fn test_delete_files_in_range_for_titan() {
     r.mut_peers().push(Peer::default());
     r.set_start_key(b"a".to_vec());
     r.set_end_key(b"z".to_vec());
-    let snapshot = RegionSnapshot::<RocksSnapshot>::from_raw(engines1.kv.clone(), r);
-    let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
+    let snapshot = RegionSnapshot::<RocksSnapshot>::from_raw(engines1.kv, r);
+    let mut scanner = ScannerBuilder::new(snapshot, 10.into())
         .range(Some(Key::from_raw(b"a")), None)
         .build()
         .unwrap();

@@ -1,9 +1,16 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::cf_defs::CfName;
 use crate::errors::Result;
 use crate::iterable::Iterable;
+use kvproto::import_sstpb::SstMeta;
 use std::path::PathBuf;
+
+#[derive(Clone, Debug)]
+pub struct SSTMetaInfo {
+    pub total_bytes: u64,
+    pub total_kvs: u64,
+    pub meta: SstMeta,
+}
 
 pub trait SstExt: Sized {
     type SstReader: SstReader;
@@ -20,7 +27,7 @@ pub trait SstReader: Iterable + Sized {
 }
 
 /// SstWriter is used to create sst files that can be added to database later.
-pub trait SstWriter {
+pub trait SstWriter: Send {
     type ExternalSstFileInfo: ExternalSstFileInfo;
     type ExternalSstFileReader: std::io::Read;
 
@@ -62,7 +69,7 @@ where
     fn set_db(self, db: &E) -> Self;
 
     /// Set CF for the builder. The builder may need some config from the CF.
-    fn set_cf(self, cf: CfName) -> Self;
+    fn set_cf(self, cf: &str) -> Self;
 
     /// Set it to true, the builder builds a in-memory SST builder.
     fn set_in_memory(self, in_memory: bool) -> Self;

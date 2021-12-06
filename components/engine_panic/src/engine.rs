@@ -55,6 +55,9 @@ impl SyncMutable for PanicEngine {
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         panic!()
     }
+    fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        panic!()
+    }
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         panic!()
     }

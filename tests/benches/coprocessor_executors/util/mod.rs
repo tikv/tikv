@@ -49,6 +49,7 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
         64,
         false,
         false,
+        None,
     )
     .build()
     .unwrap()

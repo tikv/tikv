@@ -2,8 +2,8 @@
 
 use std::sync::atomic::*;
 use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 use std::time::Duration;
-use std::{mem, thread};
 
 use kvproto::metapb::{Peer, Region};
 use raft::eraftpb::MessageType;
@@ -51,7 +51,7 @@ fn stale_read_during_splitting(right_derive: bool) {
     fail::cfg(apply_split, "pause").unwrap();
 
     // Split the first region.
-    cluster.split_region(&region1, key2, Callback::Write(Box::new(move |_| {})));
+    cluster.split_region(&region1, key2, Callback::write(Box::new(move |_| {})));
 
     // Sleep for a while.
     // The TiKVs that have followers of the old region will elected a leader
@@ -268,7 +268,7 @@ fn test_stale_read_during_merging() {
 
     //             merge into
     // region1000 ------------> region1
-    cluster.try_merge(region1000.get_id(), region1.get_id());
+    cluster.must_try_merge(region1000.get_id(), region1.get_id());
 
     // Pause the apply workers except for the peer 4.
     let apply_commit_merge = "apply_before_commit_merge_except_1_4";
@@ -325,19 +325,24 @@ fn test_read_index_when_transfer_leader_2() {
 
     // Increase the election tick to make this test case running reliably.
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
+    // Stop log compaction to transfer leader with filter easier.
+    configure_for_request_snapshot(&mut cluster);
     let max_lease = Duration::from_secs(2);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
 
+    // Add peer 2 and 3 and wait them to apply it.
     cluster.pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k0", b"v0");
     cluster.pd_client.must_add_peer(r1, new_peer(2, 2));
     cluster.pd_client.must_add_peer(r1, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
     must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 
     // Put and test again to ensure that peer 3 get the latest writes by message append
     // instead of snapshot, so that transfer leader to peer 3 can 100% success.
     cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     let r1 = cluster.get_region(b"k1");
     let old_leader = cluster.leader_of_region(r1.get_id()).unwrap();
@@ -388,7 +393,7 @@ fn test_read_index_when_transfer_leader_2() {
     let router = cluster.sim.wl().get_router(old_leader.get_id()).unwrap();
     let mut reserved_msgs = Vec::new();
     'LOOP: loop {
-        for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
+        for raft_msg in std::mem::take(&mut *dropped_msgs.lock().unwrap()) {
             let msg_type = raft_msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgHeartbeatResponse || msg_type == MessageType::MsgAppend {
                 reserved_msgs.push(raft_msg);

@@ -65,7 +65,7 @@ impl<T: Storage> RangesScanner<T> {
 
     /// Fetches next row.
     // Note: This is not implemented over `Iterator` since it can fail.
-    // TODO: Change to use reference to avoid alloation and copy.
+    // TODO: Change to use reference to avoid allocation and copy.
     pub fn next(&mut self) -> Result<Option<OwnedKvPair>, StorageError> {
         loop {
             let range = self.ranges_iter.next();

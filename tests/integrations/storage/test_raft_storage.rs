@@ -3,6 +3,8 @@
 use std::thread;
 use std::time::Duration;
 
+use collections::HashMap;
+use error_code::{raftstore::STALE_COMMAND, ErrorCodeExt};
 use kvproto::kvrpcpb::Context;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
@@ -13,7 +15,6 @@ use tikv::storage::kv::{Engine, Error as KvError, ErrorInner as KvErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::{Error as StorageError, ErrorInner as StorageErrorInner};
-use tikv_util::collections::HashMap;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Mutation, TimeStamp};
 
@@ -28,8 +29,12 @@ fn new_raft_storage() -> (
 #[test]
 fn test_raft_storage() {
     let (_cluster, storage, mut ctx) = new_raft_storage();
-    let key = Key::from_raw(b"key");
-    assert_eq!(storage.get(ctx.clone(), &key, 5).unwrap(), None);
+    let raw_key = b"key".to_vec();
+    let key = Key::from_raw(&raw_key);
+    assert_eq!(
+        storage.get(ctx.clone(), raw_key.clone(), 5).unwrap().0,
+        None
+    );
     storage
         .prewrite(
             ctx.clone(),
@@ -42,17 +47,25 @@ fn test_raft_storage() {
         .commit(ctx.clone(), vec![key.clone()], 10, 15)
         .unwrap();
     assert_eq!(
-        storage.get(ctx.clone(), &key, 20).unwrap().unwrap(),
+        storage
+            .get(ctx.clone(), raw_key.clone(), 20)
+            .unwrap()
+            .0
+            .unwrap(),
         b"value".to_vec()
     );
 
     // Test wrong region id.
     let region_id = ctx.get_region_id();
     ctx.set_region_id(region_id + 1);
-    assert!(storage.get(ctx.clone(), &key, 20).is_err());
-    assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
+    assert!(storage.get(ctx.clone(), raw_key.clone(), 20).is_err());
+    assert!(
+        storage
+            .batch_get(ctx.clone(), &[raw_key.clone()], 20)
+            .is_err()
+    );
     assert!(storage.scan(ctx.clone(), key, None, 1, false, 20).is_err());
-    assert!(storage.scan_locks(ctx, 20, None, 100).is_err());
+    assert!(storage.scan_locks(ctx, 20, None, None, 100).is_err());
 }
 
 #[test]
@@ -115,8 +128,12 @@ fn test_raft_storage_rollback_before_prewrite() {
 fn test_raft_storage_store_not_match() {
     let (_cluster, storage, mut ctx) = new_raft_storage();
 
-    let key = Key::from_raw(b"key");
-    assert_eq!(storage.get(ctx.clone(), &key, 5).unwrap(), None);
+    let raw_key = b"key".to_vec();
+    let key = Key::from_raw(&raw_key);
+    assert_eq!(
+        storage.get(ctx.clone(), raw_key.clone(), 5).unwrap().0,
+        None
+    );
     storage
         .prewrite(
             ctx.clone(),
@@ -129,7 +146,11 @@ fn test_raft_storage_store_not_match() {
         .commit(ctx.clone(), vec![key.clone()], 10, 15)
         .unwrap();
     assert_eq!(
-        storage.get(ctx.clone(), &key, 20).unwrap().unwrap(),
+        storage
+            .get(ctx.clone(), raw_key.clone(), 20)
+            .unwrap()
+            .0
+            .unwrap(),
         b"value".to_vec()
     );
 
@@ -139,8 +160,8 @@ fn test_raft_storage_store_not_match() {
 
     peer.set_store_id(store_id + 1);
     ctx.set_peer(peer);
-    assert!(storage.get(ctx.clone(), &key, 20).is_err());
-    let res = storage.get(ctx.clone(), &key, 20);
+    assert!(storage.get(ctx.clone(), raw_key.clone(), 20).is_err());
+    let res = storage.get(ctx.clone(), raw_key.clone(), 20);
     if let StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
         box KvErrorInner::Request(ref e),
     ))))) = *res.as_ref().err().unwrap()
@@ -149,9 +170,13 @@ fn test_raft_storage_store_not_match() {
     } else {
         panic!("expect store_not_match, but got {:?}", res);
     }
-    assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
+    assert!(
+        storage
+            .batch_get(ctx.clone(), &[raw_key.clone()], 20)
+            .is_err()
+    );
     assert!(storage.scan(ctx.clone(), key, None, 1, false, 20).is_err());
-    assert!(storage.scan_locks(ctx, 20, None, 100).is_err());
+    assert!(storage.scan_locks(ctx, 20, None, None, 100).is_err());
 }
 
 #[test]
@@ -226,17 +251,28 @@ fn check_data<E: Engine>(
 ) {
     let ts = ts.into();
     for (k, v) in test_data {
-        let mut region = cluster.get_region(k);
-        let leader = cluster.leader_of_region(region.get_id()).unwrap();
-        let leader_id = leader.get_store_id();
-        let mut ctx = Context::default();
-        ctx.set_region_id(region.get_id());
-        ctx.set_region_epoch(region.take_region_epoch());
-        ctx.set_peer(leader);
+        let mut retry_times = 0;
+        let value = loop {
+            let mut region = cluster.get_region(k);
+            let leader = cluster.leader_of_region(region.get_id()).unwrap();
+            let leader_id = leader.get_store_id();
+            let mut ctx = Context::default();
+            ctx.set_region_id(region.get_id());
+            ctx.set_region_epoch(region.take_region_epoch());
+            ctx.set_peer(leader);
 
-        let value = storages[&leader_id]
-            .get(ctx, &Key::from_raw(k), ts)
-            .unwrap();
+            match storages[&leader_id].get(ctx, k.to_owned(), ts) {
+                Ok(v) => break v.0,
+                // Retry if meeting `StaleCommand` error.
+                Err(e) if e.error_code() == STALE_COMMAND => {}
+                Err(e) => panic!("storage get meets error: {:?}", e),
+            }
+            if retry_times > 50 {
+                panic!("storage get fails after 50 retry");
+            }
+            thread::sleep(Duration::from_millis(20));
+            retry_times += 1;
+        };
         if expect_success {
             assert_eq!(value.unwrap().as_slice(), v.as_slice());
         } else {
@@ -352,4 +388,52 @@ fn test_auto_gc() {
     finish_signal_rx
         .recv_timeout(Duration::from_millis(300))
         .unwrap_err();
+}
+
+#[test]
+fn test_atomic_basic() {
+    let (_cluster, storage, ctx) = new_raft_storage();
+    storage
+        .raw_batch_put_atomic(
+            ctx.clone(),
+            "default".to_string(),
+            vec![(b"k1".to_vec(), b"v1".to_vec())],
+            vec![0],
+        )
+        .unwrap();
+    let (prev_val, succeed) = storage
+        .raw_compare_and_swap_atomic(
+            ctx.clone(),
+            "default".to_string(),
+            b"k1".to_vec(),
+            Some(b"v2".to_vec()),
+            b"v3".to_vec(),
+            0,
+        )
+        .unwrap();
+    assert!(!succeed);
+    assert_eq!(prev_val, Some(b"v1".to_vec()));
+    let (prev_val, succeed) = storage
+        .raw_compare_and_swap_atomic(
+            ctx.clone(),
+            "default".to_string(),
+            b"k1".to_vec(),
+            Some(b"v1".to_vec()),
+            b"v2".to_vec(),
+            0,
+        )
+        .unwrap();
+    assert!(succeed);
+    assert_eq!(prev_val, Some(b"v1".to_vec()));
+    let value = storage
+        .raw_get(ctx.clone(), "default".to_string(), b"k1".to_vec())
+        .unwrap();
+    assert_eq!(b"v2".to_vec(), value.unwrap());
+    storage
+        .raw_batch_delete_atomic(ctx.clone(), "default".to_string(), vec![b"k1".to_vec()])
+        .unwrap();
+    let value = storage
+        .raw_get(ctx, "default".to_string(), b"k1".to_vec())
+        .unwrap();
+    assert!(value.is_none());
 }

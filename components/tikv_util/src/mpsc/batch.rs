@@ -94,7 +94,10 @@ impl Drop for Notifier {
     #[inline]
     fn drop(&mut self) {
         let notifier_registered = &self.0.notifier_registered;
-        if !notifier_registered.compare_and_swap(true, false, Ordering::AcqRel) {
+        if notifier_registered
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
             unreachable!("notifier_registered must be true");
         }
         self.0.notify();
@@ -160,7 +163,10 @@ impl<T> Sender<T> {
     #[inline]
     pub fn get_notifier(&self) -> Option<Notifier> {
         let notifier_registered = &self.state.notifier_registered;
-        if !notifier_registered.compare_and_swap(false, true, Ordering::AcqRel) {
+        if notifier_registered
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
             return Some(Notifier(Arc::clone(&self.state)));
         }
         None
@@ -354,9 +360,8 @@ mod tests {
 
         let msg_counter = Arc::new(AtomicUsize::new(0));
         let msg_counter1 = Arc::clone(&msg_counter);
-        let pool = Builder::new()
-            .threaded_scheduler()
-            .core_threads(1)
+        let pool = Builder::new_multi_thread()
+            .worker_threads(1)
             .build()
             .unwrap();
         let _res = pool.spawn(rx.for_each(move |_| {
@@ -400,9 +405,8 @@ mod tests {
         let msg_counter = Arc::new(AtomicUsize::new(0));
         let msg_counter_spawned = Arc::clone(&msg_counter);
         let (nty, polled) = mpsc::sync_channel(1);
-        let pool = Builder::new()
-            .threaded_scheduler()
-            .core_threads(1)
+        let pool = Builder::new_multi_thread()
+            .worker_threads(1)
             .build()
             .unwrap();
         let _res = pool.spawn(

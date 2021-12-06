@@ -22,70 +22,6 @@ pub struct ChunkedVecJson {
 }
 
 impl ChunkedVecJson {
-    impl_chunked_vec_common! { Json }
-
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            data: Vec::with_capacity(capacity),
-            bitmap: BitVec::with_capacity(capacity),
-            var_offset: vec![0],
-            length: 0,
-        }
-    }
-
-    pub fn to_vec(&self) -> Vec<Option<Json>> {
-        let mut x = Vec::with_capacity(self.len());
-        for i in 0..self.len() {
-            x.push(self.get(i).map(|x| x.to_owned()));
-        }
-        x
-    }
-
-    pub fn len(&self) -> usize {
-        self.length
-    }
-
-    #[inline]
-    pub fn push_data(&mut self, mut value: Json) {
-        self.bitmap.push(true);
-        self.data.push(value.get_type() as u8);
-        self.data.append(&mut value.value);
-        self.var_offset.push(self.data.len());
-        self.length += 1;
-    }
-
-    #[inline]
-    pub fn push_null(&mut self) {
-        self.bitmap.push(false);
-        self.var_offset.push(self.data.len());
-        self.length += 1;
-    }
-
-    pub fn truncate(&mut self, len: usize) {
-        if len < self.len() {
-            self.data.truncate(self.var_offset[len]);
-            self.bitmap.truncate(len);
-            self.var_offset.truncate(len + 1);
-            self.length = len;
-        }
-    }
-
-    pub fn capacity(&self) -> usize {
-        self.data.capacity().max(self.length)
-    }
-
-    pub fn append(&mut self, other: &mut Self) {
-        self.data.append(&mut other.data);
-        self.bitmap.append(&mut other.bitmap);
-        let var_offset_last = *self.var_offset.last().unwrap();
-        for i in 1..other.var_offset.len() {
-            self.var_offset.push(other.var_offset[i] + var_offset_last);
-        }
-        self.length += other.length;
-        other.var_offset = vec![0];
-        other.length = 0;
-    }
-
     #[inline]
     pub fn get(&self, idx: usize) -> Option<JsonRef> {
         assert!(idx < self.len());
@@ -100,13 +36,68 @@ impl ChunkedVecJson {
 }
 
 impl ChunkedVec<Json> for ChunkedVecJson {
-    fn chunked_with_capacity(capacity: usize) -> Self {
-        Self::with_capacity(capacity)
+    impl_chunked_vec_common! { Json }
+
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            data: Vec::with_capacity(capacity),
+            bitmap: BitVec::with_capacity(capacity),
+            var_offset: vec![0],
+            length: 0,
+        }
     }
 
     #[inline]
-    fn chunked_push(&mut self, value: Option<Json>) {
-        self.push(value)
+    fn push_data(&mut self, mut value: Json) {
+        self.bitmap.push(true);
+        self.data.push(value.get_type() as u8);
+        self.data.append(&mut value.value);
+        self.var_offset.push(self.data.len());
+        self.length += 1;
+    }
+
+    #[inline]
+    fn push_null(&mut self) {
+        self.bitmap.push(false);
+        self.var_offset.push(self.data.len());
+        self.length += 1;
+    }
+
+    fn len(&self) -> usize {
+        self.length
+    }
+
+    fn truncate(&mut self, len: usize) {
+        if len < self.len() {
+            self.data.truncate(self.var_offset[len]);
+            self.bitmap.truncate(len);
+            self.var_offset.truncate(len + 1);
+            self.length = len;
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        self.data.capacity().max(self.length)
+    }
+
+    fn append(&mut self, other: &mut Self) {
+        self.data.append(&mut other.data);
+        self.bitmap.append(&mut other.bitmap);
+        let var_offset_last = *self.var_offset.last().unwrap();
+        for i in 1..other.var_offset.len() {
+            self.var_offset.push(other.var_offset[i] + var_offset_last);
+        }
+        self.length += other.length;
+        other.var_offset = vec![0];
+        other.length = 0;
+    }
+
+    fn to_vec(&self) -> Vec<Option<Json>> {
+        let mut x = Vec::with_capacity(self.len());
+        for i in 0..self.len() {
+            x.push(self.get(i).map(|x| x.to_owned()));
+        }
+        x
     }
 }
 
@@ -126,9 +117,9 @@ impl<'a> ChunkRef<'a, JsonRef<'a>> for &'a ChunkedVecJson {
     }
 }
 
-impl Into<ChunkedVecJson> for Vec<Option<Json>> {
-    fn into(self) -> ChunkedVecJson {
-        ChunkedVecJson::from_vec(self)
+impl From<Vec<Option<Json>>> for ChunkedVecJson {
+    fn from(v: Vec<Option<Json>>) -> ChunkedVecJson {
+        ChunkedVecJson::from_vec(v)
     }
 }
 

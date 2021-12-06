@@ -6,12 +6,13 @@
 //! For an overview of the coprocessor architecture, see the documentation on
 //! [tikv/src/coprocessor](https://github.com/tikv/tikv/blob/master/src/coprocessor/mod.rs).
 //!
-//! This crate exports a custom derive for [`AggrFunction`](https://github.com/tikv/tikv/blob/master/components/tidb_query_vec_aggr/src/mod.rs)
+//! This crate exports a custom derive for [`AggrFunction`](https://github.com/tikv/tikv/blob/master/components/tidb_query_aggr/src/mod.rs)
 //! and an attribute macro called `rpn_fn` for use on functions which provide
 //! coprocessor functionality. `rpn_fn` is documented in the [rpn_function](rpn_function.rs)
 //! module.
 
 #![feature(proc_macro_diagnostic)]
+#![feature(iter_order_by)]
 #![recursion_limit = "256"]
 
 extern crate proc_macro;

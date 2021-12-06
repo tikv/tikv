@@ -1,43 +1,28 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use std::error;
-use std::result;
+use std::{error, result};
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Io(err: std::io::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        ClusterBootstrapped(cluster_id: u64) {
-            display("cluster {} is already bootstrapped", cluster_id)
-        }
-        ClusterNotBootstrapped(cluster_id: u64) {
-            display("cluster {} is not bootstrapped", cluster_id)
-        }
-        Incompatible {
-            display("feature is not supported in other cluster components")
-        }
-        Grpc(err: grpcio::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("unknown error {:?}", err)
-        }
-        RegionNotFound(key: Vec<u8>) {
-            display("region is not found for key {}", hex::encode_upper(key))
-        }
-        StoreTombstone(msg: String) {
-            display("store is tombstone {:?}", msg)
-        }
-    }
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+    #[error("cluster {0} is already bootstrapped")]
+    ClusterBootstrapped(u64),
+    #[error("cluster {0} is not bootstrapped")]
+    ClusterNotBootstrapped(u64),
+    #[error("feature is not supported in other cluster components")]
+    Incompatible,
+    #[error("{0}")]
+    Grpc(#[from] grpcio::Error),
+    #[error("unknown error {0:?}")]
+    Other(#[from] Box<dyn error::Error + Sync + Send>),
+    #[error("region is not found for key {}", log_wrappers::Value::key(.0))]
+    RegionNotFound(Vec<u8>),
+    #[error("store is tombstone {0:?}")]
+    StoreTombstone(String),
 }
 
 pub type Result<T> = result::Result<T, Error>;

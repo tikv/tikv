@@ -6,6 +6,10 @@ use prometheus_static_metric::*;
 use crate::storage::ErrorHeaderKind;
 use prometheus::exponential_buckets;
 
+pub use crate::storage::kv::metrics::{
+    GcKeysCF, GcKeysCounterVec, GcKeysCounterVecInner, GcKeysDetail,
+};
+
 make_auto_flush_static_metric! {
     pub label_enum GrpcTypeKind {
         invalid,
@@ -36,12 +40,9 @@ make_auto_flush_static_metric! {
         raw_delete,
         raw_delete_range,
         raw_batch_delete,
-        ver_get,
-        ver_batch_get,
-        ver_mut,
-        ver_batch_mut,
-        ver_scan,
-        ver_delete_range,
+        raw_get_key_ttl,
+        raw_compare_and_swap,
+        raw_checksum,
         unsafe_destroy_range,
         physical_scan_lock,
         register_lock_observer,
@@ -49,17 +50,22 @@ make_auto_flush_static_metric! {
         remove_lock_observer,
         coprocessor,
         coprocessor_stream,
+        raw_coprocessor,
         mvcc_get_by_key,
         mvcc_get_by_start_ts,
         split_region,
         read_index,
+        check_leader,
+        batch_commands,
     }
 
     pub label_enum GcCommandKind {
         gc,
+        gc_keys,
         unsafe_destroy_range,
         physical_scan_lock,
         validate_config,
+        orphan_versions,
     }
 
     pub label_enum SnapTask {
@@ -75,20 +81,14 @@ make_auto_flush_static_metric! {
         tombstone,
     }
 
-    pub label_enum GcKeysCF {
-        default,
-        lock,
-        write,
+    pub label_enum ReplicaReadLockCheckResult {
+        unlocked,
+        locked,
     }
 
-    pub label_enum GcKeysDetail {
-        processed_keys,
-        get,
-        next,
-        prev,
-        seek,
-        seek_for_prev,
-        over_seek_bound,
+    pub label_enum WhetherSuccess {
+        success,
+        fail,
     }
 
     pub struct GcCommandCounterVec: LocalIntCounter {
@@ -115,13 +115,17 @@ make_auto_flush_static_metric! {
         "type" => GrpcTypeKind,
     }
 
-    pub struct GcKeysCounterVec: LocalIntCounter {
-        "cf" => GcKeysCF,
-        "tag" => GcKeysDetail,
+    pub struct GrpcProxyMsgCounterVec: LocalIntCounter {
+        "type" => GrpcTypeKind,
+        "success" => WhetherSuccess,
     }
 
     pub struct GrpcMsgHistogramVec: LocalHistogram {
         "type" => GrpcTypeKind,
+    }
+
+    pub struct ReplicaReadLockCheckHistogramVec: LocalHistogram {
+        "result" => ReplicaReadLockCheckResult,
     }
 }
 
@@ -131,9 +135,8 @@ make_static_metric! {
     }
 
     pub label_enum BatchableRequestKind {
-        point_get,
-        prewrite,
-        commit,
+        kv_get,
+        raw_get,
     }
 
     pub struct GrpcMsgHistogramGlobal: Histogram {
@@ -186,6 +189,12 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref GRPC_PROXY_MSG_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_grpc_proxy_msg_total",
+        "Total number of handle grpc proxy message",
+        &["type", "success"]
+    )
+    .unwrap();
     pub static ref GC_KEYS_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_gcworker_gc_keys",
         "Counter of keys affected during gc",
@@ -199,6 +208,27 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref SERVER_INFO_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_server_info",
+        "Indicate the tikv server info, and the value is the server startup timestamp(s).",
+        &["version", "hash"]
+    )
+    .unwrap();
+    pub static ref REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_replica_read_lock_check_duration_seconds",
+            "Duration of memory lock checking for replica read",
+            &["result"],
+            exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
+        )
+        .unwrap();
+    pub static ref ADDRESS_RESOLVE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_server_address_resolve_duration_secs",
+            "Duration of resolving store address",
+            exponential_buckets(0.0001, 2.0, 20).unwrap()
+        )
+        .unwrap();
 }
 
 lazy_static! {
@@ -218,8 +248,14 @@ lazy_static! {
         auto_flush_from!(RESOLVE_STORE_COUNTER, ResolveStoreCounterVec);
     pub static ref GRPC_MSG_FAIL_COUNTER: GrpcMsgFailCounterVec =
         auto_flush_from!(GRPC_MSG_FAIL_COUNTER_VEC, GrpcMsgFailCounterVec);
+    pub static ref GRPC_PROXY_MSG_COUNTER: GrpcProxyMsgCounterVec =
+        auto_flush_from!(GRPC_PROXY_MSG_COUNTER_VEC, GrpcProxyMsgCounterVec);
     pub static ref GC_KEYS_COUNTER_STATIC: GcKeysCounterVec =
         auto_flush_from!(GC_KEYS_COUNTER_VEC, GcKeysCounterVec);
+    pub static ref REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC: ReplicaReadLockCheckHistogramVec = auto_flush_from!(
+        REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC,
+        ReplicaReadLockCheckHistogramVec
+    );
 }
 
 lazy_static! {
@@ -280,6 +316,28 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref TTL_CHECKER_PROCESSED_REGIONS_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_ttl_checker_processed_regions",
+        "Processed regions by ttl checker"
+    )
+    .unwrap();
+    pub static ref TTL_CHECKER_ACTIONS_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_ttl_checker_actions",
+        "Actions of ttl checker",
+        &["type"]
+    )
+    .unwrap();
+    pub static ref TTL_CHECKER_COMPACT_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_ttl_checker_compact_duration",
+        "Duration of ttl checker compact files execution",
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref TTL_CHECKER_POLL_INTERVAL_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_ttl_checker_poll_interval",
+        "Interval of ttl checker poll"
+    )
+    .unwrap();
     pub static ref RAFT_MESSAGE_RECV_COUNTER: IntCounter = register_int_counter!(
         "tikv_server_raft_message_recv_total",
         "Total number of raft messages received"
@@ -302,11 +360,6 @@ lazy_static! {
         "Total number of raft messages flushed immediately"
     )
     .unwrap();
-    pub static ref RAFT_MESSAGE_DELAY_FLUSH_COUNTER: IntCounter = register_int_counter!(
-        "tikv_server_raft_message_delay_flush_total",
-        "Total number of raft messages flushed delay"
-    )
-    .unwrap();
     pub static ref CONFIG_ROCKSDB_GAUGE: GaugeVec = register_gauge_vec!(
         "tikv_config_rocksdb",
         "Config information of rocksdb",
@@ -319,21 +372,25 @@ lazy_static! {
             "tikv_server_request_batch_size",
             "Size of request batch input",
             &["type"],
-            exponential_buckets(1f64, 5f64, 10).unwrap()
-        )
-        .unwrap();
-    pub static ref REQUEST_BATCH_RATIO_HISTOGRAM_VEC: RequestBatchRatioHistogramVec =
-        register_static_histogram_vec!(
-            RequestBatchRatioHistogramVec,
-            "tikv_server_request_batch_ratio",
-            "Ratio of request batch output to input",
-            &["type"],
-            exponential_buckets(1f64, 5f64, 10).unwrap()
+            vec![1.0, 2.0, 4.0, 8.0, 12.0, 16.0, 20.0, 24.0, 28.0, 32.0, 64.0]
         )
         .unwrap();
     pub static ref CPU_CORES_QUOTA_GAUGE: Gauge = register_gauge!(
         "tikv_server_cpu_cores_quota",
         "Total CPU cores quota for TiKV server"
+    )
+    .unwrap();
+    pub static ref MEM_TRACE_SUM_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_server_mem_trace_sum",
+        "The sum of memory trace for TiKV server",
+        &["name"]
+    )
+    .unwrap();
+    pub static ref MEMORY_USAGE_GAUGE: IntGauge =
+        register_int_gauge!("tikv_server_memory_usage", "Memory usage for the instance").unwrap();
+    pub static ref RAFT_APPEND_REJECTS: IntCounter = register_int_counter!(
+        "tikv_server_raft_append_rejects",
+        "Count for rejected Raft append messages"
     )
     .unwrap();
 }
@@ -357,6 +414,7 @@ make_auto_flush_static_metric! {
         err_stale_command,
         err_store_not_match,
         err_raft_entry_too_large,
+        err_leader_memory_lock_check,
     }
 
     pub label_enum RequestTypeKind {

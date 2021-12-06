@@ -1,12 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::MvccTxn;
+use crate::storage::mvcc::{MvccTxn, SnapshotReader};
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
+    WriteCommand, WriteContext, WriteResult,
 };
-use crate::storage::txn::Result;
+use crate::storage::txn::{cleanup, commit, Result};
 use crate::storage::{ProcessResult, Snapshot};
 use txn_types::{Key, TimeStamp};
 
@@ -29,18 +31,17 @@ impl CommandExt for ResolveLockLite {
     ctx!();
     tag!(resolve_lock_lite);
     ts!(start_ts);
-    command_method!(is_sys_cmd, bool, true);
+    property!(is_sys_cmd);
     write_bytes!(resolve_keys: multiple);
     gen_lock!(resolve_keys: multiple);
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        let mut txn = MvccTxn::new(
-            snapshot,
-            self.start_ts,
-            !self.ctx.get_not_fill_cache(),
-            context.concurrency_manager,
+    fn process_write(self, snapshot: S, mut context: WriteContext<'_, L>) -> Result<WriteResult> {
+        let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache()),
+            &mut context.statistics,
         );
 
         let rows = self.resolve_keys.len();
@@ -49,15 +50,15 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
         let mut released_locks = ReleasedLocks::new(self.start_ts, self.commit_ts);
         for key in self.resolve_keys {
             released_locks.push(if !self.commit_ts.is_zero() {
-                txn.commit(key, self.commit_ts)?
+                commit(&mut txn, &mut reader, key, self.commit_ts)?
             } else {
-                txn.rollback(key)?
+                cleanup(&mut txn, &mut reader, key, TimeStamp::zero(), false)?
             });
         }
         released_locks.wake_up(context.lock_mgr);
 
-        context.statistics.add(&txn.take_statistics());
-        let write_data = WriteData::from_modifies(txn.into_modifies());
+        let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write: write_data,
@@ -65,6 +66,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
             pr: ProcessResult::Res,
             lock_info: None,
             lock_guards: vec![],
+            response_policy: ResponsePolicy::OnApplied,
         })
     }
 }

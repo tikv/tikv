@@ -5,6 +5,7 @@ use std::fmt::{self, Display, Formatter};
 use super::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
 
 use crate::store::StoreRouter;
+use engine_traits::KvEngine;
 use pd_client::PdClient;
 use tikv_util::worker::Runnable;
 
@@ -20,25 +21,33 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<C, S> {
-    cleanup_sst: CleanupSSTRunner<C, S>,
+pub struct Runner<E, C, S>
+where
+    E: KvEngine,
+    S: StoreRouter<E>,
+{
+    cleanup_sst: CleanupSSTRunner<E, C, S>,
 }
 
-impl<C, S> Runner<C, S>
+impl<E, C, S> Runner<E, C, S>
 where
+    E: KvEngine,
     C: PdClient,
-    S: StoreRouter,
+    S: StoreRouter<E>,
 {
-    pub fn new(cleanup_sst: CleanupSSTRunner<C, S>) -> Runner<C, S> {
+    pub fn new(cleanup_sst: CleanupSSTRunner<E, C, S>) -> Runner<E, C, S> {
         Runner { cleanup_sst }
     }
 }
 
-impl<C, S> Runnable<Task> for Runner<C, S>
+impl<E, C, S> Runnable for Runner<E, C, S>
 where
+    E: KvEngine,
     C: PdClient,
-    S: StoreRouter,
+    S: StoreRouter<E>,
 {
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         match task {
             Task::CleanupSST(t) => self.cleanup_sst.run(t),

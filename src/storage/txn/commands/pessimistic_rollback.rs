@@ -1,10 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{MvccTxn, Result as MvccResult};
+use crate::storage::mvcc::{MvccTxn, Result as MvccResult, SnapshotReader};
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
+    WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Result as StorageResult, Snapshot};
@@ -37,12 +39,15 @@ impl CommandExt for PessimisticRollback {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
     /// Delete any pessimistic lock with small for_update_ts belongs to this transaction.
-    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        let mut txn = MvccTxn::new(
-            snapshot,
-            self.start_ts,
-            !self.ctx.get_not_fill_cache(),
-            context.concurrency_manager,
+    fn process_write(
+        mut self,
+        snapshot: S,
+        mut context: WriteContext<'_, L>,
+    ) -> Result<WriteResult> {
+        let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache()),
+            &mut context.statistics,
         );
 
         let ctx = mem::take(&mut self.ctx);
@@ -59,7 +64,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
                 ))
                 .into()
             ));
-            let released_lock: MvccResult<_> = if let Some(lock) = txn.reader.load_lock(&key)? {
+            let released_lock: MvccResult<_> = if let Some(lock) = reader.load_lock(&key)? {
                 if lock.lock_type == LockType::Pessimistic
                     && lock.ts == self.start_ts
                     && lock.for_update_ts <= self.for_update_ts
@@ -75,8 +80,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
         }
         released_locks.wake_up(context.lock_mgr);
 
-        context.statistics.add(&txn.take_statistics());
-        let write_data = WriteData::from_modifies(txn.into_modifies());
+        let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx,
             to_be_write: write_data,
@@ -84,6 +89,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
             pr: ProcessResult::MultiRes { results: vec![] },
             lock_info: None,
             lock_guards: vec![],
+            response_policy: ResponsePolicy::OnApplied,
         })
     }
 }
@@ -95,9 +101,12 @@ pub mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::commands::{WriteCommand, WriteContext};
+    use crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT;
+    use crate::storage::txn::tests::*;
     use crate::storage::TestEngineBuilder;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+    use tikv_util::deadline::Deadline;
     use txn_types::Key;
 
     pub fn must_success<E: Engine>(
@@ -107,7 +116,7 @@ pub mod tests {
         for_update_ts: impl Into<TimeStamp>,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let for_update_ts = for_update_ts.into();
         let cm = ConcurrencyManager::new(for_update_ts);
         let start_ts = start_ts.into();
@@ -116,6 +125,7 @@ pub mod tests {
             keys: vec![Key::from_raw(key)],
             start_ts,
             for_update_ts,
+            deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
         let lock_mgr = DummyLockManager;
         let write_context = WriteContext {
@@ -123,8 +133,7 @@ pub mod tests {
             concurrency_manager: cm,
             extra_op: Default::default(),
             statistics: &mut Default::default(),
-            pipelined_pessimistic_lock: false,
-            enable_async_commit: true,
+            async_apply_prewrite: false,
         };
         let result = command.process_write(snapshot, write_context).unwrap();
         write(engine, &ctx, result.to_be_write.modifies);

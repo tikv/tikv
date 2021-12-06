@@ -2,29 +2,48 @@
 
 use super::key_handle::{KeyHandle, KeyHandleGuard};
 
-use parking_lot::Mutex;
+use crossbeam_skiplist::SkipMap;
 use std::{
-    collections::BTreeMap,
     ops::Bound,
     sync::{Arc, Weak},
 };
 use txn_types::{Key, Lock};
 
-#[derive(Clone, Default)]
-pub struct LockTable(pub Arc<Mutex<BTreeMap<Key, Weak<KeyHandle>>>>);
+#[derive(Clone)]
+pub struct LockTable(pub Arc<SkipMap<Key, Weak<KeyHandle>>>);
+
+impl Default for LockTable {
+    fn default() -> Self {
+        LockTable(Arc::new(SkipMap::new()))
+    }
+}
 
 impl LockTable {
     pub async fn lock_key(&self, key: &Key) -> KeyHandleGuard {
         loop {
-            if let Some(handle) = self.get(key) {
-                return handle.lock().await;
-            } else {
-                let handle = Arc::new(KeyHandle::new(key.clone(), self.clone()));
-                let weak = Arc::downgrade(&handle);
-                let guard = handle.lock().await;
-                if self.insert_if_not_exist(key.clone(), weak) {
-                    return guard;
+            // Create a KeyHandle first, but do not bind it to the lock table first.
+            // If we fail to insert the handle into the table, this handle should be dropped
+            // without removing any entry from the table.
+            let handle = Arc::new(KeyHandle::new(key.clone()));
+            let weak = Arc::downgrade(&handle);
+            let weak2 = weak.clone();
+            let guard = handle.lock().await;
+
+            let entry = self.0.get_or_insert(key.clone(), weak);
+            if entry.value().ptr_eq(&weak2) {
+                // If the weak ptr returned by `get_or_insert` equals to the one we inserted,
+                // `guard` refers to the KeyHandle in the lock table. Now, we can bind the handle
+                // to the table.
+
+                // SAFETY: The `table` field in `KeyHandle` is only accessed through the `set_table`
+                // or the `drop` method. It's impossible to have a concurrent `drop` here and `set_table`
+                // is only called here. So there is no concurrent access to the `table` field in `KeyHandle`.
+                unsafe {
+                    guard.handle().set_table(self.clone());
                 }
+                return guard;
+            } else if let Some(handle) = entry.value().upgrade() {
+                return handle.lock().await;
             }
         }
     }
@@ -57,30 +76,12 @@ impl LockTable {
                     .and_then(|lock| check_fn(&handle.key, lock).err())
             })
         });
-        if let Some(e) = e {
-            Err(e)
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Inserts a key handle to the map if the key does not exists in the map.
-    /// Returns whether the handle is successfully inserted into the map.
-    pub fn insert_if_not_exist(&self, key: Key, handle: Weak<KeyHandle>) -> bool {
-        use std::collections::btree_map::Entry;
-
-        match self.0.lock().entry(key) {
-            Entry::Vacant(entry) => {
-                entry.insert(handle);
-                true
-            }
-            Entry::Occupied(_) => false,
-        }
+        if let Some(e) = e { Err(e) } else { Ok(()) }
     }
 
     /// Gets the handle of the key.
-    pub fn get<'m>(&'m self, key: &Key) -> Option<Arc<KeyHandle>> {
-        self.0.lock().get(key).and_then(|handle| handle.upgrade())
+    pub fn get(&self, key: &Key) -> Option<Arc<KeyHandle>> {
+        self.0.get(key).and_then(|e| e.value().upgrade())
     }
 
     /// Finds the first handle in the given range that `pred` returns `Some`.
@@ -91,15 +92,13 @@ impl LockTable {
         end_key: Option<&Key>,
         mut pred: impl FnMut(Arc<KeyHandle>) -> Option<T>,
     ) -> Option<T> {
-        let lower_bound = start_key
-            .map(|k| Bound::Included(k))
-            .unwrap_or(Bound::Unbounded);
-        let upper_bound = end_key
-            .map(|k| Bound::Excluded(k))
-            .unwrap_or(Bound::Unbounded);
-        for (_, handle) in self.0.lock().range::<Key, _>((lower_bound, upper_bound)) {
-            if let Some(v) = handle.upgrade().and_then(&mut pred) {
-                return Some(v);
+        let lower_bound = start_key.map(Bound::Included).unwrap_or(Bound::Unbounded);
+        let upper_bound = end_key.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
+
+        for e in self.0.range((lower_bound, upper_bound)) {
+            let res = e.value().upgrade().and_then(&mut pred);
+            if res.is_some() {
+                return res;
             }
         }
         None
@@ -107,8 +106,8 @@ impl LockTable {
 
     /// Iterates all handles and call a specified function on each of them.
     pub fn for_each(&self, mut f: impl FnMut(Arc<KeyHandle>)) {
-        for (_, handle) in self.0.lock().iter() {
-            if let Some(handle) = handle.upgrade() {
+        for entry in self.0.iter() {
+            if let Some(handle) = entry.value().upgrade() {
                 f(handle);
             }
         }
@@ -116,7 +115,7 @@ impl LockTable {
 
     /// Removes the key and its key handle from the map.
     pub fn remove(&self, key: &Key) {
-        self.0.lock().remove(key);
+        self.0.remove(key);
     }
 }
 
@@ -127,7 +126,7 @@ mod test {
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
     };
-    use tokio::time::delay_for;
+    use tokio::time::sleep;
     use txn_types::LockType;
 
     #[tokio::test]
@@ -144,7 +143,7 @@ mod test {
                 // Modify an atomic counter with a mutex guard. The value of the counter
                 // should remain unchanged if the mutex works.
                 let counter_val = counter.fetch_add(1, Ordering::SeqCst) + 1;
-                delay_for(Duration::from_millis(1)).await;
+                sleep(Duration::from_millis(1)).await;
                 assert_eq!(counter.load(Ordering::SeqCst), counter_val);
             });
             handles.push(handle);
@@ -228,18 +227,22 @@ mod test {
         });
 
         // no lock found
-        assert!(lock_table
-            .check_range(
-                Some(&Key::from_raw(b"m")),
-                Some(&Key::from_raw(b"n")),
-                |_, _| Err(())
-            )
-            .is_ok());
+        assert!(
+            lock_table
+                .check_range(
+                    Some(&Key::from_raw(b"m")),
+                    Some(&Key::from_raw(b"n")),
+                    |_, _| Err(())
+                )
+                .is_ok()
+        );
 
         // lock passes check_fn
-        assert!(lock_table
-            .check_range(None, Some(&Key::from_raw(b"z")), |_, l| ts_check(l, 5))
-            .is_ok());
+        assert!(
+            lock_table
+                .check_range(None, Some(&Key::from_raw(b"z")), |_, l| ts_check(l, 5))
+                .is_ok()
+        );
 
         // first lock does not pass check_fn
         assert_eq!(
@@ -308,5 +311,31 @@ mod test {
 
         lock_table.for_each(|h| collect(h, &mut found_locks));
         assert_eq!(found_locks, expect_locks);
+    }
+
+    #[tokio::test]
+    async fn test_lock_key_when_handle_exists() {
+        let lock_table: LockTable = LockTable::default();
+        let key = Key::from_raw(b"key");
+
+        let guard = lock_table.lock_key(&key).await;
+        let handle = lock_table.get(&key).unwrap();
+        drop(guard);
+        // The handle is still alive in the table.
+        assert!(Arc::ptr_eq(&handle, &lock_table.get(&key).unwrap()));
+
+        let guard2 = lock_table.lock_key(&key).await;
+
+        // After we drop the original handle, make sure the new guard refers
+        // to the KeyHandle in the table.
+        drop(handle);
+        assert!(Arc::ptr_eq(guard2.handle(), &lock_table.get(&key).unwrap()));
+
+        // After dropping guard2, a new guard should be different to the old one.
+        let old_ptr = Arc::as_ptr(guard2.handle());
+        drop(guard2);
+        let guard3 = lock_table.lock_key(&key).await;
+        assert_ne!(old_ptr, Arc::as_ptr(guard3.handle()));
+        assert!(Arc::ptr_eq(guard3.handle(), &lock_table.get(&key).unwrap()));
     }
 }

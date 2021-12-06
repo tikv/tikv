@@ -6,7 +6,7 @@ use std::sync::Arc;
 use criterion::{Bencher, Criterion};
 use engine_rocks::raw::DB;
 use engine_rocks::Compat;
-use engine_traits::{Mutable, WriteBatchExt};
+use engine_traits::{Mutable, WriteBatch, WriteBatchExt};
 use test_raftstore::*;
 use test_util::*;
 
@@ -17,7 +17,7 @@ fn enc_write_kvs(db: &Arc<DB>, kvs: &[(Vec<u8>, Vec<u8>)]) {
     for &(ref k, ref v) in kvs {
         wb.put(&keys::data_key(k), v).unwrap();
     }
-    db.c().write(&wb).unwrap();
+    wb.write().unwrap();
 }
 
 fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>, initial_kvs: &[(Vec<u8>, Vec<u8>)]) {
@@ -113,33 +113,29 @@ where
     let nodes_coll = vec![1, 3, 5];
     let value_size_coll = vec![8, 128, 1024, 4096];
 
-    let mut set_inputs = vec![];
-    let mut get_inputs = vec![];
-    let mut delete_inputs = vec![];
+    let mut group = c.benchmark_group(label);
+
     for nodes in nodes_coll {
         for &value_size in &value_size_coll {
-            set_inputs.push(SetConfig {
+            let config = SetConfig {
                 factory: factory.clone(),
                 nodes,
                 value_size,
-            });
+            };
+            group.bench_with_input(format!("bench_set/{:?}", &config), &config, bench_set);
         }
-        get_inputs.push(GetConfig {
+        let config = GetConfig {
             factory: factory.clone(),
             nodes,
-        });
-        delete_inputs.push(DeleteConfig {
+        };
+        group.bench_with_input(format!("bench_get/{:?}", &config), &config, bench_get);
+        let config = DeleteConfig {
             factory: factory.clone(),
             nodes,
-        });
+        };
+        group.bench_with_input(format!("bench_delete/{:?}", &config), &config, bench_delete);
     }
-    c.bench_function_over_inputs(&format!("{}/bench_set", label), bench_set, set_inputs);
-    c.bench_function_over_inputs(&format!("{}/bench_get", label), bench_get, get_inputs);
-    c.bench_function_over_inputs(
-        &format!("{}/bench_delete", label),
-        bench_delete,
-        delete_inputs,
-    );
+    group.finish();
 }
 
 trait ClusterFactory<T: Simulator>: Clone + fmt::Debug + 'static {

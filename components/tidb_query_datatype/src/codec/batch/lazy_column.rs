@@ -7,10 +7,11 @@ use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 
 use crate::codec::chunk::{ChunkColumnEncoder, Column};
-use crate::codec::data_type::{match_template_evaluable, LogicalRows, VectorValue};
+use crate::codec::data_type::{ChunkedVec, LogicalRows, VectorValue};
 use crate::codec::datum_codec::RawDatumDecoder;
 use crate::codec::Result;
 use crate::expr::EvalContext;
+use crate::match_template_evaltype;
 
 /// A container stores an array of datums, which can be either raw (not decoded), or decoded into
 /// the `VectorValue` type.
@@ -168,7 +169,7 @@ impl LazyBatchColumn {
 
         let mut decoded_column = VectorValue::with_capacity(raw_vec_len, eval_type);
 
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match &mut decoded_column {
                 VectorValue::TT(vec) => {
                     match logical_rows {
@@ -181,10 +182,7 @@ impl LazyBatchColumn {
                             }
                         }
                         LogicalRows::Ref { logical_rows } => {
-                            let mut decode_bitmap = Vec::with_capacity(raw_vec_len);
-                            for _ in 0..raw_vec_len {
-                                decode_bitmap.push(false);
-                            }
+                            let mut decode_bitmap = vec![false; raw_vec_len];
                             for row_index in logical_rows {
                                 decode_bitmap[*row_index] = true;
                             }

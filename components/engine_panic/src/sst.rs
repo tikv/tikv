@@ -99,7 +99,7 @@ impl SstWriterBuilder<PanicEngine> for PanicSstWriterBuilder {
     fn set_db(self, db: &PanicEngine) -> Self {
         panic!()
     }
-    fn set_cf(self, cf: CfName) -> Self {
+    fn set_cf(self, cf: &str) -> Self {
         panic!()
     }
     fn set_in_memory(self, in_memory: bool) -> Self {

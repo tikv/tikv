@@ -30,10 +30,7 @@ impl From<Vec<VectorValue>> for LazyBatchColumnVec {
     #[inline]
     fn from(columns: Vec<VectorValue>) -> Self {
         LazyBatchColumnVec {
-            columns: columns
-                .into_iter()
-                .map(|v| LazyBatchColumn::from(v))
-                .collect(),
+            columns: columns.into_iter().map(LazyBatchColumn::from).collect(),
         }
     }
 }
