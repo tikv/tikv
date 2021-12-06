@@ -11,10 +11,10 @@ use std::{cmp, mem, u64};
 
 use batch_system::{BasicMailbox, Fsm};
 use collections::HashMap;
-use engine_traits::CF_RAFT;
 use engine_traits::{
     Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatch, WriteBatchExt, WriteOptions,
 };
+use engine_traits::{CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use keys::{self, enc_end_key, enc_start_key};
@@ -24,8 +24,8 @@ use kvproto::kvrpcpb::DiskFullOpt;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, Request, StatusCmdType,
-    StatusResponse,
+    AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
+    StatusCmdType, StatusResponse,
 };
 use kvproto::raft_serverpb::{
     ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
@@ -2239,15 +2239,83 @@ where
                     if self.fsm.batch_req_builder.request.is_some() {
                         self.propose_batch_raft_command(true);
                     }
+                    if self.propose_locks_before_transfer_leader() {
+                        // If some pessimistic locks are just proposed, we propose another
+                        // TransferLeader command instead of transferring leader immediately.
 
-                    self.fsm.peer.transfer_leader(&from);
+                        let mut cmd = new_admin_request(
+                            self.fsm.peer.region().get_id(),
+                            self.fsm.peer.peer.clone(),
+                        );
+                        cmd.mut_header()
+                            .set_region_epoch(self.region().get_region_epoch().clone());
+                        cmd.mut_admin_request()
+                            .set_cmd_type(AdminCmdType::TransferLeader);
+                        cmd.mut_admin_request().mut_transfer_leader().set_peer(from);
+                        self.propose_raft_command(
+                            cmd,
+                            Callback::None,
+                            DiskFullOpt::AllowedOnAlmostFull,
+                        );
+                    } else {
+                        self.fsm.peer.transfer_leader(&from);
+                    }
                 }
             }
         } else {
             self.fsm
                 .peer
-                .execute_transfer_leader(&mut self.ctx, msg, peer_disk_usage);
+                .execute_transfer_leader(&mut self.ctx, msg.get_from(), peer_disk_usage);
         }
+    }
+
+    // Returns whether we should propose another TransferLeader command. This is for:
+    // 1. Considering the amount of pessimistic locks can be big, it can reduce
+    // unavailable time caused by waiting for the transferree catching up logs.
+    // 2. Make transferring leader strictly after write commands that executes
+    // before proposing the locks, preventing unexpected lock loss.
+    fn propose_locks_before_transfer_leader(&mut self) -> bool {
+        // 1. Disable in-memory pessimistic locks.
+        let locks = {
+            let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
+            // If `is_valid` is false, it means we have proposed the pessimistic locks.
+            // We can trigger transferring leader immediately.
+            if !pessimistic_locks.is_valid {
+                return false;
+            }
+            pessimistic_locks.is_valid = false;
+            mem::take(&mut pessimistic_locks.map)
+        };
+
+        // 2. Propose pessimistic locks
+        if locks.is_empty() {
+            // This is a trick for detecting whether the map has been written, in order to skip
+            // proposing the extra TransferLeader command when the in-memory pessimistic lock feature
+            // is disabled.
+            // If the map is empty but the capacity is not zero, it is possible that a write command
+            // has just deleted locks from the map but not proposed yet. It might cause that command
+            // to fail if we skip proposing the extra TransferLeader command here.
+            return locks.capacity() > 0;
+        }
+        // FIXME: Raft command has size limit. Either limit the total size of pessimistic locks
+        // in a region, or split commands here.
+        let mut cmd = RaftCmdRequest::default();
+        cmd.mut_header().set_region_id(self.fsm.region_id());
+        cmd.mut_header()
+            .set_region_epoch(self.region().get_region_epoch().clone());
+        cmd.mut_header().set_peer(self.fsm.peer.peer.clone());
+        for (key, lock) in locks {
+            let mut put = PutRequest::default();
+            put.set_cf(CF_LOCK.to_string());
+            put.set_key(key.into_encoded());
+            put.set_value(lock.into_lock().to_bytes());
+            let mut req = Request::default();
+            req.set_cmd_type(CmdType::Put);
+            req.set_put(put);
+            cmd.mut_requests().push(req);
+        }
+        self.propose_raft_command(cmd, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
+        true
     }
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
@@ -3577,6 +3645,7 @@ where
                     // TODO: clean user properties?
                 }
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
+                ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
             }
         }
 
@@ -4475,6 +4544,22 @@ where
             self.on_pd_heartbeat_tick();
             self.register_split_region_check_tick();
         }
+    }
+
+    fn on_transfer_leader(&mut self, term: u64) {
+        // If the term has changed between proposing and executing the TransferLeader request,
+        // ignore it because this request may be stale.
+        if term != self.fsm.peer.term() {
+            return;
+        }
+        // As the leader can propose the TransferLeader request successfully, the disk of
+        // the leader is probably not full.
+        self.fsm.peer.execute_transfer_leader(
+            &mut self.ctx,
+            self.fsm.peer.leader_id(),
+            DiskUsage::Normal,
+        );
+        self.fsm.has_ready = true;
     }
 
     /// Verify and store the hash to state. return true means the hash has been stored successfully.

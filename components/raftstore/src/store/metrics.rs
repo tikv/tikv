@@ -36,6 +36,7 @@ make_auto_flush_static_metric! {
         commit_merge,
         rollback_merge,
         compact,
+        transfer_leader
     }
 
     pub label_enum AdminCmdStatus {
