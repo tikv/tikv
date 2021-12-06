@@ -172,7 +172,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         let mut pairs = vec![];
         let mut row_count = 0;
         let mut time_slice_start = Instant::now();
-        while cursor.valid()? && pairs.len() < limit {
+        while cursor.valid()? {
             row_count += 1;
             if row_count >= MAX_BATCH_SIZE {
                 if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
@@ -189,6 +189,9 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
                     cursor.value(statistics).to_owned()
                 },
             )));
+            if pairs.len() >= limit {
+                break;
+            }
             cursor.next(statistics);
         }
         Ok(pairs)
@@ -220,7 +223,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         let mut pairs = vec![];
         let mut row_count = 0;
         let mut time_slice_start = Instant::now();
-        while cursor.valid()? && pairs.len() < limit {
+        while cursor.valid()? {
             row_count += 1;
             if row_count >= MAX_BATCH_SIZE {
                 if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
@@ -237,6 +240,9 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
                     cursor.value(statistics).to_owned()
                 },
             )));
+            if pairs.len() >= limit {
+                break;
+            }
             cursor.prev(statistics);
         }
         Ok(pairs)
