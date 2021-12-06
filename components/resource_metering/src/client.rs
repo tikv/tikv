@@ -52,7 +52,6 @@ impl Client for GrpcClient {
             IGNORED_DATA_COUNTER
                 .with_label_values(&["report"])
                 .inc_by(record_cnt as _);
-            warn!("receiver address is empty, discarding the new report data");
             return;
         }
 

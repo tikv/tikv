@@ -12,7 +12,7 @@ use futures::{SinkExt, StreamExt};
 use grpcio::{RpcContext, ServerStreamingSink, WriteFlags};
 use kvproto::resource_usage_agent::{ResourceMeteringRequest, ResourceUsageRecord};
 use kvproto::resource_usage_agent_grpc::ResourceMeteringPubSub;
-use tikv_util::{defer, warn};
+use tikv_util::{defer, info, warn};
 
 /// `ResourceMeteringPublisher` implements [ResourceMeteringPubSub].
 ///
@@ -39,6 +39,8 @@ impl ResourceMeteringPubSub for ResourceMeteringPublisher {
         _: ResourceMeteringRequest,
         mut sink: ServerStreamingSink<ResourceUsageRecord>,
     ) {
+        info!("accept a new subscriber"; "from" => ?ctx.peer());
+
         // The `tx` is for the reporter and the `rx` is for the gRPC stream sender.
         //
         // The reporter calls `tx.try_send` roughly every minute. If the the gRPC
