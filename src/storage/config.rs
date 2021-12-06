@@ -124,6 +124,23 @@ impl Config {
             _ => unreachable!(),
         }
     }
+
+    pub fn set_api_version(&mut self, api_version: ApiVersion) {
+        match api_version {
+            ApiVersion::V1 => {
+                self.api_version = 1;
+                self.enable_ttl = false;
+            }
+            ApiVersion::V1ttl => {
+                self.api_version = 1;
+                self.enable_ttl = true;
+            }
+            ApiVersion::V2 => {
+                self.api_version = 2;
+                self.enable_ttl = false;
+            }
+        }
+    }
 }
 
 pub struct StorageConfigManger<EK: KvEngine> {

@@ -143,48 +143,40 @@ fn test_node_bootstrap_idempotent() {
 
 #[test]
 fn test_node_switch_api_version() {
-    // Bootstrap
-    let mut cluster = new_node_cluster(0, 1);
-    cluster.run();
+    use kvproto::kvrpcpb::ApiVersion;
 
-    // Write TiDB data.
-    cluster.put(b"m_tidb_data", b"").unwrap();
-    cluster.shutdown();
+    let api_versions = [ApiVersion::V1, ApiVersion::V1ttl, ApiVersion::V2];
 
-    // Default API Version is V1, should be able to swith to V2.
-    cluster.cfg.storage.api_version = 2;
-    cluster.cfg.storage.enable_ttl = true;
-    cluster.start().unwrap();
-    cluster.shutdown();
+    for from_api in api_versions {
+        for to_api in api_versions {
+            // Bootstrap with `from_api`
+            let mut cluster = new_node_cluster(0, 1);
+            cluster.cfg.storage.set_api_version(from_api);
+            cluster.run();
 
-    // Should be able to switch back to V1.
-    cluster.cfg.storage.api_version = 1;
-    cluster.cfg.storage.enable_ttl = false;
-    cluster.start().unwrap();
+            // Write TiDB data.
+            cluster.put(b"m_tidb_data", b"").unwrap();
+            cluster.shutdown();
 
-    // Write non-TiDB data.
-    cluster.put(b"k1", b"").unwrap();
-    cluster.shutdown();
+            // Should be able to switch back to `to_api`.
+            cluster.cfg.storage.set_api_version(to_api);
+            cluster.start().unwrap();
+            cluster.shutdown();
 
-    // Should not be able to switch from V1 to V2 now.
-    cluster.cfg.storage.api_version = 2;
-    cluster.cfg.storage.enable_ttl = true;
-    assert!(cluster.start().is_err());
-    cluster.shutdown();
+            if from_api != to_api {
+                // Bootstrap a new cluster with `from_api`
+                let mut cluster = new_node_cluster(0, 1);
+                cluster.cfg.storage.set_api_version(from_api);
+                cluster.run();
 
-    // Prepare a new storage and switch it to V2.
-    let mut cluster = new_node_cluster(0, 1);
-    cluster.cfg.storage.api_version = 2;
-    cluster.cfg.storage.enable_ttl = true;
-    cluster.run();
+                // Write non-TiDB data.
+                cluster.put(b"k1", b"").unwrap();
+                cluster.shutdown();
 
-    // Write non-TiDB data.
-    cluster.put(b"k1", b"").unwrap();
-    cluster.shutdown();
-
-    // Should not be able to switch from V2 to V1 now.
-    cluster.cfg.storage.api_version = 1;
-    cluster.cfg.storage.enable_ttl = false;
-    assert!(cluster.start().is_err());
-    cluster.shutdown();
+                // Should not be able to switch to `to_api`.
+                cluster.cfg.storage.set_api_version(to_api);
+                assert!(cluster.start().is_err());
+            }
+        }
+    }
 }

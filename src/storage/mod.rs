@@ -2346,26 +2346,9 @@ impl FlowStatsReporter for DummyReporter {
 }
 
 impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
-    fn set_api_version_to_config(api_version: ApiVersion, config: &mut Config) {
-        match api_version {
-            ApiVersion::V1 => {
-                config.api_version = 1;
-                config.enable_ttl = false
-            }
-            ApiVersion::V1ttl => {
-                config.api_version = 1;
-                config.enable_ttl = true
-            }
-            ApiVersion::V2 => {
-                config.api_version = 2;
-                config.enable_ttl = true
-            }
-        };
-    }
-
     pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L, api_version: ApiVersion) -> Self {
         let mut config = Config::default();
-        Self::set_api_version_to_config(api_version, &mut config);
+        config.set_api_version(api_version);
         Self {
             engine,
             config,
@@ -2401,7 +2384,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     }
 
     pub fn set_api_version(mut self, api_version: ApiVersion) -> Self {
-        Self::set_api_version_to_config(api_version, &mut self.config);
+        self.config.set_api_version(api_version);
         self
     }
 

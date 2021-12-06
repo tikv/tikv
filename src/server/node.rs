@@ -154,6 +154,7 @@ where
                 "injected error: node_after_bootstrap_store"
             )));
         }
+        self.check_api_version(&engines)?;
         self.store.set_id(store_id);
         Ok(())
     }
@@ -252,14 +253,16 @@ where
             return Err(box_err!("invalid store ident {:?}", ident));
         }
 
-        self.check_api_version(engines, ident)?;
-
         Ok(store_id)
     }
 
     // During the api version switch only TiDB data are allowed to exist otherwise
     // returns error.
-    fn check_api_version(&self, engines: &Engines<EK, ER>, ident: StoreIdent) -> Result<()> {
+    fn check_api_version(&self, engines: &Engines<EK, ER>) -> Result<()> {
+        let ident = engines
+            .kv
+            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?
+            .expect("Store should have bootstrapped");
         if ident.api_version != self.api_version {
             // Check if there are only TiDB data in the engine
             let snapshot = engines.kv.snapshot();
