@@ -75,7 +75,7 @@ impl MetadataEvent {
 }
 
 /// extract the start key and the end key from a metadata key-value pair.
-/// example: KeyValue(<prefix>/ranges/<start-key>, <end-key>) -> (<start-key>, <end-key>)
+/// example: `KeyValue(<prefix>/ranges/<start-key>, <end-key>) -> (<start-key>, <end-key>)`
 fn take_range(kv: &mut KeyValue) -> (Vec<u8>, Vec<u8>) {
     let key = kv.take_key();
     (
