@@ -18,7 +18,13 @@ pub struct Config {
     pub wait_for_lock_timeout: ReadableDuration,
     #[serde(deserialize_with = "readable_duration_or_u64")]
     pub wake_up_delay_duration: ReadableDuration,
+    /// Whether to enable the pipelined pessimistic lock feature.
     pub pipelined: bool,
+    /// Whether to enable the in-memory pessimistic lock feature.
+    /// It will take effect only if the `pipelined` config is true because
+    /// we assume that the success rate of pessimistic transactions is important to
+    /// people who disable the pipelined pessimistic lock feature.
+    pub in_memory: bool,
 }
 
 // u64 is for backward compatibility since v3.x uses it.
@@ -49,6 +55,7 @@ impl Default for Config {
             wait_for_lock_timeout: ReadableDuration::millis(1000),
             wake_up_delay_duration: ReadableDuration::millis(20),
             pipelined: true,
+            in_memory: false,
         }
     }
 }
@@ -66,6 +73,7 @@ pub struct LockManagerConfigManager {
     pub waiter_mgr_scheduler: WaiterMgrScheduler,
     pub detector_scheduler: DeadlockScheduler,
     pub pipelined: Arc<AtomicBool>,
+    pub in_memory: Arc<AtomicBool>,
 }
 
 impl LockManagerConfigManager {
@@ -73,11 +81,13 @@ impl LockManagerConfigManager {
         waiter_mgr_scheduler: WaiterMgrScheduler,
         detector_scheduler: DeadlockScheduler,
         pipelined: Arc<AtomicBool>,
+        in_memory: Arc<AtomicBool>,
     ) -> Self {
         LockManagerConfigManager {
             waiter_mgr_scheduler,
             detector_scheduler,
             pipelined,
+            in_memory,
         }
     }
 }
@@ -98,6 +108,9 @@ impl ConfigManager for LockManagerConfigManager {
         if let Some(p) = change.remove("pipelined").map(Into::into) {
             self.pipelined.store(p, Ordering::Relaxed);
         }
+        if let Some(p) = change.remove("in_memory").map(Into::into) {
+            self.in_memory.store(p, Ordering::Relaxed);
+        }
         Ok(())
     }
 }
@@ -113,11 +126,13 @@ mod tests {
         wait-for-lock-timeout = "10ms"
         wake-up-delay-duration = 100
         pipelined = false
+        in-memory = true
         "#;
 
         let config: Config = toml::from_str(conf).unwrap();
         assert_eq!(config.wait_for_lock_timeout.as_millis(), 10);
         assert_eq!(config.wake_up_delay_duration.as_millis(), 100);
         assert_eq!(config.pipelined, false);
+        assert_eq!(config.in_memory, true);
     }
 }
