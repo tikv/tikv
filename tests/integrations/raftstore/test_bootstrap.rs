@@ -142,7 +142,7 @@ fn test_node_bootstrap_idempotent() {
 }
 
 #[test]
-fn test_node_switch_api_version() {
+fn test_node_switch_api_version_with_tidb_data() {
     use kvproto::kvrpcpb::ApiVersion;
 
     let api_versions = [ApiVersion::V1, ApiVersion::V1ttl, ApiVersion::V2];
@@ -162,8 +162,19 @@ fn test_node_switch_api_version() {
             cluster.cfg.storage.set_api_version(to_api);
             cluster.start().unwrap();
             cluster.shutdown();
+        }
+    }
+}
 
-            // Bootstrap a new cluster with `from_api`
+#[test]
+fn test_node_switch_api_version_with_non_tidb_data() {
+    use kvproto::kvrpcpb::ApiVersion;
+
+    let api_versions = [ApiVersion::V1, ApiVersion::V1ttl, ApiVersion::V2];
+
+    for from_api in api_versions {
+        for to_api in api_versions {
+            // Bootstrap with `from_api`
             let mut cluster = new_node_cluster(0, 1);
             cluster.cfg.storage.set_api_version(from_api);
             cluster.run();
