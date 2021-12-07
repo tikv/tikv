@@ -1,5 +1,4 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
-
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -143,48 +142,53 @@ fn test_node_bootstrap_idempotent() {
 }
 
 #[test]
-fn test_node_switch_api_version_with_tidb_data() {
-    let api_versions = [ApiVersion::V1, ApiVersion::V1ttl, ApiVersion::V2];
-    for from_api in api_versions {
-        for to_api in api_versions {
+fn test_node_switch_api_version() {
+    // V1 and V1ttl are impossible to switch bewteen becuase of config check.
+    let cases = [
+        (ApiVersion::V1, ApiVersion::V1),
+        (ApiVersion::V1, ApiVersion::V2),
+        (ApiVersion::V1ttl, ApiVersion::V1ttl),
+        (ApiVersion::V1ttl, ApiVersion::V2),
+        (ApiVersion::V2, ApiVersion::V1),
+        (ApiVersion::V2, ApiVersion::V1ttl),
+        (ApiVersion::V2, ApiVersion::V2),
+    ];
+    for (from_api, to_api) in cases {
+        // With TiDB data
+        {
             // Bootstrap with `from_api`
             let mut cluster = new_node_cluster(0, 1);
             cluster.cfg.storage.set_api_version(from_api);
-            cluster.run();
+            cluster.start().unwrap();
 
-            // Write TiDB data.
+            // Write TiDB data
             cluster.put(b"m_tidb_data", b"").unwrap();
             cluster.shutdown();
 
-            // Should switch to `to_api`.
+            // Should switch to `to_api`
             cluster.cfg.storage.set_api_version(to_api);
             cluster.start().unwrap();
             cluster.shutdown();
         }
-    }
-}
 
-#[test]
-fn test_node_switch_api_version_with_non_tidb_data() {
-    let api_versions = [ApiVersion::V1, ApiVersion::V1ttl, ApiVersion::V2];
-    for from_api in api_versions {
-        for to_api in api_versions {
+        // With non-TiDB data.
+        {
             // Bootstrap with `from_api`
             let mut cluster = new_node_cluster(0, 1);
             cluster.cfg.storage.set_api_version(from_api);
-            cluster.run();
+            cluster.start().unwrap();
 
-            // Write non-TiDB data.
+            // Write non-TiDB data
             cluster.put(b"k1", b"").unwrap();
             cluster.shutdown();
 
             if from_api == to_api {
-                // Should switch to `to_api`.
+                // Should start with if there is no api version change
                 cluster.cfg.storage.set_api_version(to_api);
                 cluster.start().unwrap();
                 cluster.shutdown();
             } else {
-                // Should not be able to switch to `to_api`.
+                // Should not be able to switch to `to_api`
                 cluster.cfg.storage.set_api_version(to_api);
                 assert!(cluster.start().is_err());
             }
