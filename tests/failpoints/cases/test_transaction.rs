@@ -499,7 +499,6 @@ fn test_pessimistic_lock_check_valid() {
 
     let region = cluster.get_region(b"");
     let leader = region.get_peers()[0].clone();
-
     fail::cfg("acquire_pessimistic_lock", "pause").unwrap();
 
     let env = Arc::new(Environment::new(1));
