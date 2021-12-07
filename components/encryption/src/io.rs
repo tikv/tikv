@@ -647,31 +647,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_do_crypter_in_place() {
-        let iv = Iv::new_ctr();
-        let method = EncryptionMethod::Aes128Ctr;
-        let key = generate_data_key(method);
-
-        let mut crypter_core =
-            CrypterCore::new(EncryptionMethod::Aes128Ctr, &key[..], Mode::Encrypt, iv).unwrap();
-
-        let mut buf1 = "pingcap 01234567890abcdefg".as_bytes().to_vec();
-        let mut buf2 = buf1.clone();
-        let half_len = buf1.len() / 2;
-
-        let r = crypter_core.do_crypter_in_place(&mut buf1[..]);
-        assert!(r.is_ok());
-
-        let r = crypter_core.reset_crypter(0);
-        assert!(r.is_ok());
-        let r = crypter_core.do_crypter_in_place(&mut buf2[..half_len]);
-        assert!(r.is_ok());
-        let r = crypter_core.do_crypter_in_place(&mut buf2[half_len..]);
-        assert!(r.is_ok());
-        assert_eq!(buf1, buf2);
-    }
-
     struct MockReader {
         data: Vec<u8>,
     }
@@ -702,39 +677,51 @@ mod tests {
     }
 
     async fn test_poll_read() {
+        let methods = [
+            EncryptionMethod::Plaintext,
+            EncryptionMethod::Aes128Ctr,
+            EncryptionMethod::Aes192Ctr,
+            EncryptionMethod::Aes256Ctr,
+        ];
         let iv = Iv::new_ctr();
-        let method = EncryptionMethod::Aes128Ctr;
-        let key = generate_data_key(method);
         let mut plain_text = vec![0; 10240];
         OsRng.fill_bytes(&mut plain_text);
 
-        // encrypt plaintext into encrypt_text
-        let mut encrypt_reader =
-            EncrypterReader::new(MockReader::new(&mut plain_text[..]), method, &key[..], iv)
-                .unwrap();
+        for method in methods {
+            let key = generate_data_key(method);
 
-        let mut encrypt_text = [0; 20480];
-        let s = encrypt_reader.read(&mut encrypt_text[..]).await;
-        assert!(s.is_ok());
-        let read_len = s.unwrap();
-        assert_eq!(read_len, plain_text.len());
-        assert_ne!(encrypt_text[..read_len], plain_text);
+            // encrypt plaintext into encrypt_text
+            let mut encrypt_reader =
+                EncrypterReader::new(MockReader::new(&mut plain_text[..]), method, &key[..], iv)
+                    .unwrap();
 
-        // decrypt encrypt_text into decrypt_text
-        let mut decrypt_reader = DecrypterReader::new(
-            MockReader::new(&mut encrypt_text[..read_len]),
-            method,
-            &key[..],
-            iv,
-        )
-        .unwrap();
+            let mut encrypt_text = [0; 20480];
+            let s = encrypt_reader.read(&mut encrypt_text[..]).await;
+            assert!(s.is_ok());
+            let read_len = s.unwrap();
+            assert_eq!(read_len, plain_text.len());
+            if method == EncryptionMethod::Plaintext {
+                assert_eq!(encrypt_text[..read_len], plain_text);
+            } else {
+                assert_ne!(encrypt_text[..read_len], plain_text);
+            }
 
-        let mut decrypt_text = [0; 20480];
-        let s = decrypt_reader.read(&mut decrypt_text[..]).await;
-        assert!(s.is_ok());
-        let read_len = s.unwrap();
-        assert_eq!(read_len, plain_text.len());
-        assert_eq!(decrypt_text[..read_len], plain_text);
+            // decrypt encrypt_text into decrypt_text
+            let mut decrypt_reader = DecrypterReader::new(
+                MockReader::new(&mut encrypt_text[..read_len]),
+                method,
+                &key[..],
+                iv,
+            )
+            .unwrap();
+
+            let mut decrypt_text = [0; 20480];
+            let s = decrypt_reader.read(&mut decrypt_text[..]).await;
+            assert!(s.is_ok());
+            let read_len = s.unwrap();
+            assert_eq!(read_len, plain_text.len());
+            assert_eq!(decrypt_text[..read_len], plain_text);
+        }
     }
 
     #[test]
