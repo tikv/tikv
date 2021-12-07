@@ -189,18 +189,11 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
                     cursor.value(statistics).to_owned()
                 },
             )));
-<<<<<<< HEAD
             if pairs.len() < limit {
                 cursor.next(statistics);
             } else {
                 break;
             }
-=======
-            if pairs.len() >= limit {
-                break;
-            }
-            cursor.next(statistics);
->>>>>>> d67a22a29... close https://github.com/tikv/tikv/issues/11572
         }
         Ok(pairs)
     }
@@ -248,18 +241,11 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
                     cursor.value(statistics).to_owned()
                 },
             )));
-<<<<<<< HEAD
             if pairs.len() < limit {
                 cursor.next(statistics);
             } else {
                 break;
             }
-=======
-            if pairs.len() >= limit {
-                break;
-            }
-            cursor.prev(statistics);
->>>>>>> d67a22a29... close https://github.com/tikv/tikv/issues/11572
         }
         Ok(pairs)
     }
