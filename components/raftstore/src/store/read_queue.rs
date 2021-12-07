@@ -219,6 +219,10 @@ where
         self.reads.back_mut()
     }
 
+    pub fn back(&mut self) -> Option<&ReadIndexRequest<S>> {
+        self.reads.back()
+    }
+
     pub fn last_ready(&self) -> Option<&ReadIndexRequest<S>> {
         if self.ready_cnt > 0 {
             return Some(&self.reads[self.ready_cnt - 1]);
