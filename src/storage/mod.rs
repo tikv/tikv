@@ -54,8 +54,8 @@ pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
         CfStatistics, Cursor, CursorBuilder, Engine, FlowStatistics, FlowStatsReporter, Iterator,
-        PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot, Statistics,
-        TestEngineBuilder,
+        PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot,
+        StageLatencyStats, Statistics, TestEngineBuilder,
     },
     raw::{RawEncodeSnapshot, RawStore},
     read_pool::{build_read_pool, build_read_pool_for_test},
@@ -106,7 +106,7 @@ use std::{
     },
 };
 use tikv_kv::SnapshotExt;
-use tikv_util::time::{Instant, ThreadReadId};
+use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -425,7 +425,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         raw_key: Vec<u8>,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<(Option<Value>, Statistics, PerfStatisticsDelta)>> {
+    ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
+        let stage_begin_ts = Instant::now_coarse();
         let key: Key = Key::from_raw(&raw_key);
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
@@ -436,6 +437,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
+                let stage_scheduled_ts = Instant::now_coarse();
                 tls_collect_query(
                     ctx.get_region_id(),
                     ctx.get_peer(),
@@ -471,6 +473,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
+                    let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
                     let snap_store = SnapshotStore::new(
@@ -502,7 +505,29 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.saturating_elapsed_secs());
 
-                    Ok((result?, statistics, delta))
+                    let stage_finished_ts = Instant::now_coarse();
+                    let schedule_wait_time =
+                        stage_scheduled_ts.saturating_duration_since(stage_begin_ts);
+                    let snapshot_wait_time =
+                        stage_snap_recv_ts.saturating_duration_since(stage_scheduled_ts);
+                    let wait_wall_time =
+                        stage_snap_recv_ts.saturating_duration_since(stage_begin_ts);
+                    let process_wall_time =
+                        stage_finished_ts.saturating_duration_since(stage_snap_recv_ts);
+                    let latency_stats = StageLatencyStats {
+                        schedule_wait_time_ms: duration_to_ms(schedule_wait_time),
+                        snapshot_wait_time_ms: duration_to_ms(snapshot_wait_time),
+                        wait_wall_time_ms: duration_to_ms(wait_wall_time),
+                        process_wall_time_ms: duration_to_ms(process_wall_time),
+                    };
+                    Ok((
+                        result?,
+                        KvGetStatistics {
+                            stats: statistics,
+                            perf_stats: delta,
+                            latency_stats,
+                        },
+                    ))
                 }
             }
             .in_resource_metering_tag(resource_tag),
@@ -686,7 +711,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         raw_keys: Vec<Vec<u8>>,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, Statistics, PerfStatisticsDelta)>> {
+    ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> {
+        let stage_begin_ts = Instant::now_coarse();
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -698,6 +724,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
+                let stage_scheduled_ts = Instant::now_coarse();
                 let mut key_ranges = vec![];
                 for key in &keys {
                     key_ranges.push(build_key_range(key.as_encoded(), key.as_encoded(), false));
@@ -733,6 +760,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
+                    let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
                     let snap_store = SnapshotStore::new(
@@ -777,7 +805,29 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.saturating_elapsed_secs());
 
-                    Ok((result?, statistics, delta))
+                    let stage_finished_ts = Instant::now_coarse();
+                    let schedule_wait_time =
+                        stage_scheduled_ts.saturating_duration_since(stage_begin_ts);
+                    let snapshot_wait_time =
+                        stage_snap_recv_ts.saturating_duration_since(stage_scheduled_ts);
+                    let wait_wall_time =
+                        stage_snap_recv_ts.saturating_duration_since(stage_begin_ts);
+                    let process_wall_time =
+                        stage_finished_ts.saturating_duration_since(stage_snap_recv_ts);
+                    let latency_stats = StageLatencyStats {
+                        schedule_wait_time_ms: duration_to_ms(schedule_wait_time),
+                        snapshot_wait_time_ms: duration_to_ms(snapshot_wait_time),
+                        wait_wall_time_ms: duration_to_ms(wait_wall_time),
+                        process_wall_time_ms: duration_to_ms(process_wall_time),
+                    };
+                    Ok((
+                        result?,
+                        KvGetStatistics {
+                            stats: statistics,
+                            perf_stats: delta,
+                            latency_stats,
+                        },
+                    ))
                 }
             }
             .in_resource_metering_tag(resource_tag),
@@ -2646,6 +2696,14 @@ pub mod test_util {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
     }
+}
+
+/// All statistics related to KvGet/KvBatchGet.
+#[derive(Debug, Default, Clone)]
+pub struct KvGetStatistics {
+    pub stats: Statistics,
+    pub perf_stats: PerfStatisticsDelta,
+    pub latency_stats: StageLatencyStats,
 }
 
 #[cfg(test)]
