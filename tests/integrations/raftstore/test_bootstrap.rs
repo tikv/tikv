@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use tempfile::Builder;
 
+use kvproto::kvrpcpb::ApiVersion;
 use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
 
@@ -143,10 +144,7 @@ fn test_node_bootstrap_idempotent() {
 
 #[test]
 fn test_node_switch_api_version_with_tidb_data() {
-    use kvproto::kvrpcpb::ApiVersion;
-
     let api_versions = [ApiVersion::V1, ApiVersion::V1ttl, ApiVersion::V2];
-
     for from_api in api_versions {
         for to_api in api_versions {
             // Bootstrap with `from_api`
@@ -168,10 +166,7 @@ fn test_node_switch_api_version_with_tidb_data() {
 
 #[test]
 fn test_node_switch_api_version_with_non_tidb_data() {
-    use kvproto::kvrpcpb::ApiVersion;
-
     let api_versions = [ApiVersion::V1, ApiVersion::V1ttl, ApiVersion::V2];
-
     for from_api in api_versions {
         for to_api in api_versions {
             // Bootstrap with `from_api`
