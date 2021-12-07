@@ -615,7 +615,7 @@ impl<R: RegionInfoProvider> Progress<R> {
 
 struct ControlThreadPool {
     size: usize,
-    workers: Option<Arc<Runtime>>,
+    workers: Option<Runtime>,
 }
 
 impl ControlThreadPool {
@@ -630,15 +630,11 @@ impl ControlThreadPool {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let workers = self.workers.as_ref().unwrap();
-        let w = workers.clone();
-        workers.spawn(async move {
-            func.await;
-            // Debug service requires jobs in the old thread pool continue to run even after
-            // the pool is recreated. So the pool needs to be ref counted and dropped after
-            // task has finished.
-            drop(w);
-        });
+        let workers = self
+            .workers
+            .as_ref()
+            .expect("ControlThreadPool: please call adjust_with() before spawn()");
+        workers.spawn(func);
     }
 
     /// Lazily adjust the thread pool's size
@@ -651,10 +647,11 @@ impl ControlThreadPool {
         }
         // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
         //   adapt it.
-        let workers = Arc::new(
-            create_tokio_runtime(new_size, "bkwkr")
-                .expect("failed to create tokio runtime for backup worker."),
-        );
+        if let Some(wkrs) = self.workers.take() {
+            wkrs.shutdown_background();
+        }
+        let workers = create_tokio_runtime(new_size, "bkwkr")
+            .expect("failed to create tokio runtime for backup worker.");
         self.workers = Some(workers);
         self.size = new_size;
         BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64);
@@ -1585,7 +1582,7 @@ pub mod tests {
         req.set_end_version(1);
         req.set_storage_backend(make_noop_backend());
 
-        let (tx, _) = unbounded();
+        let (tx, rx) = unbounded();
 
         // expand thread pool is needed
         endpoint.get_config_manager().set_num_threads(15);
@@ -1603,5 +1600,18 @@ pub mod tests {
         let (task, _) = Task::new(req, tx).unwrap();
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 3);
+
+        // make sure all tasks can finish properly.
+        let responses = block_on(rx.collect::<Vec<_>>());
+        assert_eq!(responses.len(), 3);
+
+        // for testing whether dropping the pool before all tasks finished causes panic.
+        // but the panic must be checked manually... (It may panic at tokio runtime threads...)
+        let mut pool = ControlThreadPool::new();
+        pool.adjust_with(1);
+        pool.spawn(async { tokio::time::sleep(Duration::from_millis(100)).await });
+        pool.adjust_with(2);
+        drop(pool);
+        std::thread::sleep(Duration::from_millis(150));
     }
 }
