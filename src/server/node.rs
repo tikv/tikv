@@ -252,6 +252,7 @@ where
         if store_id == INVALID_ID {
             return Err(box_err!("invalid store ident {:?}", ident));
         }
+        
         Ok(store_id)
     }
 
