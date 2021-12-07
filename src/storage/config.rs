@@ -108,8 +108,10 @@ impl Config {
             return Err("storage.api_version can only be set to 1 or 2.".into());
         }
         if self.api_version == 2 && !self.enable_ttl {
-            warn!("storage.enable_ttl is deprecated in API V2 since API V2 forces to enable TTL.");
-            self.enable_ttl = true;
+            return Err(
+                "storage.enable_ttl must be true in API V2 because API V2 forces to enable TTL."
+                    .into(),
+            );
         };
         self.io_rate_limit.validate()?;
 
