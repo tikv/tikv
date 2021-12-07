@@ -7,7 +7,7 @@ use tikv::storage::{kv::RocksEngine, mvcc::SnapshotReader, Engine};
 use txn_types::{Key, Mutation};
 
 fn prepare_mvcc_data(key: &Key, n: u64) -> SyncTestStorage<RocksEngine> {
-    let store = SyncTestStorageBuilder::new().build().unwrap();
+    let store = SyncTestStorageBuilder::default().build().unwrap();
     for ts in 1..=n {
         let mutation = Mutation::Put((key.clone(), b"value".to_vec()));
         store

@@ -7,7 +7,7 @@ use crate::storage::mvcc::{
 };
 use crate::storage::txn::actions::check_data_constraint::check_data_constraint;
 use crate::storage::Snapshot;
-use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, Value, Write, WriteType};
+use txn_types::{Key, LockType, OldValue, PessimisticLock, TimeStamp, Value, Write, WriteType};
 
 pub fn acquire_pessimistic_lock<S: Snapshot>(
     txn: &mut MvccTxn,
@@ -28,25 +28,6 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     // Update max_ts for Insert operation to guarante linearizability and snapshot isolation
     if should_not_exist {
         txn.concurrency_manager.update_max_ts(for_update_ts);
-    }
-
-    fn pessimistic_lock(
-        primary: &[u8],
-        start_ts: TimeStamp,
-        lock_ttl: u64,
-        for_update_ts: TimeStamp,
-        min_commit_ts: TimeStamp,
-    ) -> Lock {
-        Lock::new(
-            LockType::Pessimistic,
-            primary.to_vec(),
-            start_ts,
-            lock_ttl,
-            None,
-            for_update_ts,
-            0,
-            min_commit_ts,
-        )
     }
 
     fn load_old_value<S: Snapshot>(
@@ -104,14 +85,14 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
 
         // Overwrite the lock with small for_update_ts
         if for_update_ts > lock.for_update_ts {
-            let lock = pessimistic_lock(
-                primary,
-                reader.start_ts,
-                lock_ttl,
+            let lock = PessimisticLock {
+                primary: primary.into(),
+                start_ts: reader.start_ts,
+                ttl: lock_ttl,
                 for_update_ts,
                 min_commit_ts,
-            );
-            txn.put_lock(key, &lock);
+            };
+            txn.put_pessimistic_lock(key, lock);
         } else {
             MVCC_DUPLICATE_CMD_COUNTER_VEC
                 .acquire_pessimistic_lock
@@ -206,14 +187,14 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         prev_write_loaded,
         prev_write,
     )?;
-    let lock = pessimistic_lock(
-        primary,
-        reader.start_ts,
-        lock_ttl,
+    let lock = PessimisticLock {
+        primary: primary.into(),
+        start_ts: reader.start_ts,
+        ttl: lock_ttl,
         for_update_ts,
         min_commit_ts,
-    );
-    txn.put_lock(key, &lock);
+    };
+    txn.put_pessimistic_lock(key, lock);
     // TODO don't we need to commit the modifies in txn?
 
     Ok((val, old_value))
