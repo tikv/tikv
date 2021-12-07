@@ -650,9 +650,11 @@ mod tests {
     #[test]
     fn test_do_crypter_in_place() {
         let iv = Iv::new_ctr();
-        let key = iv.as_slice().clone();
+        let method = EncryptionMethod::Aes128Ctr;
+        let key = generate_data_key(method);
+
         let mut crypter_core =
-            CrypterCore::new(EncryptionMethod::Aes128Ctr, key, Mode::Encrypt, iv).unwrap();
+            CrypterCore::new(EncryptionMethod::Aes128Ctr, &key[..], Mode::Encrypt, iv).unwrap();
 
         let mut buf1 = "pingcap 01234567890abcdefg".as_bytes().to_vec();
         let mut buf2 = buf1.clone();
@@ -695,30 +697,21 @@ mod tests {
                 buf.copy_from_slice(&self.data[..copy_len]);
             }
 
-            println!("poll read in MockReader");
-            println!("self.data.len:{}", self.data.len());
-            println!("input buf.len:{}", buf.len());
-            println!("readlen:{}", copy_len);
             Poll::Ready(IoResult::Ok(copy_len))
         }
     }
 
     async fn test_poll_read() {
         let iv = Iv::new_ctr();
-        let mut key = vec![0; 16];
-        OsRng.fill_bytes(&mut key);
-
+        let method = EncryptionMethod::Aes128Ctr;
+        let key = generate_data_key(method);
         let mut plain_text = vec![0; 10240];
         OsRng.fill_bytes(&mut plain_text);
 
         // encrypt plaintext into encrypt_text
-        let mut encrypt_reader = EncrypterReader::new(
-            MockReader::new(&mut plain_text[..]),
-            EncryptionMethod::Aes128Ctr,
-            &key[..],
-            iv,
-        )
-        .unwrap();
+        let mut encrypt_reader =
+            EncrypterReader::new(MockReader::new(&mut plain_text[..]), method, &key[..], iv)
+                .unwrap();
 
         let mut encrypt_text = [0; 20480];
         let s = encrypt_reader.read(&mut encrypt_text[..]).await;
@@ -730,7 +723,7 @@ mod tests {
         // decrypt encrypt_text into decrypt_text
         let mut decrypt_reader = DecrypterReader::new(
             MockReader::new(&mut encrypt_text[..read_len]),
-            EncryptionMethod::Aes128Ctr,
+            method,
             &key[..],
             iv,
         )
