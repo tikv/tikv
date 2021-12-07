@@ -192,7 +192,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
 <<<<<<< HEAD
             if pairs.len() < limit {
                 cursor.next(statistics);
-            }else{
+            } else {
                 break;
             }
 =======
@@ -251,7 +251,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
 <<<<<<< HEAD
             if pairs.len() < limit {
                 cursor.next(statistics);
-            }else{
+            } else {
                 break;
             }
 =======
