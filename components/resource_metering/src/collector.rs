@@ -4,7 +4,7 @@ use crate::metrics::IGNORED_DATA_COUNTER;
 use crate::{RawRecords, Task};
 
 use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crossbeam::channel::{bounded, Sender};
@@ -33,6 +33,16 @@ pub trait Collector: Send {
     fn collect(&self, records: Arc<RawRecords>);
 }
 
+/// `CollectorRegistry` accepts registrations of [Collector].
+///
+/// Normally, 'registry' holds everything registered to it. However, the
+/// `CollectorRegistry` isn't implemented in the normal way. It will forward
+/// collectors passed in via the call [register] to the recorder via an
+/// internal channel. It is still named `registry` because we want users
+/// to treat it and use it as a normal registry.
+///
+/// [Collector]: crate::collector::Collector
+/// [register]: crate::collector::CollectorRegistry::register
 #[derive(Clone)]
 pub struct CollectorRegistry {
     tx: Sender<CollectorReg>,
@@ -50,7 +60,7 @@ impl CollectorRegistry {
 
     pub fn register(&self, collector: Box<dyn Collector>) -> CollectorHandle {
         static NEXT_COLLECTOR_ID: AtomicU64 = AtomicU64::new(1);
-        let id = CollectorId(NEXT_COLLECTOR_ID.fetch_add(1, Relaxed));
+        let id = CollectorId(NEXT_COLLECTOR_ID.fetch_add(1, Ordering::SeqCst));
 
         let reg_msg = CollectorReg::Register { collector, id };
         match self.tx.send(reg_msg) {
