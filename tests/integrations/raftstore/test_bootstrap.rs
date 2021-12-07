@@ -158,7 +158,7 @@ fn test_node_switch_api_version() {
             cluster.put(b"m_tidb_data", b"").unwrap();
             cluster.shutdown();
 
-            // Should be able to switch back to `to_api`.
+            // Should switch to `to_api`.
             cluster.cfg.storage.set_api_version(to_api);
             cluster.start().unwrap();
             cluster.shutdown();
