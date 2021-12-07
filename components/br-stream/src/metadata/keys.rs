@@ -38,7 +38,9 @@ pub struct KeyValue(pub MetaKey, pub Vec<u8>);
 
 impl std::fmt::Debug for MetaKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("MetaKey").field(&self.0.escape_ascii()).finish()
+        f.debug_tuple("MetaKey")
+            .field(&self.0.escape_ascii())
+            .finish()
     }
 }
 
