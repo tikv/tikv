@@ -66,8 +66,9 @@ pub enum ErrorInner {
     #[error("The length of ttls does not equal to the length of pairs")]
     TTLsLenNotEqualsToPairs,
 
-    #[error("Api version in request does not match with TiKV storage, storage: {:?}, request: {:?}", .storage_api_version, .req_api_version)]
+    #[error("Api version in request does not match with TiKV storage, cmd: {:?}, storage: {:?}, request: {:?}", .cmd, .storage_api_version, .req_api_version)]
     ApiVersionNotMatched {
+        cmd: CommandKind,
         storage_api_version: ApiVersion,
         req_api_version: ApiVersion,
     },
@@ -78,6 +79,16 @@ pub enum ErrorInner {
         key_prefix: KeyPrefix,
         key: String,
     },
+}
+
+impl ErrorInner {
+    pub fn invalid_key_prefix(cmd: CommandKind, key: &[u8]) -> Self {
+        ErrorInner::InvalidKeyPrefix {
+            cmd,
+            key_prefix: KeyPrefix::parse(key).0,
+            key: log_wrappers::hex_encode_upper(key),
+        }
+    }
 }
 
 impl From<DeadlineError> for ErrorInner {

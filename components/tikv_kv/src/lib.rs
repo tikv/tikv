@@ -32,7 +32,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{error, ptr, result};
 
-use engine_traits::{CfName, CF_DEFAULT};
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK};
 use engine_traits::{
     IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions, WriteBatch,
 };
@@ -42,7 +42,7 @@ use kvproto::kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange};
 use raftstore::store::TxnExt;
 use thiserror::Error;
 use tikv_util::{deadline::Deadline, escape};
-use txn_types::{Key, TimeStamp, TxnExtra, Value};
+use txn_types::{Key, PessimisticLock, TimeStamp, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
@@ -67,6 +67,7 @@ pub type Result<T> = result::Result<T, Error>;
 pub enum Modify {
     Delete(CfName, Key),
     Put(CfName, Key, Value),
+    PessimisticLock(Key, PessimisticLock),
     // cf_name, start_key, end_key, notify_only
     DeleteRange(CfName, Key, Key, bool),
 }
@@ -76,6 +77,7 @@ impl Modify {
         let cf = match self {
             Modify::Delete(cf, _) => cf,
             Modify::Put(cf, ..) => cf,
+            Modify::PessimisticLock(..) => &CF_LOCK,
             Modify::DeleteRange(..) => unreachable!(),
         };
         let cf_size = if cf == &CF_DEFAULT { 0 } else { cf.len() };
@@ -83,6 +85,7 @@ impl Modify {
         match self {
             Modify::Delete(_, k) => cf_size + k.as_encoded().len(),
             Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
+            Modify::PessimisticLock(k, _) => cf_size + k.as_encoded().len(), // FIXME: inaccurate
             Modify::DeleteRange(..) => unreachable!(),
         }
     }
@@ -492,6 +495,11 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
                     trace!("RocksEngine: put_cf"; "cf" => cf, "key" => %k, "value" => escape(&v));
                     wb.put_cf(cf, k.as_encoded(), &v)
                 }
+            }
+            Modify::PessimisticLock(k, lock) => {
+                let v = lock.into_lock().to_bytes();
+                trace!("RocksEngine: put lock"; "key" => %k, "values" => escape(&v));
+                wb.put_cf(CF_LOCK, k.as_encoded(), &v)
             }
             Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
                 trace!(

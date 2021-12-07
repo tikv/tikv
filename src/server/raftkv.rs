@@ -16,7 +16,7 @@ use raft::eraftpb::{self, MessageType};
 use thiserror::Error;
 
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_DEFAULT};
+use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_DEFAULT, CF_LOCK};
 use kvproto::{
     errorpb,
     kvrpcpb::Context,
@@ -346,6 +346,10 @@ where
                     let bytes = keys::data_key(key.as_encoded());
                     *key = Key::from_encoded(bytes);
                 }
+                Modify::PessimisticLock(ref mut key, _) => {
+                    let bytes = keys::data_key(key.as_encoded());
+                    *key = Key::from_encoded(bytes);
+                }
                 Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
                     let bytes = keys::data_key(key1.as_encoded());
                     *key1 = Key::from_encoded(bytes);
@@ -574,6 +578,15 @@ pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<Request> {
                 if cf != CF_DEFAULT {
                     put.set_cf(cf.to_string());
                 }
+                req.set_cmd_type(CmdType::Put);
+                req.set_put(put);
+            }
+            Modify::PessimisticLock(k, lock) => {
+                let v = lock.into_lock().to_bytes();
+                let mut put = PutRequest::default();
+                put.set_key(k.into_encoded());
+                put.set_value(v);
+                put.set_cf(CF_LOCK.to_string());
                 req.set_cmd_type(CmdType::Put);
                 req.set_put(put);
             }
