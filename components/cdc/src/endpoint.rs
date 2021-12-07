@@ -1621,6 +1621,8 @@ mod tests {
     }
 
     impl TestEndpointSuite {
+        // It's important to matain raft receivers in `raft_rxs`, otherwise all cases
+        // need to drop `endpoint` and `rx` in order manually.
         fn add_region(&mut self, region_id: u64, cap: usize) {
             let rx = self.raft_router.add_region(region_id, cap);
             self.raft_rxs.insert(region_id, rx);
