@@ -324,7 +324,7 @@ impl<S: Snapshot> ScannerConfig<S> {
 /// Panics if there is a short value carried in the given `write`.
 ///
 /// Panics if key in default CF does not exist. This means there is a data corruption.
-fn near_load_data_by_write<I>(
+pub fn near_load_data_by_write<I>(
     default_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
     user_key: &Key,
     write_start_ts: TimeStamp,
