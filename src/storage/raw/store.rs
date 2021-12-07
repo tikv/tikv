@@ -242,7 +242,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
                 },
             )));
             if pairs.len() < limit {
-                cursor.next(statistics);
+                cursor.prev(statistics);
             } else {
                 break;
             }
