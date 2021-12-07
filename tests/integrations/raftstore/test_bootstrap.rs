@@ -163,16 +163,21 @@ fn test_node_switch_api_version() {
             cluster.start().unwrap();
             cluster.shutdown();
 
-            if from_api != to_api {
-                // Bootstrap a new cluster with `from_api`
-                let mut cluster = new_node_cluster(0, 1);
-                cluster.cfg.storage.set_api_version(from_api);
-                cluster.run();
+            // Bootstrap a new cluster with `from_api`
+            let mut cluster = new_node_cluster(0, 1);
+            cluster.cfg.storage.set_api_version(from_api);
+            cluster.run();
 
-                // Write non-TiDB data.
-                cluster.put(b"k1", b"").unwrap();
+            // Write non-TiDB data.
+            cluster.put(b"k1", b"").unwrap();
+            cluster.shutdown();
+
+            if from_api == to_api {
+                // Should switch to `to_api`.
+                cluster.cfg.storage.set_api_version(to_api);
+                cluster.start().unwrap();
                 cluster.shutdown();
-
+            } else {
                 // Should not be able to switch to `to_api`.
                 cluster.cfg.storage.set_api_version(to_api);
                 assert!(cluster.start().is_err());
