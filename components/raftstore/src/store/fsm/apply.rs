@@ -3738,7 +3738,7 @@ where
 impl<EK, W> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, W>
 where
     EK: KvEngine,
-    W: WriteBatch<EK>,
+    W: WriteBatch<EK> + 'static,
 {
     fn begin(&mut self, _batch_size: usize) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
@@ -3896,7 +3896,7 @@ where
 impl<EK, W> HandlerBuilder<ApplyFsm<EK>, ControlFsm> for Builder<EK, W>
 where
     EK: KvEngine,
-    W: WriteBatch<EK>,
+    W: WriteBatch<EK> + 'static,
 {
     type Handler = ApplyPoller<EK, W>;
 
@@ -3920,6 +3920,28 @@ where
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
             trace_event: Default::default(),
+        }
+    }
+}
+
+impl<EK, W> Clone for Builder<EK, W>
+where
+    EK: KvEngine,
+    W: WriteBatch<EK>,
+{
+    fn clone(&self) -> Self {
+        Builder {
+            tag: self.tag.clone(),
+            cfg: self.cfg.clone(),
+            coprocessor_host: self.coprocessor_host.clone(),
+            importer: self.importer.clone(),
+            region_scheduler: self.region_scheduler.clone(),
+            engine: self.engine.clone(),
+            sender: self.sender.clone_box(),
+            router: self.router.clone(),
+            _phantom: self._phantom,
+            store_id: self.store_id,
+            pending_create_peers: self.pending_create_peers.clone(),
         }
     }
 }
