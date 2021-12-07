@@ -128,11 +128,12 @@ impl MetaStore for EtcdStore {
     }
 }
 
-impl Into<Txn> for super::Transaction {
-    fn into(self) -> Txn {
+impl From<super::Transaction> for Txn {
+    fn from(etcd_txn: super::Transaction) -> Txn {
         let txn = Txn::default();
         txn.and_then(
-            self.into_ops()
+            etcd_txn
+                .into_ops()
                 .into_iter()
                 .map(|op| match op {
                     super::TransactionOp::Put(mut pair) => {

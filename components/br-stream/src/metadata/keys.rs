@@ -138,7 +138,7 @@ pub fn extract_name_from_info(full_path: &str) -> Option<&str> {
 }
 
 /// extract the range from the key path.
-pub fn extract_range_from_key<'a>(full_path: &'a [u8]) -> Option<&'a [u8]> {
+pub fn extract_range_from_key(full_path: &[u8]) -> Option<&[u8]> {
     let caps = EXTRACT_KEY_FROM_PATH_RE.captures(full_path)?;
     let start_key = caps.name("start_key")?;
     Some(start_key.as_bytes())
