@@ -7,12 +7,6 @@ edition = "2018"
 name = "playground"
 path = "bin/playground.rs"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-# [features]
-# default = ["protobuf-codec"]
-# protobuf-codec = ["kvproto/protobuf-codec"]
-# prost-codec = ["prost", "kvproto/protobuf"]
-
 [dependencies]
 
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }

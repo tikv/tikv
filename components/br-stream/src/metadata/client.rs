@@ -59,8 +59,6 @@ impl PartialEq for MetadataEvent {
     }
 }
 
-impl Eq for MetadataEvent {}
-
 impl MetadataEvent {
     fn from_watch_event(event: &KvEvent) -> Option<MetadataEvent> {
         // Maybe report an error when the kv isn't present?
@@ -78,11 +76,11 @@ impl MetadataEvent {
 }
 
 /// extract the start key and the end key from a metadata key-value pair.
-/// example: KeyValue(<prefix>/ranges/<start-key>, <end-key>) -> (<start-key>, <end-key>)
-fn take_range(kv: &mut KeyValue, task_name: &str) -> (Vec<u8>, Vec<u8>) {
+/// example: `KeyValue(<prefix>/ranges/<start-key>, <end-key>) -> (<start-key>, <end-key>)`
+fn take_range(kv: &mut KeyValue) -> (Vec<u8>, Vec<u8>) {
     let key = kv.take_key();
     (
-        super::keys::extract_range_from_key(key.as_slice(), task_name)
+        super::keys::extract_range_from_key(key.as_slice())
             .map(|v| v.to_vec())
             .unwrap_or(key),
         kv.take_value(),
@@ -207,7 +205,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
             revision: snap.revision(),
             inner: ranges
                 .into_iter()
-                .map(|mut kv| take_range(&mut kv, task_name))
+                .map(|mut kv| take_range(&mut kv))
                 .collect(),
         })
     }
@@ -249,11 +247,11 @@ impl<Store: MetaStore> MetadataClient<Store> {
         if !prev.kvs.is_empty() {
             let kv = &mut prev.kvs[0];
             if kv.value() > start_key.as_slice() {
-                result.push(take_range(kv, task_name));
+                result.push(take_range(kv));
             }
         }
         for mut kv in all {
-            result.push(take_range(&mut kv, task_name));
+            result.push(take_range(&mut kv));
         }
         Ok(WithRevision {
             revision: snap.revision(),

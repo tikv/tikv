@@ -1,11 +1,4 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{
-    cell::Cell,
-    collections::{BTreeMap, HashMap},
-    ops::Bound,
-    sync::Arc,
-};
-
 use crate::{
     errors::Result,
     metadata::{
@@ -17,11 +10,18 @@ use crate::{
     },
 };
 use async_trait::async_trait;
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, HashMap},
+    ops::Bound,
+    sync::Arc,
+};
 use tokio::sync::{
     mpsc::{self, Sender},
     Mutex,
 };
 use tokio_stream::StreamExt;
+
 struct Subscriber {
     start_key: Vec<u8>,
     end_key: Vec<u8>,

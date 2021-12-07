@@ -31,17 +31,10 @@ fn simple_task(name: &str) -> Task {
 // Maybe we can make it more generic...?
 // But there isn't a AsIter trait :(
 fn assert_range_matches(real: Vec<(Vec<u8>, Vec<u8>)>, expected: &[(&[u8], &[u8])]) {
-    assert_eq!(
-        real.len(),
-        expected.len(),
-        "range not match: {:?} vs {:?}",
-        real,
-        expected
-    );
     assert!(
         real.iter()
-            .zip(expected.iter())
-            .all(|((k, v), (rk, rv))| { k.as_slice() == *rk && v.as_slice() == *rv }),
+            .map(|(k, v)| (k.as_slice(), v.as_slice()))
+            .eq(expected.iter().copied()),
         "range not match: {:?} vs {:?}",
         real,
         expected,

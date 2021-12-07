@@ -1,16 +1,19 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use bytes::BufMut;
 use lazy_static::lazy_static;
-use regex::Regex;
+use regex::bytes::Regex as ByteRegex;
 
 const PREFIX: &str = "/tidb/br-stream";
 const PATH_INFO: &str = "/info";
 const PATH_NEXT_BACKUP_TS: &str = "/checkpoint";
 const PATH_RANGES: &str = "/ranges";
 const PATH_PAUSE: &str = "/pause";
+// Note: maybe use something like `const_fmt` for concatenating constant strings?
+const TASKS_PREFIX: &str = "/tidb/br-stream/info/";
 lazy_static! {
-    static ref EXTRACT_NAME_FROM_INFO_RE: Regex =
-        Regex::new(r"/tidb/br-stream/info/(?P<task_name>[0-9a-zA-Z_]+)").unwrap();
+    static ref EXTRACT_KEY_FROM_PATH_RE: ByteRegex =
+        ByteRegex::new(r"^/tidb/br-stream/ranges/(?P<task_name>[0-9a-zA-Z_]+)/(?P<start_key>.+)$")
+            .unwrap();
 }
 
 /// A key that associates to some metadata.
@@ -35,11 +38,7 @@ pub struct KeyValue(pub MetaKey, pub Vec<u8>);
 
 impl std::fmt::Debug for MetaKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match std::str::from_utf8(&self.0) {
-            Ok(s) => s.to_owned(),
-            Err(_) => format!("<{}>", hex::encode(&self.0)),
-        };
-        f.debug_tuple("MetaKey").field(&s).finish()
+        f.debug_tuple("MetaKey").field(&self.0.escape_ascii()).finish()
     }
 }
 
@@ -70,7 +69,7 @@ impl From<MetaKey> for Vec<u8> {
 impl MetaKey {
     /// the basic tasks path prefix.
     pub fn tasks() -> Self {
-        Self(format!("{}{}", PREFIX, PATH_INFO).into_bytes())
+        Self(TASKS_PREFIX.to_owned().into_bytes())
     }
 
     /// the path for the specified path.
@@ -103,7 +102,7 @@ impl MetaKey {
     }
 
     /// The key for pausing some task.
-    pub fn pause(name: &str) -> Self {
+    pub fn pause_of(name: &str) -> Self {
         Self(format!("{}{}/{}", PREFIX, PATH_PAUSE, name).into_bytes())
     }
 
@@ -133,16 +132,12 @@ impl MetaKey {
 
 /// extract the task name from the task info path.
 pub fn extract_name_from_info(full_path: &str) -> Option<&str> {
-    Some(
-        EXTRACT_NAME_FROM_INFO_RE
-            .captures(full_path)?
-            .name("task_name")?
-            .as_str(),
-    )
+    full_path.strip_prefix(TASKS_PREFIX)
 }
 
 /// extract the range from the key path.
-pub fn extract_range_from_key<'a>(full_path: &'a [u8], task_name: &str) -> Option<&'a [u8]> {
-    let prefix = MetaKey::ranges_of(task_name);
-    full_path.strip_prefix(prefix.0.as_slice())
+pub fn extract_range_from_key<'a>(full_path: &'a [u8]) -> Option<&'a [u8]> {
+    let caps = EXTRACT_KEY_FROM_PATH_RE.captures(full_path)?;
+    let start_key = caps.name("start_key")?;
+    Some(start_key.as_bytes())
 }
