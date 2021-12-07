@@ -651,12 +651,13 @@ mod tests {
     fn test_do_crypter_in_place() {
         let iv = Iv::new_ctr();
         let key = iv.as_slice().clone();
-        let mut crypter_core = CrypterCore::new(EncryptionMethod::Aes128Ctr, key, Mode::Encrypt, iv).unwrap();
+        let mut crypter_core =
+            CrypterCore::new(EncryptionMethod::Aes128Ctr, key, Mode::Encrypt, iv).unwrap();
 
         let mut buf1 = "pingcap 01234567890abcdefg".as_bytes().to_vec();
         let mut buf2 = buf1.clone();
         let half_len = buf1.len() / 2;
-        
+
         let r = crypter_core.do_crypter_in_place(&mut buf1[..]);
         assert!(r.is_ok());
 
@@ -668,29 +669,29 @@ mod tests {
         assert!(r.is_ok());
         assert_eq!(buf1, buf2);
     }
-    
-    struct MockReader{
+
+    struct MockReader {
         data: Vec<u8>,
     }
 
-    impl MockReader{
+    impl MockReader {
         fn new(buff: &mut [u8]) -> MockReader {
-            Self{
+            Self {
                 data: buff.to_owned(),
             }
         }
     }
 
-    impl AsyncRead for MockReader{
+    impl AsyncRead for MockReader {
         fn poll_read(
             self: Pin<&mut Self>,
             _cx: &mut Context<'_>,
             buf: &mut [u8],
-        ) -> Poll<IoResult<usize>>  {
+        ) -> Poll<IoResult<usize>> {
             let copy_len = std::cmp::min(self.data.len(), buf.len());
-            if self.data.len() < buf.len(){
+            if self.data.len() < buf.len() {
                 buf[..copy_len].copy_from_slice(&self.data[..]);
-            }else{
+            } else {
                 buf.copy_from_slice(&self.data[..copy_len]);
             }
 
@@ -700,10 +701,9 @@ mod tests {
             println!("readlen:{}", copy_len);
             Poll::Ready(IoResult::Ok(copy_len))
         }
-    
     }
-    
-    async fn test_poll_read(){
+
+    async fn test_poll_read() {
         let iv = Iv::new_ctr();
         let mut key = vec![0; 16];
         OsRng.fill_bytes(&mut key);
@@ -714,10 +714,11 @@ mod tests {
         // encrypt plaintext into encrypt_text
         let mut encrypt_reader = EncrypterReader::new(
             MockReader::new(&mut plain_text[..]),
-            EncryptionMethod::Aes128Ctr, 
-            &key[..], 
-            iv
-        ).unwrap();
+            EncryptionMethod::Aes128Ctr,
+            &key[..],
+            iv,
+        )
+        .unwrap();
 
         let mut encrypt_text = [0; 20480];
         let s = encrypt_reader.read(&mut encrypt_text[..]).await;
@@ -728,11 +729,12 @@ mod tests {
 
         // decrypt encrypt_text into decrypt_text
         let mut decrypt_reader = DecrypterReader::new(
-            MockReader::new(&mut encrypt_text[..read_len]), 
+            MockReader::new(&mut encrypt_text[..read_len]),
             EncryptionMethod::Aes128Ctr,
             &key[..],
             iv,
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut decrypt_text = [0; 20480];
         let s = decrypt_reader.read(&mut decrypt_text[..]).await;
@@ -741,9 +743,9 @@ mod tests {
         assert_eq!(read_len, plain_text.len());
         assert_eq!(decrypt_text[..read_len], plain_text);
     }
-    
+
     #[test]
-    fn test_async_read(){
+    fn test_async_read() {
         futures::executor::block_on(test_poll_read());
     }
 }
