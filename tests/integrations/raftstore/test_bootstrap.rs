@@ -143,7 +143,7 @@ fn test_node_bootstrap_idempotent() {
 
 #[test]
 fn test_node_switch_api_version() {
-    // V1 and V1ttl are impossible to switch bewteen becuase of config check.
+    // V1 and V1ttl are impossible to switch between because of config check.
     let cases = [
         (ApiVersion::V1, ApiVersion::V1),
         (ApiVersion::V1, ApiVersion::V2),
