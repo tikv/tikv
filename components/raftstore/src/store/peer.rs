@@ -1036,7 +1036,7 @@ where
     pub fn check_after_tick(&self, state: GroupState, res: CheckTickResult) -> bool {
         if res.leader {
             if res.up_to_date {
-                self.is_leader()
+                self.is_leader() && self.raft_group.raft.pending_read_count() == 0
             } else {
                 if !res.reason.is_empty() {
                     debug!("rejecting sleeping"; "reason" => res.reason, "region_id" => self.region_id, "peer_id" => self.peer_id());
