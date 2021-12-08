@@ -197,6 +197,7 @@ fn test_request_in_joint_state() {
 #[test]
 fn test_joint_replace_peers() {
     let mut cluster = new_node_cluster(0, 5);
+    cluster.cfg.raft_store.allow_remove_leader = false;
 
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -269,6 +270,7 @@ fn test_joint_replace_peers() {
 #[test]
 fn test_invalid_confchange_request() {
     let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.allow_remove_leader = false;
 
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();

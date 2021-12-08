@@ -62,6 +62,7 @@ abnormal-leader-missing-duration = "1500ms"
 peer-stale-state-check-interval = "1s"
 report-region-flow-interval = "100ms"
 raft-store-max-leader-lease = "240ms"
+allow-remove-leader = true
 merge-check-tick-interval = "100ms"
 pd-heartbeat-tick-interval = "20ms"
 dev-assert = true
