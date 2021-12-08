@@ -8,6 +8,7 @@ use crate::storage::mvcc::{
     Result,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use tikv_kv::SnapshotExt;
 use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
 
 /// Read from an MVCC snapshot, i.e., a logical view of the database at a specific timestamp (the
@@ -150,6 +151,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
     }
 
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
+        if let Some(pessimistic_lock) = self.load_in_memory_pessimistic_lock(key) {
+            return Ok(Some(pessimistic_lock));
+        }
+
         if self.scan_mode.is_some() {
             self.create_lock_cursor()?;
         }
@@ -168,6 +173,17 @@ impl<S: EngineSnapshot> MvccReader<S> {
         };
 
         Ok(res)
+    }
+
+    fn load_in_memory_pessimistic_lock(&self, key: &Key) -> Option<Lock> {
+        self.snapshot.ext().get_txn_ext().and_then(|txn_ext| {
+            txn_ext
+                .pessimistic_locks
+                .read()
+                .map
+                .get(key)
+                .map(|lock| lock.to_lock())
+        })
     }
 
     fn get_scan_mode(&self, allow_backward: bool) -> ScanMode {
@@ -747,6 +763,11 @@ pub mod tests {
                     Modify::Delete(cf, k) => {
                         let k = keys::data_key(k.as_encoded());
                         wb.delete_cf(cf, &k).unwrap();
+                    }
+                    Modify::PessimisticLock(k, lock) => {
+                        let k = keys::data_key(k.as_encoded());
+                        let v = lock.into_lock().to_bytes();
+                        wb.put_cf(CF_LOCK, &k, &v).unwrap();
                     }
                     Modify::DeleteRange(cf, k1, k2, notify_only) => {
                         if !notify_only {
