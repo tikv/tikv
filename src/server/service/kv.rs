@@ -1296,7 +1296,8 @@ fn check_engine_corruption_err<T>(res: &crate::storage::Result<T>) {
         {
             // Hack! it depend on the error message to identify the engine corruption error
             let err_msg = format!("{}", e).to_lowercase();
-            if err_msg.contains("corruption") && err_msg.contains("sst") {
+            if err_msg.contains("corruption") {
+                tikv_util::set_panic_mark();
                 panic!("kv request met engine corruption error: {:?}", e);
             }
         }
