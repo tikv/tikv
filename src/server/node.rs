@@ -157,6 +157,7 @@ where
                 "injected error: node_after_bootstrap_store"
             )));
         }
+        self.check_api_version(&engines)?;
         self.store.set_id(store_id);
         Ok(())
     }
@@ -257,15 +258,26 @@ where
             return Err(box_err!("invalid store ident {:?}", ident));
         }
 
-        self.check_api_version(engines, ident)?;
-
         Ok(store_id)
     }
 
     // During the api version switch only TiDB data are allowed to exist otherwise
     // returns error.
-    fn check_api_version(&self, engines: &Engines<EK, ER>, ident: StoreIdent) -> Result<()> {
-        if ident.api_version != self.api_version {
+    fn check_api_version(&self, engines: &Engines<EK, ER>) -> Result<()> {
+        let ident = engines
+            .kv
+            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?
+            .expect("Store should have bootstrapped");
+        // API version is not written into `StoreIdent` in legacy TiKV, thus it will be V1 in
+        // `StoreIdent` regardless of `storage.enable_ttl`. To allow upgrading from legacy V1
+        // TiKV, the config switch between V1 and V1ttl are not checked here.
+        // It's safe to do so because `storage.enable_ttl` is impossible to change thanks to the
+        // config check.
+        let should_check = match (ident.api_version, self.api_version) {
+            (ApiVersion::V1, ApiVersion::V1ttl) | (ApiVersion::V1ttl, ApiVersion::V1) => false,
+            (left, right) => left != right,
+        };
+        if should_check {
             // Check if there are only TiDB data in the engine
             let snapshot = engines.kv.snapshot();
             for cf in DATA_CFS {
@@ -282,12 +294,6 @@ where
                         },
                     )?;
                     if let Some(unexpected_data_key) = unexpected_data_key {
-                        error!(
-                            "unable to switch `storage.api_version`";
-                            "current" => ?ident.api_version,
-                            "target" => ?self.api_version,
-                            "found data key that is not written by TiDB" => log_wrappers::hex_encode_upper(&unexpected_data_key),
-                        );
                         return Err(box_err!(
                             "unable to switch `storage.api_version` from {:?} to {:?} \
                             because found data key that is not written by TiDB: {:?}",
