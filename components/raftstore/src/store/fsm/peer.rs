@@ -1386,15 +1386,16 @@ where
         // If lease expired, we will send a noop read index to renew lease.
         if self.fsm.peer.is_leader() {
             let current_time = *self.ctx.current_time.get_or_insert_with(monotonic_raw_now);
-            let next_tick = current_time + self.ctx.cfg.raft_base_tick_interval() * 2;
+            let next_heartbeat = current_time
+                + self.ctx.cfg.raft_base_tick_interval() * self.ctx.cfg.raft_heartbeat_ticks as i32;
             // We need to propose a read index request if current lease can't cover till next tick
-            let need_propose = match self.fsm.peer.leader_lease.inspect(Some(next_tick)) {
+            let need_propose = match self.fsm.peer.leader_lease.inspect(Some(next_heartbeat)) {
                 LeaseState::Expired => {
                     let max_lease = self.ctx.cfg.raft_store_max_leader_lease();
                     self.fsm.peer.pending_reads.back().map_or(true, |read| {
                         // If there are read index whose lease can cover till next tick
                         // then we don't need to propose a new one
-                        read.propose_time + max_lease < next_tick
+                        read.propose_time + max_lease < next_heartbeat
                     })
                 }
                 _ => false,
