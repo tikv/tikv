@@ -2256,7 +2256,7 @@ impl Default for BackupStreamConfig {
     fn default() -> Self {
         let cpu_num = SysQuota::cpu_cores_quota();
         Self {
-            // use at most 75% of vCPU by default
+            // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
             enable_streaming: false,
         }
@@ -2448,6 +2448,9 @@ pub struct TiKvConfig {
     pub backup: BackupConfig,
 
     #[online_config(submodule)]
+    pub backup_stream: BackupStreamConfig,
+
+    #[online_config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
 
     #[online_config(submodule)]
@@ -2464,9 +2467,6 @@ pub struct TiKvConfig {
 
     #[online_config(submodule)]
     pub resource_metering: ResourceMeteringConfig,
-
-    #[online_config(submodule)]
-    pub backup_stream: BackupStreamConfig,
 }
 
 impl Default for TiKvConfig {
