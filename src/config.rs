@@ -2634,6 +2634,7 @@ impl TiKvConfig {
         self.security.validate()?;
         self.import.validate()?;
         self.backup.validate()?;
+        self.backup_stream.validate()?;
         self.cdc.validate()?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
@@ -3200,6 +3201,7 @@ impl From<&str> for Module {
             "security" => Module::Security,
             "import" => Module::Import,
             "backup" => Module::Backup,
+            "backup_stream" => Module::BackupStream,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
             "cdc" => Module::CDC,
@@ -4360,6 +4362,7 @@ mod tests {
             ("security", Module::Security),
             ("import", Module::Import),
             ("backup", Module::Backup),
+            ("backup_stream", Module::BackupStream),
             ("pessimistic_txn", Module::PessimisticTxn),
             ("gc", Module::Gc),
             ("cdc", Module::CDC),
