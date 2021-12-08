@@ -602,11 +602,22 @@ impl<E: Engine> Endpoint<E> {
     }
 }
 
+fn is_engine_corruption_error(e: &Error) -> bool {
+    // Hack! it depend on the error message to identify the engine corruption error
+    let err_msg = format!("{:?}", e).to_lowercase();
+    err_msg.contains("engine") && err_msg.contains("corruption") && err_msg.contains("sst")
+}
+
 fn make_error_response(e: Error) -> coppb::Response {
     warn!(
         "error-response";
         "err" => %e
     );
+
+    if is_engine_corruption_error(&e) {
+        panic!("met engine corruption error: {:?}", e);
+    }
+
     let mut resp = coppb::Response::default();
     let tag;
     match e {
