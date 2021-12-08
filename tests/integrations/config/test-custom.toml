@@ -608,6 +608,7 @@ enabled = false # test backward compatibility
 wait-for-lock-timeout = "10ms"
 wake-up-delay-duration = 100 # test backward compatibility
 pipelined = false
+in-memory = true
 
 [cdc]
 min-ts-interval = "4s"
