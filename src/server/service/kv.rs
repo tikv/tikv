@@ -1290,6 +1290,19 @@ async fn future_handle_empty(
     Ok(res)
 }
 
+fn check_engine_corruption_err<T>(res: &crate::storage::Result<T>) {
+    if let Err(err) = res {
+        if let crate::storage::ErrorInner::Engine(engine_traits::Error::Engine(e)) = err.0.as_ref()
+        {
+            // Hack! it depend on the error message to identify the engine corruption error
+            let err_msg = format!("{}", e).to_lowercase();
+            if err_msg.contains("corruption") && err_msg.contains("sst") {
+                panic!("kv request met engine corruption error: {:?}", e);
+            }
+        }
+    }
+}
+
 fn future_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: GetRequest,
@@ -1303,6 +1316,10 @@ fn future_get<E: Engine, L: LockManager>(
 
     async move {
         let v = v.await;
+
+        // Check engine corruption error
+        check_engine_corruption_err(&v);
+
         let duration_ms = duration_to_ms(start.saturating_elapsed());
         let mut resp = GetResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -1347,6 +1364,10 @@ fn future_scan<E: Engine, L: LockManager>(
 
     async move {
         let v = v.await;
+
+        // Check engine corruption error
+        check_engine_corruption_err(&v);
+
         let mut resp = ScanResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1382,6 +1403,10 @@ fn future_batch_get<E: Engine, L: LockManager>(
 
     async move {
         let v = v.await;
+
+        // Check engine corruption error
+        check_engine_corruption_err(&v);
+
         let duration_ms = duration_to_ms(start.saturating_elapsed());
         let mut resp = BatchGetResponse::default();
         if let Some(err) = extract_region_error(&v) {
