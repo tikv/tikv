@@ -324,7 +324,7 @@
 
 ## The path to RaftDB directory.
 ## If not set, it will be `{data-dir}/raft`.
-## If there are multiple disks on the machine, storing the data of Raft RocksDB on differen disks
+## If there are multiple disks on the machine, storing the data of Raft RocksDB on a different disk
 ## can improve TiKV performance.
 # raftdb-path = ""
 
@@ -925,6 +925,8 @@
 
 ## Directory to store log files. Will be created on startup if not exists.
 ## If not set, it will be `{data-dir}/raft-engine`.
+## If there are multiple disks on the machine, storing the data of Raft engine on a different disk
+## can improve TiKV performance.
 # dir = ""
 
 ## Compress a log batch if its size exceeds this value.
