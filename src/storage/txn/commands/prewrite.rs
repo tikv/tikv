@@ -184,14 +184,15 @@ impl CommandExt for Prewrite {
         let mut bytes = 0;
         for m in &self.mutations {
             match *m {
-                Mutation::Put((ref key, ref value)) | Mutation::Insert((ref key, ref value)) => {
+                Mutation::Put((ref key, ref value), _)
+                | Mutation::Insert((ref key, ref value), _) => {
                     bytes += key.as_encoded().len();
                     bytes += value.len();
                 }
-                Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
+                Mutation::Delete(ref key, _) | Mutation::Lock(ref key, _) => {
                     bytes += key.as_encoded().len();
                 }
-                Mutation::CheckNotExists(_) => (),
+                Mutation::CheckNotExists(..) => (),
             }
         }
         bytes
@@ -315,14 +316,15 @@ impl CommandExt for PrewritePessimistic {
         let mut bytes = 0;
         for (m, _) in &self.mutations {
             match *m {
-                Mutation::Put((ref key, ref value)) | Mutation::Insert((ref key, ref value)) => {
+                Mutation::Put((ref key, ref value), _)
+                | Mutation::Insert((ref key, ref value), _) => {
                     bytes += key.as_encoded().len();
                     bytes += value.len();
                 }
-                Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
+                Mutation::Delete(ref key, _) | Mutation::Lock(ref key, _) => {
                     bytes += key.as_encoded().len();
                 }
-                Mutation::CheckNotExists(_) => (),
+                Mutation::CheckNotExists(..) => (),
             }
         }
         bytes
@@ -786,20 +788,20 @@ mod tests {
         let mut mutations = Vec::default();
         let pri_key = &[pri_key_number];
         for i in 0..write_num {
-            mutations.push(Mutation::Insert((
+            mutations.push(Mutation::make_insert(
                 Key::from_raw(&[i as u8]),
                 b"100".to_vec(),
-            )));
+            ));
         }
         let mut statistic = Statistics::default();
         let engine = TestEngineBuilder::new().build().unwrap();
         prewrite(
             &engine,
             &mut statistic,
-            vec![Mutation::Put((
+            vec![Mutation::make_put(
                 Key::from_raw(&[pri_key_number]),
                 b"100".to_vec(),
-            ))],
+            )],
             pri_key.to_vec(),
             99,
             None,
@@ -909,10 +911,10 @@ mod tests {
         let pri_key_number = 0;
         let pri_key = &[pri_key_number];
         for i in 0..40 {
-            mutations.push(Mutation::Insert((
+            mutations.push(Mutation::make_insert(
                 Key::from_raw(&[b'z', i as u8]),
                 b"100".to_vec(),
-            )));
+            ));
         }
         let engine = TestEngineBuilder::new().build().unwrap();
         let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
@@ -960,7 +962,7 @@ mod tests {
 
         let key = b"k";
         let value = b"v";
-        let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
+        let mutations = vec![Mutation::make_put(Key::from_raw(key), value.to_vec())];
 
         let mut statistics = Statistics::default();
         prewrite_with_cm(
@@ -979,7 +981,7 @@ mod tests {
 
         cm.update_max_ts(50.into());
 
-        let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
+        let mutations = vec![Mutation::make_put(Key::from_raw(key), value.to_vec())];
 
         let mut statistics = Statistics::default();
         // Test the idempotency of prewrite when falling back to 2PC.
@@ -1001,8 +1003,8 @@ mod tests {
 
         must_rollback(&engine, key, 20, false);
         let mutations = vec![
-            Mutation::Put((Key::from_raw(key), value.to_vec())),
-            Mutation::CheckNotExists(Key::from_raw(b"non_exist")),
+            Mutation::make_put(Key::from_raw(key), value.to_vec()),
+            Mutation::make_check_not_exists(Key::from_raw(b"non_exist")),
         ];
         let mut statistics = Statistics::default();
         prewrite_with_cm(
@@ -1027,7 +1029,7 @@ mod tests {
             &engine,
             cm.clone(),
             &mut statistics,
-            vec![Mutation::Put((Key::from_raw(k2), v2.to_vec()))],
+            vec![Mutation::make_put(Key::from_raw(k2), v2.to_vec())],
             k2.to_vec(),
             50,
             None,
@@ -1035,8 +1037,8 @@ mod tests {
         .unwrap();
         // Try 1PC on the two keys and it will fail on the second one.
         let mutations = vec![
-            Mutation::Put((Key::from_raw(k1), v1.to_vec())),
-            Mutation::Put((Key::from_raw(k2), v2.to_vec())),
+            Mutation::make_put(Key::from_raw(k1), v1.to_vec()),
+            Mutation::make_put(Key::from_raw(k2), v2.to_vec()),
         ];
         prewrite_with_cm(
             &engine,
@@ -1063,7 +1065,7 @@ mod tests {
 
         must_acquire_pessimistic_lock(&engine, key, key, 10, 10);
 
-        let mutations = vec![(Mutation::Put((Key::from_raw(key), value.to_vec())), true)];
+        let mutations = vec![(Mutation::make_put(Key::from_raw(key), value.to_vec()), true)];
         let mut statistics = Statistics::default();
         pessimistic_prewrite_with_cm(
             &engine,
@@ -1087,8 +1089,8 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, k1, k1, 8, 12);
 
         let mutations = vec![
-            (Mutation::Put((Key::from_raw(k1), v1.to_vec())), true),
-            (Mutation::Put((Key::from_raw(k2), v2.to_vec())), false),
+            (Mutation::make_put(Key::from_raw(k1), v1.to_vec()), true),
+            (Mutation::make_put(Key::from_raw(k2), v2.to_vec()), false),
         ];
         statistics = Statistics::default();
         pessimistic_prewrite_with_cm(
@@ -1113,7 +1115,7 @@ mod tests {
         cm.update_max_ts(50.into());
         must_acquire_pessimistic_lock(&engine, k1, k1, 20, 20);
 
-        let mutations = vec![(Mutation::Put((Key::from_raw(k1), v1.to_vec())), true)];
+        let mutations = vec![(Mutation::make_put(Key::from_raw(k1), v1.to_vec()), true)];
         statistics = Statistics::default();
         let res = pessimistic_prewrite_with_cm(
             &engine,
@@ -1142,7 +1144,7 @@ mod tests {
             &engine,
             cm.clone(),
             &mut statistics,
-            vec![Mutation::Put((Key::from_raw(k2), v2.to_vec()))],
+            vec![Mutation::make_put(Key::from_raw(k2), v2.to_vec())],
             k2.to_vec(),
             50,
             None,
@@ -1150,8 +1152,8 @@ mod tests {
         .unwrap();
         // Try 1PC on the two keys and it will fail on the second one.
         let mutations = vec![
-            (Mutation::Put((Key::from_raw(k1), v1.to_vec())), true),
-            (Mutation::Put((Key::from_raw(k2), v2.to_vec())), false),
+            (Mutation::make_put(Key::from_raw(k1), v1.to_vec()), true),
+            (Mutation::make_put(Key::from_raw(k2), v2.to_vec()), false),
         ];
         must_acquire_pessimistic_lock(&engine, k1, k1, 60, 60);
         pessimistic_prewrite_with_cm(
@@ -1178,7 +1180,7 @@ mod tests {
 
         let key = b"k";
         let value = b"v";
-        let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
+        let mutations = vec![Mutation::make_put(Key::from_raw(key), value.to_vec())];
 
         let mut statistics = Statistics::default();
         let cmd = super::Prewrite::new(
@@ -1206,8 +1208,8 @@ mod tests {
         let (k2, v2) = (b"k2", b"v2");
 
         let mutations = vec![
-            Mutation::Put((Key::from_raw(k1), v1.to_vec())),
-            Mutation::Put((Key::from_raw(k2), v2.to_vec())),
+            Mutation::make_put(Key::from_raw(k1), v1.to_vec()),
+            Mutation::make_put(Key::from_raw(k2), v2.to_vec()),
         ];
         let mut statistics = Statistics::default();
         // calculated_ts > max_commit_ts
@@ -1245,7 +1247,7 @@ mod tests {
 
         must_acquire_pessimistic_lock(&engine, key, key, 10, 10);
 
-        let mutations = vec![(Mutation::Put((Key::from_raw(key), value.to_vec())), true)];
+        let mutations = vec![(Mutation::make_put(Key::from_raw(key), value.to_vec()), true)];
         let mut statistics = Statistics::default();
         let cmd = super::PrewritePessimistic::new(
             mutations,
@@ -1275,8 +1277,8 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, k2, k1, 20, 20);
 
         let mutations = vec![
-            (Mutation::Put((Key::from_raw(k1), v1.to_vec())), true),
-            (Mutation::Put((Key::from_raw(k2), v2.to_vec())), true),
+            (Mutation::make_put(Key::from_raw(k1), v1.to_vec()), true),
+            (Mutation::make_put(Key::from_raw(k2), v2.to_vec()), true),
         ];
         let mut statistics = Statistics::default();
         // calculated_ts > max_commit_ts
@@ -1398,8 +1400,8 @@ mod tests {
         let keys = [b"k1", b"k2"];
         let values = [b"v1", b"v2"];
         let mutations = vec![
-            Mutation::Put((Key::from_raw(keys[0]), keys[0].to_vec())),
-            Mutation::Put((Key::from_raw(keys[1]), values[1].to_vec())),
+            Mutation::make_put(Key::from_raw(keys[0]), keys[0].to_vec()),
+            Mutation::make_put(Key::from_raw(keys[1]), values[1].to_vec()),
         ];
         let mut statistics = Statistics::default();
 
@@ -1541,7 +1543,7 @@ mod tests {
             &engine,
             cm.clone(),
             &mut statistics,
-            vec![Mutation::CheckNotExists(Key::from_raw(key))],
+            vec![Mutation::make_check_not_exists(Key::from_raw(key))],
             key.to_vec(),
             15,
             None,
@@ -1565,7 +1567,7 @@ mod tests {
             &engine,
             cm,
             &mut statistics,
-            vec![Mutation::CheckNotExists(Key::from_raw(key))],
+            vec![Mutation::make_check_not_exists(Key::from_raw(key))],
             key.to_vec(),
             10,
             None,
@@ -1593,7 +1595,7 @@ mod tests {
 
         // T2: start_ts = 15, commit_ts = 16, 1PC
         let cmd = Prewrite::with_1pc(
-            vec![Mutation::Put((Key::from_raw(key), b"v2".to_vec()))],
+            vec![Mutation::make_put(Key::from_raw(key), b"v2".to_vec())],
             key.to_vec(),
             15.into(),
             TimeStamp::default(),
@@ -1607,7 +1609,7 @@ mod tests {
 
         // Repeating the T1 prewrite request
         let cmd = Prewrite::new(
-            vec![Mutation::Put((Key::from_raw(key), b"v1".to_vec()))],
+            vec![Mutation::make_put(Key::from_raw(key), b"v1".to_vec())],
             key.to_vec(),
             5.into(),
             200,
@@ -1641,7 +1643,7 @@ mod tests {
 
         // Repeating the T2 prewrite request
         let cmd = Prewrite::with_1pc(
-            vec![Mutation::Put((Key::from_raw(key), b"v2".to_vec()))],
+            vec![Mutation::make_put(Key::from_raw(key), b"v2".to_vec())],
             key.to_vec(),
             15.into(),
             TimeStamp::default(),
@@ -1693,7 +1695,7 @@ mod tests {
         // T2: start_ts = 15, commit_ts = 16, 1PC
         must_acquire_pessimistic_lock(&engine, key, key, 15, 15);
         let cmd = PrewritePessimistic::with_1pc(
-            vec![(Mutation::Put((Key::from_raw(key), b"v2".to_vec())), true)],
+            vec![(Mutation::make_put(Key::from_raw(key), b"v2".to_vec()), true)],
             key.to_vec(),
             15.into(),
             15.into(),
@@ -1708,7 +1710,7 @@ mod tests {
 
         // Repeating the T1 prewrite request
         let cmd = PrewritePessimistic::new(
-            vec![(Mutation::Put((Key::from_raw(key), b"v1".to_vec())), true)],
+            vec![(Mutation::make_put(Key::from_raw(key), b"v1".to_vec()), true)],
             key.to_vec(),
             5.into(),
             200,
@@ -1742,7 +1744,7 @@ mod tests {
 
         // Repeating the T2 prewrite request
         let cmd = PrewritePessimistic::with_1pc(
-            vec![(Mutation::Put((Key::from_raw(key), b"v2".to_vec())), true)],
+            vec![(Mutation::make_put(Key::from_raw(key), b"v2".to_vec()), true)],
             key.to_vec(),
             15.into(),
             15.into(),
@@ -1778,8 +1780,14 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, b"k2", b"k2", 5, 5);
         // The second key needs a pessimistic lock
         let mutations = vec![
-            (Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())), false),
-            (Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())), true),
+            (
+                Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
+                false,
+            ),
+            (
+                Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
+                true,
+            ),
         ];
         let res = pessimistic_prewrite_with_cm(
             &engine,
@@ -1827,7 +1835,7 @@ mod tests {
              ts: u64,
              is_pessimistic_lock,
              is_retry_request| {
-                let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
+                let mutation = Mutation::make_put(Key::from_raw(key), value.to_vec());
                 let mut ctx = Context::default();
                 ctx.set_is_retry_request(is_retry_request);
                 let cmd = PrewritePessimistic::new(
@@ -1931,7 +1939,7 @@ mod tests {
         must_prewrite_put(&engine, k1, v2, k1, 5);
         must_commit(&engine, k1, 5, 6);
         let prewrite_cmd = Prewrite::new(
-            vec![Mutation::Put((Key::from_raw(k1), v1.to_vec()))],
+            vec![Mutation::make_put(Key::from_raw(k1), v1.to_vec())],
             k1.to_vec(),
             1.into(),
             10,
@@ -1958,7 +1966,7 @@ mod tests {
         must_rollback(&engine, k1, 10, true);
         must_acquire_pessimistic_lock(&engine, k1, v1, 15, 15);
         let prewrite_cmd = PrewritePessimistic::with_defaults(
-            vec![(Mutation::Put((Key::from_raw(k1), v1.to_vec())), true)],
+            vec![(Mutation::make_put(Key::from_raw(k1), v1.to_vec()), true)],
             k1.to_vec(),
             10.into(),
             10.into(),
