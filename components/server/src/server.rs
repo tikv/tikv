@@ -26,6 +26,10 @@ use std::{
     u64,
 };
 
+use br_stream::config::BackupStreamConfigManager;
+use br_stream::metadata::store::EtcdStore;
+use br_stream::metadata::MetadataClient;
+use br_stream::observer::BackupStreamObserver;
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
@@ -861,6 +865,31 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.config.storage.ttl_check_poll_interval.into(),
             ));
             self.to_stop.push(ttl_checker);
+        }
+
+        if self.config.backup.enable_streaming {
+            // Create backup stream.
+            let mut backup_stream_worker = Box::new(LazyWorker::new("br-stream"));
+            let backup_stream_scheduler = backup_stream_worker.scheduler();
+
+            // Register br-stream observer.
+            let backup_stream_ob = BackupStreamObserver::new(backup_stream_scheduler.clone());
+            backup_stream_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+            // Register config manager.
+            cfg_controller.register(
+                tikv::config::Module::Backup,
+                Box::new(BackupStreamConfigManager(backup_stream_worker.scheduler())),
+            );
+
+            let meta_store = EtcdStore::connect(&self.config.pd.endpoints);
+            let meta_client = MetadataClient::new(meta_store, node.id());
+            let backup_stream_endpoint = br_stream::Endpoint::new(
+                meta_client,
+                self.config.backup.clone(),
+                backup_stream_scheduler.clone(),
+                backup_stream_ob.clone(),
+            );
+            backup_stream_worker.start(backup_stream_endpoint);
         }
 
         // Start CDC.

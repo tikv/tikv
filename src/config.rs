@@ -2202,6 +2202,7 @@ pub struct BackupConfig {
     pub auto_tune_refresh_interval: ReadableDuration,
     #[online_config(submodule)]
     pub hadoop: HadoopConfig,
+    pub enable_streaming: bool,
 }
 
 impl BackupConfig {
@@ -2229,6 +2230,7 @@ impl Default for BackupConfig {
             auto_tune_remain_threads: 2,
             auto_tune_refresh_interval: ReadableDuration::secs(60),
             hadoop: Default::default(),
+            enable_streaming: false,
         }
     }
 }
