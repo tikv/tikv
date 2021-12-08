@@ -27,7 +27,6 @@ use std::{
 };
 
 use br_stream::config::BackupStreamConfigManager;
-use br_stream::metadata::store::EtcdStore;
 use br_stream::observer::BackupStreamObserver;
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
@@ -880,12 +879,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 Box::new(BackupStreamConfigManager(backup_stream_worker.scheduler())),
             );
 
-            let backup_stream_endpoint = br_stream::Endpoint::<EtcdStore>::new::<String>(
+            let backup_stream_endpoint = br_stream::Endpoint::new::<String>(
                 node.id(),
                 &self.config.pd.endpoints,
                 self.config.backup_stream.clone(),
-                backup_stream_scheduler.clone(),
-                backup_stream_ob.clone(),
+                backup_stream_scheduler,
+                backup_stream_ob,
             );
             backup_stream_worker.start(backup_stream_endpoint);
         }

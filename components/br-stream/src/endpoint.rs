@@ -25,10 +25,7 @@ pub struct Endpoint<S: MetaStore + 'static> {
     pool: Runtime,
 }
 
-impl<S> Endpoint<S>
-where
-    S: MetaStore + 'static,
-{
+impl Endpoint<EtcdStore> {
     pub fn new<E: AsRef<str>>(
         store_id: u64,
         endpoints: &dyn AsRef<[E]>,
@@ -69,7 +66,7 @@ where
         let meta_client_clone = meta_client.clone();
         let scheduler_clone = scheduler.clone();
         // TODO build a error handle mechanism #error 2
-        pool.spawn(async move { Endpoint::starts_watch_tasks(meta_client_clone, scheduler_clone) });
+        pool.spawn(Endpoint::starts_watch_tasks(meta_client_clone, scheduler_clone));
         Endpoint {
             config,
             meta_client: Some(meta_client),
@@ -78,7 +75,12 @@ where
             pool,
         }
     }
+}
 
+impl<S> Endpoint<S>
+where
+    S: MetaStore + 'static,
+{
     // TODO find a proper way to exit watch tasks
     async fn starts_watch_tasks(
         meta_client: MetadataClient<S>,
@@ -127,7 +129,7 @@ where
 
     // register task ranges
     pub fn on_register(&self, task: MetaTask) {
-        self.meta_client.as_ref().map(|cli| {
+        if let Some(cli) = self.meta_client.as_ref() {
             // clone for move
             let cli = cli.clone();
             self.pool.spawn(async move {
@@ -141,7 +143,7 @@ where
                     Err(e) => error!("backup stream register task failed"; "error" => ?e),
                 }
             });
-        });
+        };
     }
 
     pub fn do_backup(&self, _events: Vec<CmdBatch>) {
