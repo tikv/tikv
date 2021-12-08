@@ -1464,12 +1464,10 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let prefixed_engine = PrefixedEngine(engine.clone());
 
-        let (tx, _rx) = channel();
         let cfg = GcConfig::default();
         let mut runner = GcRunner::new(
             prefixed_engine.clone(),
             RaftStoreBlackHole,
-            tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
                 .tracker("gc-woker".to_owned()),

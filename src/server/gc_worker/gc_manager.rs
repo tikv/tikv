@@ -687,7 +687,7 @@ mod tests {
     /// A set of utilities that helps testing `GcManager`.
     /// The safe_point polling interval is set to 100 ms.
     struct GcManagerTestUtil {
-        gc_manager: Option<GcManager<MockSafePointProvider, MockRegionInfoProvider, RocksEngine>>,
+        gc_manager: Option<GcManager<MockSafePointProvider, MockRegionInfoProvider>>,
         worker: LazyWorker<GcTask>,
         safe_point_sender: Sender<TimeStamp>,
         gc_task_receiver: Receiver<GcTask>,
