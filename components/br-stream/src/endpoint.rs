@@ -5,7 +5,7 @@ use tokio::io::Result as TokioResult;
 use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
 
-use crate::metadata::store::MetaStore;
+use crate::metadata::store::{MetaStore, EtcdStore};
 use crate::metadata::{MetadataClient, MetadataEvent, Task as MetaTask};
 use crate::{errors::Result, observer::BackupStreamObserver};
 use online_config::ConfigChange;
@@ -17,7 +17,7 @@ use tikv_util::{debug, error, info};
 pub struct Endpoint<S: MetaStore + 'static> {
     #[allow(dead_code)]
     config: BackupStreamConfig,
-    meta_client: MetadataClient<S>,
+    meta_client: Option<MetadataClient<S>>,
     #[allow(dead_code)]
     scheduler: Scheduler<Task>,
     #[allow(dead_code)]
@@ -29,27 +29,48 @@ impl<S> Endpoint<S>
 where
     S: MetaStore + 'static,
 {
-    pub fn new(
-        endpoints: AsRef<E>,
-        meta_client: MetadataClient<S>,
+    pub fn new<E: AsRef<str>>(
+        store_id: u64,
+        endpoints: &dyn AsRef<[E]>,
         config: BackupStreamConfig,
         scheduler: Scheduler<Task>,
         observer: BackupStreamObserver,
-    ) -> Endpoint<S> {
+    ) -> Endpoint<EtcdStore> {
         let pool = create_tokio_runtime(config.num_threads, "br-stream")
-            .expect("failed to create tokio runtime for backup worker.");
+            .expect("failed to create tokio runtime for backup stream worker.");
 
-        if let Ok(cli) = pool.block_on(etcd_client::Client::connect(&endpoints, None)) {
+        let cli = match pool.block_on(etcd_client::Client::connect(&endpoints, None)) {
+            Ok(c) => {
+                let meta_store = EtcdStore::from(c);
+                Some(MetadataClient::new(meta_store, store_id))
+            },
+            Err(e) => {
+                error!("failed to create etcd client for backup stream worker"; "error" => ?e);
+                None
+            }
+        };
 
+        if cli.is_none() {
+            // unable to connect to etcd
+            // may we should retry connect later
+            // TODO find a better way to handle 
+            return Endpoint{
+                config,
+                meta_client: None,
+                scheduler,
+                observer,
+                pool,
+            }
         }
 
+        let meta_client  = cli.unwrap();
         // spawn a worker to watch task changes from etcd periodically.
         let meta_client_clone = meta_client.clone();
         let scheduler_clone = scheduler.clone();
         pool.spawn(async move { Endpoint::starts_watch_tasks(meta_client_clone, scheduler_clone) });
         Endpoint {
             config,
-            meta_client,
+            meta_client: Some(meta_client),
             scheduler,
             observer,
             pool,
@@ -103,16 +124,19 @@ where
 
     // register task ranges
     pub fn on_register(&self, task: MetaTask) {
-        let cli = self.meta_client.clone();
-        self.pool.spawn(async move {
-            match cli.ranges_of_task(task.info.get_name()).await {
-                Ok(_ranges) => {
-                    debug!("backup stream register ranges to observer");
-                    // TODO implement register ranges
-                    // Endpoint::register_ranges(ranges.inner);
+        self.meta_client.as_ref().map(|cli| {
+            // clone for move
+            let cli = cli.clone();
+            self.pool.spawn(async move {
+                match cli.ranges_of_task(task.info.get_name()).await {
+                    Ok(_ranges) => {
+                        debug!("backup stream register ranges to observer");
+                        // TODO implement register ranges
+                        // Endpoint::register_ranges(ranges.inner);
+                    }
+                    Err(e) => error!("backup stream register task failed"; "error" => ?e),
                 }
-                Err(e) => error!("backup stream register task failed"; "error" => ?e),
-            }
+            });
         });
     }
 
