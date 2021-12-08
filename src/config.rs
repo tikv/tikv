@@ -2469,8 +2469,6 @@ pub struct TiKvConfig {
     pub backup_stream: BackupStreamConfig,
 }
 
-
-
 impl Default for TiKvConfig {
     fn default() -> TiKvConfig {
         TiKvConfig {

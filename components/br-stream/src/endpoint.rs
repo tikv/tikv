@@ -5,7 +5,7 @@ use tokio::io::Result as TokioResult;
 use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
 
-use crate::metadata::store::{MetaStore, EtcdStore};
+use crate::metadata::store::{EtcdStore, MetaStore};
 use crate::metadata::{MetadataClient, MetadataEvent, Task as MetaTask};
 use crate::{errors::Result, observer::BackupStreamObserver};
 use online_config::ConfigChange;
@@ -39,11 +39,12 @@ where
         let pool = create_tokio_runtime(config.num_threads, "br-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
 
+        // TODO consider TLS?
         let cli = match pool.block_on(etcd_client::Client::connect(&endpoints, None)) {
             Ok(c) => {
                 let meta_store = EtcdStore::from(c);
                 Some(MetadataClient::new(meta_store, store_id))
-            },
+            }
             Err(e) => {
                 error!("failed to create etcd client for backup stream worker"; "error" => ?e);
                 None
@@ -54,16 +55,16 @@ where
             // unable to connect to etcd
             // may we should retry connect later
             // TODO build a error handle mechanism #error 1
-            return Endpoint{
+            return Endpoint {
                 config,
                 meta_client: None,
                 scheduler,
                 observer,
                 pool,
-            }
+            };
         }
 
-        let meta_client  = cli.unwrap();
+        let meta_client = cli.unwrap();
         // spawn a worker to watch task changes from etcd periodically.
         let meta_client_clone = meta_client.clone();
         let scheduler_clone = scheduler.clone();
