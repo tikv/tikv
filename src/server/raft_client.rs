@@ -535,6 +535,9 @@ where
                             let sid: u64 = sid.parse().unwrap();
                             if sid == store_id {
                                 mem::swap(&mut addr, &mut Err(box_err!("injected failure")));
+                                // Sleep some time to avoid race between enqueuing message and
+                                // resolving address.
+                                std::thread::sleep(std::time::Duration::from_millis(10));
                             }
                         })
                     };
