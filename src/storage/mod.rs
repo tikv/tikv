@@ -2161,14 +2161,8 @@ impl FlowStatsReporter for DummyReporter {
 }
 
 impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
-<<<<<<< HEAD
     pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L) -> Self {
         let config = Config::default();
-=======
-    pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L, api_version: ApiVersion) -> Self {
-        let mut config = Config::default();
-        config.set_api_version(api_version);
->>>>>>> 23af18d98... fix check_api_version() unexpectedly skipped on bootstrap (#11590)
         Self {
             engine,
             config,
@@ -2197,14 +2191,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     }
 
     pub fn set_api_version(mut self, api_version: ApiVersion) -> Self {
-<<<<<<< HEAD
-        self.config.api_version = match api_version {
-            ApiVersion::V1 | ApiVersion::V1ttl => 1,
-            ApiVersion::V2 => 2,
-        };
-=======
         self.config.set_api_version(api_version);
->>>>>>> 23af18d98... fix check_api_version() unexpectedly skipped on bootstrap (#11590)
         self
     }
 
