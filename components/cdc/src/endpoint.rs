@@ -1809,6 +1809,15 @@ mod tests {
     #[test]
     fn test_incremental_scanner_with_hint_min_ts() {
         let engine = TestEngineBuilder::new().build_without_cache().unwrap();
+
+        let v_suffix = |suffix: usize| -> Vec<u8> {
+            let suffix = suffix.to_string().into_bytes();
+            let mut v = Vec::with_capacity(1000 + suffix.len());
+            (0..100).for_each(|_| v.extend_from_slice(b"vvvvvvvvvv"));
+            v.extend_from_slice(&suffix);
+            v
+        };
+
         let check_handling_old_value_seek_write = || {
             // Do incremental scan with different `hint_min_ts` values.
             for checkpoint_ts in [200, 100, 150] {
@@ -1837,7 +1846,7 @@ mod tests {
                     };
                     for entry in entries.into_iter().filter(|x| x.start_ts == 200) {
                         // Check old value is expected in all cases.
-                        assert_eq!(entry.get_old_value(), b"value100");
+                        assert_eq!(entry.get_old_value(), &v_suffix(100));
                     }
                 }
                 block_on(th).unwrap();
@@ -1846,9 +1855,9 @@ mod tests {
         };
 
         // Create the initial data with CF_WRITE L0: |zkey_110, zkey1_160|
-        must_prewrite_put(&engine, b"zkey", b"value100", b"zkey", 100);
+        must_prewrite_put(&engine, b"zkey", &v_suffix(100), b"zkey", 100);
         must_commit(&engine, b"zkey", 100, 110);
-        must_prewrite_put(&engine, b"zzzz", b"value150", b"zzzz", 150);
+        must_prewrite_put(&engine, b"zzzz", &v_suffix(150), b"zzzz", 150);
         must_commit(&engine, b"zzzz", 150, 160);
         engine.kv_engine().flush_cf(CF_WRITE, true).unwrap();
         must_prewrite_delete(&engine, b"zkey", b"zkey", 200);

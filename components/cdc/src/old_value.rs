@@ -481,37 +481,67 @@ mod tests {
     fn test_old_value_reuse_cursor() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let kv_engine = engine.get_rocksdb();
+        let value = || vec![b'v'; 1024];
 
         for i in 0..100 {
             let key = format!("key-{:0>3}", i).into_bytes();
-            must_prewrite_put(&engine, &key, b"value", &key, 100);
+            must_prewrite_put(&engine, &key, &value(), &key, 100);
             must_commit(&engine, &key, 100, 101);
-            must_prewrite_put(&engine, &key, b"value", &key, 200);
+            must_prewrite_put(&engine, &key, &value(), &key, 200);
             must_commit(&engine, &key, 200, 201);
         }
 
         let snapshot = Arc::new(kv_engine.snapshot());
         let mut cursor = new_old_value_cursor(&snapshot, CF_WRITE);
-        let mut stats = Default::default();
+        let mut default_cursor = new_old_value_cursor(&snapshot, CF_DEFAULT);
+        let mut load_default = |use_default_cursor: bool| {
+            if use_default_cursor {
+                let x = unsafe { std::mem::transmute::<_, &'static mut _>(&mut default_cursor) };
+                Either::Right(x)
+            } else {
+                Either::Left(&snapshot)
+            }
+        };
 
-        for i in 0..30 {
-            let raw_key = format!("key-{:0>3}", i).into_bytes();
-            let key = Key::from_raw(&raw_key).append_ts(150.into());
-            let load_default = Either::Left(&snapshot);
-            let v = near_seek_old_value(&key, &mut cursor, load_default, &mut stats).unwrap();
-            assert!(v.map_or(false, |x| x == b"value"));
-        }
-        assert_eq!(stats.write.seek, 1);
-        assert_eq!(stats.write.next, 58);
+        for &use_default_cursor in &[true, false] {
+            let mut stats = Default::default();
+            for i in 0..30 {
+                let raw_key = format!("key-{:0>3}", i).into_bytes();
+                let key = Key::from_raw(&raw_key).append_ts(150.into());
+                let ld = load_default(use_default_cursor);
+                let v = near_seek_old_value(&key, &mut cursor, ld, &mut stats).unwrap();
+                assert!(v.map_or(false, |x| x == value()));
+            }
+            assert_eq!(stats.write.seek, 1);
+            assert_eq!(stats.write.next, 58);
+            if use_default_cursor {
+                assert_eq!(stats.data.seek, 1);
+                assert_eq!(stats.data.next, 58);
+                assert_eq!(stats.data.get, 0);
+            } else {
+                assert_eq!(stats.data.seek, 0);
+                assert_eq!(stats.data.next, 0);
+                assert_eq!(stats.data.get, 30);
+            }
 
-        for i in 60..100 {
-            let raw_key = format!("key-{:0>3}", i).into_bytes();
-            let key = Key::from_raw(&raw_key).append_ts(150.into());
-            let load_default = Either::Left(&snapshot);
-            let v = near_seek_old_value(&key, &mut cursor, load_default, &mut stats).unwrap();
-            assert!(v.map_or(false, |x| x == b"value"));
+            for i in 60..100 {
+                let raw_key = format!("key-{:0>3}", i).into_bytes();
+                let key = Key::from_raw(&raw_key).append_ts(150.into());
+                let ld = load_default(use_default_cursor);
+                let v = near_seek_old_value(&key, &mut cursor, ld, &mut stats).unwrap();
+                assert!(v.map_or(false, |x| x == value()));
+            }
+            assert_eq!(stats.write.seek, 2);
+            assert_eq!(stats.write.next, 144);
+            if use_default_cursor {
+                assert_eq!(stats.data.seek, 2);
+                assert_eq!(stats.data.next, 144);
+                assert_eq!(stats.data.get, 0);
+            } else {
+                assert_eq!(stats.data.seek, 0);
+                assert_eq!(stats.data.next, 0);
+                assert_eq!(stats.data.get, 70);
+            }
         }
-        assert_eq!(stats.write.seek, 2);
-        assert_eq!(stats.write.next, 144);
     }
 }
