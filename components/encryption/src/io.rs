@@ -9,7 +9,6 @@ use futures_util::{
     io::AsyncRead,
     task::{Context, Poll},
 };
-
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{Cipher as OCipher, Crypter as OCrypter, Mode};
 
@@ -485,11 +484,11 @@ impl CrypterCore {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::crypter;
     use byteorder::{BigEndian, ByteOrder};
     use futures::AsyncReadExt;
     use rand::{rngs::OsRng, RngCore};
+    use std::{cmp::min, io::Cursor};
 
     fn generate_data_key(method: EncryptionMethod) -> Vec<u8> {
         let key_length = crypter::get_method_key_length(method);
@@ -648,17 +647,15 @@ mod tests {
     }
 
     struct MockCursorReader {
-        data: Vec<u8>,
+        cursor: Cursor<Vec<u8>>,
         read_maxsize_once: usize,
-        pos: usize,
     }
 
     impl MockCursorReader {
         fn new(buff: &mut [u8], size_once: usize) -> MockCursorReader {
             Self {
-                data: buff.to_owned(),
+                cursor: Cursor::new(buff.to_vec()),
                 read_maxsize_once: size_once,
-                pos: 0,
             }
         }
     }
@@ -669,20 +666,10 @@ mod tests {
             _cx: &mut Context<'_>,
             buf: &mut [u8],
         ) -> Poll<IoResult<usize>> {
-            assert!(buf.len() > 0);
-
-            let mut read_len = 0;
-            if self.pos >= self.data.len() {
-                return Poll::Ready(IoResult::Ok(read_len));
-            } else if self.pos + self.read_maxsize_once <= self.data.len() {
-                read_len = std::cmp::min(self.read_maxsize_once, buf.len());
-            } else {
-                read_len = std::cmp::min(buf.len(), self.data.len() - self.pos);
-            }
-
-            buf[..read_len].copy_from_slice(&self.data[self.pos..self.pos + read_len]);
-            self.pos += read_len;
-            Poll::Ready(IoResult::Ok(read_len))
+            let len = min(self.read_maxsize_once, buf.len());
+            let r = self.cursor.read(&mut buf[..len]);
+            assert!(r.is_ok());
+            Poll::Ready(IoResult::Ok(r.unwrap()))
         }
     }
 
