@@ -31,10 +31,10 @@ const ROLLBACK_TS_PREFIX: u8 = b'r';
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
         match *mutation {
-            Mutation::Put(_) | Mutation::Insert(_) => Some(LockType::Put),
-            Mutation::Delete(_) => Some(LockType::Delete),
-            Mutation::Lock(_) => Some(LockType::Lock),
-            Mutation::CheckNotExists(_) => None,
+            Mutation::Put(..) | Mutation::Insert(..) => Some(LockType::Put),
+            Mutation::Delete(..) => Some(LockType::Delete),
+            Mutation::Lock(..) => Some(LockType::Lock),
+            Mutation::CheckNotExists(..) => None,
         }
     }
 
@@ -432,17 +432,17 @@ mod tests {
         let (key, value) = (b"key", b"value");
         let mut tests = vec![
             (
-                Mutation::Put((Key::from_raw(key), value.to_vec())),
+                Mutation::make_put(Key::from_raw(key), value.to_vec()),
                 LockType::Put,
                 FLAG_PUT,
             ),
             (
-                Mutation::Delete(Key::from_raw(key)),
+                Mutation::make_delete(Key::from_raw(key)),
                 LockType::Delete,
                 FLAG_DELETE,
             ),
             (
-                Mutation::Lock(Key::from_raw(key)),
+                Mutation::make_lock(Key::from_raw(key)),
                 LockType::Lock,
                 FLAG_LOCK,
             ),
