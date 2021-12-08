@@ -702,7 +702,7 @@ mod tests {
                             need_old_value: false,
                             is_retry_request: false,
                         },
-                        Mutation::Put((Key::from_raw(key), key.to_vec())),
+                        Mutation::make_put(Key::from_raw(key), key.to_vec()),
                         &None,
                         false,
                     )
