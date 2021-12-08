@@ -230,12 +230,7 @@ where
         gc_info.found_versions += next_gc_info.found_versions;
         gc_info.deleted_versions += next_gc_info.deleted_versions;
         gc_info.is_completed = next_gc_info.is_completed;
-<<<<<<< HEAD
         self.stats.add(&txn.take_statistics());
-=======
-        let stats = mem::take(&mut reader.statistics);
-        self.stats.add(&stats);
->>>>>>> dce2dc811... gc: Fix GC scan effectiveness to avoid OOM (#11416)
         Ok(())
     }
 
@@ -344,22 +339,10 @@ where
             Ok(Box::new(keys.into_iter()))
         }
 
-        let count = keys.len();
         let mut keys = get_keys_in_regions(keys, regions_provider)?;
 
         let snapshot = self.engine.snapshot_on_kv_engine(b"", b"")?;
-<<<<<<< HEAD
         let mut txn = Self::new_txn(snapshot);
-=======
-        let mut txn = Self::new_txn();
-        let mut reader = if count <= 1 {
-            MvccReader::new(snapshot, None, false)
-        } else {
-            // keys are closing to each other in one batch of gc keys, so do not use
-            // prefix seek here to avoid too many seeks
-            MvccReader::new(snapshot, Some(ScanMode::Forward), false)
-        };
->>>>>>> dce2dc811... gc: Fix GC scan effectiveness to avoid OOM (#11416)
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
@@ -1463,7 +1446,7 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let prefixed_engine = PrefixedEngine(engine.clone());
 
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = channel();
         let cfg = GcConfig::default();
         let mut runner = GcRunner::new(
             prefixed_engine.clone(),
