@@ -647,32 +647,42 @@ mod tests {
         }
     }
 
-    struct MockReader {
+    struct MockCursorReader {
         data: Vec<u8>,
+        read_maxsize_once: usize,
+        pos: usize,
     }
 
-    impl MockReader {
-        fn new(buff: &mut [u8]) -> MockReader {
+    impl MockCursorReader {
+        fn new(buff: &mut [u8], size_once: usize) -> MockCursorReader {
             Self {
                 data: buff.to_owned(),
+                read_maxsize_once: size_once,
+                pos: 0,
             }
         }
     }
 
-    impl AsyncRead for MockReader {
+    impl AsyncRead for MockCursorReader {
         fn poll_read(
-            self: Pin<&mut Self>,
+            mut self: Pin<&mut Self>,
             _cx: &mut Context<'_>,
             buf: &mut [u8],
         ) -> Poll<IoResult<usize>> {
-            let copy_len = std::cmp::min(self.data.len(), buf.len());
-            if self.data.len() < buf.len() {
-                buf[..copy_len].copy_from_slice(&self.data[..]);
+            assert!(buf.len() > 0);
+
+            let mut read_len = 0;
+            if self.pos >= self.data.len() {
+                return Poll::Ready(IoResult::Ok(read_len));
+            } else if self.pos + self.read_maxsize_once <= self.data.len() {
+                read_len = std::cmp::min(self.read_maxsize_once, buf.len());
             } else {
-                buf.copy_from_slice(&self.data[..copy_len]);
+                read_len = std::cmp::min(buf.len(), self.data.len() - self.pos);
             }
 
-            Poll::Ready(IoResult::Ok(copy_len))
+            buf[..read_len].copy_from_slice(&self.data[self.pos..self.pos + read_len]);
+            self.pos += read_len;
+            Poll::Ready(IoResult::Ok(read_len))
         }
     }
 
@@ -689,38 +699,61 @@ mod tests {
 
         for method in methods {
             let key = generate_data_key(method);
-
             // encrypt plaintext into encrypt_text
-            let mut encrypt_reader =
-                EncrypterReader::new(MockReader::new(&mut plain_text[..]), method, &key[..], iv)
-                    .unwrap();
-
+            let read_once = 16;
+            let mut encrypt_reader = EncrypterReader::new(
+                MockCursorReader::new(&mut plain_text[..], read_once),
+                method,
+                &key[..],
+                iv,
+            )
+            .unwrap();
             let mut encrypt_text = [0; 20480];
-            let s = encrypt_reader.read(&mut encrypt_text[..]).await;
-            assert!(s.is_ok());
-            let read_len = s.unwrap();
-            assert_eq!(read_len, plain_text.len());
+            let mut encrypt_read_len = 0;
+
+            loop {
+                let s = encrypt_reader
+                    .read(&mut encrypt_text[encrypt_read_len..])
+                    .await;
+                assert!(s.is_ok());
+                let read_len = s.unwrap();
+                if read_len == 0 {
+                    break;
+                }
+                encrypt_read_len += read_len;
+            }
+
             if method == EncryptionMethod::Plaintext {
-                assert_eq!(encrypt_text[..read_len], plain_text);
+                assert_eq!(encrypt_text[..encrypt_read_len], plain_text);
             } else {
-                assert_ne!(encrypt_text[..read_len], plain_text);
+                assert_ne!(encrypt_text[..encrypt_read_len], plain_text);
             }
 
             // decrypt encrypt_text into decrypt_text
+            let mut decrypt_text = [0; 20480];
+            let mut decrypt_read_len = 0;
+            let read_once = 20;
             let mut decrypt_reader = DecrypterReader::new(
-                MockReader::new(&mut encrypt_text[..read_len]),
+                MockCursorReader::new(&mut encrypt_text[..encrypt_read_len], read_once),
                 method,
                 &key[..],
                 iv,
             )
             .unwrap();
 
-            let mut decrypt_text = [0; 20480];
-            let s = decrypt_reader.read(&mut decrypt_text[..]).await;
-            assert!(s.is_ok());
-            let read_len = s.unwrap();
-            assert_eq!(read_len, plain_text.len());
-            assert_eq!(decrypt_text[..read_len], plain_text);
+            loop {
+                let s = decrypt_reader
+                    .read(&mut decrypt_text[decrypt_read_len..])
+                    .await;
+                assert!(s.is_ok());
+                let read_len = s.unwrap();
+                if read_len == 0 {
+                    break;
+                }
+                decrypt_read_len += read_len;
+            }
+
+            assert_eq!(decrypt_text[..decrypt_read_len], plain_text);
         }
     }
 
