@@ -13,8 +13,8 @@ use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    test_util::GetConsumer, txn::commands, Engine, PerfStatisticsDelta, PrewriteResult, Result,
-    Statistics, Storage, TestEngineBuilder, TestStorageBuilder, TxnStatus,
+    test_util::GetConsumer, txn::commands, Engine, KvGetStatistics, PrewriteResult, Result,
+    Storage, TestEngineBuilder, TestStorageBuilder, TxnStatus,
 };
 use tikv_util::time::Instant;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
@@ -131,7 +131,7 @@ impl<E: Engine> SyncTestStorage<E> {
         ctx: Context,
         key: Vec<u8>,
         start_ts: impl Into<TimeStamp>,
-    ) -> Result<(Option<Value>, Statistics, PerfStatisticsDelta)> {
+    ) -> Result<(Option<Value>, KvGetStatistics)> {
         block_on(self.store.get(ctx, key, start_ts.into()))
     }
 
@@ -141,7 +141,7 @@ impl<E: Engine> SyncTestStorage<E> {
         ctx: Context,
         keys: &[Vec<u8>],
         start_ts: impl Into<TimeStamp>,
-    ) -> Result<(Vec<Result<KvPair>>, Statistics, PerfStatisticsDelta)> {
+    ) -> Result<(Vec<Result<KvPair>>, KvGetStatistics)> {
         block_on(self.store.batch_get(ctx, keys.to_owned(), start_ts.into()))
     }
 
