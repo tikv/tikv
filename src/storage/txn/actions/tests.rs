@@ -32,7 +32,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
 
-    let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
+    let mutation = Mutation::make_put(Key::from_raw(key), value.to_vec());
     let txn_kind = if for_update_ts.is_zero() {
         TransactionKind::Optimistic(false)
     } else {
@@ -269,7 +269,7 @@ fn must_prewrite_put_err_impl<E: Engine>(
     let ts = ts.into();
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
-    let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
+    let mutation = Mutation::make_put(Key::from_raw(key), value.to_vec());
     let commit_kind = if secondary_keys.is_some() {
         CommitKind::Async(max_commit_ts.into())
     } else {
@@ -374,7 +374,7 @@ fn must_prewrite_delete_impl<E: Engine>(
     let ts = ts.into();
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
-    let mutation = Mutation::Delete(Key::from_raw(key));
+    let mutation = Mutation::make_delete(Key::from_raw(key));
 
     prewrite(
         &mut txn,
@@ -427,7 +427,7 @@ fn must_prewrite_lock_impl<E: Engine>(
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
 
-    let mutation = Mutation::Lock(Key::from_raw(key));
+    let mutation = Mutation::make_lock(Key::from_raw(key));
     prewrite(
         &mut txn,
         &mut reader,
@@ -464,7 +464,7 @@ pub fn must_prewrite_lock_err<E: Engine>(
             &mut txn,
             &mut reader,
             &default_txn_props(ts, pk, TimeStamp::zero()),
-            Mutation::Lock(Key::from_raw(key)),
+            Mutation::make_lock(Key::from_raw(key)),
             &None,
             false,
         )
