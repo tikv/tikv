@@ -323,7 +323,7 @@ pub fn add_datetime_and_string(
     arg0: &DateTime,
     arg1: BytesRef,
 ) -> Result<Option<DateTime>> {
-    let arg1 = std::str::from_utf8(&arg1).map_err(Error::Encoding)?;
+    let arg1 = std::str::from_utf8(arg1).map_err(Error::Encoding)?;
     let arg1 = match Duration::parse(ctx, arg1, MAX_FSP) {
         Ok(arg) => arg,
         Err(_) => return Ok(None),
@@ -350,7 +350,7 @@ pub fn add_date_and_string(
     arg0: &DateTime,
     arg1: BytesRef,
 ) -> Result<Option<DateTime>> {
-    let arg1 = std::str::from_utf8(&arg1).map_err(Error::Encoding)?;
+    let arg1 = std::str::from_utf8(arg1).map_err(Error::Encoding)?;
     let arg1 = match Duration::parse(ctx, arg1, MAX_FSP) {
         Ok(arg) => arg,
         Err(_) => return Ok(None),
@@ -369,6 +369,24 @@ pub fn add_date_and_string(
     };
     res.set_time_type(TimeType::Date)?;
     Ok(Some(res))
+}
+
+#[rpn_fn()]
+#[inline]
+pub fn add_time_datetime_null(_arg0: &DateTime, _arg1: &DateTime) -> Result<Option<DateTime>> {
+    Ok(None)
+}
+
+#[rpn_fn()]
+#[inline]
+pub fn add_time_duration_null(_arg0: &DateTime, _arg1: &DateTime) -> Result<Option<Duration>> {
+    Ok(None)
+}
+
+#[rpn_fn()]
+#[inline]
+pub fn add_time_string_null(_arg0: &DateTime, _arg1: &DateTime) -> Result<Option<Bytes>> {
+    Ok(None)
 }
 
 #[rpn_fn(capture = [ctx])]
@@ -423,7 +441,7 @@ pub fn sub_datetime_and_string(
     datetime: &DateTime,
     duration_str: BytesRef,
 ) -> Result<Option<DateTime>> {
-    let duration_str = std::str::from_utf8(&duration_str).map_err(Error::Encoding)?;
+    let duration_str = std::str::from_utf8(duration_str).map_err(Error::Encoding)?;
     let duration = match Duration::parse(ctx, duration_str, MAX_FSP) {
         Ok(duration) => duration,
         Err(_) => return Ok(None),
@@ -436,6 +454,33 @@ pub fn sub_datetime_and_string(
                 .handle_invalid_time_error(Error::overflow(
                     "DATETIME",
                     format!("({} - {})", datetime, duration),
+                ))
+                .map(|_| Ok(None))?;
+        }
+    };
+    Ok(Some(res))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn sub_duration_and_string(
+    ctx: &mut EvalContext,
+    arg1: &Duration,
+    arg2: BytesRef,
+) -> Result<Option<Duration>> {
+    let arg2 = std::str::from_utf8(arg2).map_err(Error::Encoding)?;
+    let arg2 = match Duration::parse(ctx, arg2, MAX_FSP) {
+        Ok(arg) => arg,
+        Err(_) => return Ok(None),
+    };
+
+    let res = match arg1.checked_sub(arg2) {
+        Some(res) => res,
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(
+                    "DURATION",
+                    format!("({} - {})", arg1, arg2),
                 ))
                 .map(|_| Ok(None))?;
         }
@@ -714,7 +759,7 @@ pub fn add_duration_and_string(
     arg1: &Duration,
     arg2: BytesRef,
 ) -> Result<Option<Duration>> {
-    let arg2 = std::str::from_utf8(&arg2).map_err(Error::Encoding)?;
+    let arg2 = std::str::from_utf8(arg2).map_err(Error::Encoding)?;
     let arg2 = match Duration::parse(ctx, arg2, MAX_FSP) {
         Ok(arg) => arg,
         Err(_) => return Ok(None),
@@ -764,6 +809,60 @@ pub fn duration_duration_time_diff(
         }
     };
     Ok(Some(res))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn string_duration_time_diff(
+    ctx: &mut EvalContext,
+    arg1: BytesRef,
+    arg2: &Duration,
+) -> Result<Option<Duration>> {
+    let arg1 = std::str::from_utf8(arg1).map_err(Error::Encoding)?;
+    let arg1 = match Duration::parse(ctx, arg1, MAX_FSP) {
+        Ok(arg) => arg,
+        Err(_) => return Ok(None),
+    };
+
+    duration_duration_time_diff(ctx, &arg1, arg2)
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn string_string_time_diff(
+    ctx: &mut EvalContext,
+    arg1: BytesRef,
+    arg2: BytesRef,
+) -> Result<Option<Duration>> {
+    let arg1 = std::str::from_utf8(arg1).map_err(Error::Encoding)?;
+    let arg1 = match Duration::parse(ctx, arg1, MAX_FSP) {
+        Ok(arg) => arg,
+        Err(_) => return Ok(None),
+    };
+
+    let arg2 = std::str::from_utf8(arg2).map_err(Error::Encoding)?;
+    let arg2 = match Duration::parse(ctx, arg2, MAX_FSP) {
+        Ok(arg) => arg,
+        Err(_) => return Ok(None),
+    };
+
+    duration_duration_time_diff(ctx, &arg1, &arg2)
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn duration_string_time_diff(
+    ctx: &mut EvalContext,
+    arg1: &Duration,
+    arg2: BytesRef,
+) -> Result<Option<Duration>> {
+    let arg2 = std::str::from_utf8(arg2).map_err(Error::Encoding)?;
+    let arg2 = match Duration::parse(ctx, arg2, MAX_FSP) {
+        Ok(arg) => arg,
+        Err(_) => return Ok(None),
+    };
+
+    duration_duration_time_diff(ctx, arg1, &arg2)
 }
 
 /// Cast Duration into string representation and drop subsec if possible.
@@ -831,11 +930,11 @@ mod tests {
         for (duration, string, exp) in cases {
             let expected = exp.map(|exp| Duration::parse(&mut ctx, exp, MAX_FSP).unwrap());
             let duration = duration.map(|arg1| Duration::parse(&mut ctx, arg1, MAX_FSP).unwrap());
-            let string = string.map(|arg2| Duration::parse(&mut ctx, arg2, MAX_FSP).unwrap());
+            let string = string.map(|str| str.as_bytes().to_vec());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(duration)
                 .push_param(string)
-                .evaluate(ScalarFuncSig::AddDurationAndDuration)
+                .evaluate(ScalarFuncSig::AddDurationAndString)
                 .unwrap();
             assert_eq!(output, expected);
         }
@@ -863,6 +962,29 @@ mod tests {
             assert_eq!(output, expected);
         }
     }
+    #[test]
+    fn test_sub_duration_and_string() {
+        let cases = vec![
+            (Some("00:02:02"), Some("00:01:01"), Some("00:01:01")),
+            (Some("12:00:00"), Some("00:00:01"), Some("11:59:59")),
+            (Some("24:00:00"), Some("00:00:01"), Some("23:59:59")),
+            (Some("24:00:01"), Some("00:00:02"), Some("23:59:59")),
+            (None, None, None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (duration, string, exp) in cases {
+            let expected = exp.map(|exp| Duration::parse(&mut ctx, exp, MAX_FSP).unwrap());
+            let duration = duration.map(|arg1| Duration::parse(&mut ctx, arg1, MAX_FSP).unwrap());
+            let string = string.map(|str| str.as_bytes().to_vec());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(duration)
+                .push_param(string)
+                .evaluate(ScalarFuncSig::SubDurationAndString)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
     #[test]
     fn test_date_format() {
         use std::sync::Arc;
@@ -1676,6 +1798,43 @@ mod tests {
     }
 
     #[test]
+    fn test_add_time_result_null() {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            (Some("2021-03-26"), Some("2021-03-26 00:00:00")),
+            (Some("2021-03-26 00:00:00"), Some("2021-03-26")),
+            (Some("2021-03-26 00:00:00"), Some("2021-03-26 23:59:59")),
+        ];
+        for (arg0, arg1) in cases {
+            let arg0 =
+                arg0.map(|arg0| Time::parse_datetime(&mut ctx, arg0, MAX_FSP, true).unwrap());
+            let arg1 =
+                arg1.map(|arg1| Time::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
+
+            let output: Result<Option<DateTime>> = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::AddTimeDateTimeNull);
+            let output = output.unwrap();
+            assert_eq!(output, None);
+
+            let output: Result<Option<Duration>> = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::AddTimeDurationNull);
+            let output = output.unwrap();
+            assert_eq!(output, None);
+
+            let output: Result<Option<Bytes>> = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::AddTimeStringNull);
+            let output = output.unwrap();
+            assert_eq!(output, None);
+        }
+    }
+
+    #[test]
     fn test_from_days() {
         let cases = vec![
             (ScalarValue::Int(Some(-140)), Some("0000-00-00")), // mysql FROM_DAYS returns 0000-00-00 for any day <= 365.
@@ -2255,6 +2414,186 @@ mod tests {
                 .push_param(duration1)
                 .push_param(duration2)
                 .evaluate::<Duration>(ScalarFuncSig::DurationDurationTimeDiff)
+                .unwrap();
+            assert_eq!(output, expected, "got {}", output.unwrap().to_string());
+        }
+    }
+
+    #[test]
+    fn test_string_duration_time_diff() {
+        let cases = vec![
+            (Some("00:02:02"), Some("00:01:01"), Some("00:01:01")),
+            (Some("12:00:00"), Some("00:00:01"), Some("11:59:59")),
+            (Some("24:00:00"), Some("00:00:01"), Some("23:59:59")),
+            (Some("24:00:01"), Some("00:00:02"), Some("23:59:59")),
+            (None, None, None),
+            // corner case
+            (
+                Some("00:59:59.999999"),
+                Some("01:00:00.000000"),
+                Some("-00:00:00.000001"),
+            ),
+            (
+                Some("00:59:59.999999"),
+                Some("-00:00:00.000001"),
+                Some("01:00:00.000000"),
+            ),
+            (
+                Some("-00:00:00.000001"),
+                Some("00:00:00.000001"),
+                Some("-00:00:00.000002"),
+            ),
+            (
+                Some("-00:00:00.000001"),
+                Some("-00:00:00.000001"),
+                Some("00:00:00.000000"),
+            ),
+            // overflow or underflow case
+            (
+                Some("-00:00:01"),
+                Some("838:59:59.000000"),
+                Some("-838:59:59.000000"),
+            ),
+            (
+                Some("838:59:59.000000"),
+                Some("-00:00:01"),
+                Some("838:59:59.000000"),
+            ),
+            (
+                Some("838:59:59.000000"),
+                Some("-838:59:59.000000"),
+                Some("838:59:59.000000"),
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (string, duration, exp) in cases {
+            let expected = exp.map(|exp| Duration::parse(&mut ctx, exp, MAX_FSP).unwrap());
+            let string = string.map(|str| str.as_bytes().to_vec());
+            let duration = duration.map(|arg1| Duration::parse(&mut ctx, arg1, MAX_FSP).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(string)
+                .push_param(duration)
+                .evaluate::<Duration>(ScalarFuncSig::StringDurationTimeDiff)
+                .unwrap();
+            assert_eq!(output, expected, "got {}", output.unwrap().to_string());
+        }
+    }
+
+    #[test]
+    fn test_string_string_time_diff() {
+        let cases = vec![
+            (Some("00:02:02"), Some("00:01:01"), Some("00:01:01")),
+            (Some("12:00:00"), Some("00:00:01"), Some("11:59:59")),
+            (Some("24:00:00"), Some("00:00:01"), Some("23:59:59")),
+            (Some("24:00:01"), Some("00:00:02"), Some("23:59:59")),
+            (None, None, None),
+            // corner case
+            (
+                Some("00:59:59.999999"),
+                Some("01:00:00.000000"),
+                Some("-00:00:00.000001"),
+            ),
+            (
+                Some("00:59:59.999999"),
+                Some("-00:00:00.000001"),
+                Some("01:00:00.000000"),
+            ),
+            (
+                Some("-00:00:00.000001"),
+                Some("00:00:00.000001"),
+                Some("-00:00:00.000002"),
+            ),
+            (
+                Some("-00:00:00.000001"),
+                Some("-00:00:00.000001"),
+                Some("00:00:00.000000"),
+            ),
+            // overflow or underflow case
+            (
+                Some("-00:00:01"),
+                Some("838:59:59.000000"),
+                Some("-838:59:59.000000"),
+            ),
+            (
+                Some("838:59:59.000000"),
+                Some("-00:00:01"),
+                Some("838:59:59.000000"),
+            ),
+            (
+                Some("838:59:59.000000"),
+                Some("-838:59:59.000000"),
+                Some("838:59:59.000000"),
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (string1, string2, exp) in cases {
+            let expected = exp.map(|exp| Duration::parse(&mut ctx, exp, MAX_FSP).unwrap());
+            let string1 = string1.map(|str| str.as_bytes().to_vec());
+            let string2 = string2.map(|str| str.as_bytes().to_vec());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(string1)
+                .push_param(string2)
+                .evaluate::<Duration>(ScalarFuncSig::StringStringTimeDiff)
+                .unwrap();
+            assert_eq!(output, expected, "got {}", output.unwrap().to_string());
+        }
+    }
+
+    #[test]
+    fn test_duration_string_time_diff() {
+        let cases = vec![
+            (Some("00:02:02"), Some("00:01:01"), Some("00:01:01")),
+            (Some("12:00:00"), Some("00:00:01"), Some("11:59:59")),
+            (Some("24:00:00"), Some("00:00:01"), Some("23:59:59")),
+            (Some("24:00:01"), Some("00:00:02"), Some("23:59:59")),
+            (None, None, None),
+            // corner case
+            (
+                Some("00:59:59.999999"),
+                Some("01:00:00.000000"),
+                Some("-00:00:00.000001"),
+            ),
+            (
+                Some("00:59:59.999999"),
+                Some("-00:00:00.000001"),
+                Some("01:00:00.000000"),
+            ),
+            (
+                Some("-00:00:00.000001"),
+                Some("00:00:00.000001"),
+                Some("-00:00:00.000002"),
+            ),
+            (
+                Some("-00:00:00.000001"),
+                Some("-00:00:00.000001"),
+                Some("00:00:00.000000"),
+            ),
+            // overflow or underflow case
+            (
+                Some("-00:00:01"),
+                Some("838:59:59.000000"),
+                Some("-838:59:59.000000"),
+            ),
+            (
+                Some("838:59:59.000000"),
+                Some("-00:00:01"),
+                Some("838:59:59.000000"),
+            ),
+            (
+                Some("838:59:59.000000"),
+                Some("-838:59:59.000000"),
+                Some("838:59:59.000000"),
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (duration, string, exp) in cases {
+            let expected = exp.map(|exp| Duration::parse(&mut ctx, exp, MAX_FSP).unwrap());
+            let duration = duration.map(|arg1| Duration::parse(&mut ctx, arg1, MAX_FSP).unwrap());
+            let string = string.map(|str| str.as_bytes().to_vec());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(duration)
+                .push_param(string)
+                .evaluate::<Duration>(ScalarFuncSig::DurationStringTimeDiff)
                 .unwrap();
             assert_eq!(output, expected, "got {}", output.unwrap().to_string());
         }

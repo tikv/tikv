@@ -5,10 +5,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use engine_rocks::Compat;
-use engine_traits::{KvEngine, Peekable};
+use engine_traits::KvEngine;
 use file_system::{IOOp, IOType};
 use futures::executor::block_on;
 use grpcio::Environment;
@@ -19,7 +18,7 @@ use rand::Rng;
 use security::SecurityManager;
 use test_raftstore::*;
 use tikv::server::snap::send_snap;
-use tikv_util::{config::*, HandyRwLock};
+use tikv_util::{config::*, time::Instant, HandyRwLock};
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
@@ -31,15 +30,16 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let r1 = cluster.run_conf_change();
 
+    let first_value = vec![0; 10240];
     // at least 4m data
-    for i in 0..2 * 1024 {
-        let key = format!("{:01024}", i);
-        let value = format!("{:01024}", i);
-        cluster.must_put(key.as_bytes(), value.as_bytes());
+    for i in 0..400 {
+        let key = format!("{:03}", i);
+        cluster.must_put(key.as_bytes(), &first_value);
     }
+    let first_key: &[u8] = b"000";
 
     let engine_2 = cluster.get_engine(2);
-    must_get_none(&engine_2, &format!("{:01024}", 0).into_bytes());
+    must_get_none(&engine_2, first_key);
     // add peer (2,2) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 2));
 
@@ -49,9 +49,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, key, value);
 
     // now snapshot must be applied on peer 2;
-    let key = format!("{:01024}", 0);
-    let value = format!("{:01024}", 0);
-    must_get_equal(&engine_2, key.as_bytes(), value.as_bytes());
+    must_get_equal(&engine_2, first_key, &first_value);
     let stale = Arc::new(AtomicBool::new(false));
     cluster.sim.wl().add_recv_filter(
         3,
@@ -61,16 +59,15 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
         )),
     );
     pd_client.must_add_peer(r1, new_peer(3, 3));
-    let mut i = 2 * 1024;
+    let mut i = 400;
     loop {
         i += 1;
-        let key = format!("{:01024}", i);
-        let value = format!("{:01024}", i);
-        cluster.must_put(key.as_bytes(), value.as_bytes());
+        let key = format!("{:03}", i);
+        cluster.must_put(key.as_bytes(), &first_value);
         if stale.load(Ordering::Relaxed) {
             break;
         }
-        if i > 10 * 1024 {
+        if i > 1000 {
             panic!("snapshot should be sent twice after {} kvs", i);
         }
     }
@@ -79,13 +76,6 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_3, b"k3", b"v3");
 
     // TODO: add more tests.
-}
-
-#[test]
-fn test_node_huge_snapshot() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_huge_snapshot(&mut cluster);
 }
 
 #[test]
@@ -143,7 +133,7 @@ fn test_server_snap_gc() {
         if snap_index != first_snap_idx {
             break;
         }
-        if now.elapsed() >= Duration::from_secs(5) {
+        if now.saturating_elapsed() >= Duration::from_secs(5) {
             panic!("can't get any snap after {}", first_snap_idx);
         }
     }
@@ -174,7 +164,7 @@ fn test_server_snap_gc() {
         if snap_files.is_empty() {
             return;
         }
-        if now.elapsed() > Duration::from_secs(10) {
+        if now.saturating_elapsed() > Duration::from_secs(10) {
             panic!("snap files is still not empty: {:?}", snap_files);
         }
         sleep_ms(20);
@@ -450,45 +440,9 @@ fn test_server_snapshot_with_append() {
 }
 
 #[test]
-fn test_request_snapshot_apply_repeatedly() {
-    let mut cluster = new_node_cluster(0, 2);
-    configure_for_request_snapshot(&mut cluster);
-
-    let pd_client = Arc::clone(&cluster.pd_client);
-    // Disable default max peer count check.
-    pd_client.disable_default_operator();
-    let region_id = cluster.run_conf_change();
-    pd_client.must_add_peer(region_id, new_peer(2, 2));
-    cluster.must_transfer_leader(region_id, new_peer(2, 2));
-
-    sleep_ms(200);
-    // Install snapshot filter before requesting snapshot.
-    let (tx, rx) = mpsc::channel();
-    let notifier = Mutex::new(Some(tx));
-    cluster.sim.wl().add_recv_filter(
-        1,
-        Box::new(RecvSnapshotFilter {
-            notifier,
-            region_id,
-        }),
-    );
-    cluster.must_request_snapshot(1, region_id);
-    rx.recv_timeout(Duration::from_secs(5)).unwrap();
-
-    sleep_ms(200);
-    let engine = cluster.get_raft_engine(1);
-    let raft_key = keys::raft_state_key(region_id);
-    let raft_state: RaftLocalState = engine.c().get_msg(&raft_key).unwrap().unwrap();
-    assert!(
-        raft_state.get_last_index() > RAFT_INIT_LOG_INDEX,
-        "{:?}",
-        raft_state
-    );
-}
-
-#[test]
 fn test_inspected_snapshot() {
     let mut cluster = new_server_cluster(1, 3);
+    cluster.cfg.prefer_mem = false;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 8;
     cluster.cfg.raft_store.merge_max_log_gap = 3;
@@ -619,7 +573,8 @@ fn test_gen_during_heavy_recv() {
     pd_client.must_add_peer(r1, new_learner_peer(3, 3));
     sleep_ms(500);
     must_get_equal(&cluster.get_engine(3), b"zzz-0000", b"value");
-
+    assert_eq!(cluster.get_snap_mgr(1).stats().sending_count, 0);
+    assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
     drop(cluster);
     let _ = th.join();
 }
@@ -657,4 +612,58 @@ fn random_long_vec(length: usize) -> Vec<u8> {
     let mut value = Vec::with_capacity(1024);
     (0..length).for_each(|_| value.push(rng.gen::<u8>()));
     value
+}
+
+/// Snapshot is generated using apply term from apply thread, which should be set
+/// correctly otherwise lead to unconsistency.
+#[test]
+fn test_correct_snapshot_term() {
+    // Use five replicas so leader can send a snapshot to a new peer without
+    // committing extra logs.
+    let mut cluster = new_server_cluster(0, 5);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+
+    // Use run conf change to make new node be initialized with term 0.
+    let r = cluster.run_conf_change();
+
+    // 5 will catch up logs with just a snapshot.
+    cluster.add_send_filter(IsolationFilterFactory::new(5));
+    // 4 will catch up logs using snapshot from 5.
+    cluster.add_send_filter(IsolationFilterFactory::new(4));
+
+    pd_client.must_add_peer(r, new_peer(2, 2));
+    pd_client.must_add_peer(r, new_peer(3, 3));
+    pd_client.must_add_peer(r, new_peer(4, 4));
+    pd_client.must_add_peer(r, new_peer(5, 5));
+    cluster.must_put(b"k0", b"v0");
+
+    cluster.clear_send_filters();
+    // So peer 4 will not apply snapshot from current leader.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 4)
+            .msg_type(MessageType::MsgSnapshot)
+            .direction(Direction::Recv),
+    ));
+    // So no new log will be applied. When peer 5 becomes leader, it won't have
+    // chance to update apply index in apply worker.
+    for i in 1..=3 {
+        cluster.add_send_filter(CloneFilterFactory(
+            RegionPacketFilter::new(1, i)
+                .msg_type(MessageType::MsgAppendResponse)
+                .direction(Direction::Send),
+        ));
+    }
+    cluster.must_transfer_leader(1, new_peer(5, 5));
+    // Clears send filters so peer 4 can accept snapshot from peer 5. If peer 5
+    // didn't set apply index correctly using snapshot in apply worker, the snapshot
+    // will be generated as term 0. Raft consider term of missing index as 0, so
+    // peer 4 will accept the snapshot and think it has already applied it, hence fast
+    // forward it then panic.
+    cluster.clear_send_filters();
+    must_get_equal(&cluster.get_engine(4), b"k0", b"v0");
+    cluster.clear_send_filters();
+    cluster.must_put(b"k1", b"v1");
+    // If peer 4 panicks, it won't be able to apply new writes.
+    must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
 }

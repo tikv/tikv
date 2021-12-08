@@ -1,27 +1,27 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use configuration::Configuration;
 use kvproto::encryptionpb::{EncryptionMethod, MasterKeyKms};
+use online_config::OnlineConfig;
 use serde_derive::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct EncryptionConfig {
     // Encryption configs.
     #[serde(with = "encryption_method_serde")]
-    #[config(skip)]
+    #[online_config(skip)]
     pub data_encryption_method: EncryptionMethod,
-    #[config(skip)]
+    #[online_config(skip)]
     pub data_key_rotation_period: ReadableDuration,
-    #[config(skip)]
+    #[online_config(skip)]
     pub enable_file_dictionary_log: bool,
-    #[config(skip)]
+    #[online_config(skip)]
     pub file_dictionary_rewrite_threshold: u64,
-    #[config(skip)]
+    #[online_config(skip)]
     pub master_key: MasterKeyConfig,
-    #[config(skip)]
+    #[online_config(skip)]
     pub previous_master_key: MasterKeyConfig,
 }
 
@@ -46,7 +46,7 @@ pub struct FileConfig {
     pub path: String,
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, Configuration)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct KmsConfig {

@@ -157,7 +157,7 @@ pub fn get_cf_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<
 }
 
 /// Gets the amount of pending compaction bytes of given column family.
-pub fn get_cf_compaction_pending_bytes(engine: &DB, handle: &CFHandle) -> Option<u64> {
+pub fn get_cf_pending_compaction_bytes(engine: &DB, handle: &CFHandle) -> Option<u64> {
     engine.get_property_int_cf(handle, ROCKSDB_PENDING_COMPACTION_BYTES)
 }
 

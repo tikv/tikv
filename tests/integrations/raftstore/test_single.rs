@@ -1,82 +1,116 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::*;
+use std::time::Duration;
 
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use raftstore::store::*;
+use rand::prelude::*;
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 
 // TODO add epoch not match test cases.
 
 fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
 
-    for i in 1..1000 {
-        let (k, v) = (format!("key{}", i), format!("value{}", i));
-        let key = k.as_bytes();
-        let value = v.as_bytes();
-        cluster.must_put(key, value);
+    let mut data_set: Vec<_> = (1..1000)
+        .map(|i| {
+            (
+                format!("key{}", i).into_bytes(),
+                format!("value{}", i).into_bytes(),
+            )
+        })
+        .collect();
+
+    for kvs in data_set.chunks(50) {
+        let requests = kvs.iter().map(|(k, v)| new_put_cmd(k, v)).collect();
+        // key9 is always the last region.
+        cluster.batch_put(b"key9", requests).unwrap();
+    }
+    let mut rng = rand::thread_rng();
+    for _ in 0..50 {
+        let (key, value) = data_set.choose(&mut rng).unwrap();
         let v = cluster.get(key);
-        assert_eq!(v, Some(value.to_vec()));
+        assert_eq!(v.as_ref(), Some(value));
+    }
+
+    data_set = data_set
+        .into_iter()
+        .enumerate()
+        .map(|(i, (k, _))| (k, format!("value{}", i + 2).into_bytes()))
+        .collect();
+
+    for kvs in data_set.chunks(50) {
+        let requests = kvs.iter().map(|(k, v)| new_put_cmd(k, v)).collect();
+        // key9 is always the last region.
+        cluster.batch_put(b"key9", requests).unwrap();
     }
     // value should be overwrited.
-    for i in 1..1000 {
-        let (k, v) = (format!("key{}", i), format!("value{}", i + 1));
-        let key = k.as_bytes();
-        let value = v.as_bytes();
-        cluster.must_put(key, value);
+    for _ in 0..50 {
+        let (key, value) = data_set.choose(&mut rng).unwrap();
         let v = cluster.get(key);
-        assert_eq!(v, Some(value.to_vec()));
+        assert_eq!(v.as_ref(), Some(value));
     }
 }
 
 fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
 
-    for i in 1..1000 {
-        let (k, v) = (format!("key{}", i), format!("value{}", i));
-        let key = k.as_bytes();
-        let value = v.as_bytes();
-        cluster.must_put(key, value);
-        let v = cluster.get(key);
-        assert_eq!(v, Some(value.to_vec()));
+    let data_set: Vec<_> = (1..1000)
+        .map(|i| {
+            (
+                format!("key{}", i).into_bytes(),
+                format!("value{}", i).into_bytes(),
+            )
+        })
+        .collect();
+
+    for kvs in data_set.chunks(50) {
+        let requests = kvs.iter().map(|(k, v)| new_put_cmd(k, v)).collect();
+        // key999 is always the last region.
+        cluster.batch_put(b"key999", requests).unwrap();
     }
 
-    for i in 1..1000 {
-        let k = format!("key{}", i);
-        let key = k.as_bytes();
+    let mut rng = rand::thread_rng();
+    for (key, value) in data_set.choose_multiple(&mut rng, 50) {
+        let v = cluster.get(key);
+        assert_eq!(v.as_ref(), Some(value));
         cluster.must_delete(key);
         assert!(cluster.get(key).is_none());
     }
 }
 
 fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>, cf: CfName) {
-    for i in 1..1000 {
-        let (k, v) = (format!("key{:08}", i), format!("value{}", i));
-        let key = k.as_bytes();
-        let value = v.as_bytes();
-        cluster.must_put_cf(cf, key, value);
-        let v = cluster.get_cf(cf, key);
-        assert_eq!(v, Some(value.to_vec()));
+    let data_set: Vec<_> = (1..500)
+        .map(|i| {
+            (
+                format!("key{:08}", i).into_bytes(),
+                format!("value{}", i).into_bytes(),
+            )
+        })
+        .collect();
+    for kvs in data_set.chunks(50) {
+        let requests = kvs.iter().map(|(k, v)| new_put_cf_cmd(cf, k, v)).collect();
+        // key9 is always the last region.
+        cluster.batch_put(b"key9", requests).unwrap();
     }
 
     // delete_range request with notify_only set should not actually delete data.
     cluster.must_notify_delete_range_cf(cf, b"", b"");
 
-    for i in 1..1000 {
-        let key = format!("key{:08}", i).into_bytes();
-        let value = format!("value{}", i).into_bytes();
-        assert_eq!(cluster.get_cf(cf, &key).unwrap(), value);
+    let mut rng = rand::thread_rng();
+    for _ in 0..50 {
+        let (k, v) = data_set.choose(&mut rng).unwrap();
+        assert_eq!(cluster.get_cf(cf, k).unwrap(), *v);
     }
 
     // Empty keys means the whole range.
     cluster.must_delete_range_cf(cf, b"", b"");
 
-    for i in 1..1000 {
-        let k = format!("key{:08}", i);
-        let key = k.as_bytes();
-        assert!(cluster.get_cf(cf, key).is_none());
+    for _ in 0..50 {
+        let k = &data_set.choose(&mut rng).unwrap().0;
+        assert!(cluster.get_cf(cf, k).is_none());
     }
 }
 
@@ -195,7 +229,7 @@ fn test_node_apply_no_op() {
         if state.get_applied_index() > RAFT_INIT_LOG_INDEX {
             break;
         }
-        if timer.elapsed() > Duration::from_secs(3) {
+        if timer.saturating_elapsed() > Duration::from_secs(3) {
             panic!("apply no-op log not finish after 3 seconds");
         }
         sleep_ms(10);

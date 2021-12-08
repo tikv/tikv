@@ -9,7 +9,6 @@ use engine_rocks::RocksSstReader;
 pub use engine_rocks::RocksSstWriter;
 use engine_rocks::RocksSstWriterBuilder;
 use engine_traits::KvEngine;
-use engine_traits::SstReader;
 use engine_traits::SstWriter;
 use engine_traits::SstWriterBuilder;
 use kvproto::import_sstpb::*;
@@ -53,7 +52,7 @@ where
             apply(*cf, &mut opt);
             opt.add_table_properties_collector_factory(
                 "tikv.test_properties",
-                Box::new(TestPropertiesCollectorFactory::new(*cf)),
+                TestPropertiesCollectorFactory::new(*cf),
             );
             CFOptions::new(*cf, opt)
         })
@@ -75,8 +74,8 @@ where
     new_test_engine_with_options_and_env(path, cfs, apply, None)
 }
 
-pub fn new_sst_reader(path: &str) -> RocksSstReader {
-    RocksSstReader::open(path).expect("test sst reader")
+pub fn new_sst_reader(path: &str, e: Option<Arc<Env>>) -> RocksSstReader {
+    RocksSstReader::open_with_env(path, e).expect("test sst reader")
 }
 
 pub fn new_sst_writer(path: &str) -> RocksSstWriter {
@@ -167,9 +166,9 @@ impl TestPropertiesCollectorFactory {
     }
 }
 
-impl TablePropertiesCollectorFactory for TestPropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(TestPropertiesCollector::new(self.cf.clone()))
+impl TablePropertiesCollectorFactory<TestPropertiesCollector> for TestPropertiesCollectorFactory {
+    fn create_table_properties_collector(&mut self, _: u32) -> TestPropertiesCollector {
+        TestPropertiesCollector::new(self.cf.clone())
     }
 }
 

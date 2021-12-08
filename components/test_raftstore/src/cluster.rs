@@ -3,12 +3,12 @@
 use std::collections::hash_map::Entry;
 use std::error::Error as StdError;
 use std::sync::{mpsc, Arc, Mutex, RwLock};
-use std::time::*;
+use std::time::Duration;
 use std::{result, thread};
 
 use futures::executor::block_on;
 use kvproto::errorpb::Error as PbError;
-use kvproto::metapb::{self, Peer, RegionEpoch, StoreLabel};
+use kvproto::metapb::{self, PeerRole, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{
@@ -17,6 +17,7 @@ use kvproto::raft_serverpb::{
 use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
 
+use crate::Config;
 use collections::{HashMap, HashSet};
 use encryption_export::DataKeyManager;
 use engine_rocks::raw::DB;
@@ -32,8 +33,9 @@ use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRoute
 use raftstore::store::transport::CasualRouter;
 use raftstore::store::*;
 use raftstore::{Error, Result};
-use tikv::config::TiKvConfig;
 use tikv::server::Result as ServerResult;
+use tikv_util::thread_group::GroupProperties;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 use super::*;
@@ -53,7 +55,7 @@ pub trait Simulator {
     fn run_node(
         &mut self,
         node_id: u64,
-        cfg: TiKvConfig,
+        cfg: Config,
         engines: Engines<RocksEngine, RocksEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
@@ -67,6 +69,15 @@ pub trait Simulator {
         node_id: u64,
         request: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
+    ) -> Result<()> {
+        self.async_command_on_node_with_opts(node_id, request, cb, Default::default())
+    }
+    fn async_command_on_node_with_opts(
+        &self,
+        node_id: u64,
+        request: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+        opts: RaftCmdExtraOpts,
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
@@ -120,14 +131,14 @@ pub trait Simulator {
             }
         }
         rx.recv_timeout(timeout)
-            .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
+            .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))
     }
 }
 
 pub struct Cluster<T: Simulator> {
-    pub cfg: TiKvConfig,
+    pub cfg: Config,
     leaders: HashMap<u64, metapb::Peer>,
-    count: usize,
+    pub count: usize,
 
     pub paths: Vec<TempDir>,
     pub dbs: Vec<Engines<RocksEngine, RocksEngine>>,
@@ -137,6 +148,7 @@ pub struct Cluster<T: Simulator> {
     pub engines: HashMap<u64, Engines<RocksEngine, RocksEngine>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
+    group_props: HashMap<u64, GroupProperties>,
 
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
@@ -152,7 +164,10 @@ impl<T: Simulator> Cluster<T> {
     ) -> Cluster<T> {
         // TODO: In the future, maybe it's better to test both case where `use_delete_range` is true and false
         Cluster {
-            cfg: new_tikv_config(id),
+            cfg: Config {
+                tikv: new_tikv_config(id),
+                prefer_mem: true,
+            },
             leaders: HashMap::default(),
             count,
             paths: vec![],
@@ -163,6 +178,7 @@ impl<T: Simulator> Cluster<T> {
             engines: HashMap::default(),
             key_managers_map: HashMap::default(),
             labels: HashMap::default(),
+            group_props: HashMap::default(),
             sim,
             pd_client,
         }
@@ -233,6 +249,9 @@ impl<T: Simulator> Cluster<T> {
             let key_mgr = self.key_managers.last().unwrap().clone();
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
 
+            let props = GroupProperties::default();
+            tikv_util::thread_group::set_properties(Some(props.clone()));
+
             let mut sim = self.sim.wl();
             let node_id = sim.run_node(
                 0,
@@ -243,6 +262,7 @@ impl<T: Simulator> Cluster<T> {
                 router,
                 system,
             )?;
+            self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
             self.store_metas.insert(node_id, store_meta);
             self.key_managers_map.insert(node_id, key_mgr);
@@ -304,6 +324,9 @@ impl<T: Simulator> Cluster<T> {
                 .insert(Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP))))
                 .clone(),
         };
+        let props = GroupProperties::default();
+        self.group_props.insert(node_id, props.clone());
+        tikv_util::thread_group::set_properties(Some(props));
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim
@@ -315,24 +338,21 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn stop_node(&mut self, node_id: u64) {
         debug!("stopping node {}", node_id);
+        self.group_props[&node_id].mark_shutdown();
         match self.sim.write() {
             Ok(mut sim) => sim.stop_node(node_id),
-            Err(_) => {
-                if !thread::panicking() {
-                    panic!("failed to acquire write lock.")
-                }
-            }
+            Err(_) => safe_panic!("failed to acquire write lock."),
         }
         self.pd_client.shutdown_store(node_id);
         debug!("node {} stopped", node_id);
     }
 
     pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
-        Arc::clone(&self.engines[&node_id].kv.as_inner())
+        Arc::clone(self.engines[&node_id].kv.as_inner())
     }
 
     pub fn get_raft_engine(&self, node_id: u64) -> Arc<DB> {
-        Arc::clone(&self.engines[&node_id].raft.as_inner())
+        Arc::clone(self.engines[&node_id].raft.as_inner())
     }
 
     pub fn get_all_engines(&self, node_id: u64) -> Engines<RocksEngine, RocksEngine> {
@@ -422,7 +442,9 @@ impl<T: Simulator> Cluster<T> {
                 e @ Err(_) => return e,
                 Ok(resp) => resp,
             };
-            if self.refresh_leader_if_needed(&resp, region_id) && timer.elapsed() < timeout {
+            if self.refresh_leader_if_needed(&resp, region_id)
+                && timer.saturating_elapsed() < timeout
+            {
                 warn!(
                     "{:?} is no longer leader, let's retry",
                     request.get_header().get_peer()
@@ -434,7 +456,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn valid_leader_id(&self, region_id: u64, leader_id: u64) -> bool {
-        let store_ids = match self.store_ids_of_region(region_id) {
+        let store_ids = match self.voter_store_ids_of_region(region_id) {
             None => return false,
             Some(ids) => ids,
         };
@@ -442,10 +464,22 @@ impl<T: Simulator> Cluster<T> {
         store_ids.contains(&leader_id) && node_ids.contains(&leader_id)
     }
 
-    fn store_ids_of_region(&self, region_id: u64) -> Option<Vec<u64>> {
+    fn voter_store_ids_of_region(&self, region_id: u64) -> Option<Vec<u64>> {
         block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
-            .map(|region| region.get_peers().iter().map(Peer::get_store_id).collect())
+            .map(|region| {
+                region
+                    .get_peers()
+                    .iter()
+                    .flat_map(|p| {
+                        if p.get_role() != PeerRole::Learner {
+                            Some(p.get_store_id())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
     }
 
     pub fn query_leader(
@@ -477,10 +511,19 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
-        let store_ids = match self.store_ids_of_region(region_id) {
-            None => return None,
-            Some(ids) => ids,
-        };
+        let timer = Instant::now_coarse();
+        let timeout = Duration::from_secs(5);
+        let mut store_ids = None;
+        while timer.saturating_elapsed() < timeout {
+            match self.voter_store_ids_of_region(region_id) {
+                None => thread::sleep(Duration::from_millis(10)),
+                Some(ids) => {
+                    store_ids = Some(ids);
+                    break;
+                }
+            };
+        }
+        let store_ids = store_ids?;
         if let Some(l) = self.leaders.get(&region_id) {
             // leader may be stopped in some tests.
             if self.valid_leader_id(region_id, l.get_store_id()) {
@@ -499,7 +542,7 @@ impl<T: Simulator> Cluster<T> {
             .filter(|id| node_ids.contains(id))
             .cloned()
             .collect();
-        for _ in 0..500 {
+        while timer.saturating_elapsed() < timeout {
             for store_id in &alive_store_ids {
                 let l = match self.query_leader(*store_id, region_id, Duration::from_secs(1)) {
                     None => continue,
@@ -511,16 +554,20 @@ impl<T: Simulator> Cluster<T> {
                     .1
                     .push(*store_id);
             }
-            if let Some((_, (l, c))) = leaders.drain().max_by_key(|(_, (_, c))| c.len()) {
+            if let Some((_, (l, c))) = leaders.iter().max_by_key(|(_, (_, c))| c.len()) {
                 // It may be a step down leader.
                 if c.contains(&l.get_store_id()) {
-                    leader = Some(l);
+                    leader = Some(l.clone());
+                    // Technically, correct calculation should use two quorum when in joint
+                    // state. Here just for simplicity.
                     if c.len() > store_ids.len() / 2 {
                         break;
                     }
                 }
             }
+            debug!("failed to detect leaders"; "leaders" => ?leaders, "store_ids" => ?store_ids);
             sleep_ms(10);
+            leaders.clear();
         }
 
         if let Some(l) = leader {
@@ -577,11 +624,11 @@ impl<T: Simulator> Cluster<T> {
         for (&id, engines) in &self.engines {
             let peer = new_peer(id, id);
             region.mut_peers().push(peer.clone());
-            bootstrap_store(&engines, self.id(), id).unwrap();
+            bootstrap_store(engines, self.id(), id).unwrap();
         }
 
         for engines in self.engines.values() {
-            prepare_bootstrap_cluster(&engines, &region)?;
+            prepare_bootstrap_cluster(engines, &region)?;
         }
 
         self.bootstrap_cluster(region);
@@ -601,7 +648,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for (&id, engines) in &self.engines {
-            bootstrap_store(&engines, self.id(), id).unwrap();
+            bootstrap_store(engines, self.id(), id).unwrap();
         }
 
         let node_id = 1;
@@ -692,12 +739,9 @@ impl<T: Simulator> Cluster<T> {
         match self.sim.read() {
             Ok(s) => keys = s.get_node_ids(),
             Err(_) => {
-                if thread::panicking() {
-                    // Leave the resource to avoid double panic.
-                    return;
-                } else {
-                    panic!("failed to acquire read lock");
-                }
+                safe_panic!("failed to acquire read lock");
+                // Leave the resource to avoid double panic.
+                return;
             }
         }
         for id in keys {
@@ -726,8 +770,8 @@ impl<T: Simulator> Cluster<T> {
         }
 
         // If command is stale, leadership may have changed.
-        // Or epoch not match, it can be introduced by wrong leader.
-        if err.has_stale_command() || err.has_epoch_not_match() {
+        // EpochNotMatch is not checked as leadership is checked first in raftstore.
+        if err.has_stale_command() {
             self.reset_leader_of_region(region_id);
             return true;
         }
@@ -754,7 +798,7 @@ impl<T: Simulator> Cluster<T> {
         let timer = Instant::now();
         let mut tried_times = 0;
         // At least retry once.
-        while tried_times < 2 || timer.elapsed() < timeout {
+        while tried_times < 2 || timer.saturating_elapsed() < timeout {
             tried_times += 1;
             let mut region = self.get_region(key);
             let region_id = region.get_id();
@@ -862,7 +906,15 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn async_request(
         &mut self,
+        req: RaftCmdRequest,
+    ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+        self.async_request_with_opts(req, Default::default())
+    }
+
+    pub fn async_request_with_opts(
+        &mut self,
         mut req: RaftCmdRequest,
+        opts: RaftCmdExtraOpts,
     ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
         let region_id = req.get_header().get_region_id();
         let leader = self.leader_of_region(region_id).unwrap();
@@ -870,7 +922,7 @@ impl<T: Simulator> Cluster<T> {
         let (cb, rx) = make_cb(&req);
         self.sim
             .rl()
-            .async_command_on_node(leader.get_store_id(), req, cb)?;
+            .async_command_on_node_with_opts(leader.get_store_id(), req, cb, opts)?;
         Ok(rx)
     }
 
@@ -928,14 +980,8 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) {
-        match self.batch_put(key, vec![new_put_cf_cmd(cf, key, value)]) {
-            Ok(resp) => {
-                assert_eq!(resp.get_responses().len(), 1);
-                assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
-            }
-            Err(e) => {
-                panic!("has error: {:?}", e);
-            }
+        if let Err(e) = self.batch_put(key, vec![new_put_cf_cmd(cf, key, value)]) {
+            panic!("has error: {:?}", e);
         }
     }
 
@@ -971,8 +1017,6 @@ impl<T: Simulator> Cluster<T> {
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Delete);
     }
 
     pub fn must_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
@@ -985,8 +1029,6 @@ impl<T: Simulator> Cluster<T> {
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::DeleteRange);
     }
 
     pub fn must_notify_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
@@ -996,8 +1038,6 @@ impl<T: Simulator> Cluster<T> {
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::DeleteRange);
     }
 
     pub fn must_flush_cf(&mut self, cf: &str, sync: bool) {
@@ -1039,7 +1079,7 @@ impl<T: Simulator> Cluster<T> {
             if truncated_state.get_index() >= index {
                 return;
             }
-            if timer.elapsed() >= Duration::from_secs(5) {
+            if timer.saturating_elapsed() >= Duration::from_secs(5) {
                 panic!(
                     "[region {}] log is still not truncated to {}: {:?} on store {}",
                     region_id, index, truncated_state, store_id,
@@ -1092,7 +1132,7 @@ impl<T: Simulator> Cluster<T> {
             if cur_index >= expected {
                 return;
             }
-            if timer.elapsed() >= timeout {
+            if timer.saturating_elapsed() >= timeout {
                 panic!(
                     "[region {}] last index still not reach {}: {:?}",
                     region_id, expected, raft_state
@@ -1196,7 +1236,7 @@ impl<T: Simulator> Cluster<T> {
                     return;
                 }
             }
-            if timer.elapsed() > Duration::from_secs(5) {
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
                 panic!(
                     "failed to transfer leader to [{}] {:?}, current leader: {:?}",
                     region_id, leader, cur_leader
@@ -1250,6 +1290,7 @@ impl<T: Simulator> Cluster<T> {
         let mut try_cnt = 0;
         let split_count = self.pd_client.get_split_count();
         loop {
+            debug!("asking split"; "region" => ?region, "key" => ?split_key);
             // In case ask split message is ignored, we should retry.
             if try_cnt % 50 == 0 {
                 self.reset_leader_of_region(region.get_id());
@@ -1277,7 +1318,9 @@ impl<T: Simulator> Cluster<T> {
                     assert_eq!(regions[0].get_end_key(), key.as_slice());
                     assert_eq!(regions[0].get_end_key(), regions[1].get_start_key());
                 });
-                self.split_region(region, split_key, Callback::write(check));
+                if self.leader_of_region(region.get_id()).is_some() {
+                    self.split_region(region, split_key, Callback::write(check));
+                }
             }
 
             if self.pd_client.check_split(region, split_key)
@@ -1448,7 +1491,7 @@ impl<T: Simulator> Cluster<T> {
                 );
                 break;
             }
-            if timer.elapsed() > Duration::from_secs(60) {
+            if timer.saturating_elapsed() > Duration::from_secs(60) {
                 panic!("region {} is not removed after 60s.", region_id);
             }
             thread::sleep(Duration::from_millis(100));
@@ -1460,23 +1503,72 @@ impl<T: Simulator> Cluster<T> {
         self.add_send_filter(PartitionFilterFactory::new(s1, s2));
     }
 
-    // Request a snapshot on the given region.
-    pub fn must_request_snapshot(&self, store_id: u64, region_id: u64) -> u64 {
-        // Request snapshot.
-        let (request_tx, request_rx) = mpsc::channel();
-        let router = self.sim.rl().get_router(store_id).unwrap();
-        CasualRouter::send(
-            &router,
-            region_id,
-            CasualMessage::AccessPeer(Box::new(move |peer: &mut dyn AbstractPeer| {
-                let idx = peer.raft_commit_index();
-                peer.raft_request_snapshot(idx);
-                debug!("{} request snapshot at {:?}", idx, peer.meta_peer());
-                request_tx.send(idx).unwrap();
-            })),
-        )
-        .unwrap();
-        request_rx.recv_timeout(Duration::from_secs(5)).unwrap()
+    pub fn must_wait_for_leader_expire(&self, node_id: u64, region_id: u64) {
+        let timer = Instant::now_coarse();
+        while timer.saturating_elapsed() < Duration::from_secs(5) {
+            if self
+                .query_leader(node_id, region_id, Duration::from_secs(1))
+                .is_none()
+            {
+                return;
+            }
+            sleep_ms(100);
+        }
+        panic!(
+            "region {}'s replica in store {} still has a valid leader after 5 secs",
+            region_id, node_id
+        );
+    }
+
+    pub fn must_update_region_for_unsafe_recover(&mut self, node_id: u64, region: &metapb::Region) {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+        let mut try_cnt = 0;
+        loop {
+            if try_cnt % 50 == 0 {
+                // In case the message is ignored, re-send it every 50 tries.
+                router
+                    .force_send(
+                        region.get_id(),
+                        PeerMsg::UpdateRegionForUnsafeRecover(region.clone()),
+                    )
+                    .unwrap();
+            }
+            if let Ok(Some(current)) = block_on(self.pd_client.get_region_by_id(region.get_id())) {
+                if current.get_start_key() == region.get_start_key()
+                    && current.get_end_key() == region.get_end_key()
+                {
+                    return;
+                }
+            }
+            if try_cnt > 500 {
+                panic!("region {:?} is not updated", region);
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
+    }
+
+    pub fn must_recreate_region_for_unsafe_recover(
+        &mut self,
+        node_id: u64,
+        region: &metapb::Region,
+    ) {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+        let mut try_cnt = 0;
+        loop {
+            if try_cnt % 50 == 0 {
+                // In case the message is ignored, re-send it every 50 tries.
+                StoreRouter::send(&router, StoreMsg::CreatePeer(region.clone())).unwrap();
+            }
+            if let Ok(Some(_)) = block_on(self.pd_client.get_region_by_id(region.get_id())) {
+                return;
+            }
+            if try_cnt > 250 {
+                panic!("region {:?} is not created", region);
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
     }
 }
 

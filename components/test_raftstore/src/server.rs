@@ -15,17 +15,17 @@ use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use kvproto::tikvpb::TikvClient;
-use tempfile::{Builder, TempDir};
+use tempfile::TempDir;
 use tokio::runtime::Builder as TokioBuilder;
 
 use super::*;
+use crate::Config;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::{PerfLevel, RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
-use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::errors::Error as RaftError;
 use raftstore::router::{
     LocalReadRouter, RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter,
@@ -34,9 +34,14 @@ use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::SnapManager;
 use raftstore::store::{
-    AutoSplitController, Callback, LocalReader, SnapManagerBuilder, SplitCheckRunner,
+    AutoSplitController, Callback, CheckLeaderRunner, LocalReader, SnapManagerBuilder,
+    SplitCheckRunner, SplitConfigManager,
 };
 use raftstore::Result;
+use raftstore::{
+    coprocessor::{CoprocessorHost, RegionInfoAccessor},
+    store::msg::RaftCmdExtraOpts,
+};
 use security::SecurityManager;
 use tikv::coprocessor;
 use tikv::coprocessor_v2;
@@ -52,13 +57,11 @@ use tikv::server::{
     Server, ServerTransport,
 };
 use tikv::storage;
-use tikv::{
-    config::{ConfigController, TiKvConfig},
-    server::raftkv::ReplicaReadLockChecker,
-};
+use tikv::storage::txn::flow_controller::FlowController;
+use tikv::{config::ConfigController, server::raftkv::ReplicaReadLockChecker};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
-use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker};
+use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker};
 use tikv_util::HandyRwLock;
 use txn_types::TxnExtraScheduler;
 
@@ -103,8 +106,8 @@ impl StoreAddrResolver for AddressMap {
 }
 
 struct ServerMeta {
-    node: Node<TestPdClient, RocksEngine>,
-    server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
+    node: Node<TestPdClient, RocksEngine, RocksEngine>,
+    server: Server<SimulateStoreTransport, PdStoreAddrResolver, SimulateEngine>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
@@ -203,7 +206,7 @@ impl Simulator for ServerCluster {
     fn run_node(
         &mut self,
         node_id: u64,
-        mut cfg: TiKvConfig,
+        mut cfg: Config,
         engines: Engines<RocksEngine, RocksEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
@@ -211,7 +214,7 @@ impl Simulator for ServerCluster {
         system: RaftBatchSystem<RocksEngine, RocksEngine>,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
-            let p = Builder::new().prefix("test_cluster").tempdir().unwrap();
+            let p = test_util::temp_dir("test_cluster", cfg.prefer_mem);
             (p.path().to_str().unwrap().to_owned(), Some(p))
         } else {
             let p = self.snap_paths[&node_id].path().to_str().unwrap();
@@ -248,11 +251,11 @@ impl Simulator for ServerCluster {
         }
 
         // Create storage.
-        let pd_worker = FutureWorker::new("test-pd-worker");
+        let pd_worker = LazyWorker::new("test-pd-worker");
         let pd_sender = pd_worker.scheduler();
         let storage_read_pool = ReadPool::from(storage::build_read_pool(
             &tikv::config::StorageReadPoolConfig::default_for_test(),
-            pd_sender,
+            pd_sender.clone(),
             raft_engine.clone(),
         ));
 
@@ -265,9 +268,11 @@ impl Simulator for ServerCluster {
             block_on(self.pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
+        let (tx, _rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
             engine.clone(),
             sim_router.clone(),
+            tx,
             cfg.gc.clone(),
             Default::default(),
         );
@@ -300,14 +305,19 @@ impl Simulator for ServerCluster {
             None
         };
 
-        let mut lock_mgr = LockManager::new(cfg.pessimistic_txn.pipelined);
+        let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
+        let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
+
+        let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
         let store = create_raft_storage(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
             lock_mgr.clone(),
             concurrency_manager.clone(),
-            lock_mgr.get_pipelined(),
+            lock_mgr.get_storage_dynamic_configs(),
+            Arc::new(FlowController::empty()),
+            pd_sender,
         )?;
         self.storages.insert(node_id, raft_engine);
 
@@ -316,7 +326,15 @@ impl Simulator for ServerCluster {
         // Create import service.
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(&cfg.import, dir, key_manager.clone()).unwrap())
+            Arc::new(
+                SSTImporter::new(
+                    &cfg.import,
+                    dir,
+                    key_manager.clone(),
+                    cfg.storage.api_version(),
+                )
+                .unwrap(),
+            )
         };
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
@@ -375,6 +393,7 @@ impl Simulator for ServerCluster {
             system,
             &server_cfg.value().clone(),
             Arc::new(VersionTrack::new(raft_store)),
+            cfg.storage.api_version(),
             Arc::clone(&self.pd_client),
             state,
             bg_worker.clone(),
@@ -394,6 +413,7 @@ impl Simulator for ServerCluster {
                 resolver.clone(),
                 snap_mgr.clone(),
                 gc_worker.clone(),
+                check_leader_scheduler.clone(),
                 self.env.clone(),
                 None,
                 debug_thread_pool.clone(),
@@ -431,12 +451,13 @@ impl Simulator for ServerCluster {
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
-        let pessimistic_txn_cfg = cfg.pessimistic_txn;
+        let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
 
         let split_check_runner =
             SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
-
+        let split_config_manager = SplitConfigManager(Arc::new(VersionTrack::new(cfg.tikv.split)));
+        let auto_split_controller = AutoSplitController::new(split_config_manager);
         node.start(
             engines,
             simulate_trans.clone(),
@@ -446,7 +467,7 @@ impl Simulator for ServerCluster {
             coprocessor_host,
             importer.clone(),
             split_check_scheduler,
-            AutoSplitController::default(),
+            auto_split_controller,
             concurrency_manager.clone(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
@@ -517,17 +538,18 @@ impl Simulator for ServerCluster {
         self.metas.keys().cloned().collect()
     }
 
-    fn async_command_on_node(
+    fn async_command_on_node_with_opts(
         &self,
         node_id: u64,
         request: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
+        opts: RaftCmdExtraOpts,
     ) -> Result<()> {
         let router = match self.metas.get(&node_id) {
             None => return Err(box_err!("missing sender for store {}", node_id)),
             Some(meta) => meta.sim_router.clone(),
         };
-        router.send_command(request, cb)
+        router.send_command(request, cb, opts)
     }
 
     fn async_read(
@@ -605,20 +627,23 @@ pub fn new_incompatible_server_cluster(id: u64, count: usize) -> Cluster<ServerC
     Cluster::new(id, count, sim, pd_client)
 }
 
-pub fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
-    must_new_and_configure_cluster(|_| ())
+pub fn must_new_cluster_mul(count: usize) -> (Cluster<ServerCluster>, metapb::Peer, Context) {
+    must_new_and_configure_cluster_mul(count, |_| ())
 }
 
 pub fn must_new_and_configure_cluster(
+    configure: impl FnMut(&mut Cluster<ServerCluster>),
+) -> (Cluster<ServerCluster>, metapb::Peer, Context) {
+    must_new_and_configure_cluster_mul(1, configure)
+}
+
+fn must_new_and_configure_cluster_mul(
+    count: usize,
     mut configure: impl FnMut(&mut Cluster<ServerCluster>),
-) -> (Cluster<ServerCluster>, metapb::Peer, Context)
-where
-{
-    let count = 1;
+) -> (Cluster<ServerCluster>, metapb::Peer, Context) {
     let mut cluster = new_server_cluster(0, count);
     configure(&mut cluster);
     cluster.run();
-
     let region_id = 1;
     let leader = cluster.leader_of_region(region_id).unwrap();
     let epoch = cluster.get_region_epoch(region_id);
@@ -631,7 +656,13 @@ where
 }
 
 pub fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster>, TikvClient, Context) {
-    let (cluster, leader, ctx) = must_new_cluster();
+    must_new_cluster_and_kv_client_mul(1)
+}
+
+pub fn must_new_cluster_and_kv_client_mul(
+    count: usize,
+) -> (Cluster<ServerCluster>, TikvClient, Context) {
+    let (cluster, leader, ctx) = must_new_cluster_mul(count);
 
     let env = Arc::new(Environment::new(1));
     let channel =
@@ -642,7 +673,7 @@ pub fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster>, TikvClient, 
 }
 
 pub fn must_new_cluster_and_debug_client() -> (Cluster<ServerCluster>, DebugClient, u64) {
-    let (cluster, leader, _) = must_new_cluster();
+    let (cluster, leader, _) = must_new_cluster_mul(1);
 
     let env = Arc::new(Environment::new(1));
     let channel =

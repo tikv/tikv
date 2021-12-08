@@ -34,10 +34,11 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
+use online_config::ConfigValue;
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use strum::EnumCount;
+use strum::{EnumCount, EnumIter};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IOOp {
@@ -46,7 +47,7 @@ pub enum IOOp {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumCount)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumCount, EnumIter)]
 pub enum IOType {
     Other = 0,
     // Including coprocessor and storage read.
@@ -63,6 +64,24 @@ pub enum IOType {
     Gc = 8,
     Import = 9,
     Export = 10,
+}
+
+impl IOType {
+    pub fn as_str(&self) -> &str {
+        match *self {
+            IOType::Other => "other",
+            IOType::ForegroundRead => "foreground_read",
+            IOType::ForegroundWrite => "foreground_write",
+            IOType::Flush => "flush",
+            IOType::LevelZeroCompaction => "level_zero_compaction",
+            IOType::Compaction => "compaction",
+            IOType::Replication => "replication",
+            IOType::LoadBalance => "load_balance",
+            IOType::Gc => "gc",
+            IOType::Import => "import",
+            IOType::Export => "export",
+        }
+    }
 }
 
 pub struct WithIOType {
@@ -107,6 +126,7 @@ impl std::ops::Sub for IOBytes {
     }
 }
 
+#[repr(u32)]
 #[derive(Debug, Clone, PartialEq, Eq, Copy, EnumCount)]
 pub enum IOPriority {
     Low = 0,
@@ -121,6 +141,10 @@ impl IOPriority {
             IOPriority::Medium => "medium",
             IOPriority::High => "high",
         }
+    }
+
+    fn unsafe_from_u32(i: u32) -> Self {
+        unsafe { std::mem::transmute(i) }
     }
 }
 
@@ -177,6 +201,25 @@ impl<'de> Deserialize<'de> for IOPriority {
         }
 
         deserializer.deserialize_str(StrVistor)
+    }
+}
+
+impl From<IOPriority> for ConfigValue {
+    fn from(mode: IOPriority) -> ConfigValue {
+        ConfigValue::IOPriority(mode.as_str().to_owned())
+    }
+}
+
+impl From<ConfigValue> for IOPriority {
+    fn from(c: ConfigValue) -> IOPriority {
+        if let ConfigValue::IOPriority(s) = c {
+            match IOPriority::from_str(s.as_str()) {
+                Ok(p) => p,
+                _ => panic!("expect: low, medium, high, got: {:?}", s),
+            }
+        } else {
+            panic!("expect: ConfigValue::IOPriority, got: {:?}", c);
+        }
     }
 }
 
@@ -369,7 +412,7 @@ impl<R: Read> Read for Sha256Reader<R> {
     }
 }
 
-const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
+pub const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
 
 /// Create a file with hole, to reserve space for TiKV.
 pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) -> io::Result<()> {

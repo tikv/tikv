@@ -6,11 +6,8 @@ use external_storage::request::file_name_for_write;
 use file_system::File;
 use futures::executor::block_on;
 use futures_io::AsyncRead;
-use kvproto::backup as proto;
-#[cfg(feature = "prost-codec")]
-pub use kvproto::backup::storage_backend::Backend;
-#[cfg(feature = "protobuf-codec")]
-pub use kvproto::backup::StorageBackend_oneof_backend as Backend;
+use kvproto::brpb as proto;
+pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 use slog_global::info;
 use std::f64::INFINITY;
 use std::io::{self};

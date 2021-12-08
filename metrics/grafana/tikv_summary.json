@@ -397,7 +397,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_thread_cpu_seconds_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (instance)",
+              "expr": "sum(rate(process_cpu_seconds_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", job=\"tikv\"}[1m])) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
@@ -2946,7 +2946,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "99% gRPC messge duration",
+          "title": "99% gRPC message duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -3028,7 +3028,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_grpc_msg_duration_seconds_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type) / sum(rate(tikv_grpc_msg_duration_seconds_count[1m])) by (type)",
+              "expr": "sum(rate(tikv_grpc_msg_duration_seconds_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type) / sum(rate(tikv_grpc_msg_duration_seconds_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 2,
@@ -3041,7 +3041,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Average gRPC messge duration",
+          "title": "Average gRPC message duration",
           "tooltip": {
             "shared": true,
             "sort": 0,

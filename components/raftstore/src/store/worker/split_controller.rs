@@ -56,7 +56,7 @@ where
     let mut pre_sum = vec![];
     let mut sum = 0;
     for item in iter {
-        sum += read(&item);
+        sum += read(item);
         pre_sum.push(sum);
     }
     pre_sum
@@ -208,7 +208,7 @@ impl Recorder {
         let mut samples: Vec<Sample> = self.convert(sampled_key_ranges);
         for key_ranges in &self.key_ranges {
             for key_range in key_ranges {
-                Recorder::sample(&mut samples, &key_range);
+                Recorder::sample(&mut samples, key_range);
             }
         }
         Recorder::split_key(
@@ -252,6 +252,9 @@ impl Recorder {
         let mut best_index: i32 = -1;
         let mut best_score = 2.0;
         for (index, sample) in samples.iter().enumerate() {
+            if sample.key.is_empty() {
+                continue;
+            }
             let sampled = sample.contained + sample.left + sample.right;
             if (sample.left + sample.right) == 0 || sampled < sample_threshold {
                 continue;
@@ -275,6 +278,33 @@ impl Recorder {
             return samples[best_index as usize].key.clone();
         }
         return vec![];
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct WriteStats {
+    pub region_infos: HashMap<u64, QueryStats>,
+}
+
+impl WriteStats {
+    pub fn add_query_num(&mut self, region_id: u64, kind: QueryKind) {
+        let query_stats = self
+            .region_infos
+            .entry(region_id)
+            .or_insert_with(|| QueryStats::default());
+        query_stats.add_query_num(kind, 1);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.region_infos.is_empty()
+    }
+}
+
+impl Default for WriteStats {
+    fn default() -> WriteStats {
+        WriteStats {
+            region_infos: HashMap::default(),
+        }
     }
 }
 

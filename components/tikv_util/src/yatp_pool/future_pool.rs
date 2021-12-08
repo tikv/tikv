@@ -109,7 +109,7 @@ impl FuturePool {
         metrics_running_task_count.inc();
 
         self.pool.spawn(async move {
-            h_schedule.observe(timer.elapsed_secs());
+            h_schedule.observe(timer.saturating_elapsed_secs());
             let _ = future.await;
             metrics_handled_task_count.inc();
             metrics_running_task_count.dec();
@@ -138,7 +138,7 @@ impl FuturePool {
         let (tx, rx) = oneshot::channel();
         metrics_running_task_count.inc();
         self.pool.spawn(async move {
-            h_schedule.observe(timer.elapsed_secs());
+            h_schedule.observe(timer.saturating_elapsed_secs());
             let res = future.await;
             metrics_handled_task_count.inc();
             metrics_running_task_count.dec();

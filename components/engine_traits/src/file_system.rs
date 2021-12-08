@@ -26,6 +26,12 @@ impl EngineFileSystemInspector {
     }
 }
 
+impl Default for EngineFileSystemInspector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FileSystemInspector for EngineFileSystemInspector {
     fn read(&self, len: usize) -> Result<usize, String> {
         if let Some(limiter) = &self.limiter {

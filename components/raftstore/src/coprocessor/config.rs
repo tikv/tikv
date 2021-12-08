@@ -3,15 +3,16 @@
 use super::Result;
 use crate::store::SplitCheckTask;
 
-use configuration::{ConfigChange, ConfigManager, Configuration};
-use engine_traits::{config as engine_config, PerfLevel};
+use engine_traits::perf_level_serde;
+use engine_traits::PerfLevel;
+use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use serde::{Deserialize, Serialize};
 
 use tikv_util::box_err;
 use tikv_util::config::ReadableSize;
 use tikv_util::worker::Scheduler;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
@@ -36,11 +37,11 @@ pub struct Config {
     pub region_split_keys: u64,
 
     /// ConsistencyCheckMethod can not be chanaged dynamically.
-    #[config(skip)]
+    #[online_config(skip)]
     pub consistency_check_method: ConsistencyCheckMethod,
 
-    #[serde(with = "engine_config::perf_level_serde")]
-    #[config(skip)]
+    #[serde(with = "perf_level_serde")]
+    #[online_config(skip)]
     pub perf_level: PerfLevel,
 }
 

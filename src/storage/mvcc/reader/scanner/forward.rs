@@ -1,10 +1,11 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
-use txn_types::{Key, Lock, LockType, TimeStamp, Value, WriteRef, WriteType};
+use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
 use crate::storage::kv::SEEK_BOUND;
@@ -47,11 +48,15 @@ pub trait ScanPolicy<S: Snapshot> {
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>>;
+
+    /// Returns the size of the specified output.
+    fn output_size(&mut self, output: &Self::Output) -> usize;
 }
 
 pub enum HandleRes<T> {
     Return(T),
     Skip(Key),
+    MoveToNext,
 }
 
 pub struct Cursors<S: Snapshot> {
@@ -261,8 +266,12 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     &mut self.cursors,
                     &mut self.statistics,
                 )? {
-                    HandleRes::Return(output) => return Ok(Some(output)),
+                    HandleRes::Return(output) => {
+                        self.statistics.processed_size += self.scan_policy.output_size(&output);
+                        return Ok(Some(output));
+                    }
                     HandleRes::Skip(key) => key,
+                    HandleRes::MoveToNext => continue,
                 };
             }
             if has_write {
@@ -275,6 +284,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                         &mut self.statistics,
                     )? {
                         self.statistics.write.processed_keys += 1;
+                        self.statistics.processed_size += self.scan_policy.output_size(&output);
                         return Ok(Some(output));
                     }
                 }
@@ -353,7 +363,43 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
-        scan_latest_handle_lock(current_user_key, cfg, cursors, statistics)
+        if cfg.isolation_level == IsolationLevel::Rc {
+            cursors.lock.next(&mut statistics.lock);
+            return Ok(HandleRes::Skip(current_user_key));
+        }
+        // Only needs to check lock in SI
+        let lock = {
+            let lock_value = cursors.lock.value(&mut statistics.lock);
+            Lock::parse(lock_value)?
+        };
+        cursors.lock.next(&mut statistics.lock);
+        if let Err(e) = Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &current_user_key,
+            cfg.ts,
+            &cfg.bypass_locks,
+        ) {
+            statistics.lock.processed_keys += 1;
+            // Skip current_user_key because this key is either blocked or handled.
+            cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
+            if cfg.access_locks.contains(lock.ts) {
+                cursors.ensure_default_cursor(cfg)?;
+                return super::load_data_by_lock(
+                    &current_user_key,
+                    cfg,
+                    cursors.default.as_mut().unwrap(),
+                    lock,
+                    statistics,
+                )
+                .map(|val| match val {
+                    Some(v) => HandleRes::Return((current_user_key, v)),
+                    None => HandleRes::MoveToNext,
+                })
+                .map_err(Into::into);
+            }
+            return Err(e.into());
+        }
+        Ok(HandleRes::Skip(current_user_key))
     }
 
     fn handle_write(
@@ -417,6 +463,10 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
             Some(v) => HandleRes::Return((current_user_key, v)),
             _ => HandleRes::Skip(current_user_key),
         })
+    }
+
+    fn output_size(&mut self, output: &Self::Output) -> usize {
+        output.0.len() + output.1.len()
     }
 }
 
@@ -495,7 +545,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                     break Some(TxnEntry::Commit {
                         default: entry_default,
                         write: entry_write,
-                        old_value: None,
+                        old_value: OldValue::None,
                     });
                 }
                 WriteType::Delete => {
@@ -503,7 +553,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                         break Some(TxnEntry::Commit {
                             default: (Vec::new(), Vec::new()),
                             write: (write_key.to_vec(), write_value.to_vec()),
-                            old_value: None,
+                            old_value: OldValue::None,
                         });
                     } else {
                         break None;
@@ -530,6 +580,10 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
             _ => HandleRes::Skip(current_user_key),
         })
     }
+
+    fn output_size(&mut self, output: &Self::Output) -> usize {
+        output.size()
+    }
 }
 
 fn scan_latest_handle_lock<S: Snapshot, T>(
@@ -551,7 +605,6 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
                 cfg.ts,
                 &cfg.bypass_locks,
             )
-            .map(|_| ())
         }
         IsolationLevel::Rc => Ok(()),
     };
@@ -579,6 +632,41 @@ pub struct DeltaEntryPolicy {
 impl DeltaEntryPolicy {
     pub fn new(from_ts: TimeStamp, extra_op: ExtraOp) -> Self {
         Self { from_ts, extra_op }
+    }
+
+    fn fetch_old_value<S: Snapshot>(
+        current_user_key: &Key,
+        cfg: &ScannerConfig<S>,
+        cursors: &mut Cursors<S>,
+        statistics: &mut Statistics,
+        after_ts: TimeStamp,
+        gc_fence_ts: TimeStamp,
+    ) -> Result<OldValue> {
+        let seek_after = || {
+            let seek_after = current_user_key.clone().append_ts(after_ts);
+            OldValue::SeekWrite(seek_after)
+        };
+
+        if let Some(v) = super::seek_for_valid_value(
+            &mut cursors.write,
+            cursors.default.as_mut().unwrap(),
+            current_user_key,
+            after_ts,
+            gc_fence_ts,
+            statistics,
+        )? {
+            if let Some(hint_min_ts) = cfg.hint_min_ts {
+                let k = cursors.write.key(&mut statistics.write);
+                if Key::decode_ts_from(k).unwrap() < hint_min_ts {
+                    return Ok(seek_after());
+                }
+            }
+            Ok(OldValue::value(v))
+        } else if cfg.hint_min_ts.is_some() {
+            Ok(seek_after())
+        } else {
+            Ok(OldValue::None)
+        }
     }
 }
 
@@ -614,22 +702,22 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             } else {
                 Ok((vec![], vec![]))
             };
-            let old_value = if self.extra_op == ExtraOp::ReadOldValue
-                && (lock.lock_type == LockType::Put || lock.lock_type == LockType::Delete)
+
+            let mut old_value = OldValue::None;
+            if self.extra_op == ExtraOp::ReadOldValue
+                && matches!(lock.lock_type, LockType::Put | LockType::Delete)
             {
                 // When meet a lock, the write cursor must indicate the same user key.
                 // Seek for the last valid committed here.
-                super::seek_for_valid_value(
-                    &mut cursors.write,
-                    cursors.default.as_mut().unwrap(),
+                old_value = Self::fetch_old_value(
                     &current_user_key,
+                    cfg,
+                    cursors,
+                    statistics,
                     std::cmp::max(lock.ts, lock.for_update_ts),
                     self.from_ts,
-                    statistics,
-                )?
-            } else {
-                None
-            };
+                )?;
+            }
             load_default_res.map(|default| {
                 HandleRes::Return(TxnEntry::Prewrite {
                     default,
@@ -647,7 +735,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
     fn handle_write(
         &mut self,
         current_user_key: Key,
-        _cfg: &mut ScannerConfig<S>,
+        cfg: &mut ScannerConfig<S>,
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
@@ -712,20 +800,19 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             // Move to the next write record early for getting the old value.
             cursors.write.next(&mut statistics.write);
 
-            let old_value = if self.extra_op == ExtraOp::ReadOldValue
-                && (write_type == WriteType::Put || write_type == WriteType::Delete)
+            let mut old_value = OldValue::None;
+            if self.extra_op == ExtraOp::ReadOldValue
+                && matches!(write_type, WriteType::Put | WriteType::Delete)
             {
-                super::seek_for_valid_value(
-                    &mut cursors.write,
-                    cursors.default.as_mut().unwrap(),
+                old_value = Self::fetch_old_value(
                     &current_user_key,
-                    commit_ts,
-                    self.from_ts,
+                    cfg,
+                    cursors,
                     statistics,
-                )?
-            } else {
-                None
-            };
+                    commit_ts.prev(),
+                    self.from_ts,
+                )?;
+            }
 
             let res = Ok(HandleRes::Return(TxnEntry::Commit {
                 default,
@@ -735,6 +822,10 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
 
             return res;
         }
+    }
+
+    fn output_size(&mut self, output: &Self::Output) -> usize {
+        output.size()
     }
 }
 
@@ -775,7 +866,6 @@ pub mod test_util {
     };
     use crate::storage::Engine;
 
-    #[derive(Default)]
     pub struct EntryBuilder {
         pub key: Vec<u8>,
         pub value: Vec<u8>,
@@ -783,7 +873,21 @@ pub mod test_util {
         pub start_ts: TimeStamp,
         pub commit_ts: TimeStamp,
         pub for_update_ts: TimeStamp,
-        pub old_value: Option<Vec<u8>>,
+        pub old_value: OldValue,
+    }
+
+    impl Default for EntryBuilder {
+        fn default() -> Self {
+            EntryBuilder {
+                key: vec![],
+                value: vec![],
+                primary: vec![],
+                start_ts: 0.into(),
+                commit_ts: 0.into(),
+                for_update_ts: 0.into(),
+                old_value: OldValue::None,
+            }
+        }
     }
 
     impl EntryBuilder {
@@ -812,7 +916,7 @@ pub mod test_util {
             self
         }
         pub fn old_value(&mut self, old_value: &[u8]) -> &mut Self {
-            self.old_value = Some(old_value.to_owned());
+            self.old_value = OldValue::value(old_value.to_owned());
             self
         }
         pub fn build_commit(&self, wt: WriteType, is_short_value: bool) -> TxnEntry {
@@ -882,7 +986,7 @@ pub mod test_util {
             TxnEntry::Commit {
                 default: (vec![], vec![]),
                 write: (write_key.into_encoded(), write_value.as_ref().to_bytes()),
-                old_value: None,
+                old_value: OldValue::None,
             }
         }
     }
@@ -1024,7 +1128,7 @@ mod latest_kv_tests {
         }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into())
             .range(None, None)
             .build()
             .unwrap();
@@ -1042,6 +1146,10 @@ mod latest_kv_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
+        assert_eq!(
+            statistics.processed_size,
+            Key::from_raw(b"a").len() + b"value".len()
+        );
 
         // Use 5 next and reach out of bound:
         //   a_7 b_4 b_3 b_2 b_1 b_0
@@ -1050,12 +1158,14 @@ mod latest_kv_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 5);
+        assert_eq!(statistics.processed_size, 0);
 
         // Cursor remains invalid, so nothing should happen.
         assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.processed_size, 0);
     }
 
     /// Check whether everything works as usual when
@@ -1087,7 +1197,7 @@ mod latest_kv_tests {
         must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into())
             .range(None, None)
             .build()
             .unwrap();
@@ -1107,6 +1217,10 @@ mod latest_kv_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
+        assert_eq!(
+            statistics.processed_size,
+            Key::from_raw(b"a").len() + b"a_value".len()
+        );
 
         // Before:
         //   a_8 b_2 b_1 b_0
@@ -1122,12 +1236,17 @@ mod latest_kv_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, (SEEK_BOUND / 2 + 1) as usize);
+        assert_eq!(
+            statistics.processed_size,
+            Key::from_raw(b"b").len() + b"b_value".len()
+        );
 
         // Next we should get nothing.
         assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.processed_size, 0);
     }
 
     /// Check whether everything works as usual when
@@ -1160,7 +1279,7 @@ mod latest_kv_tests {
         must_commit(&engine, b"b", SEEK_BOUND, SEEK_BOUND);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into())
             .range(None, None)
             .build()
             .unwrap();
@@ -1180,6 +1299,10 @@ mod latest_kv_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
+        assert_eq!(
+            statistics.processed_size,
+            Key::from_raw(b"a").len() + b"a_value".len()
+        );
 
         // Before:
         //   a_8 b_4 b_3 b_2 b_1
@@ -1198,12 +1321,17 @@ mod latest_kv_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, (SEEK_BOUND - 1) as usize);
+        assert_eq!(
+            statistics.processed_size,
+            Key::from_raw(b"b").len() + b"b_value".len()
+        );
 
         // Next we should get nothing.
         assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.processed_size, 0);
     }
 
     /// Range is left open right closed.
@@ -1229,7 +1357,7 @@ mod latest_kv_tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
         // Test both bound specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into())
             .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
             .build()
             .unwrap();
@@ -1242,9 +1370,16 @@ mod latest_kv_tests {
             Some((Key::from_raw(&[4u8]), vec![4u8]))
         );
         assert_eq!(scanner.next().unwrap(), None);
+        assert_eq!(
+            scanner.take_statistics().processed_size,
+            Key::from_raw(&[3u8]).len()
+                + vec![3u8].len()
+                + Key::from_raw(&[4u8]).len()
+                + vec![4u8].len()
+        );
 
         // Test left bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into())
             .range(None, Some(Key::from_raw(&[3u8])))
             .build()
             .unwrap();
@@ -1257,9 +1392,16 @@ mod latest_kv_tests {
             Some((Key::from_raw(&[2u8]), vec![2u8]))
         );
         assert_eq!(scanner.next().unwrap(), None);
+        assert_eq!(
+            scanner.take_statistics().processed_size,
+            Key::from_raw(&[1u8]).len()
+                + vec![1u8].len()
+                + Key::from_raw(&[2u8]).len()
+                + vec![2u8].len()
+        );
 
         // Test right bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into())
             .range(Some(Key::from_raw(&[5u8])), None)
             .build()
             .unwrap();
@@ -1272,9 +1414,16 @@ mod latest_kv_tests {
             Some((Key::from_raw(&[6u8]), vec![6u8]))
         );
         assert_eq!(scanner.next().unwrap(), None);
+        assert_eq!(
+            scanner.take_statistics().processed_size,
+            Key::from_raw(&[5u8]).len()
+                + vec![5u8].len()
+                + Key::from_raw(&[6u8]).len()
+                + vec![6u8].len()
+        );
 
         // Test both bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into())
             .range(None, None)
             .build()
             .unwrap();
@@ -1303,6 +1452,12 @@ mod latest_kv_tests {
             Some((Key::from_raw(&[6u8]), vec![6u8]))
         );
         assert_eq!(scanner.next().unwrap(), None);
+        assert_eq!(
+            scanner.take_statistics().processed_size,
+            (1u8..=6u8)
+                .map(|k| Key::from_raw(&[k]).len() + vec![k].len())
+                .sum::<usize>()
+        );
     }
 
     #[test]
@@ -1316,7 +1471,7 @@ mod latest_kv_tests {
             .collect();
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, read_ts, false)
+        let mut scanner = ScannerBuilder::new(snapshot, read_ts)
             .range(None, None)
             .build()
             .unwrap();
@@ -1368,7 +1523,7 @@ mod latest_entry_tests {
         }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into())
             .range(None, None)
             .build_entry_scanner(0.into(), false)
             .unwrap();
@@ -1387,10 +1542,12 @@ mod latest_entry_tests {
             .start_ts(7.into())
             .commit_ts(7.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
+        assert_eq!(statistics.processed_size, size);
 
         // Use 5 next and reach out of bound:
         //   a_7 b_4 b_3 b_2 b_1 b_0
@@ -1399,12 +1556,14 @@ mod latest_entry_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 5);
+        assert_eq!(statistics.processed_size, 0);
 
         // Cursor remains invalid, so nothing should happen.
         assert_eq!(scanner.next_entry().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.processed_size, 0);
     }
 
     /// Check whether everything works as usual when
@@ -1437,7 +1596,7 @@ mod latest_entry_tests {
         must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into())
             .range(None, None)
             .build_entry_scanner(0.into(), false)
             .unwrap();
@@ -1456,10 +1615,12 @@ mod latest_entry_tests {
             .start_ts(16.into())
             .commit_ts(16.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
+        assert_eq!(statistics.processed_size, size);
 
         // Before:
         //   a_8 b_2 b_1 b_0
@@ -1474,16 +1635,19 @@ mod latest_entry_tests {
             .start_ts(4.into())
             .commit_ts(4.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, (SEEK_BOUND / 2 + 1) as usize);
+        assert_eq!(statistics.processed_size, size);
 
         // Next we should get nothing.
         assert_eq!(scanner.next_entry().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.processed_size, 0);
     }
 
     /// Check whether everything works as usual when
@@ -1516,7 +1680,7 @@ mod latest_entry_tests {
         must_commit(&engine, b"b", SEEK_BOUND, SEEK_BOUND);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into())
             .range(None, None)
             .build_entry_scanner(0.into(), false)
             .unwrap();
@@ -1535,10 +1699,12 @@ mod latest_entry_tests {
             .start_ts(16.into())
             .commit_ts(16.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry));
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
+        assert_eq!(statistics.processed_size, size);
 
         // Before:
         //   a_8 b_4 b_3 b_2 b_1
@@ -1556,16 +1722,19 @@ mod latest_entry_tests {
             .start_ts(8.into())
             .commit_ts(8.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, (SEEK_BOUND - 1) as usize);
+        assert_eq!(statistics.processed_size, size);
 
         // Next we should get nothing.
         assert_eq!(scanner.next_entry().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.processed_size, 0);
     }
 
     /// Range is left open right closed.
@@ -1591,7 +1760,7 @@ mod latest_entry_tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
         // Test both bound specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into())
             .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
             .build_entry_scanner(0.into(), false)
             .unwrap();
@@ -1610,7 +1779,7 @@ mod latest_entry_tests {
         assert_eq!(scanner.next_entry().unwrap(), None);
 
         // Test left bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into())
             .range(None, Some(Key::from_raw(&[3u8])))
             .build_entry_scanner(0.into(), false)
             .unwrap();
@@ -1619,7 +1788,7 @@ mod latest_entry_tests {
         assert_eq!(scanner.next_entry().unwrap(), None);
 
         // Test right bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into())
             .range(Some(Key::from_raw(&[5u8])), None)
             .build_entry_scanner(0.into(), false)
             .unwrap();
@@ -1628,7 +1797,7 @@ mod latest_entry_tests {
         assert_eq!(scanner.next_entry().unwrap(), None);
 
         // Test both bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into())
             .range(None, None)
             .build_entry_scanner(0.into(), false)
             .unwrap();
@@ -1702,7 +1871,7 @@ mod latest_entry_tests {
 
         let check = |ts: u64, after_ts: u64, output_delete, expected: Vec<&TxnEntry>| {
             let snapshot = engine.snapshot(Default::default()).unwrap();
-            let mut scanner = ScannerBuilder::new(snapshot, ts.into(), false)
+            let mut scanner = ScannerBuilder::new(snapshot, ts.into())
                 .range(None, None)
                 .build_entry_scanner(after_ts.into(), output_delete)
                 .unwrap();
@@ -1737,7 +1906,7 @@ mod latest_entry_tests {
             .collect();
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, read_ts, false)
+        let mut scanner = ScannerBuilder::new(snapshot, read_ts)
             .range(None, None)
             .build_entry_scanner(0.into(), false)
             .unwrap();
@@ -1790,7 +1959,7 @@ mod delta_entry_tests {
         }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into())
             .range(None, None)
             .build_delta_scanner(0.into(), ExtraOp::Noop)
             .unwrap();
@@ -1809,10 +1978,12 @@ mod delta_entry_tests {
             .start_ts(7.into())
             .commit_ts(7.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
+        assert_eq!(statistics.processed_size, size);
 
         // Use 5 next and reach out of bound:
         //   a_7 b_4 b_3 b_2 b_1 b_0
@@ -1821,12 +1992,14 @@ mod delta_entry_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 5);
+        assert_eq!(statistics.processed_size, 0);
 
         // Cursor remains invalid, so nothing should happen.
         assert_eq!(scanner.next_entry().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.processed_size, 0);
     }
 
     /// Check whether everything works as usual when
@@ -1858,7 +2031,7 @@ mod delta_entry_tests {
         must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into())
             .range(None, None)
             .build_delta_scanner(0.into(), ExtraOp::Noop)
             .unwrap();
@@ -1877,10 +2050,12 @@ mod delta_entry_tests {
             .start_ts(16.into())
             .commit_ts(16.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
+        assert_eq!(statistics.processed_size, size);
 
         // Before:
         //   a_8 b_2 b_1 b_0
@@ -1895,16 +2070,19 @@ mod delta_entry_tests {
             .start_ts(4.into())
             .commit_ts(4.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 1);
+        assert_eq!(statistics.processed_size, size);
 
         // Next we should get nothing.
         assert_eq!(scanner.next_entry().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 4);
+        assert_eq!(statistics.processed_size, 0);
     }
 
     /// Check whether everything works as usual when
@@ -1939,7 +2117,7 @@ mod delta_entry_tests {
         must_commit(&engine, b"b", SEEK_BOUND + 1, SEEK_BOUND + 1);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into())
             .range(None, None)
             .build_delta_scanner(8.into(), ExtraOp::Noop)
             .unwrap();
@@ -1958,10 +2136,12 @@ mod delta_entry_tests {
             .start_ts(16.into())
             .commit_ts(16.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry));
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
+        assert_eq!(statistics.processed_size, size);
 
         // Before:
         //   a_8 b_4 b_3 b_2 b_1
@@ -1979,16 +2159,19 @@ mod delta_entry_tests {
             .start_ts(9.into())
             .commit_ts(9.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 1);
+        assert_eq!(statistics.processed_size, size);
 
         // Next we should get nothing.
         assert_eq!(scanner.next_entry().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, (SEEK_BOUND - 1) as usize);
+        assert_eq!(statistics.processed_size, 0);
     }
 
     /// Range is left open right closed.
@@ -2014,7 +2197,7 @@ mod delta_entry_tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
         // Test both bound specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into())
             .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
             .build_delta_scanner(4.into(), ExtraOp::Noop)
             .unwrap();
@@ -2033,7 +2216,7 @@ mod delta_entry_tests {
         assert_eq!(scanner.next_entry().unwrap(), None);
 
         // Test left bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into())
             .range(None, Some(Key::from_raw(&[3u8])))
             .build_delta_scanner(4.into(), ExtraOp::Noop)
             .unwrap();
@@ -2042,7 +2225,7 @@ mod delta_entry_tests {
         assert_eq!(scanner.next_entry().unwrap(), None);
 
         // Test right bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into())
             .range(Some(Key::from_raw(&[5u8])), None)
             .build_delta_scanner(4.into(), ExtraOp::Noop)
             .unwrap();
@@ -2051,7 +2234,7 @@ mod delta_entry_tests {
         assert_eq!(scanner.next_entry().unwrap(), None);
 
         // Test both bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into())
             .range(None, None)
             .build_delta_scanner(4.into(), ExtraOp::Noop)
             .unwrap();
@@ -2271,16 +2454,13 @@ mod delta_entry_tests {
             } else {
                 Some(Key::from_raw(to_key))
             };
-            let mut scanner = ScannerBuilder::new(
-                engine.snapshot(Default::default()).unwrap(),
-                to_ts.into(),
-                false,
-            )
-            .hint_min_ts(Some(from_ts.into()))
-            .hint_max_ts(Some(to_ts.into()))
-            .range(from_key, to_key)
-            .build_delta_scanner(from_ts.into(), ExtraOp::Noop)
-            .unwrap();
+            let mut scanner =
+                ScannerBuilder::new(engine.snapshot(Default::default()).unwrap(), to_ts.into())
+                    .hint_min_ts(Some(from_ts.into()))
+                    .hint_max_ts(Some(to_ts.into()))
+                    .range(from_key, to_key)
+                    .build_delta_scanner(from_ts.into(), ExtraOp::Noop)
+                    .unwrap();
 
             let mut actual = vec![];
             while let Some(entry) = scanner.next_entry().unwrap() {
@@ -2413,7 +2593,7 @@ mod delta_entry_tests {
 
         let check = |after_ts: u64, expected: Vec<&TxnEntry>| {
             let snapshot = engine.snapshot(Default::default()).unwrap();
-            let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max(), false)
+            let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max())
                 .range(None, None)
                 .build_delta_scanner(after_ts.into(), ExtraOp::ReadOldValue)
                 .unwrap();
@@ -2450,7 +2630,7 @@ mod delta_entry_tests {
         prepare_test_data_for_check_gc_fence(&engine);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max())
             .range(None, None)
             .build_delta_scanner(40.into(), ExtraOp::ReadOldValue)
             .unwrap();
@@ -2482,7 +2662,7 @@ mod delta_entry_tests {
             must_prewrite_put(&engine, key, value, b"k1", 55);
         }
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max())
             .range(None, None)
             .build_delta_scanner(40.into(), ExtraOp::ReadOldValue)
             .unwrap();
@@ -2518,7 +2698,7 @@ mod delta_entry_tests {
             must_commit(&engine, key, 55, 56);
         }
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max())
             .range(None, None)
             .build_delta_scanner(40.into(), ExtraOp::ReadOldValue)
             .unwrap();

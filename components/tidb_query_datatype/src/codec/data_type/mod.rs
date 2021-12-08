@@ -407,7 +407,7 @@ impl<'a, T: Evaluable + EvaluableRet> EvaluableRef<'a> for &'a T {
 
     #[inline]
     fn from_owned_value(value: &'a T) -> Self {
-        &value
+        value
     }
 }
 

@@ -145,7 +145,7 @@ impl<'a> JsonRef<'a> {
 
     /// Returns the underlying value slice
     pub fn value(&self) -> &'a [u8] {
-        &self.value
+        self.value
     }
 
     // Returns the JSON value as u64

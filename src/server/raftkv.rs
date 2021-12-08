@@ -1,10 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::{
     borrow::Cow,
     fmt::{self, Debug, Display, Formatter},
     io::Error as IoError,
-    mem, result,
+    mem,
+    num::NonZeroU64,
+    result,
     sync::Arc,
     time::Duration,
 };
@@ -13,7 +16,7 @@ use raft::eraftpb::{self, MessageType};
 use thiserror::Error;
 
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_DEFAULT};
+use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_DEFAULT, CF_LOCK};
 use kvproto::{
     errorpb,
     kvrpcpb::Context,
@@ -30,7 +33,8 @@ use raftstore::{
     errors::Error as RaftServerError,
     router::{LocalReadRouter, RaftStoreRouter},
     store::{
-        Callback as StoreCallback, ReadIndexContext, ReadResponse, RegionSnapshot, WriteResponse,
+        Callback as StoreCallback, RaftCmdExtraOpts, ReadIndexContext, ReadResponse,
+        RegionSnapshot, WriteResponse,
     },
 };
 use tikv_util::codec::number::NumberEncoder;
@@ -39,8 +43,8 @@ use txn_types::{Key, TimeStamp, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::storage::kv::{
-    write_modifies, Callback, CbContext, Engine, Error as KvError, ErrorInner as KvErrorInner,
-    ExtCallback, Modify, SnapContext, WriteData,
+    write_modifies, Callback, Engine, Error as KvError, ErrorInner as KvErrorInner, ExtCallback,
+    Modify, SnapContext, WriteData,
 };
 use crate::storage::{self, kv};
 
@@ -104,6 +108,50 @@ impl From<Error> for kv::Error {
     }
 }
 
+pub enum CmdRes<S>
+where
+    S: Snapshot,
+{
+    Resp(Vec<Response>),
+    Snap(RegionSnapshot<S>),
+}
+
+fn check_raft_cmd_response(resp: &mut RaftCmdResponse) -> Result<()> {
+    if resp.get_header().has_error() {
+        return Err(Error::RequestFailed(resp.take_header().take_error()));
+    }
+
+    Ok(())
+}
+
+fn on_write_result<S>(mut write_resp: WriteResponse) -> Result<CmdRes<S>>
+where
+    S: Snapshot,
+{
+    if let Err(e) = check_raft_cmd_response(&mut write_resp.response) {
+        return Err(e);
+    }
+    let resps = write_resp.response.take_responses();
+    Ok(CmdRes::Resp(resps.into()))
+}
+
+fn on_read_result<S>(mut read_resp: ReadResponse<S>) -> Result<CmdRes<S>>
+where
+    S: Snapshot,
+{
+    if let Err(e) = check_raft_cmd_response(&mut read_resp.response) {
+        return Err(e);
+    }
+    let resps = read_resp.response.take_responses();
+    if let Some(mut snapshot) = read_resp.snapshot {
+        snapshot.term = NonZeroU64::new(read_resp.response.get_header().get_current_term());
+        snapshot.txn_extra_op = read_resp.txn_extra_op;
+        Ok(CmdRes::Snap(snapshot))
+    } else {
+        Ok(CmdRes::Resp(resps.into()))
+    }
+}
+
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
 pub struct RaftKv<E, S>
@@ -114,70 +162,6 @@ where
     router: S,
     engine: E,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
-}
-
-pub enum CmdRes<S>
-where
-    S: Snapshot,
-{
-    Resp(Vec<Response>),
-    Snap(RegionSnapshot<S>),
-}
-
-fn new_ctx(resp: &RaftCmdResponse) -> CbContext {
-    let mut cb_ctx = CbContext::new();
-    cb_ctx.term = Some(resp.get_header().get_current_term());
-    cb_ctx
-}
-
-fn check_raft_cmd_response(resp: &mut RaftCmdResponse, req_cnt: usize) -> Result<()> {
-    if resp.get_header().has_error() {
-        return Err(Error::RequestFailed(resp.take_header().take_error()));
-    }
-    if req_cnt != resp.get_responses().len() {
-        return Err(Error::InvalidResponse(format!(
-            "responses count {} is not equal to requests count {}",
-            resp.get_responses().len(),
-            req_cnt
-        )));
-    }
-
-    Ok(())
-}
-
-fn on_write_result<S>(
-    mut write_resp: WriteResponse,
-    req_cnt: usize,
-) -> (CbContext, Result<CmdRes<S>>)
-where
-    S: Snapshot,
-{
-    let cb_ctx = new_ctx(&write_resp.response);
-    if let Err(e) = check_raft_cmd_response(&mut write_resp.response, req_cnt) {
-        return (cb_ctx, Err(e));
-    }
-    let resps = write_resp.response.take_responses();
-    (cb_ctx, Ok(CmdRes::Resp(resps.into())))
-}
-
-fn on_read_result<S>(
-    mut read_resp: ReadResponse<S>,
-    req_cnt: usize,
-) -> (CbContext, Result<CmdRes<S>>)
-where
-    S: Snapshot,
-{
-    let mut cb_ctx = new_ctx(&read_resp.response);
-    cb_ctx.txn_extra_op = read_resp.txn_extra_op;
-    if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
-        return (cb_ctx, Err(e));
-    }
-    let resps = read_resp.response.take_responses();
-    if let Some(snapshot) = read_resp.snapshot {
-        (cb_ctx, Ok(CmdRes::Snap(snapshot)))
-    } else {
-        (cb_ctx, Ok(CmdRes::Resp(resps.into())))
-    }
 }
 
 impl<E, S> RaftKv<E, S>
@@ -234,8 +218,7 @@ where
                 ctx.read_id,
                 cmd,
                 StoreCallback::Read(Box::new(move |resp| {
-                    let (cb_ctx, res) = on_read_result(resp, 1);
-                    cb((cb_ctx, res.map_err(Error::into)));
+                    cb(on_read_result(resp).map_err(Error::into));
                 })),
             )
             .map_err(From::from)
@@ -269,7 +252,6 @@ where
 
         let reqs = modifies_to_requests(batch.modifies);
         let txn_extra = batch.extra;
-        let len = reqs.len();
         let mut header = self.new_request_header(ctx);
         if txn_extra.one_pc {
             header.set_flags(WriteBatchFlags::ONE_PC.bits());
@@ -287,17 +269,17 @@ where
 
         let cb = StoreCallback::write_ext(
             Box::new(move |resp| {
-                let (cb_ctx, res) = on_write_result(resp, len);
-                write_cb((cb_ctx, res.map_err(Error::into)));
+                write_cb(on_write_result(resp).map_err(Error::into));
             }),
             proposed_cb,
             committed_cb,
         );
-        if let Some(deadline) = batch.deadline {
-            self.router.send_command_with_deadline(cmd, cb, deadline)?;
-        } else {
-            self.router.send_command(cmd, cb)?;
-        }
+        let extra_opts = RaftCmdExtraOpts {
+            deadline: batch.deadline,
+            disk_full_opt: batch.disk_full_opt,
+        };
+        self.router.send_command(cmd, cb, extra_opts)?;
+
         Ok(())
     }
 }
@@ -364,6 +346,10 @@ where
                     let bytes = keys::data_key(key.as_encoded());
                     *key = Key::from_encoded(bytes);
                 }
+                Modify::PessimisticLock(ref mut key, _) => {
+                    let bytes = keys::data_key(key.as_encoded());
+                    *key = Key::from_encoded(bytes);
+                }
                 Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
                     let bytes = keys::data_key(key1.as_encoded());
                     *key1 = Key::from_encoded(bytes);
@@ -403,23 +389,22 @@ where
         self.exec_write_requests(
             ctx,
             batch,
-            Box::new(move |(cb_ctx, res)| match res {
+            Box::new(move |res| match res {
                 Ok(CmdRes::Resp(_)) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .write
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     fail_point!("raftkv_async_write_finish");
-                    write_cb((cb_ctx, Ok(())))
+                    write_cb(Ok(()))
                 }
-                Ok(CmdRes::Snap(_)) => write_cb((
-                    cb_ctx,
-                    Err(box_err!("unexpect snapshot, should mutate instead.")),
-                )),
+                Ok(CmdRes::Snap(_)) => {
+                    write_cb(Err(box_err!("unexpect snapshot, should mutate instead.")))
+                }
                 Err(e) => {
                     let status_kind = get_status_kind_from_engine_error(&e);
                     ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
-                    write_cb((cb_ctx, Err(e)))
+                    write_cb(Err(e))
                 }
             }),
             proposed_cb,
@@ -449,7 +434,7 @@ where
         self.exec_snapshot(
             ctx,
             req,
-            Box::new(move |(cb_ctx, res)| match res {
+            Box::new(move |res| match res {
                 Ok(CmdRes::Resp(mut r)) => {
                     let e = if r
                         .get(0)
@@ -461,19 +446,19 @@ where
                     } else {
                         invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()
                     };
-                    cb((cb_ctx, Err(e)))
+                    cb(Err(e))
                 }
                 Ok(CmdRes::Snap(s)) => {
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .snapshot
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
-                    cb((cb_ctx, Ok(s)))
+                    cb(Ok(s))
                 }
                 Err(e) => {
                     let status_kind = get_status_kind_from_engine_error(&e);
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
-                    cb((cb_ctx, Err(e)))
+                    cb(Err(e))
                 }
             }),
         )
@@ -560,11 +545,11 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                     rctx.locked = Some(lock);
                     REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC
                         .locked
-                        .observe(begin_instant.elapsed().as_secs_f64());
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
                 } else {
                     REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC
                         .unlocked
-                        .observe(begin_instant.elapsed().as_secs_f64());
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
                 }
             }
             msg.mut_entries()[0].set_data(rctx.to_bytes().into());
@@ -593,6 +578,15 @@ pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<Request> {
                 if cf != CF_DEFAULT {
                     put.set_cf(cf.to_string());
                 }
+                req.set_cmd_type(CmdType::Put);
+                req.set_put(put);
+            }
+            Modify::PessimisticLock(k, lock) => {
+                let v = lock.into_lock().to_bytes();
+                let mut put = PutRequest::default();
+                put.set_key(k.into_encoded());
+                put.set_value(v);
+                put.set_cf(CF_LOCK.to_string());
                 req.set_cmd_type(CmdType::Put);
                 req.set_put(put);
             }

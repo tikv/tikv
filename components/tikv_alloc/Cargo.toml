@@ -10,13 +10,12 @@ jemalloc = ["tikv-jemallocator", "tikv-jemalloc-ctl", "tikv-jemalloc-sys"]
 
 # Build jemalloc's profiling features. Without this
 # certain profile functions will return nothing.
-mem-profiling = ["tikv-jemallocator/profiling", "log"]
+mem-profiling = ["tikv-jemallocator/profiling"]
 snmalloc = ["snmalloc-rs"]
 
 [dependencies]
 fxhash = "0.2.1"
 libc = "0.2"
-log = { version = "0.4", optional = true }
 lazy_static = "1.3"
 
 [dev-dependencies]

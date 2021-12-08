@@ -3,12 +3,12 @@
 use protobuf::Message;
 use std::convert::TryFrom;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use fail::fail_point;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tikv_util::deadline::Deadline;
+use tikv_util::{deadline::Deadline, time::Instant};
 use tipb::StreamResponse;
 use tipb::{self, ExecType, ExecutorExecutionSummary, FieldType};
 use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
@@ -66,6 +66,9 @@ pub struct BatchExecutorsRunner<SS> {
     /// 1. default: result is encoded row by row using datum format.
     /// 2. chunk: result is encoded column by column using chunk format.
     encode_type: EncodeType,
+
+    /// If it's a paging request, paging_size indicates to the required size for current page.
+    paging_size: Option<u64>,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
@@ -77,30 +80,30 @@ impl BatchExecutorsRunner<()> {
             match ed.get_tp() {
                 ExecType::TypeTableScan => {
                     let descriptor = ed.get_tbl_scan();
-                    BatchTableScanExecutor::check_supported(&descriptor)
+                    BatchTableScanExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchTableScanExecutor: {}", e))?;
                 }
                 ExecType::TypeIndexScan => {
                     let descriptor = ed.get_idx_scan();
-                    BatchIndexScanExecutor::check_supported(&descriptor)
+                    BatchIndexScanExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchIndexScanExecutor: {}", e))?;
                 }
                 ExecType::TypeSelection => {
                     let descriptor = ed.get_selection();
-                    BatchSelectionExecutor::check_supported(&descriptor)
+                    BatchSelectionExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchSelectionExecutor: {}", e))?;
                 }
                 ExecType::TypeAggregation | ExecType::TypeStreamAgg
                     if ed.get_aggregation().get_group_by().is_empty() =>
                 {
                     let descriptor = ed.get_aggregation();
-                    BatchSimpleAggregationExecutor::check_supported(&descriptor)
+                    BatchSimpleAggregationExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchSimpleAggregationExecutor: {}", e))?;
                 }
                 ExecType::TypeAggregation => {
                     let descriptor = ed.get_aggregation();
-                    if BatchFastHashAggregationExecutor::check_supported(&descriptor).is_err() {
-                        BatchSlowHashAggregationExecutor::check_supported(&descriptor)
+                    if BatchFastHashAggregationExecutor::check_supported(descriptor).is_err() {
+                        BatchSlowHashAggregationExecutor::check_supported(descriptor)
                             .map_err(|e| other_err!("BatchSlowHashAggregationExecutor: {}", e))?;
                     }
                 }
@@ -108,13 +111,13 @@ impl BatchExecutorsRunner<()> {
                     // Note: We won't check whether the source of stream aggregation is in order.
                     //       It is undefined behavior if the source is unordered.
                     let descriptor = ed.get_aggregation();
-                    BatchStreamAggregationExecutor::check_supported(&descriptor)
+                    BatchStreamAggregationExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchStreamAggregationExecutor: {}", e))?;
                 }
                 ExecType::TypeLimit => {}
                 ExecType::TypeTopN => {
                     let descriptor = ed.get_top_n();
-                    BatchTopNExecutor::check_supported(&descriptor)
+                    BatchTopNExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchTopNExecutor: {}", e))?;
                 }
                 ExecType::TypeJoin => {
@@ -247,8 +250,7 @@ pub fn build_executors<S: Storage + 'static>(
                 )
             }
             ExecType::TypeAggregation => {
-                if BatchFastHashAggregationExecutor::check_supported(&ed.get_aggregation()).is_ok()
-                {
+                if BatchFastHashAggregationExecutor::check_supported(ed.get_aggregation()).is_ok() {
                     EXECUTOR_COUNT_METRICS.batch_fast_hash_aggr.inc();
 
                     Box::new(
@@ -344,6 +346,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         deadline: Deadline,
         stream_row_limit: usize,
         is_streaming: bool,
+        paging_size: Option<u64>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -354,7 +357,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             storage,
             ranges,
             config.clone(),
-            is_streaming, // For streaming request, executors will continue scan from range end where last scan is finished
+            is_streaming || paging_size.is_some(), // For streaming and paging request, executors will continue scan from range end where last scan is finished
         )?;
 
         let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
@@ -387,6 +390,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             exec_stats,
             stream_row_limit,
             encode_type,
+            paging_size,
         })
     }
 
@@ -396,15 +400,21 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         BATCH_INITIAL_SIZE
     }
 
-    pub async fn handle_request(&mut self) -> Result<SelectResponse> {
+    /// handle_request returns the response of selection and an optional range,
+    /// only paging request will return Some(IntervalRange),
+    /// this should be used when calculating ranges of the next batch.
+    /// IntervalRange records whole range scanned though there are gaps in multi ranges.
+    /// e.g.: [(k1 -> k2), (k4 -> k5)] may got response (k1, k2, k4) with IntervalRange like (k1, k4).
+    pub async fn handle_request(&mut self) -> Result<(SelectResponse, Option<IntervalRange>)> {
         let mut chunks = vec![];
         let mut batch_size = Self::batch_initial_size();
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
+        let mut record_all = 0;
 
         let mut time_slice_start = Instant::now();
         loop {
-            let time_slice_len = time_slice_start.elapsed();
+            let time_slice_len = time_slice_start.saturating_elapsed();
             // Check whether we should yield from the execution
             if time_slice_len > MAX_TIME_SLICE {
                 reschedule().await;
@@ -423,11 +433,16 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
             if record_len > 0 {
                 chunks.push(chunk);
+                record_all += record_len;
             }
 
-            if drained {
+            if drained || self.paging_size.map_or(false, |p| record_all >= p as usize) {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
+
+                let range = self
+                    .paging_size
+                    .map(|_| self.out_most_executor.take_scanned_range());
 
                 let mut sel_resp = SelectResponse::default();
                 sel_resp.set_chunks(chunks.into());
@@ -460,7 +475,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
                 sel_resp.set_warnings(warnings.warnings.into());
                 sel_resp.set_warning_count(warnings.warning_cnt as i64);
-                return Ok(sel_resp);
+                return Ok((sel_resp, range));
             }
 
             // Grow batch size
@@ -608,9 +623,16 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 }
 
 #[inline]
+fn batch_grow_factor() -> usize {
+    fail_point!("copr_batch_grow_size", |r| r
+        .map_or(1, |e| e.parse().unwrap()));
+    BATCH_GROW_FACTOR
+}
+
+#[inline]
 fn grow_batch_size(batch_size: &mut usize) {
     if *batch_size < BATCH_MAX_SIZE {
-        *batch_size *= BATCH_GROW_FACTOR;
+        *batch_size *= batch_grow_factor();
         if *batch_size > BATCH_MAX_SIZE {
             *batch_size = BATCH_MAX_SIZE
         }

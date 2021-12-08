@@ -10,7 +10,7 @@ use tikv::server::gc_worker::{GcTask, GcWorker};
 use tikv::storage::kv::TestEngineBuilder;
 use tikv_util::config::ReadableSize;
 use tikv_util::time::Limiter;
-use tikv_util::worker::FutureScheduler;
+use tikv_util::worker::Scheduler;
 
 #[test]
 fn test_gc_config_validate() {
@@ -29,9 +29,11 @@ fn setup_cfg_controller(
     ConfigController,
 ) {
     let engine = TestEngineBuilder::new().build().unwrap();
+    let (tx, _rx) = std::sync::mpsc::channel();
     let mut gc_worker = GcWorker::new(
         engine,
         RaftStoreBlackHole,
+        tx,
         cfg.gc.clone(),
         Default::default(),
     );
@@ -43,7 +45,7 @@ fn setup_cfg_controller(
     (gc_worker, cfg_controller)
 }
 
-fn validate<F>(scheduler: &FutureScheduler<GcTask>, f: F)
+fn validate<F>(scheduler: &Scheduler<GcTask<engine_rocks::RocksEngine>>, f: F)
 where
     F: FnOnce(&GcConfig, &Limiter) + Send + 'static,
 {

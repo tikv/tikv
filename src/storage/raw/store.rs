@@ -1,16 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::ttl::TTLSnapshot;
+// #[PerformanceCriticalPath]
+use super::encoded::RawEncodeSnapshot;
 
-use crate::storage::kv::{Cursor, ScanMode, Snapshot};
+use crate::storage::kv::{Cursor, Iterator, ScanMode, Snapshot};
 use crate::storage::Statistics;
 use crate::storage::{Error, Result};
 
-use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
-use txn_types::{Key, KvPair};
-
+use engine_traits::{CfName, IterOptions, CF_DEFAULT, DATA_KEY_PREFIX_LEN};
+use kvproto::kvrpcpb::{ApiVersion, KeyRange};
 use std::time::Duration;
 use tikv_util::time::Instant;
+use txn_types::{Key, KvPair};
 use yatp::task::future::reschedule;
 
 const MAX_TIME_SLICE: Duration = Duration::from_millis(2);
@@ -18,15 +19,18 @@ const MAX_BATCH_SIZE: usize = 1024;
 
 pub enum RawStore<S: Snapshot> {
     Vanilla(RawStoreInner<S>),
-    TTL(RawStoreInner<TTLSnapshot<S>>),
+    Encoded(RawStoreInner<RawEncodeSnapshot<S>>),
 }
 
 impl<'a, S: Snapshot> RawStore<S> {
-    pub fn new(snapshot: S, enable_ttl: bool) -> Self {
-        if enable_ttl {
-            RawStore::TTL(RawStoreInner::new(TTLSnapshot::from(snapshot)))
-        } else {
+    pub fn new(snapshot: S, api_version: ApiVersion) -> Self {
+        if api_version == ApiVersion::V1 {
             RawStore::Vanilla(RawStoreInner::new(snapshot))
+        } else {
+            RawStore::Encoded(RawStoreInner::new(RawEncodeSnapshot::from_snapshot(
+                snapshot,
+                api_version,
+            )))
         }
     }
 
@@ -38,7 +42,7 @@ impl<'a, S: Snapshot> RawStore<S> {
     ) -> Result<Option<Vec<u8>>> {
         match self {
             RawStore::Vanilla(inner) => inner.raw_get_key_value(cf, key, stats),
-            RawStore::TTL(inner) => inner.raw_get_key_value(cf, key, stats),
+            RawStore::Encoded(inner) => inner.raw_get_key_value(cf, key, stats),
         }
     }
 
@@ -50,7 +54,7 @@ impl<'a, S: Snapshot> RawStore<S> {
     ) -> Result<Option<u64>> {
         match self {
             RawStore::Vanilla(_) => panic!("get ttl on non-ttl store"),
-            RawStore::TTL(inner) => inner
+            RawStore::Encoded(inner) => inner
                 .snapshot
                 .get_key_ttl_cf(cf, key, stats)
                 .map_err(Error::from),
@@ -79,7 +83,7 @@ impl<'a, S: Snapshot> RawStore<S> {
                     .forward_raw_scan(cf, start_key, limit, statistics, option, key_only)
                     .await
             }
-            RawStore::TTL(inner) => {
+            RawStore::Encoded(inner) => {
                 inner
                     .forward_raw_scan(cf, start_key, limit, statistics, option, key_only)
                     .await
@@ -109,7 +113,7 @@ impl<'a, S: Snapshot> RawStore<S> {
                     .reverse_raw_scan(cf, start_key, limit, statistics, option, key_only)
                     .await
             }
-            RawStore::TTL(inner) => {
+            RawStore::Encoded(inner) => {
                 inner
                     .reverse_raw_scan(cf, start_key, limit, statistics, option, key_only)
                     .await
@@ -162,7 +166,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
     ) -> Result<Vec<Result<KvPair>>> {
         let mut cursor = Cursor::new(self.snapshot.iter_cf(cf, option)?, ScanMode::Forward, false);
         let statistics = statistics.mut_cf_statistics(cf);
-        if !cursor.seek(&start_key, statistics)? {
+        if !cursor.seek(start_key, statistics)? {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
@@ -171,7 +175,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         while cursor.valid()? && pairs.len() < limit {
             row_count += 1;
             if row_count >= MAX_BATCH_SIZE {
-                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
                     reschedule().await;
                     time_slice_start = Instant::now();
                 }
@@ -210,7 +214,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
             false,
         );
         let statistics = statistics.mut_cf_statistics(cf);
-        if !cursor.reverse_seek(&start_key, statistics)? {
+        if !cursor.reverse_seek(start_key, statistics)? {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
@@ -219,7 +223,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         while cursor.valid()? && pairs.len() < limit {
             row_count += 1;
             if row_count >= MAX_BATCH_SIZE {
-                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
                     reschedule().await;
                     time_slice_start = Instant::now();
                 }
@@ -237,4 +241,39 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         }
         Ok(pairs)
     }
+}
+
+pub async fn raw_checksum_ranges<S: Snapshot>(
+    snapshot: S,
+    ranges: Vec<KeyRange>,
+) -> Result<(u64, u64, u64)> {
+    let mut total_bytes = 0;
+    let mut total_kvs = 0;
+    let mut digest = crc64fast::Digest::new();
+    let mut row_count = 0;
+    let mut time_slice_start = Instant::now();
+    for r in ranges {
+        let mut opts = IterOptions::new(None, None, false);
+        opts.set_upper_bound(r.get_end_key(), DATA_KEY_PREFIX_LEN);
+        let mut iter = snapshot.iter_cf(CF_DEFAULT, opts)?;
+        iter.seek(&Key::from_encoded(r.get_start_key().to_vec()))?;
+        while iter.valid()? {
+            row_count += 1;
+            if row_count >= MAX_BATCH_SIZE {
+                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
+                    reschedule().await;
+                    time_slice_start = Instant::now();
+                }
+                row_count = 0;
+            }
+            let k = iter.key();
+            let v = iter.value();
+            digest.write(k);
+            digest.write(v);
+            total_kvs += 1;
+            total_bytes += k.len() + v.len();
+            iter.next()?;
+        }
+    }
+    Ok((digest.sum64(), total_kvs, total_bytes as u64))
 }

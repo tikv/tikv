@@ -269,7 +269,7 @@ fn test_applied_lock_collector() {
 // This case ensures it's performed correctly.
 #[test]
 fn test_gc_bypass_raft() {
-    let (cluster, leader, ctx) = must_new_cluster();
+    let (cluster, leader, ctx) = must_new_cluster_mul(1);
     cluster.pd_client.disable_default_operator();
 
     let env = Arc::new(Environment::new(1));

@@ -31,8 +31,6 @@ mod snapshot;
 pub use crate::snapshot::*;
 mod sst;
 pub use crate::sst::*;
-mod table_properties;
-pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
 pub mod range_properties;
@@ -43,5 +41,9 @@ pub mod ttl_properties;
 pub use crate::ttl_properties::*;
 pub mod perf_context;
 pub use crate::perf_context::*;
+pub mod flow_control_factors;
+pub use crate::flow_control_factors::*;
+pub mod table_properties;
+pub use crate::table_properties::*;
 
 mod raft_engine;

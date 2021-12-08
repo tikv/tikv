@@ -1,4 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
+// #[PerformanceCriticalPath]
 use crate::storage::{
     mvcc::{
         metrics::{
@@ -26,7 +28,13 @@ pub fn prewrite<S: Snapshot>(
     secondary_keys: &Option<Vec<Vec<u8>>>,
     is_pessimistic_lock: bool,
 ) -> Result<(TimeStamp, OldValue)> {
-    let mut mutation = PrewriteMutation::from_mutation(mutation, secondary_keys, txn_props)?;
+    let mut mutation =
+        PrewriteMutation::from_mutation(mutation, secondary_keys, is_pessimistic_lock, txn_props)?;
+
+    // Update max_ts for Insert operation to guarante linearizability and snapshot isolation
+    if mutation.should_not_exist {
+        txn.concurrency_manager.update_max_ts(txn_props.start_ts);
+    }
 
     fail_point!(
         if txn_props.is_pessimistic() {
@@ -129,6 +137,7 @@ pub struct TransactionProperties<'a> {
     pub lock_ttl: u64,
     pub min_commit_ts: TimeStamp,
     pub need_old_value: bool,
+    pub is_retry_request: bool,
 }
 
 impl<'a> TransactionProperties<'a> {
@@ -192,6 +201,7 @@ struct PrewriteMutation<'a> {
     mutation_type: MutationType,
     secondary_keys: &'a Option<Vec<Vec<u8>>>,
     min_commit_ts: TimeStamp,
+    is_pessimistic_lock: bool,
 
     lock_type: Option<LockType>,
     lock_ttl: u64,
@@ -205,6 +215,7 @@ impl<'a> PrewriteMutation<'a> {
     fn from_mutation(
         mutation: Mutation,
         secondary_keys: &'a Option<Vec<Vec<u8>>>,
+        is_pessimistic_lock: bool,
         txn_props: &'a TransactionProperties<'a>,
     ) -> Result<PrewriteMutation<'a>> {
         let should_not_write = mutation.should_not_write();
@@ -225,6 +236,7 @@ impl<'a> PrewriteMutation<'a> {
             mutation_type,
             secondary_keys,
             min_commit_ts: txn_props.min_commit_ts,
+            is_pessimistic_lock,
 
             lock_type,
             lock_ttl: txn_props.lock_ttl,
@@ -403,7 +415,12 @@ impl<'a> PrewriteMutation<'a> {
     fn skip_constraint_check(&self) -> bool {
         match &self.txn_props.kind {
             TransactionKind::Optimistic(s) => *s,
-            TransactionKind::Pessimistic(_) => true,
+            TransactionKind::Pessimistic(_) => {
+                // For non-pessimistic-locked keys, do not skip constraint check when retrying.
+                // This intents to protect idempotency.
+                // Ref: https://github.com/tikv/tikv/issues/11187
+                self.is_pessimistic_lock || !self.txn_props.is_retry_request
+            }
         }
     }
 
@@ -520,13 +537,7 @@ pub mod tests {
     #[cfg(test)]
     use crate::storage::{
         kv::RocksSnapshot,
-        txn::{
-            commands::prewrite::fallback_1pc_locks,
-            tests::{
-                must_acquire_pessimistic_lock, must_cleanup_with_gc_fence, must_commit,
-                must_prewrite_delete, must_prewrite_lock, must_prewrite_put, must_rollback,
-            },
-        },
+        txn::{commands::prewrite::fallback_1pc_locks, tests::*},
     };
     use crate::storage::{mvcc::tests::*, Engine};
     use concurrency_manager::ConcurrencyManager;
@@ -548,6 +559,7 @@ pub mod tests {
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
             need_old_value: false,
+            is_retry_request: false,
         }
     }
 
@@ -572,6 +584,7 @@ pub mod tests {
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
             need_old_value: true,
+            is_retry_request: false,
         }
     }
 
@@ -880,6 +893,7 @@ pub mod tests {
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
                 need_old_value: true,
+                is_retry_request: false,
             },
             Mutation::CheckNotExists(Key::from_raw(key)),
             &None,
@@ -910,6 +924,7 @@ pub mod tests {
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
             need_old_value: true,
+            is_retry_request: false,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         let (_, old_value) = prewrite(
@@ -958,6 +973,7 @@ pub mod tests {
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
             need_old_value: true,
+            is_retry_request: false,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         let (_, old_value) = prewrite(
@@ -1065,6 +1081,7 @@ pub mod tests {
             lock_ttl: 2000,
             min_commit_ts: 51.into(),
             need_old_value: true,
+            is_retry_request: false,
         };
 
         let cases = vec![
@@ -1123,6 +1140,7 @@ pub mod tests {
             lock_ttl: 2000,
             min_commit_ts: 51.into(),
             need_old_value: true,
+            is_retry_request: false,
         };
 
         let cases: Vec<_> = vec![
@@ -1160,6 +1178,115 @@ pub mod tests {
     }
 
     #[test]
+    fn test_resend_prewrite_non_pessimistic_lock() {
+        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+
+        must_acquire_pessimistic_lock(&engine, b"k1", b"k1", 10, 10);
+        must_pessimistic_prewrite_put_async_commit(
+            &engine,
+            b"k1",
+            b"v1",
+            b"k1",
+            &Some(vec![b"k2".to_vec()]),
+            10,
+            10,
+            true,
+            15,
+        );
+        must_pessimistic_prewrite_put_async_commit(
+            &engine,
+            b"k2",
+            b"v2",
+            b"k1",
+            &Some(vec![]),
+            10,
+            10,
+            false,
+            15,
+        );
+
+        // The transaction may be committed by another reader.
+        must_commit(&engine, b"k1", 10, 20);
+        must_commit(&engine, b"k2", 10, 20);
+
+        // This is a re-sent prewrite. It should report a WriteConflict. In production, the caller
+        // will need to check if the current transaction is already committed before, in order to
+        // provide the idempotency.
+        let err = must_retry_pessimistic_prewrite_put_err(
+            &engine,
+            b"k2",
+            b"v2",
+            b"k1",
+            &Some(vec![]),
+            10,
+            10,
+            false,
+            0,
+        );
+        assert!(matches!(err, Error(box ErrorInner::WriteConflict { .. })));
+        // Commit repeatedly, these operations should have no effect.
+        must_commit(&engine, b"k1", 10, 25);
+        must_commit(&engine, b"k2", 10, 25);
+
+        // Seek from 30, we should read commit_ts = 20 instead of 25.
+        must_seek_write(&engine, b"k1", 30, 10, 20, WriteType::Put);
+        must_seek_write(&engine, b"k2", 30, 10, 20, WriteType::Put);
+
+        // Write another version to the keys.
+        must_prewrite_put(&engine, b"k1", b"v11", b"k1", 35);
+        must_prewrite_put(&engine, b"k2", b"v22", b"k1", 35);
+        must_commit(&engine, b"k1", 35, 40);
+        must_commit(&engine, b"k2", 35, 40);
+
+        // A retrying non-pessimistic-lock prewrite request should not skip constraint checks.
+        // It reports a WriteConflict.
+        let err = must_retry_pessimistic_prewrite_put_err(
+            &engine,
+            b"k2",
+            b"v2",
+            b"k1",
+            &Some(vec![]),
+            10,
+            10,
+            false,
+            0,
+        );
+        assert!(matches!(err, Error(box ErrorInner::WriteConflict { .. })));
+        must_unlocked(&engine, b"k2");
+
+        let err = must_retry_pessimistic_prewrite_put_err(
+            &engine, b"k2", b"v2", b"k1", &None, 10, 10, false, 0,
+        );
+        assert!(matches!(err, Error(box ErrorInner::WriteConflict { .. })));
+        must_unlocked(&engine, b"k2");
+        // Committing still does nothing.
+        must_commit(&engine, b"k2", 10, 25);
+        // Try a different txn start ts (which haven't been successfully committed before).
+        let err = must_retry_pessimistic_prewrite_put_err(
+            &engine, b"k2", b"v2", b"k1", &None, 11, 11, false, 0,
+        );
+        assert!(matches!(err, Error(box ErrorInner::WriteConflict { .. })));
+        must_unlocked(&engine, b"k2");
+        // However conflict still won't be checked if there's a non-retry request arriving.
+        must_prewrite_put_impl(
+            &engine,
+            b"k2",
+            b"v2",
+            b"k1",
+            &None,
+            10.into(),
+            false,
+            100,
+            10.into(),
+            1,
+            15.into(),
+            TimeStamp::default(),
+            false,
+        );
+        must_locked(&engine, b"k2", 10);
+    }
+
+    #[test]
     fn test_old_value_rollback_and_lock() {
         let engine_rollback = crate::storage::TestEngineBuilder::new().build().unwrap();
 
@@ -1188,6 +1315,7 @@ pub mod tests {
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
                 need_old_value: true,
+                is_retry_request: false,
             };
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let cm = ConcurrencyManager::new(start_ts);
@@ -1240,6 +1368,7 @@ pub mod tests {
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
             need_old_value: true,
+            is_retry_request: false,
         };
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new(start_ts);
@@ -1379,6 +1508,7 @@ pub mod tests {
                     lock_ttl: 0,
                     min_commit_ts: TimeStamp::default(),
                     need_old_value: true,
+                    is_retry_request: false,
                 };
                 let (_, old_value) = prewrite(
                     &mut txn,
@@ -1413,6 +1543,7 @@ pub mod tests {
                     lock_ttl: 0,
                     min_commit_ts: TimeStamp::default(),
                     need_old_value: true,
+                    is_retry_request: false,
                 };
                 let (_, old_value) = prewrite(
                     &mut txn,

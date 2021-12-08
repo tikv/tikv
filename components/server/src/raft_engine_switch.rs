@@ -1,12 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crossbeam::channel::{unbounded, Receiver};
+use encryption_export::DataKeyManager;
 use engine_rocks::{self, raw::Env, RocksEngine};
 use engine_traits::{
     CompactExt, DeleteStrategy, Error as EngineError, Iterable, Iterator, MiscExt, RaftEngine,
     RaftEngineReadOnly, RaftLogBatch, Range, SeekKey,
 };
-use file_system::delete_dir_if_exist;
+use file_system::{delete_dir_if_exist, IORateLimiter};
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::eraftpb::Entry;
@@ -97,7 +98,7 @@ pub fn check_and_dump_raft_db(
     let mut raft_db_opts = config_raftdb.build_opt();
     raft_db_opts.set_env(env.clone());
     let raft_db_cf_opts = config_raftdb.build_cf_opts(&None);
-    let db = engine_rocks::raw_util::new_engine_opt(&raftdb_path, raft_db_opts, raft_db_cf_opts)
+    let db = engine_rocks::raw_util::new_engine_opt(raftdb_path, raft_db_opts, raft_db_cf_opts)
         .unwrap_or_else(|s| fatal!("failed to create origin raft db: {}", s));
     let src_engine = RocksEngine::from_db(Arc::new(db));
 
@@ -117,7 +118,7 @@ pub fn check_and_dump_raft_db(
     }
 
     info!("Start to scan raft log from RocksEngine and dump into RaftLogEngine");
-    let consumed_time = std::time::Instant::now();
+    let consumed_time = tikv_util::time::Instant::now();
     // Seek all region id from raftdb and send them to workers.
     let mut it = src_engine.iterator().unwrap();
     let mut valid = it.seek(SeekKey::Key(keys::REGION_RAFT_MIN_KEY)).unwrap();
@@ -144,7 +145,7 @@ pub fn check_and_dump_raft_db(
         "Finished dump, total regions: {}; Total bytes: {}; Consumed time: {:?}",
         count_region,
         count_size.load(Ordering::Relaxed),
-        consumed_time.elapsed(),
+        consumed_time.saturating_elapsed(),
     );
 
     rename_to_tmp_dir(&raftdb_path, &dirty_raftdb_path);
@@ -176,12 +177,12 @@ fn run_dump_raftdb_worker(
                             match suffix {
                                 keys::RAFT_LOG_SUFFIX => {
                                     let mut entry = Entry::default();
-                                    entry.merge_from_bytes(&value)?;
+                                    entry.merge_from_bytes(value)?;
                                     entries.push(entry);
                                 }
                                 keys::RAFT_STATE_SUFFIX => {
                                     let mut state = RaftLocalState::default();
-                                    state.merge_from_bytes(&value)?;
+                                    state.merge_from_bytes(value)?;
                                     batch.put_raft_state(region_id, &state).unwrap();
                                     // Assume that we always scan entry first and raft state at the end.
                                     batch
@@ -211,28 +212,34 @@ fn run_dump_raftdb_worker(
     count_size.fetch_add(size, Ordering::Relaxed);
 }
 
-pub fn check_and_dump_raft_engine(config: &TiKvConfig, engine: &RocksEngine, thread_num: usize) {
+pub fn check_and_dump_raft_engine(
+    config: &TiKvConfig,
+    key_manager: Option<Arc<DataKeyManager>>,
+    io_rate_limiter: Option<Arc<IORateLimiter>>,
+    rocks_engine: &RocksEngine,
+    thread_num: usize,
+) {
     let raft_engine_config = config.raft_engine.config();
     let raft_engine_path = &raft_engine_config.dir;
 
-    let dirty_raft_engine_path = get_path_for_remove(raft_engine_path);
     if !RaftLogEngine::exists(raft_engine_path) {
-        remove_tmp_dir(&dirty_raft_engine_path);
         return;
     }
+    let dirty_raft_engine_path = get_path_for_remove(raft_engine_path);
 
     // Clean the target engine if it exists.
-    clear_raft_db(engine).expect("clear_raft_db");
+    clear_raft_db(rocks_engine).expect("clear_raft_db");
 
-    let src_engine = RaftLogEngine::new(raft_engine_config.clone());
+    let raft_engine = RaftLogEngine::new(raft_engine_config.clone(), key_manager, io_rate_limiter)
+        .expect("open raft engine");
 
     let count_size = Arc::new(AtomicUsize::new(0));
     let mut count_region = 0;
     let mut threads = vec![];
     let (tx, rx) = unbounded();
     for _ in 0..thread_num {
-        let src_engine = src_engine.clone();
-        let dst_engine = engine.clone();
+        let src_engine = raft_engine.clone();
+        let dst_engine = rocks_engine.clone();
         let count_size = count_size.clone();
         let rx = rx.clone();
         let t = std::thread::spawn(move || {
@@ -242,9 +249,9 @@ pub fn check_and_dump_raft_engine(config: &TiKvConfig, engine: &RocksEngine, thr
     }
 
     info!("Start to scan raft log from RaftLogEngine and dump into RocksEngine");
-    let consumed_time = std::time::Instant::now();
+    let consumed_time = tikv_util::time::Instant::now();
     // Seek all region id from RaftLogEngine and send them to workers.
-    for id in src_engine.raft_groups() {
+    for id in raft_engine.raft_groups() {
         tx.send(id).unwrap();
         count_region += 1;
     }
@@ -254,14 +261,15 @@ pub fn check_and_dump_raft_engine(config: &TiKvConfig, engine: &RocksEngine, thr
     for t in threads {
         t.join().unwrap();
     }
-    engine.sync().unwrap();
+    rocks_engine.sync().unwrap();
     info!(
         "Finished dump, total regions: {}; Total bytes: {}; Consumed time: {:?}",
         count_region,
         count_size.load(Ordering::Relaxed),
-        consumed_time.elapsed(),
+        consumed_time.saturating_elapsed(),
     );
 
+    // Atomically rename to avoid leaving partially deleted directory.
     rename_to_tmp_dir(&raft_engine_path, &dirty_raft_engine_path);
     remove_tmp_dir(&dirty_raft_engine_path);
 }
@@ -333,7 +341,12 @@ mod tests {
         }
 
         // Dump logs from RocksEngine to RaftLogEngine.
-        let raft_engine = RaftLogEngine::new(cfg.raft_engine.config());
+        let raft_engine = RaftLogEngine::new(
+            cfg.raft_engine.config(),
+            None, /*key_manager*/
+            None, /*io_rate_limiter*/
+        )
+        .expect("open raft engine");
         if continue_on_aborted {
             let mut batch = raft_engine.log_batch(0);
             set_write_batch(25, &mut batch);
@@ -364,7 +377,13 @@ mod tests {
             rocks_engine.consume(&mut batch, false).unwrap();
             assert(25, &rocks_engine);
         }
-        check_and_dump_raft_engine(&cfg, &rocks_engine, 4);
+        check_and_dump_raft_engine(
+            &cfg,
+            None, /*key_manager*/
+            None, /*io_rate_limiter*/
+            &rocks_engine,
+            4,
+        );
         assert(1, &rocks_engine);
         assert(5, &rocks_engine);
         assert(15, &rocks_engine);

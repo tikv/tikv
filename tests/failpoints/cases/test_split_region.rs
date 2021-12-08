@@ -455,10 +455,11 @@ fn test_split_not_to_split_existing_different_uninitialied_peer() {
 
     fail::cfg("on_raft_gc_log_tick", "return()").unwrap();
     let r1 = cluster.run_conf_change();
-
-    pd_client.must_add_peer(r1, new_peer(3, 3));
-
     assert_eq!(r1, 1);
+
+    cluster.must_put(b"k0", b"v0");
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 
     let before_check_snapshot_1_2_fp = "before_check_snapshot_1_2";
     fail::cfg(before_check_snapshot_1_2_fp, "pause").unwrap();
@@ -684,7 +685,7 @@ fn test_report_approximate_size_after_split_check() {
         .get_region_approximate_keys(region_id)
         .unwrap_or_default();
     assert!(approximate_size == 0 && approximate_keys == 0);
-    let (tx, rx) = mpsc::sync_channel(10);
+    let (tx, rx) = mpsc::channel();
     let tx = Arc::new(Mutex::new(tx));
 
     fail::cfg_callback("on_split_region_check_tick", move || {

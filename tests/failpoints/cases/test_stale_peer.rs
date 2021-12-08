@@ -1,13 +1,19 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::atomic::AtomicBool;
+use std::sync::{mpsc, Arc};
 use std::thread;
-use std::time::*;
+use std::time::Duration;
 
 use engine_rocks::Compat;
 use engine_traits::Peekable;
-use kvproto::raft_serverpb::RaftLocalState;
+use kvproto::raft_serverpb::{PeerState, RaftLocalState, RaftMessage};
+use pd_client::PdClient;
+use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
+use tikv_util::time::Instant;
+use tikv_util::HandyRwLock;
 
 #[test]
 fn test_one_node_leader_missing() {
@@ -108,7 +114,7 @@ fn test_stale_learner_restart() {
         .unwrap();
     let last_index = state.get_last_index();
     let timer = Instant::now();
-    while timer.elapsed() < Duration::from_secs(5) {
+    while timer.saturating_elapsed() < Duration::from_secs(5) {
         state = cluster
             .get_raft_engine(2)
             .c()
@@ -128,4 +134,80 @@ fn test_stale_learner_restart() {
     fail::remove("on_handle_apply_1003");
     cluster.run_node(2).unwrap();
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+}
+
+/// Test if a peer can be destroyed through tombstone msg when applying snapshot.
+#[test]
+fn test_stale_peer_destroy_when_apply_snapshot() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_snapshot(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    for i in 2..10 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+
+    let region_apply_snap_fp = "region_apply_snap";
+    fail::cfg(region_apply_snap_fp, "pause").unwrap();
+
+    let (notify_tx, notify_rx) = mpsc::channel();
+    cluster.sim.wl().add_recv_filter(
+        3,
+        Box::new(MessageTypeNotifier::new(
+            MessageType::MsgSnapshot,
+            notify_tx,
+            Arc::new(AtomicBool::new(true)),
+        )),
+    );
+
+    cluster.clear_send_filters();
+
+    // Wait for leader sending snapshot to peer 3
+    notify_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let region = pd_client.get_region(b"k1").unwrap();
+    // Wait for peer 3 handling snapshot
+    let timer = Instant::now();
+    loop {
+        let local_state = cluster.region_local_state(region.get_id(), 3);
+        if local_state.get_state() == PeerState::Applying {
+            break;
+        }
+        if timer.saturating_elapsed() > Duration::from_secs(3) {
+            panic!("not become applying state after 3 seconds.");
+        }
+        sleep_ms(10);
+    }
+
+    pd_client.must_remove_peer(region.get_id(), new_peer(3, 3));
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    let mut tombstone_msg = RaftMessage::default();
+    tombstone_msg.set_region_id(region.get_id());
+    tombstone_msg.set_from_peer(new_peer(3, 3));
+    tombstone_msg.set_to_peer(new_peer(3, 3));
+    tombstone_msg.set_region_epoch(region.get_region_epoch().clone());
+    tombstone_msg.set_is_tombstone(true);
+    cluster
+        .sim
+        .wl()
+        .send_raft_msg(tombstone_msg.clone())
+        .unwrap();
+    // Wait for cancelling snapshot
+    sleep_ms(100);
+    fail::remove(region_apply_snap_fp);
+    // Wait for peer 3 changing `SnapState`
+    sleep_ms(100);
+    cluster.sim.wl().send_raft_msg(tombstone_msg).unwrap();
+
+    must_get_none(&cluster.get_engine(3), b"k1");
 }

@@ -61,6 +61,16 @@ impl OldValueCache {
             miss_none_count: 0,
         }
     }
+
+    pub(crate) fn resize(&mut self, new_capacity: ReadableSize) {
+        CDC_OLD_VALUE_CACHE_MEMORY_QUOTA.set(new_capacity.0 as i64);
+        self.cache.resize(new_capacity.0 as usize);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn capacity(&self) -> usize {
+        self.cache.capacity()
+    }
 }
 
 pub struct OldValueReader<S: EngineSnapshot> {
@@ -72,27 +82,32 @@ impl<S: EngineSnapshot> OldValueReader<S> {
         Self { snapshot }
     }
 
-    fn new_write_cursor(&self, key: &Key) -> Cursor<S::Iter> {
-        let ts = Key::decode_ts_from(key.as_encoded()).unwrap();
-        let upper = Key::from_encoded_slice(Key::truncate_ts_for(key.as_encoded()).unwrap())
-            .append_ts(TimeStamp::zero());
-        CursorBuilder::new(&self.snapshot, CF_WRITE)
-            .fill_cache(false)
-            .scan_mode(ScanMode::Mixed)
-            .range(Some(key.clone()), Some(upper))
-            .hint_max_ts(Some(ts))
-            .build()
-            .unwrap()
-    }
-
     fn get_value_default(&self, key: &Key, statistics: &mut Statistics) -> Option<Value> {
         statistics.data.get += 1;
         let mut opts = ReadOptions::new();
         opts.set_fill_cache(false);
         self.snapshot
-            .get_cf_opt(opts, CF_DEFAULT, &key)
+            .get_cf_opt(opts, CF_DEFAULT, key)
             .unwrap()
             .map(|v| v.deref().to_vec())
+    }
+
+    /// If `on_one_user_key` is true the cursor's upper bound will be set to the most early
+    /// version of `key`.
+    pub fn new_write_cursor(&self, key: &Key, on_one_user_key: bool) -> Cursor<S::Iter> {
+        let ts = Key::decode_ts_from(key.as_encoded()).unwrap();
+        let mut upper = None;
+        if on_one_user_key {
+            let user_key = key.clone().truncate_ts().unwrap();
+            upper = Some(user_key.append_ts(TimeStamp::zero()));
+        }
+        CursorBuilder::new(&self.snapshot, CF_WRITE)
+            .fill_cache(false)
+            .scan_mode(ScanMode::Mixed)
+            .range(Some(key.clone()), upper)
+            .hint_max_ts(Some(ts))
+            .build()
+            .unwrap()
     }
 
     /// Gets the latest value to the key with an older or equal version.
@@ -103,10 +118,16 @@ impl<S: EngineSnapshot> OldValueReader<S> {
     pub fn near_seek_old_value(
         &self,
         key: &Key,
+        cursor: Option<&mut Cursor<S::Iter>>,
         statistics: &mut Statistics,
     ) -> Result<Option<Value>> {
+        let mut new_cursor = match cursor {
+            Some(_) => None,
+            None => Some(self.new_write_cursor(key, true)),
+        };
+        let write_cursor = cursor.unwrap_or_else(|| new_cursor.as_mut().unwrap());
+
         let (user_key, seek_ts) = Key::split_on_ts_for(key.as_encoded()).unwrap();
-        let mut write_cursor = self.new_write_cursor(key);
         if write_cursor.near_seek(key, &mut statistics.write)?
             && Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key)
         {
@@ -171,11 +192,11 @@ pub fn get_old_value<S: EngineSnapshot>(
                         let value = reader.get_value_default(&prev_key, &mut statistics);
                         CDC_OLD_VALUE_DURATION_HISTOGRAM
                             .with_label_values(&["get"])
-                            .observe(start.elapsed().as_secs_f64());
+                            .observe(start.saturating_elapsed().as_secs_f64());
                         (value, Some(statistics))
                     }
-                    // Unspecified should not be added into cache.
-                    OldValue::Unspecified => unreachable!(),
+                    // Unspecified and SeekWrite should not be added into cache.
+                    OldValue::Unspecified | OldValue::SeekWrite(_) => unreachable!(),
                 }
             }
             _ => unreachable!(),
@@ -187,11 +208,11 @@ pub fn get_old_value<S: EngineSnapshot>(
     let start = Instant::now();
     let key = key.truncate_ts().unwrap().append_ts(query_ts);
     let value = reader
-        .near_seek_old_value(&key, &mut statistics)
+        .near_seek_old_value(&key, None, &mut statistics)
         .unwrap_or_default();
     CDC_OLD_VALUE_DURATION_HISTOGRAM
         .with_label_values(&["seek"])
-        .observe(start.elapsed().as_secs_f64());
+        .observe(start.saturating_elapsed().as_secs_f64());
     if value.is_none() {
         old_value_cache.miss_none_count += 1;
     }
@@ -207,6 +228,68 @@ mod tests {
     use tikv::storage::txn::tests::*;
 
     #[test]
+    fn test_old_value_resize() {
+        let capacity = 1024;
+
+        let mut old_value_cache = OldValueCache::new(ReadableSize(capacity));
+        let value = (
+            OldValue::Value {
+                value: b"value".to_vec(),
+            },
+            None,
+        );
+
+        // The size of each insert.
+        let mut size_calc = OldValueCacheSizePolicy::default();
+        size_calc.on_insert(&Key::from_raw(&0_usize.to_be_bytes()), &value);
+        let size = size_calc.current();
+
+        // Insert ten values.
+        let cases = 10_usize;
+        for i in 0..cases {
+            let key = Key::from_raw(&i.to_be_bytes());
+            old_value_cache.cache.insert(key, value.clone());
+        }
+
+        assert_eq!(old_value_cache.cache.size(), size * cases as usize);
+        assert_eq!(old_value_cache.cache.len(), cases as usize);
+        assert_eq!(old_value_cache.capacity(), capacity as usize);
+
+        // Reduces capacity.
+        let new_capacity = 256;
+        // The memory usage that needs to be removed because of the capacity reduction.
+        let dropped = old_value_cache.cache.size() - new_capacity;
+        let dropped_count = if dropped % size != 0 {
+            (dropped / size) + 1
+        } else {
+            dropped / size
+        };
+        // The remaining values count.
+        let remaining_count = old_value_cache.cache.len() - dropped_count;
+        old_value_cache.resize(ReadableSize(new_capacity as u64));
+
+        assert_eq!(old_value_cache.cache.size(), size * remaining_count);
+        assert_eq!(old_value_cache.cache.len(), remaining_count);
+        assert_eq!(old_value_cache.capacity(), new_capacity as usize);
+        for i in dropped_count..cases {
+            let key = Key::from_raw(&i.to_be_bytes());
+            assert_eq!(old_value_cache.cache.get(&key).is_some(), true);
+        }
+
+        // Increases the capacity again.
+        let new_capacity = 1024;
+        old_value_cache.resize(ReadableSize(new_capacity));
+
+        assert_eq!(old_value_cache.cache.size(), size * remaining_count);
+        assert_eq!(old_value_cache.cache.len(), remaining_count);
+        assert_eq!(old_value_cache.capacity(), new_capacity as usize);
+        for i in dropped_count..cases {
+            let key = Key::from_raw(&i.to_be_bytes());
+            assert_eq!(old_value_cache.cache.get(&key).is_some(), true);
+        }
+    }
+
+    #[test]
     fn test_old_value_reader() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let kv_engine = engine.get_rocksdb();
@@ -218,7 +301,7 @@ mod tests {
             let mut statistics = Statistics::default();
             assert_eq!(
                 old_value_reader
-                    .near_seek_old_value(&key.clone().append_ts(ts.into()), &mut statistics)
+                    .near_seek_old_value(&key.clone().append_ts(ts.into()), None, &mut statistics)
                     .unwrap(),
                 value
             );
@@ -269,7 +352,11 @@ mod tests {
             let mut statistics = Statistics::default();
             assert_eq!(
                 old_value_reader
-                    .near_seek_old_value(&Key::from_raw(key).append_ts(ts.into()), &mut statistics)
+                    .near_seek_old_value(
+                        &Key::from_raw(key).append_ts(ts.into()),
+                        None,
+                        &mut statistics
+                    )
                     .unwrap(),
                 value
             );
@@ -360,5 +447,46 @@ mod tests {
         for (k, v) in expected_results {
             must_get_eq(k, 40, v.map(|v| v.to_vec()));
         }
+    }
+
+    #[test]
+    fn test_old_value_reuse_cursor() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let kv_engine = engine.get_rocksdb();
+
+        for i in 0..100 {
+            let key = format!("key-{:0>3}", i).into_bytes();
+            must_prewrite_put(&engine, &key, b"value", &key, 100);
+            must_commit(&engine, &key, 100, 101);
+            must_prewrite_put(&engine, &key, b"value", &key, 200);
+            must_commit(&engine, &key, 200, 201);
+        }
+
+        let reader = OldValueReader::new(Arc::new(kv_engine.snapshot()));
+        let mut cursor =
+            reader.new_write_cursor(&Key::from_raw(b"key-000").append_ts(150.into()), false);
+        let mut stats = Default::default();
+
+        for i in 0..30 {
+            let raw_key = format!("key-{:0>3}", i).into_bytes();
+            let key = Key::from_raw(&raw_key).append_ts(150.into());
+            let v = reader
+                .near_seek_old_value(&key, Some(&mut cursor), &mut stats)
+                .unwrap();
+            assert!(v.map_or(false, |x| x == b"value"));
+        }
+        assert_eq!(stats.write.seek, 1);
+        assert_eq!(stats.write.next, 58);
+
+        for i in 60..100 {
+            let raw_key = format!("key-{:0>3}", i).into_bytes();
+            let key = Key::from_raw(&raw_key).append_ts(150.into());
+            let v = reader
+                .near_seek_old_value(&key, Some(&mut cursor), &mut stats)
+                .unwrap();
+            assert!(v.map_or(false, |x| x == b"value"));
+        }
+        assert_eq!(stats.write.seek, 2);
+        assert_eq!(stats.write.next, 144);
     }
 }

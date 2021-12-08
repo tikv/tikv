@@ -1,10 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
+use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 use crate::storage::kv::Modify;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use std::fmt;
-use txn_types::{Key, Lock, TimeStamp, Value};
+use txn_types::{Key, Lock, PessimisticLock, TimeStamp, Value};
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -13,6 +15,15 @@ pub struct GcInfo {
     pub found_versions: usize,
     pub deleted_versions: usize,
     pub is_completed: bool,
+}
+
+impl GcInfo {
+    pub fn report_metrics(&self) {
+        MVCC_VERSIONS_HISTOGRAM.observe(self.found_versions as f64);
+        if self.deleted_versions > 0 {
+            GC_DELETE_VERSIONS_HISTOGRAM.observe(self.deleted_versions as f64);
+        }
+    }
 }
 
 /// `ReleasedLock` contains the information of the lock released by `commit`, `rollback` and so on.
@@ -92,6 +103,10 @@ impl MvccTxn {
         self.locks_for_1pc.push((key, lock, remove_pessimstic_lock));
     }
 
+    pub(crate) fn put_pessimistic_lock(&mut self, key: Key, lock: PessimisticLock) {
+        self.modifies.push(Modify::PessimisticLock(key, lock))
+    }
+
     pub(crate) fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
         let released = ReleasedLock::new(&key, pessimistic);
         let write = Modify::Delete(CF_LOCK, key);
@@ -158,6 +173,13 @@ impl MvccTxn {
 
         lock.rollback_ts.push(self.start_ts);
         self.put_lock(key.clone(), &lock);
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.write_size = 0;
+        self.modifies.clear();
+        self.locks_for_1pc.clear();
+        self.guards.clear();
     }
 }
 
@@ -709,6 +731,7 @@ pub(crate) mod tests {
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
             need_old_value: false,
+            is_retry_request: false,
         }
     }
 
@@ -1003,6 +1026,7 @@ pub(crate) mod tests {
                     expected_lock_info.get_txn_size(),
                     TimeStamp::zero(),
                     TimeStamp::zero(),
+                    false,
                 );
             } else {
                 expected_lock_info.set_lock_type(Op::PessimisticLock);

@@ -23,7 +23,7 @@ fn bench_engine_put<E: Engine, F: EngineFactory<E>>(
             )
             .generate(DEFAULT_ITERATIONS)
             .iter()
-            .map(|(key, value)| (Key::from_raw(&key), value.clone()))
+            .map(|(key, value)| (Key::from_raw(key), value.clone()))
             .collect();
             (test_kvs, &ctx)
         },
@@ -61,7 +61,7 @@ fn bench_engine_get<E: Engine, F: EngineFactory<E>>(
     )
     .generate(DEFAULT_ITERATIONS)
     .iter()
-    .map(|(key, _)| Key::from_raw(&key))
+    .map(|(key, _)| Key::from_raw(key))
     .collect();
 
     bencher.iter_batched(

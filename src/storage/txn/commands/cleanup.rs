@@ -1,13 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{MvccTxn, SnapshotReader};
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
-    WriteResult,
+    Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
+    WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::{cleanup, Result};
 use crate::storage::{ProcessResult, Snapshot};
@@ -38,14 +39,16 @@ impl CommandExt for Cleanup {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, mut context: WriteContext<'_, L>) -> Result<WriteResult> {
         // It is not allowed for commit to overwrite a protected rollback. So we update max_ts
         // to prevent this case from happening.
         context.concurrency_manager.update_max_ts(self.start_ts);
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
-        let mut reader =
-            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache());
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache()),
+            &mut context.statistics,
+        );
 
         let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
         // The rollback must be protected, see more on
@@ -59,8 +62,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
         )?);
         released_locks.wake_up(context.lock_mgr);
 
-        context.statistics.add(&reader.take_statistics());
-        let write_data = WriteData::from_modifies(txn.into_modifies());
+        let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write: write_data,

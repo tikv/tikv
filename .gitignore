@@ -38,3 +38,8 @@ fuzz-incremental/
 /db/
 /last_tikv.toml
 /raft/
+core.*
+*.info
+
+# Ignore all logs
+*.log

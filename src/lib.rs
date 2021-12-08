@@ -22,12 +22,12 @@
 #![feature(cell_update)]
 #![feature(proc_macro_hygiene)]
 #![feature(min_specialization)]
-#![feature(const_fn)]
 #![feature(box_patterns)]
 #![feature(shrink_to)]
 #![feature(drain_filter)]
 #![feature(negative_impls)]
-#![feature(num_as_ne_bytes)]
+#![feature(deadline_api)]
+#![feature(generic_associated_types)]
 
 #[macro_use(fail_point)]
 extern crate fail;

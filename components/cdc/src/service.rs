@@ -1,29 +1,25 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::hash_map::Entry;
-use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use collections::HashMap;
+use crossbeam::atomic::AtomicCell;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
 use grpcio::{DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
-use kvproto::cdcpb::{
-    ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility, Event, ResolvedTs,
-};
+use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use protobuf::Message;
 use tikv_util::worker::*;
 use tikv_util::{error, info, warn};
 
-use crate::channel::{channel, MemoryQuota, Sink};
-use crate::delegate::{Downstream, DownstreamID};
+use crate::channel::{channel, MemoryQuota, Sink, CDC_CHANNLE_CAPACITY};
+use crate::delegate::{Downstream, DownstreamID, DownstreamState};
 use crate::endpoint::{Deregister, Task};
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
-
-const CDC_MAX_RESP_SIZE: u32 = 6 * 1024 * 1024; // 6MB
 
 /// A unique identifier of a Connection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -35,116 +31,9 @@ impl ConnID {
     }
 }
 
-pub enum CdcEvent {
-    ResolvedTs(ResolvedTs),
-    Event(Event),
-    Barrier(Option<Box<dyn FnOnce(()) + Send>>),
-}
-
-impl CdcEvent {
-    pub fn size(&self) -> u32 {
-        match self {
-            CdcEvent::ResolvedTs(ref r) => r.compute_size(),
-            CdcEvent::Event(ref e) => e.compute_size(),
-            CdcEvent::Barrier(_) => 0,
-        }
-    }
-
-    pub fn event(&self) -> &Event {
-        match self {
-            CdcEvent::ResolvedTs(_) | CdcEvent::Barrier(_) => unreachable!(),
-            CdcEvent::Event(ref e) => e,
-        }
-    }
-
-    pub fn resolved_ts(&self) -> &ResolvedTs {
-        match self {
-            CdcEvent::ResolvedTs(ref r) => r,
-            CdcEvent::Event(_) | CdcEvent::Barrier(_) => unreachable!(),
-        }
-    }
-}
-
-impl fmt::Debug for CdcEvent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CdcEvent::Barrier(_) => {
-                let mut d = f.debug_tuple("Barrier");
-                d.finish()
-            }
-            CdcEvent::ResolvedTs(ref r) => {
-                let mut d = f.debug_struct("ResolvedTs");
-                d.field("resolved ts", &r.ts);
-                d.field("region count", &r.regions.len());
-                d.finish()
-            }
-            CdcEvent::Event(e) => {
-                let mut d = f.debug_struct("Event");
-                d.field("region_id", &e.region_id);
-                d.field("request_id", &e.request_id);
-                #[cfg(not(feature = "prost-codec"))]
-                if e.has_entries() {
-                    d.field("entries count", &e.get_entries().get_entries().len());
-                }
-                #[cfg(feature = "prost-codec")]
-                if e.event.is_some() {
-                    use kvproto::cdcpb::event;
-                    if let Some(event::Event::Entries(ref es)) = e.event.as_ref() {
-                        d.field("entries count", &es.entries.len());
-                    }
-                }
-                d.finish()
-            }
-        }
-    }
-}
-
-pub struct EventBatcher {
-    buffer: Vec<ChangeDataEvent>,
-    last_size: u32,
-}
-
-impl EventBatcher {
-    pub fn with_capacity(cap: usize) -> EventBatcher {
-        EventBatcher {
-            buffer: Vec::with_capacity(cap),
-            last_size: 0,
-        }
-    }
-
-    // The size of the response should not exceed CDC_MAX_RESP_SIZE.
-    // Split the events into multiple responses by CDC_MAX_RESP_SIZE here.
-    pub fn push(&mut self, event: CdcEvent) {
-        let size = event.size();
-        if size >= CDC_MAX_RESP_SIZE {
-            warn!("cdc event too large"; "size" => size, "event" => ?event);
-        }
-        match event {
-            CdcEvent::Event(e) => {
-                if self.buffer.is_empty() || self.last_size + size >= CDC_MAX_RESP_SIZE {
-                    self.last_size = 0;
-                    self.buffer.push(ChangeDataEvent::default());
-                }
-                self.last_size += size;
-                self.buffer.last_mut().unwrap().mut_events().push(e);
-            }
-            CdcEvent::ResolvedTs(r) => {
-                let mut change_data_event = ChangeDataEvent::default();
-                change_data_event.set_resolved_ts(r);
-                self.buffer.push(change_data_event);
-
-                // Make sure the next message is not batched with ResolvedTs.
-                self.last_size = CDC_MAX_RESP_SIZE;
-            }
-            CdcEvent::Barrier(_) => {
-                // Barrier requires events must be batched accross the barrier.
-                self.last_size = CDC_MAX_RESP_SIZE;
-            }
-        }
-    }
-
-    pub fn build(self) -> Vec<ChangeDataEvent> {
-        self.buffer
+impl Default for ConnID {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -156,10 +45,23 @@ bitflags::bitflags! {
     }
 }
 
+impl FeatureGate {
+    // Returns the first version (v4.0.8) that supports batch resolved ts.
+    pub fn batch_resolved_ts() -> semver::Version {
+        semver::Version::new(4, 0, 8)
+    }
+
+    // Returns the first version (v5.3.0) that supports validate cluster id.
+    pub(crate) fn validate_cluster_id() -> semver::Version {
+        semver::Version::new(5, 3, 0)
+    }
+}
+
 pub struct Conn {
     id: ConnID,
     sink: Sink,
-    downstreams: HashMap<u64, DownstreamID>,
+    // region id -> DownstreamID
+    downstreams: HashMap<u64, (DownstreamID, Arc<AtomicCell<DownstreamState>>)>,
     peer: String,
     version: Option<(semver::Version, FeatureGate)>,
 }
@@ -177,11 +79,6 @@ impl Conn {
 
     // TODO refactor into Error::Version.
     pub fn check_version_and_set_feature(&mut self, ver: semver::Version) -> Option<Compatibility> {
-        // Assume batch resolved ts will be release in v4.0.7
-        // For easy of testing (nightly CI), we lower the gate to v4.0.6
-        // TODO bump the version when cherry pick to release branch.
-        let v407_bacth_resoled_ts = semver::Version::new(4, 0, 6);
-
         match &self.version {
             Some((version, _)) => {
                 if version == &ver {
@@ -198,7 +95,7 @@ impl Conn {
             }
             None => {
                 let mut features = FeatureGate::empty();
-                if v407_bacth_resoled_ts <= ver {
+                if FeatureGate::batch_resolved_ts() <= ver {
                     features.toggle(FeatureGate::BATCH_RESOLVED_TS);
                 }
                 info!("cdc connection version";
@@ -223,7 +120,15 @@ impl Conn {
         self.id
     }
 
-    pub fn take_downstreams(self) -> HashMap<u64, DownstreamID> {
+    pub fn get_downstreams(
+        &self,
+    ) -> &HashMap<u64, (DownstreamID, Arc<AtomicCell<DownstreamState>>)> {
+        &self.downstreams
+    }
+
+    pub fn take_downstreams(
+        self,
+    ) -> HashMap<u64, (DownstreamID, Arc<AtomicCell<DownstreamState>>)> {
         self.downstreams
     }
 
@@ -231,11 +136,16 @@ impl Conn {
         &self.sink
     }
 
-    pub fn subscribe(&mut self, region_id: u64, downstream_id: DownstreamID) -> bool {
+    pub fn subscribe(
+        &mut self,
+        region_id: u64,
+        downstream_id: DownstreamID,
+        downstream_state: Arc<AtomicCell<DownstreamState>>,
+    ) -> bool {
         match self.downstreams.entry(region_id) {
             Entry::Occupied(_) => false,
             Entry::Vacant(v) => {
-                v.insert(downstream_id);
+                v.insert((downstream_id, downstream_state));
                 true
             }
         }
@@ -246,7 +156,7 @@ impl Conn {
     }
 
     pub fn downstream_id(&self, region_id: u64) -> Option<DownstreamID> {
-        self.downstreams.get(&region_id).copied()
+        self.downstreams.get(&region_id).map(|x| x.0)
     }
 }
 
@@ -278,9 +188,8 @@ impl ChangeData for Service {
         stream: RequestStream<ChangeDataRequest>,
         mut sink: DuplexSink<ChangeDataEvent>,
     ) {
-        // TODO explain buffer.
-        let buffer = 1024;
-        let (event_sink, mut event_drain) = channel(buffer, self.memory_quota.clone());
+        let (event_sink, mut event_drain) =
+            channel(CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
         let peer = ctx.peer();
         let conn = Conn::new(event_sink, peer);
         let conn_id = conn.get_id();
@@ -361,6 +270,9 @@ impl ChangeData for Service {
         let scheduler = self.scheduler.clone();
 
         ctx.spawn(async move {
+            #[cfg(feature = "failpoints")]
+            sleep_before_drain_change_event().await;
+
             let res = event_drain.forward(&mut sink).await;
             // Unregister this downstream only.
             let deregister = Deregister::Conn(conn_id);
@@ -380,6 +292,21 @@ impl ChangeData for Service {
     }
 }
 
+#[cfg(feature = "failpoints")]
+async fn sleep_before_drain_change_event() {
+    use std::time::{Duration, Instant};
+    use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+    let should_sleep = || {
+        fail::fail_point!("cdc_sleep_before_drain_change_event", |_| true);
+        false
+    };
+    if should_sleep() {
+        let dur = Duration::from_secs(5);
+        let timer = GLOBAL_TIMER_HANDLE.delay(Instant::now() + dur);
+        let _ = futures::compat::Compat01As03::new(timer).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -387,107 +314,11 @@ mod tests {
 
     use futures::executor::block_on;
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
-    #[cfg(feature = "prost-codec")]
-    use kvproto::cdcpb::event::{
-        Entries as EventEntries, Event as Event_oneof_event, Row as EventRow,
-    };
-    use kvproto::cdcpb::{
-        create_change_data, ChangeDataClient, ChangeDataEvent, Event, ResolvedTs,
-    };
-    #[cfg(not(feature = "prost-codec"))]
-    use kvproto::cdcpb::{EventEntries, EventRow, Event_oneof_event};
+    use kvproto::cdcpb::{create_change_data, ChangeDataClient, ResolvedTs};
 
-    use crate::channel::{poll_timeout, recv_timeout, CDC_EVENT_MAX_BATCH_SIZE};
-    use crate::service::{CdcEvent, EventBatcher, CDC_MAX_RESP_SIZE};
+    use crate::channel::{poll_timeout, recv_timeout, CdcEvent};
 
     use super::*;
-
-    #[test]
-    fn test_event_batcher() {
-        let check_events = |result: Vec<ChangeDataEvent>, expected: Vec<Vec<CdcEvent>>| {
-            assert_eq!(result.len(), expected.len());
-
-            for i in 0..expected.len() {
-                if !result[i].has_resolved_ts() {
-                    assert_eq!(result[i].events.len(), expected[i].len());
-                    for j in 0..expected[i].len() {
-                        assert_eq!(&result[i].events[j], expected[i][j].event());
-                    }
-                } else {
-                    assert_eq!(expected[i].len(), 1);
-                    assert_eq!(result[i].get_resolved_ts(), expected[i][0].resolved_ts());
-                }
-            }
-        };
-
-        let row_small = EventRow::default();
-        let event_entries = EventEntries {
-            entries: vec![row_small].into(),
-            ..Default::default()
-        };
-        let event_small = Event {
-            event: Some(Event_oneof_event::Entries(event_entries)),
-            ..Default::default()
-        };
-
-        let mut row_big = EventRow::default();
-        row_big.set_key(vec![0_u8; CDC_MAX_RESP_SIZE as usize]);
-        let event_entries = EventEntries {
-            entries: vec![row_big].into(),
-            ..Default::default()
-        };
-        let event_big = Event {
-            event: Some(Event_oneof_event::Entries(event_entries)),
-            ..Default::default()
-        };
-
-        let mut resolved_ts = ResolvedTs::default();
-        resolved_ts.set_ts(1);
-
-        // None empty event should not return a zero size.
-        assert_ne!(CdcEvent::ResolvedTs(resolved_ts.clone()).size(), 0);
-        assert_ne!(CdcEvent::Event(event_big.clone()).size(), 0);
-        assert_ne!(CdcEvent::Event(event_small.clone()).size(), 0);
-
-        // An ReslovedTs event follows a small event, they should not be batched
-        // in one message.
-        let mut batcher = EventBatcher::with_capacity(CDC_EVENT_MAX_BATCH_SIZE);
-        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
-        batcher.push(CdcEvent::Event(event_small.clone()));
-
-        check_events(
-            batcher.build(),
-            vec![
-                vec![CdcEvent::ResolvedTs(resolved_ts.clone())],
-                vec![CdcEvent::Event(event_small.clone())],
-            ],
-        );
-
-        // A more complex case.
-        let mut batcher = EventBatcher::with_capacity(1024);
-        batcher.push(CdcEvent::Event(event_small.clone()));
-        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
-        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
-        batcher.push(CdcEvent::Event(event_big.clone()));
-        batcher.push(CdcEvent::Event(event_small.clone()));
-        batcher.push(CdcEvent::Event(event_small.clone()));
-        batcher.push(CdcEvent::Event(event_big.clone()));
-
-        check_events(
-            batcher.build(),
-            vec![
-                vec![CdcEvent::Event(event_small.clone())],
-                vec![CdcEvent::ResolvedTs(resolved_ts.clone())],
-                vec![CdcEvent::ResolvedTs(resolved_ts)],
-                vec![CdcEvent::Event(event_big.clone())],
-                vec![
-                    CdcEvent::Event(event_small.clone()),
-                    CdcEvent::Event(event_small),
-                ],
-                vec![CdcEvent::Event(event_big)],
-            ],
-        );
-    }
 
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = MemoryQuota::new(capacity);

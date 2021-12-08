@@ -201,7 +201,7 @@ fn test_node_compact_many_times() {
 
 fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 100000;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(2);
+    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(1);
     cluster.run();
     cluster.stop_node(1);
 
@@ -223,12 +223,11 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         before_states.insert(id, state);
     }
 
-    for i in 1..600 {
-        let k = i.to_string().into_bytes();
-        let v = k.clone();
-        cluster.must_put(&k, &v);
-        let v2 = cluster.get(&k);
-        assert_eq!(v2, Some(v));
+    let key = vec![1; 100];
+    let value = vec![1; 10240];
+    // 25 * 10240 = 250KiB < 1MiB
+    for _ in 0..25 {
+        cluster.must_put(&key, &value);
     }
 
     // wait log gc.
@@ -248,13 +247,9 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         assert_eq!(idx, before_state.get_index());
     }
 
-    // 600 * 10240 > 2 * 1024 * 1024
-    for _ in 600..1200 {
-        let k = vec![0; 1024 * 5];
-        let v = k.clone();
-        cluster.must_put(&k, &v);
-        let v2 = cluster.get(&k);
-        assert_eq!(v2, Some(v));
+    // 100 * 10240 + 250KiB > 1MiB
+    for _ in 0..100 {
+        cluster.must_put(&key, &value);
     }
 
     sleep_ms(500);

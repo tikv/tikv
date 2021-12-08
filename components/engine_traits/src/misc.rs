@@ -7,18 +7,26 @@
 
 use crate::cf_names::CFNamesExt;
 use crate::errors::Result;
+use crate::flow_control_factors::FlowControlFactorsExt;
 use crate::range::Range;
 
 #[derive(Clone, Debug)]
 pub enum DeleteStrategy {
+    /// Delete the SST files that are fullly fit in range. However, the SST files that are partially
+    /// overlapped with the range will not be touched.
     DeleteFiles,
+    /// Delete the data stored in Titan.
     DeleteBlobs,
+    /// Scan for keys and then delete. Useful when we know the keys in range are not too many.
     DeleteByKey,
+    /// Delete by range. Note that this is experimental and you should check whether it is enbaled
+    /// in config before using it.
     DeleteByRange,
+    /// Delete by ingesting a SST file with deletions. Useful when the number of ranges is too many.
     DeleteByWriter { sst_path: String },
 }
 
-pub trait MiscExt: CFNamesExt {
+pub trait MiscExt: CFNamesExt + FlowControlFactorsExt {
     fn flush(&self, sync: bool) -> Result<()>;
 
     fn flush_cf(&self, cf: &str, sync: bool) -> Result<()>;
@@ -80,12 +88,6 @@ pub trait MiscExt: CFNamesExt {
         start: &[u8],
         end: &[u8],
     ) -> Result<Option<(u64, u64)>>;
-
-    fn get_cf_num_files_at_level(&self, cf: &str, level: usize) -> Result<Option<u64>>;
-
-    fn get_cf_num_immutable_mem_table(&self, cf: &str) -> Result<Option<u64>>;
-
-    fn get_cf_compaction_pending_bytes(&self, cf: &str) -> Result<Option<u64>>;
 
     fn is_stalled_or_stopped(&self) -> bool;
 }
