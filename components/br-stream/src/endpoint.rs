@@ -10,14 +10,17 @@ use crate::metadata::{MetadataClient, MetadataEvent, Task as MetaTask};
 use crate::{errors::Result, observer::BackupStreamObserver};
 use online_config::ConfigChange;
 use raftstore::coprocessor::CmdBatch;
-use tikv::config::BackupConfig;
+use tikv::config::BackupStreamConfig;
 use tikv_util::worker::{Runnable, Scheduler};
 use tikv_util::{debug, error, info};
 
 pub struct Endpoint<S: MetaStore + 'static> {
-    config: BackupConfig,
+    #[allow(dead_code)]
+    config: BackupStreamConfig,
     meta_client: MetadataClient<S>,
+    #[allow(dead_code)]
     scheduler: Scheduler<Task>,
+    #[allow(dead_code)]
     observer: BackupStreamObserver,
     pool: Runtime,
 }
@@ -27,13 +30,18 @@ where
     S: MetaStore + 'static,
 {
     pub fn new(
+        endpoints: AsRef<E>,
         meta_client: MetadataClient<S>,
-        config: BackupConfig,
+        config: BackupStreamConfig,
         scheduler: Scheduler<Task>,
         observer: BackupStreamObserver,
     ) -> Endpoint<S> {
         let pool = create_tokio_runtime(config.num_threads, "br-stream")
             .expect("failed to create tokio runtime for backup worker.");
+
+        if let Ok(cli) = pool.block_on(etcd_client::Client::connect(&endpoints, None)) {
+
+        }
 
         // spawn a worker to watch task changes from etcd periodically.
         let meta_client_clone = meta_client.clone();
@@ -83,18 +91,13 @@ where
         }
     }
 
+    #[allow(dead_code)]
     // keep ranges in memory to filter kv events not in these ranges.
     fn register_ranges(_ranges: Vec<(Vec<u8>, Vec<u8>)>) {
         // TODO reigister ranges to filter kv event
         // register ranges has two main purpose.
         // 1. filter kv event that no need to backup
         // 2. route kv event to the corresponding file.
-        unimplemented!();
-    }
-
-    // filter key not in ranges
-    fn key_in_ranges() -> bool {
-        // TODO use this filter key not in given range(table-filter).
         unimplemented!();
     }
 
@@ -154,7 +157,7 @@ impl fmt::Debug for Task {
                 .finish(),
             Task::BatchEvent(_) => de.field("name", &"batch_event").finish(),
             Task::ChangeConfig(change) => de
-                .field("type", &"change_config")
+                .field("name", &"change_config")
                 .field("change", change)
                 .finish(),
         }
@@ -174,7 +177,7 @@ where
     type Task = Task;
 
     fn run(&mut self, task: Task) {
-        debug!("run br-stream task"; "task" => ?task);
+        debug!("run backup-stream task"; "task" => ?task);
         match task {
             Task::WatchTask(task) => self.on_register(task),
             Task::BatchEvent(events) => self.do_backup(events),
