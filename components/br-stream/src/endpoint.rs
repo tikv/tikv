@@ -66,7 +66,10 @@ impl Endpoint<EtcdStore> {
         let meta_client_clone = meta_client.clone();
         let scheduler_clone = scheduler.clone();
         // TODO build a error handle mechanism #error 2
-        pool.spawn(Endpoint::starts_watch_tasks(meta_client_clone, scheduler_clone));
+        pool.spawn(Endpoint::starts_watch_tasks(
+            meta_client_clone,
+            scheduler_clone,
+        ));
         Endpoint {
             config,
             meta_client: Some(meta_client),
