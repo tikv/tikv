@@ -1,7 +1,4 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-
-use std::collections::BTreeMap;
-
 use engine_traits::KvEngine;
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
@@ -18,9 +15,6 @@ use crate::endpoint::Task;
 #[derive(Clone)]
 pub struct BackupStreamObserver {
     scheduler: Scheduler<Task>,
-
-    // TODO find a proper way to record the ranges of table_filter.
-    ranges: BTreeMap<(Vec<u8>, Vec<u8>), String>,
 }
 
 impl BackupStreamObserver {
@@ -29,10 +23,7 @@ impl BackupStreamObserver {
     /// Events are strong ordered, so `scheduler` must be implemented as
     /// a FIFO queue.
     pub fn new(scheduler: Scheduler<Task>) -> BackupStreamObserver {
-        BackupStreamObserver {
-            scheduler,
-            ranges: BTreeMap::new(),
-        }
+        BackupStreamObserver { scheduler }
     }
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<impl KvEngine>) {
