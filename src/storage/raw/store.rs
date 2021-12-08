@@ -164,6 +164,9 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         option: IterOptions,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
+        if limit == 0 {
+            return Ok(vec![]);
+        }
         let mut cursor = Cursor::new(self.snapshot.iter_cf(cf, option)?, ScanMode::Forward, false);
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.seek(start_key, statistics)? {
@@ -212,6 +215,9 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         option: IterOptions,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
+        if limit == 0 {
+            return Ok(vec![]);
+        }
         let mut cursor = Cursor::new(
             self.snapshot.iter_cf(cf, option)?,
             ScanMode::Backward,
