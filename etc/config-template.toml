@@ -324,7 +324,7 @@
 
 ## The path to RaftDB directory.
 ## If not set, it will be `{data-dir}/raft`.
-## If there are multiple disks on the machine, storing the data of Raft RocksDB on a differen disk
+## If there are multiple disks on the machine, storing the data of Raft RocksDB on a different disk
 ## can improve TiKV performance.
 # raftdb-path = ""
 
