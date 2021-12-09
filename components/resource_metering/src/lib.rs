@@ -31,8 +31,6 @@ use crate::localstorage::{LocalStorage, LocalStorageRef, STORAGE};
 
 use std::intrinsics::unlikely;
 use std::pin::Pin;
-use std::sync::atomic::AtomicPtr;
-use std::sync::atomic::Ordering::SeqCst;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -77,8 +75,7 @@ impl ResourceMeteringTag {
             }
 
             assert!(!ls.is_set, "nested attachment is not allowed");
-            let prev = ls.shared_ptr.swap(self.infos.clone());
-            assert!(prev.is_none());
+            ls.attached_tag.store(Some(self.infos.clone()));
             ls.is_set = true;
 
             Guard {
@@ -104,7 +101,7 @@ impl Drop for Guard {
     fn drop(&mut self) {
         STORAGE.with(|s| {
             let mut ls = s.borrow_mut();
-            while ls.shared_ptr.take().is_none() {}
+            ls.attached_tag.store(None);
             ls.is_set = false;
         })
     }
@@ -235,40 +232,6 @@ impl TagInfos {
     }
 }
 
-/// This is a version of [ResourceMeteringTag] that can be shared across threads.
-///
-/// The typical scenario is that we need to access all threads' tags in the
-/// [Recorder] thread for collection purposes, so we need a non-copy way to pass tags.
-#[derive(Default, Clone)]
-pub struct SharedTagPtr {
-    ptr: Arc<AtomicPtr<TagInfos>>,
-}
-
-impl SharedTagPtr {
-    /// Gets the tag under the pointer and replace the original value with null.
-    pub fn take(&self) -> Option<Arc<TagInfos>> {
-        let prev = self.ptr.swap(std::ptr::null_mut(), SeqCst);
-        (!prev.is_null()).then(|| unsafe { Arc::from_raw(prev as _) })
-    }
-
-    /// Gets the tag under the pointer and replace the original value with parameter v.
-    pub fn swap(&self, v: Arc<TagInfos>) -> Option<Arc<TagInfos>> {
-        let ptr = Arc::into_raw(v);
-        let prev = self.ptr.swap(ptr as _, SeqCst);
-        (!prev.is_null()).then(|| unsafe { Arc::from_raw(prev as _) })
-    }
-
-    /// Gets a clone of the tag under the pointer and put it back.
-    pub fn take_clone(&self) -> Option<Arc<TagInfos>> {
-        self.take().map(|req_tag| {
-            let tag = req_tag.clone();
-            // Put it back as quickly as possible.
-            assert!(self.swap(req_tag).is_none());
-            tag
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,46 +258,22 @@ mod tests {
                 assert_eq!(guard._tag, tag.infos);
                 STORAGE.with(|s| {
                     let ls = s.borrow_mut();
-                    let local_tag = ls.shared_ptr.take();
+                    let local_tag = ls.attached_tag.swap(None);
                     assert!(local_tag.is_some());
                     let tag_infos = local_tag.unwrap();
                     assert_eq!(tag_infos, tag.infos);
                     assert_eq!(tag_infos, guard._tag);
-                    assert!(ls.shared_ptr.swap(tag_infos).is_none());
+                    assert!(ls.attached_tag.swap(Some(tag_infos)).is_none());
                 });
                 // drop here.
             }
             STORAGE.with(|s| {
                 let ls = s.borrow_mut();
-                let local_tag = ls.shared_ptr.take();
+                let local_tag = ls.attached_tag.swap(None);
                 assert!(local_tag.is_none());
             });
         })
         .join()
         .unwrap();
-    }
-
-    #[test]
-    fn test_shared_tag_ptr_take_clone() {
-        let info = Arc::new(TagInfos {
-            store_id: 0,
-            region_id: 0,
-            peer_id: 0,
-            extra_attachment: b"abc".to_vec(),
-        });
-        let ptr = SharedTagPtr {
-            ptr: Arc::new(AtomicPtr::new(Arc::into_raw(info) as _)),
-        };
-
-        assert!(ptr.take_clone().is_some());
-        assert!(ptr.take_clone().is_some());
-        assert!(ptr.take_clone().is_some());
-
-        assert!(ptr.take().is_some());
-        assert!(ptr.take().is_none());
-
-        assert!(ptr.take_clone().is_none());
-        assert!(ptr.take_clone().is_none());
-        assert!(ptr.take_clone().is_none());
     }
 }

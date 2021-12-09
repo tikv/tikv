@@ -2,7 +2,7 @@
 
 use crate::collector::{Collector, CollectorReg, CollectorRegistry};
 use crate::localstorage::{LocalStorage, LocalStorageRef};
-use crate::{utils, RawRecords, ResourceTagFactory, SharedTagPtr};
+use crate::{utils, RawRecords, ResourceTagFactory, TagInfos};
 
 use std::io;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
@@ -15,6 +15,7 @@ use std::time::Duration;
 use collections::HashMap;
 use crossbeam::channel::{bounded, Receiver};
 use tikv_util::time::Instant;
+use arc_swap::ArcSwapOption;
 
 mod cpu;
 
@@ -75,7 +76,7 @@ pub trait SubRecorder {
     /// This function exists because the sampling work of `SubRecorder` may need
     /// to be performed on all functions, and `SubRecorder` may wish to maintain
     /// a thread-related data structure by itself.
-    fn thread_created(&mut self, _id: usize, _tag: SharedTagPtr) {}
+    fn thread_created(&mut self, _id: usize, _tag: Arc<ArcSwapOption<TagInfos>>) {}
 }
 
 /// Give `Recorder` a list of [SubRecorder]s and `Recorder` will make them work
@@ -140,7 +141,7 @@ impl Recorder {
             if let Some(ids) = utils::thread_ids() {
                 self.thread_stores.retain(|k, v| {
                     let retain = ids.contains(k);
-                    assert!(retain || v.shared_ptr.take().is_none());
+                    assert!(retain || v.attached_tag.load().is_none());
                     retain
                 });
             }
@@ -194,7 +195,7 @@ impl Recorder {
         while let Ok(lsr) = self.thread_rx.try_recv() {
             self.thread_stores.insert(lsr.id, lsr.storage.clone());
             for r in &mut self.recorders {
-                r.thread_created(lsr.id, lsr.storage.shared_ptr.clone());
+                r.thread_created(lsr.id, lsr.storage.attached_tag.clone());
             }
         }
     }
@@ -393,7 +394,7 @@ mod tests {
             OP_COUNT.fetch_add(1, SeqCst);
         }
 
-        fn thread_created(&mut self, _id: usize, _tag: SharedTagPtr) {
+        fn thread_created(&mut self, _id: usize, _tag: Arc<ArcSwapOption<TagInfos>>) {
             OP_COUNT.fetch_add(1, SeqCst);
         }
     }
