@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::option::Option;
@@ -1246,6 +1247,7 @@ impl RegionReadProgressCore {
 pub struct RaftstoreDuration {
     pub store_wait_duration: Option<std::time::Duration>,
     pub store_process_duration: Option<std::time::Duration>,
+    pub store_write_duration: Option<std::time::Duration>,
     pub apply_wait_duration: Option<std::time::Duration>,
     pub apply_process_duration: Option<std::time::Duration>,
 }
@@ -1254,6 +1256,7 @@ impl RaftstoreDuration {
     pub fn sum(&self) -> std::time::Duration {
         self.store_wait_duration.unwrap_or_default()
             + self.store_process_duration.unwrap_or_default()
+            + self.store_write_duration.unwrap_or_default()
             + self.apply_wait_duration.unwrap_or_default()
             + self.apply_process_duration.unwrap_or_default()
     }
@@ -1281,6 +1284,10 @@ impl LatencyInspector {
 
     pub fn record_store_process(&mut self, duration: std::time::Duration) {
         self.duration.store_process_duration = Some(duration);
+    }
+
+    pub fn record_store_write(&mut self, duration: std::time::Duration) {
+        self.duration.store_write_duration = Some(duration);
     }
 
     pub fn record_apply_wait(&mut self, duration: std::time::Duration) {

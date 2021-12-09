@@ -10,7 +10,6 @@ use tikv_util::{box_err, impl_display_as_debug};
 
 use crate::{Error, Result};
 
-#[cfg(not(feature = "prost-codec"))]
 pub fn encryption_method_to_db_encryption_method(method: EncryptionMethod) -> DBEncryptionMethod {
     match method {
         EncryptionMethod::Plaintext => DBEncryptionMethod::Plaintext,
@@ -31,33 +30,8 @@ pub fn encryption_method_from_db_encryption_method(method: DBEncryptionMethod) -
     }
 }
 
-#[cfg(not(feature = "prost-codec"))]
 pub fn compat(method: EncryptionMethod) -> EncryptionMethod {
     method
-}
-
-#[cfg(feature = "prost-codec")]
-pub fn encryption_method_to_db_encryption_method(
-    method: i32, /* EncryptionMethod */
-) -> DBEncryptionMethod {
-    match method {
-        1/* EncryptionMethod::Plaintext */ => DBEncryptionMethod::Plaintext,
-        2/* EncryptionMethod::Aes128Ctr */ => DBEncryptionMethod::Aes128Ctr,
-        3/* EncryptionMethod::Aes192Ctr */ => DBEncryptionMethod::Aes192Ctr,
-        4/* EncryptionMethod::Aes256Ctr */ => DBEncryptionMethod::Aes256Ctr,
-        _/* EncryptionMethod::Unknown */ => DBEncryptionMethod::Unknown,
-    }
-}
-
-#[cfg(feature = "prost-codec")]
-pub fn compat(method: EncryptionMethod) -> i32 {
-    match method {
-        EncryptionMethod::Unknown => 0,
-        EncryptionMethod::Plaintext => 1,
-        EncryptionMethod::Aes128Ctr => 2,
-        EncryptionMethod::Aes192Ctr => 3,
-        EncryptionMethod::Aes256Ctr => 4,
-    }
 }
 
 pub fn get_method_key_length(method: EncryptionMethod) -> usize {

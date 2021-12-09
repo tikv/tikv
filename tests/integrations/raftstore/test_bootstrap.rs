@@ -1,10 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
-
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use tempfile::Builder;
 
+use kvproto::kvrpcpb::ApiVersion;
 use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
 
@@ -62,6 +62,7 @@ fn test_node_bootstrap_with_prepared_data() {
         system,
         &cfg.server,
         Arc::new(VersionTrack::new(cfg.raft_store.clone())),
+        cfg.storage.api_version(),
         Arc::clone(&pd_client),
         Arc::default(),
         bg_worker,
@@ -97,7 +98,7 @@ fn test_node_bootstrap_with_prepared_data() {
 
     let importer = {
         let dir = tmp_path.path().join("import-sst");
-        Arc::new(SSTImporter::new(&cfg.import, dir, None, false).unwrap())
+        Arc::new(SSTImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
@@ -138,4 +139,59 @@ fn test_node_bootstrap_with_prepared_data() {
 fn test_node_bootstrap_idempotent() {
     let mut cluster = new_node_cluster(0, 3);
     test_bootstrap_idempotent(&mut cluster);
+}
+
+#[test]
+fn test_node_switch_api_version() {
+    // V1 and V1ttl are impossible to switch between because of config check.
+    let cases = [
+        (ApiVersion::V1, ApiVersion::V1),
+        (ApiVersion::V1, ApiVersion::V2),
+        (ApiVersion::V1ttl, ApiVersion::V1ttl),
+        (ApiVersion::V1ttl, ApiVersion::V2),
+        (ApiVersion::V2, ApiVersion::V1),
+        (ApiVersion::V2, ApiVersion::V1ttl),
+        (ApiVersion::V2, ApiVersion::V2),
+    ];
+    for (from_api, to_api) in cases {
+        // With TiDB data
+        {
+            // Bootstrap with `from_api`
+            let mut cluster = new_node_cluster(0, 1);
+            cluster.cfg.storage.set_api_version(from_api);
+            cluster.start().unwrap();
+
+            // Write TiDB data
+            cluster.put(b"m_tidb_data", b"").unwrap();
+            cluster.shutdown();
+
+            // Should switch to `to_api`
+            cluster.cfg.storage.set_api_version(to_api);
+            cluster.start().unwrap();
+            cluster.shutdown();
+        }
+
+        // With non-TiDB data.
+        {
+            // Bootstrap with `from_api`
+            let mut cluster = new_node_cluster(0, 1);
+            cluster.cfg.storage.set_api_version(from_api);
+            cluster.start().unwrap();
+
+            // Write non-TiDB data
+            cluster.put(b"k1", b"").unwrap();
+            cluster.shutdown();
+
+            if from_api == to_api {
+                // Should start with if there is no api version change
+                cluster.cfg.storage.set_api_version(to_api);
+                cluster.start().unwrap();
+                cluster.shutdown();
+            } else {
+                // Should not be able to switch to `to_api`
+                cluster.cfg.storage.set_api_version(to_api);
+                assert!(cluster.start().is_err());
+            }
+        }
+    }
 }

@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod test_async_io;
 mod test_backup;
 mod test_bootstrap;
 mod test_cmd_epoch_checker;

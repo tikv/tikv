@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath
 //! Scheduler which schedules the execution of `storage::Command`s.
 //!
 //! There is one scheduler for each store. It receives commands from clients, executes them against
@@ -21,27 +22,28 @@
 //! to the scheduler.
 
 use crossbeam::utils::CachePadded;
+use engine_traits::CF_LOCK;
 use parking_lot::{Mutex, MutexGuard};
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use std::u64;
+use std::{mem, u64};
 
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use futures::compat::Future01CompatExt;
-use futures::{select, FutureExt as _};
 use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
-use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
-use tikv_util::{callback::must_call, time::Instant, timer::GLOBAL_TIMER_HANDLE};
+use resource_metering::{FutureExt, ResourceMeteringTag};
+use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
+use tikv_util::{time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::TimeStamp;
 
 use crate::server::lock_manager::waiter_manager;
 use crate::storage::config::Config;
 use crate::storage::kv::{
-    drop_snapshot_callback, with_tls_engine, Engine, ExtCallback, Result as EngineResult,
-    SnapContext, Statistics,
+    self, with_tls_engine, Engine, ExtCallback, Result as EngineResult, SnapContext, Statistics,
 };
 use crate::storage::lock_manager::{self, DiagnosticContext, LockManager, WaitTimeout};
 use crate::storage::metrics::{self, *};
@@ -56,6 +58,7 @@ use crate::storage::txn::{
     sched_pool::{tls_collect_read_duration, tls_collect_scan_details, SchedPool},
     Error, ProcessResult,
 };
+use crate::storage::DynamicConfigs;
 use crate::storage::{
     get_priority_tag, kv::FlowStatsReporter, types::StorageCallback, Error as StorageError,
     ErrorInner as StorageErrorInner,
@@ -185,11 +188,15 @@ struct SchedulerInner<L: LockManager> {
 
     flow_controller: Arc<FlowController>,
 
+    control_mutex: Arc<tokio::sync::Mutex<bool>>,
+
     lock_mgr: L,
 
     concurrency_manager: ConcurrencyManager,
 
     pipelined_pessimistic_lock: Arc<AtomicBool>,
+
+    in_memory_pessimistic_lock: Arc<AtomicBool>,
 
     enable_async_apply_prewrite: bool,
 }
@@ -284,10 +291,10 @@ impl<L: LockManager> SchedulerInner<L> {
 /// Scheduler which schedules the execution of `storage::Command`s.
 #[derive(Clone)]
 pub struct Scheduler<E: Engine, L: LockManager> {
-    // `engine` is `None` means currently the program is in scheduler worker threads.
-    engine: Option<E>,
     inner: Arc<SchedulerInner<L>>,
-    control_mutex: Arc<tokio::sync::Mutex<bool>>,
+    // The engine can be fetched from the thread local storage of scheduler threads.
+    // So, we don't store the engine here.
+    _engine: PhantomData<E>,
 }
 
 unsafe impl<E: Engine, L: LockManager> Send for Scheduler<E, L> {}
@@ -299,7 +306,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         lock_mgr: L,
         concurrency_manager: ConcurrencyManager,
         config: &Config,
-        pipelined_pessimistic_lock: Arc<AtomicBool>,
+        dynamic_configs: DynamicConfigs,
         flow_controller: Arc<FlowController>,
         reporter: R,
     ) -> Self {
@@ -322,14 +329,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 "sched-worker-pool",
             ),
             high_priority_pool: SchedPool::new(
-                engine.clone(),
+                engine,
                 std::cmp::max(1, config.scheduler_worker_pool_size / 2),
                 reporter,
                 "sched-high-pri-pool",
             ),
+            control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
             lock_mgr,
             concurrency_manager,
-            pipelined_pessimistic_lock,
+            pipelined_pessimistic_lock: dynamic_configs.pipelined_pessimistic_lock,
+            in_memory_pessimistic_lock: dynamic_configs.in_memory_pessimistic_lock,
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
             flow_controller,
         });
@@ -339,9 +348,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             "initialized the transaction scheduler"
         );
         Scheduler {
-            engine: Some(engine),
             inner,
-            control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
+            _engine: PhantomData,
         }
     }
 
@@ -451,25 +459,31 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    /// Initiates an async operation to get a snapshot from the storage engine, then execute the
-    /// task in the sched pool.
+    /// Executes the task in the sched pool.
     fn execute(&self, mut task: Task) {
-        let cid = task.cid;
-        let tag = task.cmd.tag();
-        let ctx = task.cmd.ctx().clone();
         let sched = self.clone();
+        self.get_sched_pool(task.cmd.priority())
+            .pool
+            .spawn(async move {
+                if sched.check_task_deadline_exceeded(&task) {
+                    return;
+                }
 
-        let cb = must_call(
-            move |(cb_ctx, snapshot)| {
-                debug!(
-                    "receive snapshot finish msg";
-                    "cid" => task.cid, "cb_ctx" => ?cb_ctx
-                );
+                let tag = task.cmd.tag();
+                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
 
-                match snapshot {
+                let snap_ctx = SnapContext {
+                    pb_ctx: task.cmd.ctx(),
+                    ..Default::default()
+                };
+                // The program is currently in scheduler worker threads.
+                // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
+                match unsafe { with_tls_engine(|engine: &E| kv::snapshot(engine, snap_ctx)) }.await
+                {
                     Ok(snapshot) => {
                         SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
-
+                        let term = snapshot.ext().get_term();
+                        let extra_op = snapshot.ext().get_txn_extra_op();
                         if !sched
                             .inner
                             .get_task_slot(task.cid)
@@ -477,71 +491,30 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             .unwrap()
                             .try_own()
                         {
-                            sched
-                                .get_sched_pool(task.cmd.priority())
-                                .clone()
-                                .pool
-                                .spawn(async move {
-                                    sched.finish_with_err(
-                                        task.cid,
-                                        StorageErrorInner::DeadlineExceeded,
-                                    );
-                                })
-                                .unwrap();
+                            sched.finish_with_err(task.cid, StorageErrorInner::DeadlineExceeded);
                             return;
                         }
 
-                        if let Some(term) = cb_ctx.term {
-                            task.cmd.ctx_mut().set_term(term);
+                        if let Some(term) = term {
+                            task.cmd.ctx_mut().set_term(term.get());
                         }
-                        task.extra_op = cb_ctx.txn_extra_op;
+                        task.extra_op = extra_op;
 
                         debug!(
                             "process cmd with snapshot";
-                            "cid" => task.cid, "cb_ctx" => ?cb_ctx
+                            "cid" => task.cid, "term" => ?term, "extra_op" => ?extra_op,
                         );
-                        sched.process_by_worker(snapshot, task);
+                        sched.process(snapshot, task).await;
                     }
                     Err(err) => {
                         SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
 
                         info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
-                        sched
-                            .get_sched_pool(task.cmd.priority())
-                            .clone()
-                            .pool
-                            .spawn(async move {
-                                sched.finish_with_err(task.cid, Error::from(err));
-                            })
-                            .unwrap();
+                        sched.finish_with_err(task.cid, Error::from(err));
                     }
                 }
-            },
-            drop_snapshot_callback::<E>,
-        );
-
-        let f = |engine: &E| {
-            let snap_ctx = SnapContext {
-                pb_ctx: &ctx,
-                ..Default::default()
-            };
-            if let Err(e) = engine.async_snapshot(snap_ctx, cb) {
-                SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
-
-                info!("engine async_snapshot failed"; "err" => ?e);
-                self.finish_with_err(cid, e);
-            } else {
-                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
-            }
-        };
-
-        if let Some(engine) = self.engine.as_ref() {
-            f(engine)
-        } else {
-            // The program is currently in scheduler worker threads.
-            // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
-            unsafe { with_tls_engine(f) }
-        }
+            })
+            .unwrap();
     }
 
     /// Calls the callback with an error.
@@ -676,67 +649,58 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         // It won't release locks here until write finished.
     }
 
-    /// Delivers a command to a worker thread for processing.
-    fn process_by_worker(self, snapshot: E::Snap, task: Task) {
+    /// Process the task in the current thread.
+    async fn process(self, snapshot: E::Snap, task: Task) {
         if self.check_task_deadline_exceeded(&task) {
             return;
         }
 
-        let tag = task.cmd.tag();
         let resource_tag = ResourceMeteringTag::from_rpc_context(task.cmd.ctx());
-        self.get_sched_pool(task.cmd.priority())
-            .clone()
-            .pool
-            .spawn(
-                async move {
-                    fail_point!("scheduler_async_snapshot_finish");
-                    SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
+        async {
+            let tag = task.cmd.tag();
+            fail_point!("scheduler_async_snapshot_finish");
+            SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
-                    if self.check_task_deadline_exceeded(&task) {
-                        return;
-                    }
+            let timer = Instant::now_coarse();
 
-                    let timer = Instant::now_coarse();
-
-                    let region_id = task.cmd.ctx().get_region_id();
-                    let ts = task.cmd.ts();
-                    let mut statistics = Statistics::default();
-                    match &task.cmd {
-                        Command::Prewrite(_) | Command::PrewritePessimistic(_) => {
-                            tls_collect_query(region_id, QueryKind::Prewrite);
-                        }
-                        Command::AcquirePessimisticLock(_) => {
-                            tls_collect_query(region_id, QueryKind::AcquirePessimisticLock);
-                        }
-                        Command::Commit(_) => {
-                            tls_collect_query(region_id, QueryKind::Commit);
-                        }
-                        Command::Rollback(_) | Command::PessimisticRollback(_) => {
-                            tls_collect_query(region_id, QueryKind::Rollback);
-                        }
-                        _ => {}
-                    }
-
-                    if task.cmd.readonly() {
-                        self.process_read(snapshot, task, &mut statistics);
-                    } else {
-                        self.process_write(snapshot, task, &mut statistics).await;
-                    };
-                    tls_collect_scan_details(tag.get_str(), &statistics);
-                    let elapsed = timer.saturating_elapsed();
-                    slow_log!(
-                        elapsed,
-                        "[region {}] scheduler handle command: {}, ts: {}",
-                        region_id,
-                        tag,
-                        ts
-                    );
-
-                    tls_collect_read_duration(tag.get_str(), elapsed);
+            let region_id = task.cmd.ctx().get_region_id();
+            let ts = task.cmd.ts();
+            let mut statistics = Statistics::default();
+            match &task.cmd {
+                Command::Prewrite(_) | Command::PrewritePessimistic(_) => {
+                    tls_collect_query(region_id, QueryKind::Prewrite);
                 }
-                .in_resource_metering_tag(resource_tag),
-            )
-            .unwrap();
+                Command::AcquirePessimisticLock(_) => {
+                    tls_collect_query(region_id, QueryKind::AcquirePessimisticLock);
+                }
+                Command::Commit(_) => {
+                    tls_collect_query(region_id, QueryKind::Commit);
+                }
+                Command::Rollback(_) | Command::PessimisticRollback(_) => {
+                    tls_collect_query(region_id, QueryKind::Rollback);
+                }
+                _ => {}
+            }
+
+            if task.cmd.readonly() {
+                self.process_read(snapshot, task, &mut statistics);
+            } else {
+                self.process_write(snapshot, task, &mut statistics).await;
+            };
+            tls_collect_scan_details(tag.get_str(), &statistics);
+            let elapsed = timer.saturating_elapsed();
+            slow_log!(
+                elapsed,
+                "[region {}] scheduler handle command: {}, ts: {}",
+                region_id,
+                tag,
+                ts
+            );
+
+            tls_collect_read_duration(tag.get_str(), elapsed);
+        }
+        .in_resource_metering_tag(resource_tag)
+        .await;
     }
 
     /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
@@ -763,11 +727,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let priority = task.cmd.priority();
         let ts = task.cmd.ts();
         let scheduler = self.clone();
-        let pipelined_pessimistic_lock = self
-            .inner
-            .pipelined_pessimistic_lock
-            .load(Ordering::Relaxed);
-        let pipelined = pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
+        let pessimistic_lock_mode = self.pessimistic_lock_mode();
+        let pipelined =
+            task.cmd.can_be_pipelined() && pessimistic_lock_mode == PessimisticLockMode::Pipelined;
 
         let deadline = task.cmd.deadline();
         let write_result = {
@@ -780,215 +742,274 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             };
 
             task.cmd
-                .process_write(snapshot, context)
+                .process_write(snapshot.clone(), context)
                 .map_err(StorageError::from)
         };
-        match deadline
+        let WriteResult {
+            ctx,
+            mut to_be_write,
+            rows,
+            pr,
+            lock_info,
+            lock_guards,
+            response_policy,
+        } = match deadline
             .check()
             .map_err(StorageError::from)
             .and(write_result)
         {
-            // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
-            // message when it finishes.
-            Ok(WriteResult {
-                ctx,
-                mut to_be_write,
-                rows,
-                pr,
-                lock_info,
-                lock_guards,
-                response_policy,
-            }) => {
-                SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
-
-                if ctx.get_disk_full_opt() == DiskFullOpt::AllowedOnAlmostFull {
-                    to_be_write.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull
-                }
-
-                if let Some(lock_info) = lock_info {
-                    let WriteResultLockInfo {
-                        lock,
-                        key,
-                        is_first_lock,
-                        wait_timeout,
-                    } = lock_info;
-                    let diag_ctx = DiagnosticContext {
-                        key,
-                        resource_group_tag: ctx.get_resource_group_tag().into(),
-                    };
-                    scheduler.on_wait_for_lock(
-                        cid,
-                        ts,
-                        pr,
-                        lock,
-                        is_first_lock,
-                        wait_timeout,
-                        diag_ctx,
-                    );
-                } else if to_be_write.modifies.is_empty() {
-                    scheduler.on_write_finished(
-                        cid,
-                        Some(pr),
-                        Ok(()),
-                        lock_guards,
-                        false,
-                        false,
-                        tag,
-                    );
-                } else {
-                    let mut pr = Some(pr);
-                    let mut is_async_apply_prewrite = false;
-
-                    let (proposed_cb, committed_cb): (Option<ExtCallback>, Option<ExtCallback>) =
-                        match response_policy {
-                            ResponsePolicy::OnApplied => (None, None),
-                            ResponsePolicy::OnCommitted => {
-                                self.inner.store_pr(cid, pr.take().unwrap());
-                                let sched = scheduler.clone();
-                                // Currently, the only case that response is returned after finishing
-                                // commit is async applying prewrites for async commit transactions.
-                                // The committed callback is not guaranteed to be invoked. So store
-                                // the `pr` to the tctx instead of capturing it to the closure.
-                                let committed_cb = Box::new(move || {
-                                    fail_point!("before_async_apply_prewrite_finish", |_| {});
-                                    let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
-                                    Self::early_response(
-                                        cid,
-                                        cb.unwrap(),
-                                        pr.unwrap(),
-                                        tag,
-                                        metrics::CommandStageKind::async_apply_prewrite,
-                                    );
-                                });
-                                is_async_apply_prewrite = true;
-                                (None, Some(committed_cb))
-                            }
-                            ResponsePolicy::OnProposed => {
-                                if pipelined {
-                                    // The normal write process is respond to clients and release
-                                    // latches after async write finished. If pipelined pessimistic
-                                    // locking is enabled, the process becomes parallel and there are
-                                    // two msgs for one command:
-                                    //   1. Msg::PipelinedWrite: respond to clients
-                                    //   2. Msg::WriteFinished: deque context and release latches
-                                    // The proposed callback is not guaranteed to be invoked. So store
-                                    // the `pr` to the tctx instead of capturing it to the closure.
-                                    self.inner.store_pr(cid, pr.take().unwrap());
-                                    let sched = scheduler.clone();
-                                    // Currently, the only case that response is returned after finishing
-                                    // proposed phase is pipelined pessimistic lock.
-                                    // TODO: Unify the code structure of pipelined pessimistic lock and
-                                    // async apply prewrite.
-                                    let proposed_cb = Box::new(move || {
-                                        fail_point!("before_pipelined_write_finish", |_| {});
-                                        let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
-                                        Self::early_response(
-                                            cid,
-                                            cb.unwrap(),
-                                            pr.unwrap(),
-                                            tag,
-                                            metrics::CommandStageKind::pipelined_write,
-                                        );
-                                    });
-                                    (Some(proposed_cb), None)
-                                } else {
-                                    (None, None)
-                                }
-                            }
-                        };
-
-                    let sched = scheduler.clone();
-                    let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
-                    let write_size = to_be_write.size();
-                    // The callback to receive async results of write prepare from the storage engine.
-                    let engine_cb = Box::new(move |(_, result): (_, EngineResult<()>)| {
-                        sched_pool
-                            .spawn(async move {
-                                fail_point!("scheduler_async_write_finish");
-
-                                let ok = result.is_ok();
-                                sched.on_write_finished(
-                                    cid,
-                                    pr,
-                                    result,
-                                    lock_guards,
-                                    pipelined,
-                                    is_async_apply_prewrite,
-                                    tag,
-                                );
-                                KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
-                                    .get(tag)
-                                    .observe(rows as f64);
-
-                                if ok {
-                                    // consume the quota only when write succeeds, otherwise failed write requests may exhaust
-                                    // the quota and other write requests would be in long delay.
-                                    if sched.inner.flow_controller.enabled() {
-                                        if sched.inner.flow_controller.is_unlimited() {
-                                            // no need to delay if unthrottled, just call consume to record write flow
-                                            let _ = sched.inner.flow_controller.consume(write_size);
-                                        } else {
-                                            // Control mutex is used to ensure there is only one request consuming the quota.
-                                            // The delay may exceed 1s, and the speed limit is changed every second.
-                                            // If the speed of next second is larger than the one of first second,
-                                            // without the mutex, the write flow can't throttled strictly.
-                                            let _guard = sched.control_mutex.lock().await;
-                                            let delay =
-                                                sched.inner.flow_controller.consume(write_size);
-                                            delay.await;
-                                        }
-                                    }
-                                }
-                            })
-                            .unwrap()
-                    });
-
-                    if self.inner.flow_controller.enabled()
-                        && !self.inner.flow_controller.is_unlimited()
-                    {
-                        let mut deadline_fut = GLOBAL_TIMER_HANDLE
-                            .delay(deadline.to_std_instant())
-                            .compat()
-                            .fuse();
-                        let start = Instant::now_coarse();
-                        // Wait for the delay. But don't wait beyond the deadline.
-                        let _guard = select! {
-                            _ = deadline_fut => {
-                                scheduler.finish_with_err(cid, StorageErrorInner::DeadlineExceeded);
-                                return;
-                            },
-                            guard = self.control_mutex.lock().fuse() => guard,
-                        };
-                        SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
-                    }
-
-                    to_be_write.deadline = Some(deadline);
-                    // Safety: `self.sched_pool` ensures a TLS engine exists.
-                    unsafe {
-                        with_tls_engine(|engine: &E| {
-                            if let Err(e) = engine.async_write_ext(
-                                &ctx,
-                                to_be_write,
-                                engine_cb,
-                                proposed_cb,
-                                committed_cb,
-                            ) {
-                                SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
-
-                                info!("engine async_write failed"; "cid" => cid, "err" => ?e);
-                                scheduler.finish_with_err(cid, e);
-                            }
-                        })
-                    }
-                }
-            }
             // Write prepare failure typically means conflicting transactions are detected. Delivers the
             // error to the callback, and releases the latches.
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
                 debug!("write command failed at prewrite"; "cid" => cid, "err" => ?err);
                 scheduler.finish_with_err(cid, err);
+                return;
             }
+            // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
+            // message when it finishes.
+            Ok(res) => res,
+        };
+        SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
+
+        if let Some(lock_info) = lock_info {
+            let WriteResultLockInfo {
+                lock,
+                key,
+                is_first_lock,
+                wait_timeout,
+            } = lock_info;
+            let diag_ctx = DiagnosticContext {
+                key,
+                resource_group_tag: ctx.get_resource_group_tag().into(),
+            };
+            scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock, wait_timeout, diag_ctx);
+            return;
+        }
+
+        let mut pr = Some(pr);
+        if to_be_write.modifies.is_empty() {
+            scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, false, tag);
+            return;
+        }
+
+        if tag == CommandKind::acquire_pessimistic_lock
+            && pessimistic_lock_mode == PessimisticLockMode::InMemory
+            && self.try_write_in_memory_pessimistic_locks(&snapshot, &mut to_be_write)
+        {
+            scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, false, tag);
+            return;
+        }
+
+        let mut is_async_apply_prewrite = false;
+        let write_size = to_be_write.size();
+
+        // Mutations on the lock CF should overwrite the memory locks.
+        // These mutations happen on a working leader, so memory pessimistic locks
+        // are only written through the scheduler. Protected by the latches, there will
+        // be no concurrent write on the same keys in the lock table. So, it is safe
+        // for us to only delete keys that are already in the lock table.
+        // This will help us reduce the cost of cloning the keys for the commit command
+        // or when the feature is disabled.
+        let locks_to_be_removed = {
+            match snapshot
+                .ext()
+                .get_txn_ext()
+                .map(|txn_ext| txn_ext.pessimistic_locks.read())
+            {
+                Some(locks) if !locks.map.is_empty() => to_be_write
+                    .modifies
+                    .iter()
+                    .filter_map(|write| match write {
+                        Modify::Put(cf, key, ..) | Modify::Delete(cf, key)
+                            if *cf == CF_LOCK && locks.map.contains_key(key) =>
+                        {
+                            Some(key.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                _ => vec![],
+            }
+        };
+
+        if ctx.get_disk_full_opt() == DiskFullOpt::AllowedOnAlmostFull {
+            to_be_write.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull
+        }
+        let (proposed_cb, committed_cb): (Option<ExtCallback>, Option<ExtCallback>) =
+            match response_policy {
+                ResponsePolicy::OnApplied => (None, None),
+                ResponsePolicy::OnCommitted => {
+                    self.inner.store_pr(cid, pr.take().unwrap());
+                    let sched = scheduler.clone();
+                    // Currently, the only case that response is returned after finishing
+                    // commit is async applying prewrites for async commit transactions.
+                    // The committed callback is not guaranteed to be invoked. So store
+                    // the `pr` to the tctx instead of capturing it to the closure.
+                    let committed_cb = Box::new(move || {
+                        fail_point!("before_async_apply_prewrite_finish", |_| {});
+                        let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
+                        Self::early_response(
+                            cid,
+                            cb.unwrap(),
+                            pr.unwrap(),
+                            tag,
+                            metrics::CommandStageKind::async_apply_prewrite,
+                        );
+                    });
+                    is_async_apply_prewrite = true;
+                    (None, Some(committed_cb))
+                }
+                ResponsePolicy::OnProposed => {
+                    if pipelined {
+                        // The normal write process is respond to clients and release
+                        // latches after async write finished. If pipelined pessimistic
+                        // locking is enabled, the process becomes parallel and there are
+                        // two msgs for one command:
+                        //   1. Msg::PipelinedWrite: respond to clients
+                        //   2. Msg::WriteFinished: deque context and release latches
+                        // The proposed callback is not guaranteed to be invoked. So store
+                        // the `pr` to the tctx instead of capturing it to the closure.
+                        self.inner.store_pr(cid, pr.take().unwrap());
+                        let sched = scheduler.clone();
+                        // Currently, the only case that response is returned after finishing
+                        // proposed phase is pipelined pessimistic lock.
+                        // TODO: Unify the code structure of pipelined pessimistic lock and
+                        // async apply prewrite.
+                        let proposed_cb = Box::new(move || {
+                            fail_point!("before_pipelined_write_finish", |_| {});
+                            let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
+                            Self::early_response(
+                                cid,
+                                cb.unwrap(),
+                                pr.unwrap(),
+                                tag,
+                                metrics::CommandStageKind::pipelined_write,
+                            );
+                        });
+                        (Some(proposed_cb), None)
+                    } else {
+                        (None, None)
+                    }
+                }
+            };
+
+        let sched = scheduler.clone();
+        let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
+        let txn_ext = snapshot.ext().get_txn_ext().cloned();
+        // The callback to receive async results of write prepare from the storage engine.
+        let engine_cb = Box::new(move |result: EngineResult<()>| {
+            sched_pool
+                .spawn(async move {
+                    fail_point!("scheduler_async_write_finish");
+
+                    let ok = result.is_ok();
+                    if ok && !locks_to_be_removed.is_empty() {
+                        // Lock CF mutations should overwrite memory pessimistic locks
+                        if let Some(mut pessimistic_locks) = txn_ext
+                            .as_ref()
+                            .map(|txn_ext| txn_ext.pessimistic_locks.write())
+                        {
+                            for key in &locks_to_be_removed {
+                                pessimistic_locks.map.remove(key);
+                            }
+                        }
+                    }
+                    sched.on_write_finished(
+                        cid,
+                        pr,
+                        result,
+                        lock_guards,
+                        pipelined,
+                        is_async_apply_prewrite,
+                        tag,
+                    );
+                    KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
+                        .get(tag)
+                        .observe(rows as f64);
+
+                    if !ok {
+                        // Only consume the quota when write succeeds, otherwise failed write requests may exhaust
+                        // the quota and other write requests would be in long delay.
+                        if sched.inner.flow_controller.enabled() {
+                            sched.inner.flow_controller.unconsume(write_size);
+                        }
+                    }
+                })
+                .unwrap()
+        });
+
+        if self.inner.flow_controller.enabled() {
+            if self.inner.flow_controller.is_unlimited() {
+                // no need to delay if unthrottled, just call consume to record write flow
+                let _ = self.inner.flow_controller.consume(write_size);
+            } else {
+                let start = Instant::now_coarse();
+                // Control mutex is used to ensure there is only one request consuming the quota.
+                // The delay may exceed 1s, and the speed limit is changed every second.
+                // If the speed of next second is larger than the one of first second,
+                // without the mutex, the write flow can't throttled strictly.
+                let control_mutex = self.inner.control_mutex.clone();
+                let _guard = control_mutex.lock().await;
+                let delay = self.inner.flow_controller.consume(write_size);
+                let delay_end = Instant::now_coarse() + delay;
+                while !self.inner.flow_controller.is_unlimited() {
+                    let now = Instant::now_coarse();
+                    if now >= delay_end {
+                        break;
+                    }
+                    if now >= deadline.inner() {
+                        scheduler.finish_with_err(cid, StorageErrorInner::DeadlineExceeded);
+                        self.inner.flow_controller.unconsume(write_size);
+                        SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
+                        return;
+                    }
+                    GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + Duration::from_millis(1))
+                        .compat()
+                        .await
+                        .unwrap();
+                }
+                SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
+            }
+        }
+
+        to_be_write.deadline = Some(deadline);
+        // Safety: `self.sched_pool` ensures a TLS engine exists.
+        unsafe {
+            with_tls_engine(|engine: &E| {
+                if let Err(e) =
+                    engine.async_write_ext(&ctx, to_be_write, engine_cb, proposed_cb, committed_cb)
+                {
+                    SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
+
+                    info!("engine async_write failed"; "cid" => cid, "err" => ?e);
+                    scheduler.finish_with_err(cid, e);
+                }
+            })
+        }
+    }
+
+    // Returns whether it succeeds to write pessimistic locks to the in-memory lock table
+    fn try_write_in_memory_pessimistic_locks(
+        &self,
+        snapshot: &E::Snap,
+        to_be_write: &mut WriteData,
+    ) -> bool {
+        if let Some(txn_ext) = snapshot.ext().get_txn_ext() {
+            let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
+            // TODO: check `epoch` and `valid`
+            for modify in mem::take(&mut to_be_write.modifies) {
+                match modify {
+                    Modify::PessimisticLock(key, lock) => {
+                        pessimistic_locks.map.insert(key, lock);
+                    }
+                    _ => panic!("all modifies should be PessimisticLock"),
+                }
+            }
+            true
+        } else {
+            false
         }
     }
 
@@ -1003,6 +1024,34 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             false
         }
     }
+
+    fn pessimistic_lock_mode(&self) -> PessimisticLockMode {
+        let pipelined = self
+            .inner
+            .pipelined_pessimistic_lock
+            .load(Ordering::Relaxed);
+        let in_memory = self
+            .inner
+            .in_memory_pessimistic_lock
+            .load(Ordering::Relaxed);
+        if pipelined && in_memory {
+            PessimisticLockMode::InMemory
+        } else if pipelined {
+            PessimisticLockMode::Pipelined
+        } else {
+            PessimisticLockMode::Sync
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum PessimisticLockMode {
+    // Return success only if the pessimistic lock is persisted.
+    Sync,
+    // Return success after the pessimistic lock is proposed successfully.
+    Pipelined,
+    // Try to store pessimistic locks only in the memory.
+    InMemory,
 }
 
 #[cfg(test)]
@@ -1166,7 +1215,10 @@ mod tests {
             DummyLockManager,
             ConcurrencyManager::new(1.into()),
             &config,
-            Arc::new(AtomicBool::new(true)),
+            DynamicConfigs {
+                pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
+                in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+            },
             Arc::new(FlowController::empty()),
             DummyReporter,
         );
@@ -1218,7 +1270,10 @@ mod tests {
             DummyLockManager,
             ConcurrencyManager::new(1.into()),
             &config,
-            Arc::new(AtomicBool::new(true)),
+            DynamicConfigs {
+                pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
+                in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+            },
             Arc::new(FlowController::empty()),
             DummyReporter,
         );
@@ -1270,7 +1325,10 @@ mod tests {
             DummyLockManager,
             ConcurrencyManager::new(1.into()),
             &config,
-            Arc::new(AtomicBool::new(true)),
+            DynamicConfigs {
+                pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
+                in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+            },
             Arc::new(FlowController::empty()),
             DummyReporter,
         );
@@ -1284,10 +1342,8 @@ mod tests {
         let cmd: TypedCommand<TxnStatus> = req.into();
         let (cb, f) = paired_future_callback();
 
-        // Lock the control_mutex to simulate flow control.
         scheduler.inner.flow_controller.enable(true);
-        scheduler.inner.flow_controller.set_speed_limit(1e9);
-        let guard = block_on(scheduler.control_mutex.lock());
+        scheduler.inner.flow_controller.set_speed_limit(1.0);
         scheduler.run_cmd(cmd.cmd, StorageCallback::TxnStatus(cb));
         // The task waits for 200ms until it locks the control_mutex, but the execution
         // time limit is 100ms. Before the mutex is locked, it should return
@@ -1297,9 +1353,14 @@ mod tests {
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
+        // should unconsume if the request fails
+        assert_eq!(scheduler.inner.flow_controller.total_bytes_consumed(), 0);
 
-        drop(guard);
-        // A new request should not be blocked after releasing the lock.
+        // A new request should not be blocked without flow control.
+        scheduler
+            .inner
+            .flow_controller
+            .set_speed_limit(std::f64::INFINITY);
         let mut req = CheckTxnStatusRequest::default();
         req.mut_context().max_execution_duration_ms = 100;
         req.set_primary_key(b"a".to_vec());
@@ -1327,7 +1388,10 @@ mod tests {
             DummyLockManager,
             ConcurrencyManager::new(1.into()),
             &config,
-            Arc::new(AtomicBool::new(true)),
+            DynamicConfigs {
+                pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
+                in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+            },
             Arc::new(FlowController::empty()),
             DummyReporter,
         );
@@ -1361,5 +1425,55 @@ mod tests {
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
         assert!(block_on(f).is_ok());
+    }
+
+    #[test]
+    fn test_pessimistic_lock_mode() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let config = Config {
+            scheduler_concurrency: 1024,
+            scheduler_worker_pool_size: 1,
+            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
+            enable_async_apply_prewrite: false,
+            ..Default::default()
+        };
+        let scheduler = Scheduler::new(
+            engine,
+            DummyLockManager,
+            ConcurrencyManager::new(1.into()),
+            &config,
+            DynamicConfigs {
+                pipelined_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+                in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+            },
+            Arc::new(FlowController::empty()),
+            DummyReporter,
+        );
+        // Use sync mode if pipelined_pessimistic_lock is false.
+        assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);
+        // Use sync mode even when in_memory is true.
+        scheduler
+            .inner
+            .in_memory_pessimistic_lock
+            .store(true, Ordering::SeqCst);
+        assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);
+        // Mode is InMemory when both pipelined and in_memory is true.
+        scheduler
+            .inner
+            .pipelined_pessimistic_lock
+            .store(true, Ordering::SeqCst);
+        assert_eq!(
+            scheduler.pessimistic_lock_mode(),
+            PessimisticLockMode::InMemory
+        );
+        // Mode is Pipelined when only pipelined is true.
+        scheduler
+            .inner
+            .in_memory_pessimistic_lock
+            .store(false, Ordering::SeqCst);
+        assert_eq!(
+            scheduler.pessimistic_lock_mode(),
+            PessimisticLockMode::Pipelined
+        );
     }
 }

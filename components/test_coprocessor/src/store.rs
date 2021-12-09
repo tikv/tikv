@@ -130,6 +130,10 @@ impl<E: Engine> Store<E> {
         }
     }
 
+    pub fn current_ts(&self) -> TimeStamp {
+        self.current_ts
+    }
+
     pub fn begin(&mut self) {
         self.current_ts = (next_id() as u64).into();
         self.handles.clear();
@@ -192,7 +196,7 @@ impl<E: Engine> Store<E> {
         self.store
             .scan(
                 Context::default(),
-                Key::from_encoded(vec![]),
+                vec![],
                 None,
                 100_000,
                 false,
@@ -213,6 +217,7 @@ impl<E: Engine> Store<E> {
             self.last_committed_ts,
             IsolationLevel::Si,
             true,
+            Default::default(),
             Default::default(),
             false,
         )
