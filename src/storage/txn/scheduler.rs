@@ -35,7 +35,7 @@ use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use futures::compat::Future01CompatExt;
 use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
-use resource_metering::{FutureExt, ResourceMeteringTag};
+use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
 use tikv_util::{time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::TimeStamp;
@@ -199,6 +199,8 @@ struct SchedulerInner<L: LockManager> {
     in_memory_pessimistic_lock: Arc<AtomicBool>,
 
     enable_async_apply_prewrite: bool,
+
+    resource_tag_factory: ResourceTagFactory,
 }
 
 #[inline]
@@ -309,6 +311,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         dynamic_configs: DynamicConfigs,
         flow_controller: Arc<FlowController>,
         reporter: R,
+        resource_tag_factory: ResourceTagFactory,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -341,6 +344,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             in_memory_pessimistic_lock: dynamic_configs.in_memory_pessimistic_lock,
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
             flow_controller,
+            resource_tag_factory,
         });
 
         slow_log!(
@@ -655,7 +659,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             return;
         }
 
-        let resource_tag = ResourceMeteringTag::from_rpc_context(task.cmd.ctx());
+        let resource_tag = self.inner.resource_tag_factory.new_tag(task.cmd.ctx());
         async {
             let tag = task.cmd.tag();
             fail_point!("scheduler_async_snapshot_finish");
@@ -1220,6 +1224,7 @@ mod tests {
             },
             Arc::new(FlowController::empty()),
             DummyReporter,
+            ResourceTagFactory::new_for_test(),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1275,6 +1280,7 @@ mod tests {
             },
             Arc::new(FlowController::empty()),
             DummyReporter,
+            ResourceTagFactory::new_for_test(),
         );
 
         // Spawn a task that sleeps for 500ms to occupy the pool. The next request
@@ -1330,6 +1336,7 @@ mod tests {
             },
             Arc::new(FlowController::empty()),
             DummyReporter,
+            ResourceTagFactory::new_for_test(),
         );
 
         let mut req = CheckTxnStatusRequest::default();
@@ -1393,6 +1400,7 @@ mod tests {
             },
             Arc::new(FlowController::empty()),
             DummyReporter,
+            ResourceTagFactory::new_for_test(),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1447,6 +1455,7 @@ mod tests {
             },
             Arc::new(FlowController::empty()),
             DummyReporter,
+            ResourceTagFactory::new_for_test(),
         );
         // Use sync mode if pipelined_pessimistic_lock is false.
         assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);
