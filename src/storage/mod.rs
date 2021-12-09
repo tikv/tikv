@@ -1068,7 +1068,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cmd: TypedCommand<T>,
         callback: Callback<T>,
     ) -> Result<()> {
-        if self.enable_ttl {
+        if let ApiVersion::V1ttl = self.api_version {
             return Err(box_err!(
                 "can't sched txn cmd({}) with TTL enabled",
                 cmd.cmd.tag()
