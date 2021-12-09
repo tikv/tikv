@@ -145,6 +145,12 @@ pub struct Config {
     #[online_config(hidden)]
     pub right_derive_when_split: bool,
 
+    /// This setting can only ensure conf remove will not be proposed by the peer
+    /// being removed. But it can't guarantee the remove is applied when the target
+    /// is not leader. That means we always need to check if it's working as expected
+    /// when a leader applies a self-remove conf change. Keep the configuration only
+    /// for convenient test.
+    #[cfg(any(test, feature = "testexport"))]
     pub allow_remove_leader: bool,
 
     /// Max log gap allowed to propose merge.
@@ -292,6 +298,7 @@ impl Default for Config {
             report_region_flow_interval: ReadableDuration::minutes(1),
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             right_derive_when_split: true,
+            #[cfg(any(test, feature = "testexport"))]
             allow_remove_leader: false,
             merge_max_log_gap: 10,
             merge_check_tick_interval: ReadableDuration::secs(2),
@@ -336,6 +343,16 @@ impl Config {
 
     pub fn raft_heartbeat_interval(&self) -> Duration {
         self.raft_base_tick_interval.0 * self.raft_heartbeat_ticks as u32
+    }
+
+    #[cfg(any(test, feature = "testexport"))]
+    pub fn allow_remove_leader(&self) -> bool {
+        self.allow_remove_leader
+    }
+
+    #[cfg(not(any(test, feature = "testexport")))]
+    pub fn allow_remove_leader(&self) -> bool {
+        false
     }
 
     pub fn validate(&mut self) -> Result<()> {
@@ -654,9 +671,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["right_derive_when_split"])
             .set((self.right_derive_when_split as i32).into());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["allow_remove_leader"])
-            .set((self.allow_remove_leader as i32).into());
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["merge_max_log_gap"])
