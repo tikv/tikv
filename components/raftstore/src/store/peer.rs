@@ -568,7 +568,6 @@ where
 
     // region merge logic need to be broadcast to all followers when disk full happens.
     pub has_region_merge_proposal: bool,
-
     pub region_merge_proposal_index: u64,
 
     pub read_progress: Arc<RegionReadProgress>,
@@ -586,6 +585,8 @@ where
     persisted_number: u64,
     /// The context of applying snapshot.
     apply_snap_ctx: Option<ApplySnapshotContext>,
+
+    pub in_store_log_lag: HashSet<u64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -696,6 +697,7 @@ where
             unpersisted_ready: None,
             persisted_number: 0,
             apply_snap_ctx: None,
+            in_store_log_lag: HashSet::default(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -3155,6 +3157,14 @@ where
         if last_index >= index + ctx.cfg.leader_transfer_max_log_lag {
             return Some("log gap");
         }
+
+        let meta = ctx.store_meta.lock().unwrap();
+        if let Some(count) = meta.store_log_lag.get(&peer.get_store_id()) {
+            if *count != 0 {
+                return Some("other peer log gap");
+            }
+        }
+
         None
     }
 
@@ -3671,6 +3681,16 @@ where
             );
             return;
         }
+
+        // if time::get_time() <= ctx.start_time + time::Duration::minutes(1) {
+        //     info!(
+        //         "reject tranferring leader due to just after starting";
+        //         "region_id" => self.region_id,
+        //         "peer_id" => self.peer.get_id(),
+        //         "from" => msg.get_from(),
+        //     );
+        //     return;
+        // }
 
         let mut msg = eraftpb::Message::new();
         msg.set_from(self.peer_id());

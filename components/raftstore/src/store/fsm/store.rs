@@ -33,7 +33,7 @@ use protobuf::Message;
 use raft::StateRole;
 use time::{self, Timespec};
 
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use engine_traits::CompactedEvent;
 use engine_traits::{RaftEngine, RaftLogBatch, WriteOptions};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -101,6 +101,8 @@ pub struct StoreInfo<EK, ER> {
 pub struct StoreMeta {
     /// store id
     pub store_id: Option<u64>,
+    /// store_id -> count of region
+    pub store_log_lag: HashMap<u64, u64>,
     /// region_end_key -> region_id
     pub region_ranges: BTreeMap<Vec<u8>, u64>,
     /// region_id -> region
@@ -137,6 +139,7 @@ impl StoreMeta {
     pub fn new(vote_capacity: usize) -> StoreMeta {
         StoreMeta {
             store_id: None,
+            store_log_lag: HashMap::default(),
             region_ranges: BTreeMap::default(),
             regions: HashMap::default(),
             readers: HashMap::default(),
@@ -163,6 +166,28 @@ impl StoreMeta {
             // TODO: may not be a good idea to panic when holding a lock.
             panic!("{} region corrupted", peer.tag);
         }
+        if !peer.in_store_log_lag.is_empty() {
+            // clean the record in store log lag if the peer is removed.
+            let stores: HashSet<_> = peer
+                .region()
+                .get_peers()
+                .iter()
+                .map(|p| p.get_store_id())
+                .collect();
+            for p in region.get_peers() {
+                if !stores.contains(&p.get_store_id())
+                    && peer.in_store_log_lag.contains(&p.get_id())
+                {
+                    peer.in_store_log_lag.remove(&p.get_id());
+                    let count = self.store_log_lag.get_mut(&p.get_store_id()).unwrap();
+                    *count -= 1;
+                    LOG_LAG_REGION_GAUGE_VEC
+                        .with_label_values(&[&p.get_store_id().to_string()])
+                        .dec();
+                }
+            }
+        }
+
         let reader = self.readers.get_mut(&region.get_id()).unwrap();
         peer.set_region(host, reader, region);
     }
@@ -354,6 +379,7 @@ where
 {
     pub cfg: Config,
     pub store: metapb::Store,
+    pub start_time: Timespec,
     pub pd_scheduler: Scheduler<PdTask<EK, ER>>,
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
@@ -602,7 +628,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 StoreMsg::StoreUnreachable { store_id } => {
                     self.on_store_unreachable(store_id);
                 }
-                StoreMsg::Start { store } => self.start(store),
+                StoreMsg::Start { store, start_time } => self.start(store, start_time),
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
@@ -618,7 +644,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         }
     }
 
-    fn start(&mut self, store: metapb::Store) {
+    fn start(&mut self, store: metapb::Store, start_time: Timespec) {
         if self.fsm.store.start_time.is_some() {
             panic!(
                 "[store {}] unable to start again with meta {:?}",
@@ -626,7 +652,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             );
         }
         self.fsm.store.id = store.get_id();
-        self.fsm.store.start_time = Some(time::get_time());
+        self.fsm.store.start_time = Some(start_time);
         self.register_cleanup_import_sst_tick();
         self.register_compact_check_tick();
         self.register_pd_store_heartbeat_tick();
@@ -926,6 +952,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
+    start_time: Timespec,
     pd_scheduler: Scheduler<PdTask<EK, ER>>,
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
@@ -1142,6 +1169,7 @@ where
         let mut ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
+            start_time: self.start_time.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
             consistency_check_scheduler: self.consistency_check_scheduler.clone(),
             split_check_scheduler: self.split_check_scheduler.clone(),
@@ -1209,11 +1237,13 @@ where
         RaftPollerBuilder {
             cfg: self.cfg.clone(),
             store: self.store.clone(),
+            start_time: self.start_time.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
             consistency_check_scheduler: self.consistency_check_scheduler.clone(),
             split_check_scheduler: self.split_check_scheduler.clone(),
             cleanup_scheduler: self.cleanup_scheduler.clone(),
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
+            raftlog_fetch_scheduler: self.raftlog_fetch_scheduler.clone(),
             region_scheduler: self.region_scheduler.clone(),
             apply_router: self.apply_router.clone(),
             router: self.router.clone(),
@@ -1379,6 +1409,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let mut builder = RaftPollerBuilder {
             cfg,
             store: meta,
+            start_time: time::get_time(),
             engines,
             router: self.router.clone(),
             split_check_scheduler,
@@ -1470,6 +1501,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let (raft_builder, apply_builder) = (builder.clone(), apply_poller_builder.clone());
 
         let tag = format!("raftstore-{}", store.get_id());
+        let start_time = builder.start_time;
         self.system.spawn(tag, builder);
         let mut mailboxes = Vec::with_capacity(region_peers.len());
         let mut address = Vec::with_capacity(region_peers.len());
@@ -1489,6 +1521,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         self.router
             .send_control(StoreMsg::Start {
                 store: store.clone(),
+                start_time,
             })
             .unwrap();
 

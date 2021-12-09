@@ -455,6 +455,12 @@ lazy_static! {
     pub static ref REGION_HASH_COUNTER: RegionHashCounter =
         auto_flush_from!(REGION_HASH_COUNTER_VEC, RegionHashCounter);
 
+    pub static ref LOG_LAG_REGION_GAUGE_VEC: IntGaugeVec =
+        register_int_gauge_vec!(
+            "tikv_raftstore_log_lag_region_total",
+            "Total number of region which has log lag.",
+            &["store"]
+        ).unwrap();
     pub static ref REGION_MAX_LOG_LAG: Histogram =
         register_histogram!(
             "tikv_raftstore_log_lag",

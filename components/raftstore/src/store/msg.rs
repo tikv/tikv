@@ -23,6 +23,7 @@ use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
 use crate::store::SnapKey;
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
+use time::Timespec;
 
 use super::{AbstractPeer, RegionSnapshot};
 
@@ -572,6 +573,7 @@ where
     Tick(StoreTick),
     Start {
         store: metapb::Store,
+        start_time: Timespec,
     },
 
     /// Asks the store to update replication mode.
@@ -611,7 +613,7 @@ where
                 start_key, end_key
             ),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
-            StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
+            StoreMsg::Start { ref store, .. } => write!(fmt, "Start store {:?}", store),
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),

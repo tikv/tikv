@@ -1219,6 +1219,16 @@ where
                 self.fsm.peer.heartbeat_pd(self.ctx);
                 self.register_pd_heartbeat_tick();
                 self.register_raft_gc_log_tick();
+            } else if !self.fsm.peer.in_store_log_lag.is_empty() {
+                // clean all store log lag record after transferring leader
+                for peer_id in self.fsm.peer.in_store_log_lag.iter() {
+                    let peer = self.fsm.peer.get_peer_from_cache(*peer_id).unwrap();
+                    let store_id = peer.get_store_id();
+                    let mut meta = self.ctx.store_meta.lock().unwrap();
+                    let count = meta.store_log_lag.entry(store_id).or_insert(0);
+                    *count -= 1;
+                }
+                self.fsm.peer.in_store_log_lag.clear();
             }
         }
     }
@@ -3929,9 +3939,42 @@ where
         let truncated_idx = self.fsm.peer.get_store().truncated_index();
         let last_idx = self.fsm.peer.get_store().last_index();
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
+
         for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
+            }
+
+            let lag = last_idx - p.matched;
+            // use a threshold to not update it too frequently.
+            let diff = match (
+                self.fsm.peer.in_store_log_lag.contains(&peer_id),
+                lag >= self.ctx.cfg.leader_transfer_max_log_lag && p.matched > truncated_idx, // p.matched > truncated_idx is to exclude the region needing snapshot
+            ) {
+                (true, true) => 0,
+                (true, false) => {
+                    self.fsm.peer.in_store_log_lag.remove(peer_id);
+                    -1
+                }
+                (false, true) => {
+                    self.fsm.peer.in_store_log_lag.insert(*peer_id);
+                    1
+                }
+                (false, false) => 0,
+            };
+            if diff != 0 {
+                let peer = self.fsm.peer.get_peer_from_cache(*peer_id).unwrap();
+                let store_id = peer.get_store_id();
+                let mut meta = self.ctx.store_meta.lock().unwrap();
+                let count = meta.store_log_lag.entry(store_id).or_insert(0);
+                if diff > 0 {
+                    *count += 1;
+                } else {
+                    *count -= 1;
+                }
+                LOG_LAG_REGION_GAUGE_VEC
+                    .with_label_values(&[&store_id.to_string()])
+                    .add(diff);
             }
             if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id) {
                 if alive_cache_idx > p.matched
@@ -3942,15 +3985,17 @@ where
                 }
             }
         }
+
         // When an election happened or a new peer is added, replicated_idx can be 0.
         if replicated_idx > 0 {
+            let lag = last_idx - replicated_idx;
             assert!(
                 last_idx >= replicated_idx,
                 "expect last index {} >= replicated index {}",
                 last_idx,
                 replicated_idx
             );
-            REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
+            REGION_MAX_LOG_LAG.observe(lag as f64);
         }
         self.fsm
             .peer
