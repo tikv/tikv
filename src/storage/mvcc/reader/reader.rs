@@ -723,6 +723,7 @@ pub mod tests {
                 0,
                 for_update_ts,
                 false,
+                false,
                 TimeStamp::zero(),
                 true,
             )

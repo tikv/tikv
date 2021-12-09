@@ -7803,7 +7803,13 @@ mod tests {
         let k1 = Key::from_raw(b"k1");
         storage
             .sched_txn_command(
-                new_acquire_pessimistic_lock_command(vec![(k1.clone(), false)], 10, 10, false),
+                new_acquire_pessimistic_lock_command(
+                    vec![(k1.clone(), false)],
+                    10,
+                    10,
+                    false,
+                    false,
+                ),
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
@@ -7828,7 +7834,13 @@ mod tests {
         // The written in-memory pessimistic lock should be visible, so the new lock request should fail.
         storage
             .sched_txn_command(
-                new_acquire_pessimistic_lock_command(vec![(k1.clone(), false)], 20, 20, false),
+                new_acquire_pessimistic_lock_command(
+                    vec![(k1.clone(), false)],
+                    20,
+                    20,
+                    false,
+                    false,
+                ),
                 Box::new(move |res| {
                     tx.send(res).unwrap();
                 }),
@@ -7879,7 +7891,13 @@ mod tests {
         let k1 = Key::from_raw(b"k1");
         storage
             .sched_txn_command(
-                new_acquire_pessimistic_lock_command(vec![(k1.clone(), false)], 10, 10, false),
+                new_acquire_pessimistic_lock_command(
+                    vec![(k1.clone(), false)],
+                    10,
+                    10,
+                    false,
+                    false,
+                ),
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
