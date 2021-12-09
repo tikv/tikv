@@ -7,8 +7,13 @@ edition = "2018"
 name = "playground"
 path = "bin/playground.rs"
 
-[dependencies]
+[features]
+default = ["test-engines-rocksdb"]
+test-engines-rocksdb = [
+  "tikv/test-engines-rocksdb",
+]
 
+[dependencies]
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
 async-trait = { version = "0.1" }
@@ -20,8 +25,15 @@ tokio-stream = "0.1"
 protobuf = { version = "2.8", features = ["bytes"] }
 regex = "1"
 tikv_util = {path = "../tikv_util"}
+tikv_alloc = {path = "../tikv_alloc"}
 lazy_static = "1.4"
 futures = "0.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 hex = "0.4"
+engine_rocks = { path = "../engine_rocks", default-features = false }
+engine_traits = { path = "../engine_traits", default-features = false }
+raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
+raftstore = { path = "../raftstore", default-features = false }
+tikv = { path = "../../", default-features = false }
+online_config = { path = "../online_config" }

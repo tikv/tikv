@@ -16,6 +16,7 @@ use tokio_stream::StreamExt;
 use crate::errors::{Error, Result};
 
 /// Some operations over stream backup metadata key space.
+#[derive(Clone)]
 pub struct MetadataClient<Store> {
     store_id: u64,
     pub(crate) meta_store: Store,

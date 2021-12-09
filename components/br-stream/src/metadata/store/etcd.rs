@@ -20,6 +20,15 @@ use async_trait::async_trait;
 #[derive(Clone)]
 pub struct EtcdStore(Arc<Mutex<etcd_client::Client>>);
 
+impl EtcdStore {
+    pub fn connect<E: AsRef<str>, S: AsRef<[E]>>(endpoints: S) -> Self {
+        // TODO remove block_on
+        let cli =
+            futures::executor::block_on(etcd_client::Client::connect(&endpoints, None)).unwrap();
+        Self(Arc::new(Mutex::new(cli)))
+    }
+}
+
 impl From<etcd_client::Client> for EtcdStore {
     fn from(cli: etcd_client::Client) -> Self {
         Self(Arc::new(Mutex::new(cli)))
