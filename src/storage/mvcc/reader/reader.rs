@@ -579,7 +579,7 @@ pub mod tests {
             commit_ts: impl Into<TimeStamp>,
         ) {
             let start_ts = start_ts.into();
-            let m = Mutation::Put((Key::from_raw(pk), vec![]));
+            let m = Mutation::make_put(Key::from_raw(pk), vec![]);
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
@@ -591,7 +591,7 @@ pub mod tests {
             commit_ts: impl Into<TimeStamp>,
         ) {
             let start_ts = start_ts.into();
-            let m = Mutation::Lock(Key::from_raw(pk));
+            let m = Mutation::make_lock(Key::from_raw(pk));
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
@@ -603,7 +603,7 @@ pub mod tests {
             commit_ts: impl Into<TimeStamp>,
         ) {
             let start_ts = start_ts.into();
-            let m = Mutation::Delete(Key::from_raw(pk));
+            let m = Mutation::make_delete(Key::from_raw(pk));
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
@@ -696,6 +696,7 @@ pub mod tests {
                 false,
                 0,
                 for_update_ts,
+                false,
                 false,
                 TimeStamp::zero(),
                 true,
@@ -950,25 +951,25 @@ pub mod tests {
         let mut engine = RegionEngine::new(&db, &region);
 
         let (k, v) = (b"k", b"v");
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.prewrite(m, k, 1);
         engine.commit(k, 1, 10);
 
         engine.rollback(k, 5);
         engine.rollback(k, 20);
 
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.prewrite(m, k, 25);
         engine.commit(k, 25, 30);
 
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.prewrite(m, k, 35);
         engine.commit(k, 35, 40);
 
         // Overlapped rollback on the commit record at 40.
         engine.rollback(k, 40);
 
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 45, 45);
         engine.prewrite_pessimistic_lock(m, k, 45);
         engine.commit(k, 45, 50);
@@ -1073,7 +1074,7 @@ pub mod tests {
 
         let (k, v) = (b"k", b"v");
         let key = Key::from_raw(k);
-        let m = Mutation::Put((key.clone(), v.to_vec()));
+        let m = Mutation::make_put(key.clone(), v.to_vec());
 
         // txn: start_ts = 2, commit_ts = 3
         engine.acquire_pessimistic_lock(key.clone(), k, 2, 2);
@@ -1114,7 +1115,7 @@ pub mod tests {
         let mut engine = RegionEngine::new(&db, &region);
 
         let (k, v) = (b"k", b"v");
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.prewrite(m.clone(), k, 1);
         engine.commit(k, 1, 5);
 
@@ -1136,7 +1137,7 @@ pub mod tests {
 
         // Timestamp overlap with the previous transaction.
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 10, 18);
-        engine.prewrite_pessimistic_lock(Mutation::Lock(Key::from_raw(k)), k, 10);
+        engine.prewrite_pessimistic_lock(Mutation::make_lock(Key::from_raw(k)), k, 10);
         engine.commit(k, 10, 20);
 
         engine.prewrite(m, k, 23);
@@ -1212,7 +1213,7 @@ pub mod tests {
 
         // Test seek_write should not see the next key.
         let (k2, v2) = (b"k2", b"v2");
-        let m2 = Mutation::Put((Key::from_raw(k2), v2.to_vec()));
+        let m2 = Mutation::make_put(Key::from_raw(k2), v2.to_vec());
         engine.prewrite(m2, k2, 1);
         engine.commit(k2, 1, 2);
 
@@ -1256,7 +1257,7 @@ pub mod tests {
         let mut engine = RegionEngine::new(&db, &region);
 
         let (k, v) = (b"k", b"v");
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.prewrite(m, k, 1);
         engine.commit(k, 1, 2);
 
@@ -1266,26 +1267,26 @@ pub mod tests {
 
         engine.delete(k, 8, 9);
 
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.prewrite(m, k, 12);
         engine.commit(k, 12, 14);
 
-        let m = Mutation::Lock(Key::from_raw(k));
+        let m = Mutation::make_lock(Key::from_raw(k));
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 13, 15);
         engine.prewrite_pessimistic_lock(m, k, 13);
         engine.commit(k, 13, 15);
 
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 18, 18);
         engine.prewrite_pessimistic_lock(m, k, 18);
         engine.commit(k, 18, 20);
 
-        let m = Mutation::Lock(Key::from_raw(k));
+        let m = Mutation::make_lock(Key::from_raw(k));
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 17, 21);
         engine.prewrite_pessimistic_lock(m, k, 17);
         engine.commit(k, 17, 21);
 
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.prewrite(m, k, 24);
 
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
@@ -1350,18 +1351,18 @@ pub mod tests {
 
         // Put some locks to the db.
         engine.prewrite(
-            Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
+            Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             b"k1",
             5,
         );
         engine.prewrite(
-            Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
+            Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             b"k1",
             10,
         );
-        engine.prewrite(Mutation::Delete(Key::from_raw(b"k3")), b"k1", 10);
-        engine.prewrite(Mutation::Lock(Key::from_raw(b"k3\x00")), b"k1", 10);
-        engine.prewrite(Mutation::Delete(Key::from_raw(b"k4")), b"k1", 12);
+        engine.prewrite(Mutation::make_delete(Key::from_raw(b"k3")), b"k1", 10);
+        engine.prewrite(Mutation::make_lock(Key::from_raw(b"k3\x00")), b"k1", 10);
+        engine.prewrite(Mutation::make_delete(Key::from_raw(b"k4")), b"k1", 12);
         engine.acquire_pessimistic_lock(Key::from_raw(b"k5"), b"k1", 10, 12);
         engine.acquire_pessimistic_lock(Key::from_raw(b"k6"), b"k1", 12, 12);
 

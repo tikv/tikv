@@ -749,7 +749,7 @@ pub(crate) mod tests {
             &mut txn,
             &mut reader,
             &txn_props(10.into(), pk, CommitKind::TwoPc, None, 0, false),
-            Mutation::Put((key.clone(), v.to_vec())),
+            Mutation::make_put(key.clone(), v.to_vec()),
             &None,
             false,
         )
@@ -794,7 +794,7 @@ pub(crate) mod tests {
                 &mut txn,
                 &mut reader,
                 &txn_props(5.into(), key, CommitKind::TwoPc, None, 0, false),
-                Mutation::Put((Key::from_raw(key), value.to_vec())),
+                Mutation::make_put(Key::from_raw(key), value.to_vec()),
                 &None,
                 false,
             )
@@ -808,7 +808,7 @@ pub(crate) mod tests {
             &mut txn,
             &mut reader,
             &txn_props(5.into(), key, CommitKind::TwoPc, None, 0, true),
-            Mutation::Put((Key::from_raw(key), value.to_vec())),
+            Mutation::make_put(Key::from_raw(key), value.to_vec()),
             &None,
             false,
         )
@@ -1041,6 +1041,7 @@ pub(crate) mod tests {
                     expected_lock_info.get_lock_ttl(),
                     expected_lock_info.get_lock_for_update_ts(),
                     false,
+                    false,
                     TimeStamp::zero(),
                 );
             }
@@ -1196,7 +1197,7 @@ pub(crate) mod tests {
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut txn = MvccTxn::new(TimeStamp::new(2), cm.clone());
             let mut reader = SnapshotReader::new(TimeStamp::new(2), snapshot, true);
-            let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
+            let mutation = Mutation::make_put(Key::from_raw(b"key"), b"value".to_vec());
             let (min_commit_ts, _) = prewrite(
                 &mut txn,
                 &mut reader,
@@ -1253,7 +1254,7 @@ pub(crate) mod tests {
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut txn = MvccTxn::new(TimeStamp::new(2), cm.clone());
             let mut reader = SnapshotReader::new(TimeStamp::new(2), snapshot, true);
-            let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
+            let mutation = Mutation::make_put(Key::from_raw(b"key"), b"value".to_vec());
             let (min_commit_ts, _) = prewrite(
                 &mut txn,
                 &mut reader,
@@ -1304,12 +1305,14 @@ pub(crate) mod tests {
         let cm = ConcurrencyManager::new(42.into());
 
         // Simulate that min_commit_ts is pushed forward larger than latest_ts
-        must_acquire_pessimistic_lock_impl(&engine, b"key", b"key", 2, false, 20000, 2, false, 100);
+        must_acquire_pessimistic_lock_impl(
+            &engine, b"key", b"key", 2, false, 20000, 2, false, false, 100,
+        );
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(TimeStamp::new(2), cm);
         let mut reader = SnapshotReader::new(TimeStamp::new(2), snapshot, true);
-        let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
+        let mutation = Mutation::make_put(Key::from_raw(b"key"), b"value".to_vec());
         let (min_commit_ts, _) = prewrite(
             &mut txn,
             &mut reader,
