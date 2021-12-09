@@ -532,33 +532,33 @@ impl<'de> Deserialize<'de> for ReadableDuration {
     }
 }
 
-fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
-    fn normalize(path: &Path) -> PathBuf {
-        use std::path::Component;
-        let mut components = path.components().peekable();
-        let mut ret = PathBuf::new();
+pub fn normalize_path<P: AsRef<Path>>(path: P) -> PathBuf {
+    use std::path::Component;
+    let mut components = path.as_ref().components().peekable();
+    let mut ret = PathBuf::new();
 
-        while let Some(c @ (Component::Prefix(..) | Component::RootDir)) =
-            components.peek().cloned()
-        {
-            components.next();
-            ret.push(c.as_os_str());
-        }
-
-        for component in components {
-            match component {
-                Component::Prefix(..) | Component::RootDir => unreachable!(),
-                Component::CurDir => {}
-                c @ Component::ParentDir => {
-                    if !ret.pop() {
-                        ret.push(c.as_os_str());
-                    }
-                }
-                Component::Normal(c) => ret.push(c),
-            }
-        }
-        ret
+    while let Some(c @ (Component::Prefix(..) | Component::RootDir)) = components.peek().cloned() {
+        components.next();
+        ret.push(c.as_os_str());
     }
+
+    for component in components {
+        match component {
+            Component::Prefix(..) | Component::RootDir => unreachable!(),
+            Component::CurDir => {}
+            c @ Component::ParentDir => {
+                if !ret.pop() {
+                    ret.push(c.as_os_str());
+                }
+            }
+            Component::Normal(c) => ret.push(c),
+        }
+    }
+    ret
+}
+
+/// Normalizes the path and canonicalizes its longest physically existing sub-path.
+fn canonicalize_non_existing_path<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     fn try_canonicalize_normalized_path(path: &Path) -> std::io::Result<PathBuf> {
         use std::path::Component;
         let mut components = path.components().peekable();
@@ -606,97 +606,13 @@ fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
         }
         Ok(ret)
     }
-    try_canonicalize_normalized_path(&normalize(path.as_ref()))
-}
-
-#[macro_export]
-macro_rules! numeric_enum_serializing_mod {
-    ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
-        pub mod $name {
-            use std::fmt;
-
-            use serde::{Serializer, Deserializer};
-            use serde::de::{self, Unexpected, Visitor};
-            use super::$enum;
-            use case_macros::*;
-
-            pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
-                where S: Serializer
-            {
-                match mode {
-                    $( $enum::$variant => serializer.serialize_i64($value as i64), )*
-                }
-            }
-
-            pub fn deserialize<'de, D>(deserializer: D) -> Result<$enum, D::Error>
-                where D: Deserializer<'de>
-            {
-                struct EnumVisitor;
-
-                impl<'de> Visitor<'de> for EnumVisitor {
-                    type Value = $enum;
-
-                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                        write!(formatter, concat!("valid ", stringify!($enum)))
-                    }
-
-                    fn visit_i64<E>(self, value: i64) -> Result<$enum, E>
-                        where E: de::Error
-                    {
-                        match value {
-                            $( $value => Ok($enum::$variant), )*
-                            _ => Err(E::invalid_value(Unexpected::Signed(value), &self))
-                        }
-                    }
-
-                    fn visit_str<E>(self, value: &str) -> Result<$enum, E>
-                        where E: de::Error
-                    {
-                        match value {
-                            $(kebab_case!($variant) => Ok($enum::$variant), )*
-                            _ => Err(E::invalid_value(Unexpected::Str(value), &self))
-                        }
-                    }
-                }
-
-                deserializer.deserialize_any(EnumVisitor)
-            }
-
-            #[cfg(test)]
-            mod tests {
-                use toml;
-                use super::$enum;
-                use serde::{Deserialize, Serialize};
-
-                #[test]
-                fn test_serde() {
-                    #[derive(Serialize, Deserialize, PartialEq)]
-                    struct EnumHolder {
-                        #[serde(with = "super")]
-                        e: $enum,
-                    }
-
-                    let cases = vec![
-                        $(($enum::$variant, $value), )*
-                    ];
-                    for (e, v) in cases {
-                        let holder = EnumHolder { e };
-                        let res = toml::to_string(&holder).unwrap();
-                        let exp = format!("e = {}\n", v);
-                        assert_eq!(res, exp);
-                        let h: EnumHolder = toml::from_str(&exp).unwrap();
-                        assert!(h == holder);
-                    }
-                }
-            }
-        }
-    }
+    try_canonicalize_normalized_path(&normalize_path(path))
 }
 
 /// Normalizes the path and canonicalizes its longest physically existing sub-path.
 fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     match path.as_ref().canonicalize() {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_fallback(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_non_existing_path(path),
         other => other,
     }
 }
@@ -706,11 +622,7 @@ pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
 }
 
 pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
-    let path = Path::new(path);
-    let mut path = canonicalize_imp(path)?;
-    if !sub_path.is_empty() {
-        path = path.join(Path::new(sub_path));
-    }
+    let path = canonicalize_imp(Path::new(path).join(Path::new(sub_path)))?;
     if path.exists() && path.is_file() {
         return Err(format!("{}/{} is not a directory!", path.display(), sub_path).into());
     }
@@ -1420,6 +1332,90 @@ impl TomlWriter {
     }
 }
 
+#[macro_export]
+macro_rules! numeric_enum_serializing_mod {
+    ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
+        pub mod $name {
+            use std::fmt;
+
+            use serde::{Serializer, Deserializer};
+            use serde::de::{self, Unexpected, Visitor};
+            use super::$enum;
+            use case_macros::*;
+
+            pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
+                where S: Serializer
+            {
+                match mode {
+                    $( $enum::$variant => serializer.serialize_i64($value as i64), )*
+                }
+            }
+
+            pub fn deserialize<'de, D>(deserializer: D) -> Result<$enum, D::Error>
+                where D: Deserializer<'de>
+            {
+                struct EnumVisitor;
+
+                impl<'de> Visitor<'de> for EnumVisitor {
+                    type Value = $enum;
+
+                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                        write!(formatter, concat!("valid ", stringify!($enum)))
+                    }
+
+                    fn visit_i64<E>(self, value: i64) -> Result<$enum, E>
+                        where E: de::Error
+                    {
+                        match value {
+                            $( $value => Ok($enum::$variant), )*
+                            _ => Err(E::invalid_value(Unexpected::Signed(value), &self))
+                        }
+                    }
+
+                    fn visit_str<E>(self, value: &str) -> Result<$enum, E>
+                        where E: de::Error
+                    {
+                        match value {
+                            $(kebab_case!($variant) => Ok($enum::$variant), )*
+                            _ => Err(E::invalid_value(Unexpected::Str(value), &self))
+                        }
+                    }
+                }
+
+                deserializer.deserialize_any(EnumVisitor)
+            }
+
+            #[cfg(test)]
+            mod tests {
+                use toml;
+                use super::$enum;
+                use serde::{Deserialize, Serialize};
+
+                #[test]
+                fn test_serde() {
+                    #[derive(Serialize, Deserialize, PartialEq)]
+                    struct EnumHolder {
+                        #[serde(with = "super")]
+                        e: $enum,
+                    }
+
+                    let cases = vec![
+                        $(($enum::$variant, $value), )*
+                    ];
+                    for (e, v) in cases {
+                        let holder = EnumHolder { e };
+                        let res = toml::to_string(&holder).unwrap();
+                        let exp = format!("e = {}\n", v);
+                        assert_eq!(res, exp);
+                        let h: EnumHolder = toml::from_str(&exp).unwrap();
+                        assert!(h == holder);
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::File;
@@ -1622,7 +1618,7 @@ mod tests {
         let cases = vec![".", "/../../", "./../"];
         for case in &cases {
             assert_eq!(
-                Path::new(&canonicalize_fallback(case).unwrap()),
+                Path::new(&canonicalize_non_existing_path(case).unwrap()),
                 Path::new(case).canonicalize().unwrap(),
             );
         }
@@ -1641,22 +1637,21 @@ mod tests {
         };
         for first in nodes {
             for second in nodes {
-                let path = format!(
-                    "{}/{}/../{}/non_existing",
-                    tmp_dir.to_str().unwrap(),
-                    first,
-                    second
-                );
-                let res_path = canonicalize_path(&path).unwrap();
+                let base_path = format!("{}/{}/..", tmp_dir.to_str().unwrap(), first,);
+                let sub_path = format!("{}/non_existing", second);
+                let full_path = format!("{}/{}", &base_path, &sub_path);
+                let res_path1 = canonicalize_path(&full_path).unwrap();
+                let res_path2 = canonicalize_sub_path(&base_path, &sub_path).unwrap();
+                assert_eq!(Path::new(&res_path1), Path::new(&res_path2));
                 // resolve to second/non_existing
                 if *second == "non_existing" {
                     assert_eq!(
-                        Path::new(&res_path),
+                        Path::new(&res_path1),
                         tmp_dir.to_path_buf().join("non_existing/non_existing")
                     );
                 } else {
                     assert_eq!(
-                        Path::new(&res_path),
+                        Path::new(&res_path1),
                         tmp_dir.to_path_buf().join("dir/non_existing")
                     );
                 }

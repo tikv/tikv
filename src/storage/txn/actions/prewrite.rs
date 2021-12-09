@@ -609,7 +609,7 @@ pub mod tests {
             &mut txn,
             &mut reader,
             &props,
-            Mutation::Insert((Key::from_raw(key), value.to_vec())),
+            Mutation::make_insert(Key::from_raw(key), value.to_vec()),
             &None,
             false,
         )?;
@@ -640,7 +640,7 @@ pub mod tests {
             &mut txn,
             &mut reader,
             &optimistic_txn_props(pk, ts),
-            Mutation::CheckNotExists(Key::from_raw(key)),
+            Mutation::make_check_not_exists(Key::from_raw(key)),
             &None,
             true,
         )?;
@@ -662,7 +662,7 @@ pub mod tests {
             &mut txn,
             &mut reader,
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, false),
-            Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
+            Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &Some(vec![b"k2".to_vec()]),
             false,
         )
@@ -675,7 +675,7 @@ pub mod tests {
             &mut txn,
             &mut reader,
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 1, false),
-            Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
+            Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             &Some(vec![]),
             false,
         )
@@ -709,7 +709,7 @@ pub mod tests {
             &mut txn,
             &mut reader,
             &props,
-            Mutation::CheckNotExists(Key::from_raw(b"k0")),
+            Mutation::make_check_not_exists(Key::from_raw(b"k0")),
             &Some(vec![]),
             false,
         )
@@ -728,7 +728,7 @@ pub mod tests {
             &mut txn,
             &mut reader,
             &props,
-            Mutation::CheckNotExists(Key::from_raw(b"k0")),
+            Mutation::make_check_not_exists(Key::from_raw(b"k0")),
             &Some(vec![]),
             false,
         )
@@ -743,7 +743,7 @@ pub mod tests {
             &mut txn,
             &mut reader,
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, false),
-            Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
+            Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &Some(vec![b"k2".to_vec()]),
             false,
         )
@@ -754,9 +754,9 @@ pub mod tests {
 
         for &should_not_write in &[false, true] {
             let mutation = if should_not_write {
-                Mutation::CheckNotExists(Key::from_raw(b"k3"))
+                Mutation::make_check_not_exists(Key::from_raw(b"k3"))
             } else {
-                Mutation::Put((Key::from_raw(b"k3"), b"v1".to_vec()))
+                Mutation::make_put(Key::from_raw(b"k3"), b"v1".to_vec())
             };
 
             // min_commit_ts must be > start_ts
@@ -837,7 +837,7 @@ pub mod tests {
             &mut txn,
             &mut reader,
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, true),
-            Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
+            Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &None,
             false,
         )
@@ -850,7 +850,7 @@ pub mod tests {
             &mut txn,
             &mut reader,
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 1, true),
-            Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
+            Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             &None,
             false,
         )
@@ -895,7 +895,7 @@ pub mod tests {
                 need_old_value: true,
                 is_retry_request: false,
             },
-            Mutation::CheckNotExists(Key::from_raw(key)),
+            Mutation::make_check_not_exists(Key::from_raw(key)),
             &None,
             false,
         )?;
@@ -931,7 +931,7 @@ pub mod tests {
             &mut txn,
             &mut reader,
             &txn_props,
-            Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
+            Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &Some(vec![b"k2".to_vec()]),
             true,
         )
@@ -945,7 +945,7 @@ pub mod tests {
             &mut txn,
             &mut reader,
             &txn_props,
-            Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
+            Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             &Some(vec![]),
             true,
         )
@@ -980,7 +980,7 @@ pub mod tests {
             &mut txn,
             &mut reader,
             &txn_props,
-            Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
+            Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &None,
             true,
         )
@@ -994,7 +994,7 @@ pub mod tests {
             &mut txn,
             &mut reader,
             &txn_props,
-            Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
+            Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             &None,
             true,
         )
@@ -1099,7 +1099,7 @@ pub mod tests {
                 &mut txn,
                 &mut reader,
                 &txn_props,
-                Mutation::CheckNotExists(Key::from_raw(key)),
+                Mutation::make_check_not_exists(Key::from_raw(key)),
                 &None,
                 false,
             );
@@ -1114,7 +1114,7 @@ pub mod tests {
                 &mut txn,
                 &mut reader,
                 &txn_props,
-                Mutation::Insert((Key::from_raw(key), b"value".to_vec())),
+                Mutation::make_insert(Key::from_raw(key), b"value".to_vec()),
                 &None,
                 false,
             );
@@ -1168,7 +1168,7 @@ pub mod tests {
                 &mut txn,
                 &mut reader,
                 &txn_props,
-                Mutation::Put((key.clone(), b"value".to_vec())),
+                Mutation::make_put(key.clone(), b"value".to_vec()),
                 &None,
                 false,
             )
@@ -1325,7 +1325,7 @@ pub mod tests {
                 &mut txn,
                 &mut reader,
                 &txn_props,
-                Mutation::Put((Key::from_raw(b"k1"), b"value".to_vec())),
+                Mutation::make_put(Key::from_raw(b"k1"), b"value".to_vec()),
                 &None,
                 false,
             )
@@ -1378,7 +1378,7 @@ pub mod tests {
             &mut txn,
             &mut reader,
             &txn_props,
-            Mutation::Insert((Key::from_raw(b"k1"), b"v2".to_vec())),
+            Mutation::make_insert(Key::from_raw(b"k1"), b"v2".to_vec()),
             &None,
             false,
         )
@@ -1514,7 +1514,7 @@ pub mod tests {
                     &mut txn,
                     &mut reader,
                     &txn_props,
-                    Mutation::Put((Key::from_raw(key), b"v2".to_vec())),
+                    Mutation::make_put(Key::from_raw(key), b"v2".to_vec()),
                     &None,
                     false,
                 )?;
@@ -1549,7 +1549,7 @@ pub mod tests {
                     &mut txn,
                     &mut reader,
                     &txn_props,
-                    Mutation::Insert((Key::from_raw(key), b"v2".to_vec())),
+                    Mutation::make_insert(Key::from_raw(key), b"v2".to_vec()),
                     &None,
                     false,
                 )?;

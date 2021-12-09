@@ -56,7 +56,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
     storage
         .sched_txn_command(
             commands::Prewrite::new(
-                vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
+                vec![Mutation::make_put(Key::from_raw(b"k"), b"v".to_vec())],
                 b"k".to_vec(),
                 40.into(),
                 20000,
@@ -110,7 +110,7 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
     storage
         .sched_txn_command(
             commands::Prewrite::new(
-                vec![Mutation::Put((Key::from_raw(b"j"), b"v".to_vec()))],
+                vec![Mutation::make_put(Key::from_raw(b"j"), b"v".to_vec())],
                 b"j".to_vec(),
                 10.into(),
                 20000,
@@ -153,7 +153,7 @@ fn test_update_max_ts_before_scan_memory_locks() {
     storage
         .sched_txn_command(
             commands::Prewrite::new(
-                vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
+                vec![Mutation::make_put(Key::from_raw(b"k"), b"v".to_vec())],
                 b"k".to_vec(),
                 10.into(),
                 20000,
@@ -203,7 +203,7 @@ macro_rules! lock_release_test {
             storage
                 .sched_txn_command(
                     commands::Prewrite::new(
-                        vec![Mutation::Put((key.clone(), b"v".to_vec()))],
+                        vec![Mutation::make_put(key.clone(), b"v".to_vec())],
                         b"k".to_vec(),
                         10.into(),
                         20000,
@@ -279,8 +279,8 @@ fn test_max_commit_ts_error() {
         .sched_txn_command(
             commands::Prewrite::new(
                 vec![
-                    Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())),
-                    Mutation::Put((Key::from_raw(b"k2"), b"v".to_vec())),
+                    Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec()),
+                    Mutation::make_put(Key::from_raw(b"k2"), b"v".to_vec()),
                 ],
                 b"k1".to_vec(),
                 10.into(),
@@ -337,8 +337,8 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
 
     cm.update_max_ts(40.into());
     let mutations = vec![
-        Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())),
-        Mutation::Put((Key::from_raw(b"k2"), b"v".to_vec())),
+        Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec()),
+        Mutation::make_put(Key::from_raw(b"k2"), b"v".to_vec()),
     ];
     storage
         .sched_txn_command(
