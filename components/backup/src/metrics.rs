@@ -46,4 +46,16 @@ lazy_static! {
         "The time backup scanner wait for available writer."
     )
     .unwrap();
+    pub static ref BACKUP_SCAN_KV_COUNT : IntCounterVec = register_int_counter_vec!(
+        "tikv_backup_scan_kv_count",
+        "Total number of kvs backed up",
+        &["cf"],
+    )
+    .unwrap();
+    pub static ref BACKUP_SCAN_KV_SIZE : IntCounterVec = register_int_counter_vec!(
+        "tikv_backup_scan_kv_size",
+        "Total size of kvs backed up",
+        &["cf"],
+    )
+    .unwrap();
 }

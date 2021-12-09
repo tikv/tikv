@@ -389,11 +389,21 @@ impl BackupRange {
                 return Err(e);
             }
         }
+        drop(snap_store);
+        let stat = scanner.take_statistics();
+        if start_scan.saturating_elapsed_secs() > 30.0 {
+            warn!("backup scan takes long time.";
+                "take(s)" => %start_scan.saturating_elapsed_secs(),
+                "region" => ?self.region,
+                "start_key" => ?self.start_key,
+                "end_key" => ?self.end_key,
+                "stat" => ?stat,
+            );
+        }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["scan"])
             .observe(start_scan.saturating_elapsed().as_secs_f64());
 
-        drop(snap_store);
         let msg = InMemBackupFiles {
             files: KvWriter::TiDB(writer),
             start_key: next_file_start_key,
@@ -407,7 +417,6 @@ impl BackupRange {
         };
         send_to_worker_with_metrics(&saver, msg).await?;
 
-        let stat = scanner.take_statistics();
         Ok(stat)
     }
 
