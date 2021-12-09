@@ -97,7 +97,7 @@ pub enum StaleState {
 }
 
 #[derive(Debug)]
-struct ProposalQueue<S>
+pub struct ProposalQueue<S>
 where
     S: Snapshot,
 {
@@ -186,6 +186,10 @@ impl<S: Snapshot> ProposalQueue<S> {
         {
             self.queue.shrink_to_fit();
         }
+    }
+
+    pub fn back(&self) -> Option<&Proposal<S>> {
+        self.queue.back()
     }
 }
 
@@ -462,7 +466,7 @@ where
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
 
-    proposals: ProposalQueue<EK::Snapshot>,
+    pub proposals: ProposalQueue<EK::Snapshot>,
     leader_missing_time: Option<Instant>,
     pub leader_lease: Lease,
     pub pending_reads: ReadIndexQueue<EK::Snapshot>,
@@ -3154,7 +3158,7 @@ where
         cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().commit_index())))
     }
 
-    fn pre_read_index(&self) -> Result<()> {
+    pub fn pre_read_index(&self) -> Result<()> {
         fail_point!(
             "before_propose_readindex",
             |s| if s.map_or(true, |s| s.parse().unwrap_or(true)) {

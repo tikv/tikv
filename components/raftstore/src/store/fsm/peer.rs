@@ -1470,30 +1470,47 @@ where
         }
     }
 
+    // If lease expired, we will send a noop read index to renew lease.
     fn try_renew_leader_lease(&mut self) {
-        // If lease expired, we will send a noop read index to renew lease.
-        if self.fsm.peer.is_leader() {
-            let current_time = *self.ctx.current_time.get_or_insert_with(monotonic_raw_now);
-            let next_heartbeat = current_time
-                + self.ctx.cfg.raft_base_tick_interval() * self.ctx.cfg.raft_heartbeat_ticks as i32;
-            // We need to propose a read index request if current lease can't cover till next tick
-            let need_propose = match self.fsm.peer.leader_lease.inspect(Some(next_heartbeat)) {
-                LeaseState::Expired => {
-                    let max_lease = self.ctx.cfg.raft_store_max_leader_lease();
-                    self.fsm.peer.pending_reads.back().map_or(true, |read| {
-                        // If there are read index whose lease can cover till next heartbeat
-                        // then we don't need to propose a new one
-                        read.propose_time + max_lease < next_heartbeat
+        if !self.fsm.peer.is_leader() {
+            return;
+        }
+        if let Err(e) = self.fsm.peer.pre_read_index() {
+            debug!(
+                "prevent unsafe read index to renew leader lease";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => ?e,
+            );
+            return;
+        }
+
+        let current_time = *self.ctx.current_time.get_or_insert_with(monotonic_raw_now);
+        let next_heartbeat = current_time
+            + self.ctx.cfg.raft_base_tick_interval() * self.ctx.cfg.raft_heartbeat_ticks as i32;
+        // We need to propose a read index request if current lease can't cover till next tick
+        let need_propose = match self.fsm.peer.leader_lease.inspect(Some(next_heartbeat)) {
+            LeaseState::Expired => {
+                let max_lease = self.ctx.cfg.raft_store_max_leader_lease();
+                self.fsm.peer.pending_reads.back().map_or(true, |read| {
+                    // If there is any read index whose lease can cover till next heartbeat
+                    // then we don't need to propose a new one
+                    read.propose_time + max_lease < next_heartbeat
+                }) || self.fsm.peer.proposals.back().map_or(true, |proposal| {
+                    // If there is any write whose lease can cover till next heartbeat
+                    // then we don't need to propose a new one
+                    proposal.propose_time.map_or(true, |propose_time| {
+                        propose_time + max_lease < next_heartbeat
                     })
-                }
-                _ => false,
-            };
-            if need_propose {
-                let (id, dropped) = self.fsm.peer.propose_read_index(None, None);
-                if !dropped {
-                    let read_proposal = ReadIndexRequest::noop(id, current_time);
-                    self.fsm.peer.pending_reads.push_back(read_proposal, true);
-                }
+                })
+            }
+            _ => false,
+        };
+        if need_propose {
+            let (id, dropped) = self.fsm.peer.propose_read_index(None, None);
+            if !dropped {
+                let read_proposal = ReadIndexRequest::noop(id, current_time);
+                self.fsm.peer.pending_reads.push_back(read_proposal, true);
             }
         }
     }
