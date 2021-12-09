@@ -57,7 +57,7 @@ impl Router {
                         .range(k..)
                         .next()
                         .filter(|r| key <= &r.1.end[..] && key >= &r.0.0[..])
-                        .map_or(None, |r| Some(r.1.task_name.clone()))
+                        .map(|r| r.1.task_name.clone())
                 },
                 |r| Some(r.1.task_name.clone()),
             )
