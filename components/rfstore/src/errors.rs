@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::store::{PeerMsg};
+use crate::store::PeerMsg;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, metapb};
 use protobuf::ProtobufError;
@@ -40,7 +40,7 @@ pub enum Error {
     StoreNotMatch { to_store_id: u64, my_store_id: u64 },
 
     #[error("region {0} not found")]
-    RegionNotFound(u64),
+    RegionNotFound(u64, Option<PeerMsg>),
 
     #[error("region {0} not initialized yet")]
     RegionNotInitialized(u64),
@@ -138,7 +138,7 @@ impl From<Error> for errorpb::Error {
         errorpb.set_message(format!("{}", err));
 
         match err {
-            Error::RegionNotFound(region_id) => {
+            Error::RegionNotFound(region_id, _) => {
                 errorpb.mut_region_not_found().set_region_id(region_id);
             }
             Error::NotLeader(region_id, leader) => {
@@ -240,7 +240,7 @@ impl ErrorCodeExt for Error {
             Error::ReadIndexNotReady { .. } => error_code::raftstore::READ_INDEX_NOT_READY,
             Error::RaftEntryTooLarge { .. } => error_code::raftstore::ENTRY_TOO_LARGE,
             Error::StoreNotMatch { .. } => error_code::raftstore::STORE_NOT_MATCH,
-            Error::RegionNotFound(_) => error_code::raftstore::REGION_NOT_FOUND,
+            Error::RegionNotFound(..) => error_code::raftstore::REGION_NOT_FOUND,
             Error::NotLeader(..) => error_code::raftstore::NOT_LEADER,
             Error::StaleCommand => error_code::raftstore::STALE_COMMAND,
             Error::RegionNotInitialized(_) => error_code::raftstore::REGION_NOT_INITIALIZED,

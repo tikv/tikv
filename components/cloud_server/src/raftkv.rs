@@ -235,7 +235,7 @@ impl RaftKv {
                         let rid: u64 = rid.parse().unwrap();
                         if rid == region_id { None } else { Some(()) }
                     })
-                    .ok_or_else(|| RaftServerError::RegionNotFound(region_id).into())
+                    .ok_or_else(|| RaftServerError::RegionNotFound(region_id, None).into())
                 });
                 Ok(())
             };

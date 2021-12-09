@@ -91,10 +91,8 @@ pub(crate) struct PeerTick {
 }
 
 pub(crate) const PEER_TICK_RAFT: PeerTick = PeerTick { idx: 0 };
-pub(crate) const PEER_TICK_RAFT_LOG_GC: PeerTick = PeerTick { idx: 1 };
-pub(crate) const PEER_TICK_SPLIT_CHECK: PeerTick = PeerTick { idx: 2 };
-pub(crate) const PEER_TICK_PD_HEARTBEAT: PeerTick = PeerTick { idx: 3 };
-pub(crate) const PEER_TICK_STALE_STATE_CHECK: PeerTick = PeerTick { idx: 4 };
+pub(crate) const PEER_TICK_SPLIT_CHECK: PeerTick = PeerTick { idx: 1 };
+pub(crate) const PEER_TICK_PD_HEARTBEAT: PeerTick = PeerTick { idx: 2 };
 
 #[derive(Eq, PartialEq)]
 pub struct StoreTick {
@@ -102,4 +100,3 @@ pub struct StoreTick {
 }
 
 pub(crate) const STORE_TICK_PD_HEARTBEAT: StoreTick = StoreTick { idx: 0 };
-pub(crate) const STORE_TICK_CONSISTENCY_CHECK: StoreTick = StoreTick { idx: 1 };

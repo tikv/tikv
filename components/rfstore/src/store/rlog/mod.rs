@@ -1,174 +1,251 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub mod custom;
-
-use core::panicking::panic;
-use bytes::{Buf, Bytes};
-pub use custom::*;
+use byteorder::{ByteOrder, LittleEndian};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use kvproto::raft_cmdpb;
-use kvproto::raft_cmdpb::{RaftCmdRequest, Request, CmdType};
+use kvproto::raft_cmdpb::{CmdType, CustomRequest, RaftCmdRequest, Request};
 use protobuf::Message;
+use std::mem;
 
+pub(crate) fn get_custom_log(req: &RaftCmdRequest) -> Option<CustomRaftLog> {
+    if !req.has_custom_request() {
+        return None;
+    }
+    Some(CustomRaftLog {
+        data: req.get_custom_request().get_data(),
+    })
+}
+
+type CustomRaftlogType = u8;
+
+pub const TYPE_PREWRITE: CustomRaftlogType = 1;
+pub const TYPE_COMMIT: CustomRaftlogType = 2;
+pub const TYPE_ROLLBACK: CustomRaftlogType = 3;
+pub const TYPE_PESSIMISTIC_LOCK: CustomRaftlogType = 4;
+pub const TYPE_PESSIMISTIC_ROLLBACK: CustomRaftlogType = 5;
+pub const TYPE_PRE_SPLIT: CustomRaftlogType = 6;
+pub const TYPE_FLUSH: CustomRaftlogType = 7;
+pub const TYPE_COMPACTION: CustomRaftlogType = 8;
+pub const TYPE_SPLIT_FILES: CustomRaftlogType = 9;
+pub const TYPE_NEX_MEM_TABLE_SIZE: CustomRaftlogType = 10;
+pub const TYPE_DELETE_RANGE: CustomRaftlogType = 11;
+
+const HEADER_SIZE: usize = 2;
+
+// CustomRaftLog is the raft log format for unistore to store Prewrite/Commit/PessimisticLock.
+//  | type(1) | version(1) | entries
+//
+// It reduces the cost of marshal/unmarshal and avoid DB lookup during apply.
 #[derive(Debug)]
-pub enum RaftLog {
-    Request(raft_cmdpb::RaftCmdRequest),
-    Custom(CustomRaftLog),
+pub(crate) struct CustomRaftLog<'a> {
+    pub(crate) data: &'a [u8],
 }
 
-impl RaftLog {
-    pub fn is_conf_change(&self) -> bool {
-        if let RaftLog::Request(cmd) = self {
-            if cmd.has_admin_request() {
-                let admin = cmd.get_admin_request();
-                return admin.has_change_peer() || admin.has_change_peer_v2()
-            }
-        }
-        false
+impl CustomRaftLog<'a> {
+    pub(crate) fn new_from_data(data: &'a [u8]) -> Self {
+        Self { data }
     }
 
-    pub fn get_epoch(&self) -> (u64, u64) {
-        match &self {
-            RaftLog::Request(cmd) => {
-                let epoch = cmd.get_header().get_region_epoch();
-                (epoch.get_version(), epoch.get_conf_ver())
-            },
-            RaftLog::Custom(custom) => {
-                (custom.epoch.ver as u64, custom.epoch.conf_ver as u64)
-            }
-        }
+    pub(crate) fn get_type(&self) -> CustomRaftlogType {
+        self.data[0] as CustomRaftlogType
     }
 
-    pub fn get_store_id(&self) -> u64 {
-        match &self {
-            RaftLog::Request(cmd) => {
-                cmd.get_header().get_peer().store_id
-            },
-            RaftLog::Custom(custom) => {
-                custom.store_id
-            }
+    // F: (key, val)
+    pub(crate) fn iterate_lock<F>(&self, mut f: F)
+    where
+        F: FnMut(&[u8], &[u8]),
+    {
+        let mut i = HEADER_SIZE;
+        while i < self.data.len() {
+            let key_len = LittleEndian::read_u16(&self.data[i..]) as usize;
+            i += 2;
+            let key = &self.data[i..i + key_len];
+            i += key_len;
+            let val_len = LittleEndian::read_u32(&self.data[i..]) as usize;
+            i += 4;
+            let val = &self.data[i..i + val_len];
+            i += val_len;
+            f(key, val)
         }
     }
 
-    pub fn get_term(&self) -> u64 {
-        match &self {
-            RaftLog::Request(cmd) => {
-                cmd.get_header().get_term()
-            },
-            RaftLog::Custom(_) => {
-                0
-            }
+    // F: (key, val, commit_ts)
+    pub(crate) fn iterate_commit<F>(&self, mut f: F)
+    where
+        F: FnMut(&[u8], &[u8], u64),
+    {
+        let mut i = HEADER_SIZE;
+        while i < self.data.len() {
+            let key_len = LittleEndian::read_u16(&self.data[i..]) as usize;
+            i += 2;
+            let key = &self.data[i..i + key_len];
+            i += key_len;
+            let val_len = LittleEndian::read_u32(&self.data[i..]) as usize;
+            i += 4;
+            let val = &self.data[i..i + val_len];
+            i += val_len;
+            let commit_ts = LittleEndian::read_u64(&self.data[i..]);
+            i += 8;
+            f(key, val, commit_ts)
         }
     }
 
-    pub fn get_region_id(&self) -> u64 {
-        match &self {
-            RaftLog::Request(cmd) => {
-                cmd.get_header().get_region_id()
-            },
-            RaftLog::Custom(custom) => {
-                custom.region_id
-            }
+    // F: (key, start_ts, delete_lock)
+    pub(crate) fn iterate_rollback<F>(&self, mut f: F)
+    where
+        F: FnMut(&[u8], u64, bool),
+    {
+        let mut i = HEADER_SIZE;
+        while i < self.data.len() {
+            let key_len = LittleEndian::read_u16(&self.data[i..]) as usize;
+            i += 2;
+            let key = &self.data[i..i + key_len];
+            i += key_len;
+            let start_ts = LittleEndian::read_u64(&self.data[i..]);
+            i += 8;
+            let del = self.data[i];
+            i += 1;
+            f(key, start_ts, del > 0)
         }
     }
 
-    pub fn get_peer_id(&self) -> u64 {
-        match &self {
-            RaftLog::Request(cmd) => {
-                cmd.get_header().get_peer().get_id()
-            },
-            RaftLog::Custom(custom) => {
-                custom.peer_id
-            }
+    pub(crate) fn iterate_keys_only<F>(&self, mut f: F)
+    where
+        F: FnMut(&[u8]),
+    {
+        let mut i = HEADER_SIZE;
+        while i < self.data.len() {
+            let key_len = LittleEndian::read_u16(&self.data[i..]) as usize;
+            i += 2;
+            let key = &self.data[i..i + key_len];
+            i += key_len;
+            f(key)
         }
     }
 
-    pub fn get_cmd_request(&self) -> Option<&RaftCmdRequest> {
-        if let RaftLog::Request(cmd) = self {
-            Some(cmd)
-        } else {
-            None
-        }
+    pub(crate) fn get_change_set(&self) -> crate::Result<kvenginepb::ChangeSet> {
+        let mut cs = kvenginepb::ChangeSet::new();
+        cs.merge_from_bytes(&self.data[HEADER_SIZE..])?;
+        Ok(cs)
     }
 
-    pub fn take_cmd_request(self) -> RaftCmdRequest {
-        match self {
-            RaftLog::Request(cmd) => cmd,
-            RaftLog::Custom(_) => panic!("invalid call")
-        }
-    }
-
-    pub fn get_requests(&self) -> &[Request] {
-        if let RaftLog::Request(cmd) = self {
-            cmd.get_requests()
-        } else {
-            &[]
-        }
-    }
-
-    pub fn get_replica_read(&self) -> bool {
-        if let RaftLog::Request(cmd) = self {
-            cmd.get_header().get_replica_read()
-        } else {
-            false
-        }
-    }
-
-    pub fn has_read_and_write(&self) -> (bool, bool) {
-        let mut has_read = false;
-        let mut has_write = false;
-        match &self {
-            RaftLog::Request(cmd) => {
-                for r in cmd.get_requests() {
-                    match r.get_cmd_type() {
-                        CmdType::Get | CmdType::Snap | CmdType::ReadIndex => has_read = true,
-                        _ => {}
-                    }
-                }
-            },
-            RaftLog::Custom(_) => {
-                has_write = true;
-            }
-        }
-        (has_read, has_write)
-    }
-
-    pub fn is_read_quorum(&self) -> bool {
-        if let RaftLog::Request(cmd) = self {
-            cmd.get_header().get_read_quorum()
-        } else {
-            false
-        }
+    pub(crate) fn get_delete_range(&'a self) -> (&'a [u8], &'a [u8]) {
+        let mut i = HEADER_SIZE;
+        let start_key_len = LittleEndian::read_u16(&self.data[i..]) as usize;
+        i += 2;
+        let start_key = &self.data[i..i + start_key_len];
+        let end_key = &self.data[i + start_key_len..];
+        (start_key, end_key)
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Epoch {
-    ver: u32,
-    conf_ver: u32,
+pub struct CustomBuilder {
+    buf: Vec<u8>,
+    cnt: i32,
 }
 
-impl Epoch {
-    pub fn new(ver: u32, conf_ver: u32) -> Self {
-        Self { ver, conf_ver }
+impl CustomBuilder {
+    pub(crate) fn new() -> Self {
+        Self {
+            buf: vec![0; HEADER_SIZE],
+            cnt: 0,
+        }
     }
 
-    pub fn version(&self) -> u32 {
-        self.ver
+    pub(crate) fn append_lock(&mut self, key: &[u8], val: &[u8]) {
+        self.buf.put_u16_le(key.len() as u16);
+        self.buf.extend_from_slice(key);
+        self.buf.put_u32_le(val.len() as u32);
+        self.buf.extend_from_slice(val);
+        self.cnt += 1;
     }
 
-    pub fn conf_version(&self) -> u32 {
-        self.conf_ver
+    pub(crate) fn append_commit(&mut self, key: &[u8], val: &[u8], commit_ts: u64) {
+        self.buf.put_u16_le(key.len() as u16);
+        self.buf.extend_from_slice(key);
+        self.buf.put_u32_le(val.len() as u32);
+        self.buf.extend_from_slice(val);
+        self.buf.put_u64_le(commit_ts);
+        self.cnt += 1;
+    }
+
+    pub(crate) fn append_rollback(&mut self, key: &[u8], start_ts: u64, delete_lock: bool) {
+        self.buf.put_u16_le(key.len() as u16);
+        self.buf.extend_from_slice(key);
+        self.buf.put_u64_le(start_ts);
+        self.buf.put_u8(delete_lock as u8);
+        self.cnt += 1;
+    }
+
+    pub(crate) fn append_key_only(&mut self, key: &[u8]) {
+        self.buf.put_u16_le(key.len() as u16);
+        self.buf.extend_from_slice(key);
+        self.cnt += 1;
+    }
+
+    pub(crate) fn set_change_set(&mut self, cs: kvenginepb::ChangeSet) {
+        assert_eq!(self.buf.len(), HEADER_SIZE);
+        let mut tp: CustomRaftlogType = 0;
+        if cs.has_flush() {
+            tp = TYPE_FLUSH;
+        } else if cs.has_compaction() {
+            tp = TYPE_COMPACTION;
+        } else if cs.has_pre_split() {
+            tp = TYPE_PRE_SPLIT;
+        } else if cs.has_split_files() {
+            tp = TYPE_SPLIT_FILES;
+        } else if cs.get_next_mem_table_size() > 0 {
+            tp = TYPE_NEX_MEM_TABLE_SIZE;
+        }
+        assert_ne!(tp, 0);
+        let data = cs.write_to_bytes().unwrap();
+        self.buf.extend_from_slice(&data);
+        self.set_type(tp);
+    }
+
+    pub(crate) fn set_type(&mut self, tp: CustomRaftlogType) {
+        self.buf[0] = tp as u8;
+    }
+
+    pub(crate) fn get_type(&self) -> CustomRaftlogType {
+        self.buf[0] as CustomRaftlogType
+    }
+
+    pub(crate) fn build(&mut self) -> CustomRequest {
+        let mut req = CustomRequest::default();
+        let buf = mem::take(&mut self.buf);
+        req.set_data(buf);
+        req
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.cnt as usize
     }
 }
 
-pub fn decode_log(entry_data: Bytes) -> RaftLog {
-    let rlog: RaftLog;
-    if entry_data[0] == CUSTOM_FLAG {
-        rlog = RaftLog::Custom(CustomRaftLog::new_from_data(entry_data))
-    } else {
-        let mut req = raft_cmdpb::RaftCmdRequest::default();
-        req.merge_from_bytes(entry_data.chunk());
-        rlog = RaftLog::Request(req)
+pub fn is_engine_meta_log(data: &[u8]) -> bool {
+    match data[0] as CustomRaftlogType {
+        TYPE_FLUSH
+        | TYPE_COMPACTION
+        | TYPE_PRE_SPLIT
+        | TYPE_SPLIT_FILES
+        | TYPE_NEX_MEM_TABLE_SIZE => true,
+        _ => false,
     }
-    rlog
+}
+
+pub fn is_background_change_set(data: &[u8]) -> bool {
+    match data[0] as CustomRaftlogType {
+        TYPE_FLUSH | TYPE_COMPACTION | TYPE_SPLIT_FILES => true,
+        _ => false,
+    }
+}
+
+pub fn is_pre_split_log(data: &[u8]) -> bool {
+    data[0] == TYPE_PRE_SPLIT as u8
+}
+
+#[test]
+fn test_run() {
+    println!("run")
 }

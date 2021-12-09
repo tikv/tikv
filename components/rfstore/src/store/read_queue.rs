@@ -3,9 +3,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::{cmp, mem, u64, usize};
 
-use raftstore::store::metrics::*;
 use crate::store::{apply, Callback, Config};
 use crate::Result;
+use raftstore::store::metrics::*;
 
 use engine_traits::Snapshot;
 use kvproto::kvrpcpb::LockInfo;

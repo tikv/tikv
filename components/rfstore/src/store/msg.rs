@@ -3,12 +3,13 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
 
 use crate::store::{ApplyMetrics, ApplyResult, ExecResult, Proposal, RegionSnapshot, StoreTick};
 use bytes::Bytes;
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
+use kvproto::kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::{metapb, pdpb, raft_cmdpb, raft_serverpb as rspb};
 use raft_proto::eraftpb;
@@ -19,13 +20,13 @@ use tikv_util::escape;
 use super::{rlog, Peer, RaftApplyState};
 
 #[derive(Debug)]
-pub(crate) enum PeerMsg {
+pub enum PeerMsg {
     RaftMessage(rspb::RaftMessage),
     RaftCommand(RaftCommand),
     Tick,
     Start,
     ApplyRes(MsgApplyResult),
-    DestroyRes{
+    DestroyRes {
         // ID of peer that has been destroyed.
         peer_id: u64,
         // Whether destroy request is from its target region's snapshot
@@ -35,16 +36,14 @@ pub(crate) enum PeerMsg {
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg),
-    /// Ask region to report a heartbeat to PD.
-    HeartbeatPd,
+    GenerateEngineChangeSet(kvenginepb::ChangeSet),
+    WaitFollowerSplitFiles(MsgWaitFollowerSplitFiles),
 }
 
 impl PeerMsg {
     pub(crate) fn take_callback(&mut self) -> Callback {
-        match &mut self {
-            PeerMsg::RaftCommand(cmd) => {
-                std::mem::replace(&mut cmd.callback, Callback::None)
-            }
+        match self {
+            PeerMsg::RaftCommand(cmd) => std::mem::replace(&mut cmd.callback, Callback::None),
             _ => Callback::None,
         }
     }
@@ -61,7 +60,7 @@ pub(crate) enum ApplyMsg {
 }
 
 pub enum StoreMsg {
-    Tick(StoreTick),
+    Tick,
     Start { store: metapb::Store },
     StoreUnreachable { store_id: u64 },
     RaftMessage(rspb::RaftMessage),
@@ -69,35 +68,18 @@ pub enum StoreMsg {
 }
 
 #[derive(Debug)]
-pub enum MergeResultKind {
-    /// Its target peer applys `CommitMerge` log.
-    FromTargetLog,
-    /// Its target peer receives snapshot.
-    /// In step 1, this peer should mark `pending_move` is true and destroy its apply fsm.
-    /// Then its target peer will remove this peer data and apply snapshot atomically.
-    FromTargetSnapshotStep1,
-    /// In step 2, this peer should destroy its peer fsm.
-    FromTargetSnapshotStep2,
-    /// This peer is no longer needed by its target peer so it can be destroyed by itself.
-    /// It happens if and only if its target peer has been removed by conf change.
-    Stale,
-}
-
-#[derive(Debug)]
 pub struct RaftCommand {
     pub send_time: Instant,
-    pub request: rlog::RaftLog,
+    pub request: RaftCmdRequest,
     pub callback: Callback,
-    pub deadline: Option<Deadline>,
 }
 
 impl RaftCommand {
-    pub fn new(request: rlog::RaftLog, cb: Callback) -> Self {
+    pub fn new(request: RaftCmdRequest, callback: Callback) -> Self {
         Self {
-            send_time: Instant::now(),
             request,
-            callback: cb,
-            deadline: None,
+            callback,
+            send_time: Instant::now(),
         }
     }
 }
@@ -107,26 +89,14 @@ pub struct MsgApply {
     pub(crate) region_id: u64,
     pub(crate) term: u64,
     pub(crate) entries: Vec<eraftpb::Entry>,
-    pub(crate) soft_state: Option<raft::SoftState>,
+    pub(crate) new_role: Option<raft::StateRole>,
     pub(crate) cbs: Vec<Proposal>,
 }
 
 #[derive(Debug)]
-pub(crate) struct MsgApplyResult {
+pub struct MsgApplyResult {
     pub(crate) results: VecDeque<ExecResult>,
     pub(crate) apply_state: RaftApplyState,
-    pub(crate) merged: bool,
-    pub(crate) metrics: ApplyMetrics,
-}
-
-pub struct MsgMergeResult {
-    pub target_peer: Box<metapb::Peer>,
-    pub state: bool,
-}
-
-pub struct MsgWaitFollowerSplitFiles {
-    split_keys: Vec<Bytes>,
-    callback: Callback,
 }
 
 #[derive(Debug)]
@@ -145,6 +115,21 @@ impl MsgRegistration {
             apply_state: peer.get_store().apply_state(),
             region: peer.get_store().region().clone(),
         }
+    }
+}
+
+pub struct MsgWaitFollowerSplitFiles {
+    pub(crate) split_keys: Vec<Bytes>,
+    pub(crate) callback: Callback,
+}
+
+impl Debug for MsgWaitFollowerSplitFiles {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "wait follower split files split keys: {:?}",
+            self.split_keys,
+        )
     }
 }
 
@@ -222,6 +207,30 @@ impl Callback {
         }
     }
 
+    pub fn has_proposed_cb(&mut self) -> bool {
+        if let Callback::Write { proposed_cb, .. } = self {
+            proposed_cb.is_some()
+        } else {
+            false
+        }
+    }
+
+    pub fn invoke_proposed(&mut self) {
+        if let Callback::Write { proposed_cb, .. } = self {
+            if let Some(cb) = proposed_cb.take() {
+                cb()
+            }
+        }
+    }
+
+    pub fn invoke_committed(&mut self) {
+        if let Callback::Write { committed_cb, .. } = self {
+            if let Some(cb) = committed_cb.take() {
+                cb()
+            }
+        }
+    }
+
     pub fn invoke_read(self, args: ReadResponse) {
         match self {
             Callback::Read(read) => read(args),
@@ -256,11 +265,6 @@ pub enum SignificantMsg {
         region_id: u64,
         to_peer_id: u64,
     },
-    StoreResolved {
-        store_id: u64,
-        group_id: u64,
-    },
-    LeaderCallback(Callback),
 }
 
 /// Message that will be sent to a peer.
@@ -283,42 +287,11 @@ pub enum CasualMessage {
         policy: pdpb::CheckPolicy,
         source: &'static str,
     },
-
-    /// Hash result of ComputeHash command.
-    ComputeHashResult {
-        index: u64,
-        context: Vec<u8>,
-        hash: Vec<u8>,
-    },
-
-    /// Indicate a target region is overlapped.
-    RegionOverlapped,
-
-    /// Generally Raft leader keeps as more as possible logs for followers,
-    /// however `ForceCompactRaftLogs` only cares the leader itself.
-    ForceCompactRaftLogs,
-
-    /// Region info from PD
-    QueryRegionLeaderResp {
-        region: metapb::Region,
-        leader: metapb::Peer,
-    },
 }
 
 impl fmt::Debug for CasualMessage {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CasualMessage::ComputeHashResult {
-                index,
-                context,
-                ref hash,
-            } => write!(
-                fmt,
-                "ComputeHashResult [index: {}, context: {}, hash: {}]",
-                index,
-                log_wrappers::Value::key(&context),
-                escape(hash)
-            ),
             CasualMessage::SplitRegion {
                 ref split_keys,
                 source,
@@ -332,9 +305,6 @@ impl fmt::Debug for CasualMessage {
             CasualMessage::HalfSplitRegion { source, .. } => {
                 write!(fmt, "Half Split from {}", source)
             }
-            CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
-            CasualMessage::ForceCompactRaftLogs => write!(fmt, "ForceCompactRaftLogs"),
-            CasualMessage::QueryRegionLeaderResp { .. } => write!(fmt, "QueryRegionLeaderResp"),
         }
     }
 }

@@ -1,10 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::RaftRouter;
-use std::collections::{HashMap, VecDeque};
-use std::fmt::{self, Display, Formatter};
 use bytes::Bytes;
 use kvproto::metapb;
+use std::collections::{HashMap, VecDeque};
+use std::fmt::{self, Display, Formatter};
 use tikv_util::mpsc::{Receiver, Sender};
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
@@ -28,7 +28,7 @@ pub enum Task {
         peer: metapb::Peer,
         split_keys: Vec<Bytes>,
         stage: kvenginepb::SplitStage,
-    }
+    },
 }
 
 impl Task {
@@ -61,6 +61,9 @@ impl Display for Task {
                 log_wrappers::Value::key(&start_key),
                 log_wrappers::Value::key(&end_key)
             ),
+            Task::RecoverSplit { .. } => {
+                todo!()
+            }
         }
     }
 }

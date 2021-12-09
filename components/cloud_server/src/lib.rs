@@ -31,9 +31,9 @@ mod transport;
 
 #[cfg(test)]
 mod tests {
-    use tikv::config::TiKvConfig;
-    use crate::tikv_server::run_tikv;
     use super::*;
+    use crate::tikv_server::run_tikv;
+    use tikv::config::TiKvConfig;
 
     #[test]
     fn test_run() {

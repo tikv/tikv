@@ -207,7 +207,7 @@ impl TiKVServer {
 
         // Initialize raftstore channels.
         let rfstore_conf = rfstore::store::Config::from_old(&config.raft_store);
-        let system = rfstore::store::RaftBatchSystem::new(&raw_engines);
+        let system = rfstore::store::RaftBatchSystem::new(&raw_engines, &rfstore_conf);
         let router = system.router();
 
         let thread_count = config.server.background_thread_count;

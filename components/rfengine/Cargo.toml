@@ -21,7 +21,7 @@ byteorder = "1.2"
 error_code = { path = "../error_code", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 protobuf = "2.8"
-kvproto = { git = "https://github.com/coocood/kvproto.git", rev = "c182ab01a5ed95293ed430b955489e2e2c509ca8" }
+kvproto = { git = "https://github.com/coocood/kvproto.git", rev = "128b6a780ee757fe66484bf324673abb4f868473" }
 raft = { version = "0.6.0-alpha", default-features = false }
 raft-proto = { version = "0.6.0-alpha", default-features = false }
 crc32c = "0.6"

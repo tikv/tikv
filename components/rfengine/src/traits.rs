@@ -2,8 +2,10 @@
 
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{RFEngine, WriteBatch};
-use engine_traits::{Error, RaftEngine, RaftEngineReadOnly, RaftLogBatch, Result};
+use crate::{RFEngine, StateKey, WriteBatch};
+use bytes::{BufMut, Bytes, BytesMut};
+use engine_traits::Error::EntriesUnavailable;
+use engine_traits::{RaftEngine, RaftEngineReadOnly, RaftLogBatch, Result};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
 
@@ -13,7 +15,13 @@ impl RaftEngineReadOnly for RFEngine {
     }
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>> {
-        panic!()
+        let map = self.entries_map.read().unwrap();
+        let res = map.get(&raft_group_id);
+        if res.is_none() {
+            return Ok(None);
+        }
+        let region_logs = res.unwrap();
+        Ok(region_logs.get(index))
     }
 
     fn fetch_entries_to(
@@ -24,7 +32,26 @@ impl RaftEngineReadOnly for RFEngine {
         max_size: Option<usize>,
         buf: &mut Vec<Entry>,
     ) -> Result<usize> {
-        panic!()
+        let old_len = buf.len();
+        let map = self.entries_map.read().unwrap();
+        let res = map.get(&region_id);
+        if res.is_none() {
+            return Err(EntriesUnavailable);
+        }
+        let region_logs = res.unwrap();
+        for i in low..high {
+            let res = region_logs.get(i);
+            if res.is_none() {
+                return Err(EntriesUnavailable);
+            }
+            buf.push(res.unwrap());
+            if let Some(max_size) = max_size {
+                if buf.len() - old_len >= max_size as usize {
+                    break;
+                }
+            }
+        }
+        return Ok(buf.len() - old_len);
     }
 }
 
@@ -112,7 +139,15 @@ impl RaftLogBatch for WriteBatch {
         panic!()
     }
 
+    fn persist_size(&self) -> usize {
+        panic!()
+    }
+
     fn is_empty(&self) -> bool {
+        panic!()
+    }
+
+    fn merge(&mut self, _: Self) {
         panic!()
     }
 }

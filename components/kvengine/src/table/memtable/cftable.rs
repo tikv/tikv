@@ -1,9 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI32};
-use std::sync::atomic::Ordering::{Acquire, Release};
 use protobuf::ProtobufEnum;
+use std::sync::atomic::Ordering::{Acquire, Release};
+use std::sync::atomic::{AtomicBool, AtomicI32};
+use std::sync::Arc;
 
 use super::{Arena, SkipList};
 use crate::NUM_CFS;

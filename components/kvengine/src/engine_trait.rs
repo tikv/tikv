@@ -3,14 +3,12 @@
 use crate::*;
 use engine_traits::{
     CFNamesExt, CFOptionsExt, ColumnFamilyOptions, CompactExt, CompactedEvent, DBOptions,
-    DBOptionsExt, DBVector, DecodeProperties, DeleteStrategy, ExternalSstFileInfo, ImportExt,
+    DBOptionsExt, DBVector, DeleteStrategy, ExternalSstFileInfo, FlowControlFactorsExt, ImportExt,
     IngestExternalFileOptions, IterOptions, Iterable, KvEngine, MiscExt, Mutable, MvccProperties,
     MvccPropertiesExt, Peekable, PerfContext, PerfContextExt, PerfContextKind, PerfLevel, Range,
     RangePropertiesExt, ReadOptions, SeekKey, Snapshot, SstCompressionType, SstExt,
-    SstPartitionerFactory, SstReader, SstWriter, SstWriterBuilder, SyncMutable, TableProperties,
-    TablePropertiesCollection, TablePropertiesCollectionIter, TablePropertiesExt,
-    TablePropertiesKey, TitanDBOptions, TtlProperties, TtlPropertiesExt, UserCollectedProperties,
-    WriteBatchExt, WriteOptions,
+    SstPartitionerFactory, SstReader, SstWriter, SstWriterBuilder, SyncMutable, TablePropertiesExt,
+    TitanDBOptions, TtlProperties, TtlPropertiesExt, WriteBatchExt, WriteOptions,
 };
 use std::collections::BTreeMap;
 use std::ops::Deref;
@@ -77,6 +75,9 @@ impl ColumnFamilyOptions for EngineColumnFamilyOptions {
         panic!()
     }
     fn get_disable_auto_compactions(&self) -> bool {
+        panic!()
+    }
+    fn get_disable_write_stall(&self) -> bool {
         panic!()
     }
     fn set_sst_partitioner_factory<F: SstPartitionerFactory>(&mut self, factory: F) {
@@ -335,16 +336,7 @@ impl engine_traits::Iterator for EngineIterator {
 impl ImportExt for Engine {
     type IngestExternalFileOptions = EngineIngestExternalFileOptions;
 
-    fn ingest_external_file_cf(
-        &self,
-        cf: &str,
-        opts: &Self::IngestExternalFileOptions,
-        files: &[&str],
-    ) -> TraitsResult<()> {
-        panic!()
-    }
-
-    fn reset_global_seq<P: AsRef<Path>>(&self, cf: &str, path: P) -> TraitsResult<()> {
+    fn ingest_external_file_cf(&self, cf: &str, files: &[&str]) -> TraitsResult<()> {
         panic!()
     }
 }
@@ -357,6 +349,32 @@ impl IngestExternalFileOptions for EngineIngestExternalFileOptions {
     }
     fn move_files(&mut self, f: bool) {
         panic!()
+    }
+
+    fn get_write_global_seqno(&self) -> bool {
+        todo!()
+    }
+
+    fn set_write_global_seqno(&mut self, f: bool) {
+        todo!()
+    }
+}
+
+impl FlowControlFactorsExt for Engine {
+    fn get_cf_num_files_at_level(
+        &self,
+        cf: &str,
+        level: usize,
+    ) -> engine_traits::Result<Option<u64>> {
+        todo!()
+    }
+
+    fn get_cf_num_immutable_mem_table(&self, cf: &str) -> engine_traits::Result<Option<u64>> {
+        todo!()
+    }
+
+    fn get_cf_pending_compaction_bytes(&self, cf: &str) -> engine_traits::Result<Option<u64>> {
+        todo!()
     }
 }
 
@@ -432,18 +450,6 @@ impl MiscExt for Engine {
         start: &[u8],
         end: &[u8],
     ) -> TraitsResult<Option<(u64, u64)>> {
-        panic!()
-    }
-
-    fn get_cf_num_files_at_level(&self, cf: &str, level: usize) -> TraitsResult<Option<u64>> {
-        panic!()
-    }
-
-    fn get_cf_num_immutable_mem_table(&self, cf: &str) -> TraitsResult<Option<u64>> {
-        panic!()
-    }
-
-    fn get_cf_compaction_pending_bytes(&self, cf: &str) -> TraitsResult<Option<u64>> {
         panic!()
     }
 
@@ -742,98 +748,34 @@ impl std::io::Read for EngineExternalSstFileReader {
     }
 }
 
-impl TablePropertiesExt for Engine {
-    type TablePropertiesCollection = EngineTablePropertiesCollection;
-    type TablePropertiesCollectionIter = EngineTablePropertiesCollectionIter;
-    type TablePropertiesKey = EngineTablePropertiesKey;
-    type TableProperties = EngineTableProperties;
-    type UserCollectedProperties = EngineUserCollectedProperties;
+pub struct UserCollectedProperties;
 
-    fn get_properties_of_tables_in_range(
+impl engine_traits::UserCollectedProperties for UserCollectedProperties {
+    fn get(&self, _: &[u8]) -> Option<&[u8]> {
+        None
+    }
+    fn approximate_size_and_keys(&self, _: &[u8], _: &[u8]) -> Option<(usize, usize)> {
+        None
+    }
+}
+pub struct TablePropertiesCollection;
+impl engine_traits::TablePropertiesCollection for TablePropertiesCollection {
+    type UserCollectedProperties = UserCollectedProperties;
+    fn iter_user_collected_properties<F>(&self, _: F)
+    where
+        F: FnMut(&Self::UserCollectedProperties) -> bool,
+    {
+    }
+}
+
+impl TablePropertiesExt for Engine {
+    type TablePropertiesCollection = TablePropertiesCollection;
+
+    fn table_properties_collection(
         &self,
         cf: &str,
         ranges: &[Range],
     ) -> TraitsResult<Self::TablePropertiesCollection> {
-        panic!()
-    }
-}
-
-pub struct EngineTablePropertiesCollection;
-
-impl
-    TablePropertiesCollection<
-        EngineTablePropertiesCollectionIter,
-        EngineTablePropertiesKey,
-        EngineTableProperties,
-        EngineUserCollectedProperties,
-    > for EngineTablePropertiesCollection
-{
-    fn iter(&self) -> EngineTablePropertiesCollectionIter {
-        panic!()
-    }
-
-    fn len(&self) -> usize {
-        panic!()
-    }
-}
-
-pub struct EngineTablePropertiesCollectionIter;
-
-impl
-    TablePropertiesCollectionIter<
-        EngineTablePropertiesKey,
-        EngineTableProperties,
-        EngineUserCollectedProperties,
-    > for EngineTablePropertiesCollectionIter
-{
-}
-
-impl core::iter::Iterator for EngineTablePropertiesCollectionIter {
-    type Item = (EngineTablePropertiesKey, EngineTableProperties);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        panic!()
-    }
-}
-
-pub struct EngineTablePropertiesKey;
-
-impl TablePropertiesKey for EngineTablePropertiesKey {}
-
-impl Deref for EngineTablePropertiesKey {
-    type Target = str;
-
-    fn deref(&self) -> &str {
-        panic!()
-    }
-}
-
-pub struct EngineTableProperties;
-
-impl TableProperties<EngineUserCollectedProperties> for EngineTableProperties {
-    fn num_entries(&self) -> u64 {
-        panic!()
-    }
-
-    fn user_collected_properties(&self) -> EngineUserCollectedProperties {
-        panic!()
-    }
-}
-
-pub struct EngineUserCollectedProperties;
-
-impl UserCollectedProperties for EngineUserCollectedProperties {
-    fn get(&self, index: &[u8]) -> Option<&[u8]> {
-        panic!()
-    }
-
-    fn len(&self) -> usize {
-        panic!()
-    }
-}
-
-impl DecodeProperties for EngineUserCollectedProperties {
-    fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
         panic!()
     }
 }
@@ -901,6 +843,9 @@ impl engine_traits::WriteBatch<Engine> for EngineWriteBatch {
         panic!()
     }
     fn rollback_to_save_point(&mut self) -> TraitsResult<()> {
+        panic!()
+    }
+    fn merge(&mut self, src: Self) {
         panic!()
     }
 }

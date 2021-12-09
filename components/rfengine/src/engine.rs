@@ -224,12 +224,43 @@ impl RFEngine {
         self.entries_map.read().unwrap().len() + self.states.read().unwrap().len() == 0
     }
 
+    pub fn get_term(&self, region_id: u64, index: u64) -> Option<u64> {
+        let entries = self.entries_map.read().unwrap();
+        entries
+            .get(&region_id)
+            .and_then(|region_logs| region_logs.term(index))
+    }
+
+    pub fn get_range(&self, region_id: u64) -> Option<(u64, u64)> {
+        let entries = self.entries_map.read().unwrap();
+        entries
+            .get(&region_id)
+            .map(|entries| (entries.range.start_index, entries.range.end_index))
+    }
+
     pub fn get_state(&self, region_id: u64, key: &[u8]) -> Option<Bytes> {
         self.states
             .read()
             .unwrap()
             .get(&StateKey::new(region_id, key))
             .map(|x| x.clone())
+    }
+
+    pub fn get_last_state_with_prefix(&self, region_id: u64, prefix: &[u8]) -> Option<Bytes> {
+        let start_key = StateKey::new(region_id, prefix);
+        assert_ne!(prefix[prefix.len() - 1], 255);
+        let mut end_prefix = Vec::from(prefix);
+        end_prefix[prefix.len() - 1] += 1;
+        let end_key = StateKey::new(region_id, &end_prefix);
+        let states = self.states.read().unwrap();
+        let range = states.range(start_key..end_key);
+        for (k, v) in range.rev() {
+            if k.key == end_prefix {
+                continue;
+            }
+            return Some(v.clone());
+        }
+        None
     }
 
     pub fn init_region_raft_logs(&self, region_id: u64) {
@@ -241,9 +272,9 @@ impl RFEngine {
         entries_map.insert(region_id, region_logs);
     }
 
-    pub fn iterate_region_states<F>(&self, region_id: u64, desc: bool, f: F) -> Result<()>
+    pub fn iterate_region_states<F>(&self, region_id: u64, desc: bool, mut f: F) -> Result<()>
     where
-        F: Fn(&[u8], &[u8]) -> Result<()>,
+        F: FnMut(&[u8], &[u8]) -> Result<()>,
     {
         let start_key = StateKey::new(region_id, &[]);
         let end_key = StateKey::new(region_id + 1, &[]);
@@ -261,22 +292,22 @@ impl RFEngine {
         Ok(())
     }
 
-    pub fn iterate_all_states<F>(&self, desc: bool, f: F)
+    pub fn iterate_all_states<F>(&self, desc: bool, mut f: F)
     where
-        F: Fn(u64, &[u8], &[u8]) -> bool,
+        F: FnMut(u64, &[u8], &[u8]) -> bool,
     {
         let states = self.states.read().unwrap();
         let iter = states.iter();
         if desc {
             for (k, v) in iter.rev() {
                 if !f(k.region_id, k.key.chunk(), v.chunk()) {
-                    break
+                    break;
                 }
             }
         } else {
             for (k, v) in iter {
                 if !f(k.region_id, k.key.chunk(), v.chunk()) {
-                    break
+                    break;
                 }
             }
         }
@@ -364,6 +395,15 @@ impl RegionRaftLogs {
         entry.set_data(op.data.clone());
         Some(entry)
     }
+
+    pub(crate) fn term(&self, index: u64) -> Option<u64> {
+        if index < self.range.start_index || index >= self.range.end_index {
+            return None;
+        }
+        let local_idx = index - self.range.start_index;
+        let op = self.raft_logs.get(local_idx as usize).unwrap();
+        return Some(op.term as u64);
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -440,6 +480,7 @@ mod tests {
             engine.iterate_all_states(false, |region_id, key, _| {
                 let state_key = StateKey::new(region_id, key);
                 assert!(old_states.read().unwrap().contains_key(&state_key));
+                true
             });
             let entries_map = engine.entries_map.read().unwrap();
             assert_eq!(entries_map.len(), 10);

@@ -14,6 +14,10 @@ pub struct Config {
     #[online_config(skip)]
     pub prevote: bool,
 
+    // store capacity. 0 means no limit.
+    #[online_config(skip)]
+    pub capacity: ReadableSize,
+
     // raft_base_tick_interval is a base tick interval (ms).
     #[online_config(hidden)]
     pub raft_base_tick_interval: ReadableDuration,
@@ -45,14 +49,20 @@ pub struct Config {
     pub abnormal_leader_missing_duration: ReadableDuration,
     pub peer_stale_state_check_interval: ReadableDuration,
 
+    pub leader_transfer_max_log_lag: u64,
+
     // The lease provided by a successfully proposed and applied entry.
     pub raft_store_max_leader_lease: ReadableDuration,
+
+    pub allow_remove_leader: bool,
 
     // Interval to gc unnecessary raft log (ms).
     pub raft_log_gc_tick_interval: ReadableDuration,
 
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: ReadableDuration,
+
+    pub waterfall_metrics: bool,
 
     pub region_split_size: ReadableSize,
 
@@ -70,6 +80,7 @@ impl Default for Config {
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
             prevote: true,
+            capacity: ReadableSize(0),
             raft_base_tick_interval: ReadableDuration::secs(1),
             raft_heartbeat_ticks: 2,
             raft_election_timeout_ticks: 10,
@@ -82,9 +93,12 @@ impl Default for Config {
             max_leader_missing_duration: ReadableDuration::hours(2),
             abnormal_leader_missing_duration: ReadableDuration::minutes(10),
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
+            leader_transfer_max_log_lag: 128,
             raft_store_max_leader_lease: ReadableDuration::secs(9),
+            allow_remove_leader: false,
             raft_log_gc_tick_interval: ReadableDuration::secs(10),
             split_region_check_tick_interval: ReadableDuration::secs(10),
+            waterfall_metrics: false,
             region_split_size: ReadableSize::gb(1),
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),

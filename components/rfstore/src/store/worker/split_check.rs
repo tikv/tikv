@@ -5,10 +5,10 @@ use kvproto::pdpb::CheckPolicy;
 use online_config::ConfigChange;
 use std::fmt::{self, Display, Formatter};
 
+use crate::RaftRouter;
 use raftstore::coprocessor::Config;
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
-use crate::RaftRouter;
 
 #[derive(Debug)]
 pub struct SplitCheckTask {
@@ -21,8 +21,7 @@ impl Display for SplitCheckTask {
         write!(
             f,
             "[split check worker] Split Check Task for {}, max_size: {}",
-            self.region_id,
-            self.max_size,
+            self.region_id, self.max_size,
         )
     }
 }
@@ -43,10 +42,7 @@ pub struct SplitCheckRunner {
 
 impl SplitCheckRunner {
     pub fn new(kv: kvengine::Engine, router: RaftRouter) -> Self {
-        Self {
-            kv,
-            router,
-        }
+        Self { kv, router }
     }
 }
 

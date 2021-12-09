@@ -385,9 +385,9 @@ checksum = "72feb31ffc86498dacdbd0fcebb56138e7177a8cc5cea4516031d15ae85a742e"
 
 [[package]]
 name = "byteorder"
-version = "1.3.4"
+version = "1.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08c48aae112d48ed9f069b33538ea9e3e90aa263cfa3d1c24309612b1f7472de"
+checksum = "14c189c53d098945499cdfa7ecc63567cf3886b3332b312a5b4585d8d3a6a610"
 
 [[package]]
 name = "bytes"
@@ -410,12 +410,13 @@ dependencies = [
 
 [[package]]
 name = "bzip2-sys"
-version = "0.1.8+1.0.8"
+version = "0.1.11+1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05305b41c5034ff0e93937ac64133d109b5a2660114ec45e9760bc6816d83038"
+checksum = "736a955f3fa7875102d57c82b8cac37ec45224a07fd32d58f9f7a186b6cd4cdc"
 dependencies = [
  "cc",
  "libc 0.2.108",
+ "pkg-config",
 ]
 
 [[package]]
@@ -658,7 +659,7 @@ dependencies = [
  "openssl",
  "paste 1.0.4",
  "pd_client",
- "prometheus 0.12.0",
+ "prometheus 0.13.0",
  "prometheus-static-metric",
  "promptly",
  "protobuf",
@@ -2310,7 +2311,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/coocood/kvproto.git?rev=c182ab01a5ed95293ed430b955489e2e2c509ca8#c182ab01a5ed95293ed430b955489e2e2c509ca8"
+source = "git+https://github.com/coocood/kvproto.git?rev=128b6a780ee757fe66484bf324673abb4f868473#128b6a780ee757fe66484bf324673abb4f868473"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2375,7 +2376,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#46b7a1da47e626ae35158a51a3c90babafbd8ff2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#4dd1d66791879997a170eee64b748019c061e434"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2394,7 +2395,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#46b7a1da47e626ae35158a51a3c90babafbd8ff2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#4dd1d66791879997a170eee64b748019c061e434"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3444,10 +3445,8 @@ dependencies = [
  "cfg-if 1.0.0",
  "fnv",
  "lazy_static",
- "libc 0.2.108",
  "memchr",
  "parking_lot",
- "protobuf",
  "thiserror",
 ]
 
@@ -3631,8 +3630,8 @@ dependencies = [
 
 [[package]]
 name = "raft"
-version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#b84afe99b5e54b10a306ec844d1b83ae8a7a3c31"
+version = "0.6.0"
+source = "git+https://github.com/tikv/raft-rs?branch=master#b445693b1c3baadd7a4917604c95525080b3a3e2"
 dependencies = [
  "bytes 1.0.1",
  "fxhash",
@@ -3665,8 +3664,8 @@ dependencies = [
 
 [[package]]
 name = "raft-proto"
-version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#b84afe99b5e54b10a306ec844d1b83ae8a7a3c31"
+version = "0.6.0"
+source = "git+https://github.com/tikv/raft-rs?branch=master#b445693b1c3baadd7a4917604c95525080b3a3e2"
 dependencies = [
  "bytes 1.0.1",
  "protobuf",
@@ -4143,6 +4142,7 @@ dependencies = [
  "bitflags",
  "byteorder",
  "bytes 1.0.1",
+ "collections",
  "concurrency_manager",
  "crc32c",
  "crossbeam",
@@ -4163,7 +4163,7 @@ dependencies = [
  "log_wrappers",
  "online_config",
  "pd_client",
- "prometheus 0.12.0",
+ "prometheus 0.13.0",
  "prometheus-static-metric",
  "protobuf",
  "raft",
@@ -4183,6 +4183,7 @@ dependencies = [
  "tokio",
  "txn_types",
  "uuid",
+ "yatp",
 ]
 
 [[package]]
@@ -4209,7 +4210,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#41d7180df72cf5aae97fbae9a18aec52ad29dfcc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#4dd1d66791879997a170eee64b748019c061e434"
 dependencies = [
  "libc 0.2.108",
  "librocksdb_sys",

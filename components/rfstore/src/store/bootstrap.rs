@@ -5,19 +5,19 @@ use super::peer_storage::{
 };
 use super::PREPARE_BOOTSTRAP_KEY;
 use crate::Result;
-use bytes::Buf;
+use bytes::{Buf, BufMut};
 use engine_traits::{CF_DEFAULT, CF_RAFT};
 
 use crate::store::{
-    raft_state_key, region_state_key, Engines, RaftApplyState, APPLY_STATE_KEY, EMPTY_KEY,
-    KV_ENGINE_META_KEY, RAFT_INIT_LOG_INDEX, STORE_IDENT_KEY,
+    raft_state_key, region_state_key, Engines, RaftApplyState, EMPTY_KEY, KV_ENGINE_META_KEY,
+    RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM, STORE_IDENT_KEY, TERM_KEY,
 };
 use kvenginepb::{ChangeSet, Snapshot};
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, StoreIdent};
 use protobuf::{Message, RepeatedField};
+use raftstore::store::util;
 use tikv_util::{box_err, box_try};
-use raftstore::store::util as outil;
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
     let mut region = metapb::Region::default();
@@ -26,7 +26,7 @@ pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Re
     region.set_end_key(EMPTY_KEY.to_vec());
     region.mut_region_epoch().set_version(INIT_EPOCH_VER);
     region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
-    region.mut_peers().push(outil::new_peer(store_id, peer_id));
+    region.mut_peers().push(util::new_peer(store_id, peer_id));
     region
 }
 
@@ -82,17 +82,22 @@ fn initial_ingest_tree(region_id: u64, version: u64) -> kvengine::IngestTree {
     change_set.set_sequence(RAFT_INIT_LOG_INDEX);
     let mut snap = Snapshot::default();
     snap.set_end(kvengine::GLOBAL_SHARD_END_KEY.to_vec());
-    let mut props = kvenginepb::Properties::default();
-    props.set_shard_id(region_id);
-    props.set_keys(RepeatedField::from_vec(vec![APPLY_STATE_KEY.to_string()]));
-    let initail_apply_state = RaftApplyState::default().marshal();
-    props.set_values(RepeatedField::from_vec(vec![initail_apply_state.to_vec()]));
+    let props = new_initial_properties();
     snap.set_properties(props);
     change_set.set_snapshot(snap);
     kvengine::IngestTree {
         change_set,
         passive: false,
     }
+}
+
+fn new_initial_properties() -> kvenginepb::Properties {
+    let mut props = kvenginepb::Properties::default();
+    props.set_keys(RepeatedField::from_slice(&[TERM_KEY.to_string()]));
+    let mut val = Vec::with_capacity(8);
+    val.put_u64_le(RAFT_INIT_LOG_TERM);
+    props.set_values(RepeatedField::from_slice(&[val]));
+    props
 }
 
 // Clear first region meta and prepare key.

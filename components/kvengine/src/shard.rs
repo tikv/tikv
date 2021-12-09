@@ -5,6 +5,7 @@ use bytes::{Buf, Bytes};
 use dashmap::DashMap;
 use pb::changeset;
 use protobuf::ProtobufEnum;
+use std::iter::Iterator;
 use std::{
     sync::{
         atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering::*, *},
@@ -12,7 +13,6 @@ use std::{
     },
     time::Instant,
 };
-use std::iter::Iterator;
 
 use crate::*;
 use crate::{
@@ -573,7 +573,7 @@ impl Shard {
     pub fn mark_mem_table_applying_flush(&self, commit_ts: u64) {
         let g = &epoch::pin();
         let shared = self.mem_tbls.load(Acquire, g);
-        let mems = unsafe { &shared.deref().tbls};
+        let mems = unsafe { &shared.deref().tbls };
         for mem in mems.iter().rev() {
             let mem_version = mem.get_version();
             if mem_version > commit_ts {
@@ -581,13 +581,17 @@ impl Shard {
             }
             if mem_version == commit_ts {
                 mem.set_applying();
-                break
+                break;
             }
         }
     }
 
     pub fn get_estimated_size(&self) -> u64 {
         self.estimated_size.load(Ordering::Relaxed)
+    }
+
+    pub fn get_initial_flushed(&self) -> bool {
+        self.initial_flushed.load(Ordering::Acquire)
     }
 }
 

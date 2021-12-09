@@ -1,10 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-use std::{path::PathBuf, sync::Mutex};
+use slog::Level::Debug;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use slog::Level::Debug;
+use std::sync::Arc;
+use std::{path::PathBuf, sync::Mutex};
 
 use crate::store::StoreMsg;
 use crate::*;
@@ -71,12 +71,11 @@ impl KVWriteBatch {
 
     pub(crate) fn get_engine_wb(&mut self, region_id: u64) -> &mut kvengine::WriteBatch {
         match self.batches.entry(region_id) {
-            Entry::Occupied(o) => {
-                o.into_mut()
-            },
-            Entry::Vacant(v) => {
-                v.insert(kvengine::WriteBatch::new(region_id, self.kv.opts.cfs.clone()))
-            },
+            Entry::Occupied(o) => o.into_mut(),
+            Entry::Vacant(v) => v.insert(kvengine::WriteBatch::new(
+                region_id,
+                self.kv.opts.cfs.clone(),
+            )),
         }
     }
 }

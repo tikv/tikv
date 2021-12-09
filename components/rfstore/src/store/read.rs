@@ -6,9 +6,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::store::{
-    cf_name_to_num, cmd_resp, rlog, util, Callback, Peer, PeerMsg,
-    RaftCommand, ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy,
-    StoreMeta,
+    cf_name_to_num, cmd_resp, rlog, util, Callback, Peer, PeerMsg, RaftCommand, ReadResponse,
+    RegionSnapshot, RequestInspector, RequestPolicy, StoreMeta,
 };
 use crate::{RaftRouter, RaftStoreRouter, Result};
 use engine_traits::{KvEngine, Peekable};
@@ -19,13 +18,13 @@ use kvproto::metapb;
 use kvproto::raft_cmdpb::{
     CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response,
 };
+use raftstore::store::util::{LeaseState, RemoteLease};
+use raftstore::store::worker_metrics::*;
 use tikv_util::codec::number::decode_u64;
 use tikv_util::lru::LruCache;
 use tikv_util::time::{monotonic_raw_now, Instant, ThreadReadId};
 use tikv_util::{debug, error};
 use time::Timespec;
-use raftstore::store::worker_metrics::*;
-use raftstore::store::util::{RemoteLease, LeaseState};
 
 #[derive(Debug)]
 pub enum Progress {
@@ -165,29 +164,6 @@ impl ReadDelegate {
         }
     }
 
-    fn fresh_valid_ts(&mut self) {
-        self.last_valid_ts = monotonic_raw_now();
-    }
-
-    pub(crate) fn update(&mut self, progress: Progress) {
-        self.fresh_valid_ts();
-        self.track_ver.inc();
-        match progress {
-            Progress::Region(region) => {
-                self.region = Arc::new(region);
-            }
-            Progress::Term(term) => {
-                self.term = term;
-            }
-            Progress::AppliedIndexTerm(applied_index_term) => {
-                self.applied_index_term = applied_index_term;
-            }
-            Progress::LeaderLease(leader_lease) => {
-                self.leader_lease = Some(leader_lease);
-            }
-        }
-    }
-
     fn is_in_leader_lease(&self, ts: Timespec, metrics: &mut ReadMetrics) -> bool {
         if let Some(ref lease) = self.leader_lease {
             let term = lease.term();
@@ -244,17 +220,14 @@ impl LocalReader {
 
     fn redirect(&mut self, mut cmd: RaftCommand) {
         debug!("localreader redirects command"; "command" => ?cmd);
-        let region_id = cmd.request.get_region_id();
+        let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
-        let result = self.router.send(
-            region_id,
-            PeerMsg::RaftCommand(cmd),
-        );
+        let result = self.router.send(region_id, PeerMsg::RaftCommand(cmd));
         if result.is_ok() {
             return;
         }
         if let crate::Error::SendPeerMsgError(mut peerMsg) = result.err().unwrap() {
-            let callback = peerMsg.get_callback();
+            let callback = peerMsg.take_callback();
             self.metrics.rejected_by_no_region += 1;
             err.set_message(format!("region {} is missing", region_id));
             err.mut_region_not_found().set_region_id(region_id);
@@ -306,7 +279,7 @@ impl LocalReader {
 
     fn pre_propose_raft_command(
         &mut self,
-        req: &rlog::RaftLog,
+        req: &RaftCmdRequest,
     ) -> Result<Option<(Arc<ReadDelegate>, RequestPolicy)>> {
         // Check store id.
         if self.store_id.get().is_none() {
@@ -322,7 +295,7 @@ impl LocalReader {
         }
 
         // Check region id.
-        let region_id = req.get_region_id();
+        let region_id = req.get_header().get_region_id();
         let delegate = match self.get_delegate(region_id) {
             Some(d) => d,
             None => {
@@ -364,17 +337,16 @@ impl LocalReader {
             metrics: &mut self.metrics,
         };
         match inspector.inspect(req) {
-            Ok(RequestPolicy::ReadLocal) => Ok(Some((delegate, RequestPolicy::ReadLocal))),
+            RequestPolicy::ReadLocal => Ok(Some((delegate, RequestPolicy::ReadLocal))),
             // It can not handle other policies.
-            Ok(_) => Ok(None),
-            Err(e) => Err(e),
+            _ => Ok(None),
         }
     }
 
     pub fn propose_raft_command(
         &mut self,
         mut read_id: Option<ThreadReadId>,
-        req: rlog::RaftLog,
+        req: RaftCmdRequest,
         cb: Callback,
     ) {
         match self.pre_propose_raft_command(&req) {
@@ -412,7 +384,7 @@ impl LocalReader {
             Ok(None) => self.redirect(RaftCommand::new(req, cb)),
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
-                if let Some(ref delegate) = self.delegates.get(&req.get_region_id()) {
+                if let Some(ref delegate) = self.delegates.get(&req.get_header().get_region_id()) {
                     cmd_resp::bind_term(&mut response, delegate.term);
                 }
                 cb.invoke_read(ReadResponse {
@@ -430,7 +402,7 @@ impl LocalReader {
     /// the last RaftCommand which left a snapshot cached in LocalReader. ThreadReadId is composed
     /// by thread_id and a thread_local incremental sequence.
     #[inline]
-    pub fn read(&mut self, read_id: Option<ThreadReadId>, req: rlog::RaftLog, cb: Callback) {
+    pub fn read(&mut self, read_id: Option<ThreadReadId>, req: RaftCmdRequest, cb: Callback) {
         self.propose_raft_command(read_id, req, cb);
         self.metrics.maybe_flush();
     }
@@ -580,7 +552,9 @@ impl Default for ReadMetrics {
 
 impl ReadMetrics {
     pub fn maybe_flush(&mut self) {
-        if self.last_flush_time.elapsed() >= Duration::from_millis(METRICS_FLUSH_INTERVAL) {
+        if self.last_flush_time.saturating_elapsed()
+            >= Duration::from_millis(METRICS_FLUSH_INTERVAL)
+        {
             self.flush();
             self.last_flush_time = Instant::now();
         }

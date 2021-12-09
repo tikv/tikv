@@ -1,6 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::store::{Applier, Callback, CasualMessage, CasualRouter, LocalReader, PeerFsm, PeerMsg, PeerStates, ProposalRouter, RaftCommand, rlog, SignificantMsg, StoreFSM, StoreMsg, StoreRouter};
+use crate::store::{
+    rlog, Applier, Callback, CasualMessage, CasualRouter, LocalReader, PeerFsm, PeerMsg,
+    PeerStates, ProposalRouter, RaftCommand, SignificantMsg, StoreFSM, StoreMsg, StoreRouter,
+};
+use crate::Error::RegionNotFound;
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use crossbeam::channel::SendError;
 use kvproto::kvrpcpb::Op;
@@ -38,13 +42,13 @@ pub trait RaftStoreRouter: StoreRouter + ProposalRouter + CasualRouter + Send + 
     }
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, req: rlog::RaftLog, cb: Callback) -> RaftStoreResult<()> {
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         send_command_impl(self, req, cb, None)
     }
 
     fn send_command_with_deadline(
         &self,
-        req: rlog::RaftLog,
+        req: RaftCmdRequest,
         cb: Callback,
         deadline: Deadline,
     ) -> RaftStoreResult<()> {
@@ -52,12 +56,11 @@ pub trait RaftStoreRouter: StoreRouter + ProposalRouter + CasualRouter + Send + 
     }
 
     /// Reports the peer being unreachable to the Region.
-    fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
-        let msg = SignificantMsg::Unreachable {
-            region_id,
-            to_peer_id,
-        };
-        self.significant_send(region_id, msg)
+    fn report_unreachable(&self, store_id: u64) -> RaftStoreResult<()> {
+        self.broadcast_normal(|| {
+            PeerMsg::SignificantMsg(SignificantMsg::StoreUnreachable { store_id })
+        });
+        Ok(())
     }
 
     /// Broadcast an `StoreUnreachable` event to all Raft groups.
@@ -67,12 +70,7 @@ pub trait RaftStoreRouter: StoreRouter + ProposalRouter + CasualRouter + Send + 
 
     /// Report a `StoreResolved` event to all Raft groups.
     fn report_resolved(&self, store_id: u64, group_id: u64) {
-        self.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::StoreResolved {
-                store_id,
-                group_id,
-            })
-        })
+        todo!()
     }
 }
 
@@ -152,7 +150,7 @@ impl LocalReadRouter for ServerRaftStoreRouter {
         cb: Callback,
     ) -> RaftStoreResult<()> {
         let mut local_reader = self.local_reader.borrow_mut();
-        local_reader.read(read_id, rlog::RaftLog::Request(req), cb);
+        local_reader.read(read_id, req, cb);
         Ok(())
     }
 }
@@ -233,11 +231,17 @@ impl RaftRouter {
     }
 
     pub(crate) fn send(&self, id: u64, mut msg: PeerMsg) -> RaftStoreResult<()> {
-        todo!()
+        if let Some(peer) = self.peers.get(&id) {
+            if !peer.closed.load(Ordering::Relaxed) {
+                self.peer_sender.send((id, msg));
+                return Ok(());
+            }
+        }
+        Err(RegionNotFound(id, Some(msg)))
     }
 
     pub(crate) fn send_store(&self, msg: StoreMsg) {
-        todo!()
+        self.store_sender.send(msg);
     }
 }
 
@@ -254,19 +258,21 @@ impl RaftStoreRouter for RaftRouter {
     }
 
     fn broadcast_normal(&self, mut msg_gen: impl FnMut() -> PeerMsg) {
-        panic!("not supported")
+        for peer in self.peers.iter() {
+            let msg = msg_gen();
+            self.peer_sender.send((*peer.key(), msg));
+        }
     }
 }
 
 fn send_command_impl(
     router: &impl ProposalRouter,
-    req: rlog::RaftLog,
+    req: RaftCmdRequest,
     cb: Callback,
     deadline: Option<Deadline>,
 ) -> RaftStoreResult<()> {
-    let region_id = req.get_region_id();
     let mut cmd = RaftCommand::new(req, cb);
-    cmd.deadline = deadline;
+    // TODO(x) handle deadline
     router.send(cmd)
 }
 

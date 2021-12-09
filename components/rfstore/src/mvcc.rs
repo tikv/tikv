@@ -1,6 +1,8 @@
-use std::ops::Deref;
-use byteorder::LittleEndian;
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
+use byteorder::{ByteOrder, LittleEndian};
 use bytes::{BufMut, Bytes, BytesMut};
+use std::ops::Deref;
 
 pub const WRITE_CF: usize = 0;
 pub const LOCK_CF: usize = 1;
@@ -32,17 +34,20 @@ impl Deref for Lock {
     type Target = LockHeader;
 
     fn deref(&self) -> &Self::Target {
-        return &self.header
+        return &self.header;
     }
 }
 
 impl Lock {
     pub fn decode(mut data: &[u8]) -> Self {
         let mut lock = Self {
-            header: unsafe {*(data.as_mut_ptr() as *const LockHeader)},
+            header: unsafe { *(data.as_ptr() as *const LockHeader) },
+            primary: Default::default(),
+            value: Default::default(),
+            secondaries: vec![],
         };
         let primary_len = lock.primary_len as usize;
-        let buf = Bytes::from(&data[LOCK_HEADER_SIZE..]);
+        let buf = Bytes::copy_from_slice(&data[LOCK_HEADER_SIZE..]);
         lock.primary = buf.slice(..primary_len);
         let mut cursor = primary_len;
         if lock.secondary_num > 0 {
@@ -70,7 +75,7 @@ impl UserMeta {
     pub fn from_slice(buf: &[u8]) -> Self {
         Self {
             start_ts: LittleEndian::read_u64(buf),
-            commit_ts: LittleEndian::read_u64(&buf[8..])
+            commit_ts: LittleEndian::read_u64(&buf[8..]),
         }
     }
 
@@ -82,9 +87,7 @@ impl UserMeta {
     }
 
     pub fn to_array(&self) -> [u8; USER_META_SIZE] {
-        unsafe {
-            std::mem::transmute(*self)
-        }
+        unsafe { std::mem::transmute(*self) }
     }
 }
 
