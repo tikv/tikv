@@ -51,7 +51,7 @@ impl TestSuite {
         tikv_cfg.resource_metering = cfg.clone();
 
         let cfg_controller = ConfigController::new(tikv_cfg);
-        let (recorder_handle, collector_registry, resource_tag_factory) =
+        let (recorder_handle, collector_reg_handle, resource_tag_factory) =
             init_recorder(cfg.enabled, cfg.precision.as_millis());
         cfg_controller.register(
             Module::ResourceMetering,
@@ -67,7 +67,7 @@ impl TestSuite {
         reporter.start_with_timer(resource_metering::Reporter::new(
             reporter_client,
             cfg,
-            collector_registry,
+            collector_reg_handle,
             scheduler.clone(),
         ));
 

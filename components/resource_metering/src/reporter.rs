@@ -24,7 +24,7 @@ pub struct Reporter<C> {
     client: C,
     config: Config,
     scheduler: Scheduler<Task>,
-    collector_registry: CollectorRegHandle,
+    collector_reg_handle: CollectorRegHandle,
     collector: Option<CollectorHandle>,
     records: Records,
 }
@@ -67,18 +67,18 @@ where
     pub fn new(
         client: C,
         config: Config,
-        collector_registry: CollectorRegHandle,
+        collector_reg_handle: CollectorRegHandle,
         scheduler: Scheduler<Task>,
     ) -> Self {
-        let collector = config
-            .should_report()
-            .then(|| collector_registry.register(Box::new(CollectorImpl::new(scheduler.clone()))));
+        let collector = config.should_report().then(|| {
+            collector_reg_handle.register(Box::new(CollectorImpl::new(scheduler.clone())))
+        });
         Self {
             client,
             config,
             scheduler,
             collector,
-            collector_registry,
+            collector_reg_handle,
             records: Records::default(),
         }
     }
@@ -95,7 +95,7 @@ where
         }
         if self.collector.is_none() {
             self.collector = Some(
-                self.collector_registry
+                self.collector_reg_handle
                     .register(Box::new(CollectorImpl::new(self.scheduler.clone()))),
             );
         }
@@ -168,8 +168,13 @@ mod tests {
     #[test]
     fn test_reporter() {
         let scheduler = LazyWorker::new("test-worker").scheduler();
-        let collector_registry = CollectorRegHandle::new_for_test();
-        let mut r = Reporter::new(MockClient, Config::default(), collector_registry, scheduler);
+        let collector_reg_handle = CollectorRegHandle::new_for_test();
+        let mut r = Reporter::new(
+            MockClient,
+            Config::default(),
+            collector_reg_handle,
+            scheduler,
+        );
         r.run(Task::ConfigChange(Config {
             enabled: false,
             receiver_address: "abc".to_string(),

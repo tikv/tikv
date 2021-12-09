@@ -1250,7 +1250,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         auto_split_controller: AutoSplitController,
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
         concurrency_manager: ConcurrencyManager,
-        collector_registry: CollectorRegHandle,
+        collector_reg_handle: CollectorRegHandle,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1363,7 +1363,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 concurrency_manager,
                 mgr,
                 pd_client,
-                collector_registry,
+                collector_reg_handle,
             )?;
         } else {
             self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatch>(
@@ -1374,7 +1374,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 concurrency_manager,
                 mgr,
                 pd_client,
-                collector_registry,
+                collector_reg_handle,
             )?;
         }
         Ok(())
@@ -1389,7 +1389,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         snap_mgr: SnapManager,
         pd_client: Arc<C>,
-        collector_registry: CollectorRegHandle,
+        collector_reg_handle: CollectorRegHandle,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1456,7 +1456,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             concurrency_manager,
             snap_mgr,
             workers.pd_worker.remote(),
-            collector_registry,
+            collector_reg_handle,
         );
         assert!(workers.pd_worker.start_with_timer(pd_runner));
 

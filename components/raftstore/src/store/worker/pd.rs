@@ -704,7 +704,7 @@ where
         concurrency_manager: ConcurrencyManager,
         snap_mgr: SnapManager,
         remote: Remote<yatp::task::future::TaskCell>,
-        collector_registry: CollectorRegHandle,
+        collector_reg_handle: CollectorRegHandle,
     ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
@@ -712,7 +712,7 @@ where
             error!("failed to start stats collector, error = {:?}", e);
         }
 
-        let _region_cpu_records_collector = collector_registry
+        let _region_cpu_records_collector = collector_reg_handle
             .register(Box::new(RegionCPUMeteringCollector::new(scheduler.clone())));
 
         Runner {

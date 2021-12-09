@@ -626,7 +626,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
 
         // Start resource metering.
-        let (recorder_handle, collector_registry, resource_tag_factory) =
+        let (recorder_handle, collector_reg_handle, resource_tag_factory) =
             resource_metering::init_recorder(
                 self.config.resource_metering.enabled,
                 self.config.resource_metering.precision.as_millis(),
@@ -642,7 +642,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let reporter = resource_metering::Reporter::new(
             resource_metering_client,
             self.config.resource_metering.clone(),
-            collector_registry.clone(),
+            collector_reg_handle.clone(),
             reporter_scheduler.clone(),
         );
         reporter_worker.start_with_timer(reporter);
@@ -874,7 +874,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             split_check_scheduler,
             auto_split_controller,
             self.concurrency_manager.clone(),
-            collector_registry,
+            collector_reg_handle,
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 

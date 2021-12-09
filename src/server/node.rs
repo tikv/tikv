@@ -178,7 +178,7 @@ where
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
-        collector_registry: CollectorRegHandle,
+        collector_reg_handle: CollectorRegHandle,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -214,7 +214,7 @@ where
             split_check_scheduler,
             auto_split_controller,
             concurrency_manager,
-            collector_registry,
+            collector_reg_handle,
         )?;
 
         Ok(())
@@ -451,7 +451,7 @@ where
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
-        collector_registry: CollectorRegHandle,
+        collector_reg_handle: CollectorRegHandle,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -482,7 +482,7 @@ where
             auto_split_controller,
             self.state.clone(),
             concurrency_manager,
-            collector_registry,
+            collector_reg_handle,
         )?;
         Ok(())
     }
