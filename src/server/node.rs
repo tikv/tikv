@@ -47,7 +47,7 @@ pub fn create_raft_storage<S, EK, R: FlowStatsReporter>(
     dynamic_configs: StorageDynamicConfigs,
     flow_controller: Arc<FlowController>,
     reporter: R,
-    tag_factory: ResourceTagFactory,
+    resource_tag_factory: ResourceTagFactory,
 ) -> Result<Storage<RaftKv<EK, S>, LockManager>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
@@ -62,7 +62,7 @@ where
         dynamic_configs,
         flow_controller,
         reporter,
-        tag_factory,
+        resource_tag_factory,
     )?;
     Ok(store)
 }

@@ -51,7 +51,7 @@ impl TestSuite {
         tikv_cfg.resource_metering = cfg.clone();
 
         let cfg_controller = ConfigController::new(tikv_cfg);
-        let (recorder_handle, collector_registry, tag_factory) =
+        let (recorder_handle, collector_registry, resource_tag_factory) =
             init_recorder(cfg.enabled, cfg.precision.as_millis());
         cfg_controller.register(
             Module::ResourceMetering,
@@ -77,7 +77,7 @@ impl TestSuite {
             DummyLockManager {},
             ApiVersion::V1,
         )
-        .set_tag_factory(tag_factory)
+        .set_resource_tag_factory(resource_tag_factory)
         .build()
         .unwrap();
 

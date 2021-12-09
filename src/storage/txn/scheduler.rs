@@ -200,7 +200,7 @@ struct SchedulerInner<L: LockManager> {
 
     enable_async_apply_prewrite: bool,
 
-    tag_factory: ResourceTagFactory,
+    resource_tag_factory: ResourceTagFactory,
 }
 
 #[inline]
@@ -311,7 +311,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         dynamic_configs: DynamicConfigs,
         flow_controller: Arc<FlowController>,
         reporter: R,
-        tag_factory: ResourceTagFactory,
+        resource_tag_factory: ResourceTagFactory,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -344,7 +344,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             in_memory_pessimistic_lock: dynamic_configs.in_memory_pessimistic_lock,
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
             flow_controller,
-            tag_factory,
+            resource_tag_factory,
         });
 
         slow_log!(
@@ -659,7 +659,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             return;
         }
 
-        let resource_tag = self.inner.tag_factory.new_tag(task.cmd.ctx());
+        let resource_tag = self.inner.resource_tag_factory.new_tag(task.cmd.ctx());
         async {
             let tag = task.cmd.tag();
             fail_point!("scheduler_async_snapshot_finish");

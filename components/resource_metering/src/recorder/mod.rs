@@ -12,10 +12,10 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use arc_swap::ArcSwapOption;
 use collections::HashMap;
 use crossbeam::channel::{bounded, Receiver};
 use tikv_util::time::Instant;
-use arc_swap::ArcSwapOption;
 
 mod cpu;
 
@@ -402,8 +402,8 @@ mod tests {
     #[test]
     fn test_recorder() {
         let (thread_tx, thread_rx) = bounded(1024);
-        let tag_factory = ResourceTagFactory::new(thread_tx);
-        tag_factory.register_local_storage(&LocalStorage::default());
+        let resource_tag_factory = ResourceTagFactory::new(thread_tx);
+        resource_tag_factory.register_local_storage(&LocalStorage::default());
 
         let (_, collector_rx) = bounded(1024);
         let now = Instant::now();

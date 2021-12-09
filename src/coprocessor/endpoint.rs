@@ -55,7 +55,7 @@ pub struct Endpoint<E: Engine> {
     // Perf stats level
     perf_level: PerfLevel,
 
-    tag_factory: ResourceTagFactory,
+    resource_tag_factory: ResourceTagFactory,
 
     /// The recursion limit when parsing Coprocessor Protobuf requests.
     recursion_limit: u32,
@@ -80,7 +80,7 @@ impl<E: Engine> Endpoint<E> {
         read_pool: ReadPoolHandle,
         concurrency_manager: ConcurrencyManager,
         perf_level: PerfLevel,
-        tag_factory: ResourceTagFactory,
+        resource_tag_factory: ResourceTagFactory,
     ) -> Self {
         // FIXME: When yatp is used, we need to limit coprocessor requests in progress to avoid
         // using too much memory. However, if there are a number of large requests, small requests
@@ -96,7 +96,7 @@ impl<E: Engine> Endpoint<E> {
             semaphore,
             concurrency_manager,
             perf_level,
-            tag_factory,
+            resource_tag_factory,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
@@ -433,7 +433,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
-        let resource_tag = self.tag_factory.new_tag(&req_ctx.context);
+        let resource_tag = self.resource_tag_factory.new_tag(&req_ctx.context);
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
@@ -560,7 +560,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
-        let resource_tag = self.tag_factory.new_tag(&req_ctx.context);
+        let resource_tag = self.resource_tag_factory.new_tag(&req_ctx.context);
         let task_id = req_ctx.build_task_id();
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 

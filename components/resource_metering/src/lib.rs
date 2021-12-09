@@ -46,12 +46,15 @@ use tikv_util::warn;
 /// [Future]: futures::Future
 pub struct ResourceMeteringTag {
     infos: Arc<TagInfos>,
-    tag_factory: ResourceTagFactory,
+    resource_tag_factory: ResourceTagFactory,
 }
 
 impl ResourceMeteringTag {
-    fn new(infos: Arc<TagInfos>, tag_factory: ResourceTagFactory) -> Self {
-        Self { infos, tag_factory }
+    fn new(infos: Arc<TagInfos>, resource_tag_factory: ResourceTagFactory) -> Self {
+        Self {
+            infos,
+            resource_tag_factory,
+        }
     }
 
     /// This method is used to provide [ResourceMeteringTag] with the ability
@@ -68,7 +71,7 @@ impl ResourceMeteringTag {
             let mut ls = s.borrow_mut();
 
             if unlikely(!ls.registered && ls.register_failed_times < MAX_THREAD_REGISTER_RETRY) {
-                ls.registered = self.tag_factory.register_local_storage(&ls);
+                ls.registered = self.resource_tag_factory.register_local_storage(&ls);
                 if !ls.registered {
                     ls.register_failed_times += 1;
                 }
@@ -243,7 +246,7 @@ mod tests {
         // the test results may be affected by parallel testing.
         std::thread::spawn(|| {
             let (tx, _rx) = unbounded();
-            let tag_factory = ResourceTagFactory::new(tx);
+            let resource_tag_factory = ResourceTagFactory::new(tx);
             let tag = ResourceMeteringTag {
                 infos: Arc::new(TagInfos {
                     store_id: 1,
@@ -251,7 +254,7 @@ mod tests {
                     peer_id: 3,
                     extra_attachment: b"12345".to_vec(),
                 }),
-                tag_factory,
+                resource_tag_factory,
             };
             {
                 let guard = tag.attach();

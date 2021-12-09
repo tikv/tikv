@@ -626,10 +626,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
 
         // Start resource metering.
-        let (recorder_handle, collector_registry, tag_factory) = resource_metering::init_recorder(
-            self.config.resource_metering.enabled,
-            self.config.resource_metering.precision.as_millis(),
-        );
+        let (recorder_handle, collector_registry, resource_tag_factory) =
+            resource_metering::init_recorder(
+                self.config.resource_metering.enabled,
+                self.config.resource_metering.precision.as_millis(),
+            );
 
         let mut reporter_worker = WorkerBuilder::new("resource-metering-reporter")
             .pending_capacity(30)
@@ -677,7 +678,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             lock_mgr.get_storage_dynamic_configs(),
             flow_controller,
             pd_sender.clone(),
-            tag_factory.clone(),
+            resource_tag_factory.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -776,7 +777,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 cop_read_pool_handle,
                 self.concurrency_manager.clone(),
                 engine_rocks::raw_util::to_raw_perf_level(self.config.coprocessor.perf_level),
-                tag_factory,
+                resource_tag_factory,
             ),
             coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
             self.router.clone(),

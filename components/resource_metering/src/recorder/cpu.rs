@@ -3,15 +3,15 @@
 use crate::localstorage::LocalStorage;
 use crate::metrics::STAT_TASK_COUNT;
 use crate::recorder::SubRecorder;
-use crate::{utils, TagInfos};
-use crate::utils::Stat;
+use crate::utils::{self, Stat};
+use crate::TagInfos;
 use crate::{RawRecord, RawRecords};
 
 use std::sync::Arc;
 
+use arc_swap::ArcSwapOption;
 use collections::HashMap;
 use fail::fail_point;
-use arc_swap::ArcSwapOption;
 
 /// An implementation of [SubRecorder] for collecting cpu statistics.
 ///
@@ -106,10 +106,8 @@ mod tests {
 mod tests {
     use super::*;
     use crate::{utils, RawRecords, TagInfos};
-    use std::sync::atomic::AtomicPtr;
-    use std::sync::Arc;
-
     use arc_swap::ArcSwapOption;
+    use std::sync::Arc;
 
     fn heavy_job() -> u64 {
         let m: u64 = rand::random();
