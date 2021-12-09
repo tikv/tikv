@@ -596,6 +596,7 @@ where
                             cb.invoke_read(resp);
                             return;
                         }
+                        self.metrics.local_executed_stale_read_requests += 1;
                         response
                     }
                     _ => unreachable!(),
@@ -704,6 +705,7 @@ const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 #[derive(Clone)]
 struct ReadMetrics {
     local_executed_requests: u64,
+    local_executed_stale_read_requests: u64,
     local_executed_snapshot_cache_hit: u64,
     // TODO: record rejected_by_read_quorum.
     rejected_by_store_id_mismatch: u64,
@@ -725,6 +727,7 @@ impl Default for ReadMetrics {
     fn default() -> ReadMetrics {
         ReadMetrics {
             local_executed_requests: 0,
+            local_executed_stale_read_requests: 0,
             local_executed_snapshot_cache_hit: 0,
             rejected_by_store_id_mismatch: 0,
             rejected_by_peer_id_mismatch: 0,
@@ -816,6 +819,10 @@ impl ReadMetrics {
         if self.local_executed_requests > 0 {
             LOCAL_READ_EXECUTED_REQUESTS.inc_by(self.local_executed_requests);
             self.local_executed_requests = 0;
+        }
+        if self.local_executed_stale_read_requests > 0 {
+            LOCAL_READ_EXECUTED_STALE_READ_REQUESTS.inc_by(self.local_executed_stale_read_requests);
+            self.local_executed_stale_read_requests = 0;
         }
     }
 }
