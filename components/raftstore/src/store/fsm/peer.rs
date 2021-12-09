@@ -162,7 +162,7 @@ where
             callback.invoke_with_response(resp);
         }
         (match self.hibernate_state.group_state() {
-            GroupState::Idle => &HIBERNATED_PEER_STATE_GAUGE.hibernated,
+            GroupState::Idle | GroupState::PreChaos => &HIBERNATED_PEER_STATE_GAUGE.hibernated,
             _ => &HIBERNATED_PEER_STATE_GAUGE.awaken,
         })
         .dec();
