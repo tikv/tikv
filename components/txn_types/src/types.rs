@@ -295,6 +295,11 @@ impl RawMutation {
 }
 
 /// A row mutation.
+///
+/// It may also carry an `Assertion` field, which means it has such an *assertion* to the data
+/// (the key already exist or not exist). The assertion should pass if the mutation (in a prewrite
+/// request) is going to be finished successfully, otherwise it indicates there should be some bug
+/// causing the attempt to write wrong data.
 #[derive(Debug, Clone)]
 pub enum Mutation {
     /// Put `Value` into `Key`, overwriting any existing value.

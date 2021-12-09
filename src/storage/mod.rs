@@ -6964,8 +6964,8 @@ mod tests {
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
-                        Mutation::Put((Key::from_raw(&k1), v1.clone())),
-                        Mutation::Put((Key::from_raw(&k2), v2.clone())),
+                        Mutation::make_put(Key::from_raw(&k1), v1.clone()),
+                        Mutation::make_put(Key::from_raw(&k2), v2.clone()),
                     ],
                     k1.clone(),
                     100.into(),
@@ -7823,7 +7823,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
-                    vec![(Mutation::Put((k1.clone(), b"v".to_vec())), true)],
+                    vec![(Mutation::make_put(k1.clone(), b"v".to_vec()), true)],
                     b"k1".to_vec(),
                     10.into(),
                     3000,
@@ -7873,7 +7873,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
-                    vec![(Mutation::Put((k1, b"v".to_vec())), true)],
+                    vec![(Mutation::make_put(k1, b"v".to_vec()), true)],
                     b"k1".to_vec(),
                     10.into(),
                     3000,
