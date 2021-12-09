@@ -54,7 +54,7 @@ fn test_scheduler_leader_change_twice() {
     storage0
         .sched_txn_command(
             commands::Prewrite::new(
-                vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
+                vec![Mutation::make_put(Key::from_raw(b"k"), b"v".to_vec())],
                 b"k".to_vec(),
                 10.into(),
                 0,
@@ -239,6 +239,7 @@ fn test_pipelined_pessimistic_lock() {
                     10,
                     10,
                     true,
+                    false,
                 ),
                 Box::new(move |res| {
                     res.unwrap_err();
@@ -264,7 +265,7 @@ fn test_pipelined_pessimistic_lock() {
     fail::cfg(scheduler_async_write_finish_fp, "pause").unwrap();
     storage
         .sched_txn_command(
-            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, true),
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, true, false),
             expect_pessimistic_lock_res_callback(
                 tx.clone(),
                 PessimisticLockRes::Values(vec![None]),
@@ -277,7 +278,7 @@ fn test_pipelined_pessimistic_lock() {
     storage
         .sched_txn_command(
             commands::PrewritePessimistic::new(
-                vec![(Mutation::Put((key.clone(), val.clone())), true)],
+                vec![(Mutation::make_put(key.clone(), val.clone()), true)],
                 key.to_raw().unwrap(),
                 10.into(),
                 3000,
@@ -305,7 +306,7 @@ fn test_pipelined_pessimistic_lock() {
     fail::cfg(rockskv_async_write_fp, "return()").unwrap();
     storage
         .sched_txn_command(
-            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 30, 30, true),
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 30, 30, true, false),
             expect_fail_callback(tx.clone(), 0, |_| ()),
         )
         .unwrap();
@@ -317,7 +318,13 @@ fn test_pipelined_pessimistic_lock() {
     for blocked in &[false, true] {
         storage
             .sched_txn_command(
-                new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 40, 40, true),
+                new_acquire_pessimistic_lock_command(
+                    vec![(key.clone(), false)],
+                    40,
+                    40,
+                    true,
+                    false,
+                ),
                 expect_pessimistic_lock_res_callback(
                     tx.clone(),
                     PessimisticLockRes::Values(vec![Some(val.clone())]),
@@ -340,7 +347,7 @@ fn test_pipelined_pessimistic_lock() {
     fail::cfg(scheduler_async_write_finish_fp, "pause").unwrap();
     storage
         .sched_txn_command(
-            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 50, 50, true),
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 50, 50, true, false),
             expect_pessimistic_lock_res_callback(
                 tx.clone(),
                 PessimisticLockRes::Values(vec![Some(val.clone())]),
@@ -361,6 +368,7 @@ fn test_pipelined_pessimistic_lock() {
                 60,
                 60,
                 true,
+                false,
             ),
             expect_pessimistic_lock_res_callback(
                 tx,
@@ -410,7 +418,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
         storage
             .sched_txn_command(
                 commands::Prewrite::new(
-                    vec![Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec()))],
+                    vec![Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec())],
                     b"k1".to_vec(),
                     10.into(),
                     100,
@@ -441,7 +449,10 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
-                    vec![(Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())), true)],
+                    vec![(
+                        Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec()),
+                        true,
+                    )],
                     b"k1".to_vec(),
                     10.into(),
                     100,
@@ -532,6 +543,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
                     false,
                     0.into(),
                     OldValues::default(),
+                    false,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -551,7 +563,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
         storage
             .sched_txn_command(
                 commands::Prewrite::new(
-                    vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
+                    vec![Mutation::make_put(Key::from_raw(key), value.to_vec())],
                     key.to_vec(),
                     start_ts,
                     0,
@@ -571,7 +583,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![(
-                        Mutation::Put((Key::from_raw(key), value.to_vec())),
+                        Mutation::make_put(Key::from_raw(key), value.to_vec()),
                         need_lock,
                     )],
                     key.to_vec(),
@@ -805,7 +817,7 @@ fn test_async_apply_prewrite_fallback() {
     storage
         .sched_txn_command(
             commands::Prewrite::new(
-                vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
+                vec![Mutation::make_put(Key::from_raw(key), value.to_vec())],
                 key.to_vec(),
                 10.into(),
                 0,
@@ -872,6 +884,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
                     false,
                     0.into(),
                     OldValues::default(),
+                    false,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -890,7 +903,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
         storage
             .sched_txn_command(
                 commands::Prewrite::new(
-                    vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
+                    vec![Mutation::make_put(Key::from_raw(key), value.to_vec())],
                     key.to_vec(),
                     start_ts,
                     0,
@@ -909,7 +922,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
-                    vec![(Mutation::Put((Key::from_raw(key), value.to_vec())), true)],
+                    vec![(Mutation::make_put(Key::from_raw(key), value.to_vec()), true)],
                     key.to_vec(),
                     start_ts,
                     0,
@@ -1175,7 +1188,7 @@ fn test_resolve_lock_deadline() {
     let mutations = (1i32..300)
         .map(|i| {
             let data = i.to_le_bytes();
-            Mutation::Put((Key::from_raw(&data), data.to_vec()))
+            Mutation::make_put(Key::from_raw(&data), data.to_vec())
         })
         .collect();
     let cmd = commands::Prewrite::new(

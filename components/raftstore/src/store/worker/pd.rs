@@ -44,7 +44,7 @@ use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use protobuf::Message;
-use resource_metering::{register_collector, Collector, CollectorHandle, RawRecords};
+use resource_metering::{Collector, CollectorHandle, CollectorRegHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -704,6 +704,7 @@ where
         concurrency_manager: ConcurrencyManager,
         snap_mgr: SnapManager,
         remote: Remote<yatp::task::future::TaskCell>,
+        collector_reg_handle: CollectorRegHandle,
     ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
@@ -711,8 +712,8 @@ where
             error!("failed to start stats collector, error = {:?}", e);
         }
 
-        let _region_cpu_records_collector =
-            register_collector(Box::new(RegionCPUMeteringCollector::new(scheduler.clone())));
+        let _region_cpu_records_collector = collector_reg_handle
+            .register(Box::new(RegionCPUMeteringCollector::new(scheduler.clone())));
 
         Runner {
             store_id,
@@ -1475,12 +1476,12 @@ fn calculate_region_cpu_records(
     region_cpu_records: &mut HashMap<u64, u32>,
 ) {
     for (tag, record) in &records.records {
-        let record_store_id = tag.infos.store_id;
+        let record_store_id = tag.store_id;
         if record_store_id != store_id {
             continue;
         }
         // Reporting a region heartbeat later will clear the corresponding record.
-        *region_cpu_records.entry(tag.infos.region_id).or_insert(0) += record.cpu_time;
+        *region_cpu_records.entry(tag.region_id).or_insert(0) += record.cpu_time;
     }
 }
 
@@ -2098,7 +2099,7 @@ mod tests {
     }
 
     use metapb::Peer;
-    use resource_metering::{RawRecord, ResourceMeteringTag};
+    use resource_metering::{RawRecord, TagInfos};
 
     #[test]
     fn test_calculate_region_cpu_records() {
@@ -2121,7 +2122,7 @@ mod tests {
                     context.set_peer(peer);
                     context.set_region_id(region_id);
                     context.set_resource_group_tag(resource_group_tag);
-                    let resource_tag = ResourceMeteringTag::from_rpc_context(&context);
+                    let resource_tag = Arc::new(TagInfos::from_rpc_context(&context));
 
                     let mut records = HashMap::default();
                     records.insert(resource_tag, RawRecord { cpu_time: 10 });
