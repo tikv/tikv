@@ -10,10 +10,10 @@ use serde_derive::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::Scheduler;
 
-const MIN_PRECISION: ReadableDuration = ReadableDuration::secs(1);
+const MIN_PRECISION: ReadableDuration = ReadableDuration::millis(100);
 const MAX_PRECISION: ReadableDuration = ReadableDuration::hours(1);
 const MAX_MAX_RESOURCE_GROUPS: usize = 5_000;
-const MIN_REPORT_RECEIVER_INTERVAL: ReadableDuration = ReadableDuration::secs(5);
+const MIN_REPORT_RECEIVER_INTERVAL: ReadableDuration = ReadableDuration::millis(500);
 
 /// Public configuration of resource metering module.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]

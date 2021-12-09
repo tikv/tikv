@@ -32,7 +32,7 @@ use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
-use resource_metering::{FutureExt, ResourceMeteringTag, StreamExt};
+use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::time::Instant;
 use txn_types::Lock;
@@ -54,6 +54,8 @@ pub struct Endpoint<E: Engine> {
 
     // Perf stats level
     perf_level: PerfLevel,
+
+    resource_tag_factory: ResourceTagFactory,
 
     /// The recursion limit when parsing Coprocessor Protobuf requests.
     recursion_limit: u32,
@@ -78,6 +80,7 @@ impl<E: Engine> Endpoint<E> {
         read_pool: ReadPoolHandle,
         concurrency_manager: ConcurrencyManager,
         perf_level: PerfLevel,
+        resource_tag_factory: ResourceTagFactory,
     ) -> Self {
         // FIXME: When yatp is used, we need to limit coprocessor requests in progress to avoid
         // using too much memory. However, if there are a number of large requests, small requests
@@ -93,6 +96,7 @@ impl<E: Engine> Endpoint<E> {
             semaphore,
             concurrency_manager,
             perf_level,
+            resource_tag_factory,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
@@ -429,7 +433,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&req_ctx.context);
+        let resource_tag = self.resource_tag_factory.new_tag(&req_ctx.context);
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
@@ -556,7 +560,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&req_ctx.context);
+        let resource_tag = self.resource_tag_factory.new_tag(&req_ctx.context);
         let task_id = req_ctx.build_task_id();
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
@@ -814,6 +818,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         // a normal request
@@ -854,6 +859,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
         copr.recursion_limit = 100;
 
@@ -891,6 +897,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         let mut req = coppb::Request::default();
@@ -913,6 +920,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         let mut req = coppb::Request::default();
@@ -958,6 +966,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         let (tx, rx) = mpsc::channel();
@@ -1005,6 +1014,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         let handler_builder =
@@ -1029,6 +1039,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         // Fail immediately
@@ -1081,6 +1092,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
@@ -1108,6 +1120,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         // handler returns `finished == true` should not be called again.
@@ -1206,6 +1219,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1268,8 +1282,13 @@ mod tests {
         };
 
         let cm = ConcurrencyManager::new(1.into());
-        let copr =
-            Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm, PerfLevel::EnableCount);
+        let copr = Endpoint::<RocksEngine>::new(
+            &config,
+            read_pool.handle(),
+            cm,
+            PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
+        );
 
         let (tx, rx) = std::sync::mpsc::channel();
 
@@ -1596,6 +1615,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         {
@@ -1653,9 +1673,13 @@ mod tests {
         });
 
         let config = Config::default();
-        let copr =
-            Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm, PerfLevel::EnableCount);
-
+        let copr = Endpoint::<RocksEngine>::new(
+            &config,
+            read_pool.handle(),
+            cm,
+            PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
+        );
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);
         req.set_start_ts(100);
