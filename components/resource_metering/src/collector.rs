@@ -33,22 +33,15 @@ pub trait Collector: Send {
     fn collect(&self, records: Arc<RawRecords>);
 }
 
-/// `CollectorRegistry` accepts registrations of [Collector].
-///
-/// Normally, 'registry' holds everything registered to it. However, the
-/// `CollectorRegistry` isn't implemented in the normal way. It will forward
-/// collectors passed in via the call [register] to the recorder via an
-/// internal channel. It is still named `registry` because we want users
-/// to treat it and use it as a normal registry.
+/// `CollectorRegHandle` accepts registrations of [Collector].
 ///
 /// [Collector]: crate::collector::Collector
-/// [register]: crate::collector::CollectorRegistry::register
 #[derive(Clone)]
-pub struct CollectorRegistry {
+pub struct CollectorRegHandle {
     tx: Sender<CollectorReg>,
 }
 
-impl CollectorRegistry {
+impl CollectorRegHandle {
     pub(crate) fn new(tx: Sender<CollectorReg>) -> Self {
         Self { tx }
     }

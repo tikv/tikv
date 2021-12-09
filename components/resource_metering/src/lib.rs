@@ -18,7 +18,7 @@ pub mod utils;
 pub(crate) mod metrics;
 
 pub use client::{Client, GrpcClient};
-pub use collector::{Collector, CollectorHandle, CollectorId, CollectorRegistry};
+pub use collector::{Collector, CollectorHandle, CollectorId, CollectorRegHandle};
 pub use config::{Config, ConfigManager};
 pub use model::*;
 pub use recorder::{init_recorder, CpuRecorder, Recorder, RecorderBuilder, RecorderHandle};
@@ -50,13 +50,6 @@ pub struct ResourceMeteringTag {
 }
 
 impl ResourceMeteringTag {
-    fn new(infos: Arc<TagInfos>, resource_tag_factory: ResourceTagFactory) -> Self {
-        Self {
-            infos,
-            resource_tag_factory,
-        }
-    }
-
     /// This method is used to provide [ResourceMeteringTag] with the ability
     /// to attach to the thread local context.
     ///
@@ -127,7 +120,10 @@ impl ResourceTagFactory {
 
     pub fn new_tag(&self, context: &kvproto::kvrpcpb::Context) -> ResourceMeteringTag {
         let tag_infos = TagInfos::from_rpc_context(context);
-        ResourceMeteringTag::new(Arc::new(tag_infos), self.clone())
+        ResourceMeteringTag {
+            infos: Arc::new(tag_infos),
+            resource_tag_factory: self.clone(),
+        }
     }
 
     fn register_local_storage(&self, storage: &LocalStorage) -> bool {

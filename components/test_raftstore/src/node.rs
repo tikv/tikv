@@ -28,7 +28,7 @@ use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use raftstore::store::SnapManagerBuilder;
 use raftstore::store::*;
 use raftstore::Result;
-use resource_metering::CollectorRegistry;
+use resource_metering::CollectorRegHandle;
 use tikv::config::{ConfigController, Module};
 use tikv::import::SSTImporter;
 use tikv::server::raftkv::ReplicaReadLockChecker;
@@ -296,7 +296,7 @@ impl Simulator for NodeCluster {
             split_scheduler,
             AutoSplitController::default(),
             cm,
-            CollectorRegistry::new_for_test(),
+            CollectorRegHandle::new_for_test(),
         )?;
         assert!(
             engines

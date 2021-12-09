@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::collector::{Collector, CollectorReg, CollectorRegistry};
+use crate::collector::{Collector, CollectorReg, CollectorRegHandle};
 use crate::localstorage::{LocalStorage, LocalStorageRef};
 use crate::{utils, RawRecords, ResourceTagFactory, TagInfos};
 
@@ -242,7 +242,7 @@ impl RecorderBuilder {
     /// This function does not return the `Recorder` instance directly, instead
     /// it returns a [RecorderHandle] that is used to control the execution, and
     /// a [ResourceTagFactory] that is used for construction of resource tag.
-    pub fn spawn(self) -> io::Result<(RecorderHandle, CollectorRegistry, ResourceTagFactory)> {
+    pub fn spawn(self) -> io::Result<(RecorderHandle, CollectorRegHandle, ResourceTagFactory)> {
         let pause = Arc::new(AtomicBool::new(!self.enable));
         let precision_ms = self.precision_ms.clone();
         let (thread_tx, thread_rx) = bounded(1024);
@@ -266,7 +266,7 @@ impl RecorderBuilder {
             .map(move |h| {
                 (
                     RecorderHandle::new(h, pause, precision_ms),
-                    CollectorRegistry::new(collector_tx),
+                    CollectorRegHandle::new(collector_tx),
                     ResourceTagFactory::new(thread_tx),
                 )
             })
@@ -342,7 +342,7 @@ impl RecorderHandle {
 pub fn init_recorder(
     enable: bool,
     precision_ms: u64,
-) -> (RecorderHandle, CollectorRegistry, ResourceTagFactory) {
+) -> (RecorderHandle, CollectorRegHandle, ResourceTagFactory) {
     RecorderBuilder::default()
         .enable(enable)
         .precision_ms(Arc::new(AtomicU64::new(precision_ms)))

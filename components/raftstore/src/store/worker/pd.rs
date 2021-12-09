@@ -44,7 +44,7 @@ use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use protobuf::Message;
-use resource_metering::{Collector, CollectorHandle, CollectorRegistry, RawRecords};
+use resource_metering::{Collector, CollectorHandle, CollectorRegHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -704,7 +704,7 @@ where
         concurrency_manager: ConcurrencyManager,
         snap_mgr: SnapManager,
         remote: Remote<yatp::task::future::TaskCell>,
-        collector_registry: CollectorRegistry,
+        collector_registry: CollectorRegHandle,
     ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());

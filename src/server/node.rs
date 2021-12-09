@@ -29,7 +29,7 @@ use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
 use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
-use resource_metering::{CollectorRegistry, ResourceTagFactory};
+use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
@@ -178,7 +178,7 @@ where
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
-        collector_registry: CollectorRegistry,
+        collector_registry: CollectorRegHandle,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -451,7 +451,7 @@ where
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
-        collector_registry: CollectorRegistry,
+        collector_registry: CollectorRegHandle,
     ) -> Result<()>
     where
         T: Transport + 'static,
