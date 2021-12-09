@@ -1877,6 +1877,7 @@ mod tests {
                     0.into(),
                     secondary_keys,
                     false,
+                    AssertionLevel::Off,
                     ctx,
                 );
                 prewrite_command(&engine, cm.clone(), &mut statistics, cmd)

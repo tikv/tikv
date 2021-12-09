@@ -1712,9 +1712,12 @@ pub mod tests {
                     key,
                     value,
                     key,
+                    &None,
                     ts,
                     for_update_ts,
                     is_pessimistic_lock,
+                    0,
+                    false,
                     assertion,
                     assertion_level,
                 );

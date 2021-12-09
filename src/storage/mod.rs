@@ -7863,6 +7863,7 @@ mod tests {
                     TimeStamp::default(),
                     None,
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 Box::new(move |res| {
@@ -7919,6 +7920,7 @@ mod tests {
                     TimeStamp::default(),
                     None,
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 Box::new(move |res| {

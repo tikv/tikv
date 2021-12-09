@@ -180,7 +180,6 @@ fn create_backend_inner(
                 return Err(bad_backend(Backend::CloudDynamic(dyn_backend.clone())));
             }
         },
-        Backend::Hdfs(_) => unimplemented!(),
         #[cfg(not(any(feature = "cloud-gcp", feature = "cloud-aws")))]
         _ => return Err(bad_backend(backend.clone())),
     };
