@@ -288,6 +288,8 @@ macro_rules! cf_config {
             pub prop_keys_index_distance: u64,
             #[online_config(skip)]
             pub enable_doubly_skiplist: bool,
+            pub compact_check_sliding_window: usize,
+            pub compact_deletion_trigger: usize,
             #[online_config(skip)]
             pub enable_compaction_guard: bool,
             #[online_config(skip)]
@@ -500,6 +502,10 @@ macro_rules! build_cf_opt {
         if $opt.enable_doubly_skiplist {
             cf_opts.set_doubly_skiplist();
         }
+        cf_opts.set_compact_on_deletion(
+            $opt.compact_check_sliding_window,
+            $opt.compact_deletion_trigger,
+        );
         if $opt.enable_compaction_guard {
             if let Some(provider) = $region_info_provider {
                 let factory = CompactionGuardGeneratorFactory::new(
@@ -571,6 +577,8 @@ impl Default for DefaultCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
+            compact_check_sliding_window: 10000,
+            compact_deletion_trigger: 5000,
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
@@ -668,6 +676,8 @@ impl Default for WriteCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
+            compact_check_sliding_window: 10000,
+            compact_deletion_trigger: 3000,
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
@@ -761,6 +771,8 @@ impl Default for LockCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
+            compact_check_sliding_window: 10000,
+            compact_deletion_trigger: 5000,
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
@@ -835,6 +847,8 @@ impl Default for RaftCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
+            compact_check_sliding_window: 0,
+            compact_deletion_trigger: 0,
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
@@ -1181,6 +1195,8 @@ impl Default for RaftDefaultCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
+            compact_check_sliding_window: 0,
+            compact_deletion_trigger: 0,
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
