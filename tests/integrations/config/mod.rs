@@ -705,7 +705,7 @@ fn test_serde_custom_tikv_config() {
         ..Default::default()
     };
     value.backup_stream = BackupStreamConfig {
-        num_threads: 456,
+        num_threads: 8,
         ..Default::default()
     };
     value.import = ImportConfig {
