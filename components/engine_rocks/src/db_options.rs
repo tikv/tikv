@@ -7,6 +7,7 @@ use engine_traits::Result;
 use engine_traits::TitanDBOptions;
 use rocksdb::DBOptions as RawDBOptions;
 use rocksdb::TitanDBOptions as RawTitanDBOptions;
+use tikv_util::box_err;
 
 impl DBOptionsExt for RocksEngine {
     type DBOptions = RocksDBOptions;

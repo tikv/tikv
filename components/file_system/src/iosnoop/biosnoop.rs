@@ -500,7 +500,7 @@ mod tests {
         let mut r = vec![A512::default(); 2];
         b.iter(|| {
             set_io_type(IOType::ForegroundRead);
-            f.seek(SeekFrom::Start(rng.gen_range(0, 100) * 512))
+            f.seek(SeekFrom::Start(rng.gen_range(0..100) * 512))
                 .unwrap();
             assert_ne!(f.read(&mut r.as_bytes_mut()).unwrap(), 0);
         });

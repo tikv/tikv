@@ -9,7 +9,7 @@ use crate::storage::mvcc::{
     EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, NewerTsCheckState, PointGetter,
     PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
 };
-use txn_types::{Key, KvPair, TimeStamp, TsSet, Value, WriteRef};
+use txn_types::{Key, KvPair, OldValue, TimeStamp, TsSet, Value, WriteRef};
 
 pub trait Store: Send {
     /// The scanner type returned by `scanner()`.
@@ -135,14 +135,27 @@ pub enum TxnEntry {
     Prewrite {
         default: KvPair,
         lock: KvPair,
-        old_value: Option<Value>,
+        old_value: OldValue,
     },
     Commit {
         default: KvPair,
         write: KvPair,
-        old_value: Option<Value>,
+        old_value: OldValue,
     },
     // TOOD: Add more entry if needed.
+}
+
+impl TxnEntry {
+    pub fn old_value(&mut self) -> &mut OldValue {
+        match self {
+            TxnEntry::Prewrite {
+                ref mut old_value, ..
+            } => old_value,
+            TxnEntry::Commit {
+                ref mut old_value, ..
+            } => old_value,
+        }
+    }
 }
 
 impl TxnEntry {
@@ -179,6 +192,35 @@ impl TxnEntry {
             // Prewrite are not support
             _ => unreachable!(),
         }
+    }
+
+    pub fn size(&self) -> usize {
+        let mut size = 0;
+        match self {
+            TxnEntry::Commit {
+                default,
+                write,
+                old_value,
+            } => {
+                size += default.0.len();
+                size += default.1.len();
+                size += write.0.len();
+                size += write.1.len();
+                size += old_value.value_size();
+            }
+            TxnEntry::Prewrite {
+                default,
+                lock,
+                old_value,
+            } => {
+                size += default.0.len();
+                size += default.1.len();
+                size += lock.0.len();
+                size += lock.1.len();
+                size += old_value.value_size();
+            }
+        }
+        size
     }
 }
 
@@ -221,6 +263,8 @@ pub struct SnapshotStore<S: Snapshot> {
     isolation_level: IsolationLevel,
     fill_cache: bool,
     bypass_locks: TsSet,
+    access_locks: TsSet,
+
     check_has_newer_ts_data: bool,
 
     point_getter_cache: Option<PointGetter<S>>,
@@ -235,6 +279,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .isolation_level(self.isolation_level)
             .multi(false)
             .bypass_locks(self.bypass_locks.clone())
+            .access_locks(self.access_locks.clone())
             .build()?;
         let v = point_getter.get(key)?;
         statistics.add(&point_getter.take_statistics());
@@ -249,6 +294,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                     .isolation_level(self.isolation_level)
                     .multi(true)
                     .bypass_locks(self.bypass_locks.clone())
+                    .access_locks(self.access_locks.clone())
                     .check_has_newer_ts_data(self.check_has_newer_ts_data)
                     .build()?,
             );
@@ -282,37 +328,24 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         keys: &[Key],
         statistics: &mut Statistics,
     ) -> Result<Vec<Result<Option<Value>>>> {
-        use std::mem::{self, MaybeUninit};
-        type Element = Result<Option<Value>>;
-
         if keys.len() == 1 {
             return Ok(vec![self.get(&keys[0], statistics)]);
         }
-
-        let mut order_and_keys: Vec<_> = keys.iter().enumerate().collect();
-        order_and_keys.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
 
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .multi(true)
             .bypass_locks(self.bypass_locks.clone())
+            .access_locks(self.access_locks.clone())
             .build()?;
 
-        let mut values: Vec<MaybeUninit<Element>> = Vec::with_capacity(keys.len());
-        for _ in 0..keys.len() {
-            values.push(MaybeUninit::uninit());
-        }
-        for (original_order, key) in order_and_keys {
+        let mut values = Vec::with_capacity(keys.len());
+        for key in keys {
             let value = point_getter.get(key).map_err(Error::from);
-            unsafe {
-                values[original_order].as_mut_ptr().write(value);
-            }
+            values.push(value)
         }
-
         statistics.add(&point_getter.take_statistics());
-
-        let values = unsafe { mem::transmute::<Vec<MaybeUninit<Element>>, Vec<Element>>(values) };
         Ok(values)
     }
 
@@ -327,12 +360,14 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
     ) -> Result<MvccScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
-        let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts, desc)
+        let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts)
+            .desc(desc)
             .range(lower_bound, upper_bound)
             .omit_value(key_only)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .bypass_locks(self.bypass_locks.clone())
+            .access_locks(self.access_locks.clone())
             .check_has_newer_ts_data(check_has_newer_ts_data)
             .build()?;
 
@@ -358,16 +393,15 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
             // Scan ts in (after_ts, start_ts].
             (Some(after_ts.next()), Some(self.start_ts))
         };
-        let scanner =
-            ScannerBuilder::new(self.snapshot.clone(), self.start_ts, false /* desc */)
-                .range(lower_bound, upper_bound)
-                .omit_value(false)
-                .fill_cache(self.fill_cache)
-                .isolation_level(self.isolation_level)
-                .bypass_locks(self.bypass_locks.clone())
-                .hint_min_ts(min_ts)
-                .hint_max_ts(max_ts)
-                .build_entry_scanner(after_ts, output_delete)?;
+        let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts)
+            .range(lower_bound, upper_bound)
+            .omit_value(false)
+            .fill_cache(self.fill_cache)
+            .isolation_level(self.isolation_level)
+            .bypass_locks(self.bypass_locks.clone())
+            .hint_min_ts(min_ts)
+            .hint_max_ts(max_ts)
+            .build_entry_scanner(after_ts, output_delete)?;
 
         Ok(scanner)
     }
@@ -380,6 +414,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         isolation_level: IsolationLevel,
         fill_cache: bool,
         bypass_locks: TsSet,
+        access_locks: TsSet,
         check_has_newer_ts_data: bool,
     ) -> Self {
         SnapshotStore {
@@ -388,6 +423,7 @@ impl<S: Snapshot> SnapshotStore<S> {
             isolation_level,
             fill_cache,
             bypass_locks,
+            access_locks,
             check_has_newer_ts_data,
 
             point_getter_cache: None,
@@ -416,7 +452,7 @@ impl<S: Snapshot> SnapshotStore<S> {
                     REQUEST_EXCEED_BOUND.inc();
                     return Err(Error::from(ErrorInner::InvalidReqRange {
                         start: Some(l.as_encoded().clone()),
-                        end: upper_bound.as_ref().map(|ref b| b.as_encoded().clone()),
+                        end: upper_bound.as_ref().map(|b| b.as_encoded().clone()),
                         lower_bound: Some(b.to_vec()),
                         upper_bound: self.snapshot.upper_bound().map(|b| b.to_vec()),
                     }));
@@ -428,7 +464,7 @@ impl<S: Snapshot> SnapshotStore<S> {
                 if !b.is_empty() && (u.as_encoded().as_slice() > b || u.as_encoded().is_empty()) {
                     REQUEST_EXCEED_BOUND.inc();
                     return Err(Error::from(ErrorInner::InvalidReqRange {
-                        start: lower_bound.as_ref().map(|ref b| b.as_encoded().clone()),
+                        start: lower_bound.as_ref().map(|b| b.as_encoded().clone()),
                         end: Some(u.as_encoded().clone()),
                         lower_bound: self.snapshot.lower_bound().map(|b| b.to_vec()),
                         upper_bound: Some(b.to_vec()),
@@ -596,10 +632,10 @@ impl Scanner for FixtureStoreScanner {
 mod tests {
     use super::*;
     use crate::storage::kv::{
-        Cursor, Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
-        SnapContext, TestEngineBuilder, WriteData,
+        Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, SnapContext,
+        TestEngineBuilder, WriteData,
     };
-    use crate::storage::mvcc::{Mutation, MvccTxn};
+    use crate::storage::mvcc::{Mutation, MvccTxn, SnapshotReader};
     use crate::storage::txn::{
         commit, prewrite, CommitKind, TransactionKind, TransactionProperties,
     };
@@ -608,6 +644,7 @@ mod tests {
     use engine_traits::{IterOptions, ReadOptions};
     use kvproto::kvrpcpb::Context;
     use std::sync::Arc;
+    use tikv_kv::DummySnapshotExt;
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: TimeStamp = TimeStamp::new(10);
@@ -647,11 +684,13 @@ mod tests {
             // do prewrite.
             {
                 let cm = ConcurrencyManager::new(START_TS);
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true, cm);
+                let mut txn = MvccTxn::new(START_TS, cm);
+                let mut reader = SnapshotReader::new(START_TS, self.snapshot.clone(), true);
                 for key in &self.keys {
                     let key = key.as_bytes();
                     prewrite(
                         &mut txn,
+                        &mut reader,
                         &TransactionProperties {
                             start_ts: START_TS,
                             kind: TransactionKind::Optimistic(false),
@@ -661,8 +700,9 @@ mod tests {
                             lock_ttl: 0,
                             min_commit_ts: TimeStamp::default(),
                             need_old_value: false,
+                            is_retry_request: false,
                         },
-                        Mutation::Put((Key::from_raw(key), key.to_vec())),
+                        Mutation::make_put(Key::from_raw(key), key.to_vec()),
                         &None,
                         false,
                     )
@@ -675,10 +715,11 @@ mod tests {
             // do commit
             {
                 let cm = ConcurrencyManager::new(START_TS);
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true, cm);
+                let mut txn = MvccTxn::new(START_TS, cm);
+                let mut reader = SnapshotReader::new(START_TS, self.snapshot.clone(), true);
                 for key in &self.keys {
                     let key = key.as_bytes();
-                    commit(&mut txn, Key::from_raw(key), COMMIT_TS).unwrap();
+                    commit(&mut txn, &mut reader, Key::from_raw(key), COMMIT_TS).unwrap();
                 }
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 self.engine.write(&self.ctx, write_data).unwrap();
@@ -701,6 +742,7 @@ mod tests {
                 COMMIT_TS.next(),
                 IsolationLevel::Si,
                 true,
+                Default::default(),
                 Default::default(),
                 false,
             )
@@ -758,6 +800,7 @@ mod tests {
 
     impl Snapshot for MockRangeSnapshot {
         type Iter = MockRangeSnapshotIter;
+        type Ext<'a> = DummySnapshotExt;
 
         fn get(&self, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
@@ -768,30 +811,20 @@ mod tests {
         fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
-        fn iter(&self, _: IterOptions, _: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
-            Ok(Cursor::new(
-                MockRangeSnapshotIter::default(),
-                ScanMode::Forward,
-                false,
-            ))
+        fn iter(&self, _: IterOptions) -> EngineResult<Self::Iter> {
+            Ok(MockRangeSnapshotIter::default())
         }
-        fn iter_cf(
-            &self,
-            _: CfName,
-            _: IterOptions,
-            _: ScanMode,
-        ) -> EngineResult<Cursor<Self::Iter>> {
-            Ok(Cursor::new(
-                MockRangeSnapshotIter::default(),
-                ScanMode::Forward,
-                false,
-            ))
+        fn iter_cf(&self, _: CfName, _: IterOptions) -> EngineResult<Self::Iter> {
+            Ok(MockRangeSnapshotIter::default())
         }
         fn lower_bound(&self) -> Option<&[u8]> {
             Some(self.start.as_slice())
         }
         fn upper_bound(&self) -> Option<&[u8]> {
             Some(self.end.as_slice())
+        }
+        fn ext(&self) -> DummySnapshotExt {
+            DummySnapshotExt
         }
     }
 
@@ -929,6 +962,7 @@ mod tests {
             IsolationLevel::Si,
             true,
             Default::default(),
+            Default::default(),
             false,
         );
         let bound_a = Key::from_encoded(b"a".to_vec());
@@ -936,36 +970,44 @@ mod tests {
         let bound_c = Key::from_encoded(b"c".to_vec());
         let bound_d = Key::from_encoded(b"d".to_vec());
         assert!(store.scanner(false, false, false, None, None).is_ok());
-        assert!(store
-            .scanner(
-                false,
-                false,
-                false,
-                Some(bound_b.clone()),
-                Some(bound_c.clone())
-            )
-            .is_ok());
-        assert!(store
-            .scanner(
-                false,
-                false,
-                false,
-                Some(bound_a.clone()),
-                Some(bound_c.clone())
-            )
-            .is_err());
-        assert!(store
-            .scanner(
-                false,
-                false,
-                false,
-                Some(bound_b.clone()),
-                Some(bound_d.clone())
-            )
-            .is_err());
-        assert!(store
-            .scanner(false, false, false, Some(bound_a.clone()), Some(bound_d))
-            .is_err());
+        assert!(
+            store
+                .scanner(
+                    false,
+                    false,
+                    false,
+                    Some(bound_b.clone()),
+                    Some(bound_c.clone())
+                )
+                .is_ok()
+        );
+        assert!(
+            store
+                .scanner(
+                    false,
+                    false,
+                    false,
+                    Some(bound_a.clone()),
+                    Some(bound_c.clone())
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .scanner(
+                    false,
+                    false,
+                    false,
+                    Some(bound_b.clone()),
+                    Some(bound_d.clone())
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .scanner(false, false, false, Some(bound_a.clone()), Some(bound_d))
+                .is_err()
+        );
 
         // Store with whole range
         let snap2 = MockRangeSnapshot::new(b"".to_vec(), b"".to_vec());
@@ -975,18 +1017,25 @@ mod tests {
             IsolationLevel::Si,
             true,
             Default::default(),
+            Default::default(),
             false,
         );
         assert!(store2.scanner(false, false, false, None, None).is_ok());
-        assert!(store2
-            .scanner(false, false, false, Some(bound_a.clone()), None)
-            .is_ok());
-        assert!(store2
-            .scanner(false, false, false, Some(bound_a), Some(bound_b))
-            .is_ok());
-        assert!(store2
-            .scanner(false, false, false, None, Some(bound_c))
-            .is_ok());
+        assert!(
+            store2
+                .scanner(false, false, false, Some(bound_a.clone()), None)
+                .is_ok()
+        );
+        assert!(
+            store2
+                .scanner(false, false, false, Some(bound_a), Some(bound_b))
+                .is_ok()
+        );
+        assert!(
+            store2
+                .scanner(false, false, false, None, Some(bound_c))
+                .is_ok()
+        );
     }
 
     fn gen_fixture_store() -> FixtureStore {
@@ -1282,6 +1331,49 @@ mod tests {
             Some((Key::from_raw(b"abcd"), vec![]))
         );
         assert_eq!(scanner.next().unwrap(), None);
+    }
+
+    #[test]
+    fn test_txn_entry_size() {
+        assert_eq!(
+            TxnEntry::Prewrite {
+                default: (vec![0; 10], vec![0; 10]),
+                lock: (vec![0; 10], vec![0; 10]),
+                old_value: OldValue::None,
+            }
+            .size(),
+            40
+        );
+
+        assert_eq!(
+            TxnEntry::Prewrite {
+                default: (vec![0; 10], vec![0; 10]),
+                lock: (vec![0; 10], vec![0; 10]),
+                old_value: OldValue::value(vec![0; 10]),
+            }
+            .size(),
+            50
+        );
+
+        assert_eq!(
+            TxnEntry::Commit {
+                default: (vec![0; 10], vec![0; 10]),
+                write: (vec![0; 10], vec![0; 10]),
+                old_value: OldValue::None,
+            }
+            .size(),
+            40
+        );
+
+        assert_eq!(
+            TxnEntry::Commit {
+                default: (vec![0; 10], vec![0; 10]),
+                write: (vec![0; 10], vec![0; 10]),
+                old_value: OldValue::value(vec![0; 10]),
+            }
+            .size(),
+            50
+        );
     }
 }
 

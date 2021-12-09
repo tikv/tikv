@@ -4,6 +4,7 @@ use collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+use fail::fail_point;
 use kvproto::metapb::{Peer, Region, Store, StoreState};
 use kvproto::pdpb::*;
 
@@ -47,6 +48,12 @@ impl Service {
 
     pub fn set_cluster_version(&self, version: String) {
         *self.feature_gate.lock().unwrap() = version;
+    }
+}
+
+impl Default for Service {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -113,6 +120,7 @@ impl PdMocker for Service {
     }
 
     fn alloc_id(&self, _: &AllocIdRequest) -> Option<Result<AllocIdResponse>> {
+        fail_point!("connect_leader", |_| None);
         let mut resp = AllocIdResponse::default();
         resp.set_header(Service::header());
 

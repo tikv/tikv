@@ -1,22 +1,20 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::decode_properties::DecodeProperties;
 use crate::{RocksEngine, UserProperties};
-use engine_traits::{
-    DecodeProperties, MvccProperties, MvccPropertiesExt, Result, TableProperties,
-    TablePropertiesCollection, TablePropertiesExt,
-};
+use engine_traits::{MvccProperties, MvccPropertiesExt, Result};
 use txn_types::TimeStamp;
 
-pub(crate) const PROP_NUM_ERRORS: &str = "tikv.num_errors";
-pub(crate) const PROP_MIN_TS: &str = "tikv.min_ts";
-pub(crate) const PROP_MAX_TS: &str = "tikv.max_ts";
-pub(crate) const PROP_NUM_ROWS: &str = "tikv.num_rows";
-pub(crate) const PROP_NUM_PUTS: &str = "tikv.num_puts";
-pub(crate) const PROP_NUM_DELETES: &str = "tikv.num_deletes";
-pub(crate) const PROP_NUM_VERSIONS: &str = "tikv.num_versions";
-pub(crate) const PROP_MAX_ROW_VERSIONS: &str = "tikv.max_row_versions";
-pub(crate) const PROP_ROWS_INDEX: &str = "tikv.rows_index";
-pub(crate) const PROP_ROWS_INDEX_DISTANCE: u64 = 10000;
+pub const PROP_NUM_ERRORS: &str = "tikv.num_errors";
+pub const PROP_MIN_TS: &str = "tikv.min_ts";
+pub const PROP_MAX_TS: &str = "tikv.max_ts";
+pub const PROP_NUM_ROWS: &str = "tikv.num_rows";
+pub const PROP_NUM_PUTS: &str = "tikv.num_puts";
+pub const PROP_NUM_DELETES: &str = "tikv.num_deletes";
+pub const PROP_NUM_VERSIONS: &str = "tikv.num_versions";
+pub const PROP_MAX_ROW_VERSIONS: &str = "tikv.max_row_versions";
+pub const PROP_ROWS_INDEX: &str = "tikv.rows_index";
+pub const PROP_ROWS_INDEX_DISTANCE: u64 = 10000;
 
 pub struct RocksMvccProperties;
 
@@ -57,13 +55,13 @@ impl MvccPropertiesExt for RocksEngine {
         start_key: &[u8],
         end_key: &[u8],
     ) -> Option<MvccProperties> {
-        let collection = match self.get_range_properties_cf(cf, &start_key, &end_key) {
+        let collection = match self.get_range_properties_cf(cf, start_key, end_key) {
             Ok(c) if !c.is_empty() => c,
             _ => return None,
         };
         let mut props = MvccProperties::new();
         for (_, v) in collection.iter() {
-            let mvcc = match RocksMvccProperties::decode(&v.user_collected_properties()) {
+            let mvcc = match RocksMvccProperties::decode(v.user_collected_properties()) {
                 Ok(m) => m,
                 Err(_) => return None,
             };

@@ -89,9 +89,7 @@ impl KeyBuilder {
     }
 
     pub fn build(mut self) -> Vec<u8> {
-        if self.start == 0 {
-            self.buf
-        } else {
+        if self.start != 0 {
             unsafe {
                 let len = self.len();
                 ptr::copy(
@@ -101,8 +99,8 @@ impl KeyBuilder {
                 );
                 self.buf.set_len(len);
             }
-            self.buf
         }
+        self.buf
     }
 }
 

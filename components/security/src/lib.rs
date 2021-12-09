@@ -186,12 +186,12 @@ impl ServerChecker for CNChecker {
     fn check(&mut self, ctx: &RpcContext) -> CheckResult {
         match check_common_name(&self.allowed_cn, ctx) {
             Ok(()) => CheckResult::Continue,
-            Err(reason) => CheckResult::Abort(RpcStatus::new(
+            Err(reason) => CheckResult::Abort(RpcStatus::with_message(
                 RpcStatusCode::UNAUTHENTICATED,
-                Some(format!(
+                format!(
                     "Common name check fail, reason: {}, cert_allowed_cn: {:?}",
                     reason, self.allowed_cn
-                )),
+                ),
             )),
         }
     }

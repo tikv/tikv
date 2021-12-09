@@ -18,12 +18,6 @@
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
-#[macro_use]
-extern crate tikv_util;
-#[macro_use]
-extern crate serde_derive;
-#[macro_use(fail_point)]
-extern crate fail;
 
 #[cfg(test)]
 extern crate test;
@@ -78,6 +72,8 @@ pub use compat::*;
 mod compact_listener;
 pub use compact_listener::*;
 
+pub mod decode_properties;
+pub use decode_properties::*;
 pub mod properties;
 pub use properties::*;
 
@@ -90,8 +86,14 @@ pub use rocks_metrics_defs::*;
 pub mod event_listener;
 pub use event_listener::*;
 
+pub mod flow_listener;
+pub use flow_listener::*;
+
 pub mod config;
 pub use config::*;
+
+pub mod ttl_properties;
+pub use ttl_properties::*;
 
 pub mod encryption;
 
@@ -101,5 +103,17 @@ mod raft_engine;
 
 pub use rocksdb::set_perf_level;
 pub use rocksdb::PerfContext;
+pub use rocksdb::PerfLevel;
+
+pub mod flow_control_factors;
+pub use flow_control_factors::*;
 
 pub mod raw;
+
+pub fn get_env(
+    key_manager: Option<std::sync::Arc<::encryption::DataKeyManager>>,
+    limiter: Option<std::sync::Arc<::file_system::IORateLimiter>>,
+) -> std::result::Result<std::sync::Arc<raw::Env>, String> {
+    let env = encryption::get_env(None /*base_env*/, key_manager)?;
+    file_system::get_env(Some(env), limiter)
+}

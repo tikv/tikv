@@ -314,6 +314,7 @@ mod tests {
     }
 
     #[test]
+    #[rustfmt::skip]
     fn test_sha2() {
         let cases = vec![
             ("pingcap", 0, "2871823be240f8ecd1d72f24c99eaa2e58af18b4b8ba99a4fc2823ba5c43930a"),
@@ -357,12 +358,14 @@ mod tests {
         ];
 
         for (input_str, hash_length_i64) in null_cases {
-            assert!(RpnFnScalarEvaluator::new()
-                .push_param(input_str)
-                .push_param(hash_length_i64)
-                .evaluate::<Bytes>(ScalarFuncSig::Sha2)
-                .unwrap()
-                .is_none())
+            assert!(
+                RpnFnScalarEvaluator::new()
+                    .push_param(input_str)
+                    .push_param(hash_length_i64)
+                    .evaluate::<Bytes>(ScalarFuncSig::Sha2)
+                    .unwrap()
+                    .is_none()
+            )
         }
     }
 
@@ -444,18 +447,22 @@ mod tests {
         ];
 
         for len in overflow_tests {
-            assert!(RpnFnScalarEvaluator::new()
-                .push_param(len)
-                .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
-                .is_err(),);
+            assert!(
+                RpnFnScalarEvaluator::new()
+                    .push_param(len)
+                    .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
+                    .is_err(),
+            );
         }
 
         //test NULL case
-        assert!(RpnFnScalarEvaluator::new()
-            .push_param(ScalarValue::Int(None))
-            .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
-            .unwrap()
-            .is_none())
+        assert!(
+            RpnFnScalarEvaluator::new()
+                .push_param(ScalarValue::Int(None))
+                .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
+                .unwrap()
+                .is_none()
+        )
     }
 
     #[test]

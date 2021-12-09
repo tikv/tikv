@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::time::{monotonic_raw_now, Instant};
+use lazy_static::lazy_static;
 use std::cmp::{Ord, Ordering, Reverse};
 use std::collections::BinaryHeap;
 use std::sync::{mpsc, Arc};
@@ -85,9 +86,11 @@ lazy_static! {
 
 fn start_global_timer() -> Handle {
     let (tx, rx) = mpsc::channel();
+    let props = crate::thread_group::current_properties();
     Builder::new()
         .name(thd_name!("timer"))
         .spawn(move || {
+            crate::thread_group::set_properties(props);
             tikv_alloc::add_thread_memory_accessor();
             let mut timer = tokio_timer::Timer::default();
             tx.send(timer.handle()).unwrap();
@@ -241,7 +244,7 @@ mod tests {
             handle.delay(::std::time::Instant::now() + std::time::Duration::from_millis(100));
         let timer = Instant::now();
         block_on(delay.compat()).unwrap();
-        assert!(timer.elapsed() >= Duration::from_millis(100));
+        assert!(timer.saturating_elapsed() >= Duration::from_millis(100));
     }
 
     #[test]

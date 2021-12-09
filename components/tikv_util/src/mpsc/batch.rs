@@ -360,9 +360,8 @@ mod tests {
 
         let msg_counter = Arc::new(AtomicUsize::new(0));
         let msg_counter1 = Arc::clone(&msg_counter);
-        let pool = Builder::new()
-            .threaded_scheduler()
-            .core_threads(1)
+        let pool = Builder::new_multi_thread()
+            .worker_threads(1)
             .build()
             .unwrap();
         let _res = pool.spawn(rx.for_each(move |_| {
@@ -406,9 +405,8 @@ mod tests {
         let msg_counter = Arc::new(AtomicUsize::new(0));
         let msg_counter_spawned = Arc::clone(&msg_counter);
         let (nty, polled) = mpsc::sync_channel(1);
-        let pool = Builder::new()
-            .threaded_scheduler()
-            .core_threads(1)
+        let pool = Builder::new_multi_thread()
+            .worker_threads(1)
             .build()
             .unwrap();
         let _res = pool.spawn(

@@ -65,7 +65,7 @@ impl ExecSummaryCollector for ExecSummaryCollectorEnabled {
     #[inline]
     fn on_finish_iterate(&mut self, dr: Self::DurationRecorder, rows: usize) {
         self.counts.num_produced_rows += rows;
-        let elapsed_time = tikv_util::time::duration_to_nanos(dr.elapsed()) as usize;
+        let elapsed_time = tikv_util::time::duration_to_ns(dr.saturating_elapsed()) as usize;
         self.counts.time_processed_ns += elapsed_time;
     }
 

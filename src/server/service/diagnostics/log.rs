@@ -69,7 +69,7 @@ impl LogIterator {
                 return Err(Error::SearchError(format!(
                     "Illegal file name: {:?}",
                     log_path
-                )))
+                )));
             }
         };
         if log_name.is_empty() {
@@ -81,7 +81,7 @@ impl LogIterator {
                 return Err(Error::SearchError(format!(
                     "Illegal parent dir: {:?}",
                     log_path
-                )))
+                )));
             }
         };
 
@@ -460,7 +460,6 @@ mod tests {
                 LogLevel::Critical,
                 "[foo.rs:100] [some message] [key=val]",
             ),
-
             (
                 "[2019/08/23 18:09:52.387 +08:00] [TRACE] [foo.rs:100] [some message] [key=val]",
                 "2019/08/23 18:09:52.387 +08:00",

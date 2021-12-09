@@ -1,10 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-// {Limit, Selection, Aggregation, TopN} are passed into Executor as Box<T> in Prost,
-// but plain T in Protobuf. We used .into() to support both types,
-// but T -> T in Protobuf generates this clippy warning. We just allow it here.
-#![cfg_attr(feature = "protobuf-codec", allow(clippy::useless_conversion))]
-
 use super::*;
 
 use protobuf::Message;
@@ -27,8 +22,9 @@ pub struct DAGSelect {
     pub limit: Option<u64>,
     pub aggregate: Vec<Expr>,
     pub group_by: Vec<Expr>,
-    pub key_range: KeyRange,
+    pub key_ranges: Vec<KeyRange>,
     pub output_offsets: Option<Vec<u32>>,
+    pub paging_size: Option<u64>,
 }
 
 impl DAGSelect {
@@ -49,8 +45,9 @@ impl DAGSelect {
             limit: None,
             aggregate: vec![],
             group_by: vec![],
-            key_range: table.get_record_range_all(),
+            key_ranges: vec![table.get_record_range_all()],
             output_offsets: None,
+            paging_size: None,
         }
     }
 
@@ -75,8 +72,9 @@ impl DAGSelect {
             limit: None,
             aggregate: vec![],
             group_by: vec![],
-            key_range: range,
+            key_ranges: vec![range],
             output_offsets: None,
+            paging_size: None,
         }
     }
 
@@ -175,8 +173,24 @@ impl DAGSelect {
         exec.set_tp(ExecType::TypeSelection);
         let mut selection = Selection::default();
         selection.mut_conditions().push(expr);
-        exec.set_selection(selection.into());
+        exec.set_selection(selection);
         self.execs.push(exec);
+        self
+    }
+
+    pub fn desc(mut self, desc: bool) -> DAGSelect {
+        self.execs[0].mut_tbl_scan().set_desc(desc);
+        self
+    }
+
+    pub fn paging_size(mut self, paging_size: u64) -> DAGSelect {
+        assert_ne!(paging_size, 0);
+        self.paging_size = Some(paging_size);
+        self
+    }
+
+    pub fn key_ranges(mut self, key_ranges: Vec<KeyRange>) -> DAGSelect {
+        self.key_ranges = key_ranges;
         self
     }
 
@@ -196,7 +210,7 @@ impl DAGSelect {
             if !self.group_by.is_empty() {
                 aggr.set_group_by(self.group_by.into());
             }
-            exec.set_aggregation(aggr.into());
+            exec.set_aggregation(aggr);
             self.execs.push(exec);
         }
 
@@ -208,7 +222,7 @@ impl DAGSelect {
             if let Some(limit) = self.limit.take() {
                 topn.set_limit(limit);
             }
-            exec.set_top_n(topn.into());
+            exec.set_top_n(topn);
             self.execs.push(exec);
         }
 
@@ -217,7 +231,7 @@ impl DAGSelect {
             exec.set_tp(ExecType::TypeLimit);
             let mut limit = Limit::default();
             limit.set_limit(l);
-            exec.set_limit(limit.into());
+            exec.set_limit(limit);
             self.execs.push(exec);
         }
 
@@ -237,7 +251,8 @@ impl DAGSelect {
         req.set_start_ts(next_id() as u64);
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(dag.write_to_bytes().unwrap());
-        req.set_ranges(vec![self.key_range].into());
+        req.set_ranges(self.key_ranges.into());
+        req.set_paging_size(self.paging_size.unwrap_or(0));
         req.set_context(ctx);
         req
     }

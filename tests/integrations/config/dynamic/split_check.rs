@@ -32,8 +32,7 @@ fn setup(cfg: TiKvConfig, engine: Arc<DB>) -> (ConfigController, LazyWorker<Task
     let runner = Runner::new(
         engine.c().clone(),
         router.clone(),
-        CoprocessorHost::new(router),
-        cfg.coprocessor.clone(),
+        CoprocessorHost::new(router, cfg.coprocessor.clone()),
     );
     let share_worker = Worker::new("split-check-config");
     let mut worker = share_worker.lazy_build("split-check-config");

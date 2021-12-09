@@ -735,11 +735,7 @@ impl Filter for LeadingDuplicatedSnapshotFilter {
             .dropped
             .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok();
-        if res.is_err() && dropped {
-            Ok(())
-        } else {
-            res
-        }
+        if res.is_err() && dropped { Ok(()) } else { res }
     }
 }
 

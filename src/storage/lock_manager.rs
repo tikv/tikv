@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::server::lock_manager::waiter_manager;
+use crate::server::lock_manager::waiter_manager::Callback;
 use crate::storage::{txn::ProcessResult, types::StorageCallback};
 use std::time::Duration;
 use txn_types::TimeStamp;
@@ -8,6 +10,16 @@ use txn_types::TimeStamp;
 pub struct Lock {
     pub ts: TimeStamp,
     pub hash: u64,
+}
+
+/// DiagnosticContext is for diagnosing problems about locks
+#[derive(Clone, Default)]
+pub struct DiagnosticContext {
+    /// The key we care about
+    pub key: Vec<u8>,
+    /// This tag is used for aggregate related kv requests (eg. generated from same statement)
+    /// Currently it is the encoded SQL digest if the client is TiDB
+    pub resource_group_tag: Vec<u8>,
 }
 
 /// Time to wait for lock released when encountering locks.
@@ -62,6 +74,7 @@ pub trait LockManager: Clone + Send + 'static {
         lock: Lock,
         is_first_lock: bool,
         timeout: Option<WaitTimeout>,
+        diag_ctx: DiagnosticContext,
     );
 
     /// The locks with `lock_ts` and `hashes` are released, tries to wake up transactions.
@@ -79,6 +92,8 @@ pub trait LockManager: Clone + Send + 'static {
     fn has_waiter(&self) -> bool {
         true
     }
+
+    fn dump_wait_for_entries(&self, cb: waiter_manager::Callback);
 }
 
 // For test
@@ -94,6 +109,7 @@ impl LockManager for DummyLockManager {
         _lock: Lock,
         _is_first_lock: bool,
         _wait_timeout: Option<WaitTimeout>,
+        _diag_ctx: DiagnosticContext,
     ) {
     }
 
@@ -104,5 +120,9 @@ impl LockManager for DummyLockManager {
         _commit_ts: TimeStamp,
         _is_pessimistic_txn: bool,
     ) {
+    }
+
+    fn dump_wait_for_entries(&self, cb: Callback) {
+        cb(vec![])
     }
 }

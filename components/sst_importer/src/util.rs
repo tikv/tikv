@@ -70,14 +70,13 @@ mod tests {
     use encryption::DataKeyManager;
     use engine_rocks::{
         util::{new_engine, RocksCFOptions},
-        RocksColumnFamilyOptions, RocksDBOptions, RocksEngine, RocksIngestExternalFileOptions,
-        RocksSstWriterBuilder, RocksTitanDBOptions,
+        RocksColumnFamilyOptions, RocksDBOptions, RocksEngine, RocksSstWriterBuilder,
+        RocksTitanDBOptions,
     };
     use engine_traits::{
-        CfName, ColumnFamilyOptions, DBOptions, EncryptionKeyManager, ImportExt,
-        IngestExternalFileOptions, Peekable, SstWriter, SstWriterBuilder, TitanDBOptions,
+        CfName, ColumnFamilyOptions, DBOptions, EncryptionKeyManager, ImportExt, Peekable,
+        SstWriter, SstWriterBuilder, TitanDBOptions,
     };
-    use file_system::calc_crc32;
     use std::{path::Path, sync::Arc};
     use tempfile::Builder;
     use test_util::encryption::new_test_key_manager;
@@ -137,12 +136,8 @@ mod tests {
 
         let cf_name = "default";
         let db = new_engine(path_str, db_opts, &[cf_name], cf_opts).unwrap();
-        let mut ingest_opts = RocksIngestExternalFileOptions::new();
-        ingest_opts.move_files(true);
 
         gen_sst_with_kvs(&db, cf_name, sst_path.to_str().unwrap(), &kvs);
-        let size = file_system::metadata(&sst_path).unwrap().len();
-        let checksum = calc_crc32(&sst_path).unwrap();
 
         if was_encrypted {
             // Add the file to key_manager to simulate an encrypted file.
@@ -154,17 +149,13 @@ mod tests {
         // The first ingestion will hard link sst_path to sst_clone.
         check_hard_link(&sst_path, 1);
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
-        db.validate_sst_for_ingestion(cf_name, &sst_clone, size, checksum)
-            .unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
         // If we prepare again, it will use hard link too.
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
-        db.validate_sst_for_ingestion(cf_name, &sst_clone, size, checksum)
-            .unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
-        db.ingest_external_file_cf(cf_name, &ingest_opts, &[sst_clone.to_str().unwrap()])
+        db.ingest_external_file_cf(cf_name, &[sst_clone.to_str().unwrap()])
             .unwrap();
         check_db_with_kvs(&db, cf_name, &kvs);
         assert!(!sst_clone.exists());
@@ -177,11 +168,9 @@ mod tests {
         // The second ingestion will copy sst_path to sst_clone.
         check_hard_link(&sst_path, 2);
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
-        db.validate_sst_for_ingestion(cf_name, &sst_clone, size, checksum)
-            .unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 1);
-        db.ingest_external_file_cf(cf_name, &ingest_opts, &[sst_clone.to_str().unwrap()])
+        db.ingest_external_file_cf(cf_name, &[sst_clone.to_str().unwrap()])
             .unwrap();
         check_db_with_kvs(&db, cf_name, &kvs);
         assert!(!sst_clone.exists());

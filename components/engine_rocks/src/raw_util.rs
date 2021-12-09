@@ -10,10 +10,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use engine_traits::Result;
+use engine_traits::CF_DEFAULT;
 use rocksdb::load_latest_options;
 use rocksdb::{CColumnFamilyDescriptor, ColumnFamilyOptions, DBOptions, Env, DB};
-
-use engine_traits::CF_DEFAULT;
+use tikv_util::warn;
 
 pub struct CFOptions<'a> {
     cf: &'a str,
@@ -56,7 +56,7 @@ fn adjust_dynamic_level_bytes(
     cf_descs: &[CColumnFamilyDescriptor],
     cf_options: &mut CFOptions<'_>,
 ) {
-    if let Some(ref cf_desc) = cf_descs
+    if let Some(cf_desc) = cf_descs
         .iter()
         .find(|cf_desc| cf_desc.name() == cf_options.cf)
     {
@@ -157,7 +157,7 @@ pub fn new_engine_opt(
         }
     }
     let cfds = cfs_v.into_iter().zip(cfs_opts_v).collect();
-    let mut db = DB::open_cf(db_opt, path, cfds).unwrap();
+    let mut db = DB::open_cf(db_opt, path, cfds)?;
 
     // Drops discarded column families.
     //    for cf in existed.iter().filter(|x| needed.iter().find(|y| y == x).is_none()) {
@@ -183,7 +183,7 @@ pub fn new_engine_opt(
     Ok(db)
 }
 
-pub(crate) fn db_exist(path: &str) -> bool {
+pub fn db_exist(path: &str) -> bool {
     let path = Path::new(path);
     if !path.exists() || !path.is_dir() {
         return false;
@@ -202,7 +202,7 @@ pub(crate) fn db_exist(path: &str) -> bool {
 /// Returns a Vec of cf which is in `a' but not in `b'.
 fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
     a.iter()
-        .filter(|x| b.iter().find(|y| y == x).is_none())
+        .filter(|x| !b.iter().any(|y| *x == y))
         .cloned()
         .collect()
 }

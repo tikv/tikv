@@ -3,6 +3,7 @@
 use crate::mailbox::BasicMailbox;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::{ptr, usize};
 
 // The FSM is notified.
@@ -11,6 +12,12 @@ const NOTIFYSTATE_NOTIFIED: usize = 0;
 const NOTIFYSTATE_IDLE: usize = 1;
 // The FSM is expected to be dropped.
 const NOTIFYSTATE_DROP: usize = 2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Priority {
+    Low,
+    Normal,
+}
 
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {
@@ -44,18 +51,25 @@ pub trait Fsm {
     {
         None
     }
+
+    fn get_priority(&self) -> Priority {
+        Priority::Normal
+    }
 }
 
 pub struct FsmState<N> {
     status: AtomicUsize,
     data: AtomicPtr<N>,
+    state_cnt: Arc<AtomicUsize>,
 }
 
 impl<N: Fsm> FsmState<N> {
-    pub fn new(data: Box<N>) -> FsmState<N> {
+    pub fn new(data: Box<N>, state_cnt: Arc<AtomicUsize>) -> FsmState<N> {
+        state_cnt.fetch_add(1, Ordering::Relaxed);
         FsmState {
             status: AtomicUsize::new(NOTIFYSTATE_IDLE),
             data: AtomicPtr::new(Box::into_raw(data)),
+            state_cnt,
         }
     }
 
@@ -147,5 +161,6 @@ impl<N> Drop for FsmState<N> {
         if !ptr.is_null() {
             unsafe { Box::from_raw(ptr) };
         }
+        self.state_cnt.fetch_sub(1, Ordering::Relaxed);
     }
 }

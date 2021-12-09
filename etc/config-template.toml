@@ -1,6 +1,6 @@
 ## TiKV config template
 ##  Human-readable big numbers:
-##   File size(based on byte): KB, MB, GB, TB, PB
+##   File size(based on byte, binary units): KB, MB, GB, TB, PB
 ##    e.g.: 1_048_576 = "1MB"
 ##   Time(based on ms): ms, s, m, h
 ##    e.g.: 78_000 = "1.3m"
@@ -39,7 +39,31 @@
 ## It won't take effect when compiling without BCC_IOSNOOP=1. 
 # enable-io-snoop = true
 
-# Configurations for the single thread pool serving read requests.
+## Use abort when TiKV panic. By default TiKV will use _exit() on panic, in that case
+## core dump file will not be generated, regardless of system settings.
+## If this config is enabled, core dump files needs to be cleanup to avoid disk space
+## being filled up.
+# abort-on-panic = false
+
+## Memory usage limit for the TiKV instance. Generally it's unnecessary to configure it
+## explicitly, in which case it will be set to 75% of total available system memory.
+## Considering the behavior of `block-cache.capacity`, it means 25% memory is reserved for
+## OS page cache.
+##
+## It's still unnecessary to configure it for deploying multiple TiKV nodes on a single
+## physical machine. It will be calculated as `5/3 * block-cache.capacity`.
+##
+## For different system memory capacity, the default memory quota will be:
+## * system=8G    block-cache=3.6G    memory-usage-limit=6G   page-cache=2G.
+## * system=16G   block-cache=7.2G    memory-usage-limit=12G  page-cache=4G
+## * system=32G   block-cache=14.4G   memory-usage-limit=24G  page-cache=8G
+##
+## So how can `memory-usage-limit` influence TiKV? When a TiKV's memory usage almost reaches
+## this threshold, it can squeeze some internal components (e.g. evicting cached Raft entries)
+## to release memory.
+# memory-usage-limit = "0B"
+
+## Configurations for the single thread pool serving read requests.
 [readpool.unified]
 ## The minimal working thread count of the thread pool.
 # min-thread-count = 1
@@ -56,7 +80,7 @@
 
 [readpool.storage]
 ## Whether to use the unified read pool to handle storage requests.
-# use-unified-pool = false
+# use-unified-pool = true
 
 ## The following configurations only take effect when `use-unified-pool` is false.
 
@@ -123,7 +147,7 @@
 # grpc-compression-type = "none"
 
 ## Size of the thread pool for the gRPC server.
-# grpc-concurrency = 4
+# grpc-concurrency = 5
 
 ## The number of max concurrent streams/requests on a client connection.
 # grpc-concurrent-stream = 1024
@@ -146,6 +170,9 @@
 ## Time to wait before closing the connection without receiving KeepAlive ping Ack.
 # grpc-keepalive-timeout = "3s"
 
+## Set maximum message length in bytes that gRPC can send. `-1` means unlimited.
+# max-grpc-send-msg-len = 10485760
+
 ## How many snapshots can be sent concurrently.
 # concurrent-send-snap-limit = 32
 
@@ -165,15 +192,6 @@
 ## Whether to enable request batch.
 # enable-request-batch = true
 
-## Whether to collect batch across commands.
-## When disabled, wait duration is ignored. When enabled, collect batch for specified duration
-## when load is high.
-# request-batch-enable-cross-command = true
-
-## Wait duration before each request batch is processed. Wait is triggered when cross-command
-## option is enabled and system load is high.
-# request-batch-wait-duration = "1ms"
-
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
 # labels = {}
 
@@ -188,12 +206,12 @@
 
 [storage]
 ## The path to RocksDB directory.
-# data-dir = "/tmp/tikv/store"
+# data-dir = "./"
 
 ## The number of slots in Scheduler latches, which controls write concurrency.
 ## In most cases you can use the default value. When importing data, you can set it to a larger
 ## value.
-# scheduler-concurrency = 2048000
+# scheduler-concurrency = 524288
 
 ## Scheduler's worker pool size, i.e. the number of write threads.
 ## It should be less than total CPU cores. When there are frequent write operations, set it to a
@@ -209,13 +227,10 @@
 ## latency jittering when apply duration is not stable.
 # enable-async-apply-prewrite = false
 
-## Reserve some space to ensure recovering the store from `no space left` must success. The
-## configured value only indicates the lower limit, and 20GB is the upper limit. In this range,
+## Reserve some space to ensure recovering the store from `no space left` must succeed.
 ## `max(reserve-space, capacity * 5%)` will be reserved exactly.
 ##
-## Set it to 0 will cause no space is reserved at all.
-##
-## Generally it's not necessary to change it. This configuration could be deprecated in future.
+## Set it to 0 will cause no space is reserved at all. It's generally used for tests.
 # reserve-space = "5GB"
 
 [storage.block-cache]
@@ -240,11 +255,52 @@
 ##
 ## To deploy multiple TiKV nodes on a single physical machine, configure this parameter explicitly.
 ## Otherwise, the OOM problem might occur in TiKV.
+##
+## If it's not set, 45% of available system memory will be used.
 # capacity = "1GB"
+
+[storage.flow-control]
+## Flow controller is used to throttle the write rate at scheduler level, aiming
+## to substitute the write stall mechanism of RocksDB. It features in two points:
+##   * throttle at scheduler, so raftstore and apply won't be blocked anymore
+##   * better control on the throttle rate to avoid QPS drop under heavy write
+##
+## Support change dynamically. 
+## When enabled, it disables kvdb's write stall and raftdb's write stall(except memtable) and vice versa.
+# enable = true
+
+## When the number of immutable memtables of kvdb reaches the threshold, the flow controller begins to work
+# memtables-threshold = 5
+
+## When the number of SST files of level-0 of kvdb reaches the threshold, the flow controller begins to work
+# l0-files-threshold = 20
+
+## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to 
+## reject some write requests with `ServerIsBusy` error. 
+# soft-pending-compaction-bytes-limit = "192GB"
+
+## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to 
+## reject all write requests with `ServerIsBusy` error. 
+# hard-pending-compaction-bytes-limit = "1024GB"
+
+[storage.io-rate-limit]
+## Maximum I/O bytes that this server can write to or read from disk (determined by mode)
+## in one second. Internally it prefers throttling background operations over foreground
+## ones. This value should be set to the disk's optimal IO bandwidth, e.g. maximum IO
+## bandwidth specified by cloud disk vendors.
+##
+## When set to zero, disk IO operations are not limited.
+# max-bytes-per-sec = "0MB"
+
+## Determine which types of IO operations are counted and restrained below threshold.
+## Three different modes are: write-only, read-only, all-io.
+##
+## Only write-only mode is supported for now.
+# mode = "write-only"
 
 [pd]
 ## PD endpoints.
-# endpoints = []
+# endpoints = ["127.0.0.1:2379"]
 
 ## The interval at which to retry a PD connection initialization.
 ## Default is 300ms.
@@ -268,7 +324,7 @@
 
 ## The path to RaftDB directory.
 ## If not set, it will be `{data-dir}/raft`.
-## If there are multiple disks on the machine, storing the data of Raft RocksDB on differen disks
+## If there are multiple disks on the machine, storing the data of Raft RocksDB on a different disk
 ## can improve TiKV performance.
 # raftdb-path = ""
 
@@ -301,18 +357,25 @@
 ## When the number of Raft entries exceeds the max size, TiKV rejects to propose the entry.
 # raft-entry-max-size = "8MB"
 
+## Interval to compact unnecessary Raft log.
+# raft-log-compact-sync-interval = "2s"
+
 ## Interval to GC unnecessary Raft log.
-# raft-log-gc-tick-interval = "10s"
+# raft-log-gc-tick-interval = "3s"
 
 ## Threshold to GC stale Raft log, must be >= 1.
 # raft-log-gc-threshold = 50
 
 ## When the entry count exceeds this value, GC will be forced to trigger.
-# raft-log-gc-count-limit = 72000
+# raft-log-gc-count-limit = 73728
 
 ## When the approximate size of Raft log entries exceeds this value, GC will be forced trigger.
 ## It's recommanded to set it to 3/4 of `region-split-size`.
 # raft-log-gc-size-limit = "72MB"
+
+## Old Raft logs could be reserved if `raft_log_gc_threshold` is not reached.
+## GC them after ticks `raft_log_reserve_max_ticks` times.
+# raft_log_reserve_max_ticks = 6
 
 ## Raft engine is a replaceable component. For some implementations, it's necessary to purge
 ## old log files to recycle disk space ASAP.
@@ -320,7 +383,7 @@
 
 ## How long the peer will be considered down and reported to PD when it hasn't been active for this
 ## time.
-# max-peer-down-duration = "5m"
+# max-peer-down-duration = "10m"
 
 ## Interval to check whether to start manual compaction for a Region.
 # region-compact-check-interval = "5m"
@@ -343,8 +406,8 @@
 # lock-cf-compact-interval = "10m"
 # lock-cf-compact-bytes-threshold = "256MB"
 
-## Interval (s) to check Region whether the data are consistent.
-# consistency-check-interval = 0
+## Interval to check region whether the data is consistent.
+# consistency-check-interval = "0s"
 
 ## Interval to clean up import SST files.
 # cleanup-import-sst-interval = "10m"
@@ -354,6 +417,13 @@
 
 ## Use how many threads to handle raft messages
 # store-pool-size = 2
+
+## Use how many threads to handle raft io tasks
+## If it is 0, it means io tasks are handled in store threads.
+# store-io-pool-size = 0
+
+## When the size of raft db writebatch exceeds this value, write will be triggered.
+# raft-write-size-limit = "1MB"
 
 [coprocessor]
 ## When it is set to `true`, TiKV will try to split a Region with table prefix if that Region
@@ -379,6 +449,12 @@
 
 ## Set to "mvcc" to do consistency check for MVCC data, or "raw" for raw data.
 # consistency-check-method = "mvcc"
+
+[coprocessor-v2]
+## Path to the directory where compiled coprocessor plugins are located.
+## Plugins in this directory will be automatically loaded by TiKV.
+## If the config value is not set, the coprocessor plugin will be disabled.
+# coprocessor-plugin-directory = "./coprocessors"
 
 [rocksdb]
 ## Maximum number of threads of RocksDB background jobs.
@@ -416,20 +492,19 @@
 # create-if-missing = true
 
 ## RocksDB Write-Ahead Logs (WAL) recovery mode.
-## 0 : TolerateCorruptedTailRecords, tolerate incomplete record in trailing data on all logs;
-## 1 : AbsoluteConsistency, We don't expect to find any corruption in the WAL;
-## 2 : PointInTimeRecovery, Recover to point-in-time consistency;
-## 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
-# wal-recovery-mode = 2
+## "tolerate-corrupted-tail-records", tolerate incomplete record in trailing data on all logs;
+## "absolute-consistency", We don't expect to find any corruption in the WAL;
+## "point-in-time", Recover to point-in-time consistency;
+## "skip-any-corrupted-records", Recovery after a disaster;
+# wal-recovery-mode = "point-in-time"
 
-## RocksDB WAL directory.
+## KV RocksDB WAL directory.
 ## This config specifies the absolute directory path for WAL.
-## If it is not set, the log files will be in the same directory as data. When you set the path to
-## RocksDB directory in memory like in `/dev/shm`, you may want to set`wal-dir` to a directory on a
-## persistent storage. See https://github.com/facebook/rocksdb/wiki/How-to-persist-in-memory-RocksDB-database .
+## If it is not set, the log files will be in the same directory as data.
 ## If there are two disks on the machine, storing RocksDB data and WAL logs on different disks can
 ## improve performance.
-# wal-dir = "/tmp/tikv/store"
+## Do not set this config the same as `raftdb.wal-dir`.
+# wal-dir = ""
 
 ## The following two fields affect how archived WAL will be deleted.
 ## 1. If both values are set to 0, logs will be deleted ASAP and will not get into the archive.
@@ -478,14 +553,14 @@
 ## 2. rate-limiter-refill-period controls how often IO tokens are refilled. Smaller value will flatten
 ##    IO bursts while introducing more CPU overhead.
 ## 3. rate-limiter-mode indicates which types of operations count against the limit.
-##    1 : ReadOnly
-##    2 : WriteOnly
-##    3 : AllIo
+##    "read-only"
+##    "write-only"
+##    "all-io"
 ## 4. rate-limiter-auto_tuned enables dynamic adjustment of rate limit within the range
 ##    [10MB/s, rate_bytes_per_sec], according to the recent demand for background I/O.
 # rate-bytes-per-sec = "10GB"
 # rate-limiter-refill-period = "100ms"
-# rate-limiter-mode = 2
+# rate-limiter-mode = "write-only"
 # rate-limiter-auto-tuned = true
 
 ## Enable or disable the pipelined write.
@@ -517,7 +592,7 @@
 ## absolute path will be used as the log file name's prefix.
 # info-log-dir = ""
 
-# RocksDB log levels
+## RocksDB log levels
 # info-log-level = "info"
 
 ## Options for `Titan`.
@@ -528,7 +603,7 @@
 # enabled = false
 
 ## Maximum number of threads of `Titan` background gc jobs.
-# default: 4
+## default: 4
 # max-background-gc = 4
 
 ## Options for "Default" Column Family, which stores actual user data.
@@ -637,11 +712,11 @@
 # max-compaction-bytes = "2GB"
 
 ## There are four different compaction priorities.
-## 0 : ByCompensatedSize
-## 1 : OldestLargestSeqFirst
-## 2 : OldestSmallestSeqFirst
-## 3 : MinOverlappingRatio
-# compaction-pri = 3
+## "by-compensated-size"
+## "oldest-largest-seq-first"
+## "oldest-smallest-seq-first"
+## "min-overlapping-ratio"
+# compaction-pri = "min-overlapping-ratio"
 
 ## Indicating if we'd put index/filter blocks to the block cache.
 ## If not specified, each "table reader" object will pre-load index/filter block during table
@@ -702,16 +777,16 @@
 ##   lz4:    kLZ4Compression
 ##   lz4hc:  kLZ4HCCompression
 ##   zstd:   kZSTD
-# default: lz4
+## default: lz4
 # blob-file-compression = "lz4"
 
 ## Specifics cache size for blob records
-# default: 0
+## default: 0
 # blob-cache-size = "0GB"
 
 ## If the ratio of discardable size of a blob file is larger than
 ## this threshold, the blob file will be GCed out.
-# default: 0.5
+## default: 0.5
 # discardable-ratio = 0.5
 
 ## The mode used to process blob files. In read-only mode Titan
@@ -721,7 +796,7 @@
 ##   default:   kNormal
 ##   read-only: kReadOnly
 ##   fallback:  kFallback
-# default: normal
+## default: normal
 # blob-run-mode = "normal"
 
 ## If set true, values in blob file will be merged to a new blob file while
@@ -734,7 +809,7 @@
 ##
 ## Requirement: level_compaction_dynamic_level_base = true
 ## default: false
-# level_merge = false
+# level-merge = false
 
 ## Use merge operator to rewrite GC blob index.
 ## default: false
@@ -760,7 +835,7 @@
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
-# compaction-pri = 3
+# compaction-pri = "min-overlapping-ratio"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
@@ -781,7 +856,7 @@
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
-# compaction-pri = 0
+# compaction-pri = "by-compensated-size"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
@@ -797,11 +872,19 @@
 # enable-statistics = true
 # stats-dump-period = "10m"
 
+## Raft RocksDB WAL directory.
+## This config specifies the absolute directory path for WAL.
+## If it is not set, the log files will be in the same directory as data.
+## If there are two disks on the machine, storing RocksDB data and WAL logs on different disks can
+## improve performance.
+## Do not set this config the same as `rocksdb.wal-dir`.
+# wal-dir = ""
+
 # compaction-readahead-size = 0
 # writable-file-max-buffer-size = "1MB"
 # use-direct-io-for-flush-and-compaction = false
 # enable-pipelined-write = true
-# allow-concurrent-memtable-write = false
+# allow-concurrent-memtable-write = true
 # bytes-per-sync = "1MB"
 # wal-bytes-per-sync = "512KB"
 
@@ -810,7 +893,6 @@
 # info-log-keep-log-file-num = 10
 # info-log-dir = ""
 # info-log-level = "info"
-# optimize-filters-for-hits = true
 
 [raftdb.defaultcf]
 ## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
@@ -831,22 +913,51 @@
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
-# compaction-pri = 0
+# compaction-pri = "by-compensated-size"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true
 # enable-compaction-guard = false
 
 [raft-engine]
-## Enable raft-engine will ignore all settings about `raftdb`.
+## When enabled, configurations of `raftdb` will be ignored.
 # enable = false
-## Recovery mode. Candidates are `tolerate-corrupted-tail-records` and `absolute-consistency`.
-# recovery_mode = "tolerate-corrupted-tail-records"
-# bytes-per-sync = "256KB"
+
+## Directory to store log files. Will be created on startup if not exists.
+## If not set, it will be `{data-dir}/raft-engine`.
+## If there are multiple disks on the machine, storing the data of Raft engine on a different disk
+## can improve TiKV performance.
+# dir = ""
+
+## Compress a log batch if its size exceeds this value.
+## It set to zero, compression is disabled.
+# batch-compression-threshold = "8KB"
+
+## Flush buffered writes to disk when their accumulative size exceed this threshold.
+## Setting it to zero disables incremental sync.
+# bytes-per-sync = "4MB"
+
+## Target file size for rotating log files.
 # target-file-size = "128MB"
+
+## Purge main log queue if its file size exceeds this value.
 # purge-threshold = "10GB"
-## Raft engine has builtin entry cache. `cache-limit` limits the memory usage of the cache.
-# cache-limit = "1GB"
+
+## How to deal with file corruption during recovery. Candidates:
+##   absolute-consistency
+##   tolerate-tail-corruption
+##   tolerate-any-corruption
+# recovery-mode = "tolerate-tail-corruption"
+
+## Minimum I/O size for reading log files during recovery.
+##
+## Default: "16KB". Minimum: "512B".
+# recovery-read-block-size = "16KB"
+
+## The number of threads used to scan and recovery log files.
+##
+## Default: 4. Minimum: 1.
+# recovery-threads = 4
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
@@ -860,7 +971,7 @@
 ## Default is false.
 # redact-info-log = false
 
-# Configurations for encryption at rest. Experimental.
+## Configurations for encryption at rest. Experimental.
 [security.encryption]
 ## Encryption method to use for data files.
 ## Possible values are "plaintext", "aes128-ctr", "aes192-ctr" and "aes256-ctr". Value other than
@@ -937,17 +1048,27 @@
 # num-threads = 24
 
 ## Number of ranges to backup in one batch.
-# batch = 8
+# batch-size = 8
 
 ## When Backup region [a,e) size exceeds `sst-max-size`, it will be backuped into several Files [a,b),
 ## [b,c), [c,d), [d,e) and the size of [a,b), [b,c), [c,d) will be `sst-max-size` (or a
 ## little larger).
 # sst-max-size = "144MB"
 
-[pessimistic-txn]
-## Enable pessimistic transaction
-# enabled = true
+## Automatically reduce the number of backup threads when the current workload is high,
+## in order to reduce impact on the cluster's performance during back up.
+# enable-auto-tune = false 
 
+[backup.hadoop]
+## let TiKV know how to find the hdfs shell command.
+## Equivalent to the $HADOOP_HOME enviroment variable.
+# home = ""
+
+## TiKV will run the hdfs shell command under this linux user.
+## TiKV will use the current linux user if not provided.
+# linux-user = ""
+
+[pessimistic-txn]
 ## The default and maximum delay before responding to TiDB when pessimistic
 ## transactions encounter locks
 # wait-for-lock-timeout = "1s"
@@ -971,7 +1092,7 @@
 # max-write-bytes-per-sec = "0"
 
 ## Enable GC by compaction filter or not.
-# enable-compaction-filter = false
+# enable-compaction-filter = true
 
 ## Garbage ratio threshold to trigger a GC.
 # ratio-threshold = 1.1

@@ -10,6 +10,7 @@ use engine_traits::{CF_DEFAULT, CF_RAFT};
 
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, StoreIdent};
+use tikv_util::{box_err, box_try};
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
     let mut region = metapb::Region::default();
@@ -93,9 +94,11 @@ pub fn clear_prepare_bootstrap_cluster(
     region_id: u64,
 ) -> Result<()> {
     let mut wb = engines.raft.log_batch(1024);
-    box_try!(engines
-        .raft
-        .clean(region_id, &RaftLocalState::default(), &mut wb));
+    box_try!(
+        engines
+            .raft
+            .clean(region_id, &RaftLocalState::default(), &mut wb)
+    );
     box_try!(engines.raft.consume(&mut wb, true));
 
     let mut wb = engines.kv.write_batch();
@@ -146,38 +149,50 @@ mod tests {
         assert!(bootstrap_store(&engines, 1, 1).is_err());
 
         assert!(prepare_bootstrap_cluster(&engines, &region).is_ok());
-        assert!(kv_engine
-            .get_value(keys::PREPARE_BOOTSTRAP_KEY)
-            .unwrap()
-            .is_some());
-        assert!(kv_engine
-            .get_value_cf(CF_RAFT, &keys::region_state_key(1))
-            .unwrap()
-            .is_some());
-        assert!(kv_engine
-            .get_value_cf(CF_RAFT, &keys::apply_state_key(1))
-            .unwrap()
-            .is_some());
-        assert!(raft_engine
-            .get_value(&keys::raft_state_key(1))
-            .unwrap()
-            .is_some());
+        assert!(
+            kv_engine
+                .get_value(keys::PREPARE_BOOTSTRAP_KEY)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            kv_engine
+                .get_value_cf(CF_RAFT, &keys::region_state_key(1))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            kv_engine
+                .get_value_cf(CF_RAFT, &keys::apply_state_key(1))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            raft_engine
+                .get_value(&keys::raft_state_key(1))
+                .unwrap()
+                .is_some()
+        );
 
         assert!(clear_prepare_bootstrap_key(&engines).is_ok());
         assert!(clear_prepare_bootstrap_cluster(&engines, 1).is_ok());
-        assert!(is_range_empty(
-            &kv_engine,
-            CF_RAFT,
-            &keys::region_meta_prefix(1),
-            &keys::region_meta_prefix(2)
-        )
-        .unwrap());
-        assert!(is_range_empty(
-            &raft_engine,
-            CF_DEFAULT,
-            &keys::region_raft_prefix(1),
-            &keys::region_raft_prefix(2)
-        )
-        .unwrap());
+        assert!(
+            is_range_empty(
+                &kv_engine,
+                CF_RAFT,
+                &keys::region_meta_prefix(1),
+                &keys::region_meta_prefix(2)
+            )
+            .unwrap()
+        );
+        assert!(
+            is_range_empty(
+                &raft_engine,
+                CF_DEFAULT,
+                &keys::region_raft_prefix(1),
+                &keys::region_raft_prefix(2)
+            )
+            .unwrap()
+        );
     }
 }

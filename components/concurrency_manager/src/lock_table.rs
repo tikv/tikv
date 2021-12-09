@@ -76,11 +76,7 @@ impl LockTable {
                     .and_then(|lock| check_fn(&handle.key, lock).err())
             })
         });
-        if let Some(e) = e {
-            Err(e)
-        } else {
-            Ok(())
-        }
+        if let Some(e) = e { Err(e) } else { Ok(()) }
     }
 
     /// Gets the handle of the key.
@@ -130,7 +126,7 @@ mod test {
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
     };
-    use tokio::time::delay_for;
+    use tokio::time::sleep;
     use txn_types::LockType;
 
     #[tokio::test]
@@ -147,7 +143,7 @@ mod test {
                 // Modify an atomic counter with a mutex guard. The value of the counter
                 // should remain unchanged if the mutex works.
                 let counter_val = counter.fetch_add(1, Ordering::SeqCst) + 1;
-                delay_for(Duration::from_millis(1)).await;
+                sleep(Duration::from_millis(1)).await;
                 assert_eq!(counter.load(Ordering::SeqCst), counter_val);
             });
             handles.push(handle);
@@ -231,18 +227,22 @@ mod test {
         });
 
         // no lock found
-        assert!(lock_table
-            .check_range(
-                Some(&Key::from_raw(b"m")),
-                Some(&Key::from_raw(b"n")),
-                |_, _| Err(())
-            )
-            .is_ok());
+        assert!(
+            lock_table
+                .check_range(
+                    Some(&Key::from_raw(b"m")),
+                    Some(&Key::from_raw(b"n")),
+                    |_, _| Err(())
+                )
+                .is_ok()
+        );
 
         // lock passes check_fn
-        assert!(lock_table
-            .check_range(None, Some(&Key::from_raw(b"z")), |_, l| ts_check(l, 5))
-            .is_ok());
+        assert!(
+            lock_table
+                .check_range(None, Some(&Key::from_raw(b"z")), |_, l| ts_check(l, 5))
+                .is_ok()
+        );
 
         // first lock does not pass check_fn
         assert_eq!(

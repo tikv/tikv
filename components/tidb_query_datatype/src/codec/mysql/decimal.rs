@@ -610,9 +610,11 @@ fn do_div_mod_impl(
         let frac_cnt = cmp::max(lhs.frac_cnt, rhs.frac_cnt);
         Res::Ok(Decimal::new(0, frac_cnt, lhs.negative))
     } else {
-        frac_word_to = word_cnt!(l_frac_cnt
-            .saturating_add(r_frac_cnt)
-            .saturating_add(frac_incr));
+        frac_word_to = word_cnt!(
+            l_frac_cnt
+                .saturating_add(r_frac_cnt)
+                .saturating_add(frac_incr)
+        );
         let res = fix_word_cnt_err(int_word_to, frac_word_to, WORD_BUF_LEN);
         int_word_to = res.0;
         frac_word_to = res.1;
@@ -632,10 +634,12 @@ fn do_div_mod_impl(
     let i = word_cnt!(l_prec as usize, usize);
     let l_len = cmp::max(
         3,
-        i + word_cnt!(r_frac_cnt
-            .saturating_mul(2)
-            .saturating_add(frac_incr)
-            .saturating_add(1)) as usize
+        i + word_cnt!(
+            r_frac_cnt
+                .saturating_mul(2)
+                .saturating_add(frac_incr)
+                .saturating_add(1)
+        ) as usize
             + 1,
     );
     let mut buf = vec![0; l_len];
@@ -760,6 +764,9 @@ fn do_div_mod_impl(
         let idx_to = idx_to as usize;
         let dest = &mut res.word_buf[idx_to..idx_to + src.len()];
         dest.copy_from_slice(src);
+    }
+    if res.is_zero() {
+        res.negative = false
     }
     Some(res)
 }
@@ -926,18 +933,18 @@ impl Decimal {
     /// ceil the Decimal into a new Decimal.
     pub fn ceil(&self) -> Res<Decimal> {
         if !self.negative {
-            self.clone().round(0, RoundMode::Ceiling)
+            self.round(0, RoundMode::Ceiling)
         } else {
-            self.clone().round(0, RoundMode::Truncate)
+            self.round(0, RoundMode::Truncate)
         }
     }
 
     /// floor the Decimal into a new Decimal.
     pub fn floor(&self) -> Res<Decimal> {
         if !self.negative {
-            self.clone().round(0, RoundMode::Truncate)
+            self.round(0, RoundMode::Truncate)
         } else {
-            self.clone().round(0, RoundMode::Ceiling)
+            self.round(0, RoundMode::Ceiling)
         }
     }
 
@@ -2263,7 +2270,7 @@ impl Eq for Decimal {}
 impl Ord for Decimal {
     fn cmp(&self, right: &Decimal) -> Ordering {
         if self.negative == right.negative {
-            let (carry, _, _, _) = calc_sub_carry(self, right);
+            let (carry, ..) = calc_sub_carry(self, right);
             carry.map_or(Ordering::Equal, |carry| {
                 if (carry > 0) == self.negative {
                     Ordering::Greater
@@ -2393,7 +2400,7 @@ mod tests {
     use std::cmp::Ordering;
     use std::collections::hash_map::DefaultHasher;
     use std::f64::EPSILON;
-    use std::iter::repeat;
+
     use std::sync::Arc;
 
     #[test]
@@ -2926,15 +2933,9 @@ mod tests {
 
         for (dec_str, scale, half_exp, trunc_exp, ceil_exp) in cases {
             let dec = dec_str.parse::<Decimal>().unwrap();
-            let res = dec
-                .clone()
-                .round(scale, RoundMode::HalfEven)
-                .map(|d| d.to_string());
+            let res = dec.round(scale, RoundMode::HalfEven).map(|d| d.to_string());
             assert_eq!(res, half_exp.map(|s| s.to_owned()));
-            let res = dec
-                .clone()
-                .round(scale, RoundMode::Truncate)
-                .map(|d| d.to_string());
+            let res = dec.round(scale, RoundMode::Truncate).map(|d| d.to_string());
             assert_eq!(res, trunc_exp.map(|s| s.to_owned()));
             let res = dec.round(scale, RoundMode::Ceiling).map(|d| d.to_string());
             assert_eq!(res, ceil_exp.map(|s| s.to_owned()));
@@ -3201,9 +3202,9 @@ mod tests {
 
     #[test]
     fn test_add() {
-        let a = "2".to_owned() + &repeat('1').take(71).collect::<String>();
-        let b: String = repeat('8').take(81).collect();
-        let c = "8888888890".to_owned() + &repeat('9').take(71).collect::<String>();
+        let a = "2".to_owned() + &"1".repeat(71);
+        let b: String = "8".repeat(81);
+        let c = "8888888890".to_owned() + &"9".repeat(71);
         let cases = vec![
             (
                 ".00012345000098765",
@@ -3296,8 +3297,8 @@ mod tests {
 
     #[test]
     fn test_mul() {
-        let a = "1".to_owned() + &repeat('0').take(60).collect::<String>();
-        let b = "1".to_owned() + &repeat("0").take(60).collect::<String>();
+        let a = "1".to_owned() + &"0".repeat(60);
+        let b = "1".to_owned() + &"0".repeat(60);
         let cases = vec![
             ("12", "10", Res::Ok("120")),
             ("0", "-1.1", Res::Ok("0")),
@@ -3488,15 +3489,31 @@ mod tests {
                 5,
                 "3428138243708624600000000000000000000000000000000000",
                 "0.000000000000000000000000000000000000000000010962196522059515",
-                Some("312723662343590746587750435944686855597018456899102054479447138416084646758822"),
-                Some("0.000000000000000000000000000000000003564345362392880000000000")
+                Some(
+                    "312723662343590746587750435944686855597018456899102054479447138416084646758822",
+                ),
+                Some("0.000000000000000000000000000000000003564345362392880000000000"),
             ),
             (
                 0,
                 "-0.000000000000000000000000000000000000000000004078816115216077",
                 "770994069125765500000000000000000000000000000",
-                Some("-0.000000000000000000000000000000000000000000000000000000000000000"),
-                Some("-0.000000000000000000000000000000000000000000004078816115216077")
+                Some("0.000000000000000000000000000000000000000000000000000000000000000"),
+                Some("-0.000000000000000000000000000000000000000000004078816115216077"),
+            ),
+            (
+                DEFAULT_DIV_FRAC_INCR,
+                "-125",
+                "489466941506",
+                Some("0.000000000"),
+                Some("-125"),
+            ),
+            (
+                DEFAULT_DIV_FRAC_INCR,
+                "-56",
+                "489466941506",
+                Some("0.000000000"),
+                Some("-56"),
             ),
         ];
 
@@ -3707,9 +3724,11 @@ mod tests {
         )));
         let truncated_res = Res::Truncated(2333);
 
-        assert!(truncated_res
-            .into_result_impl(&mut ctx, Some(Error::truncated()), None)
-            .is_ok());
+        assert!(
+            truncated_res
+                .into_result_impl(&mut ctx, Some(Error::truncated()), None)
+                .is_ok()
+        );
 
         // Overflow cases
         let mut ctx = EvalContext::default();
@@ -3728,8 +3747,10 @@ mod tests {
             Flag::OVERFLOW_AS_WARNING,
         )));
         let error = Error::overflow("", "");
-        assert!(overflow_res
-            .into_result_impl(&mut ctx, None, Some(error))
-            .is_ok());
+        assert!(
+            overflow_res
+                .into_result_impl(&mut ctx, None, Some(error))
+                .is_ok()
+        );
     }
 }

@@ -34,10 +34,12 @@ pub const MAX_OLD_ENCODED_VALUE_LEN: usize = 9;
 pub const INDEX_VALUE_COMMON_HANDLE_FLAG: u8 = 127;
 /// Flag that indicate if the index value has partition id.
 pub const INDEX_VALUE_PARTITION_ID_FLAG: u8 = 126;
+/// Flag that indicate if the index values has the version information.
+pub const INDEX_VALUE_VERSION_FLAG: u8 = 125;
 /// Flag that indicate if the index value has restored data.
 pub const INDEX_VALUE_RESTORED_DATA_FLAG: u8 = crate::codec::row::v2::CODEC_VERSION;
 
-/// ID for partition column, see https://github.com/pingcap/parser/pull/1010
+/// ID for partition column, see <https://github.com/pingcap/parser/pull/1010>
 pub const EXTRA_PARTITION_ID_COL_ID: i64 = -2;
 
 /// `TableEncoder` encodes the table record/index prefix.
@@ -512,7 +514,7 @@ pub fn generate_index_data_for_test(
     col_val: &Datum,
     unique: bool,
 ) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
-    let indice = vec![(2, (*col_val).clone()), (3, Datum::Dec(handle.into()))];
+    let indice = vec![(2, col_val.clone()), (3, Datum::Dec(handle.into()))];
     let mut expect_row = HashMap::default();
     let mut v: Vec<_> = indice
         .iter()
@@ -534,13 +536,12 @@ pub fn generate_index_data_for_test(
 
 #[cfg(test)]
 mod tests {
-    use std::i64;
+    use std::{i64, iter::FromIterator};
 
     use tipb::ColumnInfo;
 
     use crate::codec::datum::{self, Datum};
     use collections::{HashMap, HashSet};
-    use tikv_util::map;
 
     use super::*;
 
@@ -621,21 +622,23 @@ mod tests {
             .set_tp(FieldTypeTp::Duration)
             .set_decimal(2);
 
-        let mut cols = map![
-            1 => FieldTypeTp::LongLong.into(),
-            2 => FieldTypeTp::VarChar.into(),
-            3 => FieldTypeTp::NewDecimal.into(),
-            5 => FieldTypeTp::JSON.into(),
-            6 => duration_col
-        ];
+        let mut cols = HashMap::from_iter([
+            (1, FieldTypeTp::LongLong.into()),
+            (2, FieldTypeTp::VarChar.into()),
+            (3, FieldTypeTp::NewDecimal.into()),
+            (5, FieldTypeTp::JSON.into()),
+            (6, duration_col),
+        ]);
 
-        let mut row = map![
-            1 => Datum::I64(100),
-            2 => Datum::Bytes(b"abc".to_vec()),
-            3 => Datum::Dec(10.into()),
-            5 => Datum::Json(r#"{"name": "John"}"#.parse().unwrap()),
-            6 => Datum::Dur(Duration::parse(&mut EvalContext::default(),"23:23:23.666",2 ).unwrap())
-        ];
+        let duration_row = Duration::parse(&mut EvalContext::default(), "23:23:23.666", 2).unwrap();
+
+        let mut row = HashMap::from_iter([
+            (1, Datum::I64(100)),
+            (2, Datum::Bytes(b"abc".to_vec())),
+            (3, Datum::Dec(10.into())),
+            (5, Datum::Json(r#"{"name": "John"}"#.parse().unwrap())),
+            (6, Datum::Dur(duration_row)),
+        ]);
 
         let mut ctx = EvalContext::default();
         let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
@@ -681,9 +684,11 @@ mod tests {
 
         let bs = encode_row(&mut ctx, vec![], &[]).unwrap();
         assert!(!bs.is_empty());
-        assert!(decode_row(&mut bs.as_slice(), &mut ctx, &cols)
-            .unwrap()
-            .is_empty());
+        assert!(
+            decode_row(&mut bs.as_slice(), &mut ctx, &cols)
+                .unwrap()
+                .is_empty()
+        );
         datums = cut_row_as_owned(&bs, &col_id_set);
         assert!(datums.is_empty());
     }
@@ -810,16 +815,16 @@ mod tests {
     #[test]
     fn test_check_key_type() {
         let record_key = encode_row_key(TABLE_ID, 1);
-        assert!(check_key_type(&record_key.as_slice(), RECORD_PREFIX_SEP).is_ok());
-        assert!(check_key_type(&record_key.as_slice(), INDEX_PREFIX_SEP).is_err());
+        assert!(check_key_type(record_key.as_slice(), RECORD_PREFIX_SEP).is_ok());
+        assert!(check_key_type(record_key.as_slice(), INDEX_PREFIX_SEP).is_err());
 
         let (_, index_key) =
             generate_index_data_for_test(TABLE_ID, INDEX_ID, 1, &Datum::I64(1), true);
-        assert!(check_key_type(&index_key.as_slice(), RECORD_PREFIX_SEP).is_err());
-        assert!(check_key_type(&index_key.as_slice(), INDEX_PREFIX_SEP).is_ok());
+        assert!(check_key_type(index_key.as_slice(), RECORD_PREFIX_SEP).is_err());
+        assert!(check_key_type(index_key.as_slice(), INDEX_PREFIX_SEP).is_ok());
 
         let too_small_key = vec![0];
-        assert!(check_key_type(&too_small_key.as_slice(), RECORD_PREFIX_SEP).is_err());
-        assert!(check_key_type(&too_small_key.as_slice(), INDEX_PREFIX_SEP).is_err());
+        assert!(check_key_type(too_small_key.as_slice(), RECORD_PREFIX_SEP).is_err());
+        assert!(check_key_type(too_small_key.as_slice(), INDEX_PREFIX_SEP).is_err());
     }
 }

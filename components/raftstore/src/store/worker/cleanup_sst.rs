@@ -11,6 +11,7 @@ use engine_traits::KvEngine;
 use pd_client::PdClient;
 use sst_importer::SSTImporter;
 use std::marker::PhantomData;
+use tikv_util::error;
 use tikv_util::worker::Runnable;
 
 pub enum Task {

@@ -114,6 +114,12 @@ impl Store<RocksEngine> {
     }
 }
 
+impl Default for Store<RocksEngine> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<E: Engine> Store<E> {
     pub fn from_engine(engine: E) -> Self {
         Self {
@@ -122,6 +128,10 @@ impl<E: Engine> Store<E> {
             last_committed_ts: TimeStamp::zero(),
             handles: vec![],
         }
+    }
+
+    pub fn current_ts(&self) -> TimeStamp {
+        self.current_ts
     }
 
     pub fn begin(&mut self) {
@@ -134,7 +144,7 @@ impl<E: Engine> Store<E> {
         let pk = kv[0].0.clone();
         let kv = kv
             .drain(..)
-            .map(|(k, v)| Mutation::Put((Key::from_raw(&k), v)))
+            .map(|(k, v)| Mutation::make_put(Key::from_raw(&k), v))
             .collect();
         self.store.prewrite(ctx, kv, pk, self.current_ts).unwrap();
     }
@@ -148,7 +158,7 @@ impl<E: Engine> Store<E> {
         let pk = keys[0].clone();
         let mutations = keys
             .drain(..)
-            .map(|k| Mutation::Delete(Key::from_raw(&k)))
+            .map(|k| Mutation::make_delete(Key::from_raw(&k)))
             .collect();
         self.store
             .prewrite(ctx, mutations, pk, self.current_ts)
@@ -186,7 +196,7 @@ impl<E: Engine> Store<E> {
         self.store
             .scan(
                 Context::default(),
-                Key::from_encoded(vec![]),
+                vec![],
                 None,
                 100_000,
                 false,
@@ -207,6 +217,7 @@ impl<E: Engine> Store<E> {
             self.last_committed_ts,
             IsolationLevel::Si,
             true,
+            Default::default(),
             Default::default(),
             false,
         )

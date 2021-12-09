@@ -3,7 +3,7 @@
 use std::{fs::File, time::Duration};
 
 use engine_traits::{CF_DEFAULT, CF_WRITE};
-use external_storage::{create_storage, make_local_backend};
+use external_storage_export::{create_storage, make_local_backend};
 use file_system::calc_crc32_bytes;
 use futures::{executor::block_on, AsyncReadExt, StreamExt};
 use kvproto::import_sstpb::*;
@@ -28,7 +28,7 @@ fn assert_same_file_name(s1: String, s2: String) {
     }
 }
 
-fn assert_same_files(files1: Vec<kvproto::backup::File>, files2: Vec<kvproto::backup::File>) {
+fn assert_same_files(files1: Vec<kvproto::brpb::File>, files2: Vec<kvproto::brpb::File>) {
     assert_eq!(files1.len(), files2.len());
 
     // After https://github.com/tikv/tikv/pull/8707 merged.
@@ -40,6 +40,10 @@ fn assert_same_files(files1: Vec<kvproto::backup::File>, files2: Vec<kvproto::ba
         assert_same_file_name(f1.name, f2.name);
         f1.name = "".to_string();
         f2.name = "".to_string();
+        // the cipher_iv is different because iv is generated randomly
+        assert_ne!(f1.cipher_iv, f2.cipher_iv);
+        f1.cipher_iv = "".to_string().into_bytes();
+        f2.cipher_iv = "".to_string().into_bytes();
         assert_eq!(f1, f2);
     }
 }
@@ -85,7 +89,7 @@ fn test_backup_and_import() {
 
     // Use importer to restore backup files.
     let backend = make_local_backend(&storage_path);
-    let storage = create_storage(&backend).unwrap();
+    let storage = create_storage(&backend, Default::default()).unwrap();
     let region = suite.cluster.get_region(b"");
     let mut sst_meta = SstMeta::default();
     sst_meta.region_id = region.get_id();
@@ -126,7 +130,7 @@ fn test_backup_and_import() {
             .cluster
             .call_command_on_leader(cmd, Duration::from_secs(5))
             .unwrap();
-        assert!(!resp.get_header().has_error(), resp);
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
     }
 
     // Backup file should have same contents.
@@ -175,7 +179,7 @@ fn test_backup_huge_range_and_import() {
 
     // Use importer to restore backup files.
     let backend = make_local_backend(&storage_path);
-    let storage = create_storage(&backend).unwrap();
+    let storage = create_storage(&backend, Default::default()).unwrap();
     let region = suite.cluster.get_region(b"");
     let mut sst_meta = SstMeta::default();
     sst_meta.region_id = region.get_id();
@@ -217,7 +221,7 @@ fn test_backup_huge_range_and_import() {
             .cluster
             .call_command_on_leader(cmd, Duration::from_secs(5))
             .unwrap();
-        assert!(!resp.get_header().has_error(), resp);
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
     }
 
     // Backup file should have same contents.
@@ -318,7 +322,7 @@ fn test_backup_rawkv() {
 
     // Use importer to restore backup files.
     let backend = make_local_backend(&storage_path);
-    let storage = create_storage(&backend).unwrap();
+    let storage = create_storage(&backend, Default::default()).unwrap();
     let region = suite.cluster.get_region(b"");
     let mut sst_meta = SstMeta::default();
     sst_meta.region_id = region.get_id();
@@ -359,7 +363,7 @@ fn test_backup_rawkv() {
             .cluster
             .call_command_on_leader(cmd, Duration::from_secs(5))
             .unwrap();
-        assert!(!resp.get_header().has_error(), resp);
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
     }
 
     // Backup file should have same contents.

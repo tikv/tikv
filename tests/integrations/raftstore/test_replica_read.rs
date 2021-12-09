@@ -6,15 +6,18 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use futures::executor::block_on;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::Result;
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
+use txn_types::{Key, Lock, LockType};
 
 #[derive(Default)]
 struct CommitToFilter {
@@ -165,7 +168,7 @@ fn test_replica_read_on_hibernate() {
     // a new election finally because it always ticks.
     let start = Instant::now();
     loop {
-        if start.elapsed() >= Duration::from_secs(6) {
+        if start.saturating_elapsed() >= Duration::from_secs(6) {
             break;
         }
         match rx.recv_timeout(Duration::from_secs(2)) {
@@ -311,11 +314,83 @@ fn test_read_index_out_of_order() {
 }
 
 #[test]
+fn test_read_index_retry_lock_checking() {
+    let mut cluster = new_node_cluster(0, 2);
+
+    // Use long election timeout and short lease.
+    configure_for_lease_read(&mut cluster, Some(50), Some(20));
+    cluster.cfg.raft_store.raft_store_max_leader_lease =
+        ReadableDuration(Duration::from_millis(100));
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let rid = cluster.run_conf_change();
+    pd_client.must_add_peer(rid, new_peer(2, 2));
+
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    // block the follower from receiving read index resp first
+    let filter = Box::new(
+        RegionPacketFilter::new(1, 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgReadIndexResp),
+    );
+    cluster.sim.wl().add_recv_filter(2, filter);
+
+    // Can't get response because read index responses are blocked.
+    let r1 = cluster.get_region(b"k1");
+    let resp1 = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", true);
+    let resp2 = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k2", true);
+    assert!(resp1.recv_timeout(Duration::from_secs(2)).is_err());
+    assert!(resp2.try_recv().is_err());
+
+    // k1 has a memory lock
+    let leader_cm = cluster.sim.rl().get_concurrency_manager(1);
+    let lock = Lock::new(
+        LockType::Put,
+        b"k1".to_vec(),
+        10.into(),
+        20000,
+        None,
+        10.into(),
+        1,
+        20.into(),
+    )
+    .use_async_commit(vec![]);
+    let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
+    guard.with_lock(|l| *l = Some(lock.clone()));
+
+    // clear filters, so later read index responses can be received
+    cluster.sim.wl().clear_recv_filters(2);
+    // resp1 should contain key is locked error
+    assert!(
+        resp1
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .responses[0]
+            .get_read_index()
+            .has_locked()
+    );
+    // resp2 should has a successful read index
+    assert!(
+        resp2
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .responses[0]
+            .get_read_index()
+            .get_read_index()
+            > 0
+    );
+}
+
+#[test]
 fn test_split_isolation() {
     let mut cluster = new_node_cluster(0, 2);
     // Use long election timeout and short lease.
     configure_for_hibernate(&mut cluster);
-    configure_for_lease_read(&mut cluster, Some(200), Some(10));
+    configure_for_lease_read(&mut cluster, Some(50), Some(20));
     cluster.cfg.raft_store.raft_log_gc_count_limit = 11;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();

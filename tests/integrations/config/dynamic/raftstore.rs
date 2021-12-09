@@ -16,10 +16,11 @@ use tikv::import::SSTImporter;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, ALL_CFS};
+use resource_metering::CollectorRegHandle;
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::{dummy_scheduler, FutureWorker, Worker};
+use tikv_util::worker::{dummy_scheduler, LazyWorker, Worker};
 
 #[derive(Clone)]
 struct MockTransport;
@@ -76,7 +77,7 @@ fn start_raftstore(
             .as_path()
             .display()
             .to_string();
-        Arc::new(SSTImporter::new(&p, None).unwrap())
+        Arc::new(SSTImporter::new(&cfg.import, &p, None, cfg.storage.api_version()).unwrap())
     };
     let snap_mgr = {
         let p = dir
@@ -94,7 +95,7 @@ fn start_raftstore(
         Module::Raftstore,
         Box::new(RaftstoreConfigManager(cfg_track.clone())),
     );
-    let pd_worker = FutureWorker::new("store-config");
+    let pd_worker = LazyWorker::new("store-config");
     let (split_check_scheduler, _) = dummy_scheduler();
 
     system
@@ -114,6 +115,7 @@ fn start_raftstore(
             AutoSplitController::default(),
             Arc::default(),
             ConcurrencyManager::new(1.into()),
+            CollectorRegHandle::new_for_test(),
         )
         .unwrap();
     (cfg_controller, raft_router, system.apply_router(), system)

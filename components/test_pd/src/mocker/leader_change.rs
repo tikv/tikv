@@ -44,6 +44,12 @@ impl LeaderChange {
     }
 }
 
+impl Default for LeaderChange {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 const DEAD_ID: u64 = 1000;
 const DEAD_NAME: &str = "walking_dead";
 const DEAD_URL: &str = "127.0.0.1:65534";
@@ -55,6 +61,10 @@ impl PdMocker for LeaderChange {
         if now - inner.r.ts > LeaderChange::get_leader_interval() {
             inner.r.idx += 1;
             inner.r.ts = now;
+            debug!(
+                "[LeaderChange] change leader to {:?}",
+                inner.resps[inner.r.idx % inner.resps.len()].get_leader()
+            );
             return Some(Err("not leader".to_owned()));
         }
 
@@ -66,18 +76,12 @@ impl PdMocker for LeaderChange {
     }
 
     fn get_region_by_id(&self, _: &GetRegionByIdRequest) -> Option<Result<GetRegionResponse>> {
-        let mut inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().unwrap();
         let now = Instant::now();
-        if now.duration_since(inner.r.ts) > LeaderChange::get_leader_interval() {
-            inner.r.idx += 1;
-            inner.r.ts = now;
-            debug!(
-                "[LeaderChange] change leader to {:?}",
-                inner.resps[inner.r.idx % inner.resps.len()].get_leader()
-            );
+        if now.saturating_duration_since(inner.r.ts) > LeaderChange::get_leader_interval() {
+            return Some(Err("not leader".to_owned()));
         }
-
-        Some(Err("not leader".to_owned()))
+        Some(Ok(GetRegionResponse::default()))
     }
 
     fn set_endpoints(&self, eps: Vec<String>) {

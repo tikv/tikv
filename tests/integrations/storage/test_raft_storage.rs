@@ -29,12 +29,16 @@ fn new_raft_storage() -> (
 #[test]
 fn test_raft_storage() {
     let (_cluster, storage, mut ctx) = new_raft_storage();
-    let key = Key::from_raw(b"key");
-    assert_eq!(storage.get(ctx.clone(), &key, 5).unwrap().0, None);
+    let raw_key = b"key".to_vec();
+    let key = Key::from_raw(&raw_key);
+    assert_eq!(
+        storage.get(ctx.clone(), raw_key.clone(), 5).unwrap().0,
+        None
+    );
     storage
         .prewrite(
             ctx.clone(),
-            vec![Mutation::Put((key.clone(), b"value".to_vec()))],
+            vec![Mutation::make_put(key.clone(), b"value".to_vec())],
             b"key".to_vec(),
             10,
         )
@@ -43,16 +47,28 @@ fn test_raft_storage() {
         .commit(ctx.clone(), vec![key.clone()], 10, 15)
         .unwrap();
     assert_eq!(
-        storage.get(ctx.clone(), &key, 20).unwrap().0.unwrap(),
+        storage
+            .get(ctx.clone(), raw_key.clone(), 20)
+            .unwrap()
+            .0
+            .unwrap(),
         b"value".to_vec()
     );
 
     // Test wrong region id.
     let region_id = ctx.get_region_id();
     ctx.set_region_id(region_id + 1);
-    assert!(storage.get(ctx.clone(), &key, 20).is_err());
-    assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
-    assert!(storage.scan(ctx.clone(), key, None, 1, false, 20).is_err());
+    assert!(storage.get(ctx.clone(), raw_key.clone(), 20).is_err());
+    assert!(
+        storage
+            .batch_get(ctx.clone(), &[raw_key.clone()], 20)
+            .is_err()
+    );
+    assert!(
+        storage
+            .scan(ctx.clone(), raw_key, None, 1, false, 20)
+            .is_err()
+    );
     assert!(storage.scan_locks(ctx, 20, None, None, 100).is_err());
 }
 
@@ -96,7 +112,7 @@ fn test_raft_storage_rollback_before_prewrite() {
     assert!(ret.is_ok());
     let ret = storage.prewrite(
         ctx,
-        vec![Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()))],
+        vec![Mutation::make_put(Key::from_raw(b"key"), b"value".to_vec())],
         b"key".to_vec(),
         10,
     );
@@ -116,12 +132,16 @@ fn test_raft_storage_rollback_before_prewrite() {
 fn test_raft_storage_store_not_match() {
     let (_cluster, storage, mut ctx) = new_raft_storage();
 
-    let key = Key::from_raw(b"key");
-    assert_eq!(storage.get(ctx.clone(), &key, 5).unwrap().0, None);
+    let raw_key = b"key".to_vec();
+    let key = Key::from_raw(&raw_key);
+    assert_eq!(
+        storage.get(ctx.clone(), raw_key.clone(), 5).unwrap().0,
+        None
+    );
     storage
         .prewrite(
             ctx.clone(),
-            vec![Mutation::Put((key.clone(), b"value".to_vec()))],
+            vec![Mutation::make_put(key.clone(), b"value".to_vec())],
             b"key".to_vec(),
             10,
         )
@@ -130,7 +150,11 @@ fn test_raft_storage_store_not_match() {
         .commit(ctx.clone(), vec![key.clone()], 10, 15)
         .unwrap();
     assert_eq!(
-        storage.get(ctx.clone(), &key, 20).unwrap().0.unwrap(),
+        storage
+            .get(ctx.clone(), raw_key.clone(), 20)
+            .unwrap()
+            .0
+            .unwrap(),
         b"value".to_vec()
     );
 
@@ -140,8 +164,8 @@ fn test_raft_storage_store_not_match() {
 
     peer.set_store_id(store_id + 1);
     ctx.set_peer(peer);
-    assert!(storage.get(ctx.clone(), &key, 20).is_err());
-    let res = storage.get(ctx.clone(), &key, 20);
+    assert!(storage.get(ctx.clone(), raw_key.clone(), 20).is_err());
+    let res = storage.get(ctx.clone(), raw_key.clone(), 20);
     if let StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
         box KvErrorInner::Request(ref e),
     ))))) = *res.as_ref().err().unwrap()
@@ -150,8 +174,16 @@ fn test_raft_storage_store_not_match() {
     } else {
         panic!("expect store_not_match, but got {:?}", res);
     }
-    assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
-    assert!(storage.scan(ctx.clone(), key, None, 1, false, 20).is_err());
+    assert!(
+        storage
+            .batch_get(ctx.clone(), &[raw_key.clone()], 20)
+            .is_err()
+    );
+    assert!(
+        storage
+            .scan(ctx.clone(), raw_key, None, 1, false, 20)
+            .is_err()
+    );
     assert!(storage.scan_locks(ctx, 20, None, None, 100).is_err());
 }
 
@@ -203,7 +235,7 @@ fn write_test_data<E: Engine>(
         storage
             .prewrite(
                 ctx.clone(),
-                vec![Mutation::Put((Key::from_raw(k), v.to_vec()))],
+                vec![Mutation::make_put(Key::from_raw(k), v.to_vec())],
                 k.to_vec(),
                 ts,
             )
@@ -237,7 +269,7 @@ fn check_data<E: Engine>(
             ctx.set_region_epoch(region.take_region_epoch());
             ctx.set_peer(leader);
 
-            match storages[&leader_id].get(ctx, &Key::from_raw(k), ts) {
+            match storages[&leader_id].get(ctx, k.to_owned(), ts) {
                 Ok(v) => break v.0,
                 // Retry if meeting `StaleCommand` error.
                 Err(e) if e.error_code() == STALE_COMMAND => {}
@@ -364,4 +396,52 @@ fn test_auto_gc() {
     finish_signal_rx
         .recv_timeout(Duration::from_millis(300))
         .unwrap_err();
+}
+
+#[test]
+fn test_atomic_basic() {
+    let (_cluster, storage, ctx) = new_raft_storage();
+    storage
+        .raw_batch_put_atomic(
+            ctx.clone(),
+            "default".to_string(),
+            vec![(b"k1".to_vec(), b"v1".to_vec())],
+            vec![0],
+        )
+        .unwrap();
+    let (prev_val, succeed) = storage
+        .raw_compare_and_swap_atomic(
+            ctx.clone(),
+            "default".to_string(),
+            b"k1".to_vec(),
+            Some(b"v2".to_vec()),
+            b"v3".to_vec(),
+            0,
+        )
+        .unwrap();
+    assert!(!succeed);
+    assert_eq!(prev_val, Some(b"v1".to_vec()));
+    let (prev_val, succeed) = storage
+        .raw_compare_and_swap_atomic(
+            ctx.clone(),
+            "default".to_string(),
+            b"k1".to_vec(),
+            Some(b"v1".to_vec()),
+            b"v2".to_vec(),
+            0,
+        )
+        .unwrap();
+    assert!(succeed);
+    assert_eq!(prev_val, Some(b"v1".to_vec()));
+    let value = storage
+        .raw_get(ctx.clone(), "default".to_string(), b"k1".to_vec())
+        .unwrap();
+    assert_eq!(b"v2".to_vec(), value.unwrap());
+    storage
+        .raw_batch_delete_atomic(ctx.clone(), "default".to_string(), vec![b"k1".to_vec()])
+        .unwrap();
+    let value = storage
+        .raw_get(ctx, "default".to_string(), b"k1".to_vec())
+        .unwrap();
+    assert!(value.is_none());
 }

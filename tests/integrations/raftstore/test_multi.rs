@@ -128,12 +128,13 @@ fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
 
 fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize) {
     cluster.run();
+    let leader = cluster.leader_of_region(1);
 
     let half = (count as u64 + 1) / 2;
     for i in 1..=half {
         cluster.stop_node(i);
     }
-    if let Some(leader) = cluster.leader_of_region(1) {
+    if let Some(leader) = leader {
         if leader.get_store_id() > half {
             cluster.stop_node(leader.get_store_id());
         }
@@ -155,7 +156,7 @@ fn test_multi_random_restart<T: Simulator>(
     let mut value = [0u8; 5];
 
     for i in 1..restart_count {
-        let id = 1 + rng.gen_range(0, node_count as u64);
+        let id = 1 + rng.gen_range(0..node_count as u64);
         cluster.stop_node(id);
 
         let key = i.to_string().into_bytes();
@@ -181,26 +182,6 @@ fn test_multi_node_base() {
     test_multi_base(&mut cluster)
 }
 
-fn test_multi_drop_packet<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.run();
-    cluster.add_send_filter(CloneFilterFactory(DropPacketFilter::new(30)));
-    test_multi_base_after_bootstrap(cluster);
-}
-
-#[test]
-fn test_multi_node_latency() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_multi_latency(&mut cluster);
-}
-
-#[test]
-fn test_multi_node_drop_packet() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_multi_drop_packet(&mut cluster);
-}
-
 #[test]
 fn test_multi_server_base() {
     let count = 5;
@@ -214,6 +195,13 @@ fn test_multi_latency<T: Simulator>(cluster: &mut Cluster<T>) {
         30,
     ))));
     test_multi_base_after_bootstrap(cluster);
+}
+
+#[test]
+fn test_multi_node_latency() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_multi_latency(&mut cluster);
 }
 
 #[test]
@@ -241,6 +229,19 @@ fn test_multi_server_random_latency() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     test_multi_random_latency(&mut cluster);
+}
+
+fn test_multi_drop_packet<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.run();
+    cluster.add_send_filter(CloneFilterFactory(DropPacketFilter::new(30)));
+    test_multi_base_after_bootstrap(cluster);
+}
+
+#[test]
+fn test_multi_node_drop_packet() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_multi_drop_packet(&mut cluster);
 }
 
 #[test]
@@ -469,6 +470,7 @@ fn test_node_leader_change_with_log_overlap() {
                 assert!(resp.response.get_header().has_error());
                 assert!(resp.response.get_header().get_error().has_stale_command());
             })),
+            RaftCmdExtraOpts::default(),
         )
         .unwrap();
 
@@ -719,6 +721,7 @@ fn test_node_dropped_proposal() {
             Callback::write(Box::new(move |resp: WriteResponse| {
                 let _ = tx.send(resp.response);
             })),
+            RaftCmdExtraOpts::default(),
         )
         .unwrap();
 

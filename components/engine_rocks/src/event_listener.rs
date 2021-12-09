@@ -9,6 +9,9 @@ use rocksdb::{
 };
 use tikv_util::set_panic_mark;
 
+// Message for RocksDB status subcode kNoSpace.
+const NO_SPACE_ERROR: &str = "IO error: No space left on device";
+
 pub struct RocksEventListener {
     db_name: String,
 }
@@ -35,8 +38,12 @@ impl rocksdb::EventListener for RocksEventListener {
         }
     }
 
-    fn on_compaction_begin(&self, _info: &CompactionJobInfo) {
-        set_io_type(IOType::Compaction);
+    fn on_compaction_begin(&self, info: &CompactionJobInfo) {
+        if info.base_input_level() == 0 {
+            set_io_type(IOType::LevelZeroCompaction);
+        } else {
+            set_io_type(IOType::Compaction);
+        }
     }
 
     fn on_compaction_completed(&self, info: &CompactionJobInfo) {
@@ -48,7 +55,7 @@ impl rocksdb::EventListener for RocksEventListener {
             .observe(info.elapsed_micros() as f64 / 1_000_000.0);
         STORE_ENGINE_COMPACTION_NUM_CORRUPT_KEYS_VEC
             .with_label_values(&[&self.db_name, info.cf_name()])
-            .inc_by(info.num_corrupt_keys() as i64);
+            .inc_by(info.num_corrupt_keys());
         STORE_ENGINE_COMPACTION_REASON_VEC
             .with_label_values(&[
                 &self.db_name,
@@ -56,17 +63,25 @@ impl rocksdb::EventListener for RocksEventListener {
                 &info.compaction_reason().to_string(),
             ])
             .inc();
-        if get_io_type() == IOType::Compaction {
+        if info.base_input_level() == 0 && get_io_type() == IOType::LevelZeroCompaction
+            || info.base_input_level() != 0 && get_io_type() == IOType::Compaction
+        {
             set_io_type(IOType::Other);
         }
     }
 
-    fn on_subcompaction_begin(&self, _info: &SubcompactionJobInfo) {
-        set_io_type(IOType::Compaction);
+    fn on_subcompaction_begin(&self, info: &SubcompactionJobInfo) {
+        if info.base_input_level() == 0 {
+            set_io_type(IOType::LevelZeroCompaction);
+        } else {
+            set_io_type(IOType::Compaction);
+        }
     }
 
-    fn on_subcompaction_completed(&self, _info: &SubcompactionJobInfo) {
-        if get_io_type() == IOType::Compaction {
+    fn on_subcompaction_completed(&self, info: &SubcompactionJobInfo) {
+        if info.base_input_level() == 0 && get_io_type() == IOType::LevelZeroCompaction
+            || info.base_input_level() != 0 && get_io_type() == IOType::Compaction
+        {
             set_io_type(IOType::Other);
         }
     }
@@ -75,11 +90,22 @@ impl rocksdb::EventListener for RocksEventListener {
         STORE_ENGINE_EVENT_COUNTER_VEC
             .with_label_values(&[&self.db_name, info.cf_name(), "ingestion"])
             .inc();
+        STORE_ENGINE_INGESTION_PICKED_LEVEL_VEC
+            .with_label_values(&[&self.db_name, info.cf_name()])
+            .observe(info.picked_level() as f64);
     }
 
     fn on_background_error(&self, reason: DBBackgroundErrorReason, result: Result<(), String>) {
         assert!(result.is_err());
         if let Err(err) = result {
+            if matches!(
+                reason,
+                DBBackgroundErrorReason::Flush | DBBackgroundErrorReason::Compaction
+            ) && err.starts_with(NO_SPACE_ERROR)
+            {
+                // Ignore NoSpace error and let RocksDB automatically recover.
+                return;
+            }
             let r = match reason {
                 DBBackgroundErrorReason::Flush => "flush",
                 DBBackgroundErrorReason::Compaction => "compaction",

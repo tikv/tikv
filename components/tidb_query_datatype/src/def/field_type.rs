@@ -111,6 +111,8 @@ pub enum Collation {
     Utf8Mb4GeneralCi = -45,
     Utf8Mb4UnicodeCi = -224,
     Latin1Bin = -47,
+    GbkBin = -87,
+    GbkChineseCi = -28,
 }
 
 impl Collation {
@@ -126,15 +128,41 @@ impl Collation {
             -47 => Ok(Collation::Latin1Bin),
             -63 | 63 | 47 => Ok(Collation::Binary),
             -224 | -192 => Ok(Collation::Utf8Mb4UnicodeCi),
+            -87 => Ok(Collation::GbkBin),
             n if n >= 0 => Ok(Collation::Utf8Mb4BinNoPadding),
             n => Err(DataTypeError::UnsupportedCollation { code: n }),
         }
+    }
+
+    pub fn is_bin_collation(&self) -> bool {
+        matches!(self, Collation::Utf8Mb4Bin | Collation::Latin1Bin)
     }
 }
 
 impl fmt::Display for Collation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self, f)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Charset {
+    UTF8,
+    UTF8Mb4,
+    Latin1,
+    GBK,
+}
+
+impl Charset {
+    pub fn from_name(name: &str) -> Result<Self, DataTypeError> {
+        match name {
+            "utf8mb4" | "utf8" => Ok(Charset::UTF8Mb4),
+            "latin1" => Ok(Charset::Latin1),
+            "gbk" => Ok(Charset::GBK),
+            _ => Err(DataTypeError::UnsupportedCharset {
+                name: String::from(name),
+            }),
+        }
     }
 }
 
@@ -154,6 +182,9 @@ bitflags! {
 
         /// Internal: Used for telling boolean literal from integer.
         const IS_BOOLEAN = 1 << 19;
+
+        /// Internal: Used for inferring enum eval type.
+        const ENUM_SET_AS_INT = 1 << 21;
     }
 }
 
@@ -279,6 +310,16 @@ pub trait FieldTypeAccessor {
     #[inline]
     fn is_bool(&self) -> bool {
         self.flag().contains(FieldTypeFlag::IS_BOOLEAN)
+    }
+
+    #[inline]
+    fn need_restored_data(&self) -> bool {
+        self.is_non_binary_string_like()
+            && (!self
+                .collation()
+                .map(|col| col.is_bin_collation())
+                .unwrap_or(false)
+                || self.is_varchar_like())
     }
 }
 

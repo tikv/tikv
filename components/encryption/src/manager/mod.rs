@@ -8,16 +8,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossbeam::channel::{self, select, tick};
 use engine_traits::{EncryptionKeyManager, FileEncryptionInfo};
+use fail::fail_point;
 use file_system::File;
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
 use protobuf::Message;
+use tikv_util::{box_err, debug, error, info, thd_name, warn};
 
 use crate::config::EncryptionConfig;
 
 use crate::crypter::{self, compat, Iv};
 use crate::encrypted_file::EncryptedFile;
 use crate::file_dict_file::FileDictionaryFile;
-use crate::io::EncrypterWriter;
+use crate::io::{DecrypterReader, EncrypterWriter};
 use crate::master_key::Backend;
 use crate::metrics::*;
 use crate::{Error, Result};
@@ -201,9 +203,9 @@ impl Dicts {
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != EncryptionMethod::Plaintext {
-            info!("new encrypted file"; 
-                  "fname" => fname, 
-                  "method" => format!("{:?}", method), 
+            info!("new encrypted file";
+                  "fname" => fname,
+                  "method" => format!("{:?}", method),
                   "iv" => hex::encode(iv.as_slice()));
         } else {
             info!("new plaintext file"; "fname" => fname);
@@ -563,17 +565,55 @@ impl DataKeyManager {
         })
     }
 
-    pub fn create_file<P: AsRef<Path>>(&self, path: P) -> Result<EncrypterWriter<File>> {
+    pub fn create_file_for_write<P: AsRef<Path>>(&self, path: P) -> Result<EncrypterWriter<File>> {
+        let file_writer = File::create(&path)?;
+        self.open_file_with_writer(path, file_writer, true /*create*/)
+    }
+
+    pub fn open_file_with_writer<P: AsRef<Path>, W: std::io::Write>(
+        &self,
+        path: P,
+        writer: W,
+        create: bool,
+    ) -> Result<EncrypterWriter<W>> {
         let fname = path.as_ref().to_str().ok_or_else(|| {
             Error::Other(box_err!(
                 "failed to convert path to string {:?}",
                 path.as_ref()
             ))
         })?;
-        let file = self.new_file(fname)?;
-        let file_writer = File::create(path)?;
+        let file = if create {
+            self.new_file(fname)?
+        } else {
+            self.get_file(fname)?
+        };
         EncrypterWriter::new(
-            file_writer,
+            writer,
+            crypter::encryption_method_from_db_encryption_method(file.method),
+            &file.key,
+            Iv::from_slice(&file.iv)?,
+        )
+    }
+
+    pub fn open_file_for_read<P: AsRef<Path>>(&self, path: P) -> Result<DecrypterReader<File>> {
+        let file_reader = File::open(&path)?;
+        self.open_file_with_reader(path, file_reader)
+    }
+
+    pub fn open_file_with_reader<P: AsRef<Path>, R>(
+        &self,
+        path: P,
+        reader: R,
+    ) -> Result<DecrypterReader<R>> {
+        let fname = path.as_ref().to_str().ok_or_else(|| {
+            Error::Other(box_err!(
+                "failed to convert path to string {:?}",
+                path.as_ref()
+            ))
+        })?;
+        let file = self.get_file(fname)?;
+        DecrypterReader::new(
+            reader,
             crypter::encryption_method_from_db_encryption_method(file.method),
             &file.key,
             Iv::from_slice(&file.iv)?,
@@ -656,14 +696,12 @@ impl DataKeyManager {
 
 impl Drop for DataKeyManager {
     fn drop(&mut self) {
-        self.rotate_terminal
-            .send(())
-            .expect("DataKeyManager drop send");
-        self.background_worker
-            .take()
-            .expect("DataKeyManager worker take")
-            .join()
-            .expect("DataKeyManager worker join");
+        if let Err(e) = self.rotate_terminal.send(()) {
+            info!("failed to terminate background rotation, are we shutting down?"; "err" => %e);
+        }
+        if let Some(Err(e)) = self.background_worker.take().map(|w| w.join()) {
+            info!("failed to join background rotation, are we shutting down?"; "err" => ?e);
+        }
     }
 }
 
@@ -708,9 +746,7 @@ impl EncryptionKeyManager for DataKeyManager {
     }
 
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
-        let _ = self.dicts.link_file(src_fname, dst_fname)?;
-        // For now we ignore file not found.
-        // TODO: propagate it back up as an Option.
+        self.dicts.link_file(src_fname, dst_fname)?;
         Ok(())
     }
 }
@@ -724,8 +760,8 @@ mod tests {
     use engine_traits::EncryptionMethod as DBEncryptionMethod;
     use file_system::{remove_file, File};
     use matches::assert_matches;
-    use std::io::Write;
     use tempfile::TempDir;
+    use test_util::create_test_key_file;
 
     lazy_static::lazy_static! {
         static ref LOCK_FOR_GAUGE: Mutex<i32> = Mutex::new(1);
@@ -800,18 +836,16 @@ mod tests {
         }
     }
 
-    // TODO(yiwu): use the similar method in test_util crate instead.
     fn create_key_file(name: &str) -> (PathBuf, TempDir) {
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join(name);
-        let mut file = File::create(path.clone()).unwrap();
-        file.write_all(b"603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\n")
-            .unwrap();
+        create_test_key_file(path.to_str().unwrap());
         (path, tmp_dir)
     }
 
     #[test]
     fn test_key_manager_encryption_enable_disable() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         // encryption not enabled.
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let mut args = def_data_key_args(&tmp_dir);
@@ -846,6 +880,7 @@ mod tests {
     // When enabling encryption, using insecure master key is not allowed.
     #[test]
     fn test_key_manager_disallow_plaintext_metadata() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager(
             &tmp_dir,
@@ -859,7 +894,7 @@ mod tests {
     // If master_key is the wrong key, fallback to previous_master_key.
     #[test]
     fn test_key_manager_rotate_master_key() {
-        let mut _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
 
         // create initial dictionaries.
         let tmp_dir = tempfile::TempDir::new().unwrap();
@@ -919,6 +954,7 @@ mod tests {
     #[test]
     fn test_key_manager_both_master_key_fail() {
         // create initial dictionaries.
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager_def(&tmp_dir, None).unwrap();
         manager.new_file("foo").unwrap();
@@ -939,6 +975,7 @@ mod tests {
     #[test]
     fn test_key_manager_key_dict_missing() {
         // create initial dictionaries.
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager_def(&tmp_dir, None).unwrap();
         manager.new_file("foo").unwrap();
@@ -952,6 +989,7 @@ mod tests {
     #[test]
     fn test_key_manager_file_dict_missing() {
         // create initial dictionaries.
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager_def(&tmp_dir, None).unwrap();
         manager.new_file("foo").unwrap();
@@ -964,6 +1002,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_create_get_delete() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager_def(&tmp_dir, None).unwrap();
 
@@ -1001,6 +1040,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_link() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let file_foo1 = tmp_dir.path().join("foo1");
         let _ = File::create(&file_foo1).unwrap();
@@ -1027,6 +1067,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_rename() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager_def(&tmp_dir, Some(EncryptionMethod::Aes192Ctr)).unwrap();
         let file = manager.new_file("foo").unwrap();
@@ -1047,6 +1088,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_rotate() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager_def(&tmp_dir, None).unwrap();
         let (key_id, key) = {
@@ -1089,6 +1131,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_persistence() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager_def(&tmp_dir, None).unwrap();
 
@@ -1110,6 +1153,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_rotate_on_key_expose() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let (key_path, _tmp_key_dir) = create_key_file("key");
         let master_key_backend =
             Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
@@ -1159,6 +1203,7 @@ mod tests {
 
     #[test]
     fn test_expose_keys_on_insecure_backend() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let (key_path, _tmp_key_dir) = create_key_file("key");
         let file_backend = FileBackend::new(key_path.as_path()).unwrap();
         let master_key_backend = Box::new(file_backend);

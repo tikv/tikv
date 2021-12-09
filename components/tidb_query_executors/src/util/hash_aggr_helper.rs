@@ -6,6 +6,7 @@ use tidb_query_aggr::{update, AggrFunctionState};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
 use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::match_template_evaltype;
 use tidb_query_expr::RpnStackNode;
 
 pub struct HashAggregationHelper;
@@ -36,7 +37,7 @@ impl HashAggregationHelper {
             )?;
             match aggr_expr_result {
                 RpnStackNode::Scalar { value, .. } => {
-                    match_template_evaluable! {
+                    match_template_evaltype! {
                         TT, match value.as_scalar_value_ref() {
                             ScalarValueRef::TT(scalar_value) => {
                                 for offset in states_offset_each_logical_row {
@@ -50,7 +51,7 @@ impl HashAggregationHelper {
                 RpnStackNode::Vector { value, .. } => {
                     let physical_vec = value.as_ref();
                     let logical_rows = value.logical_rows_struct();
-                    match_template_evaluable! {
+                    match_template_evaltype! {
                         TT, match physical_vec {
                             VectorValue::TT(vec) => {
                                 for (states_offset, physical_idx) in states_offset_each_logical_row

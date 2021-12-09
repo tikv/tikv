@@ -10,7 +10,7 @@ use crate::codec::datum_codec::DatumFlagAndPayloadEncoder;
 use crate::codec::{datum, Error, Result};
 
 #[inline]
-fn decode_v2_u64(v: &[u8]) -> Result<u64> {
+pub fn decode_v2_u64(v: &[u8]) -> Result<u64> {
     // See `decodeInt` in TiDB.
     match v.len() {
         1 => Ok(u64::from(v[0])),
@@ -114,7 +114,7 @@ pub trait V1CompatibleEncoder: DatumFlagAndPayloadEncoder {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported FieldType {:?}",
                     fp
-                )))
+                )));
             }
         }
         Ok(())
@@ -145,7 +145,7 @@ mod tests {
 
     fn encode_to_v1_compatible(mut ctx: &mut EvalContext, col: &Column) -> Vec<u8> {
         let mut buf_v2 = vec![];
-        buf_v2.write_value(&mut ctx, &col).unwrap();
+        buf_v2.write_value(&mut ctx, col).unwrap();
         let mut buf_v1 = vec![];
         buf_v1.write_v2_as_datum(&buf_v2, col.ft()).unwrap();
         buf_v1

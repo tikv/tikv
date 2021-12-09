@@ -1,8 +1,10 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use super::timestamp::TimeStamp;
-use crate::Write;
+use bitflags::bitflags;
 use byteorder::{ByteOrder, NativeEndian};
 use collections::HashMap;
-use kvproto::kvrpcpb;
+use kvproto::kvrpcpb::{self, Assertion};
 use std::fmt::{self, Debug, Display, Formatter};
 use tikv_util::codec;
 use tikv_util::codec::bytes;
@@ -212,6 +214,12 @@ impl Key {
     pub fn gen_hash(&self) -> u64 {
         farmhash::fingerprint64(&self.to_raw().unwrap())
     }
+
+    #[allow(clippy::len_without_is_empty)]
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 impl Clone for Key {
@@ -236,6 +244,25 @@ impl Display for Key {
     }
 }
 
+/// Convert a maybe unbounded raw key into `Option`, for a explicit meaning of "Unbounded".
+///
+/// # Example
+///
+/// ```
+/// use txn_types::raw_key_maybe_unbounded_into_option;
+///
+/// assert_eq!(raw_key_maybe_unbounded_into_option(b"".to_vec()), None);
+/// assert_eq!(raw_key_maybe_unbounded_into_option(b"abc".to_vec()), Some(b"abc".to_vec()));
+/// ```
+#[inline]
+pub fn raw_key_maybe_unbounded_into_option(raw_key: Vec<u8>) -> Option<Vec<u8>> {
+    if raw_key.is_empty() {
+        None
+    } else {
+        Some(raw_key)
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum MutationType {
     Put,
@@ -245,96 +272,176 @@ pub enum MutationType {
     Other,
 }
 
-impl MutationType {
-    pub fn may_have_old_value(&self) -> bool {
-        matches!(self, MutationType::Put | MutationType::Delete)
+/// A row mutation.
+#[derive(Debug, Clone)]
+pub enum RawMutation {
+    /// Put `Value` into `Key` with TTL. The TTL will overwrite the existing TTL value.
+    Put { key: Key, value: Value, ttl: u64 },
+    /// Delete `Key`.
+    Delete { key: Key },
+}
+
+impl RawMutation {
+    pub fn key(&self) -> &Key {
+        match self {
+            RawMutation::Put {
+                ref key,
+                value: _,
+                ttl: _,
+            } => key,
+            RawMutation::Delete { ref key } => key,
+        }
     }
 }
 
 /// A row mutation.
+///
+/// It may also carry an `Assertion` field, which means it has such an *assertion* to the data
+/// (the key already exist or not exist). The assertion should pass if the mutation (in a prewrite
+/// request) is going to be finished successfully, otherwise it indicates there should be some bug
+/// causing the attempt to write wrong data.
 #[derive(Debug, Clone)]
 pub enum Mutation {
     /// Put `Value` into `Key`, overwriting any existing value.
-    Put((Key, Value)),
+    Put((Key, Value), Assertion),
     /// Delete `Key`.
-    Delete(Key),
+    Delete(Key, Assertion),
     /// Set a lock on `Key`.
-    Lock(Key),
+    Lock(Key, Assertion),
     /// Put `Value` into `Key` if `Key` does not yet exist.
     ///
     /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
-    Insert((Key, Value)),
+    Insert((Key, Value), Assertion),
     /// Check `key` must be not exist.
     ///
     /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
-    CheckNotExists(Key),
+    CheckNotExists(Key, Assertion),
 }
 
 impl Mutation {
     pub fn key(&self) -> &Key {
         match self {
-            Mutation::Put((ref key, _)) => key,
-            Mutation::Delete(ref key) => key,
-            Mutation::Lock(ref key) => key,
-            Mutation::Insert((ref key, _)) => key,
-            Mutation::CheckNotExists(ref key) => key,
+            Mutation::Put((ref key, _), _) => key,
+            Mutation::Delete(ref key, _) => key,
+            Mutation::Lock(ref key, _) => key,
+            Mutation::Insert((ref key, _), _) => key,
+            Mutation::CheckNotExists(ref key, _) => key,
         }
     }
 
     pub fn mutation_type(&self) -> MutationType {
         match self {
-            Mutation::Put(_) => MutationType::Put,
-            Mutation::Delete(_) => MutationType::Delete,
-            Mutation::Lock(_) => MutationType::Lock,
-            Mutation::Insert(_) => MutationType::Insert,
+            Mutation::Put(..) => MutationType::Put,
+            Mutation::Delete(..) => MutationType::Delete,
+            Mutation::Lock(..) => MutationType::Lock,
+            Mutation::Insert(..) => MutationType::Insert,
             _ => MutationType::Other,
         }
     }
 
     pub fn into_key_value(self) -> (Key, Option<Value>) {
         match self {
-            Mutation::Put((key, value)) => (key, Some(value)),
-            Mutation::Delete(key) => (key, None),
-            Mutation::Lock(key) => (key, None),
-            Mutation::Insert((key, value)) => (key, Some(value)),
-            Mutation::CheckNotExists(key) => (key, None),
+            Mutation::Put((key, value), _) => (key, Some(value)),
+            Mutation::Delete(key, _) => (key, None),
+            Mutation::Lock(key, _) => (key, None),
+            Mutation::Insert((key, value), _) => (key, Some(value)),
+            Mutation::CheckNotExists(key, _) => (key, None),
         }
     }
 
     pub fn should_not_exists(&self) -> bool {
-        matches!(self, Mutation::Insert(_) | Mutation::CheckNotExists(_))
+        matches!(
+            self,
+            Mutation::Insert(_, _) | Mutation::CheckNotExists(_, _)
+        )
     }
 
     pub fn should_not_write(&self) -> bool {
-        matches!(self, Mutation::CheckNotExists(_))
+        matches!(self, Mutation::CheckNotExists(_, _))
+    }
+
+    pub fn get_assertion(&self) -> Assertion {
+        *match self {
+            Mutation::Put(_, assertion) => assertion,
+            Mutation::Delete(_, assertion) => assertion,
+            Mutation::Lock(_, assertion) => assertion,
+            Mutation::Insert(_, assertion) => assertion,
+            Mutation::CheckNotExists(_, assertion) => assertion,
+        }
+    }
+
+    pub fn set_assertion(&mut self, assertion: Assertion) {
+        *match self {
+            Mutation::Put(_, ref mut assertion) => assertion,
+            Mutation::Delete(_, ref mut assertion) => assertion,
+            Mutation::Lock(_, ref mut assertion) => assertion,
+            Mutation::Insert(_, ref mut assertion) => assertion,
+            Mutation::CheckNotExists(_, ref mut assertion) => assertion,
+        } = assertion;
+    }
+
+    /// Creates a Put mutation with none assertion.
+    pub fn make_put(key: Key, value: Value) -> Self {
+        Mutation::Put((key, value), Assertion::None)
+    }
+
+    /// Creates a Delete mutation with none assertion.
+    pub fn make_delete(key: Key) -> Self {
+        Mutation::Delete(key, Assertion::None)
+    }
+
+    /// Creates a Lock mutation with none assertion.
+    pub fn make_lock(key: Key) -> Self {
+        Mutation::Lock(key, Assertion::None)
+    }
+
+    /// Creates a Insert mutation with none assertion.
+    pub fn make_insert(key: Key, value: Value) -> Self {
+        Mutation::Insert((key, value), Assertion::None)
+    }
+
+    /// Creates a CheckNotExists mutation with none assertion.
+    pub fn make_check_not_exists(key: Key) -> Self {
+        Mutation::CheckNotExists(key, Assertion::None)
     }
 }
 
 impl From<kvrpcpb::Mutation> for Mutation {
     fn from(mut m: kvrpcpb::Mutation) -> Mutation {
         match m.get_op() {
-            kvrpcpb::Op::Put => Mutation::Put((Key::from_raw(m.get_key()), m.take_value())),
-            kvrpcpb::Op::Del => Mutation::Delete(Key::from_raw(m.get_key())),
-            kvrpcpb::Op::Lock => Mutation::Lock(Key::from_raw(m.get_key())),
-            kvrpcpb::Op::Insert => Mutation::Insert((Key::from_raw(m.get_key()), m.take_value())),
-            kvrpcpb::Op::CheckNotExists => Mutation::CheckNotExists(Key::from_raw(m.get_key())),
+            kvrpcpb::Op::Put => Mutation::Put(
+                (Key::from_raw(m.get_key()), m.take_value()),
+                m.get_assertion(),
+            ),
+            kvrpcpb::Op::Del => Mutation::Delete(Key::from_raw(m.get_key()), m.get_assertion()),
+            kvrpcpb::Op::Lock => Mutation::Lock(Key::from_raw(m.get_key()), m.get_assertion()),
+            kvrpcpb::Op::Insert => Mutation::Insert(
+                (Key::from_raw(m.get_key()), m.take_value()),
+                m.get_assertion(),
+            ),
+            kvrpcpb::Op::CheckNotExists => {
+                Mutation::CheckNotExists(Key::from_raw(m.get_key()), m.get_assertion())
+            }
             _ => panic!("mismatch Op in prewrite mutations"),
         }
     }
 }
 
-/// `OldValue` is used by cdc to read the previous value associated with some key during the prewrite process
+/// `OldValue` is used by cdc to read the previous value associated with some key during the
+/// prewrite process.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OldValue {
-    /// A real `OldValue`
-    Value {
-        short_value: Option<Value>,
-        start_ts: TimeStamp,
-    },
-    /// `None` means we don't found a previous value
+    /// A real `OldValue`.
+    Value { value: Value },
+    /// A timestamp of an old value in case a value is not inlined in Write.
+    ValueTimeStamp { start_ts: TimeStamp },
+    /// `None` means we don't found a previous value.
     None,
-    /// `Unspecified` means the user doesn't care about the previous value
+    /// The user doesn't care about the previous value.
     Unspecified,
+    /// Not sure whether the old value exists or not. users can seek CF_WRITE to the give position
+    /// to take a look.
+    SeekWrite(Key),
 }
 
 impl Default for OldValue {
@@ -343,36 +450,46 @@ impl Default for OldValue {
     }
 }
 
-impl From<Option<Write>> for OldValue {
-    fn from(write: Option<Write>) -> Self {
-        match write {
-            Some(w) => OldValue::Value {
-                short_value: w.short_value,
-                start_ts: w.start_ts,
-            },
-            None => OldValue::None,
+impl OldValue {
+    pub fn value(value: Value) -> Self {
+        OldValue::Value { value }
+    }
+
+    pub fn seek_write(raw_user_key: &[u8], ts: u64) -> Self {
+        let key = Key::from_raw(raw_user_key).append_ts(ts.into());
+        OldValue::SeekWrite(key)
+    }
+
+    /// `resolved` means it's either something or `None`.
+    pub fn resolved(&self) -> bool {
+        match self {
+            Self::Value { .. } | Self::ValueTimeStamp { .. } | Self::None => true,
+            Self::Unspecified | Self::SeekWrite(_) => false,
         }
     }
-}
 
-impl OldValue {
-    pub fn specified(&self) -> bool {
-        !matches!(self, OldValue::Unspecified)
-    }
-
-    pub fn exists(&self) -> bool {
-        matches!(self, OldValue::Value { .. })
+    /// The finalized `OldValue::Value` content, or `None` for `OldValue::Unspecified`.
+    ///
+    /// # Panics
+    ///
+    /// Panic if it's `OldValue::ValueTimeStamp` or `OldValue::SeekWrite`.
+    pub fn finalized(self) -> Option<Value> {
+        match self {
+            Self::Value { value } => Some(value),
+            Self::None | Self::Unspecified => None,
+            _ => panic!("OldValue must be finalized"),
+        }
     }
 
     pub fn size(&self) -> usize {
-        let value_size = match self {
-            OldValue::Value {
-                short_value: Some(v),
-                ..
-            } => v.len(),
+        self.value_size() + std::mem::size_of::<OldValue>()
+    }
+
+    pub fn value_size(&self) -> usize {
+        match self {
+            OldValue::Value { value } => value.len(),
             _ => 0,
-        };
-        value_size + std::mem::size_of::<TimeStamp>()
+        }
     }
 }
 
@@ -380,7 +497,7 @@ impl OldValue {
 // key with current ts -> (short value of the prev txn, start ts of the prev txn).
 // The value of the map will be None when the mutation is `Insert`.
 // MutationType is the type of mutation of the current write.
-pub type OldValues = HashMap<Key, (OldValue, MutationType)>;
+pub type OldValues = HashMap<Key, (OldValue, Option<MutationType>)>;
 
 // Extra data fields filled by kvrpcpb::ExtraOp.
 #[derive(Default, Debug, Clone)]
@@ -401,9 +518,63 @@ pub trait TxnExtraScheduler: Send + Sync {
     fn schedule(&self, txn_extra: TxnExtra);
 }
 
+bitflags! {
+    /// Additional flags for a write batch.
+    /// They should be set in the `flags` field in `RaftRequestHeader`.
+    pub struct WriteBatchFlags: u64 {
+        /// Indicates this request is from a 1PC transaction.
+        /// It helps CDC recognize 1PC transactions and handle them correctly.
+        const ONE_PC = 0b00000001;
+        /// Indicates this request is from a stale read-only transaction.
+        const STALE_READ = 0b00000010;
+    }
+}
+
+impl WriteBatchFlags {
+    /// Convert from underlying bit representation
+    /// panic if it contains bits that do not correspond to a flag
+    pub fn from_bits_check(bits: u64) -> WriteBatchFlags {
+        match WriteBatchFlags::from_bits(bits) {
+            None => panic!("unrecognized flags: {:b}", bits),
+            // zero or more flags
+            Some(f) => f,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_flags() {
+        assert!(WriteBatchFlags::from_bits_check(0).is_empty());
+        assert_eq!(
+            WriteBatchFlags::from_bits_check(WriteBatchFlags::ONE_PC.bits()),
+            WriteBatchFlags::ONE_PC
+        );
+        assert_eq!(
+            WriteBatchFlags::from_bits_check(WriteBatchFlags::STALE_READ.bits()),
+            WriteBatchFlags::STALE_READ
+        );
+    }
+
+    #[test]
+    fn test_flags_panic() {
+        for _ in 0..100 {
+            assert!(
+                panic_hook::recover_safe(|| {
+                    // r must be an invalid flags if it is not zero
+                    let r = rand::random::<u64>() & !WriteBatchFlags::all().bits();
+                    WriteBatchFlags::from_bits_check(r);
+                    if r == 0 {
+                        panic!("panic for zero");
+                    }
+                })
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn test_is_user_key_eq() {
@@ -504,6 +675,19 @@ mod tests {
             let mut longer_raw = raw.to_vec();
             longer_raw.push(0);
             assert!(!encoded.is_encoded_from(&longer_raw));
+        }
+    }
+
+    #[test]
+    fn test_old_value_resolved() {
+        let cases = vec![
+            (OldValue::Unspecified, false),
+            (OldValue::None, true),
+            (OldValue::Value { value: vec![] }, true),
+            (OldValue::ValueTimeStamp { start_ts: 0.into() }, true),
+        ];
+        for (old_value, v) in cases {
+            assert_eq!(old_value.resolved(), v);
         }
     }
 }

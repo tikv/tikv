@@ -23,11 +23,11 @@ impl WriteBatchExt for RocksEngine {
     }
 
     fn write_batch(&self) -> Self::WriteBatch {
-        Self::WriteBatch::new(Arc::clone(&self.as_inner()))
+        Self::WriteBatch::new(Arc::clone(self.as_inner()))
     }
 
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
-        Self::WriteBatch::with_capacity(Arc::clone(&self.as_inner()), cap)
+        Self::WriteBatch::with_capacity(Arc::clone(self.as_inner()), cap)
     }
 }
 
@@ -64,6 +64,10 @@ impl RocksWriteBatch {
     pub fn get_db(&self) -> &DB {
         self.db.as_ref()
     }
+
+    pub fn merge(&mut self, src: &Self) {
+        self.wb.append(src.wb.data());
+    }
 }
 
 impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
@@ -77,9 +81,7 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
             .write_opt(self.as_inner(), &opt.into_raw())
             .map_err(Error::Engine)
     }
-}
 
-impl Mutable for RocksWriteBatch {
     fn data_size(&self) -> usize {
         self.wb.data_size()
     }
@@ -112,6 +114,12 @@ impl Mutable for RocksWriteBatch {
         self.wb.rollback_to_save_point().map_err(Error::Engine)
     }
 
+    fn merge(&mut self, src: Self) {
+        self.wb.append(src.wb.data());
+    }
+}
+
+impl Mutable for RocksWriteBatch {
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         self.wb.put(key, value).map_err(Error::Engine)
     }
@@ -215,9 +223,7 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
                 .map_err(Error::Engine)
         }
     }
-}
 
-impl Mutable for RocksWriteBatchVec {
     fn data_size(&self) -> usize {
         self.wbs.iter().fold(0, |a, b| a + b.data_size())
     }
@@ -266,6 +272,12 @@ impl Mutable for RocksWriteBatchVec {
         Err(Error::Engine("no save point".into()))
     }
 
+    fn merge(&mut self, _: Self) {
+        panic!("merge is not implemented for RocksWriteBatchVec");
+    }
+}
+
+impl Mutable for RocksWriteBatchVec {
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         self.check_switch_batch();
         self.wbs[self.index].put(key, value).map_err(Error::Engine)

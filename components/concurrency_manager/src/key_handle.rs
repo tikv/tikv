@@ -102,7 +102,7 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
     };
-    use tokio::time::delay_for;
+    use tokio::time::sleep;
 
     #[tokio::test]
     async fn test_key_mutex() {
@@ -118,7 +118,7 @@ mod tests {
                 // Modify an atomic counter with a mutex guard. The value of the counter
                 // should remain unchanged if the mutex works.
                 let counter_val = counter.fetch_add(1, Ordering::SeqCst) + 1;
-                delay_for(Duration::from_millis(1)).await;
+                sleep(Duration::from_millis(1)).await;
                 assert_eq!(counter.load(Ordering::SeqCst), counter_val);
             });
             handles.push(handle);

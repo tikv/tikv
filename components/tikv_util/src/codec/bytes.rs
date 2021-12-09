@@ -18,7 +18,7 @@ pub fn max_encoded_bytes_size(n: usize) -> usize {
 }
 
 pub trait BytesEncoder: NumberEncoder {
-    /// Refer: https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format#memcomparable-format
+    /// Refer: <https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format#memcomparable-format>
     fn encode_bytes(&mut self, key: &[u8], desc: bool) -> Result<()> {
         let len = key.len();
         let mut index = 0;

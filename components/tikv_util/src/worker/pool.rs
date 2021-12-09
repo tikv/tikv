@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use prometheus::IntGauge;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -7,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::compat::Future01CompatExt;
+use futures::compat::Stream01CompatExt;
 use futures::future::{self, FutureExt};
 use futures::stream::StreamExt;
 
@@ -197,6 +199,10 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
         self.stop();
         self.worker.stop()
     }
+
+    pub fn remote(&self) -> Remote<yatp::task::future::TaskCell> {
+        self.worker.remote.clone()
+    }
 }
 
 pub struct ReceiverWrapper<T: Display + Send> {
@@ -340,8 +346,18 @@ impl Worker {
         )
     }
 
-    pub fn clone_raw_handle(&self) -> Remote<yatp::task::future::TaskCell> {
-        self.remote.clone()
+    pub fn spawn_interval_task<F>(&self, interval: Duration, mut func: F)
+    where
+        F: FnMut() + Send + 'static,
+    {
+        let mut interval = GLOBAL_TIMER_HANDLE
+            .interval(std::time::Instant::now(), interval)
+            .compat();
+        self.remote.spawn(async move {
+            while let Some(Ok(_)) = interval.next().await {
+                func();
+            }
+        });
     }
 
     fn delay_notify<T: Display + Send + 'static>(tx: UnboundedSender<Msg<T>>, timeout: Duration) {
@@ -359,13 +375,13 @@ impl Worker {
         &self,
         name: S,
     ) -> LazyWorker<T> {
-        let (rx, receiver) = unbounded();
+        let (tx, rx) = unbounded();
         let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[&name.into()]);
         LazyWorker {
-            receiver: Some(receiver),
+            receiver: Some(rx),
             worker: self.clone(),
             scheduler: Scheduler::new(
-                rx,
+                tx,
                 self.counter.clone(),
                 self.pending_capacity,
                 metrics_pending_task_count.clone(),
@@ -433,6 +449,7 @@ impl Worker {
                     }
                     Msg::Timeout => {
                         handle.inner.on_timeout();
+                        let timeout = handle.inner.get_interval();
                         Self::delay_notify(tx.clone(), timeout);
                     }
                 }
