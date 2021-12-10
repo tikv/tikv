@@ -131,7 +131,7 @@ where
     }
     // TODO use a more efficent encode kv event format
     // TODO move this function to a indepentent module.
-    fn encode_event(&self, key: &[u8], value: &[u8]) -> Vec<u8> {
+    pub fn encode_event(key: &[u8], value: &[u8]) -> Vec<u8> {
         let mut buf = vec![];
         let key_len = (key.len() as u32).to_ne_bytes();
         let val_len = value.len().to_ne_bytes();
@@ -227,14 +227,13 @@ where
     pub fn on_register(&self, task: MetaTask) {
         if let Some(cli) = self.meta_client.as_ref() {
             let cli = cli.clone();
-            let mut range_router = self.range_router.clone();
-            self.pool.block_on(async move {
+            self.pool.block_on(async {
                 let task_name = task.info.get_name();
                 match cli.ranges_of_task(task_name).await {
                     Ok(ranges) => {
                         debug!("backup stream register ranges to observer");
                         // TODO implement register ranges
-                        range_router.register_ranges(task_name, ranges.inner);
+                        self.range_router.register_ranges(task_name, ranges.inner);
                     }
                     Err(e) => {
                         error!("backup stream get tasks failed"; "error" => ?e);
