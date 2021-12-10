@@ -29,7 +29,7 @@ use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
 use tikv::storage::txn::TxnEntry;
-use tikv_util::time::Instant;
+use tikv::storage::Statistics;
 use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
@@ -402,6 +402,7 @@ impl Delegate {
         batch: CmdBatch,
         old_value_cb: &OldValueCallback,
         old_value_cache: &mut OldValueCache,
+        statistics: &mut Statistics,
     ) -> Result<()> {
         // Stale CmdBatch, drop it silently.
         if batch.cdc_id != self.handle.id {
@@ -426,6 +427,7 @@ impl Delegate {
                     request.requests.into(),
                     old_value_cb,
                     old_value_cache,
+                    statistics,
                     is_one_pc,
                 )?;
             } else {
@@ -462,7 +464,7 @@ impl Delegate {
                         current_rows_size = 0;
                     }
                     current_rows_size += row_size;
-                    row.old_value = old_value.unwrap_or_default();
+                    row.old_value = old_value.finalized().unwrap_or_default();
                     rows.last_mut().unwrap().push(row);
                 }
                 Some(TxnEntry::Commit {
@@ -489,7 +491,7 @@ impl Delegate {
                         continue;
                     }
                     set_event_row_type(&mut row, EventLogType::Committed);
-                    row.old_value = old_value.unwrap_or_default();
+                    row.old_value = old_value.finalized().unwrap_or_default();
                     let row_size = row.key.len() + row.value.len();
                     if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
                         rows.push(Vec::with_capacity(entries_len));
@@ -531,35 +533,24 @@ impl Delegate {
         requests: Vec<Request>,
         old_value_cb: &OldValueCallback,
         old_value_cache: &mut OldValueCache,
+        statistics: &mut Statistics,
         is_one_pc: bool,
     ) -> Result<()> {
         let txn_extra_op = self.txn_extra_op;
-        let mut read_old_value = |row: &mut EventRow, read_old_ts| {
+        let mut read_old_value = |row: &mut EventRow, read_old_ts| -> Result<()> {
             if txn_extra_op == TxnExtraOp::ReadOldValue {
                 let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
-                let start = Instant::now();
-                let (old_value, statistics) = old_value_cb(key, read_old_ts, old_value_cache);
+                let old_value = old_value_cb(key, read_old_ts, old_value_cache, statistics)?;
                 row.old_value = old_value.unwrap_or_default();
-                CDC_OLD_VALUE_DURATION_HISTOGRAM
-                    .with_label_values(&["all"])
-                    .observe(start.saturating_elapsed().as_secs_f64());
-                if let Some(statistics) = statistics {
-                    for (cf, cf_details) in statistics.details().iter() {
-                        for (tag, count) in cf_details.iter() {
-                            CDC_OLD_VALUE_SCAN_DETAILS
-                                .with_label_values(&[*cf, *tag])
-                                .inc_by(*count as u64);
-                        }
-                    }
-                }
             }
+            Ok(())
         };
 
         let mut rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
         for mut req in requests {
             match req.get_cmd_type() {
                 CmdType::Put => {
-                    self.sink_put(req.take_put(), is_one_pc, &mut rows, &mut read_old_value)
+                    self.sink_put(req.take_put(), is_one_pc, &mut rows, &mut read_old_value)?;
                 }
                 CmdType::Delete => self.sink_delete(req.take_delete()),
                 _ => {
@@ -620,20 +611,19 @@ impl Delegate {
         mut put: PutRequest,
         is_one_pc: bool,
         rows: &mut HashMap<Vec<u8>, EventRow>,
-        mut read_old_value: impl FnMut(&mut EventRow, /* read_old_ts */ TimeStamp),
-    ) {
+        mut read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
+    ) -> Result<()> {
         match put.cf.as_str() {
             "write" => {
                 let mut row = EventRow::default();
-                let skip = decode_write(put.take_key(), put.get_value(), &mut row, true);
-                if skip {
-                    return;
+                if decode_write(put.take_key(), put.get_value(), &mut row, true) {
+                    return Ok(());
                 }
 
                 let commit_ts = if is_one_pc {
                     set_event_row_type(&mut row, EventLogType::Committed);
                     let commit_ts = TimeStamp::from(row.commit_ts);
-                    read_old_value(&mut row, commit_ts.prev());
+                    read_old_value(&mut row, commit_ts.prev())?;
                     Some(commit_ts)
                 } else {
                     // 2PC
@@ -668,13 +658,12 @@ impl Delegate {
                 let mut row = EventRow::default();
                 let lock = Lock::parse(put.get_value()).unwrap();
                 let for_update_ts = lock.for_update_ts;
-                let skip = decode_lock(put.take_key(), lock, &mut row);
-                if skip {
-                    return;
+                if decode_lock(put.take_key(), lock, &mut row) {
+                    return Ok(());
                 }
 
                 let read_old_ts = std::cmp::max(for_update_ts, row.start_ts.into());
-                read_old_value(&mut row, read_old_ts);
+                read_old_value(&mut row, read_old_ts)?;
                 let occupied = rows.entry(row.key.clone()).or_default();
                 if !occupied.value.is_empty() {
                     assert!(row.value.is_empty());
@@ -712,6 +701,7 @@ impl Delegate {
                 panic!("invalid cf {}", other);
             }
         }
+        Ok(())
     }
 
     fn sink_delete(&mut self, mut delete: DeleteRequest) {
