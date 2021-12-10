@@ -2016,7 +2016,7 @@ fn main() {
             }
             String::new()
         });
-        let data_dir = if data_dir.is_empty(){
+        let data_dir = if data_dir.is_empty() {
             None
         } else {
             Some(data_dir.as_str())
