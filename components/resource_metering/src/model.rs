@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::ResourceMeteringTag;
+use crate::TagInfos;
 
 use std::cell::Cell;
 use std::sync::Arc;
@@ -39,7 +39,7 @@ pub struct RawRecords {
     pub duration: Duration,
 
     // tag -> record
-    pub records: HashMap<ResourceMeteringTag, RawRecord>,
+    pub records: HashMap<Arc<TagInfos>, RawRecord>,
 }
 
 impl Default for RawRecords {
@@ -105,7 +105,7 @@ impl Records {
 
         let ts = raw_records.begin_unix_time_secs;
         for (tag, raw_record) in &raw_records.records {
-            let tag = &tag.infos.extra_attachment;
+            let tag = &tag.extra_attachment;
             if tag.is_empty() {
                 continue;
             }
@@ -228,24 +228,24 @@ mod tests {
 
     #[test]
     fn test_records() {
-        let tag1 = ResourceMeteringTag::from(Arc::new(TagInfos {
+        let tag1 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             extra_attachment: b"a".to_vec(),
-        }));
-        let tag2 = ResourceMeteringTag::from(Arc::new(TagInfos {
+        });
+        let tag2 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             extra_attachment: b"b".to_vec(),
-        }));
-        let tag3 = ResourceMeteringTag::from(Arc::new(TagInfos {
+        });
+        let tag3 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             extra_attachment: b"c".to_vec(),
-        }));
+        });
         let mut records = Records::default();
         let mut raw_map = HashMap::default();
         raw_map.insert(tag1, RawRecord { cpu_time: 111 });

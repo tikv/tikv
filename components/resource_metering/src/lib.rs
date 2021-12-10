@@ -4,14 +4,7 @@
 
 #![feature(shrink_to)]
 #![feature(hash_drain_filter)]
-
-use crate::localstorage::STORAGE;
-
-use std::pin::Pin;
-use std::sync::atomic::AtomicPtr;
-use std::sync::atomic::Ordering::SeqCst;
-use std::sync::Arc;
-use std::task::{Context, Poll};
+#![feature(core_intrinsics)]
 
 mod client;
 mod collector;
@@ -25,14 +18,24 @@ pub mod utils;
 pub(crate) mod metrics;
 
 pub use client::{Client, GrpcClient};
-pub use collector::Collector;
-pub use collector::{register_collector, CollectorHandle, CollectorId};
+pub use collector::{Collector, CollectorHandle, CollectorId, CollectorRegHandle};
 pub use config::{Config, ConfigManager};
 pub use model::*;
 pub use recorder::{init_recorder, CpuRecorder, Recorder, RecorderBuilder, RecorderHandle};
 pub use reporter::{Reporter, Task};
 
+pub const MAX_THREAD_REGISTER_RETRY: u32 = 10;
 pub const TEST_TAG_PREFIX: &[u8] = b"__resource_metering::tests::";
+
+use crate::localstorage::{LocalStorage, LocalStorageRef, STORAGE};
+
+use std::intrinsics::unlikely;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
+use crossbeam::channel::Sender;
+use tikv_util::warn;
 
 /// This structure is used as a label to distinguish different request contexts.
 ///
@@ -41,25 +44,12 @@ pub const TEST_TAG_PREFIX: &[u8] = b"__resource_metering::tests::";
 /// future context. It is used in the main business logic of TiKV.
 ///
 /// [Future]: futures::Future
-#[derive(Debug, Default, Eq, PartialEq, Clone, Hash)]
 pub struct ResourceMeteringTag {
-    pub infos: Arc<TagInfos>,
-}
-
-impl From<Arc<TagInfos>> for ResourceMeteringTag {
-    fn from(infos: Arc<TagInfos>) -> Self {
-        Self { infos }
-    }
+    infos: Arc<TagInfos>,
+    resource_tag_factory: ResourceTagFactory,
 }
 
 impl ResourceMeteringTag {
-    /// Get data from [Context] and construct [ResourceMeteringTag].
-    ///
-    /// [Context]: kvproto::kvrpcpb::Context
-    pub fn from_rpc_context(context: &kvproto::kvrpcpb::Context) -> Self {
-        Arc::new(TagInfos::from_rpc_context(context)).into()
-    }
-
     /// This method is used to provide [ResourceMeteringTag] with the ability
     /// to attach to the thread local context.
     ///
@@ -70,14 +60,23 @@ impl ResourceMeteringTag {
     ///
     /// [STORAGE]: crate::localstorage::STORAGE
     pub fn attach(&self) -> Guard {
-        STORAGE.with(|s| {
-            if s.is_set.get() {
-                panic!("nested attachment is not allowed")
+        STORAGE.with(move |s| {
+            let mut ls = s.borrow_mut();
+
+            if unlikely(!ls.registered && ls.register_failed_times < MAX_THREAD_REGISTER_RETRY) {
+                ls.registered = self.resource_tag_factory.register_local_storage(&ls);
+                if !ls.registered {
+                    ls.register_failed_times += 1;
+                }
             }
-            let prev = s.shared_ptr.swap(self.clone());
-            assert!(prev.is_none());
-            s.is_set.set(true);
-            Guard { _tag: self.clone() }
+
+            assert!(!ls.is_set, "nested attachment is not allowed");
+            ls.attached_tag.store(Some(self.infos.clone()));
+            ls.is_set = true;
+
+            Guard {
+                _tag: self.infos.clone(),
+            }
         })
     }
 }
@@ -90,17 +89,55 @@ impl ResourceMeteringTag {
 ///
 /// [ResourceMeteringTag]: crate::ResourceMeteringTag
 /// [ResourceMeteringTag::attach]: crate::ResourceMeteringTag::attach
-#[derive(Default)]
 pub struct Guard {
-    _tag: ResourceMeteringTag,
+    _tag: Arc<TagInfos>,
 }
 
 impl Drop for Guard {
     fn drop(&mut self) {
         STORAGE.with(|s| {
-            while s.shared_ptr.take().is_none() {}
-            s.is_set.set(false);
+            let mut ls = s.borrow_mut();
+            ls.attached_tag.store(None);
+            ls.is_set = false;
         })
+    }
+}
+
+#[derive(Clone)]
+pub struct ResourceTagFactory {
+    tx: Sender<LocalStorageRef>,
+}
+
+impl ResourceTagFactory {
+    fn new(tx: Sender<LocalStorageRef>) -> Self {
+        Self { tx }
+    }
+
+    pub fn new_for_test() -> Self {
+        let (tx, _) = crossbeam::channel::unbounded();
+        Self { tx }
+    }
+
+    pub fn new_tag(&self, context: &kvproto::kvrpcpb::Context) -> ResourceMeteringTag {
+        let tag_infos = TagInfos::from_rpc_context(context);
+        ResourceMeteringTag {
+            infos: Arc::new(tag_infos),
+            resource_tag_factory: self.clone(),
+        }
+    }
+
+    fn register_local_storage(&self, storage: &LocalStorage) -> bool {
+        let lsr = LocalStorageRef {
+            id: utils::thread_id(),
+            storage: storage.clone(),
+        };
+        match self.tx.send(lsr) {
+            Ok(_) => true,
+            Err(err) => {
+                warn!("failed to register thread"; "err" => ?err);
+                false
+            }
+        }
     }
 }
 
@@ -183,7 +220,7 @@ pub struct TagInfos {
 }
 
 impl TagInfos {
-    fn from_rpc_context(context: &kvproto::kvrpcpb::Context) -> Self {
+    pub fn from_rpc_context(context: &kvproto::kvrpcpb::Context) -> Self {
         let peer = context.get_peer();
         Self {
             store_id: peer.get_store_id(),
@@ -194,49 +231,18 @@ impl TagInfos {
     }
 }
 
-/// This is a version of [ResourceMeteringTag] that can be shared across threads.
-///
-/// The typical scenario is that we need to access all threads' tags in the
-/// [Recorder] thread for collection purposes, so we need a non-copy way to pass tags.
-#[derive(Default, Clone)]
-pub struct SharedTagPtr {
-    ptr: Arc<AtomicPtr<TagInfos>>,
-}
-
-impl SharedTagPtr {
-    /// Gets the tag under the pointer and replace the original value with null.
-    pub fn take(&self) -> Option<ResourceMeteringTag> {
-        let prev = self.ptr.swap(std::ptr::null_mut(), SeqCst);
-        (!prev.is_null()).then(|| unsafe { ResourceMeteringTag::from(Arc::from_raw(prev as _)) })
-    }
-
-    /// Gets the tag under the pointer and replace the original value with parameter v.
-    pub fn swap(&self, v: ResourceMeteringTag) -> Option<ResourceMeteringTag> {
-        let ptr = Arc::into_raw(v.infos);
-        let prev = self.ptr.swap(ptr as _, SeqCst);
-        (!prev.is_null()).then(|| unsafe { ResourceMeteringTag::from(Arc::from_raw(prev as _)) })
-    }
-
-    /// Gets a clone of the tag under the pointer and put it back.
-    pub fn take_clone(&self) -> Option<ResourceMeteringTag> {
-        self.take().map(|req_tag| {
-            let tag = req_tag.clone();
-            // Put it back as quickly as possible.
-            assert!(self.swap(req_tag).is_none());
-            tag
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossbeam::channel::unbounded;
 
     #[test]
     fn test_attach() {
         // Use a thread created by ourself. If we use unit test thread directly,
         // the test results may be affected by parallel testing.
         std::thread::spawn(|| {
+            let (tx, _rx) = unbounded();
+            let resource_tag_factory = ResourceTagFactory::new(tx);
             let tag = ResourceMeteringTag {
                 infos: Arc::new(TagInfos {
                     store_id: 1,
@@ -244,50 +250,29 @@ mod tests {
                     peer_id: 3,
                     extra_attachment: b"12345".to_vec(),
                 }),
+                resource_tag_factory,
             };
             {
                 let guard = tag.attach();
-                assert_eq!(guard._tag.infos, tag.infos);
+                assert_eq!(guard._tag, tag.infos);
                 STORAGE.with(|s| {
-                    let local_tag = s.shared_ptr.take();
+                    let ls = s.borrow_mut();
+                    let local_tag = ls.attached_tag.swap(None);
                     assert!(local_tag.is_some());
-                    let local_tag = local_tag.unwrap();
-                    assert_eq!(local_tag.infos, tag.infos);
-                    assert_eq!(local_tag.infos, guard._tag.infos);
-                    assert!(s.shared_ptr.swap(local_tag).is_none());
+                    let tag_infos = local_tag.unwrap();
+                    assert_eq!(tag_infos, tag.infos);
+                    assert_eq!(tag_infos, guard._tag);
+                    assert!(ls.attached_tag.swap(Some(tag_infos)).is_none());
                 });
                 // drop here.
             }
             STORAGE.with(|s| {
-                let local_tag = s.shared_ptr.take();
+                let ls = s.borrow_mut();
+                let local_tag = ls.attached_tag.swap(None);
                 assert!(local_tag.is_none());
             });
         })
         .join()
         .unwrap();
-    }
-
-    #[test]
-    fn test_shared_tag_ptr_take_clone() {
-        let info = Arc::new(TagInfos {
-            store_id: 0,
-            region_id: 0,
-            peer_id: 0,
-            extra_attachment: b"abc".to_vec(),
-        });
-        let ptr = SharedTagPtr {
-            ptr: Arc::new(AtomicPtr::new(Arc::into_raw(info) as _)),
-        };
-
-        assert!(ptr.take_clone().is_some());
-        assert!(ptr.take_clone().is_some());
-        assert!(ptr.take_clone().is_some());
-
-        assert!(ptr.take().is_some());
-        assert!(ptr.take().is_none());
-
-        assert!(ptr.take_clone().is_none());
-        assert!(ptr.take_clone().is_none());
-        assert!(ptr.take_clone().is_none());
     }
 }
