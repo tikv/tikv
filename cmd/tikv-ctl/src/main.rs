@@ -49,12 +49,12 @@ use std::string::ToString;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{process, str, thread, u64};
+use structopt::clap::ErrorKind;
 use structopt::StructOpt;
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv_util::{escape, run_and_wait_child_process, unescape};
 use txn_types::Key;
-use structopt::clap::ErrorKind;
 
 const METRICS_PROMETHEUS: &str = "prometheus";
 const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
@@ -1963,14 +1963,15 @@ fn main() {
         to,
         threads,
         bottommost,
-    } = cmd {
+    } = cmd
+    {
         let pd = opt.pd.unwrap_or_else(|| {
-            clap::Error
-            {
+            clap::Error {
                 message: String::from("--pd is required for this command"),
                 kind: ErrorKind::MissingRequiredArgument,
                 info: None,
-            }.exit();
+            }
+            .exit();
         });
         let pd_client = get_pd_rpc_client(&pd, Arc::clone(&mgr));
         let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
@@ -1984,20 +1985,20 @@ fn main() {
     } else if let Cmd::SplitRegion {
         region: region_id,
         key,
-    } = cmd {
+    } = cmd
+    {
         let pd = opt.pd.unwrap_or_else(|| {
-            clap::Error
-            {
+            clap::Error {
                 message: String::from("--pd is required for this command"),
                 kind: ErrorKind::MissingRequiredArgument,
                 info: None,
-            }.exit();
+            }
+            .exit();
         });
         let pd_client = get_pd_rpc_client(&pd, Arc::clone(&mgr));
         let key = unescape(&key);
         return split_region(&pd_client, mgr, region_id, key);
     } else {
-
         // Deal with all subcommands about db or host.
         let mut contains_db = true;
         let data_dir = opt.data_dir.unwrap_or_else(|| {
@@ -2006,17 +2007,25 @@ fn main() {
         });
         let host = opt.host.unwrap_or_else(|| {
             if !contains_db {
-                clap::Error
-                {
+                clap::Error {
                     message: String::from("[host|data-dir] is not specified"),
                     kind: ErrorKind::MissingRequiredArgument,
                     info: None,
-                }.exit();
+                }
+                .exit();
             }
             return String::new();
         });
-        let data_dir = if data_dir.len() == 0 { None } else { Some(data_dir.as_str()) };
-        let host = if host.len() == 0 { None } else { Some(host.as_str()) };
+        let data_dir = if data_dir.len() == 0 {
+            None
+        } else {
+            Some(data_dir.as_str())
+        };
+        let host = if host.len() == 0 {
+            None
+        } else {
+            Some(host.as_str())
+        };
         let skip_paranoid_checks = opt.skip_paranoid_checks;
 
         let debug_executor =
