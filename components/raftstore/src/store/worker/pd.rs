@@ -1090,18 +1090,18 @@ where
                         }
                     } else if resp.has_plan() {
                         info!("asked to execute recovery plan");
+                        for delete in resp.get_plan().get_deletes() {
+                            info!("asked to delete peer"; "peer" => delete);
+                            if let Err(e) = router.force_send(*delete, PeerMsg::Destroy(*delete)) {
+                                error!("fail to send delete peer message for recovery"; "err" => ?e);
+                            }
+                        }
                         for create in resp.get_plan().get_creates() {
                             info!("asked to create region"; "region" => ?create);
                             if let Err(e) =
                                 router.send_control(StoreMsg::CreatePeer(create.clone()))
                             {
                                 error!("fail to send creat peer message for recovery"; "err" => ?e);
-                            }
-                        }
-                        for delete in resp.get_plan().get_deletes() {
-                            info!("asked to delete peer"; "peer" => delete);
-                            if let Err(e) = router.force_send(*delete, PeerMsg::Destroy(*delete)) {
-                                error!("fail to send delete peer message for recovery"; "err" => ?e);
                             }
                         }
                         for update in resp.get_plan().get_updates() {
@@ -1112,14 +1112,6 @@ where
                             ) {
                                 error!("fail to send update range message for recovery"; "err" => ?e);
                             }
-                        }
-                        let task = Task::StoreHeartbeat {
-                            stats: stats_copy,
-                            store_info,
-                            send_detailed_report: true,
-                        };
-                        if let Err(e) = scheduler.schedule(task) {
-                            error!("notify pd failed"; "err" => ?e);
                         }
                     }
                 }
