@@ -5,13 +5,19 @@ use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{result, thread};
 
+<<<<<<< HEAD
 use futures::Future;
+=======
+use crossbeam::channel::TrySendError;
+use futures::executor::block_on;
+>>>>>>> a83b0f781... raftstore: destroy uninitialized peer can make it possible to recreate old peer (#11457)
 use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{
-    self, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState, RegionLocalState,
+    self, PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState,
+    RegionLocalState,
 };
 use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
@@ -1363,6 +1369,38 @@ impl<T: Simulator> Cluster<T> {
         )
         .unwrap();
         request_rx.recv_timeout(Duration::from_secs(5)).unwrap()
+    }
+
+    pub fn gc_peer(
+        &mut self,
+        region_id: u64,
+        node_id: u64,
+        peer: metapb::Peer,
+    ) -> std::result::Result<(), TrySendError<RaftMessage>> {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+
+        let mut message = RaftMessage::default();
+        message.set_region_id(region_id);
+        message.set_from_peer(peer.clone());
+        message.set_to_peer(peer);
+        message.set_region_epoch(self.get_region_epoch(region_id));
+        message.set_is_tombstone(true);
+        router.send_raft_message(message)
+    }
+
+    pub fn must_gc_peer(&mut self, region_id: u64, node_id: u64, peer: metapb::Peer) {
+        for _ in 0..250 {
+            self.gc_peer(region_id, node_id, peer.clone()).unwrap();
+            if self.region_local_state(region_id, node_id).get_state() == PeerState::Tombstone {
+                return;
+            }
+            sleep_ms(20);
+        }
+
+        panic!(
+            "gc peer timeout: region id {}, node id {}, peer {:?}",
+            region_id, node_id, peer
+        );
     }
 }
 
