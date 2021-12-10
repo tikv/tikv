@@ -1,6 +1,4 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 /// An Router for Backup Stream.
@@ -64,28 +62,8 @@ impl Router {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Ord, PartialOrd, PartialEq, Eq)]
 struct KeyRange(Vec<u8>);
-
-impl Ord for KeyRange {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.cmp(&other.0)
-    }
-}
-
-impl PartialOrd for KeyRange {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for KeyRange {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.eq(&other.0)
-    }
-}
-
-impl Eq for KeyRange {}
 
 #[derive(Clone)]
 struct TaskRange {
