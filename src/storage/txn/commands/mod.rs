@@ -206,6 +206,7 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             req.get_return_values(),
             req.get_min_commit_ts().into(),
             OldValues::default(),
+            req.get_check_existence(),
             req.take_context(),
         )
     }

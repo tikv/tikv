@@ -407,6 +407,8 @@ where
             "start_key" => %start_key, "end_key" => %end_key
         );
 
+        fail_point!("unsafe_destroy_range");
+
         self.flow_info_sender
             .send(FlowInfo::BeforeUnsafeDestroyRange)
             .unwrap();
