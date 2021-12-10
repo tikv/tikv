@@ -6,13 +6,15 @@ use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{result, thread};
 
+use crossbeam::channel::TrySendError;
 use futures::executor::block_on;
 use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, PeerRole, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{
-    self, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState, RegionLocalState,
+    self, PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState,
+    RegionLocalState,
 };
 use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
@@ -1500,6 +1502,109 @@ impl<T: Simulator> Cluster<T> {
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
         self.add_send_filter(PartitionFilterFactory::new(s1, s2));
     }
+<<<<<<< HEAD
+=======
+
+    pub fn must_wait_for_leader_expire(&self, node_id: u64, region_id: u64) {
+        let timer = Instant::now_coarse();
+        while timer.saturating_elapsed() < Duration::from_secs(5) {
+            if self
+                .query_leader(node_id, region_id, Duration::from_secs(1))
+                .is_none()
+            {
+                return;
+            }
+            sleep_ms(100);
+        }
+        panic!(
+            "region {}'s replica in store {} still has a valid leader after 5 secs",
+            region_id, node_id
+        );
+    }
+
+    pub fn must_update_region_for_unsafe_recover(&mut self, node_id: u64, region: &metapb::Region) {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+        let mut try_cnt = 0;
+        loop {
+            if try_cnt % 50 == 0 {
+                // In case the message is ignored, re-send it every 50 tries.
+                router
+                    .force_send(
+                        region.get_id(),
+                        PeerMsg::UpdateRegionForUnsafeRecover(region.clone()),
+                    )
+                    .unwrap();
+            }
+            if let Ok(Some(current)) = block_on(self.pd_client.get_region_by_id(region.get_id())) {
+                if current.get_start_key() == region.get_start_key()
+                    && current.get_end_key() == region.get_end_key()
+                {
+                    return;
+                }
+            }
+            if try_cnt > 500 {
+                panic!("region {:?} is not updated", region);
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
+    }
+
+    pub fn must_recreate_region_for_unsafe_recover(
+        &mut self,
+        node_id: u64,
+        region: &metapb::Region,
+    ) {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+        let mut try_cnt = 0;
+        loop {
+            if try_cnt % 50 == 0 {
+                // In case the message is ignored, re-send it every 50 tries.
+                StoreRouter::send(&router, StoreMsg::CreatePeer(region.clone())).unwrap();
+            }
+            if let Ok(Some(_)) = block_on(self.pd_client.get_region_by_id(region.get_id())) {
+                return;
+            }
+            if try_cnt > 250 {
+                panic!("region {:?} is not created", region);
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
+    }
+
+    pub fn gc_peer(
+        &mut self,
+        region_id: u64,
+        node_id: u64,
+        peer: metapb::Peer,
+    ) -> std::result::Result<(), TrySendError<RaftMessage>> {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+
+        let mut message = RaftMessage::default();
+        message.set_region_id(region_id);
+        message.set_from_peer(peer.clone());
+        message.set_to_peer(peer);
+        message.set_region_epoch(self.get_region_epoch(region_id));
+        message.set_is_tombstone(true);
+        router.send_raft_message(message)
+    }
+
+    pub fn must_gc_peer(&mut self, region_id: u64, node_id: u64, peer: metapb::Peer) {
+        for _ in 0..250 {
+            self.gc_peer(region_id, node_id, peer.clone()).unwrap();
+            if self.region_local_state(region_id, node_id).get_state() == PeerState::Tombstone {
+                return;
+            }
+            sleep_ms(20);
+        }
+
+        panic!(
+            "gc peer timeout: region id {}, node id {}, peer {:?}",
+            region_id, node_id, peer
+        );
+    }
+>>>>>>> a83b0f781... raftstore: destroy uninitialized peer can make it possible to recreate old peer (#11457)
 }
 
 impl<T: Simulator> Drop for Cluster<T> {
