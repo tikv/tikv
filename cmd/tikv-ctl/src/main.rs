@@ -1979,7 +1979,7 @@ fn main() {
         let from_key = from.map(|k| unescape(&k));
         let to_key = to.map(|k| unescape(&k));
         let bottommost = BottommostLevelCompaction::from(Some(bottommost.as_ref()));
-        return compact_whole_cluster(
+        compact_whole_cluster(
             &pd_client, &cfg, mgr, db_type, cfs, from_key, to_key, threads, bottommost,
         );
     } else if let Cmd::SplitRegion {
@@ -1997,13 +1997,13 @@ fn main() {
         });
         let pd_client = get_pd_rpc_client(&pd, Arc::clone(&mgr));
         let key = unescape(&key);
-        return split_region(&pd_client, mgr, region_id, key);
+        split_region(&pd_client, mgr, region_id, key);
     } else {
         // Deal with all subcommands about db or host.
         let mut contains_db = true;
         let data_dir = opt.data_dir.unwrap_or_else(|| {
             contains_db = false;
-            return String::new();
+            String::new()
         });
         let host = opt.host.unwrap_or_else(|| {
             if !contains_db {
@@ -2014,14 +2014,14 @@ fn main() {
                 }
                 .exit();
             }
-            return String::new();
+            String::new()
         });
-        let data_dir = if data_dir.len() == 0 {
+        let data_dir = if data_dir.is_empty(){
             None
         } else {
             Some(data_dir.as_str())
         };
-        let host = if host.len() == 0 {
+        let host = if host.is_empty() {
             None
         } else {
             Some(host.as_str())
