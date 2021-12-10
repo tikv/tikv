@@ -5,7 +5,7 @@ use crate::storage::{
     mvcc::{
         metrics::{
             CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM, MVCC_CONFLICT_COUNTER,
-            MVCC_DUPLICATE_CMD_COUNTER_VEC,
+            MVCC_DUPLICATE_CMD_COUNTER_VEC, MVCC_PREWRITE_ASSERTION_PERF_COUNTER_VEC,
         },
         Error, ErrorInner, Lock, LockType, MvccTxn, Result, SnapshotReader,
     },
@@ -82,7 +82,8 @@ pub fn prewrite<S: Snapshot>(
     // * If constraint check is skipped thus `prev_write` is not loaded, doing assertion here
     //   introduces too much overhead. However, we'll do it anyway if `assertion_level` is set to
     //   `Strict` level.
-    if !lock_amended && (txn_props.assertion_level == AssertionLevel::Strict || prev_write_loaded) {
+    // Assertion level will be checked within the `check_assertion` function.
+    if !lock_amended {
         let (reloaded_prev_write, reloaded) =
             mutation.check_assertion(reader, &prev_write, prev_write_loaded)?;
         if reloaded {
@@ -446,6 +447,14 @@ impl<'a> PrewriteMutation<'a> {
         if self.assertion == Assertion::None
             || self.txn_props.assertion_level == AssertionLevel::Off
         {
+            MVCC_PREWRITE_ASSERTION_PERF_COUNTER_VEC.none.inc();
+            return Ok((None, false));
+        }
+
+        if self.txn_props.assertion_level != AssertionLevel::Strict && !write_loaded {
+            MVCC_PREWRITE_ASSERTION_PERF_COUNTER_VEC
+                .write_not_loaded_skip
+                .inc();
             return Ok((None, false));
         }
 
@@ -472,11 +481,23 @@ impl<'a> PrewriteMutation<'a> {
                 w.write_type != WriteType::Put && w.write_type != WriteType::Delete
             });
         if need_reload {
+            if write_loaded {
+                MVCC_PREWRITE_ASSERTION_PERF_COUNTER_VEC
+                    .non_data_version_reload
+                    .inc();
+            } else {
+                MVCC_PREWRITE_ASSERTION_PERF_COUNTER_VEC
+                    .write_not_loaded_reload
+                    .inc();
+            }
+
             let reload_ts = write.as_ref().map_or(TimeStamp::max(), |(_, ts)| *ts);
             reloaded_write = reader.get_write_with_commit_ts(&self.key, reload_ts)?;
             write = &reloaded_write;
             reloaded = true;
-        };
+        } else {
+            MVCC_PREWRITE_ASSERTION_PERF_COUNTER_VEC.write_loaded.inc();
+        }
 
         match (self.assertion, write) {
             (Assertion::Exist, None) => {
