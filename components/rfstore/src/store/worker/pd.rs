@@ -819,7 +819,7 @@ where
                 .add_query_stats(&region_info.query_stats.0);
         }
         if !read_stats.region_infos.is_empty() {
-            todo!();
+            // TODO(x) send stats
             /*
             if let Some(sender) = self.stats_monitor.get_sender() {
                 if sender.send(read_stats).is_err() {

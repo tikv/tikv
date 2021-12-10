@@ -6,8 +6,10 @@ use kvproto::kvrpcpb::{self, KeyRange, LeaderInfo};
 use kvproto::metapb::{self, Peer, PeerRole, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use raft_proto::eraftpb::{self, MessageType};
+use slog::{Key, Record, Serializer};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::fmt::{Debug, Display, Formatter};
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::{Arc, Mutex};
@@ -178,5 +180,36 @@ pub fn cf_name_to_num(cf_name: &str) -> usize {
         "lock" => 1,
         "extra" => 2,
         _ => 0,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RegionTag {
+    region_id: u64,
+    region_ver: u64,
+}
+
+impl RegionTag {
+    pub fn new(region_id: u64, region_ver: u64) -> Self {
+        Self {
+            region_id,
+            region_ver,
+        }
+    }
+
+    pub fn from_region(region: &metapb::Region) -> Self {
+        Self::new(region.get_id(), region.get_region_epoch().get_version())
+    }
+}
+
+impl slog::Value for RegionTag {
+    fn serialize(&self, _record: &Record, key: Key, serializer: &mut Serializer) -> slog::Result {
+        serializer.emit_str(key, &self.to_string())
+    }
+}
+
+impl Display for RegionTag {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "[{}:{}]", self.region_id, self.region_ver)
     }
 }

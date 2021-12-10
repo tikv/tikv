@@ -11,14 +11,17 @@ use kvengine::{Item, SnapAccess};
 use kvproto::metapb;
 use kvproto::metapb::{PeerRole, Region};
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, RaftCmdRequest, RaftCmdResponse,
-    RaftResponseHeader,
+    AdminCmdType, AdminRequest, AdminResponse, BatchSplitRequest, BatchSplitResponse,
+    ChangePeerRequest, RaftCmdRequest, RaftCmdResponse, RaftResponseHeader,
 };
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftTruncatedState};
-use protobuf::ProtobufEnum;
-use raft::eraftpb::{self, ConfChange, ConfChangeType, ConfChangeV2, EntryType};
-use raft::{SoftState, StateRole};
-use raft_proto::eraftpb::Entry;
+use protobuf::{ProtobufEnum, RepeatedField};
+use raft::eraftpb::{
+    ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
+};
+use raft::StateRole;
+use raft_proto::eraftpb;
+use raft_proto::ConfChangeI;
 use raftstore::store::fsm::metrics::*;
 use raftstore::store::memory::*;
 use raftstore::store::metrics::*;
@@ -32,7 +35,7 @@ use std::sync::{Arc, Mutex};
 use std::vec::Drain;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::worker::Scheduler;
-use tikv_util::{box_err, defer, error, info};
+use tikv_util::{box_err, debug, defer, error, info, warn};
 use time::Timespec;
 
 pub(crate) struct PendingCmd {
@@ -132,14 +135,8 @@ pub struct NewSplitPeer {
 #[derive(Debug)]
 pub enum ExecResult {
     ChangePeer(ChangePeer),
-    SplitRegion {
-        regions: Vec<Region>,
-        derived: Region,
-        new_split_regions: HashMap<u64, NewSplitPeer>,
-    },
-    DeleteRange {
-        ranges: Vec<Range>,
-    },
+    SplitRegion { regions: Vec<Region> },
+    DeleteRange { ranges: Vec<Range> },
 }
 
 pub(crate) enum ApplyResult {
@@ -391,8 +388,8 @@ impl Applier {
         }
     }
 
-    pub(crate) fn exec_delete_range(&mut self, ctx: &mut ApplyContext, cl: CustomRaftLog) {
-        todo!()
+    pub(crate) fn exec_delete_range(&mut self, kv: &kvengine::Engine, cl: &CustomRaftLog) {
+        // TODO(x)
     }
 
     fn exec_admin_cmd(
@@ -488,7 +485,7 @@ impl Applier {
                 );
             }
             TYPE_DELETE_RANGE => {
-                todo!()
+                self.exec_delete_range(engine, cl);
             }
             _ => panic!("unknown custom log type"),
         }
@@ -563,8 +560,8 @@ impl Applier {
                         self.peer_idx = get_peer_idx_by_peer_id(&self.region, peer_id);
                     }
                 }
-                ExecResult::SplitRegion { derived, .. } => {
-                    self.region = derived.clone();
+                ExecResult::SplitRegion { regions } => {
+                    self.region = regions.last().unwrap().clone();
                 }
                 ExecResult::DeleteRange { .. } => {}
             }
@@ -628,10 +625,8 @@ impl Applier {
             assert!(index > 0);
             // if pending remove, apply should be aborted already.
             assert!(!self.pending_remove);
-            ctx.exec_log_index = index;
-            ctx.exec_log_term = term;
             let (resp, result) = self.apply_raft_log(ctx, &cmd);
-            self.handle_apply_result(ctx, resp, &result, is_conf_change_cmd(&cmd));
+            self.handle_apply_result(ctx, resp, &result, false);
             return result;
         }
         // when a peer become leader, it will send an empty entry.
@@ -1037,19 +1032,9 @@ impl Applier {
         Ok(region)
     }
 
-    fn process_raft_cmd(
-        &mut self,
-        ctx: &mut ApplyContext,
-        index: u64,
-        term: u64,
-        cmd: RaftCmdRequest,
-    ) -> ApplyResult {
-        todo!()
-    }
-
     fn handle_raft_entry_conf_change(
         &mut self,
-        apply_ctx: &mut ApplyContext,
+        ctx: &mut ApplyContext,
         entry: &eraftpb::Entry,
     ) -> ApplyResult {
         // Although conf change can't yield in normal case, it is convenient to
@@ -1069,7 +1054,9 @@ impl Applier {
             _ => unreachable!(),
         };
         let cmd = util::parse_data_at(conf_change.get_context(), index, &self.tag);
-        match self.process_raft_cmd(apply_ctx, index, term, cmd) {
+        let (resp, result) = self.apply_raft_log(ctx, &cmd);
+        self.handle_apply_result(ctx, resp, &result, true);
+        match result {
             ApplyResult::None => {
                 // If failed, tell Raft that the `ConfChange` was aborted.
                 ApplyResult::Res(ExecResult::ChangePeer(Default::default()))
@@ -1122,7 +1109,32 @@ impl Applier {
         ctx: &mut ApplyContext,
         request: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
-        todo!()
+        // Write the engine before run finish split, or we will get shard not match error.
+        let regions = split_gen_new_region_metas(&self.region, request.get_splits())?;
+        let cs = build_split_change_set(
+            &self.region,
+            &regions,
+            ctx.exec_log_index,
+            ctx.exec_log_term,
+        );
+        let mut resp = AdminResponse::default();
+        let mut result: ApplyResult;
+        if let Err(kvengine::Error::WrongSplitStage) = ctx.engine.finish_split(cs) {
+            // This must be a follower that fall behind, we need to pause the apply and wait for split files to finish
+            // in the background worker.
+            warn!("region is not in split file done stage for finish split, pause apply";
+                "region" => &self.tag);
+            result = ApplyResult::Yield;
+            return Ok((resp, result));
+        }
+        self.snap.take(); // snapshot is outdated.
+        // clear the cache here or the locks doesn't belong to the new range would never have chance to delete.
+        self.lock_cache.clear();
+        let mut splits = BatchSplitResponse::default();
+        splits.set_regions(RepeatedField::from(regions.clone()));
+        resp.set_splits(splits);
+        result = ApplyResult::Res(ExecResult::SplitRegion { regions });
+        Ok((resp, result))
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
@@ -1192,6 +1204,8 @@ impl Applier {
                 );
             }
             let mut result: ApplyResult = ApplyResult::None;
+            ctx.exec_log_index = entry.index;
+            ctx.exec_log_term = entry.term;
             match entry.get_entry_type() {
                 eraftpb::EntryType::EntryNormal => {
                     result = self.handle_raft_entry_normal(ctx, &entry);
@@ -1400,6 +1414,101 @@ pub fn is_conf_change_cmd(msg: &RaftCmdRequest) -> bool {
     }
     let req = msg.get_admin_request();
     req.has_change_peer() || req.has_change_peer_v2()
+}
+
+pub(crate) fn split_gen_new_region_metas(
+    old_region: &metapb::Region,
+    splits: &BatchSplitRequest,
+) -> Result<Vec<metapb::Region>> {
+    let requests = splits.get_requests();
+    if requests.len() == 0 {
+        return Err(box_err!("missing split key"));
+    }
+    let new_region_cnt = requests.len();
+
+    let mut keys = Vec::with_capacity(new_region_cnt + 1);
+    keys.push(old_region.start_key.clone());
+    for request in requests {
+        let split_key = &request.split_key;
+        if split_key.len() == 0 {
+            return Err(box_err!("missing split key"));
+        }
+        if split_key <= keys.last().unwrap() {
+            return Err(box_err!("invalid split requests {:?}", splits));
+        }
+        if request.new_peer_ids.len() != old_region.peers.len() {
+            return Err(box_err!(
+                "invalid new id peer count need {} but got {}",
+                old_region.peers.len(),
+                request.new_peer_ids.len()
+            ));
+        }
+        keys.push(split_key.clone());
+    }
+    let end_key = &old_region.end_key;
+    if !end_key.is_empty() && end_key <= keys.last().unwrap() {
+        return Err(box_err!("invalid split requests {:?}", splits));
+    }
+    keys.push(end_key.clone());
+
+    let mut derived = old_region.clone();
+    let mut new_regions = Vec::with_capacity(new_region_cnt + 1);
+    let old_version = old_region.get_region_epoch().get_version();
+    let tag = RegionTag::from_region(old_region);
+    info!("split region"; "region" => tag);
+    derived
+        .mut_region_epoch()
+        .set_version(old_version + new_region_cnt as u64);
+
+    // Note that the split requests only contain ids for new regions, so we need
+    // to handle new regions and old region separately.
+    for (i, req) in requests.iter().enumerate() {
+        let mut new_region = metapb::Region::new();
+        new_region.set_id(req.new_region_id);
+        new_region.set_region_epoch(derived.get_region_epoch().clone());
+        new_region.set_start_key(keys[i].clone());
+        new_region.set_end_key(keys[i + 1].clone());
+        for j in 0..derived.peers.len() {
+            let mut new_peer = metapb::Peer::new();
+            new_peer.set_id(req.new_peer_ids[j]);
+            new_peer.set_store_id(derived.peers[j].get_store_id());
+            new_peer.set_role(derived.peers[j].get_role());
+            new_region.mut_peers().push(new_peer);
+        }
+        new_regions.push(new_region);
+    }
+    derived.start_key = keys[keys.len() - 2].clone();
+    new_regions.push(derived);
+    Ok(new_regions)
+}
+
+pub(crate) fn build_split_change_set(
+    old: &metapb::Region,
+    new_regions: &Vec<metapb::Region>,
+    index: u64,
+    term: u64,
+) -> kvenginepb::ChangeSet {
+    let mut split = kvenginepb::Split::new();
+    for new_region in new_regions {
+        let mut props = kvenginepb::Properties::new();
+        props.set_shard_id(new_region.get_id());
+        props.mut_keys().push(TERM_KEY.to_string());
+        if new_region.get_id() == old.get_id() {
+            props.mut_values().push(term.to_le_bytes().to_vec());
+        } else {
+            props
+                .mut_values()
+                .push(RAFT_INIT_LOG_TERM.to_le_bytes().to_vec());
+        }
+        split.mut_new_shards().push(props);
+    }
+    let mut cs = kvenginepb::ChangeSet::new();
+    cs.set_shard_id(old.get_id());
+    cs.set_shard_ver(old.get_region_epoch().get_version());
+    cs.set_stage(kvenginepb::SplitStage::SplitFileDone);
+    cs.set_sequence(index);
+    cs.set_split(split);
+    cs
 }
 
 #[derive(Clone)]

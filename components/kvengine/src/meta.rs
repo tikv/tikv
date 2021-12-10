@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::iter::Iterator;
 use std::{collections::HashMap, ops::Deref, str::FromStr};
 
 use bytes::{Buf, Bytes};
@@ -106,7 +107,7 @@ impl ShardMeta {
         self.properties.get(key).map(|v| v.clone())
     }
 
-    pub fn apply_change_set(&mut self, mut cs: pb::ChangeSet) {
+    pub fn apply_change_set(&mut self, mut cs: &mut pb::ChangeSet) {
         if self.is_duplicated_change_set(&mut cs) {
             return;
         }
@@ -118,15 +119,15 @@ impl ShardMeta {
             return;
         }
         if cs.has_pre_split() {
-            self.apply_pre_split(cs.take_pre_split());
+            self.apply_pre_split(cs.get_pre_split());
             return;
         }
         if cs.has_compaction() {
-            self.apply_compaction(cs.take_compaction());
+            self.apply_compaction(cs.get_compaction());
             return;
         }
         if cs.has_split_files() {
-            self.apply_split_files(cs.take_split_files());
+            self.apply_split_files(cs.get_split_files());
             return;
         }
         panic!("unexpected change set {:?}", cs)
@@ -191,7 +192,7 @@ impl ShardMeta {
         return false;
     }
 
-    fn apply_flush(&mut self, cs: pb::ChangeSet) {
+    fn apply_flush(&mut self, cs: &pb::ChangeSet) {
         let flush = cs.get_flush();
         self.parent = None;
         let props = flush.get_properties();
@@ -209,12 +210,12 @@ impl ShardMeta {
         }
     }
 
-    fn apply_pre_split(&mut self, pre_split: pb::PreSplit) {
-        self.pre_split = Some(pre_split);
+    fn apply_pre_split(&mut self, pre_split: &pb::PreSplit) {
+        self.pre_split = Some(pre_split.clone());
         self.split_stage = pb::SplitStage::PreSplit;
     }
 
-    fn apply_compaction(&mut self, comp: pb::Compaction) {
+    fn apply_compaction(&mut self, comp: &pb::Compaction) {
         if is_move_down(&comp) {
             for tbl in comp.get_table_creates() {
                 self.move_down_file(tbl.id, tbl.cf, tbl.level);
@@ -238,7 +239,7 @@ impl ShardMeta {
         }
     }
 
-    fn apply_split_files(&mut self, split_files: pb::SplitFiles) {
+    fn apply_split_files(&mut self, split_files: &pb::SplitFiles) {
         for id in split_files.get_table_deletes() {
             self.files.remove(id);
         }
@@ -330,6 +331,14 @@ impl ShardMeta {
     pub fn marshal(&self) -> Vec<u8> {
         let cs = self.to_change_set();
         cs.write_to_bytes().unwrap()
+    }
+
+    pub fn all_files(&self) -> Vec<u64> {
+        let mut ids = Vec::with_capacity(self.files.len());
+        for k in self.files.keys() {
+            ids.push(*k);
+        }
+        ids
     }
 }
 

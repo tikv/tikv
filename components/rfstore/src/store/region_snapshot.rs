@@ -142,7 +142,7 @@ impl Peekable for RegionSnapshot {
         opts: &ReadOptions,
         key: &[u8],
     ) -> EngineResult<Option<Self::DBVector>> {
-        todo!()
+        panic!("not supported")
     }
 
     fn get_value_cf_opt(
@@ -151,7 +151,7 @@ impl Peekable for RegionSnapshot {
         cf: &str,
         key: &[u8],
     ) -> EngineResult<Option<Self::DBVector>> {
-        todo!()
+        panic!("not supported")
     }
 }
 

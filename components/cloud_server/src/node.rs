@@ -25,7 +25,7 @@ use tikv::server::lock_manager::LockManager;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::{config::Config as StorageConfig, Storage};
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::{FutureWorker, Scheduler, Worker};
+use tikv_util::worker::{FutureWorker, LazyWorker, Scheduler, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -145,7 +145,7 @@ where
         &mut self,
         engines: Engines,
         trans: Box<dyn Transport>,
-        pd_worker: FutureWorker<PdTask>,
+        pd_worker: LazyWorker<PdTask>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<kvengine::Engine>,
         importer: Arc<SSTImporter>,
@@ -352,7 +352,7 @@ where
         store_id: u64,
         engines: Engines,
         trans: Box<dyn Transport>,
-        pd_worker: FutureWorker<PdTask>,
+        pd_worker: LazyWorker<PdTask>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<kvengine::Engine>,
         importer: Arc<SSTImporter>,

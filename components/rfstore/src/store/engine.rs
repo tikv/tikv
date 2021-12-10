@@ -87,6 +87,7 @@ pub struct MetaChangeListener {
 
 impl kvengine::MetaChangeListener for MetaChangeListener {
     fn on_change_set(&self, cs: ChangeSet) {
-        todo!()
+        let msg = StoreMsg::GenerateEngineChangeSet(cs);
+        self.sender.send(msg).unwrap();
     }
 }

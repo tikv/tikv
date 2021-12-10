@@ -189,7 +189,7 @@ impl RaftBatchSystem {
         if self.workers.is_none() {
             return;
         }
-        todo!(); // stop the raft and apply worker.
+        // TODO(x): stop the raft and apply worker.
         let mut workers = self.workers.take().unwrap();
         // Wait all workers finish.
         workers.pd_worker.stop();

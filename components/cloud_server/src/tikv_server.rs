@@ -206,7 +206,8 @@ impl TiKVServer {
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
         // Initialize raftstore channels.
-        let rfstore_conf = rfstore::store::Config::from_old(&config.raft_store);
+        let rfstore_conf =
+            rfstore::store::Config::from_old(&config.raft_store, &config.coprocessor);
         let system = rfstore::store::RaftBatchSystem::new(&raw_engines, &rfstore_conf);
         let router = system.router();
 
@@ -466,7 +467,7 @@ impl TiKVServer {
 
         let engines = self.engines.as_mut().unwrap();
 
-        let pd_worker: FutureWorker<PdTask> = FutureWorker::new("pd-worker");
+        let pd_worker = LazyWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
         let flow_reporter = rfstore::store::worker::FlowStatsReporter::new(pd_sender.clone());
 
@@ -534,11 +535,6 @@ impl TiKVServer {
             cop_read_pools.handle()
         };
 
-        let check_leader_runner = CheckLeaderRunner::new(engines.store_meta.clone());
-        let check_leader_scheduler = self
-            .background_worker
-            .start("check-leader", check_leader_runner);
-
         let server_config = Arc::new(VersionTrack::new(self.config.server.clone()));
 
         self.config
@@ -547,6 +543,7 @@ impl TiKVServer {
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(rfstore::store::Config::from_old(
             &self.config.raft_store,
+            &self.config.coprocessor,
         )));
         let mut node = Node::new(
             self.system.take().unwrap(),

@@ -67,11 +67,6 @@ pub trait RaftStoreRouter: StoreRouter + ProposalRouter + CasualRouter + Send + 
     fn broadcast_unreachable(&self, store_id: u64) {
         let _ = self.send_store_msg(StoreMsg::StoreUnreachable { store_id });
     }
-
-    /// Report a `StoreResolved` event to all Raft groups.
-    fn report_resolved(&self, store_id: u64, group_id: u64) {
-        todo!()
-    }
 }
 
 pub trait LocalReadRouter: Send + Clone {

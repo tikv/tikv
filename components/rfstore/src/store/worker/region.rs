@@ -29,6 +29,9 @@ pub enum Task {
         split_keys: Vec<Bytes>,
         stage: kvenginepb::SplitStage,
     },
+    RejectChangeSet {
+        change: kvenginepb::ChangeSet,
+    },
 }
 
 impl Task {
@@ -62,6 +65,9 @@ impl Display for Task {
                 log_wrappers::Value::key(&end_key)
             ),
             Task::RecoverSplit { .. } => {
+                todo!()
+            }
+            Task::RejectChangeSet { .. } => {
                 todo!()
             }
         }

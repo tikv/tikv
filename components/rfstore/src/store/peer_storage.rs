@@ -11,7 +11,8 @@ use std::sync::Arc;
 
 use super::keys::raft_state_key;
 use crate::store::{
-    region_state_key, Engines, RaftApplyState, RaftState, RegionTask, KV_ENGINE_META_KEY, TERM_KEY,
+    region_state_key, Engines, RaftApplyState, RaftContext, RaftState, RegionTag, RegionTask,
+    KV_ENGINE_META_KEY, TERM_KEY,
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use engine_traits::{Mutable, RaftEngineReadOnly, RaftLogBatch};
@@ -62,30 +63,11 @@ pub enum CheckApplyingSnapStatus {
     Idle,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum SnapState {
     Relax,
-    Generating {
-        canceled: Arc<AtomicBool>,
-        index: Arc<AtomicU64>,
-        receiver: Receiver<Snapshot>,
-    },
-    Applying(Arc<AtomicUsize>),
+    Applying,
     ApplyAborted,
-}
-
-impl PartialEq for SnapState {
-    fn eq(&self, other: &SnapState) -> bool {
-        match (self, other) {
-            (&SnapState::Relax, &SnapState::Relax)
-            | (&SnapState::ApplyAborted, &SnapState::ApplyAborted)
-            | (&SnapState::Generating { .. }, &SnapState::Generating { .. }) => true,
-            (&SnapState::Applying(ref b1), &SnapState::Applying(ref b2)) => {
-                b1.load(Ordering::Relaxed) == b2.load(Ordering::Relaxed)
-            }
-            _ => false,
-        }
-    }
 }
 
 pub struct ApplySnapResult {
@@ -104,14 +86,11 @@ pub(crate) struct PeerStorage {
     apply_state: RaftApplyState,
     last_term: u64,
 
-    snap_state: RefCell<SnapState>,
+    snap_state: SnapState,
     snap_tried_cnt: usize,
 
-    split_stage: kvenginepb::SplitStage,
     initial_flushed: bool,
     shard_meta: Option<kvengine::ShardMeta>,
-
-    pub tag: String,
 }
 
 impl raft::Storage for PeerStorage {
@@ -181,13 +160,13 @@ impl raft::Storage for PeerStorage {
 
     fn snapshot(&self, request_index: u64) -> raft::Result<eraftpb::Snapshot> {
         if !self.initial_flushed || self.shard_meta.is_none() {
-            info!("shard has not flushed for generating snapshot"; "region" => &self.tag);
+            info!("shard has not flushed for generating snapshot"; "region" => self.tag());
             return Err(raft::Error::Store(StorageError::Unavailable));
         }
         let shard_meta = self.shard_meta.as_ref().unwrap();
         let snap_index = shard_meta.seq;
         if snap_index < request_index {
-            info!("requesting index is too high"; "region" => &self.tag,
+            info!("requesting index is too high"; "region" => self.tag(),
                 "request_index" => request_index, "snap_index" => snap_index);
             return Err(raft::Error::Store(StorageError::Unavailable));
         }
@@ -212,7 +191,6 @@ impl PeerStorage {
         engines: Engines,
         region: metapb::Region,
         peer_id: u64,
-        tag: String,
     ) -> Result<PeerStorage> {
         let raft_state = init_raft_state(&engines.raft, &region)?;
         let apply_state = init_apply_state(&engines.kv, &region);
@@ -232,10 +210,8 @@ impl PeerStorage {
         }
         let last_term = init_last_term(&engines.raft, &region, raft_state, meta_index, meta_term)?;
         let mut initial_flushed = false;
-        let mut split_stage = kvenginepb::SplitStage::Initial;
         if let Some(shard) = engines.kv.get_shard(region.get_id()) {
             initial_flushed = shard.get_initial_flushed();
-            split_stage = shard.get_split_stage();
         }
         Ok(PeerStorage {
             engines,
@@ -244,13 +220,15 @@ impl PeerStorage {
             raft_state,
             apply_state,
             last_term,
-            snap_state: RefCell::new(SnapState::Relax),
+            snap_state: SnapState::Relax,
             snap_tried_cnt: 0,
-            split_stage,
             initial_flushed,
             shard_meta,
-            tag,
         })
+    }
+
+    pub(crate) fn tag(&self) -> RegionTag {
+        RegionTag::from_region(&self.region)
     }
 
     pub(crate) fn clear_meta(&self, rwb: &mut rfengine::WriteBatch) {
@@ -343,7 +321,7 @@ impl PeerStorage {
 
     #[inline]
     pub fn is_applying_snapshot(&self) -> bool {
-        matches!(*self.snap_state.borrow(), SnapState::Applying(_))
+        self.snap_state == SnapState::Applying
     }
 
     pub fn check_range(&self, low: u64, high: u64) -> raft::Result<()> {
@@ -365,84 +343,20 @@ impl PeerStorage {
         Ok(())
     }
 
-    /// Check if the storage is applying a snapshot.
-    #[inline]
-    pub fn check_applying_snap(&mut self) -> CheckApplyingSnapStatus {
-        let mut res = CheckApplyingSnapStatus::Idle;
-        let new_state = match *self.snap_state.borrow() {
-            SnapState::Applying(ref status) => {
-                let s = status.load(Ordering::Relaxed);
-                if s == JOB_STATUS_FINISHED {
-                    res = CheckApplyingSnapStatus::Success;
-                    SnapState::Relax
-                } else if s == JOB_STATUS_CANCELLED {
-                    SnapState::ApplyAborted
-                } else if s == JOB_STATUS_FAILED {
-                    // TODO: cleanup region and treat it as tombstone.
-                    panic!("{} applying snapshot failed", self.get_region_id());
-                } else {
-                    return CheckApplyingSnapStatus::Applying;
-                }
-            }
-            _ => return res,
-        };
-        *self.snap_state.borrow_mut() = new_state;
-        res
-    }
-
-    /// Cancel applying snapshot, return true if the job can be considered not be run again.
-    pub fn cancel_applying_snap(&mut self) -> bool {
-        let is_canceled = match *self.snap_state.borrow() {
-            SnapState::Applying(ref status) => {
-                if status
-                    .compare_exchange(
-                        JOB_STATUS_PENDING,
-                        JOB_STATUS_CANCELLING,
-                        Ordering::SeqCst,
-                        Ordering::SeqCst,
-                    )
-                    .is_ok()
-                {
-                    true
-                } else if status
-                    .compare_exchange(
-                        JOB_STATUS_RUNNING,
-                        JOB_STATUS_CANCELLING,
-                        Ordering::SeqCst,
-                        Ordering::SeqCst,
-                    )
-                    .is_ok()
-                {
-                    return false;
-                } else {
-                    false
-                }
-            }
-            _ => return false,
-        };
-        if is_canceled {
-            *self.snap_state.borrow_mut() = SnapState::ApplyAborted;
-            return true;
-        }
-        // now status can only be JOB_STATUS_CANCELLING, JOB_STATUS_CANCELLED,
-        // JOB_STATUS_FAILED and JOB_STATUS_FINISHED.
-        self.check_applying_snap() != CheckApplyingSnapStatus::Applying
-    }
-
     pub fn flush_cache_metrics(&mut self) {
         // TODO(x)
     }
 
     pub fn handle_raft_ready(
         &mut self,
-        raft_wb: &mut rfengine::WriteBatch,
+        ctx: &mut RaftContext,
         ready: &mut raft::Ready,
     ) -> Option<ApplySnapResult> {
         let mut res = None;
         let prev_raft_state = self.raft_state;
         if !ready.snapshot().is_empty() {
             let prev_region = self.region().clone();
-            self.apply_snapshot(ready.snapshot(), raft_wb);
+            self.apply_snapshot(ready.snapshot(), ctx);
             let region = self.region.clone();
             res = Some(ApplySnapResult {
                 prev_region,
@@ -451,32 +365,82 @@ impl PeerStorage {
             })
         }
         if !ready.entries().is_empty() {
-            self.append(ready.take_entries());
+            self.append(ready.take_entries(), &mut ctx.raft_wb);
         }
 
         // Last index is 0 means the peer is created from raft message
         // and has not applied snapshot yet, so skip persistent hard state.
-        if self.raft_state.last_index > 0 {
+        if self.is_initialized() {
             if let Some(hs) = ready.hs() {
                 self.raft_state.set_hard_state(hs);
             }
         }
         if prev_raft_state != self.raft_state || !ready.snapshot().is_empty() {
             let key = raft_state_key(self.region.get_region_epoch().get_version());
-            raft_wb.set_state(self.get_region_id(), &key, &self.raft_state.marshal());
+            ctx.raft_wb
+                .set_state(self.get_region_id(), &key, &self.raft_state.marshal());
         }
         res
     }
 
-    fn apply_snapshot(&mut self, snap: &eraftpb::Snapshot, raft_wb: &mut rfengine::WriteBatch) {
-        info!("peer storage begin to apply snapshot"; "region" => &self.tag);
+    fn apply_snapshot(&mut self, snap: &eraftpb::Snapshot, ctx: &mut RaftContext) -> Result<()> {
+        info!("peer storage begin to apply snapshot"; "region" => self.tag());
+        let (region, change_set) = decode_snap_data(snap.get_data())?;
+        if region.get_id() != self.get_region_id() {
+            return Err(box_err!(
+                "mismatch region id {} != {}",
+                region.get_id(),
+                self.get_region_id()
+            ));
+        }
+        if self.is_initialized() {
+            // we can only delete the old data when the peer is initialized.
+            self.clear_meta(&mut ctx.raft_wb);
+        }
+        write_peer_state(
+            &mut ctx.raft_wb,
+            &region,
+            raft_serverpb::PeerState::Applying,
+        );
+        let last_index = snap.get_metadata().get_index();
+        let last_term = snap.get_metadata().get_term();
+        self.raft_state.last_index = last_index;
+        self.last_term = last_term;
+        self.apply_state.applied_index = last_index;
+        self.apply_state.applied_index_term = last_term;
 
-        // schedule apply snapshot.
-        todo!()
+        ctx.raft_wb.set_state(
+            region.get_id(),
+            KV_ENGINE_META_KEY,
+            &change_set.write_to_bytes().unwrap(),
+        );
+        self.shard_meta = Some(kvengine::ShardMeta::new(change_set.clone()));
+        self.region = region;
+
+        let snap_task = RegionTask::ApplyChangeSet { change: change_set };
+        ctx.global.region_scheduler.schedule(snap_task);
+        self.snap_state = SnapState::Applying;
+        Ok(())
     }
 
-    fn append(&mut self, entries: Vec<eraftpb::Entry>) {
-        todo!()
+    fn append(&mut self, entries: Vec<eraftpb::Entry>, raft_wb: &mut rfengine::WriteBatch) {
+        if entries.is_empty() {
+            return;
+        }
+        for e in &entries {
+            raft_wb.append_raft_log(self.get_region_id(), e);
+        }
+        let last_entry = entries.last().unwrap();
+        self.raft_state.last_index = last_entry.get_index();
+        self.last_term = last_entry.get_term();
+    }
+
+    pub(crate) fn get_engine_meta(&self) -> &ShardMeta {
+        self.shard_meta.as_ref().unwrap()
+    }
+
+    pub(crate) fn mut_engine_meta(&mut self) -> &mut ShardMeta {
+        self.shard_meta.as_mut().unwrap()
     }
 }
 
@@ -576,14 +540,10 @@ pub fn write_peer_state(
     raft_wb: &mut rfengine::WriteBatch,
     region: &metapb::Region,
     state: raft_serverpb::PeerState,
-    merge_state: Option<raft_serverpb::MergeState>,
 ) {
     let mut region_state = raft_serverpb::RegionLocalState::default();
     region_state.set_state(state);
     region_state.set_region(region.clone());
-    if let Some(ms) = merge_state {
-        region_state.set_merge_state(ms);
-    }
     let state_bin = region_state.write_to_bytes().unwrap();
     let epoch = region.get_region_epoch();
     let key = region_state_key(epoch.get_version(), epoch.get_conf_ver());
@@ -601,9 +561,9 @@ pub fn encode_snap_data(region: &metapb::Region, change_set: &kvenginepb::Change
     buf.freeze()
 }
 
-pub fn decode_snap_data(data: Bytes) -> Result<(metapb::Region, kvenginepb::ChangeSet)> {
+pub fn decode_snap_data(data: &[u8]) -> Result<(metapb::Region, kvenginepb::ChangeSet)> {
     let mut offset = 0;
-    let size1 = LittleEndian::read_u32(&data) as usize;
+    let size1 = LittleEndian::read_u32(data) as usize;
     offset += 4;
     let mut region = metapb::Region::default();
     region.merge_from_bytes(&data[offset..(offset + size1)])?;

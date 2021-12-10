@@ -62,10 +62,6 @@ pub struct Config {
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: ReadableDuration,
 
-    pub waterfall_metrics: bool,
-
-    pub region_split_size: ReadableSize,
-
     pub pd_heartbeat_tick_interval: ReadableDuration,
 
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
@@ -73,6 +69,8 @@ pub struct Config {
     pub consistency_check_interval: ReadableDuration,
 
     pub channel_capacity: usize,
+
+    pub region_split_size: ReadableSize,
 }
 
 impl Default for Config {
@@ -98,7 +96,6 @@ impl Default for Config {
             allow_remove_leader: false,
             raft_log_gc_tick_interval: ReadableDuration::secs(10),
             split_region_check_tick_interval: ReadableDuration::secs(10),
-            waterfall_metrics: false,
             region_split_size: ReadableSize::gb(1),
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
@@ -123,7 +120,27 @@ impl Config {
         self.raft_base_tick_interval.0 * self.raft_heartbeat_ticks as u32
     }
 
-    pub fn from_old(old: &raftstore::store::Config) -> Self {
-        todo!()
+    pub fn from_old(old: &raftstore::store::Config, old_cop: &coprocessor::Config) -> Self {
+        let mut cfg = Config::default();
+        cfg.raft_base_tick_interval = old.raft_base_tick_interval;
+        cfg.raft_heartbeat_ticks = old.raft_heartbeat_ticks;
+        cfg.raft_election_timeout_ticks = old.raft_election_timeout_ticks;
+        cfg.raft_min_election_timeout_ticks = old.raft_min_election_timeout_ticks;
+        cfg.raft_max_election_timeout_ticks = old.raft_max_election_timeout_ticks;
+        cfg.raft_max_size_per_msg = old.raft_max_size_per_msg;
+        cfg.raft_max_inflight_msgs = old.raft_max_inflight_msgs;
+        cfg.raft_entry_max_size = old.raft_entry_max_size;
+        cfg.raft_store_max_leader_lease = old.raft_store_max_leader_lease;
+        cfg.allow_remove_leader = old.allow_remove_leader;
+        cfg.pd_heartbeat_tick_interval = old.pd_heartbeat_tick_interval;
+        cfg.pd_store_heartbeat_tick_interval = old.pd_store_heartbeat_tick_interval;
+        cfg.max_peer_down_duration = old.max_peer_down_duration;
+        cfg.max_leader_missing_duration = old.max_leader_missing_duration;
+        cfg.abnormal_leader_missing_duration = old.abnormal_leader_missing_duration;
+        cfg.peer_stale_state_check_interval = old.peer_stale_state_check_interval;
+        cfg.leader_transfer_max_log_lag = old.leader_transfer_max_log_lag;
+
+        cfg.region_split_size = old_cop.region_split_size;
+        cfg
     }
 }

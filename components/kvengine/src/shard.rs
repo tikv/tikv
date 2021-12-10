@@ -337,7 +337,7 @@ impl Shard {
         }
     }
 
-    pub(crate) fn get_suggest_split_keys(&self, target_size: u64) -> Vec<Bytes> {
+    pub fn get_suggest_split_keys(&self, target_size: u64) -> Vec<Bytes> {
         let mut keys = Vec::new();
         let estimated_size = load_u64(&self.estimated_size);
         if estimated_size < target_size {

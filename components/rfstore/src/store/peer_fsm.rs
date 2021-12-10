@@ -679,7 +679,7 @@ impl<'a> PeerMsgHandler<'a> {
             // then it will be gc again. But if some overlap region is created
             // before restarting, the gc action will delete the overlap region's
             // data too.
-            panic!("{} destroy err {:?}", self.fsm.peer.tag, e);
+            panic!("{} destroy err {:?}", self.fsm.peer.tag(), e);
         }
         // Some places use `force_send().unwrap()` if the StoreMeta lock is held.
         // So in here, it's necessary to held the StoreMeta lock when closing the router.
@@ -693,10 +693,10 @@ impl<'a> PeerMsgHandler<'a> {
                 .remove(&raw_end_key(self.fsm.peer.region()))
                 .is_none()
         {
-            panic!("{} meta corruption detected", self.fsm.peer.tag);
+            panic!("{} meta corruption detected", self.fsm.peer.tag());
         }
         if meta.regions.remove(&region_id).is_none() && !merged_by_target {
-            panic!("{} meta corruption detected", self.fsm.peer.tag)
+            panic!("{} meta corruption detected", self.fsm.peer.tag())
         }
         meta.leaders.remove(&region_id);
     }
@@ -771,7 +771,8 @@ impl<'a> PeerMsgHandler<'a> {
                         } else {
                             panic!(
                                 "{} trying to remove unknown peer {:?}",
-                                self.fsm.peer.tag, peer
+                                self.fsm.peer.tag(),
+                                peer
                             );
                         }
                     }
@@ -827,14 +828,10 @@ impl<'a> PeerMsgHandler<'a> {
         }
     }
 
-    fn on_ready_split_region(
-        &mut self,
-        derived: metapb::Region,
-        regions: Vec<metapb::Region>,
-        new_split_regions: HashMap<u64, apply::NewSplitPeer>,
-    ) {
+    fn on_ready_split_region(&mut self, regions: Vec<metapb::Region>) {
         fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
 
+        let derived = regions.last().unwrap().clone();
         let region_id = derived.get_id();
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
@@ -872,7 +869,7 @@ impl<'a> PeerMsgHandler<'a> {
 
         let last_key = raw_end_key(regions.last().unwrap());
         if meta.region_ranges.remove(&last_key).is_none() {
-            panic!("{} original region should exist", self.fsm.peer.tag);
+            panic!("{} original region should exist", self.fsm.peer.tag());
         }
         let last_region_id = regions.last().unwrap().get_id();
         for new_region in regions {
@@ -887,12 +884,7 @@ impl<'a> PeerMsgHandler<'a> {
                 continue;
             }
 
-            // Check if this new region should be splitted
-            let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
-            if new_split_peer.result.is_some() {
-                continue;
-            }
-
+            // TODO(x) check split conflict with add peer.
             // Now all checking passed.
 
             // Insert new regions and validation
@@ -993,11 +985,7 @@ impl<'a> PeerMsgHandler<'a> {
         while let Some(result) = exec_results.pop_front() {
             match result {
                 ExecResult::ChangePeer(cp) => self.on_ready_change_peer(cp),
-                ExecResult::SplitRegion {
-                    derived,
-                    regions,
-                    new_split_regions,
-                } => self.on_ready_split_region(derived, regions, new_split_regions),
+                ExecResult::SplitRegion { regions } => self.on_ready_split_region(regions),
                 ExecResult::DeleteRange { .. } => {
                     // TODO: clean user properties?
                 }
@@ -1068,7 +1056,7 @@ impl<'a> PeerMsgHandler<'a> {
             // TODO: replace to a more suitable error.
             return Err(Error::Other(box_err!(
                 "{} peer is applying snapshot",
-                self.fsm.peer.tag
+                self.fsm.peer.tag()
             )));
         }
         // Check whether the term is stale.
@@ -1186,7 +1174,11 @@ impl<'a> PeerMsgHandler<'a> {
             if estimated_size < cfg_split_size {
                 return;
             }
-            let task = SplitCheckTask::new(self.region_id(), cfg_split_size);
+            let task = SplitCheckTask::new(
+                self.region().clone(),
+                self.peer.peer.clone(),
+                cfg_split_size,
+            );
             if let Err(e) = self.ctx.global.split_check_scheduler.schedule(task) {
                 error!(
                     "failed to schedule split check";
@@ -1235,7 +1227,7 @@ impl<'a> PeerMsgHandler<'a> {
                 PdTask::AskBatchSplit { callback, .. } => {
                     callback.invoke_with_response(new_error(box_err!(
                         "{} failed to split: Stopped",
-                        self.fsm.peer.tag
+                        self.fsm.peer.tag()
                     )));
                 }
                 _ => unreachable!(),
@@ -1254,7 +1246,10 @@ impl<'a> PeerMsgHandler<'a> {
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
             );
-            return Err(box_err!("{} no split key is specified.", self.fsm.peer.tag));
+            return Err(box_err!(
+                "{} no split key is specified.",
+                self.fsm.peer.tag()
+            ));
         }
         for key in split_keys {
             if key.is_empty() {
@@ -1265,7 +1260,7 @@ impl<'a> PeerMsgHandler<'a> {
                 );
                 return Err(box_err!(
                     "{} split key should not be empty",
-                    self.fsm.peer.tag
+                    self.fsm.peer.tag()
                 ));
             }
         }
@@ -1299,7 +1294,9 @@ impl<'a> PeerMsgHandler<'a> {
             return Err(Error::EpochNotMatch(
                 format!(
                     "{} epoch changed {:?} != {:?}, retry later",
-                    self.fsm.peer.tag, latest_epoch, epoch
+                    self.fsm.peer.tag(),
+                    latest_epoch,
+                    epoch
                 ),
                 vec![region.to_owned()],
             ));
@@ -1322,7 +1319,7 @@ impl<'a> PeerMsgHandler<'a> {
     }
 
     fn on_generate_engine_change_set(&mut self, cs: kvenginepb::ChangeSet) {
-        info!("generate meta change event"; "region" => &self.peer.tag);
+        info!("generate meta change event"; "region" => self.peer.tag());
         let mut req = self.new_raft_cmd_request();
         let mut builder = CustomBuilder::new();
         builder.set_change_set(cs);
@@ -1413,7 +1410,7 @@ impl PeerMsgHandler<'_> {
             StatusCmdType::RegionLeader => self.execute_region_leader(),
             StatusCmdType::RegionDetail => self.execute_region_detail(request),
             StatusCmdType::InvalidStatus => {
-                Err(box_err!("{} invalid status command!", self.fsm.peer.tag))
+                Err(box_err!("{} invalid status command!", self.fsm.peer.tag()))
             }
         }?;
         response.set_cmd_type(cmd_type);
