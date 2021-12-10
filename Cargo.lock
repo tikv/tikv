@@ -95,6 +95,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dabe5a181f83789739c194cbe5a897dde195078fac08568d09221fd6137a7ba8"
 
 [[package]]
+name = "arc-swap"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c5d78ce20460b82d3fa150275ed9d55e21064fc7951177baacf86a145c4a4b1f"
+
+[[package]]
 name = "arrayvec"
 version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -298,8 +304,10 @@ dependencies = [
  "criterion",
  "crossbeam",
  "derive_more",
+ "fail",
  "file_system",
  "lazy_static",
+ "online_config",
  "prometheus",
  "serde",
  "serde_derive",
@@ -2205,7 +2213,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#03abd340988f539630450c78ead7b13dcf5e056d"
+source = "git+https://github.com/pingcap/kvproto.git#a412f7a319c347674f9fb42a2689eb0bb1c8588e"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3909,6 +3917,7 @@ dependencies = [
 name = "resource_metering"
 version = "0.0.1"
 dependencies = [
+ "arc-swap 1.5.0",
  "collections",
  "crossbeam",
  "fail",
@@ -4493,7 +4502,7 @@ name = "slog-global"
 version = "0.1.0"
 source = "git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9#d592f88e4dbba5eb439998463054f1a44fbf17b9"
 dependencies = [
- "arc-swap",
+ "arc-swap 0.4.8",
  "lazy_static",
  "log",
  "slog",
@@ -4878,6 +4887,7 @@ dependencies = [
  "futures 0.3.15",
  "kvproto",
  "protobuf",
+ "resource_metering",
  "test_storage",
  "tidb_query_common",
  "tidb_query_datatype",
@@ -4928,6 +4938,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.3",
  "resolved_ts",
+ "resource_metering",
  "security",
  "slog",
  "slog-global",
