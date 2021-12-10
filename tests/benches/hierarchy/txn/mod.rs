@@ -47,7 +47,7 @@ where
             &mut txn,
             &mut reader,
             &txn_props,
-            Mutation::Put((Key::from_raw(k), v.clone())),
+            Mutation::make_put(Key::from_raw(k), v.clone()),
             &None,
             false,
         )
@@ -69,7 +69,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
                 KvGenerator::new(config.key_length, config.value_length)
                     .generate(DEFAULT_ITERATIONS)
                     .iter()
-                    .map(|(k, v)| (Mutation::Put((Key::from_raw(k), v.clone())), k.clone()))
+                    .map(|(k, v)| (Mutation::make_put(Key::from_raw(k), v.clone()), k.clone()))
                     .collect();
             mutations
         },

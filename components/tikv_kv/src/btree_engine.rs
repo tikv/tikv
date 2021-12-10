@@ -280,7 +280,11 @@ fn write_modifies(engine: &BTreeEngine, modifies: Vec<Modify>) -> EngineResult<(
                 let cf_tree = engine.get_cf(cf);
                 cf_tree.write().unwrap().insert(k, v);
             }
-
+            Modify::PessimisticLock(k, lock) => {
+                let cf_tree = engine.get_cf(CF_LOCK);
+                let v = lock.into_lock().to_bytes();
+                cf_tree.write().unwrap().insert(k, v);
+            }
             Modify::DeleteRange(_cf, _start_key, _end_key, _notify_only) => unimplemented!(),
         };
     }
