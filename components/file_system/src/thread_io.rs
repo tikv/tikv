@@ -238,7 +238,7 @@ mod tests {
             .open(&file_path)
             .unwrap();
 
-        let w = vec![A512::default(); 1];
+        let w = vec![A512::default(); 8];
 
         let origin_io_bytes = fetch_thread_io_bytes(IOType::Other);
         for i in 1..=10 {
@@ -247,7 +247,7 @@ mod tests {
 
             let io_bytes = fetch_thread_io_bytes(IOType::Other);
 
-            assert_eq!(i * 512 + origin_io_bytes.write, io_bytes.write);
+            assert_eq!(i * 4096 + origin_io_bytes.write, io_bytes.write);
         }
     }
 
