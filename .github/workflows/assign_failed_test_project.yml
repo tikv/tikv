@@ -1,0 +1,21 @@
+name: Auto Assign Failed Test Issue to Solid Tests Project
+
+on:
+  issues:
+    types: [labeled]
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  assign_bench_test_project:
+    runs-on: ubuntu-latest
+    name: Assign to Solid Tests Project
+    steps:
+    - name: Run issues assignment to project Solid Tests Kanban
+      uses: srggrs/assign-one-project-github-action@1.2.0
+      if: |
+        github.event.issue.user.login == 'sre-bot' &&
+        contains(github.event.issue.labels.*.name, 'component/test-bench')
+      with:
+        project: 'https://github.com/tikv/tikv/projects/14'
+        column_name: 'To do(in history)'

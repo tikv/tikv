@@ -1,0 +1,11 @@
+[package]
+name = "example_plugin"
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[lib]
+crate-type = ["dylib"]
+
+[dependencies]
+coprocessor_plugin_api = { path = "../../coprocessor_plugin_api" }

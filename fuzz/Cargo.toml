@@ -1,0 +1,16 @@
+[package]
+name = "fuzz"
+version = "0.0.1"
+publish = false
+edition = "2018"
+
+[[bin]]
+name = "fuzz"
+path = "cli.rs"
+
+[dependencies]
+anyhow = "1.0"
+cargo_metadata = "0.9"
+lazy_static = "1.3"
+regex = "1.1"
+structopt = "0.3"

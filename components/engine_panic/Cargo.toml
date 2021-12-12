@@ -1,0 +1,15 @@
+[package]
+name = "engine_panic"
+version = "0.0.1"
+description = "An example TiKV storage engine that does nothing but panic"
+edition = "2018"
+publish = false
+
+[dependencies]
+engine_traits = { path = "../engine_traits", default-features = false }
+tikv_alloc = { path = "../tikv_alloc" }
+# FIXME: Remove this dep from the engine_traits interface
+tikv_util = { path = "../tikv_util", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
+txn_types = { path = "../txn_types", default-features = false }

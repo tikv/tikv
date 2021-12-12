@@ -1,0 +1,10 @@
+[package]
+name = "tipb_helper"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[dependencies]
+codec = { path = "../codec", default-features = false }
+tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
+tipb = { git = "https://github.com/pingcap/tipb.git" }

@@ -1,0 +1,10 @@
+[package]
+name = "into_other"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[dependencies]
+engine_traits = { path = "../engine_traits", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }

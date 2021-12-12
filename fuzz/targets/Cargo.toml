@@ -1,0 +1,14 @@
+[package]
+name = "fuzz-targets"
+version = "0.0.1"
+publish = false
+edition = "2018"
+
+[lib]
+path = "mod.rs"
+
+[dependencies]
+anyhow = "1.0"
+byteorder = "1"
+tidb_query_datatype = { path = "../../components/tidb_query_datatype", default-features = false }
+tikv_util = { path = "../../components/tikv_util", default-features = false }
