@@ -3,7 +3,6 @@
 //! Core data types.
 
 use crate::storage::{
-    metrics::CommandKind,
     mvcc::{Lock, LockType, TimeStamp, Write, WriteType},
     txn::ProcessResult,
     Callback, Result,
@@ -216,28 +215,4 @@ storage_callback! {
 
 pub trait StorageCallbackType: Sized {
     fn callback(cb: Callback<Self>) -> StorageCallback;
-}
-
-pub trait MutationRequest {
-    fn get_request_info(&self) -> (CommandKind, &kvrpcpb::Context, &[kvrpcpb::Mutation]);
-}
-
-impl MutationRequest for kvrpcpb::PrewriteRequest {
-    fn get_request_info(&self) -> (CommandKind, &kvrpcpb::Context, &[kvrpcpb::Mutation]) {
-        return (
-            CommandKind::prewrite,
-            self.get_context(),
-            self.get_mutations(),
-        );
-    }
-}
-
-impl MutationRequest for kvrpcpb::PessimisticLockRequest {
-    fn get_request_info(&self) -> (CommandKind, &kvrpcpb::Context, &[kvrpcpb::Mutation]) {
-        return (
-            CommandKind::acquire_pessimistic_lock,
-            self.get_context(),
-            self.get_mutations(),
-        );
-    }
 }

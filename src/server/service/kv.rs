@@ -1858,13 +1858,14 @@ fn future_raw_coprocessor<E: Engine, L: LockManager>(
 }
 
 macro_rules! txn_command_future {
-    ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident, $storage: ident, $cb: ident) {$sched: expr}; ($v: ident, $resp: ident) { $else_branch: expr }) => {
+    ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) $prelude: stmt; ($v: ident, $resp: ident) { $else_branch: expr }) => {
         fn $fn_name<E: Engine, L: LockManager>(
-            $storage: &Storage<E, L>,
+            storage: &Storage<E, L>,
             $req: $req_ty,
         ) -> impl Future<Output = ServerResult<$resp_ty>> {
-            let ($cb, f) = paired_future_callback();
-            let res = $sched;
+            $prelude
+            let (cb, f) = paired_future_callback();
+            let res = storage.sched_txn_command($req.into(), cb);
 
             async move {
                 let $v = match res {
@@ -1882,32 +1883,26 @@ macro_rules! txn_command_future {
         }
     };
     ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($v: ident, $resp: ident) { $else_branch: expr }) => {
-        txn_command_future!($fn_name, $req_ty, $resp_ty, (req, storage, cb) { storage.sched_txn_command(req.into(), cb) }; ($v, $resp) { $else_branch });
+        txn_command_future!($fn_name, $req_ty, $resp_ty, (req) {}; ($v, $resp) { $else_branch });
     };
 }
 
-macro_rules! txn_mutation_command_future {
-    ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($v: ident, $resp: ident) { $else_branch: expr }) => {
-        txn_command_future!($fn_name, $req_ty, $resp_ty, (req, storage, cb) { storage.sched_txn_mutation_request(req, cb) }; ($v, $resp) { $else_branch });
-    };
-}
-
-txn_mutation_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp) {{
-        if let Ok(v) = &v {
-            resp.set_min_commit_ts(v.min_commit_ts.into_inner());
-            resp.set_one_pc_commit_ts(v.one_pc_commit_ts.into_inner());
-        }
-        resp.set_errors(extract_key_errors(v.map(|v| v.locks)).into());
+txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp) {{
+    if let Ok(v) = &v {
+        resp.set_min_commit_ts(v.min_commit_ts.into_inner());
+        resp.set_one_pc_commit_ts(v.one_pc_commit_ts.into_inner());
+    }
+    resp.set_errors(extract_key_errors(v.map(|v| v.locks)).into());
 }});
-txn_mutation_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp) {
-        match v {
-            Ok(Ok(res)) => {
-                let (values, not_founds) = res.into_values_and_not_founds();
-                resp.set_values(values.into());
-                resp.set_not_founds(not_founds);
-            },
-            Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
-        }
+txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp) {
+    match v {
+        Ok(Ok(res)) => {
+            let (values, not_founds) = res.into_values_and_not_founds();
+            resp.set_values(values.into());
+            resp.set_not_founds(not_founds);
+        },
+        Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
+    }
 });
 txn_command_future!(future_pessimistic_rollback, PessimisticRollbackRequest, PessimisticRollbackResponse, (v, resp) {
     resp.set_errors(extract_key_errors(v).into())

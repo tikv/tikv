@@ -49,6 +49,7 @@ pub mod txn;
 mod read_pool;
 mod types;
 
+use self::kv::SnapContext;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
@@ -61,7 +62,6 @@ pub use self::{
     txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
-use self::{kv::SnapContext, types::MutationRequest};
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
@@ -1142,25 +1142,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         }
     }
 
-    // The entry point of the storage scheduler for transaction requests.
-    pub fn sched_txn_mutation_request<
-        T: StorageCallbackType,
-        R: std::convert::Into<TypedCommand<T>> + MutationRequest,
-    >(
-        &self,
-        req: R,
-        callback: Callback<T>,
-    ) -> Result<()> {
-        let (kind, ctx, mutations) = req.get_request_info();
-        Self::check_api_version(
-            self.api_version,
-            ctx.api_version,
-            kind,
-            mutations.iter().map(|m| m.get_key()),
-        )?;
-        self.sched_txn_command(req.into(), callback)
-    }
-
     // The entry point of the storage scheduler. Not only transaction commands need to access keys serially.
     pub fn sched_txn_command<T: StorageCallbackType>(
         &self,
@@ -1175,25 +1156,37 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         match &cmd {
             Command::Prewrite(Prewrite { mutations, .. }) => {
-                check_key_size!(
-                    mutations.iter().map(|m| m.key().as_encoded()),
-                    self.max_key_size,
-                    callback
-                );
+                let keys: Vec<&Vec<u8>> = mutations.iter().map(|m| m.key().as_encoded()).collect();
+                Self::check_api_version(
+                    self.api_version,
+                    cmd.ctx().api_version,
+                    CommandKind::prewrite,
+                    &keys,
+                )?;
+                check_key_size!(keys, self.max_key_size, callback);
             }
             Command::PrewritePessimistic(PrewritePessimistic { mutations, .. }) => {
-                check_key_size!(
-                    mutations.iter().map(|(m, _)| m.key().as_encoded()),
-                    self.max_key_size,
-                    callback
-                );
+                let keys: Vec<&Vec<u8>> = mutations
+                    .iter()
+                    .map(|(m, _)| m.key().as_encoded())
+                    .collect();
+                Self::check_api_version(
+                    self.api_version,
+                    cmd.ctx().api_version,
+                    CommandKind::prewrite,
+                    &keys,
+                )?;
+                check_key_size!(keys, self.max_key_size, callback);
             }
             Command::AcquirePessimisticLock(AcquirePessimisticLock { keys, .. }) => {
-                check_key_size!(
-                    keys.iter().map(|k| k.0.as_encoded()),
-                    self.max_key_size,
-                    callback
-                );
+                let keys: Vec<&Vec<u8>> = keys.iter().map(|k| k.0.as_encoded()).collect();
+                Self::check_api_version(
+                    self.api_version,
+                    cmd.ctx().api_version,
+                    CommandKind::prewrite,
+                    &keys,
+                )?;
+                check_key_size!(keys, self.max_key_size, callback);
             }
             _ => {}
         }

@@ -1853,6 +1853,16 @@ fn test_api_version() {
             );
             expect_err(res.get_errors());
 
+            // Prewrite Pessimistic
+            ts += 1;
+            let mut mutation = Mutation::default();
+            mutation.set_op(Op::Put);
+            mutation.set_key(k.clone());
+            mutation.set_value(v.clone());
+            let res =
+                try_kv_prewrite_pessimistic(&client, ctx.clone(), vec![mutation], k.clone(), ts);
+            expect_err(res.get_errors());
+
             // Pessimistic Lock
             ts += 1;
             let resp = kv_pessimistic_lock(&client, ctx.clone(), vec![k.clone()], ts, ts, false);
@@ -1861,53 +1871,82 @@ fn test_api_version() {
             assert!(!resp.errors[0].has_locked(), "{:?}", resp.get_errors());
             expect_err(resp.get_errors());
         } else {
-            // Prewrite
-            ts += 1;
-            let prewrite_start_version = ts;
-            let mut mutation = Mutation::default();
-            mutation.set_op(Op::Put);
-            mutation.set_key(k.clone());
-            mutation.set_value(v.clone());
-            must_kv_prewrite(
-                &client,
-                ctx.clone(),
-                vec![mutation],
-                k.clone(),
-                prewrite_start_version,
-            );
+            {
+                // Prewrite
+                ts += 1;
+                let prewrite_start_version = ts;
+                let mut mutation = Mutation::default();
+                mutation.set_op(Op::Put);
+                mutation.set_key(k.clone());
+                mutation.set_value(v.clone());
+                must_kv_prewrite(
+                    &client,
+                    ctx.clone(),
+                    vec![mutation],
+                    k.clone(),
+                    prewrite_start_version,
+                );
 
-            // Pessimistic Lock
-            ts += 1;
-            let resp = kv_pessimistic_lock(&client, ctx.clone(), vec![k.clone()], ts, ts, false);
-            assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
-            assert_eq!(resp.errors.len(), 1);
-            assert!(resp.errors[0].has_locked());
-            assert!(resp.values.is_empty());
-            assert!(resp.not_founds.is_empty());
+                // Pessimistic Lock
+                ts += 1;
+                let lock_ts = ts;
+                let resp = kv_pessimistic_lock(
+                    &client,
+                    ctx.clone(),
+                    vec![k.clone()],
+                    lock_ts,
+                    lock_ts,
+                    false,
+                );
+                assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+                assert_eq!(resp.errors.len(), 1);
+                assert!(resp.errors[0].has_locked());
+                assert!(resp.values.is_empty());
+                assert!(resp.not_founds.is_empty());
 
-            // Commit
-            ts += 1;
-            let commit_version = ts;
-            must_kv_commit(
-                &client,
-                ctx.clone(),
-                vec![k.clone()],
-                prewrite_start_version,
-                commit_version,
-                commit_version,
-            );
+                // Commit
+                ts += 1;
+                let commit_version = ts;
+                must_kv_commit(
+                    &client,
+                    ctx.clone(),
+                    vec![k.clone()],
+                    prewrite_start_version,
+                    commit_version,
+                    commit_version,
+                );
 
-            // Get
-            ts += 1;
-            let get_version = ts;
-            let mut get_req = GetRequest::default();
-            get_req.set_context(ctx.clone());
-            get_req.key = k.clone();
-            get_req.version = get_version;
-            let get_resp = client.kv_get(&get_req).unwrap();
-            assert!(!get_resp.has_region_error());
-            assert!(!get_resp.has_error());
-            assert!(get_resp.get_exec_details_v2().has_time_detail());
+                // Get
+                ts += 1;
+                let get_version = ts;
+                let mut get_req = GetRequest::default();
+                get_req.set_context(ctx.clone());
+                get_req.key = k.clone();
+                get_req.version = get_version;
+                let get_resp = client.kv_get(&get_req).unwrap();
+                assert!(!get_resp.has_region_error());
+                assert!(!get_resp.has_error());
+                assert!(get_resp.get_exec_details_v2().has_time_detail());
+            }
+            {
+                // Pessimistic Lock
+                ts += 1;
+                let lock_ts = ts;
+                let _resp = must_kv_pessimistic_lock(&client, ctx.clone(), k.clone(), lock_ts);
+
+                // Prewrite Pessimistic
+                let mut mutation = Mutation::default();
+                mutation.set_op(Op::Put);
+                mutation.set_key(k.clone());
+                mutation.set_value(v.clone());
+                must_kv_prewrite_pessimistic(
+                    &client,
+                    ctx.clone(),
+                    vec![mutation],
+                    k.clone(),
+                    lock_ts,
+                );
+            }
         }
     }
 }
