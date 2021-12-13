@@ -437,6 +437,8 @@ impl ThreadInfoStatistics {
                 }
             }
         }
+
+        self.tid_names.retain(|&k, _| tids.contains(&k));
     }
 
     pub fn get_cpu_usages(&self) -> HashMap<String, u64> {
