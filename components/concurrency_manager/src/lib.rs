@@ -50,6 +50,7 @@ impl ConcurrencyManager {
     /// Updates max_ts with the given new_ts. It has no effect if
     /// max_ts >= new_ts or new_ts is TimeStamp::max().
     pub fn update_max_ts(&self, new_ts: TimeStamp) {
+        std::thread::sleep(std::time::Duration::from_secs(3));
         if new_ts != TimeStamp::max() {
             self.max_ts.fetch_max(new_ts.into_inner(), Ordering::SeqCst);
         }
