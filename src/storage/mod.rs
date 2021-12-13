@@ -49,7 +49,6 @@ pub mod txn;
 mod read_pool;
 mod types;
 
-use self::kv::SnapContext;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
@@ -62,6 +61,7 @@ pub use self::{
     txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
+use self::{kv::SnapContext, types::MutationRequest};
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
@@ -421,16 +421,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             }
         }
         Ok(())
-    }
-
-    /// Check api version for external use.
-    pub fn check_api_version_ext(
-        &self,
-        req_api_version: ApiVersion,
-        cmd: CommandKind,
-        keys: impl IntoIterator<Item = impl AsRef<[u8]>>,
-    ) -> Result<()> {
-        Self::check_api_version(self.api_version, req_api_version, cmd, keys)
     }
 
     /// Get value of the given key from a snapshot.
@@ -1150,6 +1140,25 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
         }
+    }
+
+    // The entry point of the storage scheduler for transaction requests.
+    pub fn sched_txn_mutation_request<
+        T: StorageCallbackType,
+        R: std::convert::Into<TypedCommand<T>> + MutationRequest,
+    >(
+        &self,
+        req: R,
+        callback: Callback<T>,
+    ) -> Result<()> {
+        let (kind, ctx, mutations) = req.get_request_info();
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            kind,
+            mutations.iter().map(|m| m.get_key()),
+        )?;
+        self.sched_txn_command(req.into(), callback)
     }
 
     // The entry point of the storage scheduler. Not only transaction commands need to access keys serially.
