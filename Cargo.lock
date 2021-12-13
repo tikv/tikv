@@ -4618,7 +4618,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "4.0.15"
+version = "4.0.16"
 dependencies = [
  "async-stream",
  "async-trait",
