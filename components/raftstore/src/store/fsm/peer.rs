@@ -932,6 +932,7 @@ where
             PeerTicks::CHECK_MERGE => self.on_check_merge(),
             PeerTicks::CHECK_PEER_STALE_STATE => self.on_check_peer_stale_state_tick(),
             PeerTicks::ENTRY_CACHE_EVICT => self.on_entry_cache_evict_tick(),
+            PeerTicks::RENEW_LEASE => self.on_renew_lease_tick(),
             _ => unreachable!(),
         }
     }
@@ -1220,6 +1221,7 @@ where
                 self.fsm.peer.heartbeat_pd(self.ctx);
                 self.register_pd_heartbeat_tick();
                 self.register_raft_gc_log_tick();
+                self.register_renew_lease_tick();
             }
         }
     }
@@ -1390,7 +1392,6 @@ where
             !self.fsm.peer.check_after_tick(self.fsm.hibernate_state.group_state(), res.unwrap()) ||
             (self.fsm.peer.is_leader() && !self.all_agree_to_hibernate())
         {
-            self.try_renew_leader_lease();
             self.register_raft_base_tick();
             // We need pd heartbeat tick to collect down peers and pending peers.
             self.register_pd_heartbeat_tick();
@@ -1399,7 +1400,6 @@ where
 
         // Keep ticking if there are disk full peers for the Region.
         if !self.fsm.peer.disk_full_peers.is_empty() {
-            self.try_renew_leader_lease();
             self.register_raft_base_tick();
             return;
         }
@@ -1486,22 +1486,21 @@ where
         }
 
         let current_time = *self.ctx.current_time.get_or_insert_with(monotonic_raw_now);
-        let next_heartbeat = current_time
-            + self.ctx.cfg.raft_base_tick_interval() * self.ctx.cfg.raft_heartbeat_ticks as i32;
+        let renew_bound = current_time + self.ctx.cfg.raft_store_max_leader_lease() / 4;
         // We need to propose a read index request if current lease can't cover till next tick
-        let need_propose = match self.fsm.peer.leader_lease.inspect(Some(next_heartbeat)) {
+        let need_propose = match self.fsm.peer.leader_lease.inspect(Some(renew_bound)) {
             LeaseState::Expired => {
                 let max_lease = self.ctx.cfg.raft_store_max_leader_lease();
                 self.fsm.peer.pending_reads.back().map_or(true, |read| {
                     // If there is any read index whose lease can cover till next heartbeat
                     // then we don't need to propose a new one
-                    read.propose_time + max_lease < next_heartbeat
+                    read.propose_time + max_lease < renew_bound
                 }) || self.fsm.peer.proposals.back().map_or(true, |proposal| {
                     // If there is any write whose lease can cover till next heartbeat
                     // then we don't need to propose a new one
-                    proposal.propose_time.map_or(true, |propose_time| {
-                        propose_time + max_lease < next_heartbeat
-                    })
+                    proposal
+                        .propose_time
+                        .map_or(true, |propose_time| propose_time + max_lease < renew_bound)
                 })
             }
             _ => false,
@@ -1791,6 +1790,7 @@ where
         self.fsm.missing_ticks = 0;
         self.fsm.peer.should_wake_up = false;
         self.register_raft_base_tick();
+        self.register_renew_lease_tick();
     }
 
     // return false means the message is invalid, and can be ignored.
@@ -4084,6 +4084,18 @@ where
             && !self.fsm.peer.get_store().cache_is_empty()
         {
             self.register_entry_cache_evict_tick();
+        }
+    }
+
+    fn register_renew_lease_tick(&mut self) {
+        self.schedule_tick(PeerTicks::RENEW_LEASE)
+    }
+
+    fn on_renew_lease_tick(&mut self) {
+        if self.fsm.hibernate_state.group_state() != GroupState::Idle || !self.fsm.peer.is_leader()
+        {
+            self.try_renew_leader_lease();
+            self.register_renew_lease_tick();
         }
     }
 
