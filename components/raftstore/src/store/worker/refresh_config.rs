@@ -21,7 +21,6 @@ where
     C: Fsm,
     H: HandlerBuilder<N, C>,
 {
-    #[allow(dead_code)]
     pub fn new(router: BatchRouter<N, C>, state: PoolState<N, C, H>) -> Self {
         PoolController { router, state }
     }
@@ -106,14 +105,12 @@ where
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum ThreadPool {
     Store,
     Apply,
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum Task {
     ScalePool(ThreadPool, usize),
 }
@@ -150,7 +147,6 @@ where
     AH: HandlerBuilder<ApplyFsm<EK>, ControlFsm>,
     RH: HandlerBuilder<PeerFsm<EK, ER>, StoreFsm<EK>>,
 {
-    #[allow(dead_code)]
     pub fn new(
         apply_router: BatchRouter<ApplyFsm<EK>, ControlFsm>,
         raft_router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>,
