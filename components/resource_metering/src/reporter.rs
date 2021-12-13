@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::collector::{register_collector, CollectorHandle, CollectorImpl};
+use crate::collector::{CollectorHandle, CollectorImpl, CollectorRegHandle};
 use crate::{Client, Config, RawRecords, Records};
 
 use std::fmt::{self, Display, Formatter};
@@ -24,6 +24,7 @@ pub struct Reporter<C> {
     client: C,
     config: Config,
     scheduler: Scheduler<Task>,
+    collector_reg_handle: CollectorRegHandle,
     collector: Option<CollectorHandle>,
     records: Records,
 }
@@ -63,15 +64,21 @@ impl<C> Reporter<C>
 where
     C: Client + Send,
 {
-    pub fn new(client: C, config: Config, scheduler: Scheduler<Task>) -> Self {
-        let collector = config
-            .should_report()
-            .then(|| register_collector(Box::new(CollectorImpl::new(scheduler.clone()))));
+    pub fn new(
+        client: C,
+        config: Config,
+        collector_reg_handle: CollectorRegHandle,
+        scheduler: Scheduler<Task>,
+    ) -> Self {
+        let collector = config.should_report().then(|| {
+            collector_reg_handle.register(Box::new(CollectorImpl::new(scheduler.clone())))
+        });
         Self {
             client,
             config,
             scheduler,
             collector,
+            collector_reg_handle,
             records: Records::default(),
         }
     }
@@ -87,9 +94,10 @@ where
             self.reset();
         }
         if self.collector.is_none() {
-            self.collector = Some(register_collector(Box::new(CollectorImpl::new(
-                self.scheduler.clone(),
-            ))));
+            self.collector = Some(
+                self.collector_reg_handle
+                    .register(Box::new(CollectorImpl::new(self.scheduler.clone()))),
+            );
         }
     }
 
@@ -139,7 +147,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{RawRecord, ResourceMeteringTag, TagInfos};
+    use crate::{RawRecord, TagInfos};
     use collections::HashMap;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::SeqCst;
@@ -160,7 +168,13 @@ mod tests {
     #[test]
     fn test_reporter() {
         let scheduler = LazyWorker::new("test-worker").scheduler();
-        let mut r = Reporter::new(MockClient, Config::default(), scheduler);
+        let collector_reg_handle = CollectorRegHandle::new_for_test();
+        let mut r = Reporter::new(
+            MockClient,
+            Config::default(),
+            collector_reg_handle,
+            scheduler,
+        );
         r.run(Task::ConfigChange(Config {
             enabled: false,
             receiver_address: "abc".to_string(),
@@ -171,14 +185,12 @@ mod tests {
         assert_eq!(r.get_interval(), Duration::from_secs(120));
         let mut records = HashMap::default();
         records.insert(
-            ResourceMeteringTag {
-                infos: Arc::new(TagInfos {
-                    store_id: 0,
-                    region_id: 0,
-                    peer_id: 0,
-                    extra_attachment: b"12345".to_vec(),
-                }),
-            },
+            Arc::new(TagInfos {
+                store_id: 0,
+                region_id: 0,
+                peer_id: 0,
+                extra_attachment: b"12345".to_vec(),
+            }),
             RawRecord { cpu_time: 1 },
         );
         r.run(Task::Records(Arc::new(RawRecords {

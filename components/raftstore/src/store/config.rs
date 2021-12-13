@@ -5,6 +5,7 @@ use std::time::Duration;
 use std::u64;
 use time::Duration as TimeDuration;
 
+use super::worker::{RaftStoreThreadPool, RefreshConfigTask};
 use crate::{coprocessor, Result};
 use batch_system::Config as BatchSystemConfig;
 use engine_traits::perf_level_serde;
@@ -15,7 +16,8 @@ use prometheus::register_gauge_vec;
 use serde::{Deserialize, Serialize};
 use serde_with::with_prefix;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
-use tikv_util::{box_err, info, warn};
+use tikv_util::worker::Scheduler;
+use tikv_util::{box_err, error, info, warn};
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
@@ -145,6 +147,12 @@ pub struct Config {
     #[online_config(hidden)]
     pub right_derive_when_split: bool,
 
+    /// This setting can only ensure conf remove will not be proposed by the peer
+    /// being removed. But it can't guarantee the remove is applied when the target
+    /// is not leader. That means we always need to check if it's working as expected
+    /// when a leader applies a self-remove conf change. Keep the configuration only
+    /// for convenient test.
+    #[cfg(any(test, feature = "testexport"))]
     pub allow_remove_leader: bool,
 
     /// Max log gap allowed to propose merge.
@@ -161,11 +169,11 @@ pub struct Config {
     /// Maximum size of every local read task batch.
     pub local_read_batch_size: u64,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     #[serde(flatten, with = "prefix_apply")]
     pub apply_batch_system: BatchSystemConfig,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     #[serde(flatten, with = "prefix_store")]
     pub store_batch_system: BatchSystemConfig,
 
@@ -292,6 +300,7 @@ impl Default for Config {
             report_region_flow_interval: ReadableDuration::minutes(1),
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             right_derive_when_split: true,
+            #[cfg(any(test, feature = "testexport"))]
             allow_remove_leader: false,
             merge_max_log_gap: 10,
             merge_check_tick_interval: ReadableDuration::secs(2),
@@ -336,6 +345,16 @@ impl Config {
 
     pub fn raft_heartbeat_interval(&self) -> Duration {
         self.raft_base_tick_interval.0 * self.raft_heartbeat_ticks as u32
+    }
+
+    #[cfg(any(test, feature = "testexport"))]
+    pub fn allow_remove_leader(&self) -> bool {
+        self.allow_remove_leader
+    }
+
+    #[cfg(not(any(test, feature = "testexport")))]
+    pub fn allow_remove_leader(&self) -> bool {
+        false
     }
 
     pub fn validate(&mut self) -> Result<()> {
@@ -654,9 +673,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["right_derive_when_split"])
             .set((self.right_derive_when_split as i32).into());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["allow_remove_leader"])
-            .set((self.allow_remove_leader as i32).into());
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["merge_max_log_gap"])
@@ -740,7 +756,19 @@ impl Config {
     }
 }
 
-pub struct RaftstoreConfigManager(pub Arc<VersionTrack<Config>>);
+pub struct RaftstoreConfigManager {
+    scheduler: Scheduler<RefreshConfigTask>,
+    config: Arc<VersionTrack<Config>>,
+}
+
+impl RaftstoreConfigManager {
+    pub fn new(
+        scheduler: Scheduler<RefreshConfigTask>,
+        config: Arc<VersionTrack<Config>>,
+    ) -> RaftstoreConfigManager {
+        RaftstoreConfigManager { scheduler, config }
+    }
+}
 
 impl ConfigManager for RaftstoreConfigManager {
     fn dispatch(
@@ -749,7 +777,30 @@ impl ConfigManager for RaftstoreConfigManager {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = change.clone();
-            self.0.update(move |cfg: &mut Config| cfg.update(change));
+            self.config
+                .update(move |cfg: &mut Config| cfg.update(change));
+        }
+        if let Some(ConfigValue::Module(raft_batch_system_change)) =
+            change.get("store_batch_system")
+        {
+            if let Some(pool_size) = raft_batch_system_change.get("pool_size") {
+                let scale_pool =
+                    RefreshConfigTask::ScalePool(RaftStoreThreadPool::Store, pool_size.into());
+                if let Err(e) = self.scheduler.schedule(scale_pool) {
+                    error!("raftstore configuration manager schedule scale raft pool work task failed"; "err"=> ?e);
+                }
+            }
+        }
+        if let Some(ConfigValue::Module(apply_batch_system_change)) =
+            change.get("apply_batch_system")
+        {
+            if let Some(pool_size) = apply_batch_system_change.get("pool_size") {
+                let scale_pool =
+                    RefreshConfigTask::ScalePool(RaftStoreThreadPool::Apply, pool_size.into());
+                if let Err(e) = self.scheduler.schedule(scale_pool) {
+                    error!("raftstore configuration manager schedule scale apply pool work task failed"; "err"=> ?e);
+                }
+            }
         }
         info!(
             "raftstore config changed";
@@ -757,14 +808,6 @@ impl ConfigManager for RaftstoreConfigManager {
         );
         Config::write_change_into_metrics(change);
         Ok(())
-    }
-}
-
-impl std::ops::Deref for RaftstoreConfigManager {
-    type Target = Arc<VersionTrack<Config>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 

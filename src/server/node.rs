@@ -28,7 +28,8 @@ use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
-use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
+use raftstore::store::{GlobalReplicationState, PdTask, RefreshConfigTask, SplitCheckTask};
+use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
@@ -46,6 +47,7 @@ pub fn create_raft_storage<S, EK, R: FlowStatsReporter>(
     dynamic_configs: StorageDynamicConfigs,
     flow_controller: Arc<FlowController>,
     reporter: R,
+    resource_tag_factory: ResourceTagFactory,
 ) -> Result<Storage<RaftKv<EK, S>, LockManager>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
@@ -60,6 +62,7 @@ where
         dynamic_configs,
         flow_controller,
         reporter,
+        resource_tag_factory,
     )?;
     Ok(store)
 }
@@ -175,6 +178,7 @@ where
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
+        collector_reg_handle: CollectorRegHandle,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -210,6 +214,7 @@ where
             split_check_scheduler,
             auto_split_controller,
             concurrency_manager,
+            collector_reg_handle,
         )?;
 
         Ok(())
@@ -218,6 +223,11 @@ where
     /// Gets the store id.
     pub fn id(&self) -> u64 {
         self.store.get_id()
+    }
+
+    /// Gets the Scheduler of RaftstoreConfigTask, it must be called after start.
+    pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
+        self.system.refresh_config_scheduler()
     }
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
@@ -446,6 +456,7 @@ where
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
+        collector_reg_handle: CollectorRegHandle,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -476,6 +487,7 @@ where
             auto_split_controller,
             self.state.clone(),
             concurrency_manager,
+            collector_reg_handle,
         )?;
         Ok(())
     }
