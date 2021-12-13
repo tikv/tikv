@@ -4094,9 +4094,10 @@ where
     fn on_renew_lease_tick(&mut self) {
         if self.fsm.hibernate_state.group_state() != GroupState::Idle || !self.fsm.peer.is_leader()
         {
-            self.try_renew_leader_lease();
-            self.register_renew_lease_tick();
+            return;
         }
+        self.try_renew_leader_lease();
+        self.register_renew_lease_tick();
     }
 
     fn register_split_region_check_tick(&mut self) {
