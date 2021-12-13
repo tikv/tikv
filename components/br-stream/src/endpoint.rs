@@ -1,6 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::{fmt, io::Write};
 
@@ -10,11 +9,11 @@ use tokio_stream::StreamExt;
 
 use crate::metadata::store::{EtcdStore, MetaStore};
 use crate::metadata::{MetadataClient, MetadataEvent, Task as MetaTask};
-use crate::router::{DataFileWithMeta, NewKv, Router, RouterInner};
+use crate::router::{ApplyEvent, Router};
 use crate::{errors::Result, observer::BackupStreamObserver};
-use kvproto::raft_cmdpb::{CmdType, Request};
+
 use online_config::ConfigChange;
-use raftstore::coprocessor::{Cmd, CmdBatch};
+use raftstore::coprocessor::CmdBatch;
 use tikv::config::BackupStreamConfig;
 use tikv_util::worker::{Runnable, Scheduler};
 use tikv_util::{debug, error, info};
@@ -54,7 +53,10 @@ impl Endpoint<EtcdStore> {
             }
         };
 
-        let range_router = Router::new(PathBuf::from(config.streaming_path), scheduler.clone());
+        let range_router = Router::new(
+            PathBuf::from(config.streaming_path.clone()),
+            scheduler.clone(),
+        );
 
         if cli.is_none() {
             // unable to connect to etcd
@@ -143,15 +145,16 @@ where
     }
 
     fn backup_batch(&self, batch: CmdBatch) {
-        let region_id = batch.region_id;
-        let kvs = NewKv::from_cmd_batch(batch, /* TODO */ 0);
+        let kvs = ApplyEvent::from_cmd_batch(batch, /* TODO */ 0);
         let router = self.range_router.clone();
         self.pool.spawn(async move {
             let mut router = router.lock().await;
             for kv in kvs {
                 // TODO build a error handle mechanism #error 6
-                if let Err(err) = router.on_event(kv).await {
-                    error!("backup stream failed in backup batch"; "error" => ?err);
+                if kv.should_record() {
+                    if let Err(err) = router.on_event(kv).await {
+                        error!("backup stream failed in backup batch"; "error" => ?err);
+                    }
                 }
             }
         });
@@ -183,12 +186,11 @@ where
     }
 
     pub async fn do_flush(router: Router, task: String) -> Result<()> {
-        let mut temp_files = {
+        let temp_files = {
             let mut router = router.lock().await;
             router.take_temporary_files(&task)?
         };
-        temp_files.flush().await?;
-        let meta = temp_files.generate_metadata()?;
+        let meta = temp_files.generate_metadata().await?;
         // TODO flush the files to external storage
         info!("flushing data to external storage"; "local_files" => ?meta);
         Ok(())

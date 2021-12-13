@@ -19,7 +19,7 @@ pub enum Error {
     #[error("I/O Error: {0}")]
     Io(#[from] IoError),
     #[error("Other Error: {0}")]
-    Other(#[from] Box<dyn StdError + Send + 'static>),
+    Other(#[from] Box<dyn StdError + Send + Sync + 'static>),
 }
 
 pub type Result<T> = StdResult<T, Error>;

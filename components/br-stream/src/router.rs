@@ -2,38 +2,32 @@
 use std::{
     collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex as StdMutex},
+    sync::Arc,
 };
 
 use crate::{endpoint::Task, errors::Error, metadata::store::EtcdStore};
 
 use super::errors::Result;
-use file_system::Sha256Reader;
-use kvproto::{
-    brpb::LogFile,
-    raft_cmdpb::{CmdType, RaftCmdRequest, Request},
-};
+use engine_traits::{CF_DEFAULT, CF_WRITE};
+
+use kvproto::{brpb::DataFileInfo, raft_cmdpb::CmdType};
 use openssl::hash::{Hasher, MessageDigest};
-use raftstore::coprocessor::{Cmd, CmdBatch};
+use raftstore::coprocessor::CmdBatch;
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
-use tikv::storage::kv::BTreeEngine;
-use tikv_util::{
-    box_err,
-    config::{ReadableSize, MIB},
-    worker::Scheduler,
-};
+
+use tikv_util::{box_err, config::MIB, worker::Scheduler};
 use tokio::sync::Mutex;
 use txn_types::{Key, TimeStamp};
 // TODO: maybe replace it with tokio fs.
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
-impl NewKv {
-    pub fn from_cmd_batch(mut cmd: CmdBatch, resolved_ts: u64) -> Vec<Self> {
+impl ApplyEvent {
+    pub fn from_cmd_batch(cmd: CmdBatch, resolved_ts: u64) -> Vec<Self> {
         let region_id = cmd.region_id;
         let mut result = vec![];
-        for req in cmd
+        for mut req in cmd
             .cmds
             .into_iter()
             .filter(|cmd| {
@@ -47,7 +41,7 @@ impl NewKv {
                     true
                 }
             })
-            .flat_map(|cmd| cmd.request.take_requests().into_iter())
+            .flat_map(|mut cmd| cmd.request.take_requests().into_iter())
         {
             let (key, value, cf) = match req.get_cmd_type() {
                 CmdType::Put => {
@@ -76,6 +70,20 @@ impl NewKv {
             })
         }
         result
+    }
+
+    /// Check whether the key is a meta key.
+    pub fn is_meta(&self) -> bool {
+        // Can we make things not looking so hacky?
+        self.key.starts_with(b"zm")
+    }
+
+    /// Check whether the key should be recorded.
+    pub fn should_record(&self) -> bool {
+        let cf_can_handle = self.cf == CF_DEFAULT || self.cf == CF_WRITE;
+        // should we handle prewrite here?
+        let cmd_can_handle = self.cmd_type == CmdType::Delete || self.cmd_type == CmdType::Put;
+        cf_can_handle && cmd_can_handle
     }
 }
 
@@ -124,7 +132,8 @@ impl std::fmt::Debug for RouterInner {
     }
 }
 
-pub struct NewKv {
+#[derive(Debug)]
+pub struct ApplyEvent {
     key: Vec<u8>,
     value: Vec<u8>,
     cf: String,
@@ -144,7 +153,11 @@ impl RouterInner {
             temp_file_size_limit: 128 * MIB,
         }
     }
-    // keep ranges in memory to filter kv events not in these ranges.
+
+    /// Register some ranges associated to some task.
+    /// The key should be ENCODED DATA KEY.
+    /// (i.e. encoded by `Key::from_raw(key).into_encoded()` and starts with 'z'.)
+    /// We keep ranges in memory to filter kv events not in these ranges.
     pub fn register_ranges(&mut self, task_name: &str, ranges: Vec<(Vec<u8>, Vec<u8>)>) {
         // TODO reigister ranges to filter kv event
         // register ranges has two main purpose.
@@ -185,13 +198,16 @@ impl RouterInner {
             )
     }
 
-    pub async fn on_event(&mut self, kv: NewKv) -> Result<()> {
+    pub async fn on_event(&mut self, kv: ApplyEvent) -> Result<()> {
         let prefix = &self.prefix;
         if let Some(task) = self.get_task_by_key(&kv.key) {
-            let inner_router = self
-                .temp_files_of_task
-                .entry(task.clone())
-                .or_insert_with(|| TemporaryFiles::new(prefix.join(&task)));
+            let inner_router = {
+                if !self.temp_files_of_task.contains_key(&task) {
+                    self.temp_files_of_task
+                        .insert(task.clone(), TemporaryFiles::new(prefix.join(&task)).await?);
+                }
+                self.temp_files_of_task.get_mut(&task).unwrap()
+            };
             let prev_size = inner_router.total_size();
             inner_router.on_event(kv).await?;
 
@@ -201,7 +217,10 @@ impl RouterInner {
             if prev_size < self.temp_file_size_limit
                 && inner_router.total_size() > self.temp_file_size_limit
             {
-                self.scheduler.schedule(Task::Flush(task));
+                // TODO: maybe delay the schedule when failure? (Why the scheduler doesn't support blocking send...)
+                self.scheduler
+                    .schedule(Task::Flush(task))
+                    .expect("failed to schedule");
             }
         }
         Ok(())
@@ -215,56 +234,98 @@ impl RouterInner {
             |data| Ok(data),
         )
     }
+}
 
-    pub fn flush_task(&mut self, task: &str) -> Result<Vec<DataFileWithMeta>> {
-        let collector = self.take_temporary_files(task)?;
-        Ok(collector.generate_metadata()?)
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+struct TempFileKey {
+    table_id: i64,
+    region_id: u64,
+    cf: String,
+    cmd_type: CmdType,
+}
+
+impl TempFileKey {
+    fn of(kv: &ApplyEvent) -> Self {
+        // When we cannot extract the table key, use 0 for the table key(perhaps we insert meta key here.).
+        let table_id = decode_table_id(&kv.key).unwrap_or(0);
+        Self {
+            table_id,
+            region_id: kv.region_id,
+            cf: kv.cf.clone(),
+            cmd_type: kv.cmd_type,
+        }
+    }
+
+    fn temp_file_name(&self) -> String {
+        format!(
+            "{:08}_{:08}_{}_{:?}.temp.log",
+            self.table_id, self.region_id, self.cf, self.cmd_type
+        )
     }
 }
 
 #[derive(Default, Debug)]
-struct TemporaryFiles {
+pub struct TemporaryFiles {
     temp_dir: PathBuf,
-    // (table_id, region_id)
-    files: HashMap<(i64, u64), DataFile>,
+    files: HashMap<TempFileKey, DataFile>,
+    meta: Option<DataFile>,
+    min_resolved_ts: TimeStamp,
     total_size: usize,
 }
 
 impl TemporaryFiles {
-    pub fn new(temp_dir: PathBuf) -> Self {
-        Self {
+    pub async fn new(temp_dir: PathBuf) -> Result<Self> {
+        tokio::fs::create_dir_all(&temp_dir).await?;
+        Ok(Self {
             temp_dir,
+            min_resolved_ts: TimeStamp::max(),
             ..Default::default()
-        }
+        })
     }
 
-    // TODO: make a file-level lock for git rid of the &mut.
-    pub async fn on_event(&mut self, kv: NewKv) -> Result<()> {
-        let table_id = decode_table_id(&kv.key).expect("TableRouter: Not table key");
-        if !self.files.contains_key(&(table_id, kv.region_id)) {
-            let path = self
-                .temp_dir
-                .join(format!("{:08}_{:08}.temp.log", table_id, kv.region_id));
+    async fn on_table_data(&mut self, kv: ApplyEvent) -> Result<()> {
+        let key = TempFileKey::of(&kv);
+        if !self.files.contains_key(&key) {
+            let path = self.temp_dir.join(key.temp_file_name());
             let data_file = DataFile::new(path, kv.region_id).await?;
-            self.files.insert((table_id, kv.region_id), data_file);
+            self.files.insert(key.clone(), data_file);
         }
-        self.total_size += self
-            .files
-            .get_mut(&(table_id, kv.region_id))
-            .unwrap()
-            .on_event(kv)
-            .await?;
+        self.total_size += self.files.get_mut(&key).unwrap().on_event(kv).await?;
         Ok(())
     }
 
-    /// Return the name with path prefix.
+    async fn on_meta_data(&mut self, kv: ApplyEvent) -> Result<()> {
+        if self.meta.is_none() {
+            let path = self.temp_dir.join(format!(
+                "meta_{:08}_{}_{:?}.temp.log",
+                kv.region_id, kv.cf, kv.cmd_type
+            ));
+            self.meta = Some(DataFile::new(path, kv.region_id).await?);
+        }
+        self.meta.as_mut().unwrap().on_event(kv).await?;
+        Ok(())
+    }
+
+    // TODO: make a file-level lock for getting rid of the &mut.
+    pub async fn on_event(&mut self, kv: ApplyEvent) -> Result<()> {
+        if kv.is_meta() {
+            self.on_meta_data(kv).await
+        } else {
+            self.on_table_data(kv).await
+        }
+    }
+
     fn path_to_log_file(table_id: i64, min_ts: i64) -> String {
         format!(
-            "/v1/t{:12}/{:12}-{}.log",
+            "/v1/t{:012}/{:012}-{}.log",
             table_id,
             min_ts,
             uuid::Uuid::new_v4()
         )
+    }
+
+    fn path_to_schema_file(min_ts: i64) -> String {
+        format!("/v1/m/{:012}-{}.log", min_ts, uuid::Uuid::new_v4())
     }
 
     pub fn total_size(&self) -> u64 {
@@ -272,22 +333,34 @@ impl TemporaryFiles {
     }
 
     /// Flush all temporary files.
-    pub async fn flush(&mut self) -> Result<()> {
-        futures::future::join_all(self.files.values_mut().map(|f| f.inner.flush()))
-            .await
-            .into_iter()
-            .map(|r| r.map_err(Error::from))
-            .fold(Ok(()), Result::and)
+    async fn flush(&mut self) -> Result<()> {
+        futures::future::join_all(
+            self.files
+                .values_mut()
+                .chain(self.meta.iter_mut())
+                .map(|f| f.inner.flush()),
+        )
+        .await
+        .into_iter()
+        .map(|r| r.map_err(Error::from))
+        .fold(Ok(()), Result::and)
     }
 
-    pub fn generate_metadata(self) -> Result<Vec<DataFileWithMeta>> {
+    pub async fn generate_metadata(mut self) -> Result<Vec<DataFileWithMeta>> {
+        self.flush().await?;
         let mut result = Vec::with_capacity(self.files.len());
-        for ((table_id, region_id), data_file) in self.files.into_iter() {
+        for (TempFileKey { table_id, .. }, data_file) in self.files.into_iter() {
             let mut file_meta = data_file.generate_metadata()?;
             file_meta
                 .meta
                 .set_path(Self::path_to_log_file(table_id, file_meta.meta.min_ts));
             result.push(file_meta)
+        }
+        if let Some(f) = self.meta {
+            let mut schema_meta = f.generate_metadata()?;
+            schema_meta
+                .meta
+                .set_path(Self::path_to_schema_file(schema_meta.meta.min_ts));
         }
         Ok(result)
     }
@@ -308,14 +381,14 @@ struct DataFile {
 
 #[derive(Debug)]
 pub struct DataFileWithMeta {
-    pub meta: LogFile,
+    pub meta: DataFileInfo,
     pub local_path: PathBuf,
 }
 
 impl DataFile {
     async fn new(local_path: impl AsRef<Path>, region_id: u64) -> Result<Self> {
         let sha256 = Hasher::new(MessageDigest::sha256())
-            .map_err(|err| box_err!("openssl hasher failed to init: {}", err).into());
+            .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?;
         Ok(Self {
             region: region_id,
             min_ts: TimeStamp::max(),
@@ -331,7 +404,7 @@ impl DataFile {
     }
 
     /// Add a new KV pair to the file, returning its size.
-    async fn on_event(&mut self, mut kv: NewKv) -> Result<usize> {
+    async fn on_event(&mut self, mut kv: ApplyEvent) -> Result<usize> {
         let encoded = super::endpoint::Endpoint::<EtcdStore>::encode_event(&kv.key, &kv.value);
         let size = encoded.len();
         let key = Key::from_encoded(std::mem::take(&mut kv.key));
@@ -342,16 +415,20 @@ impl DataFile {
         self.inner.write_all(encoded.as_slice()).await?;
         self.sha256
             .update(encoded.as_slice())
-            .map_err(|err| box_err!("openssl hasher failed to update: {}", err).into())?;
+            .map_err(|err| Error::Other(box_err!("openssl hasher failed to update: {}", err)))?;
         self.update_key_bound(key.into_encoded());
         Ok(size)
     }
 
     fn update_key_bound(&mut self, key: Vec<u8>) {
+        // if there is nothing in file, fill the start_key and end_key by current key.
         if self.start_key.is_empty() && self.end_key.is_empty() {
             self.start_key = key.clone();
             self.end_key = key;
+            return;
         }
+
+        // expand the start_key and end_key if key out-of-range joined.
         if self.start_key > key {
             self.start_key = key;
         } else if self.end_key < key {
@@ -360,12 +437,14 @@ impl DataFile {
     }
 
     fn generate_metadata(mut self) -> Result<DataFileWithMeta> {
-        let mut meta = LogFile::new();
+        let mut meta = DataFileInfo::new();
         meta.set_sha_256(
             self.sha256
                 .finish()
                 .map(|bytes| bytes.to_vec())
-                .map_err(|err| box_err!("openssl hasher failed to finish: {}", err).into())?,
+                .map_err(|err| {
+                    Error::Other(box_err!("openssl hasher failed to finish: {}", err))
+                })?,
         );
         meta.set_number_of_entries(self.number_of_entries as _);
         meta.set_max_ts(self.max_ts.into_inner() as _);
@@ -403,9 +482,69 @@ struct TaskRange {
 
 #[cfg(test)]
 mod tests {
-    use tikv_util::worker::dummy_scheduler;
+    use std::time::Duration;
+
+    use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
 
     use super::*;
+
+    struct KvEventsBuilder {
+        region_id: u64,
+        region_resolved_ts: u64,
+        events: Vec<ApplyEvent>,
+    }
+
+    impl KvEventsBuilder {
+        fn new(region_id: u64, region_resolved_ts: u64) -> Self {
+            Self {
+                region_id,
+                region_resolved_ts,
+                events: vec![],
+            }
+        }
+
+        fn wrap_key(mut v: Vec<u8>) -> Vec<u8> {
+            v.insert(0, b'z');
+            let key = Key::from_raw(v.as_slice());
+            key.append_ts(TimeStamp::new(TimeStamp::physical_now()))
+                .into_encoded()
+        }
+
+        fn put_event(&self, cf: &'static str, key: Vec<u8>, value: Vec<u8>) -> ApplyEvent {
+            ApplyEvent {
+                key: Self::wrap_key(key),
+                value,
+                cf: cf.to_owned(),
+                region_id: self.region_id,
+                region_resolved_ts: self.region_resolved_ts,
+                cmd_type: CmdType::Put,
+            }
+        }
+
+        fn delete_event(&self, cf: &'static str, key: Vec<u8>) -> ApplyEvent {
+            ApplyEvent {
+                key: Self::wrap_key(key),
+                value: vec![],
+                cf: cf.to_owned(),
+                region_id: self.region_id,
+                region_resolved_ts: self.region_resolved_ts,
+                cmd_type: CmdType::Delete,
+            }
+        }
+
+        fn put(&mut self, cf: &'static str, key: &[u8], value: &[u8]) {
+            self.events
+                .push(self.put_event(cf, key.to_vec(), value.to_vec()));
+        }
+
+        fn delete(&mut self, cf: &'static str, key: &[u8]) {
+            self.events.push(self.delete_event(cf, key.to_owned()));
+        }
+
+        fn flush_events(&mut self) -> Vec<ApplyEvent> {
+            std::mem::take(&mut self.events)
+        }
+    }
 
     #[test]
     fn test_register() {
@@ -424,5 +563,47 @@ mod tests {
         assert_eq!(router.get_task_by_key(&[2, 3, 5]), None);
         assert_eq!(router.get_task_by_key(&[2, 4]), Some("t2".to_string()),);
         assert_eq!(router.get_task_by_key(&[4, 4]), None,)
+    }
+
+    fn collect_recv(mut rx: ReceiverWrapper<Task>) -> Vec<Task> {
+        let mut result = vec![];
+        while let Ok(Some(task)) = rx.recv_timeout(Duration::from_secs(0)) {
+            result.push(task);
+        }
+        result
+    }
+
+    #[tokio::test]
+    async fn test_basic_file() -> Result<()> {
+        let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&tmp).await?;
+        let (tx, rx) = dummy_scheduler();
+        let router = Router::new(tmp.clone(), tx);
+        let mut router = router.lock().await;
+        router.register_ranges("dummy", vec![(b"zt1".to_vec(), b"zt2".to_vec())]);
+        let now = TimeStamp::physical_now();
+        let mut region1 = KvEventsBuilder::new(1, now);
+        region1.put(CF_DEFAULT, b"t1_hello", b"world");
+        region1.put(CF_WRITE, b"t1_hello", b"this isn't a write record :3");
+        region1.put(CF_WRITE, b"t1_bonjour", b"this isn't a write record :3");
+        region1.put(CF_WRITE, b"t1_nihao", b"this isn't a write record :3");
+        region1.put(CF_WRITE, b"t2_hello", b"this isn't a write record :3");
+        region1.put(CF_WRITE, b"t1_hello", b"still isn't a write record :3");
+        region1.delete(CF_DEFAULT, b"t1_hello");
+        let events = region1.flush_events();
+        println!("{:?}", events);
+        for event in events {
+            router.on_event(event).await?;
+        }
+        println!("{:?}", router);
+        let files = router.take_temporary_files("dummy")?;
+        let meta = files.generate_metadata().await?;
+        println!("{:?}", meta);
+        drop(router);
+        println!("{:?}", collect_recv(rx));
+        for files in std::fs::read_dir(tmp.clone())? {
+            println!("{}", files?.path().display());
+        }
+        Ok(())
     }
 }

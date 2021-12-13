@@ -59,8 +59,6 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
         if cmd_batches.is_empty() {
             return;
         }
-        let mut region = Region::default();
-        region.mut_peers().push(Peer::default());
         if let Err(e) = self.scheduler.schedule(Task::BatchEvent(cmd_batches)) {
             warn!("backup stream schedule task failed"; "error" => ?e);
         }
