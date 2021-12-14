@@ -32,7 +32,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
 
-    let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
+    let mutation = Mutation::make_put(Key::from_raw(key), value.to_vec());
     let txn_kind = if for_update_ts.is_zero() {
         TransactionKind::Optimistic(false)
     } else {
@@ -256,9 +256,12 @@ fn must_prewrite_put_err_impl<E: Engine>(
     key: &[u8],
     value: &[u8],
     pk: &[u8],
+    secondary_keys: &Option<Vec<Vec<u8>>>,
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
     is_pessimistic_lock: bool,
+    max_commit_ts: impl Into<TimeStamp>,
+    is_retry_request: bool,
 ) -> Error {
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let for_update_ts = for_update_ts.into();
@@ -266,12 +269,20 @@ fn must_prewrite_put_err_impl<E: Engine>(
     let ts = ts.into();
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
-    let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
+    let mutation = Mutation::make_put(Key::from_raw(key), value.to_vec());
+    let commit_kind = if secondary_keys.is_some() {
+        CommitKind::Async(max_commit_ts.into())
+    } else {
+        CommitKind::TwoPc
+    };
+    let mut props = default_txn_props(ts, pk, for_update_ts);
+    props.is_retry_request = is_retry_request;
+    props.commit_kind = commit_kind;
 
     prewrite(
         &mut txn,
         &mut reader,
-        &default_txn_props(ts, pk, for_update_ts),
+        &props,
         mutation,
         &None,
         is_pessimistic_lock,
@@ -286,7 +297,18 @@ pub fn must_prewrite_put_err<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
 ) -> Error {
-    must_prewrite_put_err_impl(engine, key, value, pk, ts, TimeStamp::zero(), false)
+    must_prewrite_put_err_impl(
+        engine,
+        key,
+        value,
+        pk,
+        &None,
+        ts,
+        TimeStamp::zero(),
+        false,
+        0,
+        false,
+    )
 }
 
 pub fn must_pessimistic_prewrite_put_err<E: Engine>(
@@ -303,9 +325,37 @@ pub fn must_pessimistic_prewrite_put_err<E: Engine>(
         key,
         value,
         pk,
+        &None,
         ts,
         for_update_ts,
         is_pessimistic_lock,
+        0,
+        false,
+    )
+}
+
+pub fn must_retry_pessimistic_prewrite_put_err<E: Engine>(
+    engine: &E,
+    key: &[u8],
+    value: &[u8],
+    pk: &[u8],
+    secondary_keys: &Option<Vec<Vec<u8>>>,
+    ts: impl Into<TimeStamp>,
+    for_update_ts: impl Into<TimeStamp>,
+    is_pessimistic_lock: bool,
+    max_commit_ts: impl Into<TimeStamp>,
+) -> Error {
+    must_prewrite_put_err_impl(
+        engine,
+        key,
+        value,
+        pk,
+        secondary_keys,
+        ts,
+        for_update_ts,
+        is_pessimistic_lock,
+        max_commit_ts,
+        true,
     )
 }
 
@@ -324,7 +374,7 @@ fn must_prewrite_delete_impl<E: Engine>(
     let ts = ts.into();
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
-    let mutation = Mutation::Delete(Key::from_raw(key));
+    let mutation = Mutation::make_delete(Key::from_raw(key));
 
     prewrite(
         &mut txn,
@@ -377,7 +427,7 @@ fn must_prewrite_lock_impl<E: Engine>(
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
 
-    let mutation = Mutation::Lock(Key::from_raw(key));
+    let mutation = Mutation::make_lock(Key::from_raw(key));
     prewrite(
         &mut txn,
         &mut reader,
@@ -414,7 +464,7 @@ pub fn must_prewrite_lock_err<E: Engine>(
             &mut txn,
             &mut reader,
             &default_txn_props(ts, pk, TimeStamp::zero()),
-            Mutation::Lock(Key::from_raw(key)),
+            Mutation::make_lock(Key::from_raw(key)),
             &None,
             false,
         )

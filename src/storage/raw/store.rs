@@ -1,14 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use super::ttl::TTLSnapshot;
+use super::encoded::RawEncodeSnapshot;
 
 use crate::storage::kv::{Cursor, Iterator, ScanMode, Snapshot};
 use crate::storage::Statistics;
 use crate::storage::{Error, Result};
 
 use engine_traits::{CfName, IterOptions, CF_DEFAULT, DATA_KEY_PREFIX_LEN};
-use kvproto::kvrpcpb::KeyRange;
+use kvproto::kvrpcpb::{ApiVersion, KeyRange};
 use std::time::Duration;
 use tikv_util::time::Instant;
 use txn_types::{Key, KvPair};
@@ -19,15 +19,18 @@ const MAX_BATCH_SIZE: usize = 1024;
 
 pub enum RawStore<S: Snapshot> {
     Vanilla(RawStoreInner<S>),
-    TTL(RawStoreInner<TTLSnapshot<S>>),
+    Encoded(RawStoreInner<RawEncodeSnapshot<S>>),
 }
 
 impl<'a, S: Snapshot> RawStore<S> {
-    pub fn new(snapshot: S, enable_ttl: bool) -> Self {
-        if enable_ttl {
-            RawStore::TTL(RawStoreInner::new(TTLSnapshot::from(snapshot)))
-        } else {
+    pub fn new(snapshot: S, api_version: ApiVersion) -> Self {
+        if api_version == ApiVersion::V1 {
             RawStore::Vanilla(RawStoreInner::new(snapshot))
+        } else {
+            RawStore::Encoded(RawStoreInner::new(RawEncodeSnapshot::from_snapshot(
+                snapshot,
+                api_version,
+            )))
         }
     }
 
@@ -39,7 +42,7 @@ impl<'a, S: Snapshot> RawStore<S> {
     ) -> Result<Option<Vec<u8>>> {
         match self {
             RawStore::Vanilla(inner) => inner.raw_get_key_value(cf, key, stats),
-            RawStore::TTL(inner) => inner.raw_get_key_value(cf, key, stats),
+            RawStore::Encoded(inner) => inner.raw_get_key_value(cf, key, stats),
         }
     }
 
@@ -51,7 +54,7 @@ impl<'a, S: Snapshot> RawStore<S> {
     ) -> Result<Option<u64>> {
         match self {
             RawStore::Vanilla(_) => panic!("get ttl on non-ttl store"),
-            RawStore::TTL(inner) => inner
+            RawStore::Encoded(inner) => inner
                 .snapshot
                 .get_key_ttl_cf(cf, key, stats)
                 .map_err(Error::from),
@@ -80,7 +83,7 @@ impl<'a, S: Snapshot> RawStore<S> {
                     .forward_raw_scan(cf, start_key, limit, statistics, option, key_only)
                     .await
             }
-            RawStore::TTL(inner) => {
+            RawStore::Encoded(inner) => {
                 inner
                     .forward_raw_scan(cf, start_key, limit, statistics, option, key_only)
                     .await
@@ -110,7 +113,7 @@ impl<'a, S: Snapshot> RawStore<S> {
                     .reverse_raw_scan(cf, start_key, limit, statistics, option, key_only)
                     .await
             }
-            RawStore::TTL(inner) => {
+            RawStore::Encoded(inner) => {
                 inner
                     .reverse_raw_scan(cf, start_key, limit, statistics, option, key_only)
                     .await
@@ -161,6 +164,9 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         option: IterOptions,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
+        if limit == 0 {
+            return Ok(vec![]);
+        }
         let mut cursor = Cursor::new(self.snapshot.iter_cf(cf, option)?, ScanMode::Forward, false);
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.seek(start_key, statistics)? {
@@ -169,7 +175,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         let mut pairs = vec![];
         let mut row_count = 0;
         let mut time_slice_start = Instant::now();
-        while cursor.valid()? && pairs.len() < limit {
+        while cursor.valid()? {
             row_count += 1;
             if row_count >= MAX_BATCH_SIZE {
                 if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
@@ -186,7 +192,11 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
                     cursor.value(statistics).to_owned()
                 },
             )));
-            cursor.next(statistics);
+            if pairs.len() < limit {
+                cursor.next(statistics);
+            } else {
+                break;
+            }
         }
         Ok(pairs)
     }
@@ -205,6 +215,9 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         option: IterOptions,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
+        if limit == 0 {
+            return Ok(vec![]);
+        }
         let mut cursor = Cursor::new(
             self.snapshot.iter_cf(cf, option)?,
             ScanMode::Backward,
@@ -217,7 +230,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         let mut pairs = vec![];
         let mut row_count = 0;
         let mut time_slice_start = Instant::now();
-        while cursor.valid()? && pairs.len() < limit {
+        while cursor.valid()? {
             row_count += 1;
             if row_count >= MAX_BATCH_SIZE {
                 if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
@@ -234,7 +247,11 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
                     cursor.value(statistics).to_owned()
                 },
             )));
-            cursor.prev(statistics);
+            if pairs.len() < limit {
+                cursor.prev(statistics);
+            } else {
+                break;
+            }
         }
         Ok(pairs)
     }

@@ -308,6 +308,12 @@ pub fn sleep_ms(ms: u64) {
     thread::sleep(Duration::from_millis(ms));
 }
 
+pub fn sleep_until_election_triggered(cfg: &Config) {
+    let election_timeout = cfg.raft_store.raft_base_tick_interval.as_millis()
+        * cfg.raft_store.raft_election_timeout_ticks as u64;
+    sleep_ms(3u64 * election_timeout);
+}
+
 pub fn is_error_response(resp: &RaftCmdResponse) -> bool {
     resp.get_header().has_error()
 }
@@ -645,7 +651,7 @@ pub fn create_test_engine(
 
     let kv_cfs_opt = cfg
         .rocksdb
-        .build_cf_opts(&cache, None, cfg.storage.enable_ttl);
+        .build_cf_opts(&cache, None, cfg.storage.api_version());
 
     let engine = Arc::new(
         engine_rocks::raw_util::new_engine_opt(kv_path_str, kv_db_opt, kv_cfs_opt).unwrap(),

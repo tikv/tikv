@@ -6,13 +6,15 @@ use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{result, thread};
 
+use crossbeam::channel::TrySendError;
 use futures::executor::block_on;
 use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, PeerRole, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{
-    self, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState, RegionLocalState,
+    self, PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState,
+    RegionLocalState,
 };
 use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
@@ -980,14 +982,8 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) {
-        match self.batch_put(key, vec![new_put_cf_cmd(cf, key, value)]) {
-            Ok(resp) => {
-                assert_eq!(resp.get_responses().len(), 1);
-                assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
-            }
-            Err(e) => {
-                panic!("has error: {:?}", e);
-            }
+        if let Err(e) = self.batch_put(key, vec![new_put_cf_cmd(cf, key, value)]) {
+            panic!("has error: {:?}", e);
         }
     }
 
@@ -1023,8 +1019,6 @@ impl<T: Simulator> Cluster<T> {
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Delete);
     }
 
     pub fn must_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
@@ -1037,8 +1031,6 @@ impl<T: Simulator> Cluster<T> {
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::DeleteRange);
     }
 
     pub fn must_notify_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
@@ -1048,8 +1040,6 @@ impl<T: Simulator> Cluster<T> {
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::DeleteRange);
     }
 
     pub fn must_flush_cf(&mut self, cf: &str, sync: bool) {
@@ -1515,6 +1505,23 @@ impl<T: Simulator> Cluster<T> {
         self.add_send_filter(PartitionFilterFactory::new(s1, s2));
     }
 
+    pub fn must_wait_for_leader_expire(&self, node_id: u64, region_id: u64) {
+        let timer = Instant::now_coarse();
+        while timer.saturating_elapsed() < Duration::from_secs(5) {
+            if self
+                .query_leader(node_id, region_id, Duration::from_secs(1))
+                .is_none()
+            {
+                return;
+            }
+            sleep_ms(100);
+        }
+        panic!(
+            "region {}'s replica in store {} still has a valid leader after 5 secs",
+            region_id, node_id
+        );
+    }
+
     pub fn must_update_region_for_unsafe_recover(&mut self, node_id: u64, region: &metapb::Region) {
         let router = self.sim.rl().get_router(node_id).unwrap();
         let mut try_cnt = 0;
@@ -1564,6 +1571,38 @@ impl<T: Simulator> Cluster<T> {
             try_cnt += 1;
             sleep_ms(20);
         }
+    }
+
+    pub fn gc_peer(
+        &mut self,
+        region_id: u64,
+        node_id: u64,
+        peer: metapb::Peer,
+    ) -> std::result::Result<(), TrySendError<RaftMessage>> {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+
+        let mut message = RaftMessage::default();
+        message.set_region_id(region_id);
+        message.set_from_peer(peer.clone());
+        message.set_to_peer(peer);
+        message.set_region_epoch(self.get_region_epoch(region_id));
+        message.set_is_tombstone(true);
+        router.send_raft_message(message)
+    }
+
+    pub fn must_gc_peer(&mut self, region_id: u64, node_id: u64, peer: metapb::Peer) {
+        for _ in 0..250 {
+            self.gc_peer(region_id, node_id, peer.clone()).unwrap();
+            if self.region_local_state(region_id, node_id).get_state() == PeerState::Tombstone {
+                return;
+            }
+            sleep_ms(20);
+        }
+
+        panic!(
+            "gc peer timeout: region id {}, node id {}, peer {:?}",
+            region_id, node_id, peer
+        );
     }
 }
 

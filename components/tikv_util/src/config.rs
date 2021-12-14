@@ -46,7 +46,8 @@ pub const PIB: u64 = TIB * BINARY_DATA_MAGNITUDE;
 const TIME_MAGNITUDE_1: u64 = 1000;
 const TIME_MAGNITUDE_2: u64 = 60;
 const TIME_MAGNITUDE_3: u64 = 24;
-const MS: u64 = UNIT;
+const US: u64 = UNIT;
+const MS: u64 = US * TIME_MAGNITUDE_1;
 const SECOND: u64 = MS * TIME_MAGNITUDE_1;
 const MINUTE: u64 = SECOND * TIME_MAGNITUDE_2;
 const HOUR: u64 = MINUTE * TIME_MAGNITUDE_2;
@@ -361,15 +362,18 @@ impl FromStr for ReadableDuration {
         if !dur_str.is_ascii() {
             return Err(format!("unexpect ascii string: {}", dur_str));
         }
-        let err_msg = "valid duration, only d, h, m, s, ms are supported.".to_owned();
+        let err_msg = "valid duration, only d, h, m, s, ms, us are supported.".to_owned();
         let mut left = dur_str.as_bytes();
         let mut last_unit = DAY + 1;
         let mut dur = 0f64;
-        while let Some(idx) = left.iter().position(|c| b"dhms".contains(c)) {
+        while let Some(idx) = left.iter().position(|c| b"dhmsu".contains(c)) {
             let (first, second) = left.split_at(idx);
             let unit = if second.starts_with(b"ms") {
                 left = &left[idx + 2..];
                 MS
+            } else if second.starts_with(b"us") {
+                left = &left[idx + 2..];
+                US
             } else {
                 let u = match second[0] {
                     b'd' => DAY,
@@ -382,7 +386,7 @@ impl FromStr for ReadableDuration {
                 u
             };
             if unit >= last_unit {
-                return Err("d, h, m, s, ms should occur in given order.".to_owned());
+                return Err("d, h, m, s, ms, us should occur in given order.".to_owned());
             }
             // do we need to check 12h360m?
             let number_str = unsafe { str::from_utf8_unchecked(first) };
@@ -399,18 +403,22 @@ impl FromStr for ReadableDuration {
             return Err("duration should be positive.".to_owned());
         }
         let secs = dur as u64 / SECOND as u64;
-        let millis = (dur as u64 % SECOND as u64) as u32 * 1_000_000;
-        Ok(ReadableDuration(Duration::new(secs, millis)))
+        let micros = (dur as u64 % SECOND as u64) as u32 * 1_000;
+        Ok(ReadableDuration(Duration::new(secs, micros)))
     }
 }
 
 impl ReadableDuration {
-    pub const fn secs(secs: u64) -> ReadableDuration {
-        ReadableDuration(Duration::from_secs(secs))
+    pub const fn micros(micros: u64) -> ReadableDuration {
+        ReadableDuration(Duration::from_micros(micros))
     }
 
     pub const fn millis(millis: u64) -> ReadableDuration {
         ReadableDuration(Duration::from_millis(millis))
+    }
+
+    pub const fn secs(secs: u64) -> ReadableDuration {
+        ReadableDuration(Duration::from_secs(secs))
     }
 
     pub const fn minutes(minutes: u64) -> ReadableDuration {
@@ -429,8 +437,16 @@ impl ReadableDuration {
         self.0.as_secs()
     }
 
+    pub fn as_secs_f64(&self) -> f64 {
+        self.0.as_secs_f64()
+    }
+
     pub fn as_millis(&self) -> u64 {
         crate::time::duration_to_ms(self.0)
+    }
+
+    pub fn as_micros(&self) -> u64 {
+        crate::time::duration_to_us(self.0)
     }
 
     pub fn is_zero(&self) -> bool {
@@ -441,7 +457,7 @@ impl ReadableDuration {
 impl fmt::Display for ReadableDuration {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut dur = crate::time::duration_to_ms(self.0);
+        let mut dur = crate::time::duration_to_us(self.0);
         let mut written = false;
         if dur >= DAY {
             written = true;
@@ -463,9 +479,14 @@ impl fmt::Display for ReadableDuration {
             write!(f, "{}s", dur / SECOND)?;
             dur %= SECOND;
         }
+        if dur >= MS {
+            written = true;
+            write!(f, "{}ms", dur / MS)?;
+            dur %= MS;
+        }
         if dur > 0 {
             written = true;
-            write!(f, "{}ms", dur)?;
+            write!(f, "{}us", dur)?;
         }
         if !written {
             write!(f, "0s")?;
@@ -511,33 +532,33 @@ impl<'de> Deserialize<'de> for ReadableDuration {
     }
 }
 
-fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
-    fn normalize(path: &Path) -> PathBuf {
-        use std::path::Component;
-        let mut components = path.components().peekable();
-        let mut ret = PathBuf::new();
+pub fn normalize_path<P: AsRef<Path>>(path: P) -> PathBuf {
+    use std::path::Component;
+    let mut components = path.as_ref().components().peekable();
+    let mut ret = PathBuf::new();
 
-        while let Some(c @ (Component::Prefix(..) | Component::RootDir)) =
-            components.peek().cloned()
-        {
-            components.next();
-            ret.push(c.as_os_str());
-        }
-
-        for component in components {
-            match component {
-                Component::Prefix(..) | Component::RootDir => unreachable!(),
-                Component::CurDir => {}
-                c @ Component::ParentDir => {
-                    if !ret.pop() {
-                        ret.push(c.as_os_str());
-                    }
-                }
-                Component::Normal(c) => ret.push(c),
-            }
-        }
-        ret
+    while let Some(c @ (Component::Prefix(..) | Component::RootDir)) = components.peek().cloned() {
+        components.next();
+        ret.push(c.as_os_str());
     }
+
+    for component in components {
+        match component {
+            Component::Prefix(..) | Component::RootDir => unreachable!(),
+            Component::CurDir => {}
+            c @ Component::ParentDir => {
+                if !ret.pop() {
+                    ret.push(c.as_os_str());
+                }
+            }
+            Component::Normal(c) => ret.push(c),
+        }
+    }
+    ret
+}
+
+/// Normalizes the path and canonicalizes its longest physically existing sub-path.
+fn canonicalize_non_existing_path<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     fn try_canonicalize_normalized_path(path: &Path) -> std::io::Result<PathBuf> {
         use std::path::Component;
         let mut components = path.components().peekable();
@@ -585,13 +606,13 @@ fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
         }
         Ok(ret)
     }
-    try_canonicalize_normalized_path(&normalize(path.as_ref()))
+    try_canonicalize_normalized_path(&normalize_path(path))
 }
 
 /// Normalizes the path and canonicalizes its longest physically existing sub-path.
 fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     match path.as_ref().canonicalize() {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_fallback(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_non_existing_path(path),
         other => other,
     }
 }
@@ -601,11 +622,7 @@ pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
 }
 
 pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
-    let path = Path::new(path);
-    let mut path = canonicalize_imp(path)?;
-    if !sub_path.is_empty() {
-        path = path.join(Path::new(sub_path));
-    }
+    let path = canonicalize_imp(Path::new(path).join(Path::new(sub_path)))?;
     if path.exists() && path.is_file() {
         return Err(format!("{}/{} is not a directory!", path.display(), sub_path).into());
     }
@@ -1315,6 +1332,90 @@ impl TomlWriter {
     }
 }
 
+#[macro_export]
+macro_rules! numeric_enum_serializing_mod {
+    ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
+        pub mod $name {
+            use std::fmt;
+
+            use serde::{Serializer, Deserializer};
+            use serde::de::{self, Unexpected, Visitor};
+            use super::$enum;
+            use case_macros::*;
+
+            pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
+                where S: Serializer
+            {
+                match mode {
+                    $( $enum::$variant => serializer.serialize_i64($value as i64), )*
+                }
+            }
+
+            pub fn deserialize<'de, D>(deserializer: D) -> Result<$enum, D::Error>
+                where D: Deserializer<'de>
+            {
+                struct EnumVisitor;
+
+                impl<'de> Visitor<'de> for EnumVisitor {
+                    type Value = $enum;
+
+                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                        write!(formatter, concat!("valid ", stringify!($enum)))
+                    }
+
+                    fn visit_i64<E>(self, value: i64) -> Result<$enum, E>
+                        where E: de::Error
+                    {
+                        match value {
+                            $( $value => Ok($enum::$variant), )*
+                            _ => Err(E::invalid_value(Unexpected::Signed(value), &self))
+                        }
+                    }
+
+                    fn visit_str<E>(self, value: &str) -> Result<$enum, E>
+                        where E: de::Error
+                    {
+                        match value {
+                            $(kebab_case!($variant) => Ok($enum::$variant), )*
+                            _ => Err(E::invalid_value(Unexpected::Str(value), &self))
+                        }
+                    }
+                }
+
+                deserializer.deserialize_any(EnumVisitor)
+            }
+
+            #[cfg(test)]
+            mod tests {
+                use toml;
+                use super::$enum;
+                use serde::{Deserialize, Serialize};
+
+                #[test]
+                fn test_serde() {
+                    #[derive(Serialize, Deserialize, PartialEq)]
+                    struct EnumHolder {
+                        #[serde(with = "super")]
+                        e: $enum,
+                    }
+
+                    let cases = vec![
+                        $(($enum::$variant, $value), )*
+                    ];
+                    for (e, v) in cases {
+                        let holder = EnumHolder { e };
+                        let res = toml::to_string(&holder).unwrap();
+                        let exp = format!("e = {}\n", v);
+                        assert_eq!(res, exp);
+                        let h: EnumHolder = toml::from_str(&exp).unwrap();
+                        assert!(h == holder);
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::File;
@@ -1428,14 +1529,20 @@ mod tests {
 
     #[test]
     fn test_duration_construction() {
-        let mut dur = ReadableDuration::secs(1);
-        assert_eq!(dur.0, Duration::new(1, 0));
-        assert_eq!(dur.as_secs(), 1);
-        assert_eq!(dur.as_millis(), 1000);
+        let mut dur = ReadableDuration::micros(2_010_010);
+        assert_eq!(dur.0, Duration::new(2, 10_010_000));
+        assert_eq!(dur.as_secs(), 2);
+        assert!((dur.as_secs_f64() - 2.010_010).abs() < f64::EPSILON);
+        assert_eq!(dur.as_millis(), 2_010);
         dur = ReadableDuration::millis(1001);
         assert_eq!(dur.0, Duration::new(1, 1_000_000));
         assert_eq!(dur.as_secs(), 1);
+        assert!((dur.as_secs_f64() - 1.001).abs() < f64::EPSILON);
         assert_eq!(dur.as_millis(), 1001);
+        dur = ReadableDuration::secs(1);
+        assert_eq!(dur.0, Duration::new(1, 0));
+        assert_eq!(dur.as_secs(), 1);
+        assert_eq!(dur.as_millis(), 1000);
         dur = ReadableDuration::minutes(2);
         assert_eq!(dur.0, Duration::new(2 * 60, 0));
         assert_eq!(dur.as_secs(), 120);
@@ -1455,20 +1562,21 @@ mod tests {
 
         let legal_cases = vec![
             (0, 0, "0s"),
-            (0, 1, "1ms"),
+            (0, 1_000, "1ms"),
+            (0, 1, "1us"),
             (2, 0, "2s"),
             (24 * 3600, 0, "1d"),
-            (2 * 24 * 3600, 10, "2d10ms"),
+            (2 * 24 * 3600, 10_020, "2d10ms20us"),
             (4 * 60, 0, "4m"),
             (5 * 3600, 0, "5h"),
             (3600 + 2 * 60, 0, "1h2m"),
             (5 * 24 * 3600 + 3600 + 2 * 60, 0, "5d1h2m"),
-            (3600 + 2, 5, "1h2s5ms"),
-            (3 * 24 * 3600 + 7 * 3600 + 2, 5, "3d7h2s5ms"),
+            (3600 + 2, 5_600, "1h2s5ms600us"),
+            (3 * 24 * 3600 + 7 * 3600 + 2, 5_004, "3d7h2s5ms4us"),
         ];
-        for (secs, ms, exp) in legal_cases {
+        for (secs, us, exp) in legal_cases {
             let d = DurHolder {
-                d: ReadableDuration(Duration::new(secs, ms * 1_000_000)),
+                d: ReadableDuration(Duration::new(secs, us * 1_000)),
             };
             let res_str = toml::to_string(&d).unwrap();
             let exp_str = format!("d = {:?}\n", exp);
@@ -1510,7 +1618,7 @@ mod tests {
         let cases = vec![".", "/../../", "./../"];
         for case in &cases {
             assert_eq!(
-                Path::new(&canonicalize_fallback(case).unwrap()),
+                Path::new(&canonicalize_non_existing_path(case).unwrap()),
                 Path::new(case).canonicalize().unwrap(),
             );
         }
@@ -1529,22 +1637,21 @@ mod tests {
         };
         for first in nodes {
             for second in nodes {
-                let path = format!(
-                    "{}/{}/../{}/non_existing",
-                    tmp_dir.to_str().unwrap(),
-                    first,
-                    second
-                );
-                let res_path = canonicalize_path(&path).unwrap();
+                let base_path = format!("{}/{}/..", tmp_dir.to_str().unwrap(), first,);
+                let sub_path = format!("{}/non_existing", second);
+                let full_path = format!("{}/{}", &base_path, &sub_path);
+                let res_path1 = canonicalize_path(&full_path).unwrap();
+                let res_path2 = canonicalize_sub_path(&base_path, &sub_path).unwrap();
+                assert_eq!(Path::new(&res_path1), Path::new(&res_path2));
                 // resolve to second/non_existing
                 if *second == "non_existing" {
                     assert_eq!(
-                        Path::new(&res_path),
+                        Path::new(&res_path1),
                         tmp_dir.to_path_buf().join("non_existing/non_existing")
                     );
                 } else {
                     assert_eq!(
-                        Path::new(&res_path),
+                        Path::new(&res_path1),
                         tmp_dir.to_path_buf().join("dir/non_existing")
                     );
                 }

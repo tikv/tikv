@@ -5,14 +5,12 @@ use std::thread;
 use std::time::Duration;
 
 use collections::HashMap;
+use kvproto::metapb::Region;
 use raftstore::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
 
-fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
-    mut cluster: Cluster<T>,
-    region_info_providers: HashMap<u64, R>,
-) {
+fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>) -> Vec<Region> {
     for i in 0..15 {
         let i = i + b'0';
         let key = vec![b'k', i];
@@ -59,6 +57,26 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
 
     // Wait for raftstore to update regions
     thread::sleep(Duration::from_secs(2));
+    regions
+}
+
+#[test]
+fn test_region_collection_seek_region() {
+    let mut cluster = new_node_cluster(0, 3);
+
+    let (tx, rx) = channel();
+    cluster
+        .sim
+        .wl()
+        .post_create_coprocessor_host(Box::new(move |id, host| {
+            let p = RegionInfoAccessor::new(host);
+            tx.send((id, p)).unwrap()
+        }));
+
+    cluster.run();
+    let region_info_providers: HashMap<_, _> = rx.try_iter().collect();
+    assert_eq!(region_info_providers.len(), 3);
+    let regions = prepare_cluster(&mut cluster);
 
     for node_id in cluster.get_node_ids() {
         let engine = &region_info_providers[&node_id];
@@ -110,10 +128,14 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
         let region = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(region, regions[5]);
     }
+
+    for (_, p) in region_info_providers {
+        p.stop();
+    }
 }
 
 #[test]
-fn test_region_collection_seek_region() {
+fn test_region_collection_get_regions_in_range() {
     let mut cluster = new_node_cluster(0, 3);
 
     let (tx, rx) = channel();
@@ -128,8 +150,29 @@ fn test_region_collection_seek_region() {
     cluster.run();
     let region_info_providers: HashMap<_, _> = rx.try_iter().collect();
     assert_eq!(region_info_providers.len(), 3);
+    let regions = prepare_cluster(&mut cluster);
 
-    test_seek_region_impl(cluster, region_info_providers.clone());
+    for node_id in cluster.get_node_ids() {
+        let engine = &region_info_providers[&node_id];
+
+        let result = engine.get_regions_in_range(b"", b"").unwrap();
+        assert_eq!(result, regions);
+
+        let result = engine.get_regions_in_range(b"k1", b"k3").unwrap();
+        assert_eq!(&result, &regions[1..3]);
+
+        let result = engine.get_regions_in_range(b"k3", b"k8").unwrap();
+        assert_eq!(&result, &regions[2..5]);
+
+        let result = engine.get_regions_in_range(b"k6", b"k8").unwrap();
+        assert_eq!(&result, &regions[3..5]);
+
+        let result = engine.get_regions_in_range(b"k7", b"k99").unwrap();
+        assert_eq!(&result, &regions[4..6]);
+
+        let result = engine.get_regions_in_range(b"k99", b"").unwrap();
+        assert_eq!(&result, &regions[5..6]);
+    }
 
     for (_, p) in region_info_providers {
         p.stop();

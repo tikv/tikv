@@ -6,6 +6,7 @@ publish = false
 
 [[bin]]
 name = "tikv-cloud-storage"
+path = "src/bin/tikv-cloud-storage.rs"
 required-features = ["cloud-storage-grpc"]
 
 [lib]
@@ -48,7 +49,6 @@ cloud-storage-grpc = [
 ]
 
 [dependencies]
-anyhow = "1.0"
 aws = { optional = true, path = "../../cloud/aws", default-features = false }
 cloud = { path = "../../cloud", default_features = false }
 lazy_static = { optional = true, version = "1.3" }
@@ -72,6 +72,7 @@ tikv_util = { path = "../../tikv_util" }
 tokio = { version = "1.5", features = ["time", "rt", "net"], optional = true }
 tokio-util = { version = "0.6", features = ["compat"], optional = true }
 url = "2.0"
+async-trait = "0.1"
 
 [dev-dependencies]
 matches = "0.1.8"
@@ -83,6 +84,7 @@ tokio = { version = "1.5", features = ["time"] }
 
 [[example]]
 name = "scli"
+path = "examples/scli.rs"
 
 [target.'cfg(unix)'.dependencies]
 nix = { optional = true, version = "0.11" }
