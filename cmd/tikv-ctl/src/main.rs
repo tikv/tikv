@@ -1983,33 +1983,18 @@ fn main() {
         let key = unescape(&key);
         split_region(&pd_client, mgr, region_id, key);
     } else {
-        // Deal with all subcommands about db or host.
-        let mut contains_db = true;
-        let data_dir = opt.data_dir.unwrap_or_else(|| {
-            contains_db = false;
-            String::new()
-        });
-        let host = opt.host.unwrap_or_else(|| {
-            if !contains_db {
-                clap::Error {
-                    message: String::from("[host|data-dir] is not specified"),
-                    kind: ErrorKind::MissingRequiredArgument,
-                    info: None,
-                }
-                .exit();
+        let data_dir = opt.data_dir.as_deref();
+        let host = opt.host.as_deref();
+
+        if data_dir.is_none() && host.is_none() {
+            clap::Error {
+                message: String::from("[host|data-dir] is not specified"),
+                kind: ErrorKind::MissingRequiredArgument,
+                info: None,
             }
-            String::new()
-        });
-        let data_dir = if data_dir.is_empty() {
-            None
-        } else {
-            Some(data_dir.as_str())
-        };
-        let host = if host.is_empty() {
-            None
-        } else {
-            Some(host.as_str())
-        };
+            .exit();
+        }
+
         let skip_paranoid_checks = opt.skip_paranoid_checks;
 
         let debug_executor =
