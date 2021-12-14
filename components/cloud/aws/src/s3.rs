@@ -25,7 +25,9 @@ use cloud::blob::{
 pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
 use tikv_util::debug;
 use tikv_util::stream::{error_stream, retry};
+use tikv_util::time::Instant;
 
+use crate::metrics::S3_REQUEST_HISTOGRAM_VEC;
 use crate::util;
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
@@ -387,18 +389,25 @@ impl<'client> S3Uploader<'client> {
         part_number: i64,
         data: &[u8],
     ) -> Result<CompletedPart, RusotoError<UploadPartError>> {
-        match timeout(
-            Self::get_timeout(),
-            self.client.upload_part(UploadPartRequest {
-                bucket: self.bucket.clone(),
-                key: self.key.clone(),
-                upload_id: self.upload_id.clone(),
-                part_number,
-                content_length: Some(data.len() as i64),
-                body: Some(data.to_vec().into()),
-                ..Default::default()
-            }),
-        )
+        match timeout(Self::get_timeout(), async {
+            let start = Instant::now();
+            let r = self
+                .client
+                .upload_part(UploadPartRequest {
+                    bucket: self.bucket.clone(),
+                    key: self.key.clone(),
+                    upload_id: self.upload_id.clone(),
+                    part_number,
+                    content_length: Some(data.len() as i64),
+                    body: Some(data.to_vec().into()),
+                    ..Default::default()
+                })
+                .await;
+            S3_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["upload_part"])
+                .observe(start.saturating_elapsed().as_secs_f64());
+            r
+        })
         .await
         {
             Ok(part) => Ok(CompletedPart {
@@ -437,7 +446,9 @@ impl<'client> S3Uploader<'client> {
                 Err(RusotoError::ParseError("failed to put object".to_owned()))
             });
 
-            self.client
+            let start = Instant::now();
+            let r = self
+                .client
                 .put_object(PutObjectRequest {
                     bucket: self.bucket.clone(),
                     key: self.key.clone(),
@@ -452,7 +463,11 @@ impl<'client> S3Uploader<'client> {
                     body: Some(data.to_vec().into()),
                     ..Default::default()
                 })
-                .await
+                .await;
+            S3_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["put_object"])
+                .observe(start.saturating_elapsed().as_secs_f64());
+            r
         })
         .await
         .map_err(|_| {
