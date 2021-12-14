@@ -1156,35 +1156,32 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         match &cmd {
             Command::Prewrite(Prewrite { mutations, .. }) => {
-                let keys: Vec<&Vec<u8>> = mutations.iter().map(|m| m.key().as_encoded()).collect();
+                let keys = mutations.iter().map(|m| m.key().as_encoded());
                 Self::check_api_version(
                     self.api_version,
                     cmd.ctx().api_version,
                     CommandKind::prewrite,
-                    &keys,
+                    keys.clone(),
                 )?;
                 check_key_size!(keys, self.max_key_size, callback);
             }
             Command::PrewritePessimistic(PrewritePessimistic { mutations, .. }) => {
-                let keys: Vec<&Vec<u8>> = mutations
-                    .iter()
-                    .map(|(m, _)| m.key().as_encoded())
-                    .collect();
+                let keys = mutations.iter().map(|(m, _)| m.key().as_encoded());
                 Self::check_api_version(
                     self.api_version,
                     cmd.ctx().api_version,
                     CommandKind::prewrite,
-                    &keys,
+                    keys.clone(),
                 )?;
                 check_key_size!(keys, self.max_key_size, callback);
             }
             Command::AcquirePessimisticLock(AcquirePessimisticLock { keys, .. }) => {
-                let keys: Vec<&Vec<u8>> = keys.iter().map(|k| k.0.as_encoded()).collect();
+                let keys = keys.iter().map(|k| k.0.as_encoded());
                 Self::check_api_version(
                     self.api_version,
                     cmd.ctx().api_version,
                     CommandKind::prewrite,
-                    &keys,
+                    keys.clone(),
                 )?;
                 check_key_size!(keys, self.max_key_size, callback);
             }
