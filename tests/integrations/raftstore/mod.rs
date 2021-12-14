@@ -18,6 +18,7 @@ mod test_region_heartbeat;
 mod test_region_info_accessor;
 mod test_replica_read;
 mod test_replication_mode;
+mod test_scale_pool;
 mod test_single;
 mod test_snap;
 mod test_split_region;
