@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fmt;
 use std::path::PathBuf;
-use std::{fmt, io::Write};
 
 use tokio::io::Result as TokioResult;
 use tokio::runtime::Runtime;
@@ -10,6 +10,7 @@ use tokio_stream::StreamExt;
 use crate::metadata::store::{EtcdStore, MetaStore};
 use crate::metadata::{MetadataClient, MetadataEvent, Task as MetaTask};
 use crate::router::{ApplyEvent, Router};
+use crate::utils;
 use crate::{errors::Result, observer::BackupStreamObserver};
 
 use online_config::ConfigChange;
@@ -171,10 +172,16 @@ where
                     Ok(ranges) => {
                         debug!("backup stream register ranges to observer");
                         // TODO implement register ranges
-                        range_router
-                            .lock()
-                            .await
-                            .register_ranges(task_name, ranges.inner);
+                        range_router.lock().await.register_ranges(
+                            task_name,
+                            ranges
+                                .inner
+                                .into_iter()
+                                .map(|(start_key, end_key)| {
+                                    (utils::wrap_key(start_key), utils::wrap_key(end_key))
+                                })
+                                .collect(),
+                        );
                     }
                     Err(e) => {
                         error!("backup stream get tasks failed"; "error" => ?e);
@@ -251,7 +258,7 @@ impl fmt::Debug for Task {
                 .field("name", &"change_config")
                 .field("change", change)
                 .finish(),
-            _ => todo!(),
+            Task::Flush(task) => de.field("name", &"flush").field("task", &task).finish(),
         }
     }
 }

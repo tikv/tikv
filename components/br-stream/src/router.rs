@@ -24,6 +24,10 @@ use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
 impl ApplyEvent {
+    /// Convert a [CmdBatch] to a vector of events. Ignoring admin / error commands.
+    /// Assuming the resolved ts of the region is `resolved_ts`.
+    /// Note: the resolved ts cannot be advanced if there is no command,
+    ///       maybe we also need to update resolved_ts when flushing?
     pub fn from_cmd_batch(cmd: CmdBatch, resolved_ts: u64) -> Vec<Self> {
         let region_id = cmd.region_id;
         let mut result = vec![];
@@ -31,6 +35,9 @@ impl ApplyEvent {
             .cmds
             .into_iter()
             .filter(|cmd| {
+                // We will add some log then, this is just a template.
+                #[allow(clippy::if_same_then_else)]
+                #[allow(clippy::needless_bool)]
                 if cmd.response.get_header().has_error() {
                     // Add some log for skipping the error.
                     false
@@ -72,13 +79,14 @@ impl ApplyEvent {
         result
     }
 
-    /// Check whether the key is a meta key.
+    /// Check whether the key associate to the event is a meta key.
     pub fn is_meta(&self) -> bool {
         // Can we make things not looking so hacky?
         self.key.starts_with(b"zm")
     }
 
-    /// Check whether the key should be recorded.
+    /// Check whether the event should be recorded.
+    /// (We would ignore LOCK cf)
     pub fn should_record(&self) -> bool {
         let cf_can_handle = self.cf == CF_DEFAULT || self.cf == CF_WRITE;
         // should we handle prewrite here?
@@ -87,10 +95,12 @@ impl ApplyEvent {
     }
 }
 
+/// The shared version of router.
 #[derive(Debug, Clone)]
 pub struct Router(Arc<Mutex<RouterInner>>);
 
 impl Router {
+    /// Create a new router with the temporary folder.
     pub fn new(prefix: PathBuf, scheduler: Scheduler<Task>) -> Self {
         Self(Arc::new(Mutex::new(RouterInner::new(prefix, scheduler))))
     }
@@ -112,11 +122,18 @@ impl std::ops::Deref for Router {
 // TODO maybe we should introduce table key from tidb_query_datatype module.
 pub struct RouterInner {
     // TODO find a proper way to record the ranges of table_filter.
-    ranges: BTreeMap<KeyRange, TaskRange>,
     // TODO replace all map like things with lock free map, to get rid of the Mutex.
+    /// The index for search tasks by range.
+    /// It uses the `start_key` of range as the key.
+    /// Given there isn't overlapping, we can simply use binary search to find
+    /// which range a point belongs to.
+    ranges: BTreeMap<KeyRange, TaskRange>,
+    /// The temporary files associated to some task.
     temp_files_of_task: HashMap<String, TemporaryFiles>,
+    /// The temporary directory for all tasks.
     prefix: PathBuf,
 
+    /// The handle to Endpoint, we should send `Flush` to endpoint if there are too many temporary files.
     scheduler: Scheduler<Task>,
     /// The size limit of temporary file per task.
     temp_file_size_limit: u64,
@@ -155,9 +172,9 @@ impl RouterInner {
     }
 
     /// Register some ranges associated to some task.
-    /// The key should be ENCODED DATA KEY.
-    /// (i.e. encoded by `Key::from_raw(key).into_encoded()` and starts with 'z'.)
-    /// We keep ranges in memory to filter kv events not in these ranges.
+    /// Because the observer interface yields encoded data key, the key should be ENCODED DATA KEY too.    
+    /// (i.e. encoded by `Key::from_raw(key).into_encoded()` and starts with 'z', [`utils::wrap_key`] could be a shortcut.).    
+    /// We keep ranges in memory to filter kv events not in these ranges.  
     pub fn register_ranges(&mut self, task_name: &str, ranges: Vec<(Vec<u8>, Vec<u8>)>) {
         // TODO reigister ranges to filter kv event
         // register ranges has two main purpose.
@@ -174,11 +191,12 @@ impl RouterInner {
         }
     }
 
-    // filter key not in ranges
+    /// check whether a key should be backed up.
     pub fn key_in_ranges(&self, key: &[u8]) -> bool {
         self.get_task_by_key(key).is_some()
     }
 
+    /// get the task name by a key.
     pub fn get_task_by_key(&self, key: &[u8]) -> Option<String> {
         // TODO avoid key.to_vec()
         let k = &KeyRange(key.to_vec());
@@ -236,6 +254,7 @@ impl RouterInner {
     }
 }
 
+/// The handle of a temporary file.
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 struct TempFileKey {
     table_id: i64,
@@ -245,6 +264,7 @@ struct TempFileKey {
 }
 
 impl TempFileKey {
+    /// Create the key for an event. The key can be used to find which temporary file the event should be stored.
     fn of(kv: &ApplyEvent) -> Self {
         // When we cannot extract the table key, use 0 for the table key(perhaps we insert meta key here.).
         let table_id = decode_table_id(&kv.key).unwrap_or(0);
@@ -256,6 +276,7 @@ impl TempFileKey {
         }
     }
 
+    /// The full name of the file owns the key.
     fn temp_file_name(&self) -> String {
         format!(
             "{:08}_{:08}_{}_{:?}.temp.log",
@@ -266,14 +287,22 @@ impl TempFileKey {
 
 #[derive(Default, Debug)]
 pub struct TemporaryFiles {
+    /// The parent directory of temporary files.
     temp_dir: PathBuf,
+    /// The temporary file index.
     files: HashMap<TempFileKey, DataFile>,
+    /// The temporary file for meta(a.k.a. schema) keys (keys starts with 'm').
+    /// FixMe: the design is buggy since we cannot distinguish different CF / CmdType here.
+    /// Maybe extend [`TempFileKey`] for allow it containing meta key and remove the field.
     meta: Option<DataFile>,
+    /// The min resolved TS of all regions involved.
     min_resolved_ts: TimeStamp,
+    /// Total size of all temporary files in byte.
     total_size: usize,
 }
 
 impl TemporaryFiles {
+    /// Create a new temporary file set at the `temp_dir`.
     pub async fn new(temp_dir: PathBuf) -> Result<Self> {
         tokio::fs::create_dir_all(&temp_dir).await?;
         Ok(Self {
@@ -287,7 +316,7 @@ impl TemporaryFiles {
         let key = TempFileKey::of(&kv);
         if !self.files.contains_key(&key) {
             let path = self.temp_dir.join(key.temp_file_name());
-            let data_file = DataFile::new(path, kv.region_id).await?;
+            let data_file = DataFile::new(path).await?;
             self.files.insert(key.clone(), data_file);
         }
         self.total_size += self.files.get_mut(&key).unwrap().on_event(kv).await?;
@@ -300,13 +329,15 @@ impl TemporaryFiles {
                 "meta_{:08}_{}_{:?}.temp.log",
                 kv.region_id, kv.cf, kv.cmd_type
             ));
-            self.meta = Some(DataFile::new(path, kv.region_id).await?);
+            self.meta = Some(DataFile::new(path).await?);
         }
         self.meta.as_mut().unwrap().on_event(kv).await?;
         Ok(())
     }
 
     // TODO: make a file-level lock for getting rid of the &mut.
+    /// Append a event to the files. This wouldn't trigger `flush` syscall.
+    /// i.e. No guarantee of persistence.
     pub async fn on_event(&mut self, kv: ApplyEvent) -> Result<()> {
         if kv.is_meta() {
             self.on_meta_data(kv).await
@@ -332,7 +363,7 @@ impl TemporaryFiles {
         self.total_size as _
     }
 
-    /// Flush all temporary files.
+    /// Flush all temporary files to disk.
     async fn flush(&mut self) -> Result<()> {
         futures::future::join_all(
             self.files
@@ -346,14 +377,26 @@ impl TemporaryFiles {
         .fold(Ok(()), Result::and)
     }
 
+    /// Flush all files and generate corresponding metadata.
     pub async fn generate_metadata(mut self) -> Result<Vec<DataFileWithMeta>> {
         self.flush().await?;
         let mut result = Vec::with_capacity(self.files.len());
-        for (TempFileKey { table_id, .. }, data_file) in self.files.into_iter() {
+        for (
+            TempFileKey {
+                table_id,
+                cf,
+                region_id,
+                ..
+            },
+            data_file,
+        ) in self.files.into_iter()
+        {
             let mut file_meta = data_file.generate_metadata()?;
             file_meta
                 .meta
                 .set_path(Self::path_to_log_file(table_id, file_meta.meta.min_ts));
+            file_meta.meta.set_cf(cf);
+            file_meta.meta.set_region_id(region_id as _);
             result.push(file_meta)
         }
         if let Some(f) = self.meta {
@@ -366,8 +409,8 @@ impl TemporaryFiles {
     }
 }
 
+/// A opened log file with some metadata.
 struct DataFile {
-    region: u64,
     min_ts: TimeStamp,
     max_ts: TimeStamp,
     resolved_ts: TimeStamp,
@@ -386,11 +429,12 @@ pub struct DataFileWithMeta {
 }
 
 impl DataFile {
-    async fn new(local_path: impl AsRef<Path>, region_id: u64) -> Result<Self> {
+    /// create and open a logfile at the path.
+    /// Note: if a file with same name exists, would truncate it.
+    async fn new(local_path: impl AsRef<Path>) -> Result<Self> {
         let sha256 = Hasher::new(MessageDigest::sha256())
             .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?;
         Ok(Self {
-            region: region_id,
             min_ts: TimeStamp::max(),
             max_ts: TimeStamp::zero(),
             resolved_ts: TimeStamp::zero(),
@@ -420,6 +464,7 @@ impl DataFile {
         Ok(size)
     }
 
+    /// Update the `start_key` and `end_key` of `self` as if a new key added.
     fn update_key_bound(&mut self, key: Vec<u8>) {
         // if there is nothing in file, fill the start_key and end_key by current key.
         if self.start_key.is_empty() && self.end_key.is_empty() {
@@ -436,6 +481,7 @@ impl DataFile {
         }
     }
 
+    /// generate the metadata in protocol buffer of the file.
     fn generate_metadata(mut self) -> Result<DataFileWithMeta> {
         let mut meta = DataFileInfo::new();
         meta.set_sha_256(
@@ -462,7 +508,6 @@ impl DataFile {
 impl std::fmt::Debug for DataFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DataFile")
-            .field("region", &self.region)
             .field("min_ts", &self.min_ts)
             .field("max_ts", &self.max_ts)
             .field("resolved_ts", &self.resolved_ts)
@@ -482,8 +527,8 @@ struct TaskRange {
 
 #[cfg(test)]
 mod tests {
+    use crate::utils;
     use std::time::Duration;
-
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
 
     use super::*;
@@ -503,16 +548,9 @@ mod tests {
             }
         }
 
-        fn wrap_key(mut v: Vec<u8>) -> Vec<u8> {
-            v.insert(0, b'z');
-            let key = Key::from_raw(v.as_slice());
-            key.append_ts(TimeStamp::new(TimeStamp::physical_now()))
-                .into_encoded()
-        }
-
         fn put_event(&self, cf: &'static str, key: Vec<u8>, value: Vec<u8>) -> ApplyEvent {
             ApplyEvent {
-                key: Self::wrap_key(key),
+                key: utils::wrap_key(key),
                 value,
                 cf: cf.to_owned(),
                 region_id: self.region_id,
@@ -523,7 +561,7 @@ mod tests {
 
         fn delete_event(&self, cf: &'static str, key: Vec<u8>) -> ApplyEvent {
             ApplyEvent {
-                key: Self::wrap_key(key),
+                key: utils::wrap_key(key),
                 value: vec![],
                 cf: cf.to_owned(),
                 region_id: self.region_id,
@@ -591,6 +629,7 @@ mod tests {
         region1.put(CF_WRITE, b"t1_hello", b"still isn't a write record :3");
         region1.delete(CF_DEFAULT, b"t1_hello");
         let events = region1.flush_events();
+        // TODO: auto test...
         println!("{:?}", events);
         for event in events {
             router.on_event(event).await?;
