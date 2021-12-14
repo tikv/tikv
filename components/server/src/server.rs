@@ -723,28 +723,30 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             Box::new(CdcConfigManager(cdc_worker.scheduler())),
         );
 
-        // Create resolved ts worker
-        let rts_worker = if self.config.resolved_ts.enable {
-            let worker = Box::new(LazyWorker::new("resolved-ts"));
+        let (rts_worker, check_leader_scheduler) = if self.config.resolved_ts.enable {
+            // Create resolved ts worker
+            let rts_worker = Box::new(LazyWorker::new("resolved-ts"));
             // Register the resolved ts observer
-            let resolved_ts_ob = resolved_ts::Observer::new(worker.scheduler());
+            let resolved_ts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
             resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
             // Register config manager for resolved ts worker
             cfg_controller.register(
                 tikv::config::Module::ResolvedTs,
                 Box::new(resolved_ts::ResolvedTsConfigManager::new(
-                    worker.scheduler(),
+                    rts_worker.scheduler(),
                 )),
             );
-            Some(worker)
-        } else {
-            None
-        };
 
-        let check_leader_runner = CheckLeaderRunner::new(engines.store_meta.clone());
-        let check_leader_scheduler = self
-            .background_worker
-            .start("check-leader", check_leader_runner);
+            // Start the check leader runner
+            let check_leader_runner = CheckLeaderRunner::new(engines.store_meta.clone());
+            let check_leader_scheduler = self
+                .background_worker
+                .start("check-leader", check_leader_runner);
+
+            (Some(rts_worker), Some(check_leader_scheduler))
+        } else {
+            (None, None)
+        };
 
         let server_config = Arc::new(VersionTrack::new(self.config.server.clone()));
 

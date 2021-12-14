@@ -89,7 +89,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         resolver: S,
         snap_mgr: SnapManager,
         gc_worker: GcWorker<E, T>,
-        check_leader_scheduler: Scheduler<CheckLeaderTask>,
+        check_leader_scheduler: Option<Scheduler<CheckLeaderTask>>,
         env: Arc<Environment>,
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
@@ -511,7 +511,6 @@ mod tests {
         );
         let mock_store_id = 5;
         let addr = Arc::new(Mutex::new(None));
-        let (check_leader_scheduler, _) = tikv_util::worker::dummy_scheduler();
         let mut server = Server::new(
             mock_store_id,
             &cfg,
@@ -526,7 +525,7 @@ mod tests {
             },
             SnapManager::new(""),
             gc_worker,
-            check_leader_scheduler,
+            None,
             env,
             None,
             debug_thread_pool,
