@@ -1,3 +1,4 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use txn_types::{Key, TimeStamp};
 
 /// wrap a user key with encoded data key.
