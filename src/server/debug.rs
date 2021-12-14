@@ -142,12 +142,17 @@ impl<ER: RaftEngine> Debugger<ER> {
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
         let mut regions = Vec::with_capacity(128);
-        box_try!(db.scan_cf(cf, start_key, end_key, false, |key, _| {
+        box_try!(db.scan_cf(cf, start_key, end_key, false, |key, value| {
             let (id, suffix) = box_try!(keys::decode_region_meta_key(key));
-            if suffix != keys::REGION_STATE_SUFFIX {
-                return Ok(true);
+            if suffix == keys::REGION_STATE_SUFFIX {
+                let mut region_state = RegionLocalState::default();
+                region_state.merge_from_bytes(value)?;
+                if region_state.get_state() == PeerState::Tombstone {
+                    info!("skip {} because it's already tombstone", id);
+                } else {
+                    regions.push(id);
+                }
             }
-            regions.push(id);
             Ok(true)
         }));
         regions.sort_unstable();
@@ -682,7 +687,12 @@ impl<ER: RaftEngine> Debugger<ER> {
             })?;
 
             let applied_index = old_raft_apply_state.applied_index;
+            let commit_index = old_raft_apply_state.commit_index;
             let last_index = old_raft_local_state.last_index;
+
+            if last_index == applied_index && commit_index == applied_index {
+                continue;
+            }
 
             let new_raft_local_state = RaftLocalState {
                 last_index: applied_index,
