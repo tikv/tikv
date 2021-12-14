@@ -7,6 +7,7 @@
 
 use std::cmp;
 use std::collections::HashMap;
+use std::env;
 use std::error::Error;
 use std::fs;
 use std::i32;
@@ -2239,6 +2240,7 @@ impl Default for BackupConfig {
 pub struct BackupStreamConfig {
     pub num_threads: usize,
     pub enable_streaming: bool,
+    pub streaming_path: String,
 }
 
 impl BackupStreamConfig {
@@ -2257,6 +2259,8 @@ impl Default for BackupStreamConfig {
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
             enable_streaming: false,
+            // TODO: may be use raft store directory
+            streaming_path: env::temp_dir().into_os_string().into_string().unwrap(),
         }
     }
 }
