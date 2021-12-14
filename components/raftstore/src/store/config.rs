@@ -5,6 +5,7 @@ use std::time::Duration;
 use std::u64;
 use time::Duration as TimeDuration;
 
+use super::worker::{RaftStoreThreadPool, RefreshConfigTask};
 use crate::{coprocessor, Result};
 use batch_system::Config as BatchSystemConfig;
 use engine_traits::perf_level_serde;
@@ -15,7 +16,8 @@ use prometheus::register_gauge_vec;
 use serde::{Deserialize, Serialize};
 use serde_with::with_prefix;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
-use tikv_util::{box_err, info, warn};
+use tikv_util::worker::Scheduler;
+use tikv_util::{box_err, error, info, warn};
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
@@ -162,16 +164,19 @@ pub struct Config {
     #[online_config(hidden)]
     pub use_delete_range: bool,
 
+    #[online_config(skip)]
+    pub snap_generator_pool_size: usize,
+
     pub cleanup_import_sst_interval: ReadableDuration,
 
     /// Maximum size of every local read task batch.
     pub local_read_batch_size: u64,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     #[serde(flatten, with = "prefix_apply")]
     pub apply_batch_system: BatchSystemConfig,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     #[serde(flatten, with = "prefix_store")]
     pub store_batch_system: BatchSystemConfig,
 
@@ -303,6 +308,7 @@ impl Default for Config {
             merge_max_log_gap: 10,
             merge_check_tick_interval: ReadableDuration::secs(2),
             use_delete_range: false,
+            snap_generator_pool_size: 2,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
@@ -534,6 +540,12 @@ impl Config {
             ));
         }
 
+        if self.snap_generator_pool_size == 0 {
+            return Err(box_err!(
+                "snap-generator-pool-size should be greater than 0."
+            ));
+        }
+
         Ok(())
     }
 
@@ -710,6 +722,9 @@ impl Config {
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["snap_generator_pool_size"])
+            .set(self.snap_generator_pool_size as f64);
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["hibernate_regions"])
             .set((self.hibernate_regions as i32).into());
         CONFIG_RAFTSTORE_GAUGE
@@ -754,7 +769,19 @@ impl Config {
     }
 }
 
-pub struct RaftstoreConfigManager(pub Arc<VersionTrack<Config>>);
+pub struct RaftstoreConfigManager {
+    scheduler: Scheduler<RefreshConfigTask>,
+    config: Arc<VersionTrack<Config>>,
+}
+
+impl RaftstoreConfigManager {
+    pub fn new(
+        scheduler: Scheduler<RefreshConfigTask>,
+        config: Arc<VersionTrack<Config>>,
+    ) -> RaftstoreConfigManager {
+        RaftstoreConfigManager { scheduler, config }
+    }
+}
 
 impl ConfigManager for RaftstoreConfigManager {
     fn dispatch(
@@ -763,7 +790,30 @@ impl ConfigManager for RaftstoreConfigManager {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = change.clone();
-            self.0.update(move |cfg: &mut Config| cfg.update(change));
+            self.config
+                .update(move |cfg: &mut Config| cfg.update(change));
+        }
+        if let Some(ConfigValue::Module(raft_batch_system_change)) =
+            change.get("store_batch_system")
+        {
+            if let Some(pool_size) = raft_batch_system_change.get("pool_size") {
+                let scale_pool =
+                    RefreshConfigTask::ScalePool(RaftStoreThreadPool::Store, pool_size.into());
+                if let Err(e) = self.scheduler.schedule(scale_pool) {
+                    error!("raftstore configuration manager schedule scale raft pool work task failed"; "err"=> ?e);
+                }
+            }
+        }
+        if let Some(ConfigValue::Module(apply_batch_system_change)) =
+            change.get("apply_batch_system")
+        {
+            if let Some(pool_size) = apply_batch_system_change.get("pool_size") {
+                let scale_pool =
+                    RefreshConfigTask::ScalePool(RaftStoreThreadPool::Apply, pool_size.into());
+                if let Err(e) = self.scheduler.schedule(scale_pool) {
+                    error!("raftstore configuration manager schedule scale apply pool work task failed"; "err"=> ?e);
+                }
+            }
         }
         info!(
             "raftstore config changed";
@@ -771,14 +821,6 @@ impl ConfigManager for RaftstoreConfigManager {
         );
         Config::write_change_into_metrics(change);
         Ok(())
-    }
-}
-
-impl std::ops::Deref for RaftstoreConfigManager {
-    type Target = Arc<VersionTrack<Config>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 
@@ -899,6 +941,10 @@ mod tests {
 
         cfg = Config::new();
         cfg.future_poll_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.snap_generator_pool_size = 0;
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
