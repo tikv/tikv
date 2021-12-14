@@ -119,10 +119,10 @@ where
     let cf = cf_file.cf;
     let mut stats = BuildStatistics::default();
     let mut remained_quota = 0;
-    let mut file_count:usize = 0;
+    let mut file_id:usize = 0;
     let mut path = cf_file
         .path
-        .join(cf_file.gen_tmp_file_name(file_count))
+        .join(cf_file.gen_tmp_file_name(file_id))
         .to_str()
         .unwrap()
         .to_string();
@@ -131,12 +131,12 @@ where
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
         if file_length + entry_len > raw_size_per_file as usize {
-            cf_file.add_file(file_count); // add previous file
+            cf_file.add_file(file_id); // add previous file
             file_length = 0;
-            file_count += 1;
+            file_id += 1;
             path = cf_file
                 .path
-                .join(cf_file.gen_tmp_file_name(file_count))
+                .join(cf_file.gen_tmp_file_name(file_id))
                 .to_str()
                 .unwrap()
                 .to_string();
@@ -170,15 +170,15 @@ where
         Ok(true)
     }));
     if stats.key_count > 0 {
-        cf_file.add_file(file_count);
+        cf_file.add_file(file_id);
         box_try!(sst_writer.into_inner().finish());
         box_try!(File::open(path).and_then(|f| f.sync_all()));
+        info!(
+            "build_sst_cf_file_list builds {} files in cf {}. Total keys {} ", file_id+1, cf, stats.key_count
+        );
     } else {
         box_try!(fs::remove_file(path));
     }
-    info!(
-        "build_sst_cf_file_list builds {} cf {} files for ", file_count, cf
-    );
     Ok(stats)
 }
 
@@ -244,6 +244,9 @@ pub fn apply_sst_cf_file<E>(files: &[&str], db: &E, cf: &str) -> Result<(), Erro
 where
     E: KvEngine,
 {
+    if files.len() > 1 {
+        info!("apply_sst_cf_file starts on cf {}. All files {:?}", cf, files);
+    }
     box_try!(db.ingest_external_file_cf(cf, files));
     Ok(())
 }

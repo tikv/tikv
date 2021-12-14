@@ -373,17 +373,17 @@ impl CfFile {
         self.path.join(file_name).to_str().unwrap().to_string()
     }
 
-    pub fn gen_file_name(&self, file_count: usize) -> String {
+    pub fn gen_file_name(&self, file_id: usize) -> String {
         format!(
             "{}_{:04}{}",
-            self.file_prefix, file_count, self.file_suffix
+            self.file_prefix, file_id, self.file_suffix
         )
     }
 
-    pub fn gen_tmp_file_name(&self, file_count: usize) -> String {
+    pub fn gen_tmp_file_name(&self, file_id: usize) -> String {
         format!(
             "{}_{:04}{}{}",
-            self.file_prefix, file_count, self.file_suffix, TMP_FILE_SUFFIX
+            self.file_prefix, file_id, self.file_suffix, TMP_FILE_SUFFIX
         )
     }
 }
@@ -1351,7 +1351,7 @@ impl SnapManager {
                         .filter_map(|s| s.parse().ok())
                         .collect()
                 });
-                if numbers.len() != 3 {
+                if numbers.len() < 3 {
                     error!(
                         "failed to parse snapkey";
                         "snap_key" => %name,

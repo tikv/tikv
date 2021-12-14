@@ -46,7 +46,7 @@ use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
 };
-use pd_client::{PdClient, RpcClient};
+use pd_client::{PdClient, RpcClient,Feature};
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
@@ -101,6 +101,8 @@ use tokio::runtime::Builder;
 
 use crate::raft_engine_switch::{check_and_dump_raft_db, check_and_dump_raft_engine};
 use crate::{memory::*, setup::*, signal_handler};
+
+const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 0, 0);
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
@@ -662,11 +664,16 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let bps = i64::try_from(self.config.server.snap_max_write_bytes_per_sec.0)
             .unwrap_or_else(|_| fatal!("snap_max_write_bytes_per_sec > i64::max_value"));
 
+        let max_snapshot_file_raw_size = if self.pd_client.feature_gate().can_enable(MULTI_FILES_SNAPSHOT_FEATURE) {
+            self.config.server.max_snapshot_file_raw_size.0 
+        } else {
+            0
+        };
         let snap_mgr = SnapManagerBuilder::default()
             .max_write_bytes_per_sec(bps)
             .max_total_size(self.config.server.snap_max_total_size.0)
             .encryption_key_manager(self.encryption_key_manager.clone())
-            .max_per_file_size(self.config.server.max_snapshot_file_raw_size.0)
+            .max_per_file_size(max_snapshot_file_raw_size)
             .build(snap_path);
 
         // Create coprocessor endpoint.

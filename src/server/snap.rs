@@ -371,14 +371,8 @@ where
             } else {
                 u64::MAX
             };
-            let max_per_file_size = if incoming.max_snapshot_file_raw_size.0 > 0 {
-                incoming.max_snapshot_file_raw_size.0
-            } else {
-                u64::MAX
-            };
             self.snap_mgr.set_speed_limit(limit);
             self.snap_mgr.set_max_total_snap_size(max_total_size);
-            self.snap_mgr.set_max_per_file_size(max_per_file_size);
             info!("refresh snapshot manager config";
             "speed_limit"=> limit,
             "max_total_snap_size"=> max_total_size);
