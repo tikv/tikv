@@ -1869,7 +1869,7 @@ fn main() {
     }
 
     if let Cmd::BadSsts { db, manifest, pd } = cmd {
-        let pd_client = get_pd_rpc_client(&pd, Arc::clone(&mgr));
+        let pd_client = get_pd_rpc_client(Some(pd), Arc::clone(&mgr));
         print_bad_ssts(&db, manifest.as_deref(), pd_client, &cfg);
         return;
     }
@@ -1956,43 +1956,32 @@ fn main() {
         return;
     }
 
-    if matches!(cmd, Cmd::CompactCluster { .. } | Cmd::SplitRegion { .. }) {
-        let pd = opt.pd.unwrap_or_else(|| {
-            clap::Error {
-                message: String::from("--pd is required for this command"),
-                kind: ErrorKind::MissingRequiredArgument,
-                info: None,
-            }
-            .exit();
-        });
-        let pd_client = get_pd_rpc_client(&pd, Arc::clone(&mgr));
-        match cmd {
-            Cmd::CompactCluster {
-                db,
-                cf,
-                from,
-                to,
-                threads,
-                bottommost,
-            } => {
-                let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
-                let cfs = cf.iter().map(|s| s.as_ref()).collect();
-                let from_key = from.map(|k| unescape(&k));
-                let to_key = to.map(|k| unescape(&k));
-                let bottommost = BottommostLevelCompaction::from(Some(bottommost.as_ref()));
-                compact_whole_cluster(
-                    &pd_client, &cfg, mgr, db_type, cfs, from_key, to_key, threads, bottommost,
-                );
-            }
-            Cmd::SplitRegion {
-                region: region_id,
-                key,
-            } => {
-                let key = unescape(&key);
-                split_region(&pd_client, mgr, region_id, key);
-            }
-            _ => {}
-        }
+    if let Cmd::CompactCluster {
+        db,
+        cf,
+        from,
+        to,
+        threads,
+        bottommost,
+    } = cmd
+    {
+        let pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr));
+        let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
+        let cfs = cf.iter().map(|s| s.as_ref()).collect();
+        let from_key = from.map(|k| unescape(&k));
+        let to_key = to.map(|k| unescape(&k));
+        let bottommost = BottommostLevelCompaction::from(Some(bottommost.as_ref()));
+        compact_whole_cluster(
+            &pd_client, &cfg, mgr, db_type, cfs, from_key, to_key, threads, bottommost,
+        );
+    } else if let Cmd::SplitRegion {
+        region: region_id,
+        key,
+    } = cmd
+    {
+        let pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr));
+        let key = unescape(&key);
+        split_region(&pd_client, mgr, region_id, key);
     } else {
         // Deal with all subcommands about db or host.
         let mut contains_db = true;
@@ -2335,8 +2324,16 @@ fn dump_snap_meta_file(path: &str) {
     }
 }
 
-fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
-    let cfg = PdConfig::new(vec![pd.to_string()]);
+fn get_pd_rpc_client(pd: Option<String>, mgr: Arc<SecurityManager>) -> RpcClient {
+    let pd = pd.unwrap_or_else(|| {
+        clap::Error {
+            message: String::from("--pd is required for this command"),
+            kind: ErrorKind::MissingRequiredArgument,
+            info: None,
+        }
+        .exit();
+    });
+    let cfg = PdConfig::new(vec![pd]);
     cfg.validate().unwrap();
     RpcClient::new(&cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
 }
