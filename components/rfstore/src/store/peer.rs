@@ -541,14 +541,14 @@ impl Peer {
         self.raft_group.raft.raft_log.last_index() + 1
     }
 
-    pub(crate) fn maybe_destroy(&mut self) -> Option<DestroyPeerJob> {
+    pub(crate) fn maybe_destroy(&mut self) -> bool {
         if self.pending_remove {
             info!(
                 "is being destroyed, skip";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
-            return None;
+            return false;
         }
         if self.is_applying_snapshot() {
             info!(
@@ -556,18 +556,13 @@ impl Peer {
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
-            return None;
+            return false;
         }
         self.pending_remove = true;
-
-        Some(DestroyPeerJob {
-            initialized: self.get_store().is_initialized(),
-            region_id: self.region_id,
-            peer: self.peer.clone(),
-        })
+        true
     }
 
-    pub(crate) fn destroy(&mut self, engines: &Engines, keep_data: bool) -> Result<()> {
+    pub(crate) fn destroy(&mut self, rfe: &rfengine::RFEngine) -> Result<()> {
         let t = Instant::now();
 
         let region = self.region().clone();
@@ -577,23 +572,9 @@ impl Peer {
             "peer_id" => self.peer.get_id(),
         );
 
-        // Set Tombstone state explicitly
         let mut raft_wb = rfengine::WriteBatch::new();
         self.mut_store().clear_meta(&mut raft_wb);
-        write_peer_state(&mut raft_wb, &region, raft_serverpb::PeerState::Tombstone);
-        engines.raft.write(&raft_wb)?;
-
-        if self.get_store().is_initialized() && !keep_data {
-            // If we meet panic when deleting data and raft log, the dirty data
-            // will be cleared by a newer snapshot applying or restart.
-            if let Err(e) = self.get_store().clear_data() {
-                error!(?e;
-                    "failed to schedule clear data task";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                );
-            }
-        }
+        rfe.write(&raft_wb)?;
         self.pending_reads.clear_all(Some(region.get_id()));
 
         for Proposal { cb, .. } in self.proposals.queue.drain(..) {
@@ -1360,7 +1341,7 @@ impl Peer {
                     lease_to_be_updated = false;
                 }
             }
-            self.pre_process_committed_entry(ctx, entry);
+            self.preprocess_committed_entry(ctx, entry);
         }
         if let Some(last_entry) = committed_entries.last() {
             self.last_applying_idx = last_entry.get_index();
@@ -1403,7 +1384,7 @@ impl Peer {
         fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
     }
 
-    pub(crate) fn pre_process_committed_entry(&mut self, ctx: &mut RaftContext, entry: &Entry) {
+    pub(crate) fn preprocess_committed_entry(&mut self, ctx: &mut RaftContext, entry: &Entry) {
         if entry.entry_type != eraftpb::EntryType::EntryNormal {
             return;
         }
@@ -1414,14 +1395,14 @@ impl Peer {
         let mut cmd = RaftCmdRequest::default();
         cmd.merge_from_bytes(&entry.data).unwrap();
         if cmd.has_custom_request() {
-            self.pre_process_change_set(ctx, entry, cmd.get_custom_request());
+            self.preprocess_change_set(ctx, entry, cmd.get_custom_request());
         } else {
             let splits = cmd.get_admin_request().get_splits();
-            self.pre_process_pending_splits(ctx, entry, splits);
+            self.preprocess_pending_splits(ctx, entry, splits);
         }
     }
 
-    pub(crate) fn pre_process_change_set(
+    pub(crate) fn preprocess_change_set(
         &mut self,
         ctx: &mut RaftContext,
         entry: &Entry,
@@ -1469,14 +1450,16 @@ impl Peer {
             "shard meta apply change set";
             "region" => tag,
         );
-        if cs.has_flush() {
-            ctx.raft_wb.truncate_raft_log(region_id, cs.get_sequence());
-        }
         ctx.raft_wb
             .set_state(region_id, KV_ENGINE_META_KEY, &shard_meta.marshal());
+
+        if cs.has_flush() {
+            ctx.raft_wb.truncate_raft_log(region_id, cs.get_sequence());
+            self.mut_store().initial_flushed = true;
+        }
     }
 
-    pub(crate) fn pre_process_pending_splits(
+    pub(crate) fn preprocess_pending_splits(
         &mut self,
         ctx: &mut RaftContext,
         entry: &Entry,
@@ -2571,6 +2554,8 @@ impl ReadExecutor for RaftContext {
         RegionSnapshot {
             snap,
             max_ts_sync_status: None,
+            term: None,
+            txn_extra_op: TxnExtraOp::Noop,
         }
     }
 }

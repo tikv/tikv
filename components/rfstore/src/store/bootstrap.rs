@@ -114,7 +114,7 @@ pub fn clear_prepare_bootstrap_cluster(
     let raft_state_key = raft_state_key(region_ver);
     wb.set_state(region_id, raft_state_key.chunk(), &[]);
     engines.raft.write(&wb)?;
-    engines.kv.remove_shard(region_id, true);
+    engines.kv.remove_shard(region_id);
     Ok(())
 }
 

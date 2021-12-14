@@ -26,6 +26,7 @@ use crate::{
     },
 };
 use crossbeam_epoch as epoch;
+use crossbeam_epoch::pin;
 use epoch::{Atomic, Guard, Owned, Shared};
 use kvenginepb as pb;
 use slog_global::*;
@@ -138,8 +139,6 @@ pub struct Shard {
 
     size_stats: Atomic<ShardSizeStats>,
 
-    pub(crate) remove_file: AtomicBool,
-
     pub(crate) compact_lock: tokio::sync::Mutex<()>,
 }
 
@@ -177,7 +176,6 @@ impl Shard {
             write_sequence: Default::default(),
             ingest_pre_split_seq: Default::default(),
             size_stats: Default::default(),
-            remove_file: AtomicBool::new(false),
             compact_lock: tokio::sync::Mutex::new(()),
         };
         if let Some(val) = get_shard_property(MEM_TABLE_SIZE_KEY, props) {

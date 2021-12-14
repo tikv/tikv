@@ -22,16 +22,16 @@ use std::{
         atomic::{AtomicU32, AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, Instant},
     u64,
 };
 
 use crate::server::Server;
 use crate::setup::{initial_logger, initial_metric, validate_and_persist_config};
-use crate::{memory::*, node::*, raft_client::*, raftkv::*, resolve, signal_handler};
+use crate::{node::*, raft_client::*, raftkv::*, resolve, signal_handler};
 use cdc::MemoryQuota;
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
+use engine_rocks::FlowInfo;
 use engine_traits::{
     compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, KvEngine, MiscExt,
     RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -57,11 +57,11 @@ use raftstore::RegionInfoAccessor;
 use rfengine::RFEngine;
 use rfstore::store::PENDING_MSG_CAP;
 use rfstore::store::{
-    CheckLeaderRunner, Engines, LocalReader, MetaChangeListener, PdTask, RaftBatchSystem,
-    StoreMeta, MEMTRACE_ROOT,
+    Engines, LocalReader, MetaChangeListener, PdTask, RaftBatchSystem, StoreMeta,
 };
 use rfstore::{RaftRouter, ServerRaftStoreRouter};
 use security::SecurityManager;
+use tikv::storage::txn::flow_controller::FlowController;
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR},
     coprocessor, coprocessor_v2,
@@ -85,7 +85,7 @@ use tikv_util::{
     math::MovingAvgU32,
     sys::{disk, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
-    time::Monitor,
+    time::{Duration, Instant, Monitor},
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
@@ -129,7 +129,6 @@ pub fn run_tikv(config: TiKvConfig) {
     let server_config = tikv.init_servers();
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher);
-    tikv.init_storage_stats_task();
     tikv.run_server(server_config);
     tikv.run_status_server();
 
@@ -175,7 +174,6 @@ struct Servers {
     lock_mgr: LockManager,
     server: Server<RaftRouter, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,
-    importer: Arc<SSTImporter>,
 }
 
 impl TiKVServer {
@@ -443,6 +441,12 @@ impl TiKVServer {
     }
 
     fn init_servers(&mut self) -> Arc<VersionTrack<ServerConfig>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let flow_controller = Arc::new(FlowController::new(
+            &self.config.storage.flow_control,
+            self.engines.as_ref().unwrap().engine.kv_engine(),
+            rx,
+        ));
         let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
         let ttl_scheduler = ttl_checker.scheduler();
 
@@ -506,7 +510,7 @@ impl TiKVServer {
             ));
             storage_read_pools.handle()
         };
-
+        let reporter = rfstore::store::FlowStatsReporter::new(pd_sender.clone());
         let storage = create_raft_storage(
             engines.engine.clone(),
             &self.config.storage,
@@ -514,6 +518,8 @@ impl TiKVServer {
             lock_mgr.clone(),
             self.concurrency_manager.clone(),
             lock_mgr.get_pipelined(),
+            flow_controller,
+            reporter,
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -570,22 +576,11 @@ impl TiKVServer {
             coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
             self.router.clone(),
             self.resolver.clone(),
-            check_leader_scheduler,
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
-
-        let import_path = self.store_path.join("import");
-        let importer = Arc::new(
-            SSTImporter::new(
-                &self.config.import,
-                import_path,
-                self.encryption_key_manager.clone(),
-            )
-            .unwrap(),
-        );
 
         // `ConsistencyCheckObserver` must be registered before `Node::start`.
         let safe_point = Arc::new(AtomicU64::new(0));
@@ -609,7 +604,6 @@ impl TiKVServer {
             pd_worker,
             engines.store_meta.clone(),
             self.coprocessor_host.clone().unwrap(),
-            importer.clone(),
             self.concurrency_manager.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
@@ -624,36 +618,10 @@ impl TiKVServer {
             self.to_stop.push(ttl_checker);
         }
 
-        // Start resource metering.
-        let resource_metering_cpu_recorder = resource_metering::cpu::recorder::init_recorder();
-        let mut resource_metering_reporter_worker = Box::new(
-            WorkerBuilder::new("resource-metering-reporter")
-                .pending_capacity(30)
-                .create()
-                .lazy_build("resource-metering-reporter"),
-        );
-        let resource_metering_reporter_scheduler = resource_metering_reporter_worker.scheduler();
-        cfg_controller.register(
-            tikv::config::Module::ResourceMetering,
-            Box::new(resource_metering::ConfigManager::new(
-                self.config.resource_metering.clone(),
-                resource_metering_reporter_scheduler.clone(),
-                resource_metering_cpu_recorder,
-            )),
-        );
-        let resource_metering_reporter = resource_metering::reporter::ResourceMeteringReporter::new(
-            self.config.resource_metering.clone(),
-            resource_metering_reporter_scheduler,
-            self.env.clone(),
-        );
-        resource_metering_reporter_worker.start_with_timer(resource_metering_reporter);
-        self.to_stop.push(resource_metering_reporter_worker);
-
         self.servers = Some(Servers {
             lock_mgr,
             server,
             node,
-            importer,
         });
 
         server_config
@@ -708,74 +676,11 @@ impl TiKVServer {
 
     fn init_metrics_flusher(&mut self, fetcher: BytesFetcher) {
         let mut io_metrics = IOMetricsManager::new(fetcher);
-        let mut mem_trace_metrics = MemoryTraceManager::default();
-        mem_trace_metrics.register_provider((&*MEMTRACE_ROOT).to_owned());
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
                 let now = Instant::now();
                 io_metrics.flush(now);
-                mem_trace_metrics.flush(now);
             });
-    }
-
-    fn init_storage_stats_task(&self) {
-        let config_disk_capacity: u64 = self.config.raft_store.capacity.0;
-        let store_path = self.store_path.clone();
-        let disk_reserved = self.config.storage.reserve_space.0;
-        if disk_reserved == 0 {
-            info!("disk space checker not enabled");
-            return;
-        }
-        let engines = self.raw_engines.clone();
-        //TODO wal size ignore?
-        self.background_worker
-            .spawn_interval_task(DEFAULT_STORAGE_STATS_INTERVAL, move || {
-                let disk_stats = match fs2::statvfs(&store_path) {
-                    Err(e) => {
-                        error!(
-                            "get disk stat for kv store failed";
-                            "kv path" => store_path.to_str(),
-                            "err" => ?e
-                        );
-                        return;
-                    }
-                    Ok(stats) => stats,
-                };
-                let disk_cap = disk_stats.total_space();
-
-                let kv_size = engines
-                    .kv
-                    .get_engine_used_size()
-                    .expect("get kv engine size");
-
-                let raft_size = engines
-                    .raft
-                    .get_engine_size()
-                    .expect("get raft engine size");
-
-                let used_size = kv_size + raft_size;
-                let capacity = if config_disk_capacity == 0 || disk_cap < config_disk_capacity {
-                    disk_cap
-                } else {
-                    config_disk_capacity
-                };
-
-                let mut available = capacity.checked_sub(used_size).unwrap_or_default();
-                available = cmp::min(available, disk_stats.available_space());
-                if available <= disk_reserved {
-                    warn!(
-                        "disk full, available={},engine={},capacity={}",
-                        available, kv_size, capacity
-                    );
-                    disk::set_disk_full();
-                } else if disk::is_disk_full() {
-                    info!(
-                        "disk normalized, available={},engine={},capacity={}",
-                        available, kv_size, capacity
-                    );
-                    disk::clear_disk_full();
-                }
-            })
     }
 
     fn run_server(&mut self, server_config: Arc<VersionTrack<ServerConfig>>) {
@@ -848,8 +753,8 @@ impl TiKVServer {
 
         let dfs = Arc::new(kvengine::dfs::InMemFS::new());
         let opts = Arc::new(kvengine::Options::default());
-        let meta_iter = rfstore::store::MetaIterator::new(rf_engine.clone()).unwrap();
-        let recover = rfstore::store::RecoverHandler::new(rf_engine.clone()).unwrap();
+        let recoverer = rfstore::store::RecoverHandler::new(rf_engine.clone());
+        let meta_iter = recoverer.clone();
         let id_allocator = Arc::new(PdIDAllocator { pd });
         let (sender, receiver) = tikv_util::mpsc::unbounded();
         let meta_change_listener = Box::new(MetaChangeListener {
@@ -859,7 +764,7 @@ impl TiKVServer {
             dfs,
             opts,
             meta_iter,
-            recover,
+            recoverer,
             id_allocator,
             meta_change_listener,
         )

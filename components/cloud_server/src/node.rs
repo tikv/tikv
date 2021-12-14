@@ -13,7 +13,7 @@ use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
 use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
-use raftstore::store::initial_region;
+use raftstore::store::{initial_region, FlowStatsReporter};
 use rfengine::RFEngine;
 use rfstore::router::{LocalReadRouter, RaftRouter, RaftStoreRouter};
 use rfstore::store::store_fsm::StoreMeta;
@@ -23,6 +23,7 @@ use tikv::import::SSTImporter;
 use tikv::read_pool::ReadPoolHandle;
 use tikv::server::lock_manager::LockManager;
 use tikv::server::Config as ServerConfig;
+use tikv::storage::txn::flow_controller::FlowController;
 use tikv::storage::{config::Config as StorageConfig, Storage};
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::{FutureWorker, LazyWorker, Scheduler, Worker};
@@ -39,6 +40,8 @@ pub fn create_raft_storage(
     lock_mgr: LockManager,
     concurrency_manager: ConcurrencyManager,
     pipelined_pessimistic_lock: Arc<AtomicBool>,
+    flow_controller: Arc<FlowController>,
+    reporter: impl FlowStatsReporter,
 ) -> Result<Storage<RaftKv, LockManager>> {
     let store = Storage::from_engine(
         engine,
@@ -47,6 +50,8 @@ pub fn create_raft_storage(
         lock_mgr,
         concurrency_manager,
         pipelined_pessimistic_lock,
+        flow_controller,
+        reporter,
     )?;
     Ok(store)
 }
@@ -148,7 +153,6 @@ where
         pd_worker: LazyWorker<PdTask>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<kvengine::Engine>,
-        importer: Arc<SSTImporter>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
         let store_id = self.id();
@@ -177,7 +181,6 @@ where
             pd_worker,
             store_meta,
             coprocessor_host,
-            importer,
             concurrency_manager,
         )?;
 
@@ -355,7 +358,6 @@ where
         pd_worker: LazyWorker<PdTask>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<kvengine::Engine>,
-        importer: Arc<SSTImporter>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
         info!("start raft store thread"; "store_id" => store_id);

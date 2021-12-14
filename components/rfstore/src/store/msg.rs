@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::store::{ApplyMetrics, ApplyResult, ExecResult, Proposal, RegionSnapshot, StoreTick};
+use crate::Error;
 use bytes::Bytes;
 use kvproto::kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
@@ -25,19 +26,14 @@ pub enum PeerMsg {
     RaftCommand(RaftCommand),
     Tick,
     Start,
-    ApplyRes(MsgApplyResult),
-    DestroyRes {
-        // ID of peer that has been destroyed.
-        peer_id: u64,
-        // Whether destroy request is from its target region's snapshot
-        merge_from_snapshot: bool,
-    },
+    ApplyResult(MsgApplyResult),
     CasualMessage(CasualMessage),
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg),
     GenerateEngineChangeSet(kvenginepb::ChangeSet),
     WaitFollowerSplitFiles(MsgWaitFollowerSplitFiles),
+    ApplyChangeSetResult(MsgApplyChangeSetResult),
 }
 
 impl PeerMsg {
@@ -53,10 +49,8 @@ impl PeerMsg {
 pub(crate) enum ApplyMsg {
     Apply(MsgApply),
     Registration(MsgRegistration),
-    Destroy {
-        region_id: u64,
-        merge_from_snapshot: bool,
-    },
+    UnsafeDestroy { region_id: u64 },
+    Resume { region_id: u64 },
 }
 
 pub enum StoreMsg {
@@ -131,6 +125,12 @@ impl Debug for MsgWaitFollowerSplitFiles {
             self.split_keys,
         )
     }
+}
+
+#[derive(Debug)]
+pub struct MsgApplyChangeSetResult {
+    pub change_set: kvenginepb::ChangeSet,
+    pub err: Option<String>,
 }
 
 #[derive(Debug)]

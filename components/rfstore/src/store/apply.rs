@@ -137,6 +137,7 @@ pub enum ExecResult {
     ChangePeer(ChangePeer),
     SplitRegion { regions: Vec<Region> },
     DeleteRange { ranges: Vec<Range> },
+    UnsafeDestroy,
 }
 
 pub(crate) enum ApplyResult {
@@ -205,7 +206,6 @@ pub(crate) struct Applier {
     pub(crate) peer_idx: usize,
     pub(crate) term: u64,
     pub(crate) region: metapb::Region,
-    pub(crate) tag: String,
 
     /// If the applier should be stopped from polling.
     /// A applier can be stopped in conf change, merge or requested by destroy message.
@@ -236,12 +236,10 @@ impl Applier {
 
     pub(crate) fn new_from_reg(reg: MsgRegistration) -> Self {
         let peer_idx = get_peer_idx_by_store_id(&reg.region, reg.peer.store_id);
-        let tag = Self::make_tag(&reg.region);
         Self {
             peer_idx,
             term: reg.term,
             region: reg.region,
-            tag,
             stopped: false,
             pending_remove: false,
             pending_cmds: Default::default(),
@@ -253,11 +251,10 @@ impl Applier {
         }
     }
 
-    fn make_tag(region: &metapb::Region) -> String {
-        format!(
-            "({}:{})",
-            region.get_id(),
-            region.get_region_epoch().get_version()
+    fn tag(&self) -> RegionTag {
+        RegionTag::new(
+            self.region.get_id(),
+            self.region.get_region_epoch().get_version(),
         )
     }
 
@@ -268,12 +265,10 @@ impl Applier {
         apply_state: RaftApplyState,
     ) -> Self {
         let peer_idx = get_peer_idx_by_store_id(&region, store_id);
-        let tag = Self::make_tag(&region);
         Self {
             peer_idx,
             term: RAFT_INIT_LOG_TERM,
             region,
-            tag,
             stopped: false,
             pending_remove: false,
             pending_cmds: Default::default(),
@@ -460,7 +455,7 @@ impl Applier {
                 cs.sequence = ctx.exec_log_index;
                 if let Err(e) = ctx.engine.pre_split(cs) {
                     error!("failed to execute pre-split, maybe already split by ingest";
-                        "region" => &self.tag,
+                        "region" => self.tag(),
                     );
                 }
             }
@@ -564,8 +559,8 @@ impl Applier {
                     self.region = regions.last().unwrap().clone();
                 }
                 ExecResult::DeleteRange { .. } => {}
+                ExecResult::UnsafeDestroy { .. } => {}
             }
-            self.tag = Self::make_tag(&self.region);
         }
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
@@ -621,7 +616,7 @@ impl Applier {
         let data = entry.get_data();
 
         if !data.is_empty() {
-            let cmd = util::parse_data_at(data, index, &self.tag);
+            let cmd = parse_data_at(data, index, self.tag());
             assert!(index > 0);
             // if pending remove, apply should be aborted already.
             assert!(!self.pending_remove);
@@ -858,12 +853,6 @@ impl Applier {
             kind => self.apply_conf_change(kind, changes.as_slice())?,
         };
 
-        let state = if self.pending_remove {
-            PeerState::Tombstone
-        } else {
-            PeerState::Normal
-        };
-
         let mut resp = AdminResponse::default();
         resp.mut_change_peer().set_region(region.clone());
         Ok((
@@ -894,7 +883,9 @@ impl Applier {
                 if r == PeerRole::IncomingVoter || r == PeerRole::DemotingVoter {
                     panic!(
                         "{} can't apply confchange because configuration is still in joint state, confchange: {:?}, region: {:?}",
-                        self.tag, cp, self.region
+                        self.tag(),
+                        cp,
+                        self.region
                     );
                 }
             }
@@ -1045,15 +1036,14 @@ impl Applier {
         let (index, term) = (entry.get_index(), entry.get_term());
         let conf_change: ConfChangeV2 = match entry.get_entry_type() {
             EntryType::EntryConfChange => {
-                let conf_change: ConfChange =
-                    util::parse_data_at(entry.get_data(), index, &self.tag);
+                let conf_change: ConfChange = parse_data_at(entry.get_data(), index, self.tag());
                 use raft_proto::ConfChangeI;
                 conf_change.into_v2()
             }
-            EntryType::EntryConfChangeV2 => util::parse_data_at(entry.get_data(), index, &self.tag),
+            EntryType::EntryConfChangeV2 => parse_data_at(entry.get_data(), index, self.tag()),
             _ => unreachable!(),
         };
-        let cmd = util::parse_data_at(conf_change.get_context(), index, &self.tag);
+        let cmd = parse_data_at(conf_change.get_context(), index, self.tag());
         let (resp, result) = self.apply_raft_log(ctx, &cmd);
         self.handle_apply_result(ctx, resp, &result, true);
         match result {
@@ -1067,7 +1057,10 @@ impl Applier {
                 } else {
                     panic!(
                         "{} unexpected result {:?} for conf change {:?} at {}",
-                        self.tag, res, conf_change, index
+                        self.tag(),
+                        res,
+                        conf_change,
+                        index
                     );
                 }
                 ApplyResult::Res(res)
@@ -1090,7 +1083,8 @@ impl Applier {
         if change_num == 0 {
             panic!(
                 "{} can't leave a non-joint config, region: {:?}",
-                self.tag, self.region
+                self.tag(),
+                self.region
             );
         }
         let conf_ver = region.get_region_epoch().get_conf_ver() + change_num;
@@ -1123,7 +1117,7 @@ impl Applier {
             // This must be a follower that fall behind, we need to pause the apply and wait for split files to finish
             // in the background worker.
             warn!("region is not in split file done stage for finish split, pause apply";
-                "region" => &self.tag);
+                "region" => self.tag());
             result = ApplyResult::Yield;
             return Ok((resp, result));
         }
@@ -1198,7 +1192,7 @@ impl Applier {
             if expected_index != entry.get_index() {
                 panic!(
                     "{} expect index {}, but got {}",
-                    self.tag,
+                    self.tag(),
                     expected_index,
                     entry.get_index()
                 );
@@ -1243,7 +1237,7 @@ impl Applier {
         self.recover_split = false;
         if let Some(shard) = ctx.engine.get_shard(self.region.get_id()) {
             info!("shard set passive on role changed";
-                "region" => &self.tag);
+                "region" => self.tag());
             shard.set_active(new_role == StateRole::Leader);
             if new_role == StateRole::Leader {
                 ctx.engine.trigger_flush(&shard);
@@ -1260,7 +1254,7 @@ impl Applier {
             if shard.get_split_stage().value() >= kvenginepb::SplitStage::PreSplitFlushDone.value()
             {
                 self.recover_split = false;
-                info!("shard recover split"; "region" => &self.tag);
+                info!("shard recover split"; "region" => self.tag());
                 let task = RegionTask::RecoverSplit {
                     region: self.region.clone(),
                     peer: self.get_peer().clone(),
@@ -1331,9 +1325,6 @@ impl Applier {
             "peer_id" => peer_id,
         );
         self.stopped = true;
-        if let Some(router) = &ctx.router {
-            router.close(self.region_id());
-        }
         for cmd in self.pending_cmds.normals.drain(..) {
             notify_req_region_removed(self.region.get_id(), cmd.cb);
         }
@@ -1343,25 +1334,10 @@ impl Applier {
         self.yield_state = None;
     }
 
-    fn handle_destroy(
-        &mut self,
-        ctx: &mut ApplyContext,
-        region_id: u64,
-        merge_from_snapshot: bool,
-    ) {
+    fn handle_unsafe_destroy(&mut self, ctx: &mut ApplyContext, region_id: u64) {
         assert_eq!(region_id, self.region.get_id());
-        if merge_from_snapshot {
-            assert_eq!(self.stopped, false);
-        }
         if !self.stopped {
             self.destroy(ctx);
-            if let Some(router) = &ctx.router {
-                let msg = PeerMsg::DestroyRes {
-                    peer_id: self.get_peer().id,
-                    merge_from_snapshot,
-                };
-                router.send(self.region.get_id(), msg);
-            }
         }
     }
 
@@ -1373,11 +1349,8 @@ impl Applier {
             ApplyMsg::Registration(reg) => {
                 self.handle_registration(reg);
             }
-            ApplyMsg::Destroy {
-                region_id,
-                merge_from_snapshot,
-            } => {
-                self.handle_destroy(ctx, region_id, merge_from_snapshot);
+            ApplyMsg::UnsafeDestroy { region_id } => {
+                self.handle_unsafe_destroy(ctx, region_id);
             }
             _ => {
                 panic!("not supported")
@@ -1550,7 +1523,7 @@ impl ApplyContext {
                 apply_state: applier.apply_state,
             };
             let region_id = applier.region.get_id();
-            let msg = PeerMsg::ApplyRes(apply_res);
+            let msg = PeerMsg::ApplyResult(apply_res);
             router.peer_sender.send((region_id, msg)).unwrap();
         }
     }

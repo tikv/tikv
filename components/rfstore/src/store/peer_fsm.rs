@@ -4,6 +4,7 @@ use bytes::Bytes;
 use engine_traits::SSTMetaInfo;
 use error_code::ErrorCodeExt;
 use fail::fail_point;
+use kvengine::ShardMeta;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SwitchMode;
 use kvproto::kvrpcpb::DiskFullOpt;
@@ -18,7 +19,7 @@ use kvproto::raft_serverpb::{
     RaftSnapshotData, RaftTruncatedState, RegionLocalState,
 };
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
-use protobuf::Message;
+use protobuf::{Message, ProtobufEnum};
 use raft::eraftpb::{ConfChangeType, Entry, EntryType, MessageType};
 use raft::{self, Progress, ReadState, Ready, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
 use raft_proto::eraftpb;
@@ -41,7 +42,10 @@ use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::msg::{Callback, ExtCallback};
 use crate::store::peer::{ConsistencyState, Peer, StaleState};
 use crate::store::transport::Transport;
-use crate::store::{apply, ApplyMetrics, ChangePeer, ExecResult, MsgApply};
+use crate::store::{
+    apply, write_peer_state, ApplyMetrics, ChangePeer, ExecResult, MsgApply,
+    MsgApplyChangeSetResult, SnapState,
+};
 use crate::store::{
     notify_req_region_removed, ApplySnapResult, CustomBuilder, MsgWaitFollowerSplitFiles, PdTask,
 };
@@ -67,12 +71,6 @@ use txn_types::WriteBatchFlags;
 /// Another choice is using coprocessor batch limit, but 10 should be a good fit in most case.
 const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
-
-pub struct DestroyPeerJob {
-    pub initialized: bool,
-    pub region_id: u64,
-    pub peer: metapb::Peer,
-}
 
 pub struct PeerFsm {
     pub(crate) peer: Peer,
@@ -207,21 +205,18 @@ impl<'a> PeerMsgHandler<'a> {
                     self.propose_raft_command(cmd.request, cmd.callback);
                 }
                 PeerMsg::Tick => self.on_tick(),
-                PeerMsg::ApplyRes(res) => {
-                    self.on_apply_res(res);
+                PeerMsg::ApplyResult(res) => {
+                    self.on_apply_result(res);
                 }
                 PeerMsg::SignificantMsg(msg) => self.on_significant_msg(msg),
                 PeerMsg::CasualMessage(msg) => self.on_casual_msg(msg),
                 PeerMsg::Start => self.start(),
-                PeerMsg::DestroyRes {
-                    peer_id,
-                    merge_from_snapshot,
-                } => {
-                    self.on_destroy_res(peer_id, merge_from_snapshot);
-                }
                 PeerMsg::GenerateEngineChangeSet(cs) => self.on_generate_engine_change_set(cs),
                 PeerMsg::WaitFollowerSplitFiles(msg) => {
                     self.on_wait_follower_split_files(msg);
+                }
+                PeerMsg::ApplyChangeSetResult(res) => {
+                    self.on_apply_change_set_result(res);
                 }
             }
         }
@@ -341,7 +336,7 @@ impl<'a> PeerMsgHandler<'a> {
         self.ticker.schedule(PEER_TICK_RAFT)
     }
 
-    fn on_apply_res(&mut self, mut res: MsgApplyResult) {
+    fn on_apply_result(&mut self, mut res: MsgApplyResult) {
         fail_point!("on_apply_res", |_| {});
         debug!(
             "async apply finish";
@@ -543,22 +538,12 @@ impl<'a> PeerMsgHandler<'a> {
                 true
             }
             cmp::Ordering::Greater => {
-                match self.fsm.peer.maybe_destroy() {
-                    Some(job) => {
-                        info!(
-                            "target peer id is larger, destroying self";
-                            "region_id" => self.fsm.region_id(),
-                            "peer_id" => self.fsm.peer_id(),
-                            "target_peer" => ?target,
-                        );
-                        if self.handle_destroy_peer(job) {
-                            self.ctx
-                                .global
-                                .router
-                                .send_store(StoreMsg::RaftMessage(msg.clone()));
-                        }
-                    }
-                    None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
+                if self.fsm.peer.maybe_destroy() {
+                    self.ctx.apply_msgs.msgs.push(ApplyMsg::UnsafeDestroy {
+                        region_id: self.region_id(),
+                    });
+                } else {
+                    self.ctx.raft_metrics.message_dropped.applying_snap += 1;
                 }
                 true
             }
@@ -587,11 +572,13 @@ impl<'a> PeerMsgHandler<'a> {
             "peer_id" => self.fsm.peer_id(),
             "to_peer" => ?msg.get_to_peer(),
         );
-        match self.fsm.peer.maybe_destroy() {
-            None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
-            Some(job) => {
-                self.handle_destroy_peer(job);
-            }
+        if self.fsm.peer.maybe_destroy() {
+            // Destroy the apply fsm first, wait for the reply msg from apply fsm
+            self.ctx.apply_msgs.msgs.push(ApplyMsg::UnsafeDestroy {
+                region_id: self.region_id(),
+            });
+        } else {
+            self.ctx.raft_metrics.message_dropped.applying_snap += 1;
         }
     }
 
@@ -613,29 +600,12 @@ impl<'a> PeerMsgHandler<'a> {
         // TODO(x)
     }
 
-    fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
-        // The initialized flag implicitly means whether apply fsm exists or not.
-        if job.initialized {
-            // Destroy the apply fsm first, wait for the reply msg from apply fsm
-            self.ctx.apply_msgs.msgs.push(ApplyMsg::Destroy {
-                region_id: job.region_id,
-                merge_from_snapshot: false,
-            });
-            false
-        } else {
-            // Destroy the peer fsm directly
-            self.destroy_peer(false);
-            true
-        }
-    }
-
-    fn destroy_peer(&mut self, merged_by_target: bool) {
+    fn destroy_peer(&mut self, keep_data: bool) {
         fail_point!("destroy_peer");
         info!(
             "starts destroy";
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
-            "merged_by_target" => merged_by_target,
         );
         let region_id = self.region_id();
         // We can't destroy a peer which is applying snapshot.
@@ -670,11 +640,7 @@ impl<'a> PeerMsgHandler<'a> {
             );
         }
         let is_initialized = self.fsm.peer.is_initialized();
-        if let Err(e) = self
-            .fsm
-            .peer
-            .destroy(&self.ctx.global.engines, merged_by_target)
-        {
+        if let Err(e) = self.fsm.peer.destroy(&self.ctx.global.engines.raft) {
             // If not panic here, the peer will be recreated in the next restart,
             // then it will be gc again. But if some overlap region is created
             // before restarting, the gc action will delete the overlap region's
@@ -687,7 +653,7 @@ impl<'a> PeerMsgHandler<'a> {
         self.fsm.stop();
 
         if is_initialized
-            && !merged_by_target
+            && !keep_data
             && meta
                 .region_ranges
                 .remove(&raw_end_key(self.fsm.peer.region()))
@@ -695,10 +661,11 @@ impl<'a> PeerMsgHandler<'a> {
         {
             panic!("{} meta corruption detected", self.fsm.peer.tag());
         }
-        if meta.regions.remove(&region_id).is_none() && !merged_by_target {
+        if meta.regions.remove(&region_id).is_none() && !keep_data {
             panic!("{} meta corruption detected", self.fsm.peer.tag())
         }
         meta.leaders.remove(&region_id);
+        self.ctx.global.engines.kv.remove_shard(region_id);
     }
 
     // Update some region infos
@@ -711,6 +678,7 @@ impl<'a> PeerMsgHandler<'a> {
                 &mut self.fsm.peer,
             );
         }
+        write_peer_state(&mut self.ctx.raft_wb, &region);
         for peer in region.take_peers().into_iter() {
             if self.fsm.peer.peer_id() == peer.get_id() {
                 self.fsm.peer.peer = peer.clone();
@@ -830,6 +798,10 @@ impl<'a> PeerMsgHandler<'a> {
 
     fn on_ready_split_region(&mut self, regions: Vec<metapb::Region>) {
         fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
+
+        for region in &regions {
+            write_peer_state(&mut self.ctx.raft_wb, region);
+        }
 
         let derived = regions.last().unwrap().clone();
         let region_id = derived.get_id();
@@ -988,6 +960,9 @@ impl<'a> PeerMsgHandler<'a> {
                 ExecResult::SplitRegion { regions } => self.on_ready_split_region(regions),
                 ExecResult::DeleteRange { .. } => {
                     // TODO: clean user properties?
+                }
+                ExecResult::UnsafeDestroy => {
+                    self.destroy_peer(false);
                 }
             }
         }
@@ -1314,10 +1289,6 @@ impl<'a> PeerMsgHandler<'a> {
         self.fsm.peer.heartbeat_pd(&self.ctx);
     }
 
-    fn on_destroy_res(&mut self, peer_id: u64, merge_from_snapshot: bool) {
-        todo!()
-    }
-
     fn on_generate_engine_change_set(&mut self, cs: kvenginepb::ChangeSet) {
         info!("generate meta change event"; "region" => self.peer.tag());
         let mut req = self.new_raft_cmd_request();
@@ -1340,7 +1311,47 @@ impl<'a> PeerMsgHandler<'a> {
     }
 
     fn on_wait_follower_split_files(&mut self, msg: MsgWaitFollowerSplitFiles) {
-        todo!()
+        self.peer.wait_follower_split_files = Some(msg);
+    }
+
+    fn on_apply_change_set_result(&mut self, mut msg: MsgApplyChangeSetResult) {
+        let mut change = msg.change_set;
+        let tag = self.peer.tag();
+        if msg.err.is_some() {
+            let err = msg.err.take().unwrap();
+            error!(
+                "region failed to apply change set";
+                "err" => ?err,
+                "region" => tag,
+            );
+            if change.has_snapshot() {
+                self.peer.mut_store().snap_state = SnapState::ApplyAborted;
+            }
+            return;
+        }
+        info!("on apply change set result"; "region" => tag);
+
+        if change.has_snapshot() {
+            let store = self.peer.mut_store();
+            store.initial_flushed = true;
+            store.snap_state = SnapState::Relax;
+            store.shard_meta = Some(ShardMeta::new(change));
+            return;
+        }
+        if change.has_split_files() {
+            self.ctx.apply_msgs.msgs.push(ApplyMsg::Resume {
+                region_id: self.region_id(),
+            })
+        }
+        let split_stage = self.peer.get_store().split_stage;
+        if change.get_stage().value() >= split_stage.value() {
+            info!("peer storage split stage changed";
+                "region" => tag,
+                "from" => split_stage.value(),
+                "to" => change.get_stage().value(),
+            );
+            self.peer.mut_store().split_stage = change.get_stage();
+        }
     }
 }
 

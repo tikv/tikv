@@ -292,6 +292,7 @@ impl RFEngine {
         Ok(())
     }
 
+    /// f returns false to stop iterating.
     pub fn iterate_all_states<F>(&self, desc: bool, mut f: F)
     where
         F: FnMut(u64, &[u8], &[u8]) -> bool,

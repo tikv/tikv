@@ -13,7 +13,7 @@ use rfstore::router::RaftStoreRouter;
 use tikv::server::resolve::Callback;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
-use super::metrics::*;
+use tikv::server::metrics::*;
 use tikv::server::Result;
 
 const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;

@@ -20,7 +20,6 @@ use tokio_timer::timer::Handle;
 
 use engine_rocks::RocksEngine;
 use rfstore::router::RaftStoreRouter;
-use rfstore::store::CheckLeaderTask;
 use security::SecurityManager;
 use tikv::coprocessor::Endpoint;
 use tikv::coprocessor_v2;
@@ -151,7 +150,6 @@ impl<T: RaftStoreRouter + Unpin, S: StoreAddrResolver + 'static> Server<T, S> {
         copr_v2: coprocessor_v2::Endpoint,
         raft_router: T,
         resolver: S,
-        check_leader_scheduler: Scheduler<CheckLeaderTask>,
         env: Arc<Environment>,
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
@@ -178,7 +176,6 @@ impl<T: RaftStoreRouter + Unpin, S: StoreAddrResolver + 'static> Server<T, S> {
             copr,
             copr_v2,
             raft_router.clone(),
-            check_leader_scheduler,
             Arc::clone(&grpc_thread_load),
             cfg.value().enable_request_batch,
             proxy,

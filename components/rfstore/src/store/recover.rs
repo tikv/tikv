@@ -17,6 +17,7 @@ use slog_global::info;
 use std::fmt::format;
 use std::sync::Arc;
 
+#[derive(Clone)]
 pub struct RecoverHandler {
     rf_engine: rfengine::RFEngine,
     store_id: u64,

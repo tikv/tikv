@@ -20,7 +20,7 @@ use futures::channel::mpsc::UnboundedSender;
 use kvengine::ShardMeta;
 use kvenginepb::Snapshot;
 use kvproto::metapb::Region;
-use kvproto::raft_serverpb::RaftLocalState;
+use kvproto::raft_serverpb::{PeerState, RaftLocalState};
 use protobuf::Message;
 use raft::StorageError::Unavailable;
 use raft::{is_empty_snap, StorageError};
@@ -86,11 +86,12 @@ pub(crate) struct PeerStorage {
     apply_state: RaftApplyState,
     last_term: u64,
 
-    snap_state: SnapState,
+    pub(crate) snap_state: SnapState,
     snap_tried_cnt: usize,
 
-    initial_flushed: bool,
-    shard_meta: Option<kvengine::ShardMeta>,
+    pub(crate) initial_flushed: bool,
+    pub(crate) shard_meta: Option<kvengine::ShardMeta>,
+    pub(crate) split_stage: kvenginepb::SplitStage,
 }
 
 impl raft::Storage for PeerStorage {
@@ -224,6 +225,7 @@ impl PeerStorage {
             snap_tried_cnt: 0,
             initial_flushed,
             shard_meta,
+            split_stage: kvenginepb::SplitStage::Initial,
         })
     }
 
@@ -241,11 +243,6 @@ impl PeerStorage {
 
     pub(crate) fn is_initialized(&self) -> bool {
         self.shard_meta.is_some()
-    }
-
-    pub(crate) fn clear_data(&self) -> Result<()> {
-        // Todo: currently it is a place holder
-        Ok(())
     }
 
     #[inline]
@@ -397,11 +394,7 @@ impl PeerStorage {
             // we can only delete the old data when the peer is initialized.
             self.clear_meta(&mut ctx.raft_wb);
         }
-        write_peer_state(
-            &mut ctx.raft_wb,
-            &region,
-            raft_serverpb::PeerState::Applying,
-        );
+        write_peer_state(&mut ctx.raft_wb, &region);
         let last_index = snap.get_metadata().get_index();
         let last_term = snap.get_metadata().get_term();
         self.raft_state.last_index = last_index;
@@ -536,13 +529,9 @@ pub fn write_initial_apply_state(kv_wb: &mut kvengine::WriteBatch) {
     kv_wb.set_sequence(RAFT_INIT_LOG_INDEX);
 }
 
-pub fn write_peer_state(
-    raft_wb: &mut rfengine::WriteBatch,
-    region: &metapb::Region,
-    state: raft_serverpb::PeerState,
-) {
+pub fn write_peer_state(raft_wb: &mut rfengine::WriteBatch, region: &metapb::Region) {
     let mut region_state = raft_serverpb::RegionLocalState::default();
-    region_state.set_state(state);
+    region_state.set_state(PeerState::Normal);
     region_state.set_region(region.clone());
     let state_bin = region_state.write_to_bytes().unwrap();
     let epoch = region.get_region_epoch();

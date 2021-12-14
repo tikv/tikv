@@ -107,13 +107,13 @@ impl RaftBatchSystem {
         let region_apply_runner = RegionApplyRunner::new(engines.kv.clone(), self.router());
         let region_apply_scheduler = workers
             .region_apply_worker
-            .start_with_timer("region-apply-worker", region_apply_runner);
+            .start("region-apply-worker", region_apply_runner);
 
         let region_runner =
             RegionRunner::new(engines.kv.clone(), self.router(), region_apply_scheduler);
         let region_scheduler = workers
             .region_worker
-            .start_with_timer("snapshot-worker", region_runner);
+            .start("snapshot-worker", region_runner);
         let split_check_runner = SplitCheckRunner::new(engines.kv.clone(), self.router());
         let split_check_scheduler = workers
             .split_check_worker
@@ -203,7 +203,42 @@ impl RaftBatchSystem {
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
     fn load_peers(&self) -> Result<Vec<PeerFsm>> {
-        todo!()
+        // Scan region meta to get saved regions.
+        let ctx = self.ctx.as_ref().unwrap();
+        let mut regions = vec![];
+        let mut last_region_id: u64 = 0;
+        ctx.engines
+            .raft
+            .iterate_all_states(true, |region_id, key, val| -> bool {
+                if region_id == last_region_id {
+                    return true;
+                }
+                if key[0] != REGION_META_KEY_BYTE {
+                    return true;
+                }
+                last_region_id = region_id;
+                let mut local_state = RegionLocalState::default();
+                local_state.merge_from_bytes(val);
+                regions.push(local_state.get_region().clone());
+                true
+            });
+        let mut peers = vec![];
+        let store_id = self.store_fsm.as_ref().unwrap().id;
+        let mut store_meta = ctx.store_meta.lock().unwrap();
+        for region in &regions {
+            let mut peer =
+                PeerFsm::create(store_id, &ctx.cfg.value(), ctx.engines.clone(), region)?;
+            let shard = ctx.engines.kv.get_shard(region.get_id()).unwrap();
+            let peer_store = peer.peer.mut_store();
+            peer_store.initial_flushed = shard.get_initial_flushed();
+            peer_store.split_stage = shard.get_split_stage();
+            store_meta
+                .region_ranges
+                .insert(raw_end_key(region), region.get_id());
+            store_meta.regions.insert(region.get_id(), region.clone());
+            peers.push(peer);
+        }
+        Ok(peers)
     }
 }
 

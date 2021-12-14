@@ -255,7 +255,7 @@ where
     R: RaftStoreRouter,
 {
     let to_peer = msg.get_to_peer();
-    let _ = router.report_unreachable(msg.region_id, to_peer.id);
+    let _ = router.report_unreachable(to_peer.store_id);
 }
 
 fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
@@ -724,7 +724,7 @@ where
             if self.last_hash.0 == 0 || msg.region_id != self.last_hash.0 {
                 self.last_hash = (
                     msg.region_id,
-                    seahash::hash(msg.region_id.as_ne_bytes())
+                    seahash::hash(&msg.region_id.to_le_bytes())
                         % self.builder.cfg.grpc_raft_conn_num as u64,
                 );
             };

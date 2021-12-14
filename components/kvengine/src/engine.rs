@@ -194,13 +194,10 @@ impl EngineCore {
         None
     }
 
-    pub fn remove_shard(&self, shard_id: u64, remove_file: bool) -> bool {
+    pub fn remove_shard(&self, shard_id: u64) -> bool {
         let g = epoch::pin();
         let x = self.shards.remove(&shard_id);
         if let Some((_, ptr)) = x {
-            if remove_file {
-                ptr.remove_file.store(true, Ordering::Relaxed);
-            }
             return true;
         }
         false

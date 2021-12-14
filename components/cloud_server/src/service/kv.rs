@@ -17,12 +17,10 @@ use grpcio::{
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, *};
 use kvproto::kvrpcpb::*;
-use kvproto::mpp::Error as MPPError;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use rfstore::router::RaftStoreRouter;
-use rfstore::store::CheckLeaderTask;
 use rfstore::store::{Callback, CasualMessage};
 use rfstore::{DiscardReason, Error as RaftStoreError};
 use tikv::coprocessor::Endpoint;
@@ -59,8 +57,6 @@ pub struct Service<T: RaftStoreRouter, L: LockManager> {
     copr_v2: coprocessor_v2::Endpoint,
     // For handling raft messages.
     ch: T,
-    // For handling `CheckLeader` request.
-    check_leader_scheduler: Scheduler<CheckLeaderTask>,
 
     enable_req_batch: bool,
 
@@ -77,7 +73,6 @@ impl<T: RaftStoreRouter + Clone + 'static, L: LockManager + Clone> Clone for Ser
             copr: self.copr.clone(),
             copr_v2: self.copr_v2.clone(),
             ch: self.ch.clone(),
-            check_leader_scheduler: self.check_leader_scheduler.clone(),
             enable_req_batch: self.enable_req_batch,
             grpc_thread_load: self.grpc_thread_load.clone(),
             proxy: self.proxy.clone(),
@@ -93,7 +88,6 @@ impl<T: RaftStoreRouter + 'static, L: LockManager> Service<T, L> {
         copr: Endpoint<RaftKv>,
         copr_v2: coprocessor_v2::Endpoint,
         ch: T,
-        check_leader_scheduler: Scheduler<CheckLeaderTask>,
         grpc_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
         proxy: Proxy,
@@ -104,7 +98,6 @@ impl<T: RaftStoreRouter + 'static, L: LockManager> Service<T, L> {
             copr,
             copr_v2,
             ch,
-            check_leader_scheduler,
             enable_req_batch,
             grpc_thread_load,
             proxy,
@@ -124,7 +117,7 @@ macro_rules! handle_request {
                 sink.success(resp).await?;
                 GRPC_MSG_HISTOGRAM_STATIC
                     .$fn_name
-                    .observe(duration_to_sec(begin_instant.elapsed()));
+                    .observe(duration_to_sec(begin_instant.saturating_elapsed()));
                 ServerResult::Ok(())
             }
             .map_err(|e| {
@@ -242,11 +235,11 @@ impl<T: RaftStoreRouter + 'static, L: LockManager> Tikv for Service<T, L> {
         let begin_instant = Instant::now_coarse();
         let future = future_copr(&self.copr, Some(ctx.peer()), req);
         let task = async move {
-            let resp = future.await?;
+            let resp = future.await?.consume();
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .coprocessor
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -296,7 +289,7 @@ impl<T: RaftStoreRouter + 'static, L: LockManager> Tikv for Service<T, L> {
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .unsafe_destroy_range
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
             .map_err(|e| {
@@ -334,7 +327,7 @@ impl<T: RaftStoreRouter + 'static, L: LockManager> Tikv for Service<T, L> {
                 Ok(_) => {
                     GRPC_MSG_HISTOGRAM_STATIC
                         .coprocessor_stream
-                        .observe(duration_to_sec(begin_instant.elapsed()));
+                        .observe(duration_to_sec(begin_instant.saturating_elapsed()));
                     let _ = sink.close().await;
                 }
                 Err(e) => {
@@ -501,7 +494,7 @@ impl<T: RaftStoreRouter + 'static, L: LockManager> Tikv for Service<T, L> {
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .split_region
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -596,7 +589,7 @@ impl<T: RaftStoreRouter + 'static, L: LockManager> Tikv for Service<T, L> {
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .read_index
-                .observe(begin_instant.elapsed_secs());
+                .observe(begin_instant.saturating_elapsed_secs());
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -659,19 +652,26 @@ impl<T: RaftStoreRouter + 'static, L: LockManager> Tikv for Service<T, L> {
         let response_retriever = BatchReceiver::new(
             rx,
             GRPC_MSG_MAX_BATCH_SIZE,
-            BatchCommandsResponse::default,
+            MeasuredBatchResponse::default,
             BatchRespCollector,
         );
 
-        let mut response_retriever = response_retriever
-            .inspect(|r| GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64))
-            .map(move |mut r| {
-                r.set_transport_layer_load(thread_load.load() as u64);
-                GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
-                    r,
-                    WriteFlags::default().buffer_hint(false),
-                ))
-            });
+        let mut response_retriever = response_retriever.map(move |item| {
+            for measure in item.measures {
+                let GrpcRequestDuration { label, begin } = measure;
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .get(label)
+                    .observe(begin.saturating_elapsed_secs());
+            }
+
+            let mut r = item.batch_resp;
+            GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64);
+            r.set_transport_layer_load(thread_load.load() as u64);
+            GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
+                r,
+                WriteFlags::default().buffer_hint(false),
+            ))
+        });
 
         let send_task = async move {
             sink.send_all(&mut response_retriever).await?;
@@ -704,27 +704,7 @@ impl<T: RaftStoreRouter + 'static, L: LockManager> Tikv for Service<T, L> {
         mut request: CheckLeaderRequest,
         sink: UnarySink<CheckLeaderResponse>,
     ) {
-        let ts = request.get_ts();
-        let leaders = request.take_regions().into();
-        let (cb, resp) = paired_future_callback();
-        let check_leader_scheduler = self.check_leader_scheduler.clone();
-        let task = async move {
-            check_leader_scheduler
-                .schedule(CheckLeaderTask::CheckLeader { leaders, cb })
-                .map_err(|e| Error::Other(format!("{}", e).into()))?;
-            let regions = resp.await?;
-            let mut resp = CheckLeaderResponse::default();
-            resp.set_ts(ts);
-            resp.set_regions(regions);
-            sink.success(resp).await?;
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            warn!("call CheckLeader failed"; "err" => ?e);
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
+        unimplemented!()
     }
 
     fn get_store_safe_ts(
@@ -733,25 +713,7 @@ impl<T: RaftStoreRouter + 'static, L: LockManager> Tikv for Service<T, L> {
         mut request: StoreSafeTsRequest,
         sink: UnarySink<StoreSafeTsResponse>,
     ) {
-        let key_range = request.take_key_range();
-        let (cb, resp) = paired_future_callback();
-        let check_leader_scheduler = self.check_leader_scheduler.clone();
-        let task = async move {
-            check_leader_scheduler
-                .schedule(CheckLeaderTask::GetStoreTs { key_range, cb })
-                .map_err(|e| Error::Other(format!("{}", e).into()))?;
-            let store_safe_ts = resp.await?;
-            let mut resp = StoreSafeTsResponse::default();
-            resp.set_safe_ts(store_safe_ts);
-            sink.success(resp).await?;
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            warn!("call GetStoreSafeTS failed"; "err" => ?e);
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
+        unimplemented!()
     }
 
     fn get_lock_wait_info(
@@ -777,23 +739,22 @@ impl<T: RaftStoreRouter + 'static, L: LockManager> Tikv for Service<T, L> {
     }
 }
 
-fn response_batch_commands_request<F>(
+fn response_batch_commands_request<F, T>(
     id: u64,
     resp: F,
-    tx: Sender<(u64, batch_commands_response::Response)>,
-    begin_instant: Instant,
-    label_enum: GrpcTypeKind,
+    tx: Sender<MeasuredSingleResponse>,
+    begin: Instant,
+    label: GrpcTypeKind,
 ) where
-    F: Future<Output = Result<batch_commands_response::Response, ()>> + Send + 'static,
+    MemoryTraceGuard<batch_commands_response::Response>: From<T>,
+    F: Future<Output = Result<T, ()>> + Send + 'static,
 {
     let task = async move {
         if let Ok(resp) = resp.await {
-            if let Err(e) = tx.send_and_notify((id, resp)) {
+            let measure = GrpcRequestDuration { begin, label };
+            let task = MeasuredSingleResponse::new(id, resp, measure);
+            if let Err(e) = tx.send_and_notify(task) {
                 error!("KvService response batch commands fail"; "err" => ?e);
-            } else {
-                GRPC_MSG_HISTOGRAM_STATIC
-                    .get(label_enum)
-                    .observe(begin_instant.elapsed_secs());
             }
         }
     };
@@ -808,71 +769,325 @@ fn handle_batch_commands_request<L: LockManager>(
     peer: &str,
     id: u64,
     req: batch_commands_request::Request,
-    tx: &Sender<(u64, batch_commands_response::Response)>,
+    tx: &Sender<MeasuredSingleResponse>,
 ) {
-    // To simplify code and make the logic more clear.
-    macro_rules! oneof {
-        ($p:path) => {
-            |resp| batch_commands_response::Response {
-                cmd: Some($p(resp)),
-                ..Default::default()
-            }
-        };
-    }
-
-    macro_rules! handle_cmd {
-        ($($cmd: ident, $future_fn: ident ( $($arg: expr),* ), $metric_name: ident;)*) => {
-            match req.cmd {
-                None => {
-                    // For some invalid requests.
-                    let begin_instant = Instant::now();
-                    let resp = future::ok(batch_commands_response::Response::default());
-                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid);
-                },
-                Some(batch_commands_request::request::Cmd::Get(req)) => {
-                    if batcher.as_mut().map_or(false, |req_batch| {
-                        req_batch.can_batch_get(&req)
-                    }) {
-                        batcher.as_mut().unwrap().add_get_request(req, id);
-                    } else {
-                       let begin_instant = Instant::now();
-                       let resp = future_get(storage, req)
-                            .map_ok(oneof!(batch_commands_response::response::Cmd::Get))
-                            .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
-                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get);
-                    }
-                },
-                $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
-                    let begin_instant = Instant::now();
-                    let resp = $future_fn($($arg,)* req)
-                        .map_ok(oneof!(batch_commands_response::response::Cmd::$cmd))
-                        .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());
-                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name);
-                })*
-                Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
-                _ => unimplemented!(),
+    match req.cmd {
+        None => {
+            let begin_instant = Instant::now();
+            let resp = future::ok(batch_commands_response::Response::default());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::invalid,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::Get(req)) => {
+            if batcher
+                .as_mut()
+                .map_or(false, |req_batch| req_batch.can_batch_get(&req))
+            {
+                batcher.as_mut().unwrap().add_get_request(req, id);
+            } else {
+                let begin_instant = Instant::now();
+                let resp = future_get(storage, req)
+                    .map_ok(|resp| batch_commands_response::Response {
+                        cmd: Some(batch_commands_response::response::Cmd::Get(resp)),
+                        ..Default::default()
+                    })
+                    .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
+                response_batch_commands_request(
+                    id,
+                    resp,
+                    tx.clone(),
+                    begin_instant,
+                    GrpcTypeKind::kv_get,
+                );
             }
         }
-    }
-
-    handle_cmd! {
-        Scan, future_scan(storage), kv_scan;
-        Prewrite, future_prewrite(storage), kv_prewrite;
-        Commit, future_commit(storage), kv_commit;
-        Cleanup, future_cleanup(storage), kv_cleanup;
-        BatchGet, future_batch_get(storage), kv_batch_get;
-        BatchRollback, future_batch_rollback(storage), kv_batch_rollback;
-        TxnHeartBeat, future_txn_heart_beat(storage), kv_txn_heart_beat;
-        CheckTxnStatus, future_check_txn_status(storage), kv_check_txn_status;
-        CheckSecondaryLocks, future_check_secondary_locks(storage), kv_check_secondary_locks;
-        ScanLock, future_scan_lock(storage), kv_scan_lock;
-        ResolveLock, future_resolve_lock(storage), kv_resolve_lock;
-        Gc, future_gc(), kv_gc;
-        DeleteRange, future_delete_range(storage), kv_delete_range;
-        Coprocessor, future_copr(copr, Some(peer.to_string())), coprocessor;
-        PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
-        PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
-        Empty, future_handle_empty(), invalid;
+        Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
+            let begin_instant = Instant::now();
+            let resp = future_copr(copr, Some(peer.to_string()), req)
+                .map_ok(|resp| {
+                    resp.map(|resp| batch_commands_response::Response {
+                        cmd: Some(batch_commands_response::response::Cmd::Coprocessor(resp)),
+                        ..Default::default()
+                    })
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::coprocessor,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::Scan(req)) => {
+            let begin_instant = Instant::now();
+            let resp = future_scan(storage, req)
+                .map_ok(|resp| batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::Scan(resp)),
+                    ..Default::default()
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_scan.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::kv_scan,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::Prewrite(req)) => {
+            let begin_instant = Instant::now();
+            let resp = future_prewrite(storage, req)
+                .map_ok(|resp| batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::Prewrite(resp)),
+                    ..Default::default()
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_prewrite.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::kv_prewrite,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::Commit(req)) => {
+            let begin_instant = Instant::now();
+            let resp = future_commit(storage, req)
+                .map_ok(|resp| batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::Commit(resp)),
+                    ..Default::default()
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_commit.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::kv_commit,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::Cleanup(req)) => {
+            let begin_instant = Instant::now();
+            let resp = future_cleanup(storage, req)
+                .map_ok(|resp| batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::Cleanup(resp)),
+                    ..Default::default()
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_cleanup.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::kv_cleanup,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::BatchGet(req)) => {
+            let begin_instant = Instant::now();
+            let resp = future_batch_get(storage, req)
+                .map_ok(|resp| batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::BatchGet(resp)),
+                    ..Default::default()
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_get.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::kv_batch_get,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::BatchRollback(req)) => {
+            let begin_instant = Instant::now();
+            let resp = future_batch_rollback(storage, req)
+                .map_ok(|resp| batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::BatchRollback(resp)),
+                    ..Default::default()
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_rollback.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::kv_batch_rollback,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::TxnHeartBeat(req)) => {
+            let begin_instant = Instant::now();
+            let resp = future_txn_heart_beat(storage, req)
+                .map_ok(|resp| batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::TxnHeartBeat(resp)),
+                    ..Default::default()
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_txn_heart_beat.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::kv_txn_heart_beat,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::CheckTxnStatus(req)) => {
+            let begin_instant = Instant::now();
+            let resp = future_check_txn_status(storage, req)
+                .map_ok(|resp| batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::CheckTxnStatus(resp)),
+                    ..Default::default()
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_check_txn_status.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::kv_check_txn_status,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::CheckSecondaryLocks(req)) => {
+            let begin_instant = Instant::now();
+            let resp = future_check_secondary_locks(storage, req)
+                .map_ok(|resp| batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::CheckSecondaryLocks(
+                        resp,
+                    )),
+                    ..Default::default()
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_check_secondary_locks.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::kv_check_secondary_locks,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::ScanLock(req)) => {
+            let begin_instant = Instant::now();
+            let resp = future_scan_lock(storage, req)
+                .map_ok(|resp| batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::ScanLock(resp)),
+                    ..Default::default()
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_scan_lock.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::kv_scan_lock,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::ResolveLock(req)) => {
+            let begin_instant = Instant::now();
+            let resp = future_resolve_lock(storage, req)
+                .map_ok(|resp| batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::ResolveLock(resp)),
+                    ..Default::default()
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_resolve_lock.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::kv_resolve_lock,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::Gc(req)) => {
+            let begin_instant = Instant::now();
+            let resp = future_gc(req)
+                .map_ok(|resp| batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::Gc(resp)),
+                    ..Default::default()
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_gc.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::kv_gc,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::DeleteRange(req)) => {
+            let begin_instant = Instant::now();
+            let resp = future_delete_range(storage, req)
+                .map_ok(|resp| batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::DeleteRange(resp)),
+                    ..Default::default()
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_delete_range.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::kv_delete_range,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::PessimisticLock(req)) => {
+            let begin_instant = Instant::now();
+            let resp = future_acquire_pessimistic_lock(storage, req)
+                .map_ok(|resp| batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::PessimisticLock(
+                        resp,
+                    )),
+                    ..Default::default()
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_lock.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::kv_pessimistic_lock,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::PessimisticRollback(req)) => {
+            let begin_instant = Instant::now();
+            let resp = future_pessimistic_rollback(storage, req)
+                .map_ok(|resp| batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::PessimisticRollback(
+                        resp,
+                    )),
+                    ..Default::default()
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_rollback.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::kv_pessimistic_rollback,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::Empty(req)) => {
+            let begin_instant = Instant::now();
+            let resp = future_handle_empty(req)
+                .map_ok(|resp| batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::Empty(resp)),
+                    ..Default::default()
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.invalid.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::invalid,
+            );
+        }
+        Some(batch_commands_request::request::Cmd::Import(_)) => panic!("not implemented"),
+        _ => panic!("not implemented"),
     }
 }
 
@@ -901,13 +1116,13 @@ fn future_get<L: LockManager>(
     let start = Instant::now();
     let v = storage.get(
         req.take_context(),
-        Key::from_raw(req.get_key()),
+        req.get_key().into(),
         req.get_version().into(),
     );
 
     async move {
         let v = v.await;
-        let duration_ms = duration_to_ms(start.elapsed());
+        let duration_ms = duration_to_ms(start.saturating_elapsed());
         let mut resp = GetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -977,13 +1192,16 @@ fn future_batch_get<L: LockManager>(
     storage: &Storage<RaftKv, L>,
     mut req: BatchGetRequest,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
-    let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let start = Instant::now();
-    let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
+    let v = storage.batch_get(
+        req.take_context(),
+        req.get_keys().to_vec(),
+        req.get_version().into(),
+    );
 
     async move {
         let v = v.await;
-        let duration_ms = duration_to_ms(start.elapsed());
+        let duration_ms = duration_to_ms(start.saturating_elapsed());
         let mut resp = BatchGetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1078,11 +1296,11 @@ fn future_delete_range<L: LockManager>(
     }
 }
 
-fn future_copr(
-    copr: &Endpoint<RaftKv>,
+fn future_copr<E: Engine>(
+    copr: &Endpoint<E>,
     peer: Option<String>,
     req: Request,
-) -> impl Future<Output = ServerResult<Response>> {
+) -> impl Future<Output = ServerResult<MemoryTraceGuard<Response>>> {
     let ret = copr.parse_and_handle_unary_request(req, peer);
     async move { Ok(ret.await) }
 }
@@ -1232,7 +1450,6 @@ txn_command_future!(future_mvcc_get_by_start_ts, MvccGetByStartTsRequest, MvccGe
     }
 });
 
-#[cfg(feature = "protobuf-codec")]
 pub mod batch_commands_response {
     pub type Response = kvproto::tikvpb::BatchCommandsResponseResponse;
 
@@ -1241,7 +1458,6 @@ pub mod batch_commands_response {
     }
 }
 
-#[cfg(feature = "protobuf-codec")]
 pub mod batch_commands_request {
     pub type Request = kvproto::tikvpb::BatchCommandsRequestRequest;
 
@@ -1251,23 +1467,20 @@ pub mod batch_commands_request {
 }
 
 use crate::RaftKv;
-#[cfg(feature = "prost-codec")]
-pub use kvproto::tikvpb::batch_commands_request;
-#[cfg(feature = "prost-codec")]
-pub use kvproto::tikvpb::batch_commands_response;
 use protobuf::RepeatedField;
+use tikv::server::service::{GrpcRequestDuration, MeasuredBatchResponse, MeasuredSingleResponse};
+use tikv_alloc::MemoryTraceGuard;
 
 struct BatchRespCollector;
-impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Response)>
-    for BatchRespCollector
-{
+impl BatchCollector<MeasuredBatchResponse, MeasuredSingleResponse> for BatchRespCollector {
     fn collect(
         &mut self,
-        v: &mut BatchCommandsResponse,
-        e: (u64, batch_commands_response::Response),
-    ) -> Option<(u64, batch_commands_response::Response)> {
-        v.mut_request_ids().push(e.0);
-        v.mut_responses().push(e.1);
+        v: &mut MeasuredBatchResponse,
+        mut e: MeasuredSingleResponse,
+    ) -> Option<MeasuredSingleResponse> {
+        v.batch_resp.mut_request_ids().push(e.id);
+        v.batch_resp.mut_responses().push(e.resp.consume());
+        v.measures.push(e.measure);
         None
     }
 }

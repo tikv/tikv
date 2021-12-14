@@ -18,7 +18,7 @@ type TraitsResult<T> = std::result::Result<T, engine_traits::Error>;
 
 impl CFNamesExt for Engine {
     fn cf_names(&self) -> Vec<&str> {
-        panic!()
+        vec!["write", "lock", "extra"]
     }
 }
 
@@ -366,15 +366,18 @@ impl FlowControlFactorsExt for Engine {
         cf: &str,
         level: usize,
     ) -> engine_traits::Result<Option<u64>> {
-        todo!()
+        // TODO(x)
+        return Ok(Some(1));
     }
 
     fn get_cf_num_immutable_mem_table(&self, cf: &str) -> engine_traits::Result<Option<u64>> {
-        todo!()
+        // TODO(x)
+        return Ok(Some(1));
     }
 
     fn get_cf_pending_compaction_bytes(&self, cf: &str) -> engine_traits::Result<Option<u64>> {
-        todo!()
+        // TODO(x)
+        return Ok(Some(0));
     }
 }
 

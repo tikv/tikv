@@ -3,8 +3,10 @@
 use engine_traits::{
     IterOptions, KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot,
 };
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftApplyState;
+use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -29,6 +31,8 @@ pub struct RegionSnapshot {
     pub snap: Arc<SnapAccess>,
     // `None` means the snapshot does not care about max_ts
     pub max_ts_sync_status: Option<Arc<AtomicU64>>,
+    pub term: Option<NonZeroU64>,
+    pub txn_extra_op: TxnExtraOp,
 }
 
 impl RegionSnapshot {
@@ -41,6 +45,8 @@ impl RegionSnapshot {
         RegionSnapshot {
             snap,
             max_ts_sync_status: None,
+            term: None,
+            txn_extra_op: TxnExtraOp::Noop,
         }
     }
 
@@ -130,6 +136,8 @@ impl Clone for RegionSnapshot {
         RegionSnapshot {
             snap: self.snap.clone(),
             max_ts_sync_status: self.max_ts_sync_status.clone(),
+            term: self.term,
+            txn_extra_op: self.txn_extra_op.clone(),
         }
     }
 }

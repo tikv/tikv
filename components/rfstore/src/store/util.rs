@@ -5,6 +5,7 @@ use core::cmp;
 use kvproto::kvrpcpb::{self, KeyRange, LeaderInfo};
 use kvproto::metapb::{self, Peer, PeerRole, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
+use protobuf::Message;
 use raft_proto::eraftpb::{self, MessageType};
 use slog::{Key, Record, Serializer};
 use std::collections::{HashMap, VecDeque};
@@ -181,6 +182,21 @@ pub fn cf_name_to_num(cf_name: &str) -> usize {
         "extra" => 2,
         _ => 0,
     }
+}
+
+/// Parse data of entry `index`.
+///
+/// # Panics
+///
+/// If `data` is corrupted, this function will panic.
+// TODO: make sure received entries are not corrupted
+#[inline]
+pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64, tag: RegionTag) -> T {
+    let mut result = T::default();
+    result.merge_from_bytes(data).unwrap_or_else(|e| {
+        panic!("{} data is corrupted at {}: {:?}", tag, index, e);
+    });
+    result
 }
 
 #[derive(Clone, Copy, Debug, Default)]

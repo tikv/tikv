@@ -1,9 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{
-    self as kv, Error, Error as KvError, ErrorInner, Iterator as EngineIterator,
-    Snapshot as EngineSnapshot,
-};
+use crate::{self as kv, DummySnapshotExt, Error, Error as KvError, ErrorInner, Iterator as EngineIterator, Snapshot as EngineSnapshot};
 use engine_traits::CfName;
 use engine_traits::{IterOptions, Peekable, ReadOptions, Snapshot};
 use rfstore::store::{RegionIterator, RegionSnapshot};
@@ -19,6 +16,7 @@ impl From<RaftServerError> for Error {
 
 impl EngineSnapshot for RegionSnapshot {
     type Iter = RegionIterator;
+    type Ext<'a> = DummySnapshotExt;
 
     fn get(&self, key: &Key) -> kv::Result<Option<Value>> {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
@@ -68,16 +66,8 @@ impl EngineSnapshot for RegionSnapshot {
         Some(self.get_end_key())
     }
 
-    #[inline]
-    fn get_data_version(&self) -> Option<u64> {
-        Some(self.get_apply_index())
-    }
-
-    fn is_max_ts_synced(&self) -> bool {
-        self.max_ts_sync_status
-            .as_ref()
-            .map(|v| v.load(Ordering::SeqCst) & 1 == 1)
-            .unwrap_or(false)
+    fn ext(&self) -> DummySnapshotExt {
+        DummySnapshotExt
     }
 }
 
