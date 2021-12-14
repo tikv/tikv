@@ -14,7 +14,7 @@ use crate::utils;
 use crate::{errors::Result, observer::BackupStreamObserver};
 
 use online_config::ConfigChange;
-use raftstore::coprocessor::{Cmd, CmdBatch};
+use raftstore::coprocessor::CmdBatch;
 use tikv::config::BackupStreamConfig;
 use tikv_util::worker::{Runnable, Scheduler};
 use tikv_util::{debug, error, info};
