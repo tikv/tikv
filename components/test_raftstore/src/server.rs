@@ -42,6 +42,7 @@ use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
     store::msg::RaftCmdExtraOpts,
 };
+use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use tikv::coprocessor;
 use tikv::coprocessor_v2;
@@ -308,16 +309,17 @@ impl Simulator for ServerCluster {
         let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
         let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
 
-        let mut lock_mgr = LockManager::new(cfg.pessimistic_txn.pipelined);
+        let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
         let store = create_raft_storage(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
             lock_mgr.clone(),
             concurrency_manager.clone(),
-            lock_mgr.get_pipelined(),
+            lock_mgr.get_storage_dynamic_configs(),
             Arc::new(FlowController::empty()),
             pd_sender,
+            ResourceTagFactory::new_for_test(),
         )?;
         self.storages.insert(node_id, raft_engine);
 
@@ -326,7 +328,15 @@ impl Simulator for ServerCluster {
         // Create import service.
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(&cfg.import, dir, key_manager.clone(), false).unwrap())
+            Arc::new(
+                SSTImporter::new(
+                    &cfg.import,
+                    dir,
+                    key_manager.clone(),
+                    cfg.storage.api_version(),
+                )
+                .unwrap(),
+            )
         };
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
@@ -358,6 +368,7 @@ impl Simulator for ServerCluster {
             cop_read_pool.handle(),
             concurrency_manager.clone(),
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;
@@ -461,6 +472,7 @@ impl Simulator for ServerCluster {
             split_check_scheduler,
             auto_split_controller,
             concurrency_manager.clone(),
+            CollectorRegHandle::new_for_test(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

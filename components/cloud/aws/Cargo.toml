@@ -11,7 +11,7 @@ failpoints = ["fail/failpoints"]
 async-trait = "0.1"
 bytes = "1.0"
 cloud = { path = "../", default-features = false }
-fail = "0.4"
+fail = "0.5"
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 # This is only a dependency to vendor openssl for rusoto. It's not clear exactly

@@ -27,6 +27,7 @@ use engine_traits::{MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT
 use pd_client::PdClient;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{fsm::store::StoreMeta, AutoSplitController, SnapManager};
+use resource_metering::CollectorRegHandle;
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::Config as ImportConfig;
@@ -954,7 +955,7 @@ fn test_double_run_node() {
     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
-        Arc::new(SSTImporter::new(&ImportConfig::default(), dir, None, false).unwrap())
+        Arc::new(SSTImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
@@ -971,6 +972,7 @@ fn test_double_run_node() {
             split_check_scheduler,
             AutoSplitController::default(),
             ConcurrencyManager::new(1.into()),
+            CollectorRegHandle::new_for_test(),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

@@ -86,6 +86,12 @@ macro_rules! impl_into {
                 }
             }
         }
+
+        impl From<&ConfigValue> for $into {
+            fn from(c: &ConfigValue) -> $into {
+                c.clone().into()
+            }
+        }
     };
 }
 impl_into!(u64, U64);

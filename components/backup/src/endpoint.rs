@@ -212,6 +212,7 @@ impl BackupRange {
             IsolationLevel::Si,
             false, /* fill_cache */
             Default::default(),
+            Default::default(),
             false,
         );
         let start_key = self.start_key.clone();
@@ -614,7 +615,7 @@ impl<R: RegionInfoProvider> Progress<R> {
 
 struct ControlThreadPool {
     size: usize,
-    workers: Option<Arc<Runtime>>,
+    workers: Option<Runtime>,
 }
 
 impl ControlThreadPool {
@@ -629,15 +630,11 @@ impl ControlThreadPool {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let workers = self.workers.as_ref().unwrap();
-        let w = workers.clone();
-        workers.spawn(async move {
-            func.await;
-            // Debug service requires jobs in the old thread pool continue to run even after
-            // the pool is recreated. So the pool needs to be ref counted and dropped after
-            // task has finished.
-            drop(w);
-        });
+        let workers = self
+            .workers
+            .as_ref()
+            .expect("ControlThreadPool: please call adjust_with() before spawn()");
+        workers.spawn(func);
     }
 
     /// Lazily adjust the thread pool's size
@@ -650,10 +647,11 @@ impl ControlThreadPool {
         }
         // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
         //   adapt it.
-        let workers = Arc::new(
-            create_tokio_runtime(new_size, "bkwkr")
-                .expect("failed to create tokio runtime for backup worker."),
-        );
+        if let Some(wkrs) = self.workers.take() {
+            wkrs.shutdown_background();
+        }
+        let workers = create_tokio_runtime(new_size, "bkwkr")
+            .expect("failed to create tokio runtime for backup worker.");
         self.workers = Some(workers);
         self.size = new_size;
         BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64);
@@ -715,23 +713,8 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         self.config_manager.clone()
     }
 
-    fn spawn_backup_worker(
-        &self,
-        prs: Arc<Mutex<Progress<R>>>,
-        request: Request,
-        tx: UnboundedSender<BackupResponse>,
-    ) {
-        let start_ts = request.start_ts;
-        let end_ts = request.end_ts;
-        let backup_ts = request.end_ts;
-        let engine = self.engine.clone();
-        let db = self.db.clone();
-        let store_id = self.store_id;
-        let concurrency_manager = self.concurrency_manager.clone();
-        let batch_size = self.config_manager.0.read().unwrap().batch_size;
-        let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
-        let limit = self.softlimit.limit();
-        let config = BackendConfig {
+    fn get_hdfs_config(&self) -> BackendConfig {
+        BackendConfig {
             hdfs_config: HdfsConfig {
                 hadoop_home: self.config_manager.0.read().unwrap().hadoop.home.clone(),
                 linux_user: self
@@ -743,28 +726,32 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     .linux_user
                     .clone(),
             },
-        };
+        }
+    }
+
+    fn spawn_backup_worker(
+        &self,
+        prs: Arc<Mutex<Progress<R>>>,
+        request: Request,
+        tx: UnboundedSender<BackupResponse>,
+        backend: Arc<dyn ExternalStorage>,
+    ) {
+        let start_ts = request.start_ts;
+        let end_ts = request.end_ts;
+        let backup_ts = request.end_ts;
+        let engine = self.engine.clone();
+        let db = self.db.clone();
+        let store_id = self.store_id;
+        let concurrency_manager = self.concurrency_manager.clone();
+        let batch_size = self.config_manager.0.read().unwrap().batch_size;
+        let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
+        let limit = self.softlimit.limit();
 
         self.pool.borrow_mut().spawn(async move {
             let _with_io_type = WithIOType::new(IOType::Export);
-
-            // Check if we can open external storage.
-            let backend = match create_storage(&request.backend, config) {
-                Ok(backend) => backend,
-                Err(err) => {
-                    error_unknown!(?err; "backup create storage failed");
-                    let mut response = BackupResponse::default();
-                    response.set_error(crate::Error::Io(err).into());
-                    if let Err(err) = tx.unbounded_send(response) {
-                        error_unknown!(?err; "backup failed to send response");
-                    }
-                    return;
-                }
-            };
-
             let storage = LimitedStorage {
                 limiter: request.limiter,
-                storage: Arc::new(backend),
+                storage: backend,
             };
 
             loop {
@@ -931,10 +918,23 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             is_raw_kv,
             request.cf,
         )));
+        let backend = match create_storage(&request.backend, self.get_hdfs_config()) {
+            Ok(backend) => backend,
+            Err(err) => {
+                error_unknown!(?err; "backup create storage failed");
+                let mut response = BackupResponse::default();
+                response.set_error(crate::Error::Io(err).into());
+                if let Err(err) = resp.unbounded_send(response) {
+                    error_unknown!(?err; "backup failed to send response");
+                }
+                return;
+            }
+        };
+        let backend = Arc::<dyn ExternalStorage>::from(backend);
         let concurrency = self.config_manager.0.read().unwrap().num_threads;
         self.pool.borrow_mut().adjust_with(concurrency);
         for _ in 0..concurrency {
-            self.spawn_backup_worker(prs.clone(), request.clone(), resp.clone());
+            self.spawn_backup_worker(prs.clone(), request.clone(), resp.clone(), backend.clone());
         }
     }
 }
@@ -1582,7 +1582,7 @@ pub mod tests {
         req.set_end_version(1);
         req.set_storage_backend(make_noop_backend());
 
-        let (tx, _) = unbounded();
+        let (tx, rx) = unbounded();
 
         // expand thread pool is needed
         endpoint.get_config_manager().set_num_threads(15);
@@ -1600,5 +1600,18 @@ pub mod tests {
         let (task, _) = Task::new(req, tx).unwrap();
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 3);
+
+        // make sure all tasks can finish properly.
+        let responses = block_on(rx.collect::<Vec<_>>());
+        assert_eq!(responses.len(), 3);
+
+        // for testing whether dropping the pool before all tasks finished causes panic.
+        // but the panic must be checked manually... (It may panic at tokio runtime threads...)
+        let mut pool = ControlThreadPool::new();
+        pool.adjust_with(1);
+        pool.spawn(async { tokio::time::sleep(Duration::from_millis(100)).await });
+        pool.adjust_with(2);
+        drop(pool);
+        std::thread::sleep(Duration::from_millis(150));
     }
 }

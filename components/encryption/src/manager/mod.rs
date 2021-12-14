@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::{self, Error as IoError, ErrorKind, Result as IoResult};
+use std::io::{Error as IoError, ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
 use std::sync::{atomic::AtomicU64, atomic::Ordering, Arc, Mutex};
 use std::thread::JoinHandle;
@@ -567,13 +567,14 @@ impl DataKeyManager {
 
     pub fn create_file_for_write<P: AsRef<Path>>(&self, path: P) -> Result<EncrypterWriter<File>> {
         let file_writer = File::create(&path)?;
-        self.create_file_with_writer(path, file_writer)
+        self.open_file_with_writer(path, file_writer, true /*create*/)
     }
 
-    pub fn create_file_with_writer<P: AsRef<Path>, W: std::io::Write>(
+    pub fn open_file_with_writer<P: AsRef<Path>, W: std::io::Write>(
         &self,
         path: P,
         writer: W,
+        create: bool,
     ) -> Result<EncrypterWriter<W>> {
         let fname = path.as_ref().to_str().ok_or_else(|| {
             Error::Other(box_err!(
@@ -581,7 +582,11 @@ impl DataKeyManager {
                 path.as_ref()
             ))
         })?;
-        let file = self.new_file(fname)?;
+        let file = if create {
+            self.new_file(fname)?
+        } else {
+            self.get_file(fname)?
+        };
         EncrypterWriter::new(
             writer,
             crypter::encryption_method_from_db_encryption_method(file.method),
@@ -595,7 +600,7 @@ impl DataKeyManager {
         self.open_file_with_reader(path, file_reader)
     }
 
-    pub fn open_file_with_reader<P: AsRef<Path>, R: io::Read + io::Seek>(
+    pub fn open_file_with_reader<P: AsRef<Path>, R>(
         &self,
         path: P,
         reader: R,

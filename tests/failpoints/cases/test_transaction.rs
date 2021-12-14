@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures::executor::block_on;
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{ApiVersion, Context};
 use std::{sync::mpsc::channel, thread, time::Duration};
 use storage::mvcc::tests::must_get;
 use storage::mvcc::{self, tests::must_locked};
@@ -45,6 +45,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -55,7 +56,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
     storage
         .sched_txn_command(
             commands::Prewrite::new(
-                vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
+                vec![Mutation::make_put(Key::from_raw(b"k"), b"v".to_vec())],
                 b"k".to_vec(),
                 40.into(),
                 20000,
@@ -94,6 +95,7 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -108,7 +110,7 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
     storage
         .sched_txn_command(
             commands::Prewrite::new(
-                vec![Mutation::Put((Key::from_raw(b"j"), b"v".to_vec()))],
+                vec![Mutation::make_put(Key::from_raw(b"j"), b"v".to_vec())],
                 b"j".to_vec(),
                 10.into(),
                 20000,
@@ -137,6 +139,7 @@ fn test_update_max_ts_before_scan_memory_locks() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -150,7 +153,7 @@ fn test_update_max_ts_before_scan_memory_locks() {
     storage
         .sched_txn_command(
             commands::Prewrite::new(
-                vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
+                vec![Mutation::make_put(Key::from_raw(b"k"), b"v".to_vec())],
                 b"k".to_vec(),
                 10.into(),
                 20000,
@@ -185,6 +188,7 @@ macro_rules! lock_release_test {
             let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
                 engine,
                 DummyLockManager {},
+                ApiVersion::V1,
             )
             .build()
             .unwrap();
@@ -199,7 +203,7 @@ macro_rules! lock_release_test {
             storage
                 .sched_txn_command(
                     commands::Prewrite::new(
-                        vec![Mutation::Put((key.clone(), b"v".to_vec()))],
+                        vec![Mutation::make_put(key.clone(), b"v".to_vec())],
                         b"k".to_vec(),
                         10.into(),
                         20000,
@@ -263,6 +267,7 @@ fn test_max_commit_ts_error() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -274,8 +279,8 @@ fn test_max_commit_ts_error() {
         .sched_txn_command(
             commands::Prewrite::new(
                 vec![
-                    Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())),
-                    Mutation::Put((Key::from_raw(b"k2"), b"v".to_vec())),
+                    Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec()),
+                    Mutation::make_put(Key::from_raw(b"k2"), b"v".to_vec()),
                 ],
                 b"k1".to_vec(),
                 10.into(),
@@ -320,6 +325,7 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -331,8 +337,8 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
 
     cm.update_max_ts(40.into());
     let mutations = vec![
-        Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())),
-        Mutation::Put((Key::from_raw(b"k2"), b"v".to_vec())),
+        Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec()),
+        Mutation::make_put(Key::from_raw(b"k2"), b"v".to_vec()),
     ];
     storage
         .sched_txn_command(
@@ -363,14 +369,9 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     assert!(res.min_commit_ts.is_zero());
     assert!(res.one_pc_commit_ts.is_zero());
 
-    let locks = block_on(storage.scan_lock(
-        Context::default(),
-        20.into(),
-        Some(Key::from_raw(b"k1")),
-        None,
-        2,
-    ))
-    .unwrap();
+    let locks =
+        block_on(storage.scan_lock(Context::default(), 20.into(), Some(b"k1".to_vec()), None, 2))
+            .unwrap();
     assert_eq!(locks.len(), 2);
     assert_eq!(locks[0].get_key(), b"k1");
     assert!(locks[0].get_use_async_commit());

@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
@@ -55,7 +55,7 @@ use crate::store::msg::RaftCommand;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{
-    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
+    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, TxnExt,
 };
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
@@ -440,6 +440,7 @@ pub struct UnpersistedReady {
 pub struct ReadyResult {
     pub state_role: Option<StateRole>,
     pub has_new_entries: bool,
+    pub has_write_ready: bool,
 }
 
 pub struct Peer<EK, ER>
@@ -553,15 +554,8 @@ where
 
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 
-    /// The max timestamp recorded in the concurrency manager is only updated at leader.
-    /// So if a peer becomes leader from a follower, the max timestamp can be outdated.
-    /// We need to update the max timestamp with a latest timestamp from PD before this
-    /// peer can work.
-    /// From the least significant to the most, 1 bit marks whether the timestamp is
-    /// updated, 31 bits for the current epoch version, 32 bits for the current term.
-    /// The version and term are stored to prevent stale UpdateMaxTimestamp task from
-    /// marking the lowest bit.
-    pub max_ts_sync_status: Arc<AtomicU64>,
+    /// Transaction extensions related to this peer.
+    pub txn_ext: Arc<TxnExt>,
 
     /// Check whether this proposal can be proposed based on its epoch.
     cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
@@ -582,9 +576,12 @@ where
     pub memtrace_raft_entries: usize,
     /// Used for sending write msg.
     write_router: WriteRouter<EK, ER>,
+    /// Used for async write io.
     unpersisted_readies: VecDeque<UnpersistedReady>,
     /// The message count in `unpersisted_readies` for memory caculation.
     unpersisted_message_count: usize,
+    /// Used for sync write io.
+    unpersisted_ready: Option<Ready>,
     /// The last known persisted number.
     persisted_number: u64,
     /// The context of applying snapshot.
@@ -680,7 +677,7 @@ where
             check_stale_peers: vec![],
             local_first_replicate: false,
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
-            max_ts_sync_status: Arc::new(AtomicU64::new(0)),
+            txn_ext: Arc::new(TxnExt::default()),
             cmd_epoch_checker: Default::default(),
             disk_full_peers: DiskFullPeers::default(),
             dangerous_majority_set: false,
@@ -696,6 +693,7 @@ where
             write_router: WriteRouter::new(tag),
             unpersisted_readies: VecDeque::default(),
             unpersisted_message_count: 0,
+            unpersisted_ready: None,
             persisted_number: 0,
             apply_snap_ctx: None,
         };
@@ -815,13 +813,31 @@ where
             // There are maybe some logs not included in CommitMergeRequest's entries, like CompactLog,
             // so the commit index may exceed the last index of the entires from CommitMergeRequest.
             // If that, no need to append
-            if self.raft_group.raft.raft_log.committed - log_idx > entries.len() as u64 {
+            if self.raft_group.raft.raft_log.committed - log_idx >= entries.len() as u64 {
                 return None;
             }
             entries = &entries[(self.raft_group.raft.raft_log.committed - log_idx) as usize..];
             log_idx = self.raft_group.raft.raft_log.committed;
         }
         let log_term = self.get_index_term(log_idx);
+
+        let last_log = entries.last().unwrap();
+        if last_log.term > self.term() {
+            // Hack: In normal flow, when leader sends the entries, it will use a term that's not less
+            // than the last log term. And follower will update its states correctly. For merge, we append
+            // the log without raft, so we have to take care of term explicitly to get correct metadata.
+            info!(
+                "become follower for new logs";
+                "new_log_term" => last_log.term,
+                "new_log_index" => last_log.index,
+                "term" => self.term(),
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            self.raft_group
+                .raft
+                .become_follower(last_log.term, INVALID_ID);
+        }
 
         self.raft_group
             .raft
@@ -907,7 +923,7 @@ where
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = TiInstant::now();
 
-        let region = self.region().clone();
+        let mut region = self.region().clone();
         info!(
             "begin to destroy";
             "region_id" => self.region_id,
@@ -918,6 +934,14 @@ where
         let mut kv_wb = engines.kv.write_batch();
         let mut raft_wb = engines.raft.log_batch(1024);
         self.mut_store().clear_meta(&mut kv_wb, &mut raft_wb)?;
+
+        // StoreFsmDelegate::check_msg use both epoch and region peer list to check whether
+        // a message is targing a staled peer.  But for an uninitialized peer, both epoch and
+        // peer list are empty, so a removed peer will be created again.  Saving current peer
+        // into the peer list of region will fix this problem.
+        if !self.get_store().is_initialized() {
+            region.mut_peers().push(self.peer.clone());
+        }
         write_peer_state(
             &mut kv_wb,
             &region,
@@ -1834,8 +1858,9 @@ where
                     let msgs = self.build_raft_messages(ctx, snap_ctx.msgs);
                     self.send_raft_messages(ctx, msgs);
 
-                    // Snapshot has been persisted.
+                    // Snapshot has been applied.
                     self.last_applying_idx = self.get_store().truncated_index();
+                    self.last_compacted_idx = self.last_applying_idx + 1;
                     self.raft_group.advance_apply_to(self.last_applying_idx);
                     self.cmd_epoch_checker.advance_apply(
                         self.last_applying_idx,
@@ -2055,7 +2080,7 @@ where
 
         let ready_number = ready.number();
         let persisted_msgs = ready.take_persisted_messages();
-
+        let mut has_write_ready = false;
         match &res {
             HandleReadyResult::SendIOTask | HandleReadyResult::Snapshot { .. } => {
                 if !persisted_msgs.is_empty() {
@@ -2066,19 +2091,27 @@ where
                     task.request_times = request_times;
                 }
 
-                self.write_router.send_write_msg(
-                    ctx,
-                    self.unpersisted_readies.back().map(|r| r.number),
-                    WriteMsg::WriteTask(task),
-                );
+                if let Some(write_worker) = &mut ctx.sync_write_worker {
+                    write_worker.handle_write_task(task);
 
-                self.unpersisted_readies.push_back(UnpersistedReady {
-                    number: ready_number,
-                    max_empty_number: ready_number,
-                    raft_msgs: vec![],
-                });
+                    assert_eq!(self.unpersisted_ready, None);
+                    self.unpersisted_ready = Some(ready);
+                    has_write_ready = true;
+                } else {
+                    self.write_router.send_write_msg(
+                        ctx,
+                        self.unpersisted_readies.back().map(|r| r.number),
+                        WriteMsg::WriteTask(task),
+                    );
 
-                self.raft_group.advance_append_async(ready);
+                    self.unpersisted_readies.push_back(UnpersistedReady {
+                        number: ready_number,
+                        max_empty_number: ready_number,
+                        raft_msgs: vec![],
+                    });
+
+                    self.raft_group.advance_append_async(ready);
+                }
             }
             HandleReadyResult::NoIOTask => {
                 if let Some(last) = self.unpersisted_readies.back_mut() {
@@ -2161,6 +2194,7 @@ where
         Some(ReadyResult {
             state_role,
             has_new_entries,
+            has_write_ready,
         })
     }
 
@@ -2169,6 +2203,9 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         committed_entries: Vec<Entry>,
     ) {
+        if committed_entries.is_empty() {
+            return;
+        }
         fail_point!(
             "before_leader_handle_committed_entries",
             self.is_leader(),
@@ -2243,15 +2280,26 @@ where
             } else {
                 vec![]
             };
+            // Note that the `commit_index` and `commit_term` here may be used to
+            // forward the commit index. So it must be less than or equal to persist
+            // index.
+            let commit_index = cmp::min(
+                self.raft_group.raft.raft_log.committed,
+                self.raft_group.raft.raft_log.persisted,
+            );
+            let commit_term = self.get_store().term(commit_index).unwrap();
             let mut apply = Apply::new(
                 self.peer_id(),
                 self.region_id,
                 self.term(),
+                commit_index,
+                commit_term,
                 committed_entries,
                 cbs,
             );
             apply.on_schedule(&ctx.raft_metrics);
-            self.mut_store().trace_cached_entries(apply.entries.clone());
+            self.mut_store()
+                .trace_cached_entries(apply.entries[0].clone());
             if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
                 // Compact all cached entries instead of half evict.
                 self.mut_store().evict_cache(false);
@@ -2309,6 +2357,7 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         number: u64,
     ) -> Option<PersistSnapshotResult> {
+        assert!(ctx.sync_write_worker.is_none());
         if self.persisted_number >= number {
             return None;
         }
@@ -2362,6 +2411,64 @@ where
         } else {
             None
         }
+    }
+
+    pub fn handle_raft_ready_advance<T: Transport>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+    ) -> Option<PersistSnapshotResult> {
+        assert!(ctx.sync_write_worker.is_some());
+        let ready = self.unpersisted_ready.take()?;
+
+        self.persisted_number = ready.number();
+
+        if !ready.snapshot().is_empty() {
+            self.raft_group.advance_append_async(ready);
+            // The ready is persisted, but we don't want to handle following light
+            // ready immediately to avoid flow out of control, so use
+            // `on_persist_ready` instead of `advance_append`.
+            // We don't need to set `has_ready` to true, as snapshot is always
+            // checked when ticking.
+            self.raft_group.on_persist_ready(self.persisted_number);
+            return Some(self.on_persist_snapshot(ctx, self.persisted_number));
+        }
+
+        let pre_persist_index = self.raft_group.raft.raft_log.persisted;
+        let pre_commit_index = self.raft_group.raft.raft_log.committed;
+        let mut light_rd = self.raft_group.advance_append(ready);
+        self.report_persist_log_duration(pre_persist_index, &ctx.raft_metrics);
+        self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
+
+        let persist_index = self.raft_group.raft.raft_log.persisted;
+        self.mut_store().update_cache_persisted(persist_index);
+
+        self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);
+
+        if let Some(commit_index) = light_rd.commit_index() {
+            let pre_commit_index = self.get_store().commit_index();
+            assert!(commit_index >= pre_commit_index);
+            // No need to persist the commit index but the one in memory
+            // (i.e. commit of hardstate in PeerStorage) should be updated.
+            self.mut_store().set_commit_index(commit_index);
+            if self.is_leader() {
+                self.on_leader_commit_idx_changed(pre_commit_index, commit_index);
+            }
+        }
+
+        if !light_rd.messages().is_empty() {
+            if !self.is_leader() {
+                fail_point!("raft_before_follower_send");
+            }
+            let msgs = light_rd.take_messages();
+            let m = self.build_raft_messages(ctx, msgs);
+            self.send_raft_messages(ctx, m);
+        }
+
+        if !light_rd.committed_entries().is_empty() {
+            self.handle_raft_committed_entries(ctx, light_rd.take_committed_entries());
+        }
+
+        None
     }
 
     pub fn unpersisted_ready_len(&self) -> usize {
@@ -2907,7 +3014,7 @@ where
                     // In Joint confchange, the leader is allowed to be DemotingVoter
                     || (kind == ConfChangeKind::Simple
                         && change_type == ConfChangeType::AddLearnerNode))
-                && !ctx.cfg.allow_remove_leader
+                && !ctx.cfg.allow_remove_leader()
             {
                 return Err(box_err!(
                     "{} ignore remove leader or demote leader",
@@ -3542,9 +3649,8 @@ where
         msg: &eraftpb::Message,
         peer_disk_usage: DiskUsage,
     ) {
-        #[allow(clippy::suspicious_operation_groupings)]
-        if self.is_handling_snapshot()
-            || self.has_pending_snapshot()
+        let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
+        if pending_snapshot
             || msg.get_from() != self.leader_id()
             // Transfer leader to node with disk full will lead to write availablity downback.
             // But if the current leader is disk full, and send such request, we should allow it,
@@ -3557,6 +3663,8 @@ where
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "from" => msg.get_from(),
+                "pending_snapshot" => pending_snapshot,
+                "disk_usage" => ?ctx.self_disk_usage,
             );
             return;
         }
@@ -3750,7 +3858,7 @@ where
 
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
-            snap.max_ts_sync_status = Some(self.max_ts_sync_status.clone());
+            snap.txn_ext = Some(self.txn_ext.clone());
         }
         resp.txn_extra_op = self.txn_extra_op.load();
         cmd_resp::bind_term(&mut resp.response, self.term());
@@ -3910,8 +4018,13 @@ where
                 if let Some(x) = self.disk_full_peers.peers.get_mut(&peer) {
                     // It can help to establish a quorum.
                     x.1 = true;
+                    // for merge region, all peers have been set to the max.
                     if !self.has_region_merge_proposal {
                         raft.adjust_max_inflight_msgs(peer, 1);
+                        debug!(
+                            "refill disk full peer max inflight to 1 in potential quorum set: region id {}, peer id {}",
+                            self.region_id, peer
+                        );
                     }
                 }
             }
@@ -4266,7 +4379,8 @@ where
         let term_low_bits = self.term() & ((1 << 32) - 1); // 32 bits
         let version_lot_bits = epoch.get_version() & ((1 << 31) - 1); // 31 bits
         let initial_status = (term_low_bits << 32) | (version_lot_bits << 1);
-        self.max_ts_sync_status
+        self.txn_ext
+            .max_ts_sync_status
             .store(initial_status, Ordering::SeqCst);
         info!(
             "require updating max ts";
@@ -4276,7 +4390,7 @@ where
         if let Err(e) = pd_scheduler.schedule(PdTask::UpdateMaxTimestamp {
             region_id: self.region_id,
             initial_status,
-            max_ts_sync_status: self.max_ts_sync_status.clone(),
+            txn_ext: self.txn_ext.clone(),
         }) {
             error!(
                 "failed to update max ts";
