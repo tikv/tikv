@@ -16,7 +16,7 @@ use raftstore::coprocessor::CmdBatch;
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 
-use tikv_util::{box_err, config::MIB, worker::Scheduler};
+use tikv_util::{box_err, worker::Scheduler};
 use tokio::sync::Mutex;
 use txn_types::{Key, TimeStamp};
 // TODO: maybe replace it with tokio fs.
@@ -551,11 +551,18 @@ mod tests {
             }
         }
 
-        fn wrap_key(key: Vec<u8>) -> Vec<u8> {}
+        fn wrap_key(&self, key: Vec<u8>) -> Vec<u8> {
+            let key = Key::from_encoded(utils::wrap_key(key));
+            key.append_ts(TimeStamp::compose(
+                TimeStamp::physical_now(),
+                self.events.len() as _,
+            ))
+            .into_encoded()
+        }
 
         fn put_event(&self, cf: &'static str, key: Vec<u8>, value: Vec<u8>) -> ApplyEvent {
             ApplyEvent {
-                key: utils::wrap_key(key),
+                key: self.wrap_key(key),
                 value,
                 cf: cf.to_owned(),
                 region_id: self.region_id,
@@ -566,7 +573,7 @@ mod tests {
 
         fn delete_event(&self, cf: &'static str, key: Vec<u8>) -> ApplyEvent {
             ApplyEvent {
-                key: utils::wrap_key(key),
+                key: self.wrap_key(key),
                 value: vec![],
                 cf: cf.to_owned(),
                 region_id: self.region_id,
@@ -633,18 +640,43 @@ mod tests {
         region1.put(CF_WRITE, b"t1_hello", b"still isn't a write record :3");
         region1.delete(CF_DEFAULT, b"t1_hello");
         let events = region1.flush_events();
+        let start_ts = TimeStamp::physical_now();
         // TODO: auto test...
         for event in events {
             router.on_event(event).await?;
         }
+        let end_ts = TimeStamp::physical_now();
         let files = router.take_temporary_files("dummy")?;
         let meta = files.generate_metadata().await?;
-        assert_eq(meta.len(), 3);
-        println!("{:?}", meta);
+        assert_eq!(meta.len(), 3);
+        assert!(
+            meta.iter().all(|item| {
+                TimeStamp::new(item.meta.min_ts as _).physical() >= start_ts
+                    && TimeStamp::new(item.meta.max_ts as _).physical() <= end_ts
+            }),
+            "meta = {:#?}; start ts = {}, end ts = {}",
+            meta,
+            start_ts,
+            end_ts
+        );
         drop(router);
-        println!("{:?}", collect_recv(rx));
-        for files in std::fs::read_dir(tmp.clone())? {
-            println!("{}", files?.path().display());
+        let cmds = collect_recv(rx);
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            Task::Flush(task) => assert_eq!(task, "dummy"),
+            _ => assert!(false, "the cmd isn't flush!"),
+        }
+
+        for path in meta.iter().map(|meta| &meta.local_path) {
+            let f = tokio::fs::metadata(&path).await?;
+            assert!(f.is_file(), "log file {} is not a file", path.display());
+            // The file should contains some data.
+            assert!(
+                f.len() > 10,
+                "the log file {} is too small (size = {}B)",
+                path.display(),
+                f.len()
+            );
         }
         Ok(())
     }
