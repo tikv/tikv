@@ -57,6 +57,7 @@ impl Endpoint<EtcdStore> {
         let range_router = Router::new(
             PathBuf::from(config.streaming_path.clone()),
             scheduler.clone(),
+            config.temp_file_size_limit_per_task.0,
         );
 
         if cli.is_none() {

@@ -101,8 +101,12 @@ pub struct Router(Arc<Mutex<RouterInner>>);
 
 impl Router {
     /// Create a new router with the temporary folder.
-    pub fn new(prefix: PathBuf, scheduler: Scheduler<Task>) -> Self {
-        Self(Arc::new(Mutex::new(RouterInner::new(prefix, scheduler))))
+    pub fn new(prefix: PathBuf, scheduler: Scheduler<Task>, temp_file_size_limit: u64) -> Self {
+        Self(Arc::new(Mutex::new(RouterInner::new(
+            prefix,
+            scheduler,
+            temp_file_size_limit,
+        ))))
     }
 }
 
@@ -160,14 +164,13 @@ pub struct ApplyEvent {
 }
 
 impl RouterInner {
-    pub fn new(prefix: PathBuf, scheduler: Scheduler<Task>) -> Self {
+    pub fn new(prefix: PathBuf, scheduler: Scheduler<Task>, temp_file_size_limit: u64) -> Self {
         RouterInner {
             ranges: BTreeMap::default(),
             temp_files_of_task: HashMap::default(),
             prefix,
             scheduler,
-            // Maybe make it configurable?
-            temp_file_size_limit: 128 * MIB,
+            temp_file_size_limit,
         }
     }
 
@@ -548,6 +551,8 @@ mod tests {
             }
         }
 
+        fn wrap_key(key: Vec<u8>) -> Vec<u8> {}
+
         fn put_event(&self, cf: &'static str, key: Vec<u8>, value: Vec<u8>) -> ApplyEvent {
             ApplyEvent {
                 key: utils::wrap_key(key),
@@ -587,7 +592,7 @@ mod tests {
     #[test]
     fn test_register() {
         let (tx, _) = dummy_scheduler();
-        let mut router = RouterInner::new(PathBuf::new(), tx);
+        let mut router = RouterInner::new(PathBuf::new(), tx, 1024);
         // -----t1.start-----t1.end-----t2.start-----t2.end------
         // --|------------|----------|------------|-----------|--
         // case1        case2      case3        case4       case5
@@ -616,8 +621,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&tmp).await?;
         let (tx, rx) = dummy_scheduler();
-        let router = Router::new(tmp.clone(), tx);
-        let mut router = router.lock().await;
+        let mut router = RouterInner::new(tmp.clone(), tx, 32);
         router.register_ranges("dummy", vec![(b"zt1".to_vec(), b"zt2".to_vec())]);
         let now = TimeStamp::physical_now();
         let mut region1 = KvEventsBuilder::new(1, now);
@@ -630,13 +634,12 @@ mod tests {
         region1.delete(CF_DEFAULT, b"t1_hello");
         let events = region1.flush_events();
         // TODO: auto test...
-        println!("{:?}", events);
         for event in events {
             router.on_event(event).await?;
         }
-        println!("{:?}", router);
         let files = router.take_temporary_files("dummy")?;
         let meta = files.generate_metadata().await?;
+        assert_eq(meta.len(), 3);
         println!("{:?}", meta);
         drop(router);
         println!("{:?}", collect_recv(rx));
