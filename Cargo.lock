@@ -3441,7 +3441,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=master#90a50b7e7e8beb89039627c95483c8554145188d"
+source = "git+https://github.com/tikv/raft-engine?branch=master#bc4bcff80465dddb3e26b00c77ada5e8cda0418d"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -3454,7 +3454,7 @@ dependencies = [
  "libc 0.2.106",
  "log",
  "lz4-sys",
- "nix 0.19.0",
+ "nix 0.23.0",
  "num-derive",
  "num-traits",
  "parking_lot",
