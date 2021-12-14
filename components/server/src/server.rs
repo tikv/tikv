@@ -666,6 +666,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .max_write_bytes_per_sec(bps)
             .max_total_size(self.config.server.snap_max_total_size.0)
             .encryption_key_manager(self.encryption_key_manager.clone())
+            .max_per_file_size(self.config.server.max_snapshot_file_raw_size.0)
             .build(snap_path);
 
         // Create coprocessor endpoint.

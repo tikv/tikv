@@ -134,6 +134,7 @@ pub struct Config {
     pub end_point_max_concurrency: usize,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
+    pub max_snapshot_file_raw_size: ReadableSize,
     #[online_config(skip)]
     pub stats_concurrency: usize,
     #[online_config(skip)]
@@ -235,6 +236,7 @@ impl Default for Config {
             end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
+            max_snapshot_file_raw_size: ReadableSize(0),
             stats_concurrency: 1,
             // 300 means gRPC threads are under heavy load if their total CPU usage
             // is greater than 300%.

@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::f64::INFINITY;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -18,7 +18,7 @@ use engine_traits::{
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
 use raftstore::store::RegionSnapshot;
-use raftstore::store::{apply_sst_cf_file, build_sst_cf_file};
+use raftstore::store::{apply_sst_cf_file, build_sst_cf_file_list, CfFile};
 use tempfile::Builder;
 use test_raftstore::*;
 use tikv::config::TiKvConfig;
@@ -361,26 +361,26 @@ fn test_delete_files_in_range_for_titan() {
     assert_eq!(value, 1);
 
     // Generate a snapshot
-    let default_sst_file_path = path.path().join("default.sst");
-    let write_sst_file_path = path.path().join("write.sst");
     let limiter = Limiter::new(INFINITY);
-    build_sst_cf_file::<RocksEngine>(
-        &default_sst_file_path.to_str().unwrap(),
+    let mut cf_file = CfFile::new(CF_DEFAULT, PathBuf::from(path.path().to_str().unwrap()), "default".to_string(), ".sst".to_string());
+    build_sst_cf_file_list::<RocksEngine>(
+        &mut cf_file,
         &engines.kv,
         &engines.kv.snapshot(),
-        CF_DEFAULT,
         b"",
         b"{",
+        u64::MAX,
         &limiter,
     )
     .unwrap();
-    build_sst_cf_file::<RocksEngine>(
-        &write_sst_file_path.to_str().unwrap(),
+    let mut cf_file_write = CfFile::new(CF_WRITE, PathBuf::from(path.path().to_str().unwrap()), "write".to_string(), ".sst".to_string());
+    build_sst_cf_file_list::<RocksEngine>(
+        &mut cf_file_write, 
         &engines.kv,
         &engines.kv.snapshot(),
-        CF_WRITE,
         b"",
         b"{",
+        u64::MAX,
         &limiter,
     )
     .unwrap();
@@ -391,14 +391,18 @@ fn test_delete_files_in_range_for_titan() {
         .tempdir()
         .unwrap();
     let engines1 = new_temp_engine(&dir1);
+    let tmp_file_paths = cf_file.tmp_file_paths();
+    let tmp_file_paths = tmp_file_paths.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
     apply_sst_cf_file(
-        &default_sst_file_path.to_str().unwrap(),
+        &tmp_file_paths,
         &engines1.kv,
         CF_DEFAULT,
     )
     .unwrap();
+    let tmp_file_paths = cf_file_write.tmp_file_paths();
+    let tmp_file_paths = tmp_file_paths.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
     apply_sst_cf_file(
-        &write_sst_file_path.to_str().unwrap(),
+        &tmp_file_paths,
         &engines1.kv,
         CF_WRITE,
     )
