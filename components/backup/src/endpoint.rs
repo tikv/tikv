@@ -166,13 +166,6 @@ impl KvWriter {
             Self::Raw(writer) => writer.save(storage).await,
         }
     }
-
-    fn need_flush_keys(&self) -> bool {
-        match self {
-            Self::TiDB(writer) => writer.need_flush_keys(),
-            Self::Raw(_) => true,
-        }
-    }
 }
 
 struct InMemBackupFiles {
@@ -202,8 +195,7 @@ async fn save_backup_file_worker(
     storage: Arc<dyn ExternalStorage>,
 ) {
     while let Ok(msg) = rx.recv().await {
-        let files = if msg.files.need_flush_keys() {
-            match msg.files.save(&storage).await {
+        let files = match msg.files.save(&storage).await {
                 Ok(mut split_files) => {
                     for file in split_files.iter_mut() {
                         file.set_start_key(msg.start_key.clone());
@@ -218,7 +210,7 @@ async fn save_backup_file_worker(
                     Err(e)
                 }
             }
-        } else {
+         else {
             Ok(vec![])
         };
         let mut response = BackupResponse::default();
@@ -404,18 +396,20 @@ impl BackupRange {
             .with_label_values(&["scan"])
             .observe(start_scan.saturating_elapsed().as_secs_f64());
 
-        let msg = InMemBackupFiles {
-            files: KvWriter::TiDB(writer),
-            start_key: next_file_start_key,
-            end_key: self
-                .end_key
-                .clone()
-                .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
-            start_version: begin_ts,
-            end_version: backup_ts,
-            region: self.region.clone(),
-        };
-        send_to_worker_with_metrics(&saver, msg).await?;
+        if writer.need_flush_keys() {
+            let msg = InMemBackupFiles {
+                files: KvWriter::TiDB(writer),
+                start_key: next_file_start_key,
+                end_key: self
+                    .end_key
+                    .clone()
+                    .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                start_version: begin_ts,
+                end_version: backup_ts,
+                region: self.region.clone(),
+            };
+            send_to_worker_with_metrics(&saver, msg).await?;
+        }
 
         Ok(stat)
     }
