@@ -34,6 +34,7 @@ use tikv_util::worker::Worker;
 use txn_types::Key;
 
 use crate::config::ConfigController;
+use crate::server::reset_to_version::ResetToVersionManager;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 
 pub use crate::storage::mvcc::MvccInfoIterator;
@@ -117,6 +118,7 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 #[derive(Clone)]
 pub struct Debugger<ER: RaftEngine> {
     engines: Engines<RocksEngine, ER>,
+    reset_to_version_manager: ResetToVersionManager,
     cfg_controller: ConfigController,
 }
 
@@ -125,8 +127,10 @@ impl<ER: RaftEngine> Debugger<ER> {
         engines: Engines<RocksEngine, ER>,
         cfg_controller: ConfigController,
     ) -> Debugger<ER> {
+        let reset_to_version_manager = ResetToVersionManager::new(engines.kv.clone());
         Debugger {
             engines,
+            reset_to_version_manager,
             cfg_controller,
         }
     }
@@ -867,6 +871,10 @@ impl<ER: RaftEngine> Debugger<ER> {
             &keys::data_key(start),
             &keys::data_end_key(end),
         )
+    }
+
+    pub fn reset_to_version(&self, version: u64) {
+        self.reset_to_version_manager.start(version.into());
     }
 }
 

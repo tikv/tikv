@@ -673,6 +673,8 @@ trait DebugExecutor {
     fn dump_store_info(&self);
 
     fn dump_cluster_info(&self);
+
+    fn reset_to_version(&self, version: u64);
 }
 
 impl DebugExecutor for DebugClient {
@@ -879,6 +881,13 @@ impl DebugExecutor for DebugClient {
             .get_cluster_info(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_cluster_info", e));
         println!("{}", resp.get_cluster_id())
+    }
+
+    fn reset_to_version(&self, version: u64) {
+        let mut req = ResetToVersionRequest::default();
+        req.set_ts(version);
+        self.reset_to_version(&ResetToVersionRequest::default())
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::reset_to_version", e));
     }
 }
 
@@ -1109,6 +1118,10 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         if let Ok(ident) = store_ident_info {
             println!("cluster id: {}", ident.get_cluster_id());
         }
+    }
+
+    fn reset_to_version(&self, version: u64) {
+        Debugger::reset_to_version(self, version);
     }
 }
 
