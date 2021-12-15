@@ -39,5 +39,7 @@ define_error_codes!(
     PESSIMISTIC_LOCK_NOT_FOUND => ("PessimisticLockNotFound", "", ""),
     COMMIT_TS_TOO_LARGE => ("CommitTsTooLarge", "", ""),
 
+    ASSERTION_FAILED => ("AssertionFailed", "", ""),
+
     UNKNOWN => ("Unknown", "", "")
 );
