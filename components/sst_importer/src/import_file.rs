@@ -8,9 +8,13 @@ use std::sync::Arc;
 
 use encryption::{DataKeyManager, EncrypterWriter};
 use engine_rocks::{get_env, RocksSstReader};
-use engine_traits::{EncryptionKeyManager, KvEngine, SSTMetaInfo, SstReader};
+use engine_traits::key_prefix::TIDB_RANGES_COMPLEMENT;
+use engine_traits::{
+    EncryptionKeyManager, Iterable, KvEngine, SSTMetaInfo, SstReader, DATA_KEY_PREFIX_LEN,
+};
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
 use kvproto::import_sstpb::*;
+use kvproto::kvrpcpb::ApiVersion;
 use tikv_util::time::Instant;
 use uuid::{Builder as UuidBuilder, Uuid};
 
@@ -281,13 +285,71 @@ impl ImportDir {
         Ok(meta_info)
     }
 
+    /// check if api version of sst files are compatible
+    pub fn check_api_version(
+        &self,
+        metas: &[SstMeta],
+        key_manager: Option<Arc<DataKeyManager>>,
+        api_version: ApiVersion,
+    ) -> Result<bool> {
+        for meta in metas {
+            match (api_version, meta.api_version) {
+                (ApiVersion::V1 | ApiVersion::V1ttl, ApiVersion::V1 | ApiVersion::V1ttl) => {
+                    continue;
+                }
+                (ApiVersion::V2, ApiVersion::V2) => continue,
+                // cannot import V2 into V1 store
+                (ApiVersion::V1 | ApiVersion::V1ttl, ApiVersion::V2) => return Ok(false),
+                // can import V1 if all keys are written by TiDB
+                (ApiVersion::V2, ApiVersion::V1 | ApiVersion::V1ttl) => {
+                    let path = self.join(meta)?;
+                    let path_str = path.save.to_str().unwrap();
+                    let env = get_env(key_manager.clone(), get_io_rate_limiter())?;
+                    let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
+
+                    for (start, end) in TIDB_RANGES_COMPLEMENT {
+                        let mut unexpected_data_key = None;
+                        sst_reader.scan_cf(meta.get_cf_name(), start, end, false, |key, _| {
+                            unexpected_data_key = Some(key[DATA_KEY_PREFIX_LEN..].to_vec());
+                            Ok(false)
+                        })?;
+
+                        if let Some(unexpected_data_key) = unexpected_data_key {
+                            error!(
+                                "unable to switch `storage.api_version` from {:?} to {:?} \
+                                 because found data key that is not written by TiDB: {:?}",
+                                meta.api_version,
+                                api_version,
+                                log_wrappers::hex_encode_upper(&unexpected_data_key)
+                            );
+                            return Ok(false);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(true)
+    }
+
     pub fn ingest<E: KvEngine>(
         &self,
         metas: &[SSTMetaInfo],
         engine: &E,
         key_manager: Option<Arc<DataKeyManager>>,
+        api_version: ApiVersion,
     ) -> Result<()> {
         let start = Instant::now();
+
+        let meta_vec = metas
+            .iter()
+            .map(|info| info.meta.clone())
+            .collect::<Vec<_>>();
+        if !self
+            .check_api_version(&meta_vec, key_manager.clone(), api_version)
+            .unwrap()
+        {
+            panic!("cannot ingest because of imcompatible api version");
+        }
 
         let mut paths = HashMap::new();
         let mut ingest_bytes = 0;
