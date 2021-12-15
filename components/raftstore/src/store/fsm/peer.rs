@@ -932,7 +932,7 @@ where
             PeerTicks::CHECK_MERGE => self.on_check_merge(),
             PeerTicks::CHECK_PEER_STALE_STATE => self.on_check_peer_stale_state_tick(),
             PeerTicks::ENTRY_CACHE_EVICT => self.on_entry_cache_evict_tick(),
-            PeerTicks::CHECK_LEADER_LEASE => self.on_renew_lease_tick(),
+            PeerTicks::CHECK_LEADER_LEASE => self.on_check_leader_lease_tick(),
             _ => unreachable!(),
         }
     }
@@ -1221,7 +1221,7 @@ where
                 self.fsm.peer.heartbeat_pd(self.ctx);
                 self.register_pd_heartbeat_tick();
                 self.register_raft_gc_log_tick();
-                self.register_renew_lease_tick();
+                self.register_check_leader_lease_tick();
             }
         }
     }
@@ -1790,7 +1790,7 @@ where
         self.fsm.missing_ticks = 0;
         self.fsm.peer.should_wake_up = false;
         self.register_raft_base_tick();
-        self.register_renew_lease_tick();
+        self.register_check_leader_lease_tick();
     }
 
     // return false means the message is invalid, and can be ignored.
@@ -4087,17 +4087,17 @@ where
         }
     }
 
-    fn register_renew_lease_tick(&mut self) {
+    fn register_check_leader_lease_tick(&mut self) {
         self.schedule_tick(PeerTicks::CHECK_LEADER_LEASE)
     }
 
-    fn on_renew_lease_tick(&mut self) {
+    fn on_check_leader_lease_tick(&mut self) {
         if !self.fsm.peer.is_leader() || self.fsm.hibernate_state.group_state() == GroupState::Idle
         {
             return;
         }
         self.try_renew_leader_lease();
-        self.register_renew_lease_tick();
+        self.register_check_leader_lease_tick();
     }
 
     fn register_split_region_check_tick(&mut self) {
