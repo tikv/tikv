@@ -435,8 +435,8 @@ where
             self.cfg.peer_stale_state_check_interval.0;
         self.tick_batch[PeerTicks::CHECK_MERGE.bits() as usize].wait_duration =
             self.cfg.merge_check_tick_interval.0;
-        self.tick_batch[PeerTicks::RENEW_LEASE.bits() as usize].wait_duration =
-            self.cfg.raft_base_tick_interval.0;
+        self.tick_batch[PeerTicks::CHECK_LEADER_LEASE.bits() as usize].wait_duration =
+            self.cfg.check_leader_lease_interval.0;
     }
 }
 

@@ -932,7 +932,7 @@ where
             PeerTicks::CHECK_MERGE => self.on_check_merge(),
             PeerTicks::CHECK_PEER_STALE_STATE => self.on_check_peer_stale_state_tick(),
             PeerTicks::ENTRY_CACHE_EVICT => self.on_entry_cache_evict_tick(),
-            PeerTicks::RENEW_LEASE => self.on_renew_lease_tick(),
+            PeerTicks::CHECK_LEADER_LEASE => self.on_renew_lease_tick(),
             _ => unreachable!(),
         }
     }
@@ -4088,7 +4088,7 @@ where
     }
 
     fn register_renew_lease_tick(&mut self) {
-        self.schedule_tick(PeerTicks::RENEW_LEASE)
+        self.schedule_tick(PeerTicks::CHECK_LEADER_LEASE)
     }
 
     fn on_renew_lease_tick(&mut self) {

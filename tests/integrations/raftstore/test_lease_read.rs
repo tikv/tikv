@@ -293,6 +293,7 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
+    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::minutes(60);
 
     // Increase the Raft tick interval to make this test case running reliably.
     let election_timeout = configure_for_lease_read(cluster, Some(100), None);
