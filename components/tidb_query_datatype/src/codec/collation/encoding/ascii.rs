@@ -19,7 +19,7 @@ impl Encoding for EncodingAscii {
     #[inline]
     fn decode(data: BytesRef) -> Result<Bytes> {
         for x in data {
-            if *x >= 0x80_u8 {
+            if !x.is_ascii() {
                 return Err(Error::cannot_convert_string("ascii"));
             }
         }
