@@ -706,7 +706,11 @@
           "steppedLine": false,
           "targets": [
             {
+<<<<<<< HEAD
               "expr": "sum(rate(tikv_engine_flow_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", db=\"kv\", type=\"wal_file_bytes\"}[1m])) by (instance)",
+=======
+              "expr": "avg(process_resident_memory_bytes{tidb_cluster=\"$tidb_cluster\", job=\"tikv\"}) by (instance)",
+>>>>>>> c5c030d02... metrics: fix memory metrics (#11656)
               "format": "time_series",
               "hide": false,
               "intervalFactor": 2,
