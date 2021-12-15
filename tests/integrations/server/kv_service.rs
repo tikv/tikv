@@ -1810,21 +1810,9 @@ fn test_txn_api_version() {
     for (i, (storage_api_version, req_api_version, key, errcode)) in
         test_data.into_iter().enumerate()
     {
-        let (cluster, leader, mut ctx) =
-            must_new_and_configure_cluster(|cluster| match storage_api_version {
-                ApiVersion::V1 => {
-                    cluster.cfg.storage.api_version = 1;
-                    cluster.cfg.storage.enable_ttl = false;
-                }
-                ApiVersion::V1ttl => {
-                    cluster.cfg.storage.api_version = 1;
-                    cluster.cfg.storage.enable_ttl = true;
-                }
-                ApiVersion::V2 => {
-                    cluster.cfg.storage.api_version = 2;
-                    cluster.cfg.storage.enable_ttl = true;
-                }
-            });
+        let (cluster, leader, mut ctx) = must_new_and_configure_cluster(|cluster| {
+            cluster.cfg.staorge.set_api_version(storage_api_version)
+        });
         let env = Arc::new(Environment::new(1));
         let channel =
             ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
