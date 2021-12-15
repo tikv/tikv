@@ -12,11 +12,13 @@ pub use aws::{Config as S3Config, S3Storage};
 use engine_traits::FileEncryptionInfo;
 #[cfg(feature = "cloud-gcp")]
 pub use gcp::{Config as GCSConfig, GCSStorage};
+#[cfg(feature = "cloud-azure")]
+pub use azure::{Config as AzureConfig, AzureStorage};
 
 use kvproto::brpb::CloudDynamic;
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
-#[cfg(any(feature = "cloud-gcp", feature = "cloud-aws"))]
-use kvproto::brpb::{Gcs, S3};
+#[cfg(any(feature = "cloud-gcp", feature = "cloud-aws", feature = "cloud-azure"))]
+use kvproto::brpb::{Gcs, S3, AzureBlobStorage};
 
 #[cfg(feature = "cloud-storage-dylib")]
 use crate::dylib;
@@ -79,7 +81,7 @@ fn bad_backend(backend: Backend) -> io::Error {
     bad_storage_backend(&storage_backend)
 }
 
-#[cfg(any(feature = "cloud-gcp", feature = "cloud-aws"))]
+#[cfg(any(feature = "cloud-gcp", feature = "cloud-aws", feature = "cloud-azure"))]
 fn blob_store<Blob: BlobStorage>(store: Blob) -> Box<dyn ExternalStorage> {
     Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>
 }
@@ -137,6 +139,11 @@ fn create_config(backend: &Backend) -> Option<io::Result<Box<dyn BlobConfig>>> {
             let conf = GCSConfig::from_input(config.clone());
             Some(conf.map(|c| Box::new(c) as Box<dyn BlobConfig>))
         }
+        #[cfg(feature = "cloud-azure")]
+        Backend::AzureBlobStorage(config) => {
+            let conf = AzureConfig::from_input(config.clone());
+            Some(conf.map(|c| Box::new(c) as Box<dyn BlobConfig>))
+        }
         Backend::CloudDynamic(dyn_backend) => match dyn_backend.provider_name.as_str() {
             #[cfg(feature = "cloud-aws")]
             "aws" | "s3" => {
@@ -146,6 +153,11 @@ fn create_config(backend: &Backend) -> Option<io::Result<Box<dyn BlobConfig>>> {
             #[cfg(feature = "cloud-gcp")]
             "gcp" | "gcs" => {
                 let conf = GCSConfig::from_cloud_dynamic(&dyn_backend);
+                Some(conf.map(|c| Box::new(c) as Box<dyn BlobConfig>))
+            }
+            #[cfg(feature = "cloud-azure")]
+            "azure" | "azblob" => {
+                let conf = AzureConfig::from_cloud_dynamic(&dyn_backend);
                 Some(conf.map(|c| Box::new(c) as Box<dyn BlobConfig>))
             }
             _ => None,
@@ -171,16 +183,20 @@ fn create_backend_inner(
         Backend::S3(config) => blob_store(S3Storage::from_input(config.clone())?),
         #[cfg(feature = "cloud-gcp")]
         Backend::Gcs(config) => blob_store(GCSStorage::from_input(config.clone())?),
+        #[cfg(feature = "cloud-azure")]
+        Backend::AzureBlobStorage(config) => blob_store(AzureStorage::from_input(config.clone())?),
         Backend::CloudDynamic(dyn_backend) => match dyn_backend.provider_name.as_str() {
             #[cfg(feature = "cloud-aws")]
             "aws" | "s3" => blob_store(S3Storage::from_cloud_dynamic(dyn_backend)?),
             #[cfg(feature = "cloud-gcp")]
             "gcp" | "gcs" => blob_store(GCSStorage::from_cloud_dynamic(dyn_backend)?),
+            #[cfg(feature = "cloud-azure")]
+            "azure" | "azblob" => blob_store(AzureStorage::from_cloud_dynamic(dyn_backend)?),
             _ => {
                 return Err(bad_backend(Backend::CloudDynamic(dyn_backend.clone())));
             }
         },
-        #[cfg(not(any(feature = "cloud-gcp", feature = "cloud-aws")))]
+        #[cfg(not(any(feature = "cloud-gcp", feature = "cloud-aws", feature = "cloud-azure")))]
         _ => return Err(bad_backend(backend.clone())),
     };
     record_storage_create(start, &*storage);
@@ -220,6 +236,13 @@ pub fn make_noop_backend() -> StorageBackend {
 pub fn make_gcs_backend(config: Gcs) -> StorageBackend {
     let mut backend = StorageBackend::default();
     backend.set_gcs(config);
+    backend
+}
+
+#[cfg(feature = "cloud-azure")]
+pub fn make_azblob_backend(config: AzureBlobStorage) -> StorageBackend {
+    let mut backend = StorageBackend::default();
+    backend.set_azure_blob_storage(config);
     backend
 }
 

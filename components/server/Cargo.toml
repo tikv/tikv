@@ -17,6 +17,7 @@ failpoints = ["tikv/failpoints"]
 bcc-iosnoop = ["tikv/bcc-iosnoop"]
 cloud-aws = ["encryption_export/cloud-aws"]
 cloud-gcp = ["encryption_export/cloud-gcp"]
+cloud-azure = ["encryption_export/cloud-azure"]
 test-engines-rocksdb = [
   "tikv/test-engines-rocksdb",
 ]

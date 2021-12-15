@@ -12,7 +12,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
+default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -33,6 +33,10 @@ cloud-aws = [
 cloud-gcp = [
   "encryption_export/cloud-gcp",
   "sst_importer/cloud-gcp",
+]
+cloud-azure = [
+  "encryption_export/cloud-azure",
+  "sst_importer/cloud-azure",
 ]
 testexport = ["raftstore/testexport"]
 test-engines-rocksdb = [
@@ -233,6 +237,7 @@ members = [
   "components/case_macros",
   "components/cloud",
   "components/cloud/aws",
+  "components/cloud/azure",
   "components/cloud/gcp",
   "components/backup",
   "components/keys",
