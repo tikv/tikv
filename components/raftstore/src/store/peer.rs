@@ -587,6 +587,7 @@ where
     apply_snap_ctx: Option<ApplySnapshotContext>,
 
     pub in_store_log_lag: HashSet<u64>,
+    pub in_apply_lag: bool,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -698,6 +699,7 @@ where
             persisted_number: 0,
             apply_snap_ctx: None,
             in_store_log_lag: HashSet::default(),
+            in_apply_lag: false,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2670,6 +2672,24 @@ where
         let applied_index = apply_state.get_applied_index();
         self.raft_group.advance_apply_to(applied_index);
 
+        let diff = match (
+            self.in_apply_lag,
+            applied_index - self.get_store().commit_index() > ctx.cfg.leader_transfer_max_log_lag,
+        ) {
+            (true, false) => -1,
+            (false, true) => 1,
+            (..) => 0,
+        };
+        if diff != 0 {
+            let mut meta = ctx.store_meta.lock().unwrap();
+            if diff > 0 {
+                meta.apply_lag_region += 1;
+            } else {
+                meta.apply_lag_region -= 1;
+            }
+            APPLY_LAG_REGION_GAUGE.add(diff);
+        }
+
         self.cmd_epoch_checker.advance_apply(
             applied_index,
             self.term(),
@@ -3682,15 +3702,17 @@ where
             return;
         }
 
-        // if time::get_time() <= ctx.start_time + time::Duration::minutes(1) {
-        //     info!(
-        //         "reject tranferring leader due to just after starting";
-        //         "region_id" => self.region_id,
-        //         "peer_id" => self.peer.get_id(),
-        //         "from" => msg.get_from(),
-        //     );
-        //     return;
-        // }
+        if time::get_time() <= ctx.start_time + time::Duration::minutes(10) {
+            if ctx.store_meta.lock().unwrap().apply_lag_region != 0 {
+                info!(
+                    "reject tranferring leader due to just after starting";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "from" => msg.get_from(),
+                );
+                return;
+            }
+        }
 
         let mut msg = eraftpb::Message::new();
         msg.set_from(self.peer_id());

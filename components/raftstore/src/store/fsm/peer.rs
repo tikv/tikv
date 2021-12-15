@@ -1227,6 +1227,9 @@ where
                     let mut meta = self.ctx.store_meta.lock().unwrap();
                     let count = meta.store_log_lag.entry(store_id).or_insert(0);
                     *count -= 1;
+                    LOG_LAG_REGION_GAUGE_VEC
+                        .with_label_values(&[&store_id.to_string()])
+                        .dec();
                 }
                 self.fsm.peer.in_store_log_lag.clear();
             }
@@ -2335,6 +2338,22 @@ where
 
         // Destroy read delegates.
         meta.readers.remove(&region_id);
+
+        // Clear log and apply lag stats
+        for peer_id in self.fsm.peer.in_store_log_lag.iter() {
+            let peer = self.fsm.peer.get_peer_from_cache(*peer_id).unwrap();
+            let store_id = peer.get_store_id();
+            let count = meta.store_log_lag.entry(store_id).or_insert(0);
+            *count -= 1;
+            LOG_LAG_REGION_GAUGE_VEC
+                .with_label_values(&[&store_id.to_string()])
+                .dec();
+        }
+        self.fsm.peer.in_store_log_lag.clear();
+        if self.fsm.peer.in_apply_lag {
+            meta.apply_lag_region -= 1;
+            APPLY_LAG_REGION_GAUGE.dec();
+        }
 
         // Trigger region change observer
         self.ctx.coprocessor_host.on_region_changed(
