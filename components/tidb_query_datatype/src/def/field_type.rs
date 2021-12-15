@@ -129,6 +129,7 @@ impl Collation {
             -63 | 63 | 47 => Ok(Collation::Binary),
             -224 | -192 => Ok(Collation::Utf8Mb4UnicodeCi),
             -87 => Ok(Collation::GbkBin),
+            -28 => Ok(Collation::GbkChineseCi),
             n if n >= 0 => Ok(Collation::Utf8Mb4BinNoPadding),
             n => Err(DataTypeError::UnsupportedCollation { code: n }),
         }
@@ -504,6 +505,8 @@ mod tests {
             (i32::MIN, None),
             (-192, Some(Collation::Utf8Mb4UnicodeCi)),
             (-224, Some(Collation::Utf8Mb4UnicodeCi)),
+            (-28, Some(Collation::GbkChineseCi)),
+            (-87, Some(Collation::GbkBin)),
         ];
 
         for (collate, expected) in cases {
