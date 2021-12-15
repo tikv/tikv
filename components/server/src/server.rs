@@ -1047,7 +1047,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_io_utility(&mut self) -> BytesFetcher {
-        // The entrance of enabling io snooper is removed so it is always false
+        // Always set to false because BPF needs root permission which is not feasible in a real deployment.
+        // Maybe enable it when the newer stable kernel has better permission control for BPF.
         let io_snooper_on = false;
 
         let limiter = Arc::new(

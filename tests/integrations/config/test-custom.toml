@@ -5,7 +5,6 @@ slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
-enable-io-snoop = false
 abort-on-panic = true
 memory-usage-limit = "10GB"
 memory-usage-high-water= 0.65
