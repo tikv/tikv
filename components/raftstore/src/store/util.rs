@@ -426,7 +426,7 @@ pub fn is_region_initialized(r: &metapb::Region) -> bool {
 pub struct Lease {
     // A suspect timestamp is in the Either::Left(_),
     // a valid timestamp is in the Either::Right(_).
-    bound: Option<Either<Timespec, Timespec>>,
+    pub bound: Option<Either<Timespec, Timespec>>,
     max_lease: Duration,
 
     max_drift: Duration,

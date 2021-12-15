@@ -38,6 +38,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     configure_for_lease_read(cluster, Some(50), Some(10_000));
     // Override max leader lease to 2 seconds.
     let max_lease = Duration::from_secs(2);
+    cluster.cfg.raft_store.hibernate_regions = false;
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
 
     let node_id = 1u64;
@@ -82,15 +83,9 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
         assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
         expect_lease_read += 1;
         assert_eq!(detector.ctx.rl().len(), expect_lease_read);
-
-        // Wait for the leader lease to expire.
-        thread::sleep(max_lease);
-        // Issue a read request and check the value on response.
+        // Issue a read request to verify the lease.
         must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
-
-        // Check if the leader does a index read and renewed its lease.
         assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
-        expect_lease_read += 1;
         assert_eq!(detector.ctx.rl().len(), expect_lease_read);
     }
 
@@ -108,6 +103,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     let state = cluster.raft_local_state(region_id, store_id);
     assert_eq!(state.get_last_index(), last_index + 1);
 
+    expect_lease_read = detector.ctx.rl().len();
     // Issue a read request and check the value on response.
     must_read_on_peer(cluster, peer, region, key, b"v2");
 

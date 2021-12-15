@@ -1486,16 +1486,16 @@ where
         }
 
         let current_time = *self.ctx.current_time.get_or_insert_with(monotonic_raw_now);
-        let renew_bound = current_time + self.ctx.cfg.raft_store_max_leader_lease() / 4;
+        let max_lease = self.ctx.cfg.raft_store_max_leader_lease();
+        let renew_bound = current_time + max_lease / 4;
         // We need to propose a read index request if current lease can't cover till next tick
         let need_propose = match self.fsm.peer.leader_lease.inspect(Some(renew_bound)) {
             LeaseState::Expired => {
-                let max_lease = self.ctx.cfg.raft_store_max_leader_lease();
                 self.fsm.peer.pending_reads.back().map_or(true, |read| {
                     // If there is any read index whose lease can cover till next heartbeat
                     // then we don't need to propose a new one
                     read.propose_time + max_lease < renew_bound
-                }) || self.fsm.peer.proposals.back().map_or(true, |proposal| {
+                }) && self.fsm.peer.proposals.back().map_or(true, |proposal| {
                     // If there is any write whose lease can cover till next heartbeat
                     // then we don't need to propose a new one
                     proposal
@@ -4092,7 +4092,7 @@ where
     }
 
     fn on_renew_lease_tick(&mut self) {
-        if self.fsm.hibernate_state.group_state() != GroupState::Idle || !self.fsm.peer.is_leader()
+        if !self.fsm.peer.is_leader() || self.fsm.hibernate_state.group_state() == GroupState::Idle
         {
             return;
         }
