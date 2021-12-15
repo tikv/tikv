@@ -273,7 +273,6 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio",
- "tokio-stream",
  "txn_types",
  "yatp",
 ]
@@ -1227,7 +1226,6 @@ dependencies = [
  "raft",
  "serde",
  "tikv_alloc",
- "toml",
 ]
 
 [[package]]
@@ -1241,7 +1239,6 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
- "anyhow",
  "async-trait",
  "bytes 1.0.1",
  "encryption",
@@ -1266,7 +1263,6 @@ dependencies = [
  "slog",
  "slog-global",
  "structopt",
- "tame-oauth",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
@@ -1279,7 +1275,6 @@ dependencies = [
 name = "external_storage_export"
 version = "0.0.1"
 dependencies = [
- "anyhow",
  "async-trait",
  "aws",
  "cloud",
@@ -2290,15 +2285,15 @@ dependencies = [
 
 [[package]]
 name = "linked-hash-map"
-version = "0.5.2"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae91b68aebc4ddb91978b11a1b02ddd8602a05ec19002801c5666000e05e0f83"
+checksum = "7fb9b38af92608140b86b693604b9ffcc5824240a484d1ecd4795bacb2fe88f3"
 
 [[package]]
 name = "linked_hash_set"
-version = "0.1.3"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c7c91c4c7bbeb4f2f7c4e5be11e6a05bd6830bc37249c47ce1ad86ad453ff9c"
+checksum = "47186c6da4d81ca383c7c47c1bfc80f4b95f4720514d860a5407aaf4233f9588"
 dependencies = [
  "linked-hash-map",
 ]
@@ -3899,13 +3894,11 @@ dependencies = [
  "pin-project",
  "procinfo",
  "prometheus",
- "prometheus-static-metric",
  "rand 0.8.3",
  "serde",
  "serde_derive",
  "slog",
  "slog-global",
- "thread-id",
  "tikv_util",
 ]
 
@@ -4372,7 +4365,6 @@ dependencies = [
  "nix 0.11.1",
  "pd_client",
  "prometheus",
- "promptly",
  "protobuf",
  "raft",
  "raft_log_engine",
@@ -4392,7 +4384,6 @@ dependencies = [
  "tokio",
  "toml",
  "txn_types",
- "vlog",
  "yatp",
 ]
 
@@ -5069,17 +5060,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "thread-id"
-version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fdfe0627923f7411a43ec9ec9c39c3a9b4151be313e0922042581fb6c9b717f"
-dependencies = [
- "libc 0.2.106",
- "redox_syscall 0.2.6",
- "winapi 0.3.9",
-]
-
-[[package]]
 name = "thread_local"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5492,7 +5472,6 @@ dependencies = [
  "thiserror",
  "tikv_util",
  "txn_types",
- "vlog",
 ]
 
 [[package]]
@@ -5511,7 +5490,6 @@ dependencies = [
  "derive_more",
  "error_code",
  "fail",
- "fs2",
  "futures 0.3.15",
  "futures-util",
  "gag",
@@ -5657,17 +5635,6 @@ dependencies = [
  "futures 0.3.15",
  "openssl",
  "pin-project",
- "tokio",
-]
-
-[[package]]
-name = "tokio-stream"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50145484efff8818b5ccd256697f36863f587da82cf8b409c53adf1e840798e3"
-dependencies = [
- "futures-core",
- "pin-project-lite",
  "tokio",
 ]
 
@@ -5909,12 +5876,6 @@ name = "version_check"
 version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5a972e5669d67ba988ce3dc826706fb0a8b01471c088cb0b6110b805cc36aed"
-
-[[package]]
-name = "vlog"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2266fcb904c50fb17fda4c9a751a1715629ecf8b21f4c9d78b4890fb71525d71"
 
 [[package]]
 name = "void"
