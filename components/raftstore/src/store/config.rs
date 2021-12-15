@@ -144,7 +144,7 @@ pub struct Config {
     pub raft_store_max_leader_lease: ReadableDuration,
 
     // Interval of scheduling a tick to check the leader lease.
-    // It will be same with raft_base_tick_interval by default.
+    // It will be set to by raft_store_max_leader_lease/4 default.
     pub check_leader_lease_interval: ReadableDuration,
 
     // Right region derive origin region id when split.
@@ -556,7 +556,7 @@ impl Config {
         }
 
         if self.check_leader_lease_interval.as_millis() == 0 {
-            self.check_leader_lease_interval = self.raft_base_tick_interval;
+            self.check_leader_lease_interval = self.raft_store_max_leader_lease / 4;
         }
 
         Ok(())
