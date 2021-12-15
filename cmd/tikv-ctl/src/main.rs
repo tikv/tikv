@@ -49,6 +49,7 @@ use std::string::ToString;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{process, str, thread, u64};
+use structopt::clap::ErrorKind;
 use structopt::StructOpt;
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
@@ -1875,7 +1876,7 @@ fn main() {
     }
 
     if let Cmd::BadSsts { db, manifest, pd } = cmd {
-        let pd_client = get_pd_rpc_client(&pd, Arc::clone(&mgr));
+        let pd_client = get_pd_rpc_client(Some(pd), Arc::clone(&mgr));
         print_bad_ssts(&db, manifest.as_deref(), pd_client, &cfg);
         return;
     }
@@ -1962,10 +1963,134 @@ fn main() {
         return;
     }
 
-    // Deal with all subcommands needs PD.
-    if let Some(pd) = opt.pd.as_deref() {
-        let pd_client = get_pd_rpc_client(pd, Arc::clone(&mgr));
-        if let Cmd::CompactCluster {
+    if let Cmd::CompactCluster {
+        db,
+        cf,
+        from,
+        to,
+        threads,
+        bottommost,
+    } = cmd
+    {
+        let pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr));
+        let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
+        let cfs = cf.iter().map(|s| s.as_ref()).collect();
+        let from_key = from.map(|k| unescape(&k));
+        let to_key = to.map(|k| unescape(&k));
+        let bottommost = BottommostLevelCompaction::from(Some(bottommost.as_ref()));
+        compact_whole_cluster(
+            &pd_client, &cfg, mgr, db_type, cfs, from_key, to_key, threads, bottommost,
+        );
+    } else if let Cmd::SplitRegion {
+        region: region_id,
+        key,
+    } = cmd
+    {
+        let pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr));
+        let key = unescape(&key);
+        split_region(&pd_client, mgr, region_id, key);
+    } else {
+        let data_dir = opt.data_dir.as_deref();
+        let host = opt.host.as_deref();
+
+        if data_dir.is_none() && host.is_none() {
+            clap::Error {
+                message: String::from("[host|data-dir] is not specified"),
+                kind: ErrorKind::MissingRequiredArgument,
+                info: None,
+            }
+            .exit();
+        }
+
+        let skip_paranoid_checks = opt.skip_paranoid_checks;
+
+        let debug_executor =
+            new_debug_executor(&cfg, data_dir, skip_paranoid_checks, host, Arc::clone(&mgr));
+        if let Cmd::Print { cf, key } = cmd {
+            let key = unescape(&key);
+            debug_executor.dump_value(&cf, key);
+        } else if let Cmd::Raft { cmd: subcmd } = cmd {
+            match subcmd {
+                RaftCmd::Log { region, index, key } => {
+                    let (id, index) = if let Some(key) = key.as_deref() {
+                        keys::decode_raft_log_key(&unescape(key)).unwrap()
+                    } else {
+                        let id = region.unwrap();
+                        let index = index.unwrap();
+                        (id, index)
+                    };
+                    debug_executor.dump_raft_log(id, index);
+                }
+                RaftCmd::Region {
+                    regions,
+                    skip_tombstone,
+                    ..
+                } => {
+                    debug_executor.dump_region_info(regions, skip_tombstone);
+                }
+            }
+        } else if let Cmd::Size { region, cf } = cmd {
+            let cfs = cf.iter().map(AsRef::as_ref).collect();
+            if let Some(id) = region {
+                debug_executor.dump_region_size(id, cfs);
+            } else {
+                debug_executor.dump_all_region_size(cfs);
+            }
+        } else if let Cmd::Scan {
+            from,
+            to,
+            limit,
+            show_cf,
+            start_ts,
+            commit_ts,
+        } = cmd
+        {
+            let from = unescape(&from);
+            let to = to.map_or_else(Vec::new, |to| unescape(&to));
+            let limit = limit.unwrap_or(0);
+            if to.is_empty() && limit == 0 {
+                println!(r#"please pass "to" or "limit""#);
+                process::exit(-1);
+            }
+            let cfs = show_cf.iter().map(AsRef::as_ref).collect();
+            debug_executor.dump_mvccs_infos(from, to, limit, cfs, start_ts, commit_ts);
+        } else if let Cmd::RawScan {
+            from,
+            to,
+            limit,
+            cf,
+        } = cmd
+        {
+            let from = unescape(&from);
+            let to = unescape(&to);
+            debug_executor.raw_scan(&from, &to, limit, &cf);
+        } else if let Cmd::Mvcc {
+            key,
+            show_cf,
+            start_ts,
+            commit_ts,
+        } = cmd
+        {
+            let from = unescape(&key);
+            let cfs = show_cf.iter().map(AsRef::as_ref).collect();
+            debug_executor.dump_mvccs_infos(from, vec![], 0, cfs, start_ts, commit_ts);
+        } else if let Cmd::Diff {
+            region,
+            to_data_dir,
+            to_host,
+            to_config,
+            ..
+        } = cmd
+        {
+            let to_data_dir = to_data_dir.as_deref();
+            let to_host = to_host.as_deref();
+            let to_config = to_config.map_or_else(TiKvConfig::default, |path| {
+                let s = fs::read_to_string(&path).unwrap();
+                toml::from_str(&s).unwrap()
+            });
+            debug_executor.diff_region(region, to_host, to_data_dir, &to_config, mgr);
+        } else if let Cmd::Compact {
+            region,
             db,
             cf,
             from,
@@ -1975,278 +2100,156 @@ fn main() {
         } = cmd
         {
             let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
-            let cfs = cf.iter().map(|s| s.as_ref()).collect();
             let from_key = from.map(|k| unescape(&k));
             let to_key = to.map(|k| unescape(&k));
             let bottommost = BottommostLevelCompaction::from(Some(bottommost.as_ref()));
-            return compact_whole_cluster(
-                &pd_client, &cfg, mgr, db_type, cfs, from_key, to_key, threads, bottommost,
-            );
-        }
-        if let Cmd::SplitRegion {
-            region: region_id,
-            key,
+            if let Some(region) = region {
+                debug_executor.compact_region(host, db_type, &cf, region, threads, bottommost);
+            } else {
+                debug_executor.compact(host, db_type, &cf, from_key, to_key, threads, bottommost);
+            }
+        } else if let Cmd::Tombstone { regions, pd, force } = cmd {
+            if let Some(pd_urls) = pd {
+                let cfg = PdConfig {
+                    endpoints: pd_urls,
+                    ..Default::default()
+                };
+                if let Err(e) = cfg.validate() {
+                    panic!("invalid pd configuration: {:?}", e);
+                }
+                debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
+            } else {
+                assert!(force);
+                debug_executor.set_region_tombstone_force(regions);
+            }
+        } else if let Cmd::RecoverMvcc {
+            read_only,
+            all,
+            threads,
+            regions,
+            pd: pd_urls,
         } = cmd
         {
-            let key = unescape(&key);
-            return split_region(&pd_client, mgr, region_id, key);
-        }
-
-        Opt::clap().print_help().ok();
-        return;
-    }
-
-    // Deal with all subcommands about db or host.
-    let data_dir = opt.data_dir.as_deref();
-    let skip_paranoid_checks = opt.skip_paranoid_checks;
-    let host = opt.host.as_deref();
-
-    let debug_executor =
-        new_debug_executor(&cfg, data_dir, skip_paranoid_checks, host, Arc::clone(&mgr));
-
-    if let Cmd::Print { cf, key } = cmd {
-        let key = unescape(&key);
-        debug_executor.dump_value(&cf, key);
-    } else if let Cmd::Raft { cmd: subcmd } = cmd {
-        match subcmd {
-            RaftCmd::Log { region, index, key } => {
-                let (id, index) = if let Some(key) = key.as_deref() {
-                    keys::decode_raft_log_key(&unescape(key)).unwrap()
-                } else {
-                    let id = region.unwrap();
-                    let index = index.unwrap();
-                    (id, index)
-                };
-                debug_executor.dump_raft_log(id, index);
+            if all {
+                let threads = threads.unwrap();
+                if threads == 0 {
+                    panic!("Number of threads can't be 0");
+                }
+                println!(
+                    "Recover all, threads: {}, read_only: {}",
+                    threads, read_only
+                );
+                debug_executor.recover_mvcc_all(threads, read_only);
+            } else {
+                let mut cfg = PdConfig::default();
+                println!(
+                    "Recover regions: {:?}, pd: {:?}, read_only: {}",
+                    regions, pd_urls, read_only
+                );
+                cfg.endpoints = pd_urls;
+                if let Err(e) = cfg.validate() {
+                    panic!("invalid pd configuration: {:?}", e);
+                }
+                debug_executor.recover_regions_mvcc(mgr, &cfg, regions, read_only);
             }
-            RaftCmd::Region {
-                regions,
-                skip_tombstone,
-                ..
-            } => {
-                debug_executor.dump_region_info(regions, skip_tombstone);
+        } else if let Cmd::UnsafeRecover { cmd: subcmd } = cmd {
+            match subcmd {
+                UnsafeRecoverCmd::RemoveFailStores {
+                    stores,
+                    regions,
+                    promote_learner,
+                    ..
+                } => {
+                    debug_executor.remove_fail_stores(stores, regions, promote_learner);
+                }
+                UnsafeRecoverCmd::DropUnappliedRaftlog { regions, .. } => {
+                    debug_executor.drop_unapplied_raftlog(regions);
+                }
             }
-        }
-    } else if let Cmd::Size { region, cf } = cmd {
-        let cfs = cf.iter().map(AsRef::as_ref).collect();
-        if let Some(id) = region {
-            debug_executor.dump_region_size(id, cfs);
-        } else {
-            debug_executor.dump_all_region_size(cfs);
-        }
-    } else if let Cmd::Scan {
-        from,
-        to,
-        limit,
-        show_cf,
-        start_ts,
-        commit_ts,
-    } = cmd
-    {
-        let from = unescape(&from);
-        let to = to.map_or_else(Vec::new, |to| unescape(&to));
-        let limit = limit.unwrap_or(0);
-        if to.is_empty() && limit == 0 {
-            println!(r#"please pass "to" or "limit""#);
-            process::exit(-1);
-        }
-        let cfs = show_cf.iter().map(AsRef::as_ref).collect();
-        debug_executor.dump_mvccs_infos(from, to, limit, cfs, start_ts, commit_ts);
-    } else if let Cmd::RawScan {
-        from,
-        to,
-        limit,
-        cf,
-    } = cmd
-    {
-        let from = unescape(&from);
-        let to = unescape(&to);
-        debug_executor.raw_scan(&from, &to, limit, &cf);
-    } else if let Cmd::Mvcc {
-        key,
-        show_cf,
-        start_ts,
-        commit_ts,
-    } = cmd
-    {
-        let from = unescape(&key);
-        let cfs = show_cf.iter().map(AsRef::as_ref).collect();
-        debug_executor.dump_mvccs_infos(from, vec![], 0, cfs, start_ts, commit_ts);
-    } else if let Cmd::Diff {
-        region,
-        to_data_dir,
-        to_host,
-        to_config,
-        ..
-    } = cmd
-    {
-        let to_data_dir = to_data_dir.as_deref();
-        let to_host = to_host.as_deref();
-        let to_config = to_config.map_or_else(TiKvConfig::default, |path| {
-            let s = fs::read_to_string(&path).unwrap();
-            toml::from_str(&s).unwrap()
-        });
-        debug_executor.diff_region(region, to_host, to_data_dir, &to_config, mgr);
-    } else if let Cmd::Compact {
-        region,
-        db,
-        cf,
-        from,
-        to,
-        threads,
-        bottommost,
-    } = cmd
-    {
-        let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
-        let from_key = from.map(|k| unescape(&k));
-        let to_key = to.map(|k| unescape(&k));
-        let bottommost = BottommostLevelCompaction::from(Some(bottommost.as_ref()));
-        if let Some(region) = region {
-            debug_executor.compact_region(host, db_type, &cf, region, threads, bottommost);
-        } else {
-            debug_executor.compact(host, db_type, &cf, from_key, to_key, threads, bottommost);
-        }
-    } else if let Cmd::Tombstone { regions, pd, force } = cmd {
-        if let Some(pd_urls) = pd {
-            let cfg = PdConfig {
-                endpoints: pd_urls,
+        } else if let Cmd::RecreateRegion {
+            pd,
+            region: region_id,
+        } = cmd
+        {
+            let pd_cfg = PdConfig {
+                endpoints: pd,
                 ..Default::default()
             };
-            if let Err(e) = cfg.validate() {
-                panic!("invalid pd configuration: {:?}", e);
+            debug_executor.recreate_region(mgr, &pd_cfg, region_id);
+        } else if let Cmd::ConsistencyCheck { region } = cmd {
+            debug_executor.check_region_consistency(region);
+        } else if let Cmd::BadRegions {} = cmd {
+            debug_executor.print_bad_regions();
+        } else if let Cmd::ModifyTikvConfig {
+            config_name,
+            config_value,
+        } = cmd
+        {
+            debug_executor.modify_tikv_config(&config_name, &config_value);
+        } else if let Cmd::Metrics { tag } = cmd {
+            let tags = tag.iter().map(AsRef::as_ref).collect();
+            debug_executor.dump_metrics(tags)
+        } else if let Cmd::RegionProperties { region } = cmd {
+            debug_executor.dump_region_properties(region)
+        } else if let Cmd::RangeProperties { start, end } = cmd {
+            let start_key = from_hex(&start).unwrap();
+            let end_key = from_hex(&end).unwrap();
+            debug_executor.dump_range_properties(start_key, end_key);
+        } else if let Cmd::Fail { cmd: subcmd } = cmd {
+            if host.is_none() {
+                println!("command fail requires host");
+                process::exit(-1);
             }
-            debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
-        } else {
-            assert!(force);
-            debug_executor.set_region_tombstone_force(regions);
-        }
-    } else if let Cmd::RecoverMvcc {
-        read_only,
-        all,
-        threads,
-        regions,
-        pd: pd_urls,
-    } = cmd
-    {
-        if all {
-            let threads = threads.unwrap();
-            if threads == 0 {
-                panic!("Number of threads can't be 0");
-            }
-            println!(
-                "Recover all, threads: {}, read_only: {}",
-                threads, read_only
-            );
-            debug_executor.recover_mvcc_all(threads, read_only);
-        } else {
-            let mut cfg = PdConfig::default();
-            println!(
-                "Recover regions: {:?}, pd: {:?}, read_only: {}",
-                regions, pd_urls, read_only
-            );
-            cfg.endpoints = pd_urls;
-            if let Err(e) = cfg.validate() {
-                panic!("invalid pd configuration: {:?}", e);
-            }
-            debug_executor.recover_regions_mvcc(mgr, &cfg, regions, read_only);
-        }
-    } else if let Cmd::UnsafeRecover { cmd: subcmd } = cmd {
-        match subcmd {
-            UnsafeRecoverCmd::RemoveFailStores {
-                stores,
-                regions,
-                promote_learner,
-                ..
-            } => {
-                debug_executor.remove_fail_stores(stores, regions, promote_learner);
-            }
-            UnsafeRecoverCmd::DropUnappliedRaftlog { regions, .. } => {
-                debug_executor.drop_unapplied_raftlog(regions);
-            }
-        }
-    } else if let Cmd::RecreateRegion {
-        pd,
-        region: region_id,
-    } = cmd
-    {
-        let pd_cfg = PdConfig {
-            endpoints: pd,
-            ..Default::default()
-        };
-        debug_executor.recreate_region(mgr, &pd_cfg, region_id);
-    } else if let Cmd::ConsistencyCheck { region } = cmd {
-        debug_executor.check_region_consistency(region);
-    } else if let Cmd::BadRegions {} = cmd {
-        debug_executor.print_bad_regions();
-    } else if let Cmd::ModifyTikvConfig {
-        config_name,
-        config_value,
-    } = cmd
-    {
-        debug_executor.modify_tikv_config(&config_name, &config_value);
-    } else if let Cmd::Metrics { tag } = cmd {
-        let tags = tag.iter().map(AsRef::as_ref).collect();
-        debug_executor.dump_metrics(tags)
-    } else if let Cmd::RegionProperties { region } = cmd {
-        debug_executor.dump_region_properties(region)
-    } else if let Cmd::RangeProperties { start, end } = cmd {
-        let start_key = from_hex(&start).unwrap();
-        let end_key = from_hex(&end).unwrap();
-        debug_executor.dump_range_properties(start_key, end_key);
-    } else if let Cmd::Fail { cmd: subcmd } = cmd {
-        if host.is_none() {
-            println!("command fail requires host");
-            process::exit(-1);
-        }
-        let client = new_debug_client(host.unwrap(), mgr);
-        match subcmd {
-            FailCmd::Inject { args, file } => {
-                let mut list = file.as_deref().map_or_else(Vec::new, read_fail_file);
-                for pair in args {
-                    let mut parts = pair.split('=');
-                    list.push((
-                        parts.next().unwrap().to_owned(),
-                        parts.next().unwrap_or("").to_owned(),
-                    ))
-                }
-                for (name, actions) in list {
-                    if actions.is_empty() {
-                        println!("No action for fail point {}", name);
-                        continue;
+            let client = new_debug_client(host.unwrap(), mgr);
+            match subcmd {
+                FailCmd::Inject { args, file } => {
+                    let mut list = file.as_deref().map_or_else(Vec::new, read_fail_file);
+                    for pair in args {
+                        let mut parts = pair.split('=');
+                        list.push((
+                            parts.next().unwrap().to_owned(),
+                            parts.next().unwrap_or("").to_owned(),
+                        ))
                     }
-                    let mut inject_req = InjectFailPointRequest::default();
-                    inject_req.set_name(name);
-                    inject_req.set_actions(actions);
+                    for (name, actions) in list {
+                        if actions.is_empty() {
+                            println!("No action for fail point {}", name);
+                            continue;
+                        }
+                        let mut inject_req = InjectFailPointRequest::default();
+                        inject_req.set_name(name);
+                        inject_req.set_actions(actions);
 
+                        let option = CallOption::default().timeout(Duration::from_secs(10));
+                        client.inject_fail_point_opt(&inject_req, option).unwrap();
+                    }
+                }
+                FailCmd::Recover { args, file } => {
+                    let mut list = file.as_deref().map_or_else(Vec::new, read_fail_file);
+                    for fp in args {
+                        list.push((fp.to_owned(), "".to_owned()))
+                    }
+                    for (name, _) in list {
+                        let mut recover_req = RecoverFailPointRequest::default();
+                        recover_req.set_name(name);
+                        let option = CallOption::default().timeout(Duration::from_secs(10));
+                        client.recover_fail_point_opt(&recover_req, option).unwrap();
+                    }
+                }
+                FailCmd::List {} => {
+                    let list_req = ListFailPointsRequest::default();
                     let option = CallOption::default().timeout(Duration::from_secs(10));
-                    client.inject_fail_point_opt(&inject_req, option).unwrap();
+                    let resp = client.list_fail_points_opt(&list_req, option).unwrap();
+                    println!("{:?}", resp.get_entries());
                 }
             }
-            FailCmd::Recover { args, file } => {
-                let mut list = file.as_deref().map_or_else(Vec::new, read_fail_file);
-                for fp in args {
-                    list.push((fp.to_owned(), "".to_owned()))
-                }
-                for (name, _) in list {
-                    let mut recover_req = RecoverFailPointRequest::default();
-                    recover_req.set_name(name);
-                    let option = CallOption::default().timeout(Duration::from_secs(10));
-                    client.recover_fail_point_opt(&recover_req, option).unwrap();
-                }
-            }
-            FailCmd::List {} => {
-                let list_req = ListFailPointsRequest::default();
-                let option = CallOption::default().timeout(Duration::from_secs(10));
-                let resp = client.list_fail_points_opt(&list_req, option).unwrap();
-                println!("{:?}", resp.get_entries());
-            }
+        } else if let Cmd::Store {} = cmd {
+            debug_executor.dump_store_info();
+        } else if let Cmd::Cluster {} = cmd {
+            debug_executor.dump_cluster_info();
+        } else {
+            Opt::clap().print_help().ok();
         }
-    } else if let Cmd::Store {} = cmd {
-        debug_executor.dump_store_info();
-    } else if let Cmd::Cluster {} = cmd {
-        debug_executor.dump_cluster_info();
-    } else {
-        Opt::clap().print_help().ok();
     }
 }
 
@@ -2313,8 +2316,16 @@ fn dump_snap_meta_file(path: &str) {
     }
 }
 
-fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
-    let cfg = PdConfig::new(vec![pd.to_string()]);
+fn get_pd_rpc_client(pd: Option<String>, mgr: Arc<SecurityManager>) -> RpcClient {
+    let pd = pd.unwrap_or_else(|| {
+        clap::Error {
+            message: String::from("--pd is required for this command"),
+            kind: ErrorKind::MissingRequiredArgument,
+            info: None,
+        }
+        .exit();
+    });
+    let cfg = PdConfig::new(vec![pd]);
     cfg.validate().unwrap();
     RpcClient::new(&cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
 }
