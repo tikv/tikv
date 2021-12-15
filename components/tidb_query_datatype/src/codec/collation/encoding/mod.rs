@@ -1,11 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod ascii;
 mod gbk;
-mod latin1;
 mod utf8;
 
+pub use ascii::*;
 pub use gbk::*;
-pub use latin1::*;
 pub use utf8::*;
 
 use std::str;
