@@ -164,6 +164,9 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         option: IterOptions,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
+        if limit == 0 {
+            return Ok(vec![]);
+        }
         let mut cursor = Cursor::new(self.snapshot.iter_cf(cf, option)?, ScanMode::Forward, false);
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.seek(start_key, statistics)? {
@@ -172,7 +175,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         let mut pairs = vec![];
         let mut row_count = 0;
         let mut time_slice_start = Instant::now();
-        while cursor.valid()? && pairs.len() < limit {
+        while cursor.valid()? {
             row_count += 1;
             if row_count >= MAX_BATCH_SIZE {
                 if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
@@ -189,7 +192,11 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
                     cursor.value(statistics).to_owned()
                 },
             )));
-            cursor.next(statistics);
+            if pairs.len() < limit {
+                cursor.next(statistics);
+            } else {
+                break;
+            }
         }
         Ok(pairs)
     }
@@ -208,6 +215,9 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         option: IterOptions,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
+        if limit == 0 {
+            return Ok(vec![]);
+        }
         let mut cursor = Cursor::new(
             self.snapshot.iter_cf(cf, option)?,
             ScanMode::Backward,
@@ -220,7 +230,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         let mut pairs = vec![];
         let mut row_count = 0;
         let mut time_slice_start = Instant::now();
-        while cursor.valid()? && pairs.len() < limit {
+        while cursor.valid()? {
             row_count += 1;
             if row_count >= MAX_BATCH_SIZE {
                 if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
@@ -237,7 +247,11 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
                     cursor.value(statistics).to_owned()
                 },
             )));
-            cursor.prev(statistics);
+            if pairs.len() < limit {
+                cursor.prev(statistics);
+            } else {
+                break;
+            }
         }
         Ok(pairs)
     }
