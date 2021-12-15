@@ -9,6 +9,7 @@ use futures::executor::block_on;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
+use tikv_util::config::ReadableDuration;
 use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
@@ -277,6 +278,9 @@ fn test_split_delay() {
 fn test_inconsistent_configuration() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_hibernate(&mut cluster);
+    // Sometimes the lease renewing may delay the time of going to hibernate, disable it to
+    // make test more stable.
+    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
