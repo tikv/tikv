@@ -13,7 +13,6 @@ use futures::{
 };
 use grpcio::WriteFlags;
 use kvproto::cdcpb::ChangeDataEvent;
-
 use tikv_util::time::Instant;
 use tikv_util::{impl_display_as_debug, warn};
 
