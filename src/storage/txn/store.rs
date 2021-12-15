@@ -70,9 +70,7 @@ pub trait Scanner: Send {
                 }
                 Ok(None) => break,
                 Err(
-                    e
-                    @
-                    Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked {
+                    e @ Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked {
                         ..
                     }))),
                 ) => {

@@ -387,8 +387,9 @@ impl CrypterCore {
 
     fn reset_buffer(&mut self, size: usize) {
         // OCrypter require the output buffer to have block_size extra bytes, or it will panic.
-        self.buffer.reserve(size + self.block_size);
+        #[allow(clippy::uninit_vec)]
         unsafe {
+            self.buffer.reserve(size + self.block_size);
             self.buffer.set_len(size + self.block_size);
         }
     }

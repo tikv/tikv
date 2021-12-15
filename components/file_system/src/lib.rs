@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(test)]
-#![feature(duration_consts_2)]
+#![feature(duration_consts_float)]
 
 #[macro_use]
 extern crate lazy_static;

@@ -182,6 +182,7 @@ fn create_backend_inner(
         },
         #[cfg(not(any(feature = "cloud-gcp", feature = "cloud-aws")))]
         _ => return Err(bad_backend(backend.clone())),
+        Backend::AzureBlobStorage(_) => todo!(),
     };
     record_storage_create(start, &*storage);
     Ok(storage)

@@ -485,7 +485,7 @@ fn get_sysctl_list() -> HashMap<String, String> {
             let content = std::fs::read_to_string(entry.path()).ok()?;
             let path = entry.path().to_str()?;
 
-            let name = path.trim_start_matches(DIR).replace("/", ".");
+            let name = path.trim_start_matches(DIR).replace('/', ".");
             Some((name, content.trim().to_string()))
         })
         .collect()

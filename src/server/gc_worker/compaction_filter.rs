@@ -224,13 +224,13 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             "manual" => context.is_manual_compaction(),
         );
 
-        let filter = Box::new(WriteCompactionFilter::new(
+        let filter = WriteCompactionFilter::new(
             db,
             safe_point,
             context,
             gc_scheduler,
             (store_id, region_info_provider),
-        ));
+        );
         let name = CString::new("write_compaction_filter").unwrap();
         unsafe { new_compaction_filter_raw(name, filter) }
     }
