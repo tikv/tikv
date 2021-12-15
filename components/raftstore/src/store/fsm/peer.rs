@@ -2235,7 +2235,7 @@ where
             match self
                 .fsm
                 .peer
-                .ready_to_transfer_leader(&mut self.ctx, msg.get_index(), &from)
+                .ready_to_transfer_leader(&mut self.ctx, &msg, &from)
             {
                 Some(reason) => {
                     info!(

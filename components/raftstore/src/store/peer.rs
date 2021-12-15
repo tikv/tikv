@@ -88,6 +88,7 @@ const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
 const REGION_READ_PROGRESS_CAP: usize = 128;
 const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
+const ON_START_MARK: bytes::Bytes = bytes::Bytes::from_static(&[0]);
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug, PartialEq, Eq)]
@@ -2028,6 +2029,31 @@ where
             if self.is_leader() {
                 self.on_leader_commit_idx_changed(pre_commit_index, hs.get_commit());
             }
+
+            let diff = match (
+                self.in_apply_lag,
+                hs.get_commit() - self.get_store().applied_index()
+                    > ctx.cfg.leader_transfer_max_log_lag,
+            ) {
+                (true, false) => {
+                    self.in_apply_lag = false;
+                    -1
+                }
+                (false, true) => {
+                    self.in_apply_lag = true;
+                    1
+                }
+                (..) => 0,
+            };
+            if diff != 0 {
+                let mut meta = ctx.store_meta.lock().unwrap();
+                if diff > 0 {
+                    meta.apply_lag_region += 1;
+                } else {
+                    meta.apply_lag_region -= 1;
+                }
+                APPLY_LAG_REGION_GAUGE.add(diff);
+            }
         }
 
         if !ready.messages().is_empty() {
@@ -2674,10 +2700,16 @@ where
 
         let diff = match (
             self.in_apply_lag,
-            applied_index - self.get_store().commit_index() > ctx.cfg.leader_transfer_max_log_lag,
+            self.get_store().commit_index() - applied_index > ctx.cfg.leader_transfer_max_log_lag,
         ) {
-            (true, false) => -1,
-            (false, true) => 1,
+            (true, false) => {
+                self.in_apply_lag = false;
+                -1
+            }
+            (false, true) => {
+                self.in_apply_lag = true;
+                1
+            }
             (..) => 0,
         };
         if diff != 0 {
@@ -3143,12 +3175,13 @@ where
     pub fn ready_to_transfer_leader<T>(
         &self,
         ctx: &mut PollContext<EK, ER, T>,
-        mut index: u64,
+        msg: &eraftpb::Message,
         peer: &metapb::Peer,
     ) -> Option<&'static str> {
         let peer_id = peer.get_id();
         let status = self.raft_group.status();
         let progress = status.progress.unwrap();
+        let mut index = msg.get_index();
 
         if !progress.conf().voters().contains(peer_id) {
             return Some("non voter");
@@ -3178,10 +3211,12 @@ where
             return Some("log gap");
         }
 
-        let meta = ctx.store_meta.lock().unwrap();
-        if let Some(count) = meta.store_log_lag.get(&peer.get_store_id()) {
-            if *count != 0 {
-                return Some("other peer log gap");
+        if msg.get_context() == &ON_START_MARK {
+            let meta = ctx.store_meta.lock().unwrap();
+            if let Some(count) = meta.store_log_lag.get(&peer.get_store_id()) {
+                if *count != 0 {
+                    return Some("other peer log gap");
+                }
             }
         }
 
@@ -3705,7 +3740,7 @@ where
         if time::get_time() <= ctx.start_time + time::Duration::minutes(10) {
             if ctx.store_meta.lock().unwrap().apply_lag_region != 0 {
                 info!(
-                    "reject tranferring leader due to just after starting";
+                    "reject tranferring leader due to just after starting and have apply lag";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "from" => msg.get_from(),
@@ -3720,6 +3755,9 @@ where
         msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
         msg.set_index(self.get_store().applied_index());
         msg.set_log_term(self.term());
+        if time::get_time() <= ctx.start_time + time::Duration::minutes(10) {
+            msg.set_context(ON_START_MARK);
+        }
         self.raft_group.raft.msgs.push(msg);
     }
 
