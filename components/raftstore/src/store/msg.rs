@@ -180,7 +180,7 @@ where
 }
 
 bitflags! {
-    pub struct PeerTicks: u16 {
+    pub struct PeerTicks: u8 {
         const RAFT                   = 0b00000001;
         const RAFT_LOG_GC            = 0b00000010;
         const SPLIT_REGION_CHECK     = 0b00000100;

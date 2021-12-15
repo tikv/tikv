@@ -341,10 +341,6 @@ where
         self.ready_cnt += 1;
         self.handled_cnt -= 1;
     }
-
-    pub fn len(&self) -> usize {
-        self.reads.len()
-    }
 }
 
 const UUID_LEN: usize = 16;

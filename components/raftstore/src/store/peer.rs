@@ -191,10 +191,6 @@ impl<S: Snapshot> ProposalQueue<S> {
     pub fn back(&self) -> Option<&Proposal<S>> {
         self.queue.back()
     }
-
-    pub fn len(&self) -> usize {
-        self.queue.len()
-    }
 }
 
 bitflags! {
