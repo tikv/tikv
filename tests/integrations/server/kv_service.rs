@@ -1747,8 +1747,12 @@ fn test_get_lock_wait_info_api() {
     handle.join().unwrap();
 }
 
+// Test API version verification for transaction requests.
+// See the following for detail:
+//   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
+//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
 #[test]
-fn test_api_version() {
+fn test_txn_api_version() {
     const TIDB_KEY_CASE: &[u8] = b"t_a";
     const TXN_KEY_CASE: &[u8] = &[key_prefix::TXN_KEY_PREFIX, 0, b'a'];
     const RAW_KEY_CASE: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'a'];
@@ -1757,14 +1761,15 @@ fn test_api_version() {
         // config api_version = V1|V1ttl, for backward compatible.
         (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, None),
         (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, None),
-        // storage api_version = V1ttl, allow RawKV request only.
+        (ApiVersion::V1, ApiVersion::V1, RAW_KEY_CASE, None),
+        // storage api_version = V1ttl, allow RawKV request only. Any key cases will be rejected.
         (
             ApiVersion::V1ttl,
             ApiVersion::V1,
             TXN_KEY_CASE,
             Some("ApiVersionNotMatched"),
         ),
-        // config api_version = V1, reject V2 request.
+        // config api_version = V1, reject all V2 requests.
         (
             ApiVersion::V1,
             ApiVersion::V2,
@@ -1778,6 +1783,12 @@ fn test_api_version() {
             ApiVersion::V2,
             ApiVersion::V1,
             TXN_KEY_CASE,
+            Some("InvalidKeyPrefix"),
+        ),
+        (
+            ApiVersion::V2,
+            ApiVersion::V1,
+            RAW_KEY_CASE,
             Some("InvalidKeyPrefix"),
         ),
         // V2 api validation.

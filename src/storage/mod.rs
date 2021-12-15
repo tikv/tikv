@@ -376,9 +376,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ///
     /// When config.api_version = V1: accept request of V1 only.
     /// When config.api_version = V2: accept the following:
-    ///   * Request of V1 from TiDB, for compatiblity.
+    ///   * Request of V1 from TiDB, for compatibility.
     ///   * Request of V2 with legal prefix.
-    /// See rfc https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md for detail.
+    /// See the following for detail:
+    ///   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
+    ///   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
     fn check_api_version(
         storage_api_version: ApiVersion,
         req_api_version: ApiVersion,
@@ -7647,6 +7649,10 @@ mod tests {
         rx.recv().unwrap();
     }
 
+    // Test check_api_version.
+    // See the following for detail:
+    //   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
+    //   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
     #[test]
     fn test_check_api_version() {
         use error_code::storage::*;
@@ -7668,7 +7674,7 @@ mod tests {
                 ApiVersion::V1,
                 ApiVersion::V1,
                 CommandKind::raw_get,
-                vec![RAW_KEY_CASE],
+                vec![RAW_KEY_CASE, TXN_KEY_CASE],
                 None,
             ),
             // storage api_version = V1ttl, allow RawKV request only.
@@ -7715,6 +7721,13 @@ mod tests {
                 ApiVersion::V1,
                 CommandKind::get,
                 vec![TIDB_KEY_CASE, TXN_KEY_CASE],
+                Some(INVALID_KEY_PREFIX),
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V1,
+                CommandKind::get,
+                vec![RAW_KEY_CASE],
                 Some(INVALID_KEY_PREFIX),
             ),
             // V2 api validation.
