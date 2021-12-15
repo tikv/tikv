@@ -473,7 +473,7 @@ fn main() {
                     debug_executor.dump_cluster_info();
                 }
                 _ => {
-                    Opt::clap().print_help().ok();
+                    unreachable!()
                 }
             }
         }
