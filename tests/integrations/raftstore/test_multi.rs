@@ -839,7 +839,7 @@ fn test_leader_drop_with_pessimistic_lock() {
         .get_txn_ext()
         .unwrap()
         .clone();
-    txn_ext.pessimistic_locks.write().map.insert(
+    txn_ext.pessimistic_locks.write().insert(
         Key::from_raw(b"k1"),
         PessimisticLock {
             primary: b"k1".to_vec().into_boxed_slice(),

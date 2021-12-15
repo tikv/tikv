@@ -916,17 +916,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         // Mutations on the lock CF should overwrite the memory locks.
         //
-        // We have to remove these locks before proposing. Otherwise the locks that are migrated
-        // to other peers may include these deleted locks unexpectedly. Here is a example:
-        // 1. Here we propose deleting a lock (but not removing the lock from the memory first).
-        // 2. The region is going to transfer leader, so it proposes all its in-memory pessimistic
-        //    locks.
-        // 3. The follower deletes the lock first, and adds the migrated locks later.
-        // This leads to an incorrect result. Deleted locks appear again.
-        //
-        // Protected by the latches, be no concurrent write on the same keys. So, removing these
-        // locks now is safe. If the write fails, we will later recover these deleted locks
-        // before releasing the latches. We will not mistakenly lose the pessimistic locks.
+        // Protected by the latches, there is no concurrent write on the same keys. So,
+        // removing these locks now is safe, even if there is leader or region changes before.
+        // We only set a deleted flag here, and the lock will be finally removed when it finishes
+        // applying. See the comments in `PeerPessimisticLocks` for how this flag is used.
         let txn_ext2 = txn_ext.clone();
         let mut pessimistic_locks_guard = txn_ext2
             .as_ref()
@@ -938,7 +931,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     .iter()
                     .filter_map(|write| match write {
                         Modify::Put(cf, key, ..) | Modify::Delete(cf, key) if *cf == CF_LOCK => {
-                            locks.map.remove_entry(key)
+                            locks.map.get_mut(key).map(|(_, deleted)| {
+                                *deleted = true;
+                                key.to_owned()
+                            })
                         }
                         _ => None,
                     })
@@ -956,7 +952,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let _downgraded_guard = pessimistic_locks_guard.and_then(|guard| {
             (!removed_pessimistic_locks.is_empty()).then(|| RwLockWriteGuard::downgrade(guard))
         });
-
+        let (version, term) = (ctx.get_region_epoch().get_version(), ctx.get_term());
         // The callback to receive async results of write prepare from the storage engine.
         let engine_cb = Box::new(move |result: EngineResult<()>| {
             sched_pool
@@ -964,17 +960,19 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     fail_point!("scheduler_async_write_finish");
 
                     let ok = result.is_ok();
-                    if !ok && !removed_pessimistic_locks.is_empty() {
-                        // Revert removing pessimistic locks if it fails to write.
+                    if ok && !removed_pessimistic_locks.is_empty() {
+                        // Removing pessimistic locks when it succeeds to apply.
                         if let Some(mut pessimistic_locks) = txn_ext
                             .as_ref()
                             .map(|txn_ext| txn_ext.pessimistic_locks.write())
                         {
-                            // If epoch changes, the lock table is reset. Do not insert
-                            // stale removed locks into it.
-                            if pessimistic_locks.epoch == pessimistic_epoch {
-                                for (key, lock) in removed_pessimistic_locks {
-                                    pessimistic_locks.map.insert(key, lock);
+                            // If epoch version or term does not match, region or leader change has happened,
+                            // so we needn't remove the key.
+                            if pessimistic_locks.term == term
+                                && pessimistic_locks.version == version
+                            {
+                                for key in removed_pessimistic_locks {
+                                    pessimistic_locks.map.remove(&key);
                                 }
                             }
                         }
@@ -1044,7 +1042,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         for modify in mem::take(&mut to_be_write.modifies) {
             match modify {
                 Modify::PessimisticLock(key, lock) => {
-                    pessimistic_locks.map.insert(key, lock);
+                    pessimistic_locks.insert(key, lock);
                 }
                 _ => panic!("all modifies should be PessimisticLock"),
             }

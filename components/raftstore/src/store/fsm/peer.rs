@@ -2289,22 +2289,15 @@ where
 
         // 2. Propose pessimistic locks
         if locks.is_empty() {
-            // This is a trick for detecting whether the map has been written, in order to skip
-            // proposing the extra TransferLeader command when the in-memory pessimistic lock feature
-            // is disabled.
-            // If the map is empty but the capacity is not zero, it is possible that a write command
-            // has just deleted locks from the map but not proposed yet. It might cause that command
-            // to fail if we skip proposing the extra TransferLeader command here.
-            return locks.capacity() > 0;
+            return false;
         }
         // FIXME: Raft command has size limit. Either limit the total size of pessimistic locks
         // in a region, or split commands here.
         let mut cmd = RaftCmdRequest::default();
-        cmd.mut_header().set_region_id(self.fsm.region_id());
-        cmd.mut_header()
-            .set_region_epoch(self.region().get_region_epoch().clone());
-        cmd.mut_header().set_peer(self.fsm.peer.peer.clone());
-        for (key, lock) in locks {
+        for (key, (lock, deleted)) in locks {
+            if deleted {
+                // continue;
+            }
             let mut put = PutRequest::default();
             put.set_cf(CF_LOCK.to_string());
             put.set_key(key.into_encoded());
@@ -2314,6 +2307,16 @@ where
             req.set_put(put);
             cmd.mut_requests().push(req);
         }
+        if cmd.get_requests().is_empty() {
+            // If the map is not empty but all locks are deleted, it is possible that a write
+            // command has just marked locks deleted but not proposed yet. It might cause
+            // that command to fail if we skip proposing the extra TransferLeader command here.
+            return true;
+        }
+        cmd.mut_header().set_region_id(self.fsm.region_id());
+        cmd.mut_header()
+            .set_region_epoch(self.region().get_region_epoch().clone());
+        cmd.mut_header().set_peer(self.fsm.peer.peer.clone());
         self.propose_raft_command(cmd, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
         true
     }

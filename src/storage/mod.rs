@@ -8163,7 +8163,7 @@ mod tests {
 
         {
             let pessimistic_locks = txn_ext.pessimistic_locks.read();
-            let lock = pessimistic_locks.map.get(&k1).unwrap();
+            let lock = &pessimistic_locks.map.get(&k1).unwrap().0;
             assert_eq!(
                 lock,
                 &PessimisticLock {

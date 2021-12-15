@@ -95,7 +95,7 @@ fn test_prewrite_before_max_ts_is_synced() {
 }
 
 #[test]
-fn test_locks_deleted_earlier_than_proposing_locks() {
+fn test_delete_lock_proposed_earlier_than_proposing_locks() {
     use tikv::storage::Engine;
 
     let mut cluster = new_server_cluster(0, 3);
@@ -119,7 +119,7 @@ fn test_locks_deleted_earlier_than_proposing_locks() {
         ..Default::default()
     };
     let txn_ext = storage.snapshot(snap_ctx).unwrap().txn_ext.unwrap();
-    txn_ext.pessimistic_locks.write().map.insert(
+    txn_ext.pessimistic_locks.write().insert(
         Key::from_raw(b"key"),
         PessimisticLock {
             primary: b"key".to_vec().into_boxed_slice(),
@@ -148,7 +148,6 @@ fn test_locks_deleted_earlier_than_proposing_locks() {
 
     thread::sleep(Duration::from_millis(200));
     assert!(resp_rx.try_recv().is_err());
-    assert!(txn_ext.pessimistic_locks.read().map.is_empty());
 
     cluster.transfer_leader(1, new_peer(2, 2));
     thread::sleep(Duration::from_millis(200));

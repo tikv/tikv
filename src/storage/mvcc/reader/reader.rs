@@ -192,7 +192,11 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 .read()
                 .map
                 .get(key)
-                .map(|lock| lock.to_lock())
+                .map(|(lock, deleted)| {
+                    // Protected by latch, deleted must be false.
+                    debug_assert!(!deleted);
+                    lock.to_lock()
+                })
         })
     }
 
