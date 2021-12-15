@@ -142,17 +142,12 @@ impl<ER: RaftEngine> Debugger<ER> {
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
         let mut regions = Vec::with_capacity(128);
-        box_try!(db.scan_cf(cf, start_key, end_key, false, |key, value| {
+        box_try!(db.scan_cf(cf, start_key, end_key, false, |key, _| {
             let (id, suffix) = box_try!(keys::decode_region_meta_key(key));
-            if suffix == keys::REGION_STATE_SUFFIX {
-                let mut region_state = RegionLocalState::default();
-                region_state.merge_from_bytes(value)?;
-                if region_state.get_state() == PeerState::Tombstone {
-                    info!("skip {} because it's already tombstone", id);
-                } else {
-                    regions.push(id);
-                }
+            if suffix != keys::REGION_STATE_SUFFIX {
+                return Ok(true);
             }
+            regions.push(id);
             Ok(true)
         }));
         regions.sort_unstable();
