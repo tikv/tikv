@@ -10,7 +10,8 @@ use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
 use tikv::storage::kv::{SnapContext, SnapshotExt};
-use tikv_util::{config::*, HandyRwLock};
+use tikv::storage::{Engine, Snapshot};
+use tikv_util::config::*;
 use txn_types::{Key, PessimisticLock};
 
 fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -168,8 +169,6 @@ fn test_server_transfer_leader_during_snapshot() {
 
 #[test]
 fn test_sync_max_ts_after_leader_transfer() {
-    use tikv::storage::{Engine, Snapshot};
-
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.run();
@@ -222,8 +221,6 @@ fn test_sync_max_ts_after_leader_transfer() {
 
 #[test]
 fn test_propose_in_memory_pessimistic_locks() {
-    use tikv::storage::{Engine, Snapshot};
-
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.run();
@@ -231,24 +228,7 @@ fn test_propose_in_memory_pessimistic_locks() {
     let region_id = 1;
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    let get_snapshot = |cluster: &mut Cluster<ServerCluster>| {
-        let leader = cluster.leader_of_region(region_id).unwrap();
-        let store_id = leader.store_id;
-        let epoch = cluster.get_region_epoch(region_id);
-        let mut ctx = Context::default();
-        ctx.set_region_id(region_id);
-        ctx.set_peer(leader);
-        ctx.set_region_epoch(epoch);
-
-        let storage = cluster.sim.rl().storages.get(&store_id).unwrap().clone();
-        let snap_ctx = SnapContext {
-            pb_ctx: &ctx,
-            ..Default::default()
-        };
-        storage.snapshot(snap_ctx).unwrap().clone()
-    };
-
-    let snapshot = get_snapshot(&mut cluster);
+    let snapshot = cluster.must_get_snapshot_of_region(region_id);
     let txn_ext = snapshot.txn_ext.clone().unwrap();
     let lock = PessimisticLock {
         primary: b"key".to_vec().into_boxed_slice(),
@@ -268,7 +248,7 @@ fn test_propose_in_memory_pessimistic_locks() {
 
     // After the leader is transferred to store 2, we should be able to get the lock
     // in the lock CF.
-    let snapshot = get_snapshot(&mut cluster);
+    let snapshot = cluster.must_get_snapshot_of_region(region_id);
     let value = snapshot
         .get_cf(CF_LOCK, &Key::from_raw(b"key"))
         .unwrap()

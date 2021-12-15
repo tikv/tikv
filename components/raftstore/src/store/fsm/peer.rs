@@ -2296,7 +2296,7 @@ where
         let mut cmd = RaftCmdRequest::default();
         for (key, (lock, deleted)) in locks {
             if deleted {
-                // continue;
+                continue;
             }
             let mut put = PutRequest::default();
             put.set_cf(CF_LOCK.to_string());
