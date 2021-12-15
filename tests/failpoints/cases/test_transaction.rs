@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures::executor::block_on;
-use kvproto::kvrpcpb::{ApiVersion, Context};
+use kvproto::kvrpcpb::{ApiVersion, AssertionLevel, Context};
 use std::{sync::mpsc::channel, thread, time::Duration};
 use storage::mvcc::tests::must_get;
 use storage::mvcc::{self, tests::must_locked};
@@ -66,6 +66,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
                 TimeStamp::default(),
                 Some(vec![]),
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -120,6 +121,7 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
                 TimeStamp::default(),
                 Some(vec![]),
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -163,6 +165,7 @@ fn test_update_max_ts_before_scan_memory_locks() {
                 TimeStamp::default(),
                 Some(vec![]),
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -213,6 +216,7 @@ macro_rules! lock_release_test {
                         TimeStamp::default(),
                         Some(vec![]),
                         false,
+                        AssertionLevel::Off,
                         Context::default(),
                     ),
                     Box::new(move |res| {
@@ -291,6 +295,7 @@ fn test_max_commit_ts_error() {
                 100.into(),
                 Some(vec![b"k2".to_vec()]),
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -353,6 +358,7 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
                 50.into(),
                 Some(vec![]),
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -394,6 +400,7 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
                 50.into(),
                 Some(vec![]),
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             Box::new(move |res| {
