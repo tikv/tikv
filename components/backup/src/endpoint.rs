@@ -196,19 +196,22 @@ async fn save_backup_file_worker(
 ) {
     while let Ok(msg) = rx.recv().await {
         let files = match msg.files.save(&storage).await {
-            Ok(mut split_files) => {
-                for file in split_files.iter_mut() {
-                    file.set_start_key(msg.start_key.clone());
-                    file.set_end_key(msg.end_key.clone());
-                    file.set_start_version(msg.start_version.into_inner());
-                    file.set_end_version(msg.end_version.into_inner());
+                Ok(mut split_files) => {
+                    for file in split_files.iter_mut() {
+                        file.set_start_key(msg.start_key.clone());
+                        file.set_end_key(msg.end_key.clone());
+                        file.set_start_version(msg.start_version.into_inner());
+                        file.set_end_version(msg.end_version.into_inner());
+                    }
+                    Ok(split_files)
                 }
-                Ok(split_files)
+                Err(e) => {
+                    error_unknown!(?e; "backup save file failed");
+                    Err(e)
+                }
             }
-            Err(e) => {
-                error_unknown!(?e; "backup save file failed");
-                Err(e)
-            }
+         else {
+            Ok(vec![])
         };
         let mut response = BackupResponse::default();
         match files {
