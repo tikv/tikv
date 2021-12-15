@@ -32,6 +32,7 @@ use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
 use tikv::storage::Statistics;
+use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::{Instant, Limiter};
 use tikv_util::worker::Runnable;
 use tikv_util::{box_err, debug, error, error_unknown, impl_display_as_debug, info, warn};
@@ -40,7 +41,7 @@ use tokio::runtime::Runtime;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::metrics::*;
-use crate::softlimit::{SoftLimit, SoftLimitByCpu};
+use crate::softlimit::{CpuStatistics, SoftLimit, SoftLimitByCpu};
 use crate::writer::{BackupWriterBuilder, CfNameWrap};
 use crate::Error;
 use crate::*;
@@ -460,30 +461,43 @@ impl SoftLimitKeeper {
         let mut cpu_quota =
             SoftLimitByCpu::with_remain(self.config.0.read().unwrap().auto_tune_remain_threads);
         loop {
-            let BackupConfig {
-                enable_auto_tune,
-                auto_tune_refresh_interval,
-                num_threads,
-                auto_tune_remain_threads,
-                ..
-            } = *self.config.0.read().unwrap();
-            cpu_quota.set_remain(auto_tune_remain_threads);
-            if !enable_auto_tune {
-                if let Err(e) = self.limit.resize(num_threads).await {
-                    error!("failed to resize the soft limit to num-threads, backup may be restricted unexpectly.";
-                        "current_limit" => %self.limit.current_cap(),
-                        "error" => %e
-                    );
-                }
-            } else if let Err(e) = cpu_quota
-                .exec_over_with_exclude(&self.limit, |s| s.contains("bkwkr"))
-                .await
-            {
-                error!("error during appling the soft limit for backup."; "err" => %e);
+            if let Err(err) = self.on_tick(&mut cpu_quota).await {
+                warn!("soft limit on_tick failed."; "err" => %err);
             }
-            BACKUP_SOFTLIMIT_GAUGE.set(self.limit.current_cap() as _);
+            let auto_tune_refresh_interval =
+                self.config.0.read().unwrap().auto_tune_refresh_interval;
             tokio::time::sleep(auto_tune_refresh_interval.0).await;
         }
+    }
+
+    async fn on_tick<S: CpuStatistics>(&self, cpu_quota: &mut SoftLimitByCpu<S>) -> Result<()> {
+        let BackupConfig {
+            enable_auto_tune,
+            auto_tune_refresh_interval,
+            num_threads,
+            auto_tune_remain_threads,
+            ..
+        } = *self.config.0.read().unwrap();
+        cpu_quota.set_remain(auto_tune_remain_threads);
+        if !enable_auto_tune {
+            return self.limit.resize(num_threads).await.map_err(|err| {
+                    warn!("failed to resize the soft limit to num-threads, backup may be restricted unexpectly.";
+                        "current_limit" => %self.limit.current_cap(),
+                        "error" => %err
+                    );
+                    Error::Other(box_err!("failed to resize softlimit: {}", err))
+                });
+        }
+
+        let quota_val = cpu_quota
+            .get_quota(|s| s.contains("bkwkr"))
+            .clamp(1, num_threads);
+        self.limit.resize(quota_val).await.map_err(|err| {
+            warn!("error during appling the soft limit for backup."; "err" => %err);
+            Error::Other(box_err!("failed to resize softlimit: {}", err))
+        })?;
+        BACKUP_SOFTLIMIT_GAUGE.set(self.limit.current_cap() as _);
+        Ok(())
     }
 
     fn limit(&self) -> SoftLimit {

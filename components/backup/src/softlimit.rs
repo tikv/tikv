@@ -146,7 +146,7 @@ impl<Statistics: CpuStatistics> SoftLimitByCpu<Statistics> {
     }
 
     /// get the current quota.
-    fn get_quota(&mut self, exclude: impl FnMut(&str) -> bool) -> usize {
+    pub fn get_quota(&mut self, exclude: impl FnMut(&str) -> bool) -> usize {
         let idle = self.current_idle_exclude(exclude) as usize;
         idle.saturating_sub(self.keep_remain).max(1)
     }
