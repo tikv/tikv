@@ -26,7 +26,7 @@ rusoto_core = "0.46.0"
 rusoto_credential = "0.46.0"
 rusoto_kms = { version = "0.46.0", features = ["serialize_structs"] }
 rusoto_sts = "0.46.0"
-rusoto_s3 = "0.46.0"
+rusoto_s3 = { version = "0.46.0", features = ["serialize_structs"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
 tokio = { version = "1.5", features = ["time"] }

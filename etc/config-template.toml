@@ -1062,6 +1062,12 @@
 ## in order to reduce impact on the cluster's performance during back up.
 # enable-auto-tune = false 
 
+## The size represents the part split size when upload sst file to s3 storage.
+## according to s3 requirements. each part size should between 5 MB to 5 GB.
+## the default value is 5 MB and set this value less than 5 MB won't work.
+## to reduce the requests to s3. you can set this value to 10 MB ~ 20 MB.
+# s3-multi-part-size = "5MB"
+
 [backup.hadoop]
 ## let TiKV know how to find the hdfs shell command.
 ## Equivalent to the $HADOOP_HOME enviroment variable.

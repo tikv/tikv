@@ -823,8 +823,9 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         self.config_manager.clone()
     }
 
-    fn get_hdfs_config(&self) -> BackendConfig {
+    fn get_config(&self) -> BackendConfig {
         BackendConfig {
+            s3_multi_part_size: self.config_manager.0.read().unwrap().s3_multi_part_size.0 as usize,
             hdfs_config: HdfsConfig {
                 hadoop_home: self.config_manager.0.read().unwrap().hadoop.home.clone(),
                 linux_user: self
@@ -1001,7 +1002,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             is_raw_kv,
             request.cf,
         )));
-        let backend = match create_storage(&request.backend, self.get_hdfs_config()) {
+        let backend = match create_storage(&request.backend, self.get_config()) {
             Ok(backend) => backend,
             Err(err) => {
                 error_unknown!(?err; "backup create storage failed");
@@ -1295,6 +1296,15 @@ pub mod tests {
 
         sleep(Duration::from_millis(250));
         assert_eq!(counter.load(Ordering::SeqCst), 0xffff);
+    }
+
+    #[test]
+    fn test_s3_config() {
+        let (_tmp, endpoint) = new_endpoint();
+        assert_eq!(
+            endpoint.config_manager.0.read().unwrap().s3_multi_part_size,
+            ReadableSize::mb(5)
+        );
     }
 
     #[test]

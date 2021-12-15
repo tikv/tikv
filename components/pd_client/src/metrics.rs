@@ -7,7 +7,7 @@ lazy_static! {
     pub static ref PD_REQUEST_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_pd_request_duration_seconds",
         "Bucketed histogram of PD requests duration",
-        &["type"],
+        &["type"]
     )
     .unwrap();
     pub static ref PD_HEARTBEAT_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
