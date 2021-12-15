@@ -214,7 +214,7 @@ fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
             ));
         }
         let size_vec = &cf_file.size;
-        if size_vec.len() != 0 {
+        if !size_vec.is_empty() {
             for (i, size) in size_vec.iter().enumerate() {
                 let mut cf_file_meta = SnapshotCfFile::new();
                 cf_file_meta.set_cf(cf_file.cf.to_string());
@@ -358,13 +358,14 @@ impl CfFile {
         self.add_file_with_size_checksum(idx, 0, 0)
     }
 
-    pub fn add_file_with_size_checksum(&mut self, idx: usize, size: u64, checksum: u32) -> String { 
+    pub fn add_file_with_size_checksum(&mut self, idx: usize, size: u64, checksum: u32) -> String {
         assert!(self.size.len() >= idx);
-        let file_name = self.gen_file_name(idx); 
-        if self.size.len() > idx { // Any logic similar to test_snap_corruption_on_size_or_checksum will trigger this branch
+        let file_name = self.gen_file_name(idx);
+        if self.size.len() > idx {
+            // Any logic similar to test_snap_corruption_on_size_or_checksum will trigger this branch
             self.size[idx] = size;
             self.checksum[idx] = checksum;
-            self.file_names[idx] = file_name.clone(); 
+            self.file_names[idx] = file_name.clone();
         } else {
             self.size.push(size);
             self.checksum.push(checksum);
@@ -374,10 +375,7 @@ impl CfFile {
     }
 
     pub fn gen_file_name(&self, file_id: usize) -> String {
-        format!(
-            "{}_{:04}{}",
-            self.file_prefix, file_id, self.file_suffix
-        )
+        format!("{}_{:04}{}", self.file_prefix, file_id, self.file_suffix)
     }
 
     pub fn gen_tmp_file_name(&self, file_id: usize) -> String {
@@ -637,7 +635,10 @@ impl Snapshot {
         let mut cf_file_count_from_meta: Vec<usize> = vec![];
         let mut file_count = 0;
         let mut current_cf = "";
-        info!("set_snapshot_meta total cf files count: {}", snapshot_meta.get_cf_files().len());
+        info!(
+            "set_snapshot_meta total cf files count: {}",
+            snapshot_meta.get_cf_files().len()
+        );
         for cf_file in snapshot_meta.get_cf_files() {
             if current_cf.is_empty() {
                 current_cf = cf_file.get_cf();
@@ -665,7 +666,8 @@ impl Snapshot {
         let mut file_idx = 0;
         let mut cf_idx = 0;
         for meta in snapshot_meta.get_cf_files() {
-            if cf_idx < cf_file_count_from_meta.len() && file_idx < cf_file_count_from_meta[cf_idx] {
+            if cf_idx < cf_file_count_from_meta.len() && file_idx < cf_file_count_from_meta[cf_idx]
+            {
                 if meta.get_cf() != self.cf_files[cf_idx].cf {
                     return Err(box_err!(
                         "invalid {} cf in snapshot meta, expect {}, got {}",
@@ -675,17 +677,21 @@ impl Snapshot {
                     ));
                 }
                 if meta.get_size() != 0 {
-                    let file_path = self.cf_files[cf_idx].add_file_with_size_checksum(file_idx, meta.get_size(), meta.get_checksum());
+                    let file_path = self.cf_files[cf_idx].add_file_with_size_checksum(
+                        file_idx,
+                        meta.get_size(),
+                        meta.get_checksum(),
+                    );
                     if file_exists(&file_path) {
                         let mgr = self.mgr.encryption_key_manager.as_ref();
                         let file_path = Path::new(&file_path);
-                        let (_, size) = calc_checksum_and_size(&file_path, mgr)?;
+                        let (_, size) = calc_checksum_and_size(file_path, mgr)?;
                         check_file_size(
                             size,
                             *(self.cf_files[cf_idx].size.last().unwrap()),
-                            &file_path,
+                            file_path,
                         )?;
-                    } 
+                    }
                 }
                 file_idx += 1;
                 if file_idx >= cf_file_count_from_meta[cf_idx] {
@@ -736,7 +742,7 @@ impl Snapshot {
 
                 let file_path = Path::new(file_path);
                 check_file_size_and_checksum(
-                    &file_path,
+                    file_path,
                     cf_file.size[i],
                     cf_file.checksum[i],
                     self.mgr.encryption_key_manager.as_ref(),
@@ -744,7 +750,7 @@ impl Snapshot {
 
                 if !for_send && !plain_file_used(cf_file.cf) {
                     sst_importer::prepare_sst_for_ingestion(
-                        &file_path,
+                        file_path,
                         &Path::new(&clone_file_paths[i]),
                         self.mgr.encryption_key_manager.as_deref(),
                     )?;
@@ -911,7 +917,7 @@ impl Snapshot {
             }
             if let Some(ref mgr) = self.mgr.encryption_key_manager {
                 for file_path in &file_paths {
-                    mgr.delete_file(&file_path).unwrap();
+                    mgr.delete_file(file_path).unwrap();
                 }
             }
         }
@@ -971,7 +977,7 @@ impl Snapshot {
         let region = options.region;
         let key_mgr = self.mgr.encryption_key_manager.as_ref();
         for cf_file in &mut self.cf_files {
-            if cf_file.size.len() == 0 {
+            if cf_file.size.is_empty() {
                 // Skip empty cf file.
                 continue;
             }
@@ -1010,9 +1016,9 @@ impl Snapshot {
         &self.display_path
     }
 
-    pub fn exists(&self) -> bool {  
+    pub fn exists(&self) -> bool {
         self.cf_files.iter().all(|cf_file| {
-            cf_file.size.len() == 0
+            cf_file.size.is_empty()
                 || (cf_file
                     .file_paths()
                     .iter()
@@ -1025,9 +1031,10 @@ impl Snapshot {
     }
 
     pub fn total_size(&self) -> io::Result<u64> {
-        Ok(self.cf_files.iter().fold(0, |acc, x| {
-            acc + x.size.iter().fold(0, |acc2, x2| acc2 + x2)
-        }))
+        Ok(self
+            .cf_files
+            .iter()
+            .fold(0, |acc, x| acc + x.size.iter().sum::<u64>()))
     }
 
     pub fn save(&mut self) -> io::Result<()> {
@@ -1036,14 +1043,13 @@ impl Snapshot {
             "snapshot" => %self.path(),
         );
         for cf_file in &mut self.cf_files {
-            if cf_file.size.len() == 0 {
+            if cf_file.size.is_empty() {
                 // Skip empty cf file.
                 continue;
             }
 
             // Check each cf file has been fully written, and the checksum matches.
-            let mut i = 0;
-            for mut file_for_recving in cf_file.file_for_recving.drain(..) {
+            for (i, mut file_for_recving) in cf_file.file_for_recving.drain(..).enumerate() {
                 file_for_recving.file.flush()?;
                 file_for_recving.file.sync_all()?;
 
@@ -1076,7 +1082,6 @@ impl Snapshot {
                         ),
                     ));
                 }
-                i += 1;
             }
 
             let tmp_paths = cf_file.tmp_file_paths();
@@ -1157,8 +1162,12 @@ impl Write for Snapshot {
             }
 
             assert!(cf_file.size[self.cf_file_index] != 0);
-            let mut file_for_recving = cf_file.file_for_recving.get_mut(self.cf_file_index).unwrap();
-            let left = (cf_file.size.get(self.cf_file_index).unwrap() - file_for_recving.written_size) as usize;
+            let mut file_for_recving = cf_file
+                .file_for_recving
+                .get_mut(self.cf_file_index)
+                .unwrap();
+            let left = (cf_file.size.get(self.cf_file_index).unwrap()
+                - file_for_recving.written_size) as usize;
             assert!(left > 0 && !next_buf.is_empty());
             let (write_len, switch, finished) = match next_buf.len().cmp(&left) {
                 CmpOrdering::Greater => (left, true, false),
@@ -1669,7 +1678,7 @@ impl SnapManagerCore {
                 mgr.delete_file(src)?;
             }
             let file = Path::new(&file_paths[i]);
-            let (checksum, size) = calc_checksum_and_size(&file, mgr)?;
+            let (checksum, size) = calc_checksum_and_size(file, mgr)?;
             cf_file.add_file_with_size_checksum(i, size, checksum);
         }
         Ok(())
@@ -2022,22 +2031,42 @@ pub mod tests {
     #[test]
     fn test_empty_snap_file() {
         test_snap_file(open_test_empty_db, None, u64::MAX);
-        test_snap_file(open_test_empty_db, Some(gen_db_options_with_encryption()), u64::MAX);
+        test_snap_file(
+            open_test_empty_db,
+            Some(gen_db_options_with_encryption()),
+            u64::MAX,
+        );
 
         test_snap_file(open_test_empty_db, None, 100);
-        test_snap_file(open_test_empty_db, Some(gen_db_options_with_encryption()), 100);
+        test_snap_file(
+            open_test_empty_db,
+            Some(gen_db_options_with_encryption()),
+            100,
+        );
     }
 
     #[test]
     fn test_non_empty_snap_file() {
         test_snap_file(open_test_db, None, u64::MAX);
-        test_snap_file(open_test_db, Some(gen_db_options_with_encryption()), u64::MAX);
+        test_snap_file(
+            open_test_db,
+            Some(gen_db_options_with_encryption()),
+            u64::MAX,
+        );
 
         test_snap_file(open_test_db_with_100keys, None, 100);
-        test_snap_file(open_test_db_with_100keys, Some(gen_db_options_with_encryption()), 500);
+        test_snap_file(
+            open_test_db_with_100keys,
+            Some(gen_db_options_with_encryption()),
+            500,
+        );
     }
 
-    fn test_snap_file(get_db: DBBuilder<KvTestEngine>, db_opt: Option<DBOptions>, max_file_size: u64) {
+    fn test_snap_file(
+        get_db: DBBuilder<KvTestEngine>,
+        db_opt: Option<DBOptions>,
+        max_file_size: u64,
+    ) {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
         let src_db_dir = Builder::new()

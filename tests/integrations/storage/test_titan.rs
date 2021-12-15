@@ -362,7 +362,12 @@ fn test_delete_files_in_range_for_titan() {
 
     // Generate a snapshot
     let limiter = Limiter::new(INFINITY);
-    let mut cf_file = CfFile::new(CF_DEFAULT, PathBuf::from(path.path().to_str().unwrap()), "default".to_string(), ".sst".to_string());
+    let mut cf_file = CfFile::new(
+        CF_DEFAULT,
+        PathBuf::from(path.path().to_str().unwrap()),
+        "default".to_string(),
+        ".sst".to_string(),
+    );
     build_sst_cf_file_list::<RocksEngine>(
         &mut cf_file,
         &engines.kv,
@@ -373,9 +378,14 @@ fn test_delete_files_in_range_for_titan() {
         &limiter,
     )
     .unwrap();
-    let mut cf_file_write = CfFile::new(CF_WRITE, PathBuf::from(path.path().to_str().unwrap()), "write".to_string(), ".sst".to_string());
+    let mut cf_file_write = CfFile::new(
+        CF_WRITE,
+        PathBuf::from(path.path().to_str().unwrap()),
+        "write".to_string(),
+        ".sst".to_string(),
+    );
     build_sst_cf_file_list::<RocksEngine>(
-        &mut cf_file_write, 
+        &mut cf_file_write,
         &engines.kv,
         &engines.kv.snapshot(),
         b"",
@@ -392,21 +402,17 @@ fn test_delete_files_in_range_for_titan() {
         .unwrap();
     let engines1 = new_temp_engine(&dir1);
     let tmp_file_paths = cf_file.tmp_file_paths();
-    let tmp_file_paths = tmp_file_paths.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
-    apply_sst_cf_file(
-        &tmp_file_paths,
-        &engines1.kv,
-        CF_DEFAULT,
-    )
-    .unwrap();
+    let tmp_file_paths = tmp_file_paths
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<&str>>();
+    apply_sst_cf_file(&tmp_file_paths, &engines1.kv, CF_DEFAULT).unwrap();
     let tmp_file_paths = cf_file_write.tmp_file_paths();
-    let tmp_file_paths = tmp_file_paths.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
-    apply_sst_cf_file(
-        &tmp_file_paths,
-        &engines1.kv,
-        CF_WRITE,
-    )
-    .unwrap();
+    let tmp_file_paths = tmp_file_paths
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<&str>>();
+    apply_sst_cf_file(&tmp_file_paths, &engines1.kv, CF_WRITE).unwrap();
 
     // Do scan on other DB.
     let mut r = Region::default();

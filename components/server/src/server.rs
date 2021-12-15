@@ -46,7 +46,7 @@ use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
 };
-use pd_client::{PdClient, RpcClient,Feature};
+use pd_client::{Feature, PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
@@ -664,8 +664,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let bps = i64::try_from(self.config.server.snap_max_write_bytes_per_sec.0)
             .unwrap_or_else(|_| fatal!("snap_max_write_bytes_per_sec > i64::max_value"));
 
-        let max_snapshot_file_raw_size = if self.pd_client.feature_gate().can_enable(MULTI_FILES_SNAPSHOT_FEATURE) {
-            self.config.server.max_snapshot_file_raw_size.0 
+        let max_snapshot_file_raw_size = if self
+            .pd_client
+            .feature_gate()
+            .can_enable(MULTI_FILES_SNAPSHOT_FEATURE)
+        {
+            self.config.server.max_snapshot_file_raw_size.0
         } else {
             0
         };

@@ -53,8 +53,8 @@ pub use self::replication_mode::{GlobalReplicationState, StoreGroup};
 pub use self::snap::{
     check_abort, copy_snapshot,
     snap_io::{apply_sst_cf_file, build_sst_cf_file_list},
-    ApplyOptions, Error as SnapError, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder,
-    Snapshot, SnapshotStatistics,CfFile,
+    ApplyOptions, CfFile, Error as SnapError, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder,
+    Snapshot, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
 pub use self::txn_ext::{PeerPessimisticLocks, TxnExt};

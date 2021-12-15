@@ -24,7 +24,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>, max_snapshot_file_
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
-    cluster.cfg.server.max_snapshot_file_raw_size = ReadableSize(max_snapshot_file_size); 
+    cluster.cfg.server.max_snapshot_file_raw_size = ReadableSize(max_snapshot_file_size);
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_operator();
@@ -90,7 +90,7 @@ fn test_server_huge_snapshot() {
 fn test_server_huge_snapshot_multi_files() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    test_huge_snapshot(&mut cluster, 1024*1024);
+    test_huge_snapshot(&mut cluster, 1024 * 1024);
 }
 
 #[test]

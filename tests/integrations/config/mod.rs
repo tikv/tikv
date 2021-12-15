@@ -101,7 +101,7 @@ fn test_serde_custom_tikv_config() {
         end_point_max_concurrency: 10,
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),
-        max_snapshot_file_raw_size: ReadableSize::gb(10), 
+        max_snapshot_file_raw_size: ReadableSize::gb(10),
         stats_concurrency: 10,
         heavy_load_threshold: 1000,
         heavy_load_wait_duration: ReadableDuration::millis(2),

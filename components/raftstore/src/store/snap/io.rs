@@ -44,9 +44,7 @@ where
     E: KvEngine,
 {
     let cf = cf_file.cf;
-    let path = cf_file
-        .path
-        .join(cf_file.gen_tmp_file_name(0));
+    let path = cf_file.path.join(cf_file.gen_tmp_file_name(0));
     let path = path.to_str().unwrap();
     let mut file = Some(box_try!(
         OpenOptions::new().write(true).create_new(true).open(path)
@@ -119,7 +117,7 @@ where
     let cf = cf_file.cf;
     let mut stats = BuildStatistics::default();
     let mut remained_quota = 0;
-    let mut file_id:usize = 0;
+    let mut file_id: usize = 0;
     let mut path = cf_file
         .path
         .join(cf_file.gen_tmp_file_name(file_id))
@@ -174,7 +172,10 @@ where
         box_try!(sst_writer.into_inner().finish());
         box_try!(File::open(path).and_then(|f| f.sync_all()));
         info!(
-            "build_sst_cf_file_list builds {} files in cf {}. Total keys {} ", file_id+1, cf, stats.key_count
+            "build_sst_cf_file_list builds {} files in cf {}. Total keys {} ",
+            file_id + 1,
+            cf,
+            stats.key_count
         );
     } else {
         box_try!(fs::remove_file(path));
@@ -245,7 +246,10 @@ where
     E: KvEngine,
 {
     if files.len() > 1 {
-        info!("apply_sst_cf_file starts on cf {}. All files {:?}", cf, files);
+        info!(
+            "apply_sst_cf_file starts on cf {}. All files {:?}",
+            cf, files
+        );
     }
     box_try!(db.ingest_external_file_cf(cf, files));
     Ok(())
@@ -420,7 +424,7 @@ mod tests {
                         assert!(cf_file.file_paths().len() > 1);
                         assert!(cf_file.clone_file_paths().len() > 1);
                         assert!(cf_file.tmp_file_paths().len() > 1);
-                        assert!(cf_file.size.len() > 1); 
+                        assert!(cf_file.size.len() > 1);
                     }
 
                     let dir1 = Builder::new()
