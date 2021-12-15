@@ -636,3 +636,30 @@ fn test_stale_read_future_ts_not_update_max_ts() {
     // `key3` is write as 1pc transaction so we can read `key3` without commit
     leader_client.must_kv_read_equal(b"key3".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 }
+
+// Testing that when `resolved-ts.enable` set to `false` the `check-leader` worker won't be started
+#[test]
+fn test_disable_resolved_ts() {
+    use kvproto::kvrpcpb::{CheckLeaderRequest, StoreSafeTsRequest};
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    cluster.cfg.resolved_ts.enable = false;
+    cluster.run();
+
+    // Panic if there are `CheckLeaderTask`
+    let on_check_leader_runner_task_fp = "on_check_leader_runner_task";
+    fail::cfg(on_check_leader_runner_task_fp, "panic").unwrap();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let leader_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
+
+    let req = CheckLeaderRequest::default();
+    let resp = leader_client.cli.check_leader(&req).unwrap();
+    assert!(resp.get_regions().is_empty());
+
+    let req = StoreSafeTsRequest::default();
+    let resp = leader_client.cli.get_store_safe_ts(&req).unwrap();
+    assert_eq!(resp.get_safe_ts(), 0);
+
+    fail::remove(on_check_leader_runner_task_fp);
+}

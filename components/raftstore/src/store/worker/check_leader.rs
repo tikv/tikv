@@ -96,6 +96,7 @@ impl Runner {
 impl Runnable for Runner {
     type Task = Task;
     fn run(&mut self, task: Task) {
+        fail_point!("on_check_leader_runner_task");
         match task {
             Task::CheckLeader { leaders, cb } => {
                 fail_point!(

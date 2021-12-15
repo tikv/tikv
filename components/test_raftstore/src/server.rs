@@ -282,7 +282,7 @@ impl Simulator for ServerCluster {
             .start_observe_lock_apply(&mut coprocessor_host, concurrency_manager.clone())
             .unwrap();
 
-        let rts_worker = if cfg.resolved_ts.enable {
+        let (rts_worker, check_leader_scheduler) = if cfg.resolved_ts.enable {
             // Resolved ts worker
             let mut rts_worker = LazyWorker::new("resolved-ts");
             let rts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
@@ -301,13 +301,15 @@ impl Simulator for ServerCluster {
             );
             // Start the worker
             rts_worker.start(rts_endpoint);
-            Some(rts_worker)
-        } else {
-            None
-        };
 
-        let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
-        let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
+            // Start the `CheckLeader` runner
+            let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
+            let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
+
+            (Some(rts_worker), Some(check_leader_scheduler))
+        } else {
+            (None, None)
+        };
 
         let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
         let store = create_raft_storage(
