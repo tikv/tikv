@@ -9,7 +9,7 @@ use std::u64;
 
 use rand::random;
 
-use kvproto::kvrpcpb::{ApiVersion, Context, LockInfo};
+use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
 
 use engine_traits::{key_prefix, CF_DEFAULT, CF_LOCK};
 use test_storage::*;
@@ -35,7 +35,7 @@ fn test_txn_store_get() {
 fn test_txn_store_get_with_type_lock() {
     let store = AssertionStorage::default();
     store.put_ok(b"k1", b"v1", 1, 2);
-    store.prewrite_ok(vec![Mutation::Lock(Key::from_raw(b"k1"))], b"k1", 5);
+    store.prewrite_ok(vec![Mutation::make_lock(Key::from_raw(b"k1"))], b"k1", 5);
     store.get_ok(b"k1", 20, b"v1");
 }
 
@@ -70,8 +70,8 @@ fn test_txn_store_cleanup_rollback() {
     store.put_ok(b"secondary", b"s-0", 1, 2);
     store.prewrite_ok(
         vec![
-            Mutation::Put((Key::from_raw(b"primary"), b"p-5".to_vec())),
-            Mutation::Put((Key::from_raw(b"secondary"), b"s-5".to_vec())),
+            Mutation::make_put(Key::from_raw(b"primary"), b"p-5".to_vec()),
+            Mutation::make_put(Key::from_raw(b"secondary"), b"s-5".to_vec()),
         ],
         b"primary",
         5,
@@ -87,8 +87,8 @@ fn test_txn_store_cleanup_commit() {
     store.put_ok(b"secondary", b"s-0", 1, 2);
     store.prewrite_ok(
         vec![
-            Mutation::Put((Key::from_raw(b"primary"), b"p-5".to_vec())),
-            Mutation::Put((Key::from_raw(b"secondary"), b"s-5".to_vec())),
+            Mutation::make_put(Key::from_raw(b"primary"), b"p-5".to_vec()),
+            Mutation::make_put(Key::from_raw(b"secondary"), b"s-5".to_vec()),
         ],
         b"primary",
         5,
@@ -109,9 +109,9 @@ fn test_txn_store_for_point_get_with_pk() {
     store.put_ok(b"secondary", b"v3", 3, 4);
     store.prewrite_ok(
         vec![
-            Mutation::Put((Key::from_raw(b"primary"), b"v3".to_vec())),
-            Mutation::Put((Key::from_raw(b"secondary"), b"s-5".to_vec())),
-            Mutation::Put((Key::from_raw(b"new_key"), b"new_key".to_vec())),
+            Mutation::make_put(Key::from_raw(b"primary"), b"v3".to_vec()),
+            Mutation::make_put(Key::from_raw(b"secondary"), b"s-5".to_vec()),
+            Mutation::make_put(Key::from_raw(b"new_key"), b"new_key".to_vec()),
         ],
         b"primary",
         5,
@@ -448,24 +448,24 @@ fn test_txn_store_scan_lock() {
     store.put_ok(b"k1", b"v1", 1, 2);
     store.prewrite_ok(
         vec![
-            Mutation::Put((Key::from_raw(b"p1"), b"v5".to_vec())),
-            Mutation::Put((Key::from_raw(b"s1"), b"v5".to_vec())),
+            Mutation::make_put(Key::from_raw(b"p1"), b"v5".to_vec()),
+            Mutation::make_put(Key::from_raw(b"s1"), b"v5".to_vec()),
         ],
         b"p1",
         5,
     );
     store.prewrite_ok(
         vec![
-            Mutation::Put((Key::from_raw(b"p2"), b"v10".to_vec())),
-            Mutation::Put((Key::from_raw(b"s2"), b"v10".to_vec())),
+            Mutation::make_put(Key::from_raw(b"p2"), b"v10".to_vec()),
+            Mutation::make_put(Key::from_raw(b"s2"), b"v10".to_vec()),
         ],
         b"p2",
         10,
     );
     store.prewrite_ok(
         vec![
-            Mutation::Put((Key::from_raw(b"p3"), b"v20".to_vec())),
-            Mutation::Put((Key::from_raw(b"s3"), b"v20".to_vec())),
+            Mutation::make_put(Key::from_raw(b"p3"), b"v20".to_vec()),
+            Mutation::make_put(Key::from_raw(b"s3"), b"v20".to_vec()),
         ],
         b"p3",
         20,
@@ -521,16 +521,16 @@ fn test_txn_store_resolve_lock() {
 
     store.prewrite_ok(
         vec![
-            Mutation::Put((Key::from_raw(b"p1"), b"v5".to_vec())),
-            Mutation::Put((Key::from_raw(b"s1"), b"v5".to_vec())),
+            Mutation::make_put(Key::from_raw(b"p1"), b"v5".to_vec()),
+            Mutation::make_put(Key::from_raw(b"s1"), b"v5".to_vec()),
         ],
         b"p1",
         5,
     );
     store.prewrite_ok(
         vec![
-            Mutation::Put((Key::from_raw(b"p2"), b"v10".to_vec())),
-            Mutation::Put((Key::from_raw(b"s2"), b"v10".to_vec())),
+            Mutation::make_put(Key::from_raw(b"p2"), b"v10".to_vec()),
+            Mutation::make_put(Key::from_raw(b"s2"), b"v10".to_vec()),
         ],
         b"p2",
         10,
@@ -551,7 +551,10 @@ fn test_txn_store_resolve_lock_batch(key_prefix_len: usize, n: usize) {
     let store = AssertionStorage::default();
     for k in &keys {
         store.prewrite_ok(
-            vec![Mutation::Put((Key::from_raw(k.as_bytes()), b"v".to_vec()))],
+            vec![Mutation::make_put(
+                Key::from_raw(k.as_bytes()),
+                b"v".to_vec(),
+            )],
             b"k1",
             5,
         );
@@ -569,16 +572,16 @@ fn test_txn_store_resolve_lock_in_a_batch() {
 
     store.prewrite_ok(
         vec![
-            Mutation::Put((Key::from_raw(b"p1"), b"v5".to_vec())),
-            Mutation::Put((Key::from_raw(b"s1"), b"v5".to_vec())),
+            Mutation::make_put(Key::from_raw(b"p1"), b"v5".to_vec()),
+            Mutation::make_put(Key::from_raw(b"s1"), b"v5".to_vec()),
         ],
         b"p1",
         5,
     );
     store.prewrite_ok(
         vec![
-            Mutation::Put((Key::from_raw(b"p2"), b"v10".to_vec())),
-            Mutation::Put((Key::from_raw(b"s2"), b"v10".to_vec())),
+            Mutation::make_put(Key::from_raw(b"p2"), b"v10".to_vec()),
+            Mutation::make_put(Key::from_raw(b"s2"), b"v10".to_vec()),
         ],
         b"p2",
         10,
@@ -616,8 +619,8 @@ fn test_txn_store_commit_illegal_tso() {
     let start_ts = 5;
     store.prewrite_ok(
         vec![
-            Mutation::Put((Key::from_raw(b"primary"), b"p-5".to_vec())),
-            Mutation::Put((Key::from_raw(b"secondary"), b"s-5".to_vec())),
+            Mutation::make_put(Key::from_raw(b"primary"), b"p-5".to_vec()),
+            Mutation::make_put(Key::from_raw(b"secondary"), b"s-5".to_vec()),
         ],
         b"primary",
         start_ts,
@@ -633,8 +636,8 @@ fn test_store_resolve_with_illegal_tso() {
     let start_ts = 5;
     store.prewrite_ok(
         vec![
-            Mutation::Put((Key::from_raw(b"primary"), b"p-5".to_vec())),
-            Mutation::Put((Key::from_raw(b"secondary"), b"s-5".to_vec())),
+            Mutation::make_put(Key::from_raw(b"primary"), b"p-5".to_vec()),
+            Mutation::make_put(Key::from_raw(b"secondary"), b"s-5".to_vec()),
         ],
         b"primary",
         start_ts,
@@ -738,23 +741,37 @@ fn test_txn_store_rawkv() {
     store.raw_put_ok("".to_string(), b"k1".to_vec(), b"v1".to_vec());
     store.raw_put_ok("".to_string(), b"k2".to_vec(), b"v2".to_vec());
     store.raw_put_ok("".to_string(), b"k3".to_vec(), b"v3".to_vec());
-    store.raw_scan_ok("".to_string(), b"".to_vec(), 1, vec![(b"k1", b"v1")]);
-    store.raw_scan_ok("".to_string(), b"k1".to_vec(), 1, vec![(b"k1", b"v1")]);
-    store.raw_scan_ok("".to_string(), b"k10".to_vec(), 1, vec![(b"k2", b"v2")]);
+    store.raw_scan_ok("".to_string(), b"".to_vec(), None, 1, vec![(b"k1", b"v1")]);
+    store.raw_scan_ok(
+        "".to_string(),
+        b"k1".to_vec(),
+        None,
+        1,
+        vec![(b"k1", b"v1")],
+    );
+    store.raw_scan_ok(
+        "".to_string(),
+        b"k10".to_vec(),
+        None,
+        1,
+        vec![(b"k2", b"v2")],
+    );
     store.raw_scan_ok(
         "".to_string(),
         b"".to_vec(),
+        None,
         2,
         vec![(b"k1", b"v1"), (b"k2", b"v2")],
     );
     store.raw_scan_ok(
         "".to_string(),
         b"k1".to_vec(),
+        None,
         5,
         vec![(b"k1", b"v1"), (b"k2", b"v2"), (b"k3", b"v3")],
     );
-    store.raw_scan_ok("".to_string(), b"".to_vec(), 0, vec![]);
-    store.raw_scan_ok("".to_string(), b"k5".to_vec(), 1, vec![]);
+    store.raw_scan_ok("".to_string(), b"".to_vec(), None, 0, vec![]);
+    store.raw_scan_ok("".to_string(), b"k5".to_vec(), None, 1, vec![]);
 }
 
 #[test]
@@ -773,6 +790,7 @@ fn test_txn_store_rawkv_cf() {
     store.raw_scan_ok(
         CF_DEFAULT.to_string(),
         b"".to_vec(),
+        None,
         3,
         vec![(b"k1", b"v1"), (b"k2", b"v2")],
     );
@@ -789,12 +807,15 @@ fn test_txn_storage_keysize() {
     store.raw_delete_ok("".to_string(), b"short_key".to_vec());
     store.raw_delete_err("".to_string(), long_key.clone());
     store.prewrite_ok(
-        vec![Mutation::Put((Key::from_raw(b"short_key"), b"v".to_vec()))],
+        vec![Mutation::make_put(
+            Key::from_raw(b"short_key"),
+            b"v".to_vec(),
+        )],
         b"short_key",
         1,
     );
     store.prewrite_err(
-        vec![Mutation::Put((Key::from_raw(&long_key), b"v".to_vec()))],
+        vec![Mutation::make_put(Key::from_raw(&long_key), b"v".to_vec())],
         b"short_key",
         1,
     );
@@ -805,7 +826,7 @@ fn test_txn_store_lock_primary() {
     let store = AssertionStorage::default();
     // txn1 locks "p" then aborts.
     store.prewrite_ok(
-        vec![Mutation::Put((Key::from_raw(b"p"), b"p1".to_vec()))],
+        vec![Mutation::make_put(Key::from_raw(b"p"), b"p1".to_vec())],
         b"p",
         1,
     );
@@ -813,8 +834,8 @@ fn test_txn_store_lock_primary() {
     // txn2 wants to write "p", "s".
     store.prewrite_locked(
         vec![
-            Mutation::Put((Key::from_raw(b"p"), b"p2".to_vec())),
-            Mutation::Put((Key::from_raw(b"s"), b"s2".to_vec())),
+            Mutation::make_put(Key::from_raw(b"p"), b"p2".to_vec()),
+            Mutation::make_put(Key::from_raw(b"s"), b"s2".to_vec()),
         ],
         b"p",
         2,
@@ -827,8 +848,8 @@ fn test_txn_store_lock_primary() {
     // txn3 wants to write "p", "s", neither of them should be locked.
     store.prewrite_ok(
         vec![
-            Mutation::Put((Key::from_raw(b"p"), b"p3".to_vec())),
-            Mutation::Put((Key::from_raw(b"s"), b"s3".to_vec())),
+            Mutation::make_put(Key::from_raw(b"p"), b"p3".to_vec()),
+            Mutation::make_put(Key::from_raw(b"s"), b"s3".to_vec()),
         ],
         b"p",
         3,
@@ -845,7 +866,7 @@ fn test_txn_store_write_conflict() {
     store.put_ok(key, primary, conflict_start_ts, conflict_commit_ts);
     let start_ts2 = 6;
     store.prewrite_conflict(
-        vec![Mutation::Put((Key::from_raw(key), primary.to_vec()))],
+        vec![Mutation::make_put(Key::from_raw(key), primary.to_vec())],
         primary,
         start_ts2,
         key,
@@ -856,17 +877,19 @@ fn test_txn_store_write_conflict() {
 const TIDB_KEY_CASE: &[u8] = b"t_a";
 const TXN_KEY_CASE: &[u8] = &[key_prefix::TXN_KEY_PREFIX, 0, b'a'];
 const RAW_KEY_CASE: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'a'];
+const RAW_KEY_CASE_Z: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'z'];
 
 #[test]
 fn test_txn_store_txnkv_api_version() {
     let test_data = vec![
-        // config api_version = V1|V1ttl, for backward compatible.
+        // storage api_version = V1|V1ttl, for backward compatible.
         (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, true),
         (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, true),
-        (ApiVersion::V1ttl, ApiVersion::V1, TXN_KEY_CASE, true),
-        // config api_version = V1, reject V2 request.
+        // storage api_version = V1ttl, allow RawKV request only.
+        (ApiVersion::V1ttl, ApiVersion::V1, TXN_KEY_CASE, false),
+        // storage api_version = V1, reject V2 request.
         (ApiVersion::V1, ApiVersion::V2, TIDB_KEY_CASE, false),
-        // config api_version = V2.
+        // storage api_version = V2.
         // backward compatible for TiDB request, and TiDB request only.
         (ApiVersion::V2, ApiVersion::V1, TIDB_KEY_CASE, true),
         (ApiVersion::V2, ApiVersion::V1, TXN_KEY_CASE, false),
@@ -888,11 +911,21 @@ fn test_txn_store_txnkv_api_version() {
 
             store.batch_get_ok(&[key, key, key], 10, vec![b"x", b"x", b"x"]);
             store.batch_get_command_ok(&[key, key, key], 10, vec![b"x", b"x", b"x"]);
+
+            store.scan_ok(key, 100, 10, vec![Some((key, b"x"))]);
+            store.scan_locks_ok(20, key, b"", 10, vec![]);
+
+            store.delete_range_ok(key, key);
         } else {
             store.get_err(key, 10);
-            //TODO: store.put_err(key, b"x", 5, 10);
+            // check api version at service tier: store.put_err(key, b"x", 5, 10);
             store.batch_get_err(&[key, key, key], 10);
             store.batch_get_command_err(&[key, key, key], 10);
+
+            store.scan_err(key, 100, 10);
+            store.scan_locks_err(20, key, b"", 10);
+
+            store.delete_range_err(key, key);
         }
     }
 }
@@ -900,12 +933,12 @@ fn test_txn_store_txnkv_api_version() {
 #[test]
 fn test_txn_store_rawkv_api_version() {
     let test_data = vec![
-        // config api_version = V1|V1ttl, for backward compatible.
+        // storage api_version = V1|V1ttl, for backward compatible.
         (ApiVersion::V1, ApiVersion::V1, RAW_KEY_CASE, true),
         (ApiVersion::V1ttl, ApiVersion::V1, RAW_KEY_CASE, true),
-        // config api_version = V1, reject V2 request.
+        // storage api_version = V1, reject V2 request.
         (ApiVersion::V1, ApiVersion::V2, RAW_KEY_CASE, false),
-        // config api_version = V2.
+        // storage api_version = V2.
         // backward compatible for TiDB request, and TiDB request only.
         (ApiVersion::V2, ApiVersion::V1, RAW_KEY_CASE, false),
         // V2 api validation.
@@ -913,24 +946,134 @@ fn test_txn_store_rawkv_api_version() {
         (ApiVersion::V2, ApiVersion::V2, RAW_KEY_CASE, true),
     ];
 
+    let cf = "";
+
     for (storage_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
         let mut store = AssertionStorage::new(storage_api_version);
         store.ctx.set_api_version(req_api_version);
 
+        let mut range = KeyRange::default();
+        range.set_start_key(key.to_vec());
+
+        let mut range_raw_z = KeyRange::default();
+        range_raw_z.set_start_key(key.to_vec());
+        range_raw_z.set_end_key(RAW_KEY_CASE_Z.to_vec());
+
         if is_legal {
-            store.raw_get_ok("".to_string(), key.to_vec(), None);
-            store.raw_put_ok("".to_string(), key.to_vec(), b"value".to_vec());
-            store.raw_get_ok("".to_string(), key.to_vec(), Some(b"value".to_vec()));
+            store.raw_get_ok(cf.to_owned(), key.to_vec(), None);
+            store.raw_put_ok(cf.to_owned(), key.to_vec(), b"value".to_vec());
+            store.raw_get_ok(cf.to_owned(), key.to_vec(), Some(b"value".to_vec()));
+            if !matches!(storage_api_version, ApiVersion::V1) {
+                store.raw_get_key_ttl_ok(cf.to_owned(), key.to_vec(), Some(0));
+            }
 
             store.raw_batch_get_ok(
-                "".to_string(),
+                cf.to_owned(),
                 vec![key.to_vec(), key.to_vec()],
                 vec![(key, b"value"), (key, b"value")],
             );
+            store.raw_batch_get_command_ok(
+                cf.to_owned(),
+                vec![key.to_vec(), key.to_vec()],
+                vec![b"value", b"value"],
+            );
+
+            store.raw_delete_ok(cf.to_owned(), key.to_vec());
+            store.raw_delete_range_ok(cf.to_owned(), key.to_vec(), key.to_vec());
+            store.raw_batch_delete_ok(cf.to_owned(), vec![key.to_vec()]);
+
+            store.raw_batch_put_ok(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
+
+            store.raw_scan_ok(
+                cf.to_owned(),
+                key.to_vec(),
+                Some(RAW_KEY_CASE_Z.to_vec()),
+                100,
+                vec![(key, b"value")],
+            );
+            store.raw_batch_scan_ok(
+                cf.to_owned(),
+                vec![range_raw_z.clone()],
+                100,
+                vec![(key, b"value")],
+            );
+            {
+                // unbounded end key
+                match storage_api_version {
+                    ApiVersion::V1 | ApiVersion::V1ttl => {
+                        store.raw_scan_ok(
+                            cf.to_owned(),
+                            key.to_vec(),
+                            None,
+                            100,
+                            vec![(key, b"value")],
+                        );
+                        store.raw_batch_scan_ok(
+                            cf.to_owned(),
+                            vec![range.clone()],
+                            100,
+                            vec![(key, b"value")],
+                        );
+                    }
+                    ApiVersion::V2 => {
+                        // unbounded key is prohibitted in V2.
+                        store.raw_scan_err(cf.to_owned(), key.to_vec(), None, 100);
+                        store.raw_batch_scan_err(cf.to_owned(), vec![range.clone()], 100);
+                    }
+                }
+            }
+
+            store.raw_compare_and_swap_atomic_ok(
+                cf.to_owned(),
+                key.to_vec(),
+                Some(b"value".to_vec()),
+                b"new_value".to_vec(),
+                (Some(b"value".to_vec()), true),
+            );
+
+            store.raw_batch_delete_atomic_ok(cf.to_owned(), vec![key.to_vec()]);
+            store.raw_batch_put_atomic_ok(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
+
+            if let ApiVersion::V2 = storage_api_version {
+                store.raw_checksum_ok(vec![range_raw_z.clone()], (0x2D6EE02DA4C9FDA, 1, 8));
+            }
         } else {
-            store.raw_get_err("".to_string(), key.to_vec());
-            store.raw_put_err("".to_string(), key.to_vec(), b"value".to_vec());
-            store.raw_batch_get_err("".to_string(), vec![key.to_vec(), key.to_vec()]);
+            store.raw_get_err(cf.to_owned(), key.to_vec());
+            if !matches!(storage_api_version, ApiVersion::V1) {
+                store.raw_get_key_ttl_err(cf.to_owned(), key.to_vec());
+            }
+            store.raw_put_err(cf.to_owned(), key.to_vec(), b"value".to_vec());
+
+            store.raw_batch_get_err(cf.to_owned(), vec![key.to_vec(), key.to_vec()]);
+            store.raw_batch_get_command_err(cf.to_owned(), vec![key.to_vec(), key.to_vec()]);
+
+            store.raw_delete_err(cf.to_owned(), key.to_vec());
+            store.raw_delete_range_err(cf.to_owned(), key.to_vec(), key.to_vec());
+            store.raw_batch_delete_err(cf.to_owned(), vec![key.to_vec()]);
+
+            store.raw_batch_put_err(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
+
+            store.raw_scan_err(
+                cf.to_owned(),
+                key.to_vec(),
+                Some(RAW_KEY_CASE_Z.to_vec()),
+                100,
+            );
+            store.raw_batch_scan_err(cf.to_owned(), vec![range_raw_z.clone()], 100);
+
+            store.raw_compare_and_swap_atomic_err(
+                cf.to_owned(),
+                key.to_vec(),
+                None,
+                b"value".to_vec(),
+            );
+
+            store.raw_batch_delete_atomic_err(cf.to_owned(), vec![key.to_vec()]);
+            store.raw_batch_put_atomic_err(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
+
+            if let ApiVersion::V2 = storage_api_version {
+                store.raw_checksum_err(vec![range_raw_z.clone()]);
+            }
         }
     }
 }
@@ -969,10 +1112,10 @@ fn inc<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, key: &[u8]) -> Re
         if store
             .prewrite(
                 Context::default(),
-                vec![Mutation::Put((
+                vec![Mutation::make_put(
                     Key::from_raw(key),
                     next.to_string().into_bytes(),
-                ))],
+                )],
                 key.to_vec(),
                 start_ts,
             )
@@ -1050,10 +1193,10 @@ fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -
                 }
             };
             let next = number + 1;
-            mutations.push(Mutation::Put((
+            mutations.push(Mutation::make_put(
                 keys[k].clone(),
                 next.to_string().into_bytes(),
-            )));
+            ));
         }
         if store
             .prewrite(Context::default(), mutations, b"k0".to_vec(), start_ts)

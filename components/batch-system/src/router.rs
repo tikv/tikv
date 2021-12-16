@@ -52,7 +52,7 @@ pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
     // for now.
     pub(crate) normal_scheduler: Ns,
-    control_scheduler: Cs,
+    pub(crate) control_scheduler: Cs,
 
     // Count of Mailboxes that is not destroyed.
     // Added when a Mailbox created, and subtracted it when a Mailbox destroyed.

@@ -49,7 +49,6 @@ cloud-storage-grpc = [
 ]
 
 [dependencies]
-anyhow = "1.0"
 aws = { optional = true, path = "../../cloud/aws", default-features = false }
 cloud = { path = "../../cloud", default_features = false }
 lazy_static = { optional = true, version = "1.3" }

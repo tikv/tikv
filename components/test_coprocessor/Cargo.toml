@@ -27,3 +27,4 @@ collections = { path = "../collections" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 txn_types = { path = "../txn_types", default-features = false }
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
+resource_metering = { path = "../resource_metering" }
