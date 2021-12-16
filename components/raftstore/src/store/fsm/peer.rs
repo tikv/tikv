@@ -3968,7 +3968,7 @@ where
             // use a threshold to not update it too frequently.
             let diff = match (
                 self.fsm.peer.in_store_log_lag.contains(&peer_id),
-                lag >= self.ctx.cfg.leader_transfer_max_log_lag && p.matched > truncated_idx, // p.matched > truncated_idx is to exclude the region needing snapshot
+                lag >= self.ctx.cfg.leader_transfer_max_log_lag && p.matched != 0, // p.matched != 0 is to exclude the peer newly added
             ) {
                 (true, true) => 0,
                 (true, false) => {
