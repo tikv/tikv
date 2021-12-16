@@ -13,13 +13,13 @@ use storage::mvcc::tests::must_get;
 use storage::mvcc::{self, tests::must_locked};
 use storage::txn::{self, commands};
 use test_raftstore::new_server_cluster;
-use tikv::storage::kv::{SnapContext, SnapshotExt};
+use tikv::storage::kv::SnapshotExt;
 use tikv::storage::txn::tests::{
     must_acquire_pessimistic_lock, must_commit, must_pessimistic_prewrite_put,
     must_pessimistic_prewrite_put_err, must_prewrite_put, must_prewrite_put_err,
 };
 use tikv::storage::{
-    self, lock_manager::DummyLockManager, Engine, Snapshot, TestEngineBuilder, TestStorageBuilder,
+    self, lock_manager::DummyLockManager, Snapshot, TestEngineBuilder, TestStorageBuilder,
 };
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Mutation, TimeStamp};
@@ -484,26 +484,16 @@ fn test_pessimistic_lock_check_valid() {
     cluster.cfg.pessimistic_txn.in_memory = true;
     cluster.run();
 
-    let region = cluster.get_region(b"");
-    let leader = region.get_peers()[0].clone();
-
-    let storage = cluster.sim.rl().storages.get(&1).unwrap().clone();
-    let epoch = cluster.get_region_epoch(region.id);
-    let mut ctx = Context::default();
-    ctx.set_region_id(region.id);
-    ctx.set_peer(leader.clone());
-    ctx.set_region_epoch(epoch);
-    let snap_ctx = SnapContext {
-        pb_ctx: &ctx,
-        ..Default::default()
-    };
-    let txn_ext = storage
-        .snapshot(snap_ctx)
-        .unwrap()
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let txn_ext = cluster
+        .must_get_snapshot_of_region(1)
         .ext()
         .get_txn_ext()
         .unwrap()
         .clone();
+
+    let region = cluster.get_region(b"");
+    let leader = region.get_peers()[0].clone();
 
     fail::cfg("acquire_pessimistic_lock", "pause").unwrap();
 

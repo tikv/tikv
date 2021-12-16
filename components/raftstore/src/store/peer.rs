@@ -1641,6 +1641,7 @@ where
                     self.leader_lease.expire();
                     self.mut_store().cancel_generating_snap(None);
                     self.clear_disk_full_peers(ctx);
+                    self.clear_in_memory_pessimistic_locks();
                 }
                 _ => {}
             }
@@ -4401,11 +4402,17 @@ where
         }
     }
 
-    pub fn activate_in_memory_pessimistic_locks(&mut self) {
+    fn activate_in_memory_pessimistic_locks(&mut self) {
         let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
         pessimistic_locks.is_valid = true;
         pessimistic_locks.term = self.term();
         pessimistic_locks.version = self.region().get_region_epoch().get_version();
+    }
+
+    fn clear_in_memory_pessimistic_locks(&mut self) {
+        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.is_valid = false; // Not necessary, but just make it safer.
+        pessimistic_locks.map = Default::default();
     }
 }
 
