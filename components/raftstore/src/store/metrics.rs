@@ -24,6 +24,7 @@ make_auto_flush_static_metric! {
         transfer_leader,
         conf_change,
         batch,
+        dropped_read_index,
     }
 
     pub label_enum AdminCmdType {

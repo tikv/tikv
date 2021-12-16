@@ -3338,6 +3338,7 @@ where
         if dropped && self.is_leader() {
             // The message gets dropped silently, can't be handled anymore.
             apply::notify_stale_req(self.term(), cb);
+            poll_ctx.raft_metrics.propose.dropped_read_index += 1;
             return false;
         }
 

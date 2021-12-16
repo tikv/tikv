@@ -1482,6 +1482,7 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "err" => ?e,
             );
+            self.ctx.raft_metrics.propose.unsafe_read_index += 1;
             return;
         }
 
@@ -1489,10 +1490,13 @@ where
         let renew_bound = current_time + self.ctx.cfg.check_leader_lease_interval();
         if self.fsm.peer.need_renew_lease_at(self.ctx, renew_bound) {
             let (id, dropped) = self.fsm.peer.propose_read_index(None, None);
-            if !dropped {
-                let read_proposal = ReadIndexRequest::noop(id, current_time);
-                self.fsm.peer.pending_reads.push_back(read_proposal, true);
+            if dropped {
+                self.ctx.raft_metrics.propose.dropped_read_index += 1;
+                return;
             }
+            self.ctx.raft_metrics.propose.read_index += 1;
+            let read_proposal = ReadIndexRequest::noop(id, current_time);
+            self.fsm.peer.pending_reads.push_back(read_proposal, true);
         }
     }
 
