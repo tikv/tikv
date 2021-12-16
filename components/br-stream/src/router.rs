@@ -260,6 +260,7 @@ impl RouterInner {
 /// The handle of a temporary file.
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 struct TempFileKey {
+    is_meta: bool,
     table_id: i64,
     region_id: u64,
     cf: String,
@@ -269,9 +270,15 @@ struct TempFileKey {
 impl TempFileKey {
     /// Create the key for an event. The key can be used to find which temporary file the event should be stored.
     fn of(kv: &ApplyEvent) -> Self {
-        // When we cannot extract the table key, use 0 for the table key(perhaps we insert meta key here.).
-        let table_id = decode_table_id(&kv.key).unwrap_or(0);
+        let table_id = if kv.is_meta() {
+            // Force table id of meta key be zero.
+            0
+        } else {
+            // When we cannot extract the table key, use 0 for the table key(perhaps we insert meta key here.).
+            decode_table_id(&kv.key).unwrap_or(0)
+        };
         Self {
+            is_meta: kv.is_meta(),
             table_id,
             region_id: kv.region_id,
             cf: kv.cf.clone(),
@@ -281,10 +288,17 @@ impl TempFileKey {
 
     /// The full name of the file owns the key.
     fn temp_file_name(&self) -> String {
-        format!(
-            "{:08}_{:08}_{}_{:?}.temp.log",
-            self.table_id, self.region_id, self.cf, self.cmd_type
-        )
+        if self.is_meta {
+            format!(
+                "meta_{:08}_{}_{:?}.temp.log",
+                self.region_id, self.cf, self.cmd_type
+            )
+        } else {
+            format!(
+                "{:08}_{:08}_{}_{:?}.temp.log",
+                self.table_id, self.region_id, self.cf, self.cmd_type
+            )
+        }
     }
 }
 
@@ -292,12 +306,8 @@ impl TempFileKey {
 pub struct TemporaryFiles {
     /// The parent directory of temporary files.
     temp_dir: PathBuf,
-    /// The temporary file index.
+    /// The temporary file index. Both meta (m prefixed keys) and data (t prefixed keys).
     files: HashMap<TempFileKey, DataFile>,
-    /// The temporary file for meta(a.k.a. schema) keys (keys starts with 'm').
-    /// FixMe: the design is buggy since we cannot distinguish different CF / CmdType here.
-    /// Maybe extend [`TempFileKey`] for allow it containing meta key and remove the field.
-    meta: Option<DataFile>,
     /// The min resolved TS of all regions involved.
     min_resolved_ts: TimeStamp,
     /// Total size of all temporary files in byte.
@@ -326,30 +336,14 @@ impl TemporaryFiles {
         Ok(())
     }
 
-    async fn on_meta_data(&mut self, kv: ApplyEvent) -> Result<()> {
-        if self.meta.is_none() {
-            let path = self.temp_dir.join(format!(
-                "meta_{:08}_{}_{:?}.temp.log",
-                kv.region_id, kv.cf, kv.cmd_type
-            ));
-            self.meta = Some(DataFile::new(path).await?);
-        }
-        self.meta.as_mut().unwrap().on_event(kv).await?;
-        Ok(())
-    }
-
     // TODO: make a file-level lock for getting rid of the &mut.
-    /// Append a event to the files. This wouldn't trigger `flush` syscall.
+    /// Append a event to the files. This wouldn't trigger `fsync` syscall.
     /// i.e. No guarantee of persistence.
     pub async fn on_event(&mut self, kv: ApplyEvent) -> Result<()> {
-        if kv.is_meta() {
-            self.on_meta_data(kv).await
-        } else {
-            self.on_table_data(kv).await
-        }
+        self.on_table_data(kv).await
     }
 
-    fn path_to_log_file(table_id: i64, min_ts: i64) -> String {
+    fn path_to_log_file(table_id: i64, min_ts: u64) -> String {
         format!(
             "/v1/t{:012}/{:012}-{}.log",
             table_id,
@@ -358,7 +352,7 @@ impl TemporaryFiles {
         )
     }
 
-    fn path_to_schema_file(min_ts: i64) -> String {
+    fn path_to_schema_file(min_ts: u64) -> String {
         format!("/v1/m/{:012}-{}.log", min_ts, uuid::Uuid::new_v4())
     }
 
@@ -368,45 +362,38 @@ impl TemporaryFiles {
 
     /// Flush all temporary files to disk.
     async fn flush(&mut self) -> Result<()> {
-        futures::future::join_all(
-            self.files
-                .values_mut()
-                .chain(self.meta.iter_mut())
-                .map(|f| f.inner.flush()),
-        )
-        .await
-        .into_iter()
-        .map(|r| r.map_err(Error::from))
-        .fold(Ok(()), Result::and)
+        futures::future::join_all(self.files.values_mut().map(|f| f.inner.flush()))
+            .await
+            .into_iter()
+            .map(|r| r.map_err(Error::from))
+            .fold(Ok(()), Result::and)
     }
 
     /// Flush all files and generate corresponding metadata.
-    pub async fn generate_metadata(mut self) -> Result<Vec<DataFileWithMeta>> {
+    pub async fn generate_metadata(mut self) -> Result<MetadataOfFlush> {
         self.flush().await?;
-        let mut result = Vec::with_capacity(self.files.len());
+        let mut result = MetadataOfFlush::with_capacity(self.files.len());
         for (
             TempFileKey {
                 table_id,
                 cf,
                 region_id,
+                is_meta,
                 ..
             },
             data_file,
         ) in self.files.into_iter()
         {
             let mut file_meta = data_file.generate_metadata()?;
-            file_meta
-                .meta
-                .set_path(Self::path_to_log_file(table_id, file_meta.meta.min_ts));
+            let path = if is_meta {
+                Self::path_to_schema_file(file_meta.meta.min_ts)
+            } else {
+                Self::path_to_log_file(table_id, file_meta.meta.min_ts)
+            };
+            file_meta.meta.set_path(path);
             file_meta.meta.set_cf(cf);
             file_meta.meta.set_region_id(region_id as _);
             result.push(file_meta)
-        }
-        if let Some(f) = self.meta {
-            let mut schema_meta = f.generate_metadata()?;
-            schema_meta
-                .meta
-                .set_path(Self::path_to_schema_file(schema_meta.meta.min_ts));
         }
         Ok(result)
     }
@@ -429,6 +416,27 @@ struct DataFile {
 pub struct DataFileWithMeta {
     pub meta: DataFileInfo,
     pub local_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub struct MetadataOfFlush {
+    pub files: Vec<DataFileWithMeta>,
+    pub min_resolved_ts: u64,
+}
+
+impl MetadataOfFlush {
+    fn with_capacity(cap: usize) -> Self {
+        Self {
+            files: Vec::with_capacity(cap),
+            min_resolved_ts: u64::MAX,
+        }
+    }
+
+    fn push(&mut self, file: DataFileWithMeta) {
+        let rts = file.meta.resolved_ts;
+        self.min_resolved_ts = self.min_resolved_ts.min(rts);
+        self.files.push(file);
+    }
 }
 
 impl DataFile {
@@ -498,6 +506,7 @@ impl DataFile {
         meta.set_number_of_entries(self.number_of_entries as _);
         meta.set_max_ts(self.max_ts.into_inner() as _);
         meta.set_min_ts(self.min_ts.into_inner() as _);
+        meta.set_resolved_ts(self.resolved_ts.into_inner() as _);
         meta.set_start_key(std::mem::take(&mut self.start_key));
         meta.set_end_key(std::mem::take(&mut self.end_key));
         let file_with_meta = DataFileWithMeta {
@@ -641,21 +650,20 @@ mod tests {
         region1.delete(CF_DEFAULT, b"t1_hello");
         let events = region1.flush_events();
         let start_ts = TimeStamp::physical_now();
-        // TODO: auto test...
         for event in events {
             router.on_event(event).await?;
         }
         let end_ts = TimeStamp::physical_now();
         let files = router.take_temporary_files("dummy")?;
         let meta = files.generate_metadata().await?;
-        assert_eq!(meta.len(), 3);
+        assert_eq!(meta.files.len(), 3);
         assert!(
-            meta.iter().all(|item| {
+            meta.files.iter().all(|item| {
                 TimeStamp::new(item.meta.min_ts as _).physical() >= start_ts
                     && TimeStamp::new(item.meta.max_ts as _).physical() <= end_ts
             }),
             "meta = {:#?}; start ts = {}, end ts = {}",
-            meta,
+            meta.files,
             start_ts,
             end_ts
         );
@@ -664,10 +672,10 @@ mod tests {
         assert_eq!(cmds.len(), 1);
         match &cmds[0] {
             Task::Flush(task) => assert_eq!(task, "dummy"),
-            _ => assert!(false, "the cmd isn't flush!"),
+            _ => panic!("the cmd isn't flush!"),
         }
 
-        for path in meta.iter().map(|meta| &meta.local_path) {
+        for path in meta.files.iter().map(|meta| &meta.local_path) {
             let f = tokio::fs::metadata(&path).await?;
             assert!(f.is_file(), "log file {} is not a file", path.display());
             // The file should contains some data.
