@@ -365,6 +365,23 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             commit_ts_too_large.set_commit_ts(min_commit_ts.into_inner());
             key_error.set_commit_ts_too_large(commit_ts_too_large);
         }
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::AssertionFailed {
+                start_ts,
+                key,
+                assertion,
+                existing_start_ts,
+                existing_commit_ts,
+            },
+        ))))) => {
+            let mut assertion_failed = kvrpcpb::AssertionFailed::default();
+            assertion_failed.set_start_ts(start_ts.into_inner());
+            assertion_failed.set_key(key.to_owned());
+            assertion_failed.set_assertion(*assertion);
+            assertion_failed.set_existing_start_ts(existing_start_ts.into_inner());
+            assertion_failed.set_existing_commit_ts(existing_commit_ts.into_inner());
+            key_error.set_assertion_failed(assertion_failed);
+        }
         _ => {
             error!(?*err; "txn aborts");
             key_error.set_abort(format!("{:?}", err));
