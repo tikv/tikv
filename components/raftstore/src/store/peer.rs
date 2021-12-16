@@ -97,7 +97,7 @@ pub enum StaleState {
 }
 
 #[derive(Debug)]
-pub struct ProposalQueue<S>
+struct ProposalQueue<S>
 where
     S: Snapshot,
 {
@@ -188,7 +188,7 @@ impl<S: Snapshot> ProposalQueue<S> {
         }
     }
 
-    pub fn back(&self) -> Option<&Proposal<S>> {
+    fn back(&self) -> Option<&Proposal<S>> {
         self.queue.back()
     }
 }
@@ -466,9 +466,9 @@ where
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
 
-    pub proposals: ProposalQueue<EK::Snapshot>,
+    proposals: ProposalQueue<EK::Snapshot>,
     leader_missing_time: Option<Instant>,
-    pub leader_lease: Lease,
+    leader_lease: Lease,
     pub pending_reads: ReadIndexQueue<EK::Snapshot>,
 
     /// If it fails to send messages to leader.
@@ -1048,7 +1048,7 @@ where
     pub fn check_after_tick(&self, state: GroupState, res: CheckTickResult) -> bool {
         if res.leader {
             if res.up_to_date {
-                self.is_leader() && self.raft_group.raft.pending_read_count() == 0
+                self.is_leader()
             } else {
                 if !res.reason.is_empty() {
                     debug!("rejecting sleeping"; "reason" => res.reason, "region_id" => self.region_id, "peer_id" => self.peer_id());
@@ -4402,6 +4402,30 @@ where
                 "failed to update max ts";
                 "err" => ?e,
             );
+        }
+    }
+
+    pub fn need_renew_lease_at<T>(
+        &self,
+        ctx: &PollContext<EK, ER, T>,
+        renew_bound: Timespec,
+    ) -> bool {
+        let max_lease = ctx.cfg.raft_store_max_leader_lease();
+        match self.leader_lease.inspect(Some(renew_bound)) {
+            LeaseState::Expired => {
+                self.pending_reads.back().map_or(true, |read| {
+                    // If there is any read index whose lease can cover till next heartbeat
+                    // then we don't need to propose a new one
+                    read.propose_time + max_lease < renew_bound
+                }) && self.proposals.back().map_or(true, |proposal| {
+                    // If there is any write whose lease can cover till next heartbeat
+                    // then we don't need to propose a new one
+                    proposal
+                        .propose_time
+                        .map_or(true, |propose_time| propose_time + max_lease < renew_bound)
+                })
+            }
+            _ => false,
         }
     }
 }

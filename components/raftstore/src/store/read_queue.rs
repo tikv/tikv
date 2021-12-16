@@ -219,7 +219,7 @@ where
         self.reads.back_mut()
     }
 
-    pub fn back(&mut self) -> Option<&ReadIndexRequest<S>> {
+    pub fn back(&self) -> Option<&ReadIndexRequest<S>> {
         self.reads.back()
     }
 

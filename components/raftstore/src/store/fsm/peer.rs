@@ -63,7 +63,7 @@ use crate::store::peer::{ConsistencyState, Peer, PersistSnapshotResult, StaleSta
 use crate::store::peer_storage::write_peer_state;
 use crate::store::read_queue::ReadIndexRequest;
 use crate::store::transport::Transport;
-use crate::store::util::{is_learner, KeysInfoFormatter, LeaseState};
+use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
     ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
 };
@@ -1486,26 +1486,8 @@ where
         }
 
         let current_time = *self.ctx.current_time.get_or_insert_with(monotonic_raw_now);
-        let max_lease = self.ctx.cfg.raft_store_max_leader_lease();
         let renew_bound = current_time + self.ctx.cfg.check_leader_lease_interval();
-        // We need to propose a read index request if current lease can't cover till next tick
-        let need_propose = match self.fsm.peer.leader_lease.inspect(Some(renew_bound)) {
-            LeaseState::Expired => {
-                self.fsm.peer.pending_reads.back().map_or(true, |read| {
-                    // If there is any read index whose lease can cover till next heartbeat
-                    // then we don't need to propose a new one
-                    read.propose_time + max_lease < renew_bound
-                }) && self.fsm.peer.proposals.back().map_or(true, |proposal| {
-                    // If there is any write whose lease can cover till next heartbeat
-                    // then we don't need to propose a new one
-                    proposal
-                        .propose_time
-                        .map_or(true, |propose_time| propose_time + max_lease < renew_bound)
-                })
-            }
-            _ => false,
-        };
-        if need_propose {
+        if self.fsm.peer.need_renew_lease_at(self.ctx, renew_bound) {
             let (id, dropped) = self.fsm.peer.propose_read_index(None, None);
             if !dropped {
                 let read_proposal = ReadIndexRequest::noop(id, current_time);
@@ -1790,7 +1772,9 @@ where
         self.fsm.missing_ticks = 0;
         self.fsm.peer.should_wake_up = false;
         self.register_raft_base_tick();
-        self.register_check_leader_lease_tick();
+        if self.fsm.peer.is_leader() {
+            self.register_check_leader_lease_tick();
+        }
     }
 
     // return false means the message is invalid, and can be ignored.
