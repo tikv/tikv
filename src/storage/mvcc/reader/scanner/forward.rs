@@ -633,41 +633,6 @@ impl DeltaEntryPolicy {
     pub fn new(from_ts: TimeStamp, extra_op: ExtraOp) -> Self {
         Self { from_ts, extra_op }
     }
-
-    fn fetch_old_value<S: Snapshot>(
-        current_user_key: &Key,
-        cfg: &ScannerConfig<S>,
-        cursors: &mut Cursors<S>,
-        statistics: &mut Statistics,
-        after_ts: TimeStamp,
-        gc_fence_ts: TimeStamp,
-    ) -> Result<OldValue> {
-        let seek_after = || {
-            let seek_after = current_user_key.clone().append_ts(after_ts);
-            OldValue::SeekWrite(seek_after)
-        };
-
-        if let Some(v) = super::seek_for_valid_value(
-            &mut cursors.write,
-            cursors.default.as_mut().unwrap(),
-            current_user_key,
-            after_ts,
-            gc_fence_ts,
-            statistics,
-        )? {
-            if let Some(hint_min_ts) = cfg.hint_min_ts {
-                let k = cursors.write.key(&mut statistics.write);
-                if Key::decode_ts_from(k).unwrap() < hint_min_ts {
-                    return Ok(seek_after());
-                }
-            }
-            Ok(OldValue::value(v))
-        } else if cfg.hint_min_ts.is_some() {
-            Ok(seek_after())
-        } else {
-            Ok(OldValue::None)
-        }
-    }
 }
 
 impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
@@ -709,13 +674,14 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             {
                 // When meet a lock, the write cursor must indicate the same user key.
                 // Seek for the last valid committed here.
-                old_value = Self::fetch_old_value(
+                old_value = super::seek_for_valid_value(
+                    &mut cursors.write,
+                    cursors.default.as_mut().unwrap(),
                     &current_user_key,
-                    cfg,
-                    cursors,
-                    statistics,
                     std::cmp::max(lock.ts, lock.for_update_ts),
                     self.from_ts,
+                    cfg.hint_min_ts,
+                    statistics,
                 )?;
             }
             load_default_res.map(|default| {
@@ -804,13 +770,14 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             if self.extra_op == ExtraOp::ReadOldValue
                 && matches!(write_type, WriteType::Put | WriteType::Delete)
             {
-                old_value = Self::fetch_old_value(
+                old_value = super::seek_for_valid_value(
+                    &mut cursors.write,
+                    cursors.default.as_mut().unwrap(),
                     &current_user_key,
-                    cfg,
-                    cursors,
-                    statistics,
                     commit_ts.prev(),
                     self.from_ts,
+                    cfg.hint_min_ts,
+                    statistics,
                 )?;
             }
 

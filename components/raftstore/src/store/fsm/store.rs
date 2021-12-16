@@ -74,7 +74,8 @@ use crate::store::util::{is_initial_msg, RegionReadProgressRegistry};
 use crate::store::worker::{
     AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
-    RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
+    RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask,
+    RegionRunner, RegionTask, SplitCheckTask,
 };
 use crate::store::{
     util, Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
@@ -1198,6 +1199,40 @@ where
     }
 }
 
+impl<EK, ER, T> Clone for RaftPollerBuilder<EK, ER, T>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        RaftPollerBuilder {
+            cfg: self.cfg.clone(),
+            store: self.store.clone(),
+            pd_scheduler: self.pd_scheduler.clone(),
+            consistency_check_scheduler: self.consistency_check_scheduler.clone(),
+            split_check_scheduler: self.split_check_scheduler.clone(),
+            cleanup_scheduler: self.cleanup_scheduler.clone(),
+            raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
+            region_scheduler: self.region_scheduler.clone(),
+            apply_router: self.apply_router.clone(),
+            router: self.router.clone(),
+            importer: self.importer.clone(),
+            store_meta: self.store_meta.clone(),
+            pending_create_peers: self.pending_create_peers.clone(),
+            snap_mgr: self.snap_mgr.clone(),
+            coprocessor_host: self.coprocessor_host.clone(),
+            trans: self.trans.clone(),
+            global_stat: self.global_stat.clone(),
+            engines: self.engines.clone(),
+            global_replication_state: self.global_replication_state.clone(),
+            feature_gate: self.feature_gate.clone(),
+            write_senders: self.write_senders.clone(),
+            io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
+        }
+    }
+}
+
 struct Workers<EK: KvEngine, ER: RaftEngine> {
     pd_worker: LazyWorker<PdTask<EK, ER>>,
     background_worker: Worker,
@@ -1212,6 +1247,8 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     purge_worker: Worker,
 
     coprocessor_host: CoprocessorHost<EK>,
+
+    refresh_config_worker: LazyWorker<RefreshConfigTask>,
 }
 
 pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
@@ -1230,6 +1267,15 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
     pub fn apply_router(&self) -> ApplyRouter<EK> {
         self.apply_router.clone()
+    }
+
+    pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
+        assert!(!self.workers.is_none());
+        self.workers
+            .as_ref()
+            .unwrap()
+            .refresh_config_worker
+            .scheduler()
     }
 
     // TODO: reduce arguments
@@ -1267,6 +1313,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             region_worker: Worker::new("region-worker"),
             purge_worker: Worker::new("purge-worker"),
             coprocessor_host: coprocessor_host.clone(),
+            refresh_config_worker: LazyWorker::new("refreash-config-worker"),
         };
         mgr.init()?;
         let region_runner = RegionRunner::new(
@@ -1274,6 +1321,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             mgr.clone(),
             cfg.value().snap_apply_batch_size.0 as usize,
             cfg.value().use_delete_range,
+            cfg.value().snap_generator_pool_size,
             workers.coprocessor_host.clone(),
             self.router(),
         );
@@ -1419,6 +1467,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 .broadcast_normal(|| PeerMsg::HeartbeatPd);
         });
 
+        let (raft_builder, apply_builder) = (builder.clone(), apply_poller_builder.clone());
+
         let tag = format!("raftstore-{}", store.get_id());
         self.system.spawn(tag, builder);
         let mut mailboxes = Vec::with_capacity(region_peers.len());
@@ -1444,6 +1494,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
+
+        let refresh_config_runner = RefreshConfigRunner::new(
+            self.apply_router.router.clone(),
+            self.router.router.clone(),
+            self.apply_system.build_pool_state(apply_builder),
+            self.system.build_pool_state(raft_builder),
+        );
+        assert!(workers.refresh_config_worker.start(refresh_config_runner));
 
         let pd_runner = PdRunner::new(
             &cfg,
