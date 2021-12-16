@@ -229,6 +229,7 @@ fn new_write_cursor_on_key<S: EngineSnapshot>(snapshot: &S, key: &Key) -> Cursor
     CursorBuilder::new(snapshot, CF_WRITE)
         .fill_cache(false)
         .scan_mode(ScanMode::Mixed)
+        // Set the range explicitly to avoid region boundaries are used incorrectly.
         .range(Some(key.clone()), upper)
         // Use bloom filter to speed up seeking on a given prefix.
         .prefix_seek(true)
