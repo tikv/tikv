@@ -360,6 +360,10 @@ impl Config {
         self.raft_base_tick_interval.0 * self.raft_heartbeat_ticks as u32
     }
 
+    pub fn check_leader_lease_interval(&self) -> TimeDuration {
+        TimeDuration::from_std(self.check_leader_lease_interval.0).unwrap()
+    }
+
     #[cfg(any(test, feature = "testexport"))]
     pub fn allow_remove_leader(&self) -> bool {
         self.allow_remove_leader

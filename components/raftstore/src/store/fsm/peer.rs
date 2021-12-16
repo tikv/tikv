@@ -1487,7 +1487,7 @@ where
 
         let current_time = *self.ctx.current_time.get_or_insert_with(monotonic_raw_now);
         let max_lease = self.ctx.cfg.raft_store_max_leader_lease();
-        let renew_bound = current_time + max_lease / 4;
+        let renew_bound = current_time + self.ctx.cfg.check_leader_lease_interval();
         // We need to propose a read index request if current lease can't cover till next tick
         let need_propose = match self.fsm.peer.leader_lease.inspect(Some(renew_bound)) {
             LeaseState::Expired => {
