@@ -62,6 +62,16 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     }
 
     #[inline(always)]
+    pub fn get_write_with_commit_ts(
+        &mut self,
+        key: &Key,
+        ts: TimeStamp,
+    ) -> Result<Option<(Write, TimeStamp)>> {
+        self.reader
+            .get_write_with_commit_ts(key, ts, Some(self.start_ts))
+    }
+
+    #[inline(always)]
     pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
         self.reader.seek_write(key, ts)
     }
@@ -262,9 +272,24 @@ impl<S: EngineSnapshot> MvccReader<S> {
     pub fn get_write(
         &mut self,
         key: &Key,
-        mut ts: TimeStamp,
+        ts: TimeStamp,
         gc_fence_limit: Option<TimeStamp>,
     ) -> Result<Option<Write>> {
+        Ok(self
+            .get_write_with_commit_ts(key, ts, gc_fence_limit)?
+            .map(|(w, _)| w))
+    }
+
+    /// Gets the write record of the specified key's latest version before specified `ts`, and
+    /// additionally the write record's `commit_ts`, if any.
+    ///
+    /// See also [`MvccReader::get_write`].
+    pub fn get_write_with_commit_ts(
+        &mut self,
+        key: &Key,
+        mut ts: TimeStamp,
+        gc_fence_limit: Option<TimeStamp>,
+    ) -> Result<Option<(Write, TimeStamp)>> {
         loop {
             match self.seek_write(key, ts)? {
                 Some((commit_ts, write)) => {
@@ -275,7 +300,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                     }
                     match write.write_type {
                         WriteType::Put => {
-                            return Ok(Some(write));
+                            return Ok(Some((write, commit_ts)));
                         }
                         WriteType::Delete => {
                             return Ok(None);
@@ -546,7 +571,7 @@ pub mod tests {
     use engine_rocks::{Compat, RocksSnapshot};
     use engine_traits::{IterOptions, Mutable, WriteBatch, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{AssertionLevel, Context};
     use kvproto::metapb::{Peer, Region};
     use raftstore::store::RegionSnapshot;
     use std::ops::Bound;
@@ -629,6 +654,7 @@ pub mod tests {
                 min_commit_ts: TimeStamp::default(),
                 need_old_value: false,
                 is_retry_request: false,
+                assertion_level: AssertionLevel::Off,
             }
         }
 

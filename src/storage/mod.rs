@@ -2732,7 +2732,7 @@ mod tests {
     use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
-    use kvproto::kvrpcpb::{CommandPri, Op};
+    use kvproto::kvrpcpb::{AssertionLevel, CommandPri, Op};
     use std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -5262,6 +5262,7 @@ mod tests {
                     TimeStamp::default(),
                     None,
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 expect_ok_callback(tx, 0),
@@ -5914,6 +5915,7 @@ mod tests {
                     TimeStamp::default(),
                     Some(vec![b"k1".to_vec(), b"k2".to_vec()]),
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -6056,6 +6058,7 @@ mod tests {
                     TimeStamp::default(),
                     None,
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -6130,6 +6133,7 @@ mod tests {
                     TimeStamp::default(),
                     None,
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -6263,6 +6267,7 @@ mod tests {
                     TimeStamp::default(),
                     None,
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -7063,6 +7068,7 @@ mod tests {
                     TimeStamp::default(),
                     Some(vec![b"a".to_vec(), b"b".to_vec()]),
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 Box::new(move |res| {
@@ -7108,6 +7114,7 @@ mod tests {
                     TimeStamp::default(),
                     Some(vec![b"e".to_vec()]),
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 Box::new(move |res| {
@@ -7201,6 +7208,7 @@ mod tests {
                     100.into(),
                     None,
                     false,
+                    AssertionLevel::Off,
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -7247,6 +7255,7 @@ mod tests {
                     (1 << 19).into(),
                     Some(vec![k2.to_vec()]),
                     false,
+                    AssertionLevel::Off,
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -7350,6 +7359,7 @@ mod tests {
                 TimeStamp::default(),
                 None,
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             pipelined_pessimistic_lock: false,
@@ -7373,6 +7383,7 @@ mod tests {
                 TimeStamp::default(),
                 Some(vec![]),
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             pipelined_pessimistic_lock: false,
@@ -7859,6 +7870,7 @@ mod tests {
                     TimeStamp::default(),
                     None,
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 Box::new(move |res| {
@@ -7915,6 +7927,7 @@ mod tests {
                     TimeStamp::default(),
                     None,
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 Box::new(move |res| {
