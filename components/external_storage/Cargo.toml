@@ -16,7 +16,6 @@ cloud-storage-grpc = [
 failpoints = ["fail/failpoints"]
 
 [dependencies]
-anyhow = "1.0"
 bytes = "1.0"
 fail = "0.5"
 ffi-support = { optional = true, version = "0.4.2" }
@@ -36,7 +35,6 @@ rusoto_core = "0.46.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-tame-oauth = "0.4.2"
 tikv_alloc = { path = "../tikv_alloc" }
 engine_traits = { path = "../engine_traits" }
 encryption = { path = "../encryption" }

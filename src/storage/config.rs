@@ -21,7 +21,7 @@ use tikv_util::worker::Scheduler;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
-const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
+const DEFAULT_MAX_KEY_SIZE: usize = 8 * 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 1024 * 512;
 const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
 
@@ -108,8 +108,10 @@ impl Config {
             return Err("storage.api_version can only be set to 1 or 2.".into());
         }
         if self.api_version == 2 && !self.enable_ttl {
-            warn!("storage.enable_ttl is deprecated in API V2 since API V2 forces to enable TTL.");
-            self.enable_ttl = true;
+            return Err(
+                "storage.enable_ttl must be true in API V2 because API V2 forces to enable TTL."
+                    .into(),
+            );
         };
         self.io_rate_limit.validate()?;
 
@@ -122,6 +124,23 @@ impl Config {
             1 => ApiVersion::V1,
             2 => ApiVersion::V2,
             _ => unreachable!(),
+        }
+    }
+
+    pub fn set_api_version(&mut self, api_version: ApiVersion) {
+        match api_version {
+            ApiVersion::V1 => {
+                self.api_version = 1;
+                self.enable_ttl = false;
+            }
+            ApiVersion::V1ttl => {
+                self.api_version = 1;
+                self.enable_ttl = true;
+            }
+            ApiVersion::V2 => {
+                self.api_version = 2;
+                self.enable_ttl = false;
+            }
         }
     }
 }

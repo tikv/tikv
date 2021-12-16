@@ -1,46 +1,27 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{utils, SharedTagPtr};
+use crate::TagInfos;
 
-use std::cell::Cell;
-use std::sync::Mutex;
+use std::cell::RefCell;
+use std::sync::Arc;
 
-use crossbeam::channel::Sender;
-use lazy_static::lazy_static;
-
-lazy_static! {
-    /// `STORAGE_CHANS` is used to transfer the necessary thread registration events.
-    static ref STORAGE_CHANS: Mutex<Vec<Sender<LocalStorageRef>>> = Mutex::new(Vec::new());
-}
+use arc_swap::ArcSwapOption;
 
 thread_local! {
     /// `STORAGE` is a thread-localized instance of [LocalStorage].
-    ///
-    /// When a new thread tries to read `STORAGE`, it will actively send a message
-    /// to [STORAGE_CHAN] during the initialization phase of thread local storage.
-    /// The message([LocalStorageRef]) contains the thread id and a reference to
-    /// the thread local storage structure.
-    pub static STORAGE: LocalStorage = {
-        let storage = LocalStorage {
-            is_set: Cell::new(false),
-            shared_ptr: SharedTagPtr::default(),
-        };
-        let lsr = LocalStorageRef{id: utils::thread_id(), storage: storage.clone()};
-        STORAGE_CHANS.lock().unwrap().iter().for_each(|sender| {
-            sender.send(lsr.clone()).ok();
-        });
-        storage
-    };
+    pub static STORAGE: RefCell<LocalStorage> = RefCell::new(LocalStorage::default());
 }
 
 /// `LocalStorage` is a thread-local structure that contains all necessary data of submodules.
 ///
 /// In order to facilitate mutual reference, the thread-local data of all sub-modules
 /// need to be stored centrally in `LocalStorage`.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct LocalStorage {
-    pub is_set: Cell<bool>,
-    pub shared_ptr: SharedTagPtr,
+    pub registered: bool,
+    pub register_failed_times: u32,
+    pub is_set: bool,
+    pub attached_tag: Arc<ArcSwapOption<TagInfos>>,
 }
 
 /// This structure is transmitted as a event in [STORAGE_CHAN].
@@ -49,35 +30,7 @@ pub struct LocalStorage {
 #[derive(Clone)]
 pub struct LocalStorageRef {
     pub id: usize,
+
+    // TODO(zhongzc): change to `attached_tag` to keep `LocalStorage` one per thread.
     pub storage: LocalStorage,
-}
-
-/// Register a channel to notify thread creation events.
-pub fn register_storage_chan_tx(tx: Sender<LocalStorageRef>) {
-    STORAGE_CHANS.lock().unwrap().push(tx)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crossbeam::channel::unbounded;
-
-    #[test]
-    fn test_storage_chan() {
-        let (tx, rx) = unbounded();
-        register_storage_chan_tx(tx);
-        STORAGE.with(|_| {}); // Just to trigger registration.
-        std::thread::spawn(move || {
-            STORAGE.with(|_| {});
-        })
-        .join()
-        .unwrap();
-        let mut count = 0;
-        while let Ok(r) = rx.try_recv() {
-            assert_ne!(r.id, 0);
-            count += 1;
-        }
-        // This value may be greater than 2 if other test threads access `STORAGE` in parallel.
-        assert!(count >= 2);
-    }
 }

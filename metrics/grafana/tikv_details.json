@@ -15296,7 +15296,7 @@
           },
           "yaxes": [
             {
-              "format": "ops",
+              "format": "opm",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -16690,6 +16690,13 @@
               "intervalFactor": 2,
               "legendFormat": "{{instance}}-total",
               "refId": "B"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_local_read_executed_stale_read_requests{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (instance)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{instance}}-stale-read",
+              "refId": "C"
             }
           ],
           "thresholds": [],
@@ -29421,14 +29428,6 @@
               "interval": "",
               "legendFormat": "read_message",
               "refId": "C"
-            },
-            {
-              "exemplar": true,
-              "expr": "sum(rate(raft_engine_compact_duration_seconds_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
-              "hide": false,
-              "interval": "",
-              "legendFormat": "compact",
-              "refId": "D"
             }
           ],
           "thresholds": [],
@@ -29656,7 +29655,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(raft_engine_background_rewrite_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
+              "expr": "sum(rate(raft_engine_background_rewrite_bytes_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
               "hide": false,
               "interval": "",
               "legendFormat": "rewrite {{type}}",
@@ -30228,19 +30227,11 @@
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.99, sum(rate(raft_engine_compact_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
-              "hide": false,
-              "interval": "",
-              "legendFormat": "compact",
-              "refId": "F"
-            },
-            {
-              "exemplar": true,
-              "expr": "histogram_quantile(0.99, sum(rate(raft_engine_purge_expired_files_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(raft_engine_purge_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
               "hide": false,
               "interval": "",
               "legendFormat": "purge",
-              "refId": "H"
+              "refId": "E"
             }
           ],
           "thresholds": [],

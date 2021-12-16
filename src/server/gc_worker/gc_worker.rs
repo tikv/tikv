@@ -407,6 +407,8 @@ where
             "start_key" => %start_key, "end_key" => %end_key
         );
 
+        fail_point!("unsafe_destroy_range");
+
         self.flow_info_sender
             .send(FlowInfo::BeforeUnsafeDestroyRange)
             .unwrap();
@@ -1076,6 +1078,10 @@ mod tests {
                         let bytes = keys::data_key(key.as_encoded());
                         *key = Key::from_encoded(bytes);
                     }
+                    Modify::PessimisticLock(ref mut key, _) => {
+                        let bytes = keys::data_key(key.as_encoded());
+                        *key = Key::from_encoded(bytes);
+                    }
                     Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
                         let bytes = keys::data_key(key1.as_encoded());
                         *key1 = Key::from_encoded(bytes);
@@ -1098,6 +1104,9 @@ mod tests {
                     *key = Key::from_encoded(keys::data_key(key.as_encoded()));
                 }
                 Modify::Put(_, ref mut key, _) => {
+                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
+                }
+                Modify::PessimisticLock(ref mut key, _) => {
                     *key = Key::from_encoded(keys::data_key(key.as_encoded()));
                 }
                 Modify::DeleteRange(_, ref mut start_key, ref mut end_key, _) => {
@@ -1135,7 +1144,7 @@ mod tests {
     ) {
         let scan_res = block_on(storage.scan(
             Context::default(),
-            Key::from_encoded_slice(b""),
+            b"".to_vec(),
             None,
             expected_data.len() + 1,
             0,
@@ -1192,7 +1201,7 @@ mod tests {
             .map(|key| {
                 let mut value = b"value-".to_vec();
                 value.extend_from_slice(key);
-                Mutation::Put((Key::from_raw(key), value))
+                Mutation::make_put(Key::from_raw(key), value)
             })
             .collect();
         let primary = init_keys[0].clone();
@@ -1361,7 +1370,7 @@ mod tests {
             k.encode_u64(i).unwrap();
             let v = k.clone();
 
-            let mutation = Mutation::Put((Key::from_raw(&k), v));
+            let mutation = Mutation::make_put(Key::from_raw(&k), v);
 
             let lock_ts = 10 + i % 3;
 
