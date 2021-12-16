@@ -1,12 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::f64::INFINITY;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::{borrow::Cow, time::*};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use concurrency_manager::ConcurrencyManager;
 use configuration::Configuration;
@@ -29,7 +29,7 @@ use tikv::storage::txn::{
 };
 use tikv::storage::Statistics;
 use tikv_util::impl_display_as_debug;
-use tikv_util::time::Limiter;
+use tikv_util::time::{Instant, Limiter};
 use tikv_util::worker::Runnable;
 use txn_types::{Key, Lock, TimeStamp};
 use yatp::task::callback::{Handle, TaskCell};
@@ -194,7 +194,7 @@ impl BackupRange {
         };
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["snapshot"])
-            .observe(start_snapshot.elapsed().as_secs_f64());
+            .observe(start_snapshot.saturating_elapsed().as_secs_f64());
         let snap_store = SnapshotStore::new(
             snapshot,
             backup_ts,
@@ -283,7 +283,7 @@ impl BackupRange {
         }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["scan"])
-            .observe(start_scan.elapsed().as_secs_f64());
+            .observe(start_scan.saturating_elapsed().as_secs_f64());
 
         if writer.need_flush_keys() {
             match writer.save(&storage.storage) {
@@ -366,7 +366,7 @@ impl BackupRange {
         }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["raw_scan"])
-            .observe(start.elapsed().as_secs_f64());
+            .observe(start.saturating_elapsed().as_secs_f64());
         Ok(statistics)
     }
 

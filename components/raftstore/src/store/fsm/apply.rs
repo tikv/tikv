@@ -15,7 +15,10 @@ use std::time::Duration;
 use std::vec::Drain;
 use std::{cmp, usize};
 
-use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
+use batch_system::{
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
+    TrackedFsm,
+};
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::PerfContext;
@@ -555,7 +558,7 @@ where
             self.notifier.notify(apply_res);
         }
 
-        let elapsed = t.elapsed();
+        let elapsed = t.saturating_elapsed();
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(elapsed) as f64);
 
         slow_log!(
@@ -933,7 +936,7 @@ where
             if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
-                    if start.elapsed() >= apply_ctx.yield_duration {
+                    if start.saturating_elapsed() >= apply_ctx.yield_duration {
                         return ApplyResult::Yield;
                     }
                 }
@@ -1209,6 +1212,15 @@ where
         }
         if let Some(cmd) = self.pending_cmds.conf_change.take() {
             notify_stale_command(region_id, peer_id, self.term, cmd);
+        }
+    }
+
+    fn clear_all_commands_silently(&mut self) {
+        for mut cmd in self.pending_cmds.normals.drain(..) {
+            cmd.cb.take();
+        }
+        if let Some(mut cmd) = self.pending_cmds.conf_change.take() {
+            cmd.cb.take();
         }
     }
 
@@ -3317,7 +3329,7 @@ where
         loop {
             match drainer.next() {
                 Some(Msg::Apply { start, apply }) => {
-                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.elapsed_secs());
+                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.saturating_elapsed_secs());
                     self.handle_apply(apply_ctx, apply);
                     if let Some(ref mut state) = self.delegate.yield_state {
                         state.pending_msgs = drainer.collect();
@@ -3378,7 +3390,11 @@ where
     EK: KvEngine,
 {
     fn drop(&mut self) {
-        self.delegate.clear_all_commands_as_stale();
+        if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+            self.delegate.clear_all_commands_silently()
+        } else {
+            self.delegate.clear_all_commands_as_stale();
+        }
     }
 }
 
@@ -3433,48 +3449,51 @@ where
         unimplemented!()
     }
 
-    fn handle_normal(&mut self, normal: &mut ApplyFsm<EK>) -> Option<usize> {
-        let mut expected_msg_count = None;
+    fn handle_normal(
+        &mut self,
+        normal: &mut impl TrackedFsm<Target = ApplyFsm<EK>>,
+    ) -> HandleResult {
+        let mut handle_result = HandleResult::KeepProcessing;
         normal.delegate.handle_start = Some(Instant::now_coarse());
         if normal.delegate.yield_state.is_some() {
             if normal.delegate.wait_merge_state.is_some() {
                 // We need to query the length first, otherwise there is a race
                 // condition that new messages are queued after resuming and before
                 // query the length.
-                expected_msg_count = Some(normal.receiver.len());
+                handle_result = HandleResult::stop_at(normal.receiver.len(), false);
             }
             normal.resume_pending(&mut self.apply_ctx);
             if normal.delegate.wait_merge_state.is_some() {
                 // Yield due to applying CommitMerge, this fsm can be released if its
-                // channel msg count equals to expected_msg_count because it will receive
+                // channel msg count equals to last count because it will receive
                 // a new message if its source region has applied all needed logs.
-                return expected_msg_count;
+                return handle_result;
             } else if normal.delegate.yield_state.is_some() {
                 // Yield due to other reasons, this fsm must not be released because
                 // it's possible that no new message will be sent to itself.
                 // The remaining messages will be handled in next rounds.
-                return None;
+                return HandleResult::KeepProcessing;
             }
-            expected_msg_count = None;
+            handle_result = HandleResult::KeepProcessing;
         }
         fail_point!("before_handle_normal_3", normal.delegate.id() == 3, |_| {
-            None
+            HandleResult::KeepProcessing
         });
         fail_point!(
             "before_handle_normal_1003",
             normal.delegate.id() == 1003,
-            |_| { None }
+            |_| { HandleResult::KeepProcessing }
         );
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
                 Ok(msg) => self.msg_buf.push(msg),
                 Err(TryRecvError::Empty) => {
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
                     normal.delegate.stopped = true;
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
             }
@@ -3482,18 +3501,18 @@ where
         normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf);
         if normal.delegate.wait_merge_state.is_some() {
             // Check it again immediately as catching up logs can be very fast.
-            expected_msg_count = Some(0);
+            handle_result = HandleResult::stop_at(0, false);
         } else if normal.delegate.yield_state.is_some() {
             // Let it continue to run next time.
-            expected_msg_count = None;
+            handle_result = HandleResult::KeepProcessing;
         }
-        expected_msg_count
+        handle_result
     }
 
-    fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
+    fn end(&mut self, fsms: &mut [Option<impl TrackedFsm<Target = ApplyFsm<EK>>>]) {
         let is_synced = self.apply_ctx.flush();
         if is_synced {
-            for fsm in fsms {
+            for fsm in fsms.iter_mut().flatten() {
                 fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
             }
         }
@@ -3610,9 +3629,22 @@ where
                         "target region is not found, drop proposals";
                         "region_id" => region_id
                     );
-                    for p in apply.cbs.drain(..) {
-                        let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
-                        notify_region_removed(apply.region_id, apply.peer_id, cmd);
+                    // Invoking callback can release txn latch, if it's still leader, following
+                    // command may not read the writes of previous commands and break ACID. If
+                    // it's still leader, there are two possibility that mailbox is closed:
+                    // 1. The process is shutting down.
+                    // 2. The leader is destroyed. A leader won't propose to destroy itself, so
+                    //     it should either destroyed by older leaders or newer leaders. Leader
+                    //     won't respond to read until it has applied to current term, so no
+                    //     command will be proposed until command from older leaders have applied,
+                    //     which will then stop it from accepting proposals. If the command is
+                    //     proposed by new leader, then it won't be able to propose new proposals.
+                    // So only shutdown needs to be checked here.
+                    if !tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+                        for p in apply.cbs.drain(..) {
+                            let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
+                            notify_region_removed(apply.region_id, apply.peer_id, cmd);
+                        }
                     }
                     return;
                 }

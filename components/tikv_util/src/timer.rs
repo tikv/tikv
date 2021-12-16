@@ -85,9 +85,11 @@ lazy_static! {
 
 fn start_global_timer() -> Handle {
     let (tx, rx) = mpsc::channel();
+    let props = crate::thread_group::current_properties();
     Builder::new()
         .name(thd_name!("timer"))
         .spawn(move || {
+            crate::thread_group::set_properties(props);
             tikv_alloc::add_thread_memory_accessor();
             let mut timer = tokio_timer::Timer::default();
             tx.send(timer.handle()).unwrap();
@@ -203,6 +205,7 @@ fn start_global_steady_timer() -> SteadyTimer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::time::InstantExt;
     use futures::compat::Future01CompatExt;
     use futures::executor::block_on;
 
@@ -241,7 +244,7 @@ mod tests {
             handle.delay(::std::time::Instant::now() + std::time::Duration::from_millis(100));
         let timer = Instant::now();
         block_on(delay.compat()).unwrap();
-        assert!(timer.elapsed() >= Duration::from_millis(100));
+        assert!(timer.saturating_elapsed() >= Duration::from_millis(100));
     }
 
     #[test]
@@ -250,6 +253,6 @@ mod tests {
         let timer = t.clock.now();
         let delay = t.delay(Duration::from_millis(100));
         block_on(delay.compat()).unwrap();
-        assert!(timer.elapsed() >= Duration::from_millis(100));
+        assert!(timer.saturating_elapsed() >= Duration::from_millis(100));
     }
 }

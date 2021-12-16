@@ -2254,19 +2254,25 @@ impl Default for BackupConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
-    pub old_value_cache_size: usize,
     pub hibernate_regions_compatible: bool,
+    // TODO(hi-rustin): Consider resizing the thread pool based on `incremental_scan_threads`.
+    #[config(skip)]
     pub incremental_scan_threads: usize,
     pub incremental_scan_concurrency: usize,
     pub incremental_scan_speed_limit: ReadableSize,
+    pub sink_memory_quota: ReadableSize,
+    pub old_value_cache_memory_quota: ReadableSize,
+    // Deprecated! preserved for compatibility check.
+    #[config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub old_value_cache_size: usize,
 }
 
 impl Default for CdcConfig {
     fn default() -> Self {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
-            // Assumes 1KB per entry, 131072 (128 * 1024) takes about 128MB.
-            old_value_cache_size: 131072,
             hibernate_regions_compatible: true,
             // 4 threads for incremental scan.
             incremental_scan_threads: 4,
@@ -2275,15 +2281,18 @@ impl Default for CdcConfig {
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
+            // 512MB memory for CDC sink.
+            sink_memory_quota: ReadableSize::mb(512),
+            // 512MB memory for old value cache.
+            old_value_cache_memory_quota: ReadableSize::mb(512),
+            // Deprecated! preserved for compatibility check.
+            old_value_cache_size: 0,
         }
     }
 }
 
 impl CdcConfig {
-    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        if self.old_value_cache_size == 0 {
-            return Err("cdc.old-value-cache-size can't be 0".into());
-        }
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         if self.min_ts_interval == ReadableDuration::secs(0) {
             return Err("cdc.min-ts-interval can't be 0s".into());
         }
@@ -2992,6 +3001,7 @@ pub enum Module {
     Backup,
     PessimisticTxn,
     Gc,
+    CDC,
     Split,
     Unknown(String),
 }
@@ -3015,6 +3025,7 @@ impl From<&str> for Module {
             "backup" => Module::Backup,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
+            "cdc" => Module::CDC,
             n => Module::Unknown(n.to_owned()),
         }
     }
@@ -3759,7 +3770,7 @@ mod tests {
             old-value-cache-size = 0
         "#;
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap_err();
+        cfg.validate().unwrap();
 
         let content = r#"
             [cdc]
@@ -3789,5 +3800,31 @@ mod tests {
         "#;
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap_err();
+    }
+
+    #[test]
+    fn test_module_from_str() {
+        let cases = vec![
+            ("readpool", Module::Readpool),
+            ("server", Module::Server),
+            ("metric", Module::Metric),
+            ("raft_store", Module::Raftstore),
+            ("coprocessor", Module::Coprocessor),
+            ("pd", Module::Pd),
+            ("split", Module::Split),
+            ("rocksdb", Module::Rocksdb),
+            ("raft_engine", Module::RaftEngine),
+            ("storage", Module::Storage),
+            ("security", Module::Security),
+            ("import", Module::Import),
+            ("backup", Module::Backup),
+            ("pessimistic_txn", Module::PessimisticTxn),
+            ("gc", Module::Gc),
+            ("cdc", Module::CDC),
+            ("unknown", Module::Unknown("unknown".to_string())),
+        ];
+        for (name, module) in cases {
+            assert_eq!(Module::from(name), module);
+        }
     }
 }

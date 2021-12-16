@@ -3,7 +3,7 @@
 use std::collections::hash_map::Entry;
 use std::error::Error as StdError;
 use std::sync::{mpsc, Arc, Mutex, RwLock};
-use std::time::*;
+use std::time::Duration;
 use std::{result, thread};
 
 use futures::executor::block_on;
@@ -32,6 +32,8 @@ use raftstore::store::*;
 use raftstore::{Error, Result};
 use tikv::config::TiKvConfig;
 use tikv::server::Result as ServerResult;
+use tikv_util::thread_group::GroupProperties;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 use super::*;
@@ -124,7 +126,7 @@ pub trait Simulator {
 pub struct Cluster<T: Simulator> {
     pub cfg: TiKvConfig,
     leaders: HashMap<u64, metapb::Peer>,
-    count: usize,
+    pub count: usize,
 
     pub paths: Vec<TempDir>,
     pub dbs: Vec<Engines<RocksEngine, RocksEngine>>,
@@ -133,6 +135,7 @@ pub struct Cluster<T: Simulator> {
     pub engines: HashMap<u64, Engines<RocksEngine, RocksEngine>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
+    group_props: HashMap<u64, GroupProperties>,
 
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
@@ -158,6 +161,7 @@ impl<T: Simulator> Cluster<T> {
             engines: HashMap::default(),
             key_managers_map: HashMap::default(),
             labels: HashMap::default(),
+            group_props: HashMap::default(),
             sim,
             pd_client,
         }
@@ -221,6 +225,9 @@ impl<T: Simulator> Cluster<T> {
             let key_mgr = self.key_managers.last().unwrap().clone();
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
 
+            let props = GroupProperties::default();
+            tikv_util::thread_group::set_properties(Some(props.clone()));
+
             let mut sim = self.sim.wl();
             let node_id = sim.run_node(
                 0,
@@ -231,6 +238,7 @@ impl<T: Simulator> Cluster<T> {
                 router,
                 system,
             )?;
+            self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
             self.store_metas.insert(node_id, store_meta);
             self.key_managers_map.insert(node_id, key_mgr);
@@ -285,6 +293,9 @@ impl<T: Simulator> Cluster<T> {
                 .insert(Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP))))
                 .clone(),
         };
+        let props = GroupProperties::default();
+        self.group_props.insert(node_id, props.clone());
+        tikv_util::thread_group::set_properties(Some(props));
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim
@@ -296,13 +307,10 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn stop_node(&mut self, node_id: u64) {
         debug!("stopping node {}", node_id);
+        self.group_props[&node_id].mark_shutdown();
         match self.sim.write() {
             Ok(mut sim) => sim.stop_node(node_id),
-            Err(_) => {
-                if !thread::panicking() {
-                    panic!("failed to acquire write lock.")
-                }
-            }
+            Err(_) => safe_panic!("failed to acquire write lock."),
         }
         self.pd_client.shutdown_store(node_id);
         debug!("node {} stopped", node_id);
@@ -403,7 +411,9 @@ impl<T: Simulator> Cluster<T> {
                 e @ Err(_) => return e,
                 Ok(resp) => resp,
             };
-            if self.refresh_leader_if_needed(&resp, region_id) && timer.elapsed() < timeout {
+            if self.refresh_leader_if_needed(&resp, region_id)
+                && timer.saturating_elapsed() < timeout
+            {
                 warn!(
                     "{:?} is no longer leader, let's retry",
                     request.get_header().get_peer()
@@ -673,12 +683,9 @@ impl<T: Simulator> Cluster<T> {
         match self.sim.read() {
             Ok(s) => keys = s.get_node_ids(),
             Err(_) => {
-                if thread::panicking() {
-                    // Leave the resource to avoid double panic.
-                    return;
-                } else {
-                    panic!("failed to acquire read lock");
-                }
+                safe_panic!("failed to acquire read lock");
+                // Leave the resource to avoid double panic.
+                return;
             }
         }
         for id in keys {
@@ -735,7 +742,7 @@ impl<T: Simulator> Cluster<T> {
         let timer = Instant::now();
         let mut tried_times = 0;
         // At least retry once.
-        while tried_times < 2 || timer.elapsed() < timeout {
+        while tried_times < 2 || timer.saturating_elapsed() < timeout {
             tried_times += 1;
             let mut region = self.get_region(key);
             let region_id = region.get_id();
@@ -1018,7 +1025,7 @@ impl<T: Simulator> Cluster<T> {
             if truncated_state.get_index() >= index {
                 return;
             }
-            if timer.elapsed() >= Duration::from_secs(5) {
+            if timer.saturating_elapsed() >= Duration::from_secs(5) {
                 panic!(
                     "[region {}] log is still not truncated to {}: {:?} on store {}",
                     region_id, index, truncated_state, store_id,
@@ -1071,7 +1078,7 @@ impl<T: Simulator> Cluster<T> {
             if cur_index >= expected {
                 return;
             }
-            if timer.elapsed() >= timeout {
+            if timer.saturating_elapsed() >= timeout {
                 panic!(
                     "[region {}] last index still not reach {}: {:?}",
                     region_id, expected, raft_state
@@ -1175,7 +1182,7 @@ impl<T: Simulator> Cluster<T> {
                     return;
                 }
             }
-            if timer.elapsed() > Duration::from_secs(5) {
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
                 panic!(
                     "failed to transfer leader to [{}] {:?}, current leader: {:?}",
                     region_id, leader, cur_leader
@@ -1423,7 +1430,7 @@ impl<T: Simulator> Cluster<T> {
                 );
                 break;
             }
-            if timer.elapsed() > Duration::from_secs(60) {
+            if timer.saturating_elapsed() > Duration::from_secs(60) {
                 panic!("region {} is not removed after 60s.", region_id);
             }
             thread::sleep(Duration::from_millis(100));

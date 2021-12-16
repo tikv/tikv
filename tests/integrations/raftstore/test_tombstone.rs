@@ -2,13 +2,14 @@
 
 use std::sync::Arc;
 use std::thread;
-use std::time::*;
+use std::time::Duration;
 
 use crossbeam::channel;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 use protobuf::Message;
 use raft::eraftpb::MessageType;
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 
 use engine_rocks::raw::Writable;
 use engine_rocks::Compat;
@@ -320,7 +321,7 @@ fn test_safe_tombstone_gc() {
     let key = keys::region_state_key(r);
     let mut state: Option<RegionLocalState> = None;
     let timer = Instant::now();
-    while timer.elapsed() < Duration::from_secs(5) {
+    while timer.saturating_elapsed() < Duration::from_secs(5) {
         state = cluster.get_engine(4).c().get_msg_cf(CF_RAFT, &key).unwrap();
         if state.is_some() {
             break;

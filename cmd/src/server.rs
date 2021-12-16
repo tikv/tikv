@@ -16,9 +16,10 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{atomic::AtomicU64, Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
+use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
@@ -79,7 +80,8 @@ use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
     sys::sys_quota::SysQuota,
-    time::Monitor,
+    thread_group::GroupProperties,
+    time::{Instant, Monitor},
     timer::GLOBAL_TIMER_HANDLE,
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
 };
@@ -175,10 +177,12 @@ struct Servers<ER: RaftEngine> {
     node: Node<RpcClient, ER>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
+    cdc_memory_quota: MemoryQuota,
 }
 
 impl<ER: RaftEngine> TiKVServer<ER> {
     fn init(mut config: TiKvConfig) -> TiKVServer<ER> {
+        tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
         // used during startup process.
@@ -537,12 +541,16 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         };
 
         // The `DebugService` and `DiagnosticsService` will share the same thread pool
+        let props = tikv_util::thread_group::current_properties();
         let debug_thread_pool = Arc::new(
             Builder::new()
                 .threaded_scheduler()
                 .thread_name(thd_name!("debugger"))
                 .core_threads(1)
-                .on_thread_start(tikv_alloc::add_thread_memory_accessor)
+                .on_thread_start(move || {
+                    tikv_alloc::add_thread_memory_accessor();
+                    tikv_util::thread_group::set_properties(props.clone());
+                })
                 .on_thread_stop(tikv_alloc::remove_thread_memory_accessor)
                 .build()
                 .unwrap(),
@@ -601,9 +609,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cop_read_pools.handle()
         };
 
-        // Register cdc
+        // Register cdc.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // Register cdc config.
+        cfg_controller.register(
+            tikv::config::Module::CDC,
+            Box::new(CdcConfigManager(cdc_worker.scheduler())),
+        );
 
         let server_config = Arc::new(self.config.server.clone());
 
@@ -731,6 +744,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Start CDC.
+        let cdc_memory_quota = MemoryQuota::new(self.config.cdc.sink_memory_quota.0 as _);
         let cdc_endpoint = cdc::Endpoint::new(
             &self.config.cdc,
             self.pd_client.clone(),
@@ -741,6 +755,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.concurrency_manager.clone(),
             server.env(),
             self.security_mgr.clone(),
+            cdc_memory_quota.clone(),
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.to_stop.push(cdc_worker);
@@ -751,6 +766,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             node,
             importer,
             cdc_scheduler,
+            cdc_memory_quota,
         });
 
         server_config
@@ -850,7 +866,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
         backup_worker.start(backup_endpoint);
 
-        let cdc_service = cdc::Service::new(servers.cdc_scheduler.clone());
+        let cdc_service = cdc::Service::new(
+            servers.cdc_scheduler.clone(),
+            servers.cdc_memory_quota.clone(),
+        );
         if servers
             .server
             .register_service(create_change_data(cdc_service))
@@ -878,7 +897,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     fn init_metrics_flusher(&mut self, fetcher: BytesFetcher) {
         let handle = self.background_worker.clone_raw_handle();
         let mut interval = GLOBAL_TIMER_HANDLE
-            .interval(Instant::now(), DEFAULT_METRICS_FLUSH_INTERVAL)
+            .interval(std::time::Instant::now(), DEFAULT_METRICS_FLUSH_INTERVAL)
             .compat();
         let mut engine_metrics =
             EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
@@ -934,6 +953,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn stop(self) {
+        tikv_util::thread_group::mark_shutdown();
         let mut servers = self.servers.unwrap();
         servers
             .server
@@ -1206,7 +1226,7 @@ impl<R: RaftEngine> EngineMetricsManager<R> {
     pub fn flush(&mut self, now: Instant) {
         self.engines.kv.flush_metrics("kv");
         self.engines.raft.flush_metrics("raft");
-        if now.duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
+        if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
             self.engines.kv.reset_statistics();
             self.engines.raft.reset_statistics();
             self.last_reset = now;

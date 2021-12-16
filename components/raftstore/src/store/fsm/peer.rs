@@ -10,7 +10,9 @@ use std::{cmp, u64};
 use batch_system::{BasicMailbox, Fsm};
 use collections::HashMap;
 use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatchExt};
+use engine_traits::{
+    Engines, KvEngine, Mutable, RaftEngine, RaftLogBatch, SSTMetaInfo, WriteBatchExt,
+};
 use error_code::ErrorCodeExt;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SwitchMode;
@@ -236,6 +238,7 @@ where
         let mut region = metapb::Region::default();
         region.set_id(region_id);
 
+        HIBERNATED_PEER_STATE_GAUGE.awaken.inc();
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         Ok((
             tx,
@@ -508,7 +511,7 @@ where
                         .raft_metrics
                         .propose
                         .request_wait_time
-                        .observe(duration_to_sec(cmd.send_time.elapsed()) as f64);
+                        .observe(duration_to_sec(cmd.send_time.saturating_elapsed()) as f64);
                     let req_size = cmd.request.compute_size();
                     if self.fsm.batch_req_builder.can_batch(&cmd.request, req_size) {
                         self.fsm.batch_req_builder.add(cmd, req_size);
@@ -534,6 +537,16 @@ where
                 }
                 PeerMsg::Noop => {}
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
+                PeerMsg::Destroy(peer_id) => {
+                    if self.fsm.peer.peer_id() == peer_id {
+                        match self.fsm.peer.maybe_destroy(&self.ctx) {
+                            None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
+                            Some(job) => {
+                                self.handle_destroy_peer(job);
+                            }
+                        }
+                    }
+                }
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -914,25 +927,35 @@ where
         }
     }
 
-    pub fn collect_ready(&mut self) {
+    /// Collect ready if any.
+    ///
+    /// Returns false is no readiness is generated.
+    pub fn collect_ready(&mut self, offset: usize) -> bool {
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
         if !has_ready || self.fsm.stopped {
-            return;
+            return false;
         }
         self.ctx.pending_count += 1;
         self.ctx.has_ready = true;
+        let written = self.ctx.kv_wb.data_size() + self.ctx.raft_wb.size();
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
         if let Some(mut r) = res {
             // This bases on an assumption that fsm array passed in `end` method will have
             // the same order of processing.
-            r.batch_offset = self.ctx.processed_fsm_count;
+            r.batch_offset = offset;
             self.on_role_changed(&r.ready);
             if r.ctx.has_new_entries {
                 self.register_raft_gc_log_tick();
             }
-            self.ctx.ready_res.push(r);
+            if self.ctx.kv_wb.data_size() + self.ctx.raft_wb.size() != written {
+                self.ctx.ready_res.push(r);
+            } else {
+                self.ctx.readonly_ready_res.push(r);
+            }
+            return true;
         }
+        false
     }
 
     pub fn post_raft_ready_append(&mut self, ready: CollectedReady) {
@@ -1430,22 +1453,8 @@ where
         if util::is_epoch_stale(from_epoch, self.fsm.peer.region().get_region_epoch())
             && util::find_peer(self.fsm.peer.region(), from_store_id).is_none()
         {
-            let mut need_gc_msg = util::is_vote_msg(msg.get_message());
-            if msg.has_extra_msg() {
-                // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
-                // it is removed due to conf change or merge.
-                need_gc_msg |=
-                    msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
-                // For backward compatibility
-                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
-            }
-            // The message is stale and not in current region.
-            self.ctx.handle_stale_msg(
-                msg,
-                self.fsm.peer.region().get_region_epoch().clone(),
-                need_gc_msg,
-                None,
-            );
+            self.ctx
+                .handle_stale_msg(msg, self.fsm.peer.region().get_region_epoch().clone(), None);
             return true;
         }
 
@@ -1599,12 +1608,13 @@ where
             "peer_id" => self.fsm.peer_id(),
             "to_peer" => ?msg.get_to_peer(),
         );
-        match self.fsm.peer.maybe_destroy(&self.ctx) {
-            None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
-            Some(job) => {
-                self.handle_destroy_peer(job);
-            }
-        }
+
+        // Destroy peer in next round in order to apply more committed entries if any.
+        // It depends on the implementation that msgs which are handled in this round have already fetched.
+        let _ = self
+            .ctx
+            .router
+            .force_send(self.fsm.region_id(), PeerMsg::Destroy(self.fsm.peer_id()));
     }
 
     // Returns `Vec<(u64, bool)>` indicated (source_region_id, merge_to_this_peer) if the `msg`

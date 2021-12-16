@@ -13,6 +13,8 @@ use engine_rocks::Compat;
 use engine_traits::Peekable;
 use engine_traits::CF_RAFT;
 use test_raftstore::*;
+use tikv_util::config::ReadableDuration;
+use tikv_util::HandyRwLock;
 
 /// A helper function for testing the behaviour of the gc of stale peer
 /// which is out of region.
@@ -217,11 +219,16 @@ fn test_server_stale_peer_without_data_right_derive_when_split() {
     test_stale_peer_without_data(&mut cluster, true);
 }
 
-/// A help function for testing the behaviour of the gc of stale learner
-/// which is out or region.
+/// Test if a stale learner can be destroyed by sending ValidatePeer msg to
+/// PD then it will reply to this stale learner with a tombstone msg.
 #[test]
 fn test_stale_learner() {
     let mut cluster = new_server_cluster(0, 4);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::millis(150);
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(100);
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
     pd_client.disable_default_operator();
@@ -240,20 +247,79 @@ fn test_stale_learner() {
     pd_client.must_add_peer(r1, new_peer(4, 4));
 
     // It should not be deleted.
-    thread::sleep(Duration::from_secs(3));
+    thread::sleep(Duration::from_millis(200));
     must_get_equal(&engine3, b"k1", b"v1");
 
     // Promote the learner
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     // It should not be deleted.
-    thread::sleep(Duration::from_secs(3));
+    thread::sleep(Duration::from_millis(200));
     must_get_equal(&engine3, b"k1", b"v1");
 
     // Delete the learner
     pd_client.must_remove_peer(r1, new_peer(3, 3));
 
     // Check not leader should fail, all data should be removed.
+    must_get_none(&engine3, b"k1");
+    let state_key = keys::region_state_key(r1);
+    let state: RegionLocalState = engine3
+        .c()
+        .get_msg_cf(CF_RAFT, &state_key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.get_state(), PeerState::Tombstone);
+}
+
+/// Test if a stale learner can be destroyed by sending msg(like read index) to
+/// leader then it will reply to this stale learner with a tombstone msg.
+#[test]
+fn test_stale_learner_with_read_index() {
+    let mut cluster = new_server_cluster(0, 4);
+    // Do not rely on pd to remove stale peer
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::hours(2);
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::minutes(20);
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(10);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer number check
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_learner_peer(3, 3));
+    cluster.must_put(b"k1", b"v1");
+    let engine3 = cluster.get_engine(3);
+    must_get_equal(&engine3, b"k1", b"v1");
+
+    // And then isolate peer on store 3 from leader
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    // Delete the learner
+    pd_client.must_remove_peer(r1, new_learner_peer(3, 3));
+
+    cluster.clear_send_filters();
+
+    // Stale learner should exist
+    must_get_equal(&engine3, b"k1", b"v1");
+
+    let region = cluster.get_region(b"k1");
+
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cf_cmd("default", b"k1")],
+        false,
+    );
+    request.mut_header().set_peer(new_peer(3, 3));
+    request.mut_header().set_replica_read(true);
+    let (cb, _) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(3, request, cb)
+        .unwrap();
+
+    // Stale learner should be destroyed due to interaction between leader
     must_get_none(&engine3, b"k1");
     let state_key = keys::region_state_key(r1);
     let state: RegionLocalState = engine3

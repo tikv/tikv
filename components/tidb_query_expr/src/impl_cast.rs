@@ -80,9 +80,9 @@ fn get_cast_fn_rpn_meta(
         }
         (EvalType::Real, EvalType::Real) => {
             if to_field_type.is_unsigned() {
-                cast_real_as_signed_real_fn_meta()
-            } else {
                 cast_real_as_unsigned_real_fn_meta()
+            } else {
+                cast_real_as_signed_real_fn_meta()
             }
         }
         (EvalType::Bytes, EvalType::Real) => {

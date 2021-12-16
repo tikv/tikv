@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
-use std::time::Instant;
 
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::import_sstpb::SstMeta;
@@ -20,7 +19,7 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
-use tikv_util::escape;
+use tikv_util::{escape, time::Instant};
 
 use super::{AbstractPeer, RegionSnapshot};
 
@@ -430,7 +429,9 @@ pub enum PeerMsg<EK: KvEngine> {
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
     /// Result of applying committed entries. The message can't be lost.
-    ApplyRes { res: ApplyTaskRes<EK::Snapshot> },
+    ApplyRes {
+        res: ApplyTaskRes<EK::Snapshot>,
+    },
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg<EK::Snapshot>),
@@ -444,6 +445,7 @@ pub enum PeerMsg<EK: KvEngine> {
     HeartbeatPd,
     /// Asks region to change replication mode.
     UpdateReplicationMode,
+    Destroy(u64),
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
@@ -463,6 +465,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
+            PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
         }
     }
 }

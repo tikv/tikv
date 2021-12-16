@@ -277,6 +277,11 @@ where
 
 const DEFAULT_QPS_INFO_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_COLLECT_INTERVAL: Duration = Duration::from_secs(1);
+fn default_collect_interval() -> Duration {
+    #[cfg(feature = "failpoints")]
+    fail_point!("mock_collect_interval", |_| { Duration::from_millis(1) });
+    DEFAULT_COLLECT_INTERVAL
+}
 
 #[inline]
 fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
@@ -325,7 +330,7 @@ where
         &mut self,
         mut auto_split_controller: AutoSplitController,
     ) -> Result<(), io::Error> {
-        if self.collect_interval < DEFAULT_COLLECT_INTERVAL {
+        if self.collect_interval < default_collect_interval() {
             info!("it seems we are running tests, skip stats monitoring.");
             return Ok(());
         }
@@ -348,10 +353,12 @@ where
         self.sender = Some(sender);
 
         let scheduler = self.scheduler.clone();
+        let props = tikv_util::thread_group::current_properties();
 
         let h = Builder::new()
             .name(thd_name!("stats-monitor"))
             .spawn(move || {
+                tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
                 let mut thread_stats = ThreadInfoStatistics::new();
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(collect_interval) {
