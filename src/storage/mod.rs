@@ -376,9 +376,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ///
     /// When config.api_version = V1: accept request of V1 only.
     /// When config.api_version = V2: accept the following:
-    ///   * Request of V1 from TiDB, for compatiblity.
+    ///   * Request of V1 from TiDB, for compatibility.
     ///   * Request of V2 with legal prefix.
-    /// See rfc https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md for detail.
+    /// See the following for detail:
+    ///   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
+    ///   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
     fn check_api_version(
         storage_api_version: ApiVersion,
         req_api_version: ApiVersion,
@@ -1142,23 +1144,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         }
     }
 
-    // The entry point of all transaction commands. It checks transaction-specific constraints.
-    pub fn sched_txn_command<T: StorageCallbackType>(
-        &self,
-        cmd: TypedCommand<T>,
-        callback: Callback<T>,
-    ) -> Result<()> {
-        if self.api_version == ApiVersion::V1ttl {
-            return Err(box_err!(
-                "can't sched txn cmd({}) in API V1 with TTL enabled",
-                cmd.cmd.tag()
-            ));
-        }
-        self.sched_command(cmd, callback)
-    }
-
     // The entry point of the storage scheduler. Not only transaction commands need to access keys serially.
-    fn sched_command<T: StorageCallbackType>(
+    pub fn sched_txn_command<T: StorageCallbackType>(
         &self,
         cmd: TypedCommand<T>,
         callback: Callback<T>,
@@ -1171,25 +1158,34 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         match &cmd {
             Command::Prewrite(Prewrite { mutations, .. }) => {
-                check_key_size!(
-                    mutations.iter().map(|m| m.key().as_encoded()),
-                    self.max_key_size,
-                    callback
-                );
+                let keys = mutations.iter().map(|m| m.key().as_encoded());
+                Self::check_api_version(
+                    self.api_version,
+                    cmd.ctx().api_version,
+                    CommandKind::prewrite,
+                    keys.clone(),
+                )?;
+                check_key_size!(keys, self.max_key_size, callback);
             }
             Command::PrewritePessimistic(PrewritePessimistic { mutations, .. }) => {
-                check_key_size!(
-                    mutations.iter().map(|(m, _)| m.key().as_encoded()),
-                    self.max_key_size,
-                    callback
-                );
+                let keys = mutations.iter().map(|(m, _)| m.key().as_encoded());
+                Self::check_api_version(
+                    self.api_version,
+                    cmd.ctx().api_version,
+                    CommandKind::prewrite,
+                    keys.clone(),
+                )?;
+                check_key_size!(keys, self.max_key_size, callback);
             }
             Command::AcquirePessimisticLock(AcquirePessimisticLock { keys, .. }) => {
-                check_key_size!(
-                    keys.iter().map(|k| k.0.as_encoded()),
-                    self.max_key_size,
-                    callback
-                );
+                let keys = keys.iter().map(|k| k.0.as_encoded());
+                Self::check_api_version(
+                    self.api_version,
+                    cmd.ctx().api_version,
+                    CommandKind::prewrite,
+                    keys.clone(),
+                )?;
+                check_key_size!(keys, self.max_key_size, callback);
             }
             _ => {}
         }
@@ -2043,7 +2039,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             self.api_version,
             ctx,
         );
-        self.sched_command(cmd, cb)
+        self.sched_txn_command(cmd, cb)
     }
 
     pub fn raw_batch_put_atomic(
@@ -2093,7 +2089,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             }
         };
         let cmd = RawAtomicStore::new(cf, mutations, self.api_version, ctx);
-        self.sched_command(cmd, callback)
+        self.sched_txn_command(cmd, callback)
     }
 
     pub fn raw_batch_delete_atomic(
@@ -2118,7 +2114,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             })
             .collect();
         let cmd = RawAtomicStore::new(cf, muations, self.api_version, ctx);
-        self.sched_command(cmd, callback)
+        self.sched_txn_command(cmd, callback)
     }
 
     pub fn raw_checksum(
@@ -7664,6 +7660,10 @@ mod tests {
         rx.recv().unwrap();
     }
 
+    // Test check_api_version.
+    // See the following for detail:
+    //   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
+    //   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
     #[test]
     fn test_check_api_version() {
         use error_code::storage::*;
@@ -7685,7 +7685,7 @@ mod tests {
                 ApiVersion::V1,
                 ApiVersion::V1,
                 CommandKind::raw_get,
-                vec![RAW_KEY_CASE],
+                vec![RAW_KEY_CASE, TXN_KEY_CASE],
                 None,
             ),
             // storage api_version = V1ttl, allow RawKV request only.
@@ -7732,6 +7732,13 @@ mod tests {
                 ApiVersion::V1,
                 CommandKind::get,
                 vec![TIDB_KEY_CASE, TXN_KEY_CASE],
+                Some(INVALID_KEY_PREFIX),
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V1,
+                CommandKind::get,
+                vec![RAW_KEY_CASE],
                 Some(INVALID_KEY_PREFIX),
             ),
             // V2 api validation.
