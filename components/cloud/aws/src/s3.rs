@@ -601,7 +601,7 @@ mod tests {
         // set multi_part_size to use upload_part function
         config.multi_part_size = multi_part_size;
 
-        // split magic_contents into 3 parts, so we mock 4 request here( 1 begin + 3 part + 1 complete)
+        // split magic_contents into 3 parts, so we mock 5 request here( 1 begin + 3 part + 1 complete)
         let dispatcher = MultipleMockRequestDispatcher::new(vec![
             MockRequestDispatcher::with_status(200).with_body(
                 r#"<?xml version="1.0" encoding="UTF-8"?>
