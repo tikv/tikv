@@ -6,7 +6,7 @@ use std::f64::INFINITY;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use concurrency_manager::ConcurrencyManager;
 use configuration::Configuration;
@@ -905,6 +905,7 @@ fn to_sst_compression_type(ct: CompressionType) -> Option<SstCompressionType> {
 pub mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     use engine_traits::MiscExt;
     use external_storage::{make_local_backend, make_noop_backend};
