@@ -1811,7 +1811,7 @@ fn test_txn_api_version() {
         test_data.into_iter().enumerate()
     {
         let (cluster, leader, mut ctx) = must_new_and_configure_cluster(|cluster| {
-            cluster.cfg.staorge.set_api_version(storage_api_version)
+            cluster.cfg.storage.set_api_version(storage_api_version)
         });
         let env = Arc::new(Environment::new(1));
         let channel =
