@@ -173,16 +173,12 @@ impl Buffer for BatchMessageBuffer {
 
     #[inline]
     fn push(&mut self, msg: RaftMessage) {
-<<<<<<< HEAD
-        let mut msg_size = msg.start_key.len() + msg.end_key.len();
-=======
         let mut msg_size = msg.start_key.len()
             + msg.end_key.len()
             + msg.get_message().context.len()
             + msg.extra_ctx.len()
             // index: 3, term: 2, data tag and size: 3, entry tag and size: 3
             + 11 * msg.get_message().get_entries().len();
->>>>>>> c04fd4102... raftclient: count term and index in estimated size (#11493)
         for entry in msg.get_message().get_entries() {
             msg_size += entry.data.len();
         }
