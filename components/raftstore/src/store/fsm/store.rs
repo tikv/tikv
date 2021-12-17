@@ -18,11 +18,8 @@ use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use kvproto::import_sstpb::SstMeta;
-<<<<<<< HEAD
-use kvproto::kvrpcpb::LeaderInfo;
-=======
 use kvproto::import_sstpb::SwitchMode;
->>>>>>> e74276366... raftstore: fix TiKV delete files before ingesting (#10439)
+use kvproto::kvrpcpb::LeaderInfo;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
