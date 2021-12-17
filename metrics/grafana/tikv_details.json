@@ -35621,7 +35621,7 @@
         },
         {
           "type": "graph",
-          "title": "S3 request",
+          "title": "cloud request",
           "gridPos": {
             "x": 0,
             "y": 32,
@@ -35631,8 +35631,8 @@
           "id": 23763571993,
           "targets": [
             {
-              "expr": "sum(rate(s3_request_duration_seconds_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
-              "legendFormat": "{{type}}",
+              "expr": "sum(rate(tikv_cloud_request_duration_seconds_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (cloud, req)",
+              "legendFormat": "{{cloud}}-{{req}}",
               "interval": "",
               "exemplar": true,
               "refId": "A"

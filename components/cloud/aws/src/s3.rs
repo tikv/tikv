@@ -22,12 +22,12 @@ use tokio::time::{sleep, timeout};
 use cloud::blob::{
     none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
 };
+use cloud::metrics::CLOUD_REQUEST_HISTOGRAM_VEC;
 pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
 use tikv_util::debug;
 use tikv_util::stream::{error_stream, retry};
 use tikv_util::time::Instant;
 
-use crate::metrics::S3_REQUEST_HISTOGRAM_VEC;
 use crate::util;
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
@@ -416,8 +416,8 @@ impl<'client> S3Uploader<'client> {
                     ..Default::default()
                 })
                 .await;
-            S3_REQUEST_HISTOGRAM_VEC
-                .with_label_values(&["upload_part"])
+            CLOUD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["s3", "upload_part"])
                 .observe(start.saturating_elapsed().as_secs_f64());
             r
         })
@@ -477,8 +477,8 @@ impl<'client> S3Uploader<'client> {
                     ..Default::default()
                 })
                 .await;
-            S3_REQUEST_HISTOGRAM_VEC
-                .with_label_values(&["put_object"])
+            CLOUD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["s3", "put_object"])
                 .observe(start.saturating_elapsed().as_secs_f64());
             r
         })
@@ -629,8 +629,8 @@ mod tests {
             .await;
         assert!(resp.is_ok());
         assert_eq!(
-            S3_REQUEST_HISTOGRAM_VEC
-                .get_metric_with_label_values(&["upload_part"])
+            CLOUD_REQUEST_HISTOGRAM_VEC
+                .get_metric_with_label_values(&["s3", "upload_part"])
                 .unwrap()
                 .get_sample_count(),
             // length of magic_contents
