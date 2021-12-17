@@ -224,6 +224,7 @@ trait MockKvService {
         EstablishMppConnectionRequest,
         MppDataPacket
     );
+    unary_call!(is_alive, IsAliveRequest, IsAliveResponse);
     cstream_call!(raft, RaftMessage, Done);
     cstream_call!(batch_raft, BatchRaftMessage, Done);
     cstream_call!(snapshot, SnapshotChunk, Done);
@@ -341,6 +342,7 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
         EstablishMppConnectionRequest,
         MppDataPacket
     );
+    unary_call_dispatch!(is_alive, IsAliveRequest, IsAliveResponse);
     cstream_call_dispatch!(raft, RaftMessage, Done);
     cstream_call_dispatch!(batch_raft, BatchRaftMessage, Done);
     cstream_call_dispatch!(snapshot, SnapshotChunk, Done);
