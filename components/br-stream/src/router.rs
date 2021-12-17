@@ -19,7 +19,6 @@ use tidb_query_datatype::codec::table::decode_table_id;
 use tikv_util::{box_err, worker::Scheduler};
 use tokio::sync::Mutex;
 use txn_types::{Key, TimeStamp};
-// TODO: maybe replace it with tokio fs.
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
