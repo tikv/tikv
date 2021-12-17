@@ -531,14 +531,26 @@ struct TaskRange {
 mod tests {
     use crate::utils;
     use std::time::Duration;
-    use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+    use tikv_util::{
+        codec::number::NumberEncoder,
+        worker::{dummy_scheduler, ReceiverWrapper},
+    };
 
     use super::*;
 
+    #[derive(Debug)]
     struct KvEventsBuilder {
         region_id: u64,
         region_resolved_ts: u64,
         events: Vec<ApplyEvent>,
+    }
+
+    fn make_table_key(table_id: u64, key: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut table_key = b"t".to_vec();
+        table_key.encode_u64(table_id).unwrap();
+        Write::write_all(&mut table_key, key).unwrap();
+        table_key
     }
 
     impl KvEventsBuilder {
@@ -581,13 +593,15 @@ mod tests {
             }
         }
 
-        fn put(&mut self, cf: &'static str, key: &[u8], value: &[u8]) {
+        fn put_table(&mut self, cf: &'static str, table: u64, key: &[u8], value: &[u8]) {
+            let table_key = make_table_key(table, key);
             self.events
-                .push(self.put_event(cf, key.to_vec(), value.to_vec()));
+                .push(self.put_event(cf, table_key, value.to_vec()));
         }
 
-        fn delete(&mut self, cf: &'static str, key: &[u8]) {
-            self.events.push(self.delete_event(cf, key.to_owned()));
+        fn delete_table(&mut self, cf: &'static str, table: u64, key: &[u8]) {
+            let table_key = make_table_key(table, key);
+            self.events.push(self.delete_event(cf, table_key));
         }
 
         fn flush_events(&mut self) -> Vec<ApplyEvent> {
@@ -628,22 +642,30 @@ mod tests {
         tokio::fs::create_dir_all(&tmp).await?;
         let (tx, rx) = dummy_scheduler();
         let mut router = RouterInner::new(tmp.clone(), tx, 32);
-        router.register_ranges("dummy", vec![(b"zt1".to_vec(), b"zt2".to_vec())]);
+        router.register_ranges(
+            "dummy",
+            vec![(
+                utils::wrap_key(make_table_key(1, b"")),
+                utils::wrap_key(make_table_key(2, b"")),
+            )],
+        );
         let now = TimeStamp::physical_now();
         let mut region1 = KvEventsBuilder::new(1, now);
-        region1.put(CF_DEFAULT, b"t1_hello", b"world");
-        region1.put(CF_WRITE, b"t1_hello", b"this isn't a write record :3");
-        region1.put(CF_WRITE, b"t1_bonjour", b"this isn't a write record :3");
-        region1.put(CF_WRITE, b"t1_nihao", b"this isn't a write record :3");
-        region1.put(CF_WRITE, b"t2_hello", b"this isn't a write record :3");
-        region1.put(CF_WRITE, b"t1_hello", b"still isn't a write record :3");
-        region1.delete(CF_DEFAULT, b"t1_hello");
+        region1.put_table(CF_DEFAULT, 1, b"hello", b"world");
+        region1.put_table(CF_WRITE, 1, b"hello", b"this isn't a write record :3");
+        region1.put_table(CF_WRITE, 1, b"bonjour", b"this isn't a write record :3");
+        region1.put_table(CF_WRITE, 1, b"nihao", b"this isn't a write record :3");
+        region1.put_table(CF_WRITE, 2, b"hello", b"this isn't a write record :3");
+        region1.put_table(CF_WRITE, 1, b"hello", b"still isn't a write record :3");
+        region1.delete_table(CF_DEFAULT, 1, b"hello");
+        println!("{:?}", region1);
         let events = region1.flush_events();
         let start_ts = TimeStamp::physical_now();
         for event in events {
             router.on_event(event).await?;
         }
         let end_ts = TimeStamp::physical_now();
+        println!("{:?}", router);
         let files = router.take_temporary_files("dummy")?;
         let meta = files.generate_metadata().await?;
         assert_eq!(meta.files.len(), 3);
