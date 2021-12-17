@@ -3,10 +3,13 @@
 use crate::localstorage::LocalStorage;
 use crate::metrics::STAT_TASK_COUNT;
 use crate::recorder::SubRecorder;
-use crate::utils;
-use crate::utils::Stat;
-use crate::{RawRecord, RawRecords, SharedTagPtr};
+use crate::utils::{self, Stat};
+use crate::TagInfos;
+use crate::{RawRecord, RawRecords};
 
+use std::sync::Arc;
+
+use arc_swap::ArcSwapOption;
 use collections::HashMap;
 use fail::fail_point;
 
@@ -26,11 +29,10 @@ impl SubRecorder for CpuRecorder {
     fn tick(&mut self, records: &mut RawRecords, _: &mut HashMap<usize, LocalStorage>) {
         let records = &mut records.records;
         self.thread_stats.iter_mut().for_each(|(tid, thread_stat)| {
-            let cur_tag = thread_stat.shared_ptr.take_clone();
+            let cur_tag = thread_stat.attached_tag.load_full();
             fail_point!(
                 "cpu-record-test-filter",
                 cur_tag.as_ref().map_or(false, |t| !t
-                    .infos
                     .extra_attachment
                     .starts_with(crate::TEST_TAG_PREFIX)),
                 |_| {}
@@ -69,11 +71,11 @@ impl SubRecorder for CpuRecorder {
         }
     }
 
-    fn thread_created(&mut self, id: usize, shared_ptr: SharedTagPtr) {
+    fn thread_created(&mut self, id: usize, attached_tag: Arc<ArcSwapOption<TagInfos>>) {
         self.thread_stats.insert(
             id,
             ThreadStat {
-                shared_ptr,
+                attached_tag,
                 stat: Stat::default(),
             },
         );
@@ -81,7 +83,7 @@ impl SubRecorder for CpuRecorder {
 }
 
 struct ThreadStat {
-    shared_ptr: SharedTagPtr,
+    attached_tag: Arc<ArcSwapOption<TagInfos>>,
     stat: Stat,
 }
 
@@ -104,7 +106,7 @@ mod tests {
 mod tests {
     use super::*;
     use crate::{utils, RawRecords, TagInfos};
-    use std::sync::atomic::AtomicPtr;
+    use arc_swap::ArcSwapOption;
     use std::sync::Arc;
 
     fn heavy_job() -> u64 {
@@ -126,11 +128,9 @@ mod tests {
             peer_id: 0,
             extra_attachment: b"abc".to_vec(),
         });
-        let shared_ptr = SharedTagPtr {
-            ptr: Arc::new(AtomicPtr::new(Arc::into_raw(info) as _)),
-        };
+        let attached_tag = Arc::new(ArcSwapOption::new(Some(info)));
         let mut recorder = CpuRecorder::default();
-        recorder.thread_created(utils::thread_id(), shared_ptr);
+        recorder.thread_created(utils::thread_id(), attached_tag);
         let thread_id = utils::thread_id();
         let prev_stat = &recorder.thread_stats.get(&thread_id).unwrap().stat;
         let prev_cpu_ticks = prev_stat.utime.wrapping_add(prev_stat.stime);
