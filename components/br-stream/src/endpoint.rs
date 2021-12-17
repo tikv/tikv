@@ -2,7 +2,10 @@
 
 use std::fs::OpenOptions;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::{fmt, io::Write};
+
+use engine_traits::CF_LOCK;
 
 use tokio::io::Result as TokioResult;
 use tokio::runtime::Runtime;
@@ -15,6 +18,7 @@ use crate::{errors::Result, observer::BackupStreamObserver};
 use kvproto::raft_cmdpb::{CmdType, Request};
 use online_config::ConfigChange;
 use raftstore::coprocessor::{Cmd, CmdBatch};
+use tidb_query_datatype::codec::table::decode_table_id;
 use tikv::config::BackupStreamConfig;
 use tikv_util::worker::{Runnable, Scheduler};
 use tikv_util::{debug, error, info};
@@ -23,12 +27,13 @@ pub struct Endpoint<S: MetaStore + 'static> {
     #[allow(dead_code)]
     config: BackupStreamConfig,
     meta_client: Option<MetadataClient<S>>,
-    range_router: Router,
+    range_router: Arc<Mutex<Router>>,
     #[allow(dead_code)]
     scheduler: Scheduler<Task>,
     #[allow(dead_code)]
     observer: BackupStreamObserver,
     pool: Runtime,
+    store_id: u64,
 }
 
 impl Endpoint<EtcdStore> {
@@ -54,7 +59,7 @@ impl Endpoint<EtcdStore> {
             }
         };
 
-        let range_router = Router::new();
+        let range_router = Arc::new(Mutex::new(Router::new()));
 
         if cli.is_none() {
             // unable to connect to etcd
@@ -67,6 +72,7 @@ impl Endpoint<EtcdStore> {
                 scheduler,
                 observer,
                 pool,
+                store_id,
             };
         }
 
@@ -86,6 +92,7 @@ impl Endpoint<EtcdStore> {
             scheduler,
             observer,
             pool,
+            store_id,
         }
     }
 }
@@ -100,18 +107,19 @@ where
         scheduler: Scheduler<Task>,
     ) -> Result<()> {
         let tasks = meta_client.get_tasks().await?;
-        let mut watcher = meta_client.events_from(tasks.revision).await?;
         for task in tasks.inner {
-            info!("starts watch task {:?} from backup stream", task);
+            info!("watch task"; "task" => ?task);
             // move task to schedule
             if let Err(e) = scheduler.schedule(Task::WatchTask(task)) {
                 // TODO build a error handle mechanism #error 3
                 error!("backup stream schedule task failed"; "error" => ?e);
             }
         }
+
+        let mut watcher = meta_client.events_from(tasks.revision).await?;
         loop {
             if let Some(event) = watcher.stream.next().await {
-                debug!("backup stream received {:?} from etcd", event);
+                info!("watch event from etcd"; "event" => ?event);
                 match event {
                     MetadataEvent::AddTask { task } => {
                         let t = meta_client.get_task(&task).await?;
@@ -146,26 +154,40 @@ where
     fn backup_file_name(
         &self,
         task_name: String,
+        store_id: u64,
         table_id: u64,
         region_id: u64,
         cf: &str,
         t: &str,
     ) -> String {
-        format!("{}{}{}-{}-{}.log", task_name, table_id, region_id, cf, t)
+        format!(
+            "{}-{}-{}-{}-{}-{}.log",
+            task_name, store_id, table_id, region_id, cf, t
+        )
     }
 
     // backup kv event to file.
     fn backup_file(&self, t: CmdType, key: Vec<u8>, value: Vec<u8>, cf: String) {
-        if self.range_router.key_in_ranges(&key) {
+        if cf == CF_LOCK {
+            return;
+        }
+        if !self.range_router.lock().unwrap().key_in_ranges(&key) {
             // drop the key not in filter
             return;
         }
-        if let Some(task) = self.range_router.get_task_by_key(&key) {
+        debug!(
+            "backup kv";
+            "cmdtype" => ?t,
+            "cf" => ?cf,
+            "key" => &log_wrappers::Value::key(&key),
+        );
+        if let Some(task) = self.range_router.lock().unwrap().get_task_by_key(&key) {
             let cmd_type = if t == CmdType::Put { "put" } else { "delete" };
-            let name = self.backup_file_name(task, 0, 0, &cf, cmd_type);
+            let table_id = decode_table_id(&key).unwrap_or(0) as u64;
+            let name = self.backup_file_name(task, self.store_id, table_id, 0, &cf, cmd_type);
             let file = PathBuf::from(self.config.streaming_path.clone()).join(name);
             let mut file = OpenOptions::new()
-                .write(true)
+                .create(true)
                 .append(true)
                 .open(file)
                 .unwrap();
@@ -175,7 +197,10 @@ where
             }
         } else {
             // TODO handle this error
-            error!("backup stream not found task by given key failed"; "key" => ?key);
+            error!(
+                "backup stream not found task by given key failed";
+                "key" => &log_wrappers::Value::key(&key),
+            );
         }
     }
 
@@ -227,14 +252,24 @@ where
     pub fn on_register(&self, task: MetaTask) {
         if let Some(cli) = self.meta_client.as_ref() {
             let cli = cli.clone();
-            let mut range_router = self.range_router.clone();
+            let range_router = self.range_router.clone();
+
+            info!("register task {:?}", task);
+
             self.pool.block_on(async move {
                 let task_name = task.info.get_name();
                 match cli.ranges_of_task(task_name).await {
                     Ok(ranges) => {
-                        debug!("backup stream register ranges to observer");
+                        debug!(
+                            "backup stream {:?} ranges len {:?}",
+                            task,
+                            ranges.inner.len()
+                        );
                         // TODO implement register ranges
-                        range_router.register_ranges(task_name, ranges.inner);
+                        range_router
+                            .lock()
+                            .unwrap()
+                            .register_ranges(task_name, ranges.inner);
                     }
                     Err(e) => {
                         error!("backup stream get tasks failed"; "error" => ?e);

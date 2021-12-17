@@ -1,6 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use std::collections::BTreeMap;
 
+use tikv_util::debug;
+use txn_types::Key;
+
 /// An Router for Backup Stream.
 ///
 /// It works as a table-filter.
@@ -28,11 +31,17 @@ impl Router {
         // 2. route kv event to the corresponding file.
 
         for range in ranges {
-            let key_range = KeyRange(range.0);
+            let key_range = KeyRange(Key::from_raw(&range.0).into_encoded());
             let task_range = TaskRange {
-                end: range.1,
+                end: Key::from_raw(&range.1).into_encoded(),
                 task_name: task_name.to_string(),
             };
+            debug!(
+                "register observe range";
+                "task_name" => task_name,
+                "start_key" => &log_wrappers::Value::key(&key_range.0),
+                "end_key" => &log_wrappers::Value::key(&task_range.end),
+            );
             self.ranges.insert(key_range, task_range);
         }
     }

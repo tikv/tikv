@@ -419,6 +419,7 @@ dependencies = [
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "online_config",
  "prometheus",
  "protobuf",
@@ -428,11 +429,13 @@ dependencies = [
  "slog",
  "slog-global",
  "thiserror",
+ "tidb_query_datatype",
  "tikv",
  "tikv_alloc",
  "tikv_util",
  "tokio",
  "tokio-stream",
+ "txn_types",
 ]
 
 [[package]]

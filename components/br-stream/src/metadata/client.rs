@@ -76,18 +76,6 @@ impl MetadataEvent {
     }
 }
 
-/// extract the start key and the end key from a metadata key-value pair.
-/// example: `KeyValue(<prefix>/ranges/<start-key>, <end-key>) -> (<start-key>, <end-key>)`
-fn take_range(kv: &mut KeyValue) -> (Vec<u8>, Vec<u8>) {
-    let key = kv.take_key();
-    (
-        super::keys::extract_range_from_key(key.as_slice())
-            .map(|v| v.to_vec())
-            .unwrap_or(key),
-        kv.take_value(),
-    )
-}
-
 impl<Store: MetaStore> MetadataClient<Store> {
     /// create a new store.
     /// the store_id should be the store id of current TiKV.
@@ -206,7 +194,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
             revision: snap.revision(),
             inner: ranges
                 .into_iter()
-                .map(|mut kv| take_range(&mut kv))
+                .map(|mut kv: KeyValue| kv.take_range(task_name))
                 .collect(),
         })
     }
@@ -224,6 +212,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_range_search"]).observe(now.saturating_elapsed().as_secs_f64())
         }
         let snap = self.meta_store.snapshot().await?;
+
         let mut prev = snap
             .get_extra(
                 Keys::Range(
@@ -248,11 +237,11 @@ impl<Store: MetaStore> MetadataClient<Store> {
         if !prev.kvs.is_empty() {
             let kv = &mut prev.kvs[0];
             if kv.value() > start_key.as_slice() {
-                result.push(take_range(kv));
+                result.push(kv.take_range(task_name));
             }
         }
         for mut kv in all {
-            result.push(take_range(&mut kv));
+            result.push(kv.take_range(task_name));
         }
         Ok(WithRevision {
             revision: snap.revision(),
