@@ -712,11 +712,11 @@ impl ImportDir {
         let meta_info = sst_reader.sst_meta_info(meta.to_owned());
 
         super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_deref())?;
-        let length = meta.get_length();
+        let ingest_bytes = meta_info.total_bytes;
 
         // TODO check the length and crc32 of ingested file.
         engine.reset_global_seq(cf, &path.clone)?;
-        IMPORTER_INGEST_BYTES.observe(length as _);
+        IMPORTER_INGEST_BYTES.observe(ingest_bytes as _);
 
         let mut opts = E::IngestExternalFileOptions::new();
         opts.move_files(true);
