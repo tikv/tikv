@@ -176,7 +176,6 @@ impl Buffer for BatchMessageBuffer {
         let mut msg_size = msg.start_key.len()
             + msg.end_key.len()
             + msg.get_message().context.len()
-            + msg.extra_ctx.len()
             // index: 3, term: 2, data tag and size: 3, entry tag and size: 3
             + 11 * msg.get_message().get_entries().len();
         for entry in msg.get_message().get_entries() {
