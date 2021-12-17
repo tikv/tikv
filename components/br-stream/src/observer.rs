@@ -3,8 +3,8 @@ use engine_traits::KvEngine;
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::coprocessor::*;
-use tikv_util::warn;
 use tikv_util::worker::Scheduler;
+use tikv_util::{debug, warn};
 
 use crate::endpoint::Task;
 
@@ -47,13 +47,21 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
         _engine: &E,
     ) {
         assert!(!cmd_batches.is_empty());
-        if max_level < ObserveLevel::All {
+        debug!(
+            "observe stream kv";
+            "cmd_batches len" => cmd_batches.len(),
+            "level" => ?max_level,
+        );
+
+        // br stream observe write_cf and default_cf
+        if max_level == ObserveLevel::None {
             return;
         }
+
         // TODO may be we should filter cmd batch here, to reduce the cost of clone.
         let cmd_batches: Vec<_> = cmd_batches
             .iter()
-            .filter(|cb| cb.level == ObserveLevel::All && !cb.is_empty())
+            .filter(|cb| !cb.is_empty() && cb.level > ObserveLevel::None)
             .cloned()
             .collect();
         if cmd_batches.is_empty() {

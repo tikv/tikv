@@ -25,7 +25,10 @@ tokio-stream = "0.1"
 protobuf = { version = "2.8", features = ["bytes"] }
 regex = "1"
 tikv_util = {path = "../tikv_util"}
+txn_types = { path = "../txn_types", default-features = false }
 tikv_alloc = {path = "../tikv_alloc"}
+tidb_query_datatype = {path = "../tidb_query_datatype"}
+log_wrappers = { path = "../log_wrappers" }
 lazy_static = "1.4"
 futures = "0.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }

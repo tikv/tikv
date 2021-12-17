@@ -1,7 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use bytes::BufMut;
-use lazy_static::lazy_static;
-use regex::bytes::Regex as ByteRegex;
 
 const PREFIX: &str = "/tidb/br-stream";
 const PATH_INFO: &str = "/info";
@@ -10,11 +8,6 @@ const PATH_RANGES: &str = "/ranges";
 const PATH_PAUSE: &str = "/pause";
 // Note: maybe use something like `const_fmt` for concatenating constant strings?
 const TASKS_PREFIX: &str = "/tidb/br-stream/info/";
-lazy_static! {
-    static ref EXTRACT_KEY_FROM_PATH_RE: ByteRegex =
-        ByteRegex::new(r"^/tidb/br-stream/ranges/(?P<task_name>[0-9a-zA-Z_]+)/(?P<start_key>.+)$")
-            .unwrap();
-}
 
 /// A key that associates to some metadata.
 ///
@@ -60,6 +53,13 @@ impl KeyValue {
     pub fn take_value(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.1)
     }
+
+    /// Take the start-key and end-key from a metadata key-value pair.
+    /// example: `KeyValue(<prefix>/ranges/<start-key>, <end-key>) -> (<start-key>, <end-key>)`
+    pub fn take_range(&mut self, task_name: &str) -> (Vec<u8>, Vec<u8>) {
+        let prefix_len = MetaKey::ranges_prefix_len(task_name);
+        (self.take_key()[prefix_len..].to_vec(), self.take_value())
+    }
 }
 
 impl From<MetaKey> for Vec<u8> {
@@ -82,6 +82,11 @@ impl MetaKey {
     /// the path prefix for the ranges of some tasks.
     pub fn ranges_of(name: &str) -> Self {
         Self(format!("{}{}/{}/", PREFIX, PATH_RANGES, name).into_bytes())
+    }
+
+    /// Get the length of ranges prefix
+    pub fn ranges_prefix_len(name: &str) -> usize {
+        PREFIX.len() + PATH_RANGES.len() + 1 + name.len() + 1
     }
 
     /// Generate the prefix key of some task.
@@ -135,11 +140,4 @@ impl MetaKey {
 /// extract the task name from the task info path.
 pub fn extract_name_from_info(full_path: &str) -> Option<&str> {
     full_path.strip_prefix(TASKS_PREFIX)
-}
-
-/// extract the range from the key path.
-pub fn extract_range_from_key(full_path: &[u8]) -> Option<&[u8]> {
-    let caps = EXTRACT_KEY_FROM_PATH_RE.captures(full_path)?;
-    let start_key = caps.name("start_key")?;
-    Some(start_key.as_bytes())
 }

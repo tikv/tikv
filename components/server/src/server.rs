@@ -800,6 +800,32 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             )),
         );
 
+        // Start backup stream
+        if self.config.backup_stream.enable_streaming {
+            // Create backup stream.
+            let mut backup_stream_worker = Box::new(LazyWorker::new("br-stream"));
+            let backup_stream_scheduler = backup_stream_worker.scheduler();
+
+            // Register backup-stream observer.
+            let backup_stream_ob = BackupStreamObserver::new(backup_stream_scheduler.clone());
+            backup_stream_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+            // Register config manager.
+            cfg_controller.register(
+                tikv::config::Module::BackupStream,
+                Box::new(BackupStreamConfigManager(backup_stream_worker.scheduler())),
+            );
+
+            let backup_stream_endpoint = br_stream::Endpoint::new::<String>(
+                node.id(),
+                &self.config.pd.endpoints,
+                self.config.backup_stream.clone(),
+                backup_stream_scheduler,
+                backup_stream_ob,
+            );
+            backup_stream_worker.start(backup_stream_endpoint);
+            self.to_stop.push(backup_stream_worker);
+        }
+
         let import_path = self.store_path.join("import");
         let mut importer = SSTImporter::new(
             &self.config.import,
@@ -894,30 +920,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.config.storage.ttl_check_poll_interval.into(),
             ));
             self.to_stop.push(ttl_checker);
-        }
-
-        if self.config.backup_stream.enable_streaming {
-            // Create backup stream.
-            let mut backup_stream_worker = Box::new(LazyWorker::new("br-stream"));
-            let backup_stream_scheduler = backup_stream_worker.scheduler();
-
-            // Register backup-stream observer.
-            let backup_stream_ob = BackupStreamObserver::new(backup_stream_scheduler.clone());
-            backup_stream_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-            // Register config manager.
-            cfg_controller.register(
-                tikv::config::Module::BackupStream,
-                Box::new(BackupStreamConfigManager(backup_stream_worker.scheduler())),
-            );
-
-            let backup_stream_endpoint = br_stream::Endpoint::new::<String>(
-                node.id(),
-                &self.config.pd.endpoints,
-                self.config.backup_stream.clone(),
-                backup_stream_scheduler,
-                backup_stream_ob,
-            );
-            backup_stream_worker.start(backup_stream_endpoint);
         }
 
         // Start CDC.
