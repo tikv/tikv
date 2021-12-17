@@ -400,6 +400,7 @@ mod tests {
         must_pessimistic_prewrite_delete, must_prewrite_delete, must_prewrite_lock,
         must_prewrite_put, must_prewrite_put_impl, must_rollback,
     };
+    use kvproto::kvrpcpb::{Assertion, AssertionLevel};
 
     fn new_multi_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -1082,6 +1083,8 @@ mod tests {
             100.into(), /* min_commit_ts */
             TimeStamp::default(),
             false,
+            Assertion::None,
+            AssertionLevel::Off,
         );
         must_get_value(&mut build_getter(85, vec![], vec![80]), key, val);
         must_rollback(&engine, key, 80, false);

@@ -11,7 +11,7 @@ use crossbeam::atomic::AtomicCell;
 use engine_rocks::PROP_MAX_TS;
 use engine_traits::{
     KvEngine, Range, Snapshot as EngineSnapshot, TablePropertiesCollection, TablePropertiesExt,
-    UserCollectedProperties, CF_WRITE,
+    UserCollectedProperties, CF_DEFAULT, CF_WRITE,
 };
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
@@ -39,14 +39,14 @@ use tikv::config::CdcConfig;
 use tikv::storage::kv::{PerfStatisticsInstant, Snapshot};
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
-use tikv::storage::{Cursor, Statistics};
+use tikv::storage::Statistics;
 use tikv_kv::PerfStatisticsDelta;
 use tikv_util::codec::number;
 use tikv_util::sys::inspector::{self_thread_inspector, ThreadInspector};
 use tikv_util::time::{Instant, Limiter};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
-use tikv_util::{box_err, debug, error, impl_display_as_debug, info, warn};
+use tikv_util::{box_err, debug, error, impl_display_as_debug, info, warn, Either};
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::{Mutex, Semaphore};
 use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, TxnExtra, TxnExtraScheduler};
@@ -54,7 +54,9 @@ use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, TxnExtra, TxnExtraSche
 use crate::channel::{CdcEvent, MemoryQuota, SendError};
 use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
-use crate::old_value::{OldValueCache, OldValueCallback, OldValueReader};
+use crate::old_value::{
+    near_seek_old_value, new_old_value_cursor, OldValueCache, OldValueCallback, OldValueCursors,
+};
 use crate::service::{Conn, ConnID, FeatureGate};
 use crate::{CdcObserver, Error, Result};
 
@@ -642,6 +644,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
 
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
         fail_point!("cdc_before_handle_multi_batch", |_| {});
+        let mut statistics = Statistics::default();
         for batch in multi {
             let region_id = batch.region_id;
             let mut deregister = None;
@@ -650,7 +653,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     // Skip the batch if the delegate has failed.
                     continue;
                 }
-                if let Err(e) = delegate.on_batch(batch, &old_value_cb, &mut self.old_value_cache) {
+                if let Err(e) = delegate.on_batch(
+                    batch,
+                    &old_value_cb,
+                    &mut self.old_value_cache,
+                    &mut statistics,
+                ) {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the delegate.
                     deregister = Some(Deregister::Delegate {
@@ -664,6 +672,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 self.on_deregister(deregister);
             }
         }
+        flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
     }
 
     fn on_region_ready(&mut self, observe_id: ObserveID, resolver: Resolver, region: Region) {
@@ -1087,12 +1096,14 @@ impl<E: KvEngine> Initializer<E> {
             None
         };
 
-        let (mut hint_min_ts, mut old_value_reader, mut old_value_cursor) = (None, None, None);
+        let (mut hint_min_ts, mut old_value_cursors) = (None, None);
         if self.txn_extra_op == TxnExtraOp::Noop {
             hint_min_ts = Some(self.checkpoint_ts);
         } else if self.ts_filter_is_helpful(&snap) {
             hint_min_ts = Some(self.checkpoint_ts);
-            old_value_reader = Some(OldValueReader::new(snap.clone()));
+            let wc = new_old_value_cursor(&snap, CF_WRITE);
+            let dc = new_old_value_cursor(&snap, CF_DEFAULT);
+            old_value_cursors = Some(OldValueCursors::new(wc, dc));
         }
 
         // Time range: (checkpoint_ts, max]
@@ -1118,14 +1129,9 @@ impl<E: KvEngine> Initializer<E> {
                     "conn_id" => ?conn_id);
                 return Err(box_err!("scan canceled"));
             }
-            let entries = self
-                .scan_batch(
-                    &mut scanner,
-                    old_value_reader.as_mut(),
-                    &mut old_value_cursor,
-                    resolver.as_mut(),
-                )
-                .await?;
+            let cursors = old_value_cursors.as_mut();
+            let resolver = resolver.as_mut();
+            let entries = self.scan_batch(&mut scanner, cursors, resolver).await?;
             if let Some(None) = entries.last() {
                 // If the last element is None, it means scanning is finished.
                 done = true;
@@ -1149,14 +1155,26 @@ impl<E: KvEngine> Initializer<E> {
     fn do_scan<S: Snapshot>(
         &self,
         scanner: &mut DeltaScanner<S>,
-        mut old_value_reader: Option<&mut OldValueReader<S>>,
-        old_value_cursor: &mut Option<Cursor<S::Iter>>,
+        mut old_value_cursors: Option<&mut OldValueCursors<S::Iter>>,
         entries: &mut Vec<Option<TxnEntry>>,
     ) -> Result<ScanStat> {
-        let mut total_bytes = 0;
-        let mut total_size = 0;
+        let mut read_old_value = |v: &mut OldValue, stats: &mut Statistics| -> Result<()> {
+            let (wc, dc) = match old_value_cursors {
+                Some(ref mut x) => (&mut x.write, &mut x.default),
+                None => return Ok(()),
+            };
+            if let OldValue::SeekWrite(ref key) = v {
+                match near_seek_old_value(key, wc, Either::<&S, _>::Right(dc), stats)? {
+                    Some(x) => *v = OldValue::value(x),
+                    None => *v = OldValue::None,
+                }
+            }
+            Ok(())
+        };
 
         // This code block shouldn't be switched to other threads.
+        let mut total_bytes = 0;
+        let mut total_size = 0;
         let perf_instant = PerfStatisticsInstant::new();
         let inspector = self_thread_inspector().ok();
         let old_io_stat = inspector.as_ref().and_then(|x| x.io_stat().unwrap_or(None));
@@ -1165,9 +1183,7 @@ impl<E: KvEngine> Initializer<E> {
             total_size += 1;
             match scanner.next_entry()? {
                 Some(mut entry) => {
-                    if let Some(ref mut reader) = old_value_reader {
-                        Self::read_old_value(reader, old_value_cursor, &mut entry, &mut stats)?;
-                    }
+                    read_old_value(entry.old_value(), &mut stats)?;
                     total_bytes += entry.size();
                     entries.push(Some(entry));
                 }
@@ -1192,30 +1208,10 @@ impl<E: KvEngine> Initializer<E> {
         })
     }
 
-    fn read_old_value<S: Snapshot>(
-        old_value_reader: &mut OldValueReader<S>,
-        old_value_cursor: &mut Option<Cursor<S::Iter>>,
-        entry: &mut TxnEntry,
-        stats: &mut Statistics,
-    ) -> Result<()> {
-        let old_value = entry.old_value();
-        if let OldValue::SeekWrite(ref key) = old_value {
-            if old_value_cursor.is_none() {
-                *old_value_cursor = Some(old_value_reader.new_write_cursor(key, false));
-            }
-            match old_value_reader.near_seek_old_value(key, old_value_cursor.as_mut(), stats)? {
-                Some(v) => *old_value = OldValue::value(v),
-                None => *old_value = OldValue::None,
-            }
-        }
-        Ok(())
-    }
-
     async fn scan_batch<S: Snapshot>(
         &self,
         scanner: &mut DeltaScanner<S>,
-        old_value_reader: Option<&mut OldValueReader<S>>,
-        old_value_cursor: &mut Option<Cursor<S::Iter>>,
+        old_value_cursors: Option<&mut OldValueCursors<S::Iter>>,
         resolver: Option<&mut Resolver>,
     ) -> Result<Vec<Option<TxnEntry>>> {
         let mut entries = Vec::with_capacity(self.max_scan_batch_size);
@@ -1223,7 +1219,7 @@ impl<E: KvEngine> Initializer<E> {
             emit,
             disk_read,
             perf_delta,
-        } = self.do_scan(scanner, old_value_reader, old_value_cursor, &mut entries)?;
+        } = self.do_scan(scanner, old_value_cursors, &mut entries)?;
 
         CDC_SCAN_BYTES.inc_by(emit as _);
         TLS_CDC_PERF_STATS.with(|x| *x.borrow_mut() += perf_delta);
@@ -1239,7 +1235,7 @@ impl<E: KvEngine> Initializer<E> {
         if let Some(resolver) = resolver {
             // Track the locks.
             for entry in entries.iter().flatten() {
-                if let TxnEntry::Prewrite { lock, .. } = entry {
+                if let TxnEntry::Prewrite { ref lock, .. } = entry {
                     let (encoded_key, value) = lock;
                     let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
                     let lock = Lock::parse(value)?;
@@ -1813,6 +1809,15 @@ mod tests {
     #[test]
     fn test_incremental_scanner_with_hint_min_ts() {
         let engine = TestEngineBuilder::new().build_without_cache().unwrap();
+
+        let v_suffix = |suffix: usize| -> Vec<u8> {
+            let suffix = suffix.to_string().into_bytes();
+            let mut v = Vec::with_capacity(1000 + suffix.len());
+            (0..100).for_each(|_| v.extend_from_slice(b"vvvvvvvvvv"));
+            v.extend_from_slice(&suffix);
+            v
+        };
+
         let check_handling_old_value_seek_write = || {
             // Do incremental scan with different `hint_min_ts` values.
             for checkpoint_ts in [200, 100, 150] {
@@ -1841,7 +1846,7 @@ mod tests {
                     };
                     for entry in entries.into_iter().filter(|x| x.start_ts == 200) {
                         // Check old value is expected in all cases.
-                        assert_eq!(entry.get_old_value(), b"value100");
+                        assert_eq!(entry.get_old_value(), &v_suffix(100));
                     }
                 }
                 block_on(th).unwrap();
@@ -1850,9 +1855,9 @@ mod tests {
         };
 
         // Create the initial data with CF_WRITE L0: |zkey_110, zkey1_160|
-        must_prewrite_put(&engine, b"zkey", b"value100", b"zkey", 100);
+        must_prewrite_put(&engine, b"zkey", &v_suffix(100), b"zkey", 100);
         must_commit(&engine, b"zkey", 100, 110);
-        must_prewrite_put(&engine, b"zzzz", b"value150", b"zzzz", 150);
+        must_prewrite_put(&engine, b"zzzz", &v_suffix(150), b"zzzz", 150);
         must_commit(&engine, b"zzzz", 150, 160);
         engine.kv_engine().flush_cf(CF_WRITE, true).unwrap();
         must_prewrite_delete(&engine, b"zkey", b"zkey", 200);

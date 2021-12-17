@@ -279,7 +279,7 @@ pub(crate) mod tests {
         kv::{Engine, TestEngineBuilder},
         TxnStatus,
     };
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{AssertionLevel, Context};
     use txn_types::{TimeStamp, WriteType, SHORT_VALUE_MAX_LEN};
 
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
@@ -732,6 +732,7 @@ pub(crate) mod tests {
             min_commit_ts: TimeStamp::default(),
             need_old_value: false,
             is_retry_request: false,
+            assertion_level: AssertionLevel::Off,
         }
     }
 
@@ -1027,6 +1028,8 @@ pub(crate) mod tests {
                     TimeStamp::zero(),
                     TimeStamp::zero(),
                     false,
+                    kvproto::kvrpcpb::Assertion::None,
+                    kvproto::kvrpcpb::AssertionLevel::Off,
                 );
             } else {
                 expected_lock_info.set_lock_type(Op::PessimisticLock);

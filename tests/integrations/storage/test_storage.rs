@@ -877,14 +877,18 @@ fn test_txn_store_write_conflict() {
 const TIDB_KEY_CASE: &[u8] = b"t_a";
 const TXN_KEY_CASE: &[u8] = &[key_prefix::TXN_KEY_PREFIX, 0, b'a'];
 const RAW_KEY_CASE: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'a'];
-const RAW_KEY_CASE_Z: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'z'];
 
+// Test API version verification for txnkv requests.
+// See the following for detail:
+//   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
+//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
 #[test]
 fn test_txn_store_txnkv_api_version() {
     let test_data = vec![
         // storage api_version = V1|V1ttl, for backward compatible.
         (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, true),
         (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, true),
+        (ApiVersion::V1, ApiVersion::V1, RAW_KEY_CASE, true),
         // storage api_version = V1ttl, allow RawKV request only.
         (ApiVersion::V1ttl, ApiVersion::V1, TXN_KEY_CASE, false),
         // storage api_version = V1, reject V2 request.
@@ -893,6 +897,7 @@ fn test_txn_store_txnkv_api_version() {
         // backward compatible for TiDB request, and TiDB request only.
         (ApiVersion::V2, ApiVersion::V1, TIDB_KEY_CASE, true),
         (ApiVersion::V2, ApiVersion::V1, TXN_KEY_CASE, false),
+        (ApiVersion::V2, ApiVersion::V1, RAW_KEY_CASE, false),
         // V2 api validation.
         (ApiVersion::V2, ApiVersion::V2, TXN_KEY_CASE, true),
         (ApiVersion::V2, ApiVersion::V2, RAW_KEY_CASE, false),
@@ -930,20 +935,29 @@ fn test_txn_store_txnkv_api_version() {
     }
 }
 
+// Test API version verification for rawkv requests.
+// See the following for detail:
+//   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
+//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
 #[test]
 fn test_txn_store_rawkv_api_version() {
     let test_data = vec![
         // storage api_version = V1|V1ttl, for backward compatible.
+        (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, true),
+        (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, true),
         (ApiVersion::V1, ApiVersion::V1, RAW_KEY_CASE, true),
         (ApiVersion::V1ttl, ApiVersion::V1, RAW_KEY_CASE, true),
         // storage api_version = V1, reject V2 request.
         (ApiVersion::V1, ApiVersion::V2, RAW_KEY_CASE, false),
         // storage api_version = V2.
-        // backward compatible for TiDB request, and TiDB request only.
+        // backward compatible for TiDB request, and TiDB (txnkv) request only.
+        (ApiVersion::V2, ApiVersion::V1, TIDB_KEY_CASE, false),
+        (ApiVersion::V2, ApiVersion::V1, TXN_KEY_CASE, false),
         (ApiVersion::V2, ApiVersion::V1, RAW_KEY_CASE, false),
         // V2 api validation.
         (ApiVersion::V2, ApiVersion::V2, TXN_KEY_CASE, false),
         (ApiVersion::V2, ApiVersion::V2, RAW_KEY_CASE, true),
+        (ApiVersion::V2, ApiVersion::V2, TIDB_KEY_CASE, false),
     ];
 
     let cf = "";
@@ -952,12 +966,17 @@ fn test_txn_store_rawkv_api_version() {
         let mut store = AssertionStorage::new(storage_api_version);
         store.ctx.set_api_version(req_api_version);
 
+        let mut end_key = key.to_vec().clone();
+        if let Some(end_key) = end_key.last_mut() {
+            *end_key = 0xff;
+        }
+
         let mut range = KeyRange::default();
         range.set_start_key(key.to_vec());
 
-        let mut range_raw_z = KeyRange::default();
-        range_raw_z.set_start_key(key.to_vec());
-        range_raw_z.set_end_key(RAW_KEY_CASE_Z.to_vec());
+        let mut range_bounded = KeyRange::default();
+        range_bounded.set_start_key(key.to_vec());
+        range_bounded.set_end_key(end_key.clone());
 
         if is_legal {
             store.raw_get_ok(cf.to_owned(), key.to_vec(), None);
@@ -987,13 +1006,13 @@ fn test_txn_store_rawkv_api_version() {
             store.raw_scan_ok(
                 cf.to_owned(),
                 key.to_vec(),
-                Some(RAW_KEY_CASE_Z.to_vec()),
+                Some(end_key.clone()),
                 100,
                 vec![(key, b"value")],
             );
             store.raw_batch_scan_ok(
                 cf.to_owned(),
-                vec![range_raw_z.clone()],
+                vec![range_bounded.clone()],
                 100,
                 vec![(key, b"value")],
             );
@@ -1034,8 +1053,8 @@ fn test_txn_store_rawkv_api_version() {
             store.raw_batch_delete_atomic_ok(cf.to_owned(), vec![key.to_vec()]);
             store.raw_batch_put_atomic_ok(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
 
-            if let ApiVersion::V2 = storage_api_version {
-                store.raw_checksum_ok(vec![range_raw_z.clone()], (0x2D6EE02DA4C9FDA, 1, 8));
+            if matches!(storage_api_version, ApiVersion::V2) && key == RAW_KEY_CASE {
+                store.raw_checksum_ok(vec![range_bounded.clone()], (0x2D6EE02DA4C9FDA, 1, 8));
             }
         } else {
             store.raw_get_err(cf.to_owned(), key.to_vec());
@@ -1053,13 +1072,8 @@ fn test_txn_store_rawkv_api_version() {
 
             store.raw_batch_put_err(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
 
-            store.raw_scan_err(
-                cf.to_owned(),
-                key.to_vec(),
-                Some(RAW_KEY_CASE_Z.to_vec()),
-                100,
-            );
-            store.raw_batch_scan_err(cf.to_owned(), vec![range_raw_z.clone()], 100);
+            store.raw_scan_err(cf.to_owned(), key.to_vec(), Some(end_key.clone()), 100);
+            store.raw_batch_scan_err(cf.to_owned(), vec![range_bounded.clone()], 100);
 
             store.raw_compare_and_swap_atomic_err(
                 cf.to_owned(),
@@ -1072,7 +1086,7 @@ fn test_txn_store_rawkv_api_version() {
             store.raw_batch_put_atomic_err(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
 
             if let ApiVersion::V2 = storage_api_version {
-                store.raw_checksum_err(vec![range_raw_z.clone()]);
+                store.raw_checksum_err(vec![range_bounded.clone()]);
             }
         }
     }
