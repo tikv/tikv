@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "5.0.3"
+version = "5.0.5"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -208,6 +208,7 @@ vlog = "0.1.4"
 walkdir = "2"
 minitrace = { git = "https://github.com/pingcap-incubator/minitrace-rust.git", branch = "master" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+seahash = "4.1.0"
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
@@ -234,6 +235,12 @@ rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
+
+# When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
+# kvproto at the same time.
+# After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
+# [patch.'https://github.com/pingcap/kvproto']
+# kvproto = {git = "https://github.com/your_github_id/kvproto", branch="your_branch"}
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md

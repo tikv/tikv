@@ -4,7 +4,6 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::mem;
 use std::sync::Arc;
-use std::time::Instant;
 
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
@@ -24,6 +23,7 @@ use tidb_query_executors::{
     interface::BatchExecutor, runner::MAX_TIME_SLICE, BatchTableScanExecutor,
 };
 use tidb_query_expr::BATCH_MAX_SIZE;
+use tikv_util::time::Instant;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use yatp::task::future::reschedule;
 
@@ -127,7 +127,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         while let Some((key, _)) = scanner.next()? {
             row_count += 1;
             if row_count >= BATCH_MAX_SIZE {
-                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
                     reschedule().await;
                     time_slice_start = Instant::now();
                 }
@@ -365,7 +365,7 @@ impl<S: Snapshot> SampleBuilder<S> {
         let mut common_handle_hist = Histogram::new(self.max_bucket_size);
         let mut common_handle_cms = CmSketch::new(self.cm_sketch_depth, self.cm_sketch_width);
         while !is_drained {
-            let time_slice_elapsed = time_slice_start.elapsed();
+            let time_slice_elapsed = time_slice_start.saturating_elapsed();
             if time_slice_elapsed > MAX_TIME_SLICE {
                 reschedule().await;
                 time_slice_start = Instant::now();
