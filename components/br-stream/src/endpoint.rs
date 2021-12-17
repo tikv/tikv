@@ -162,7 +162,7 @@ where
     ) -> String {
         format!(
             "{}-{}-{}-{}-{}-{}.log",
-            task_name, store_id, table_id, region_id, cf, t
+            task_name, store_id, table_id, region_id, cf, t,
         )
     }
 
