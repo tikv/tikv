@@ -199,7 +199,7 @@ where
             // TODO handle this error
             error!(
                 "backup stream not found task by given key failed";
-                "key" => &log_wrappers::Value::key(&key),
+                "key" => &log_wrappers::Value::key(&key)
             );
         }
     }
