@@ -109,6 +109,10 @@ impl SSTImporter {
         }
     }
 
+    pub fn verify_checksum(&self, metas: &[SstMeta]) -> Result<()> {
+        self.dir.verify_checksum(metas, self.key_manager.clone())
+    }
+
     pub fn exist(&self, meta: &SstMeta) -> bool {
         self.dir.exist(meta).unwrap_or(false)
     }
@@ -705,7 +709,6 @@ impl ImportDir {
         let env = get_inspected_env(Some(env))?;
 
         let sst_reader = RocksSstReader::open_with_env(&path_str, Some(env))?;
-        sst_reader.verify_checksum()?;
         let meta_info = sst_reader.sst_meta_info(meta.to_owned());
 
         super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_deref())?;
@@ -723,6 +726,22 @@ impl ImportDir {
             .with_label_values(&["ingest"])
             .observe(start.saturating_elapsed().as_secs_f64());
         Ok(meta_info)
+    }
+
+    pub fn verify_checksum(
+        &self,
+        metas: &[SstMeta],
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> Result<()> {
+        for meta in metas {
+            let path = self.join(meta)?;
+            let path_str = path.save.to_str().unwrap();
+            let env = get_encrypted_env(key_manager.clone(), None /*base_env*/)?;
+            let env = get_inspected_env(Some(env))?;
+            let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
+            sst_reader.verify_checksum()?;
+        }
+        Ok(())
     }
 
     fn list_ssts(&self) -> Result<Vec<SstMeta>> {
