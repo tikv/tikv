@@ -17,10 +17,10 @@ use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 
 use tikv_util::{box_err, worker::Scheduler};
-use tokio::sync::Mutex;
-use txn_types::{Key, TimeStamp};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex;
+use txn_types::{Key, TimeStamp};
 
 impl ApplyEvent {
     /// Convert a [CmdBatch] to a vector of events. Ignoring admin / error commands.
@@ -193,11 +193,6 @@ impl RouterInner {
         }
     }
 
-    /// check whether a key should be backed up.
-    pub fn key_in_ranges(&self, key: &[u8]) -> bool {
-        self.get_task_by_key(key).is_some()
-    }
-
     /// get the task name by a key.
     pub fn get_task_by_key(&self, key: &[u8]) -> Option<String> {
         // TODO avoid key.to_vec()
@@ -324,7 +319,10 @@ impl TemporaryFiles {
         })
     }
 
-    async fn on_table_data(&mut self, kv: ApplyEvent) -> Result<()> {
+    // TODO: make a file-level lock for getting rid of the &mut.
+    /// Append a event to the files. This wouldn't trigger `fsync` syscall.
+    /// i.e. No guarantee of persistence.
+    pub async fn on_event(&mut self, kv: ApplyEvent) -> Result<()> {
         let key = TempFileKey::of(&kv);
         if !self.files.contains_key(&key) {
             let path = self.temp_dir.join(key.temp_file_name());
@@ -333,13 +331,6 @@ impl TemporaryFiles {
         }
         self.total_size += self.files.get_mut(&key).unwrap().on_event(kv).await?;
         Ok(())
-    }
-
-    // TODO: make a file-level lock for getting rid of the &mut.
-    /// Append a event to the files. This wouldn't trigger `fsync` syscall.
-    /// i.e. No guarantee of persistence.
-    pub async fn on_event(&mut self, kv: ApplyEvent) -> Result<()> {
-        self.on_table_data(kv).await
     }
 
     fn path_to_log_file(table_id: i64, min_ts: u64) -> String {
@@ -361,7 +352,7 @@ impl TemporaryFiles {
 
     /// Flush all temporary files to disk.
     async fn flush(&mut self) -> Result<()> {
-        futures::future::join_all(self.files.values_mut().map(|f| f.inner.flush()))
+        futures::future::join_all(self.files.values_mut().map(|f| f.inner.sync_all()))
             .await
             .into_iter()
             .map(|r| r.map_err(Error::from))
