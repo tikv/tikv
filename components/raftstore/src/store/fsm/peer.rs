@@ -859,7 +859,6 @@ where
             CasualMessage::RegionOverlapped => {
                 debug!("start ticking for overlapped"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id());
                 // Maybe do some safe check first?
-                self.fsm.reset_hibernate_state(GroupState::Chaos);
                 self.register_raft_base_tick();
 
                 if is_learner(&self.fsm.peer.peer) {
@@ -901,7 +900,8 @@ where
                 }
             }
             CasualMessage::RenewLease(ts) => {
-                self.fsm.peer.try_renew_leader_lease(&mut self.ctx, ts)
+                self.fsm.peer.try_renew_leader_lease(&mut self.ctx, ts);
+                self.reset_raft_tick(GroupState::Ordered);
             }
             CasualMessage::RejectRaftAppend { peer_id } => {
                 let mut msg = raft::eraftpb::Message::new();
