@@ -975,15 +975,15 @@ mod tests {
             let mut msg = RaftMessage::default();
             msg.set_region_id(1);
             let mut region_epoch = RegionEpoch::default();
-            region_epoch.conf_ver = 1;
-            region_epoch.version = 0x123456;
+            region_epoch.set_conf_ver(1);
+            region_epoch.set_version(0x123456);
             msg.set_region_epoch(region_epoch);
             msg.set_start_key(b"12345".to_vec());
             msg.set_end_key(b"67890".to_vec());
             msg.mut_message().set_snapshot(Snapshot::default());
             msg.mut_message().set_commit(0);
             if i != 0 {
-                msg.mut_message().set_context(context.into());
+                msg.mut_message().set_context(context);
             }
             msg_buf.push(msg);
         }
