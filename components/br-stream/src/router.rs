@@ -81,7 +81,7 @@ impl ApplyEvent {
     /// Check whether the key associate to the event is a meta key.
     pub fn is_meta(&self) -> bool {
         // Can we make things not looking so hacky?
-        self.key.starts_with(b"zm")
+        self.key.starts_with(b"m")
     }
 
     /// Check whether the event should be recorded.
@@ -175,7 +175,7 @@ impl RouterInner {
 
     /// Register some ranges associated to some task.
     /// Because the observer interface yields encoded data key, the key should be ENCODED DATA KEY too.    
-    /// (i.e. encoded by `Key::from_raw(key).into_encoded()` and starts with 'z', [`utils::wrap_key`] could be a shortcut.).    
+    /// (i.e. encoded by `Key::from_raw(key).into_encoded()`, [`utils::wrap_key`] could be a shortcut.).    
     /// We keep ranges in memory to filter kv events not in these ranges.  
     pub fn register_ranges(&mut self, task_name: &str, ranges: Vec<(Vec<u8>, Vec<u8>)>) {
         // TODO reigister ranges to filter kv event
