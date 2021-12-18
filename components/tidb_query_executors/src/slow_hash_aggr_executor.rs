@@ -443,7 +443,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             let group_key_offsets = &self.group_key_offsets
                 [group_index * (self.group_by_exps.len() + self.extra_group_by_col_index.len())..];
 
-            for (group_index, _) in self.group_by_exps.iter().enumerate() {
+            for group_index in 0..self.group_by_exps.len() {
                 // Read from extra column if it's a bytes column
                 let buffer_group_index = self.original_group_by_col_index[group_index];
                 let offset_begin = group_key_offsets[buffer_group_index];

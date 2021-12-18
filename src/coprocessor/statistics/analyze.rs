@@ -372,20 +372,20 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             for logical_row in &result.logical_rows {
                 let mut column_vals: Vec<Vec<u8>> = Vec::new();
                 let mut collation_key_vals: Vec<Vec<u8>> = Vec::new();
-                for (i, info) in self.columns_info.iter().enumerate() {
+                for i in 0..self.columns_info.len() {
                     let mut val = vec![];
                     columns_slice[i].encode(
                         *logical_row,
-                        info,
+                        &self.columns_info[i],
                         &mut EvalContext::default(),
                         &mut val,
                     )?;
-                    if info.as_accessor().is_string_like() {
+                    if self.columns_info[i].as_accessor().is_string_like() {
                         let sorted_val = match_template_collator! {
-                            TT, match info.as_accessor().collation()? {
+                            TT, match self.columns_info[i].as_accessor().collation()? {
                                 Collation::TT => {
                                     let mut mut_val = &val[..];
-                                    let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), info)?;
+                                    let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &self.columns_info[i])?;
                                     if decoded_val == Datum::Null {
                                         val.clone()
                                     } else {
@@ -490,9 +490,9 @@ impl BaseRowSampleCollector {
         column_groups: &[tipb::AnalyzeColumnGroup],
     ) {
         let col_len = columns_val.len();
-        for (i, group) in column_groups.iter().enumerate() {
+        for i in 0..column_groups.len() {
             self.row_buf.clear();
-            let offsets = group.get_column_offsets();
+            let offsets = column_groups[i].get_column_offsets();
             let mut has_null = true;
             for j in offsets {
                 if columns_val[*j as usize][0] == NIL_FLAG {
