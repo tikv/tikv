@@ -2093,7 +2093,7 @@ fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionE
 
 fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
     fail_point!("needs_reject_raft_append", |_| true);
-    if reject_messages_on_memory_ratio - 0.0 < std::f64::EPSILON {
+    if reject_messages_on_memory_ratio < f64::EPSILON {
         return false;
     }
 

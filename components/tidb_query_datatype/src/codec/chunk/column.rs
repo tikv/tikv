@@ -1043,8 +1043,8 @@ mod tests {
         let fields: Vec<FieldType> = vec![FieldTypeTp::Float.into()];
         let data = vec![
             Datum::Null,
-            Datum::F64(std::f32::MIN.into()),
-            Datum::F64(std::f32::MAX.into()),
+            Datum::F64(f32::MIN.into()),
+            Datum::F64(f32::MAX.into()),
         ];
         test_colum_datum(fields, data);
     }
