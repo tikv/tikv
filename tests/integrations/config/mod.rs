@@ -14,10 +14,11 @@ use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::raw::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
-use engine_traits::config::PerfLevel;
+use engine_traits::PerfLevel;
 use file_system::{IOPriority, IORateLimitMode};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
+use raft_log_engine::RecoveryMode;
 use raftstore::coprocessor::{Config as CopConfig, ConsistencyCheckMethod};
 use raftstore::store::Config as RaftstoreConfig;
 use security::SecurityConfig;
@@ -201,6 +202,7 @@ fn test_serde_custom_tikv_config() {
         merge_max_log_gap: 3,
         merge_check_tick_interval: ReadableDuration::secs(11),
         use_delete_range: true,
+        snap_generator_pool_size: 2,
         cleanup_import_sst_interval: ReadableDuration::minutes(12),
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
@@ -222,7 +224,7 @@ fn test_serde_custom_tikv_config() {
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
-        raft_msg_flush_interval_us: 2333,
+        raft_msg_flush_interval: ReadableDuration::micros(2333),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -608,19 +610,27 @@ fn test_serde_custom_tikv_config() {
         titan: titan_db_config,
     };
     value.raft_engine.enable = true;
-    value.raft_engine.mut_config().dir = "test-dir".to_owned();
+    let raft_engine_config = value.raft_engine.mut_config();
+    raft_engine_config.dir = "test-dir".to_owned();
+    raft_engine_config.batch_compression_threshold.0 = ReadableSize::kb(1).0;
+    raft_engine_config.bytes_per_sync.0 = ReadableSize::kb(64).0;
+    raft_engine_config.target_file_size.0 = ReadableSize::mb(1).0;
+    raft_engine_config.purge_threshold.0 = ReadableSize::gb(1).0;
+    raft_engine_config.recovery_mode = RecoveryMode::TolerateTailCorruption;
+    raft_engine_config.recovery_read_block_size.0 = ReadableSize::kb(1).0;
+    raft_engine_config.recovery_threads = 2;
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
         gc_ratio_threshold: 1.2,
-        max_key_size: 8192,
+        max_key_size: 4096,
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
         reserve_space: ReadableSize::gb(10),
         enable_async_apply_prewrite: true,
+        api_version: 1,
         enable_ttl: true,
         ttl_check_poll_interval: ReadableDuration::hours(0),
-        api_version: 1,
         flow_control: FlowControlConfig {
             enable: false,
             l0_files_threshold: 10,
@@ -713,6 +723,7 @@ fn test_serde_custom_tikv_config() {
         wait_for_lock_timeout: ReadableDuration::millis(10),
         wake_up_delay_duration: ReadableDuration::millis(100),
         pipelined: false,
+        in_memory: true,
     };
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),
@@ -721,6 +732,7 @@ fn test_serde_custom_tikv_config() {
         incremental_scan_threads: 3,
         incremental_scan_concurrency: 4,
         incremental_scan_speed_limit: ReadableSize(7),
+        incremental_scan_ts_filter_ratio: 0.7,
         old_value_cache_memory_quota: ReadableSize::mb(14),
         sink_memory_quota: ReadableSize::mb(7),
     };

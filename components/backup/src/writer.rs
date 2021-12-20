@@ -4,7 +4,7 @@ use std::fmt::Display;
 use std::io::Read;
 use std::sync::Arc;
 
-use encryption::EncrypterReader;
+use encryption::{EncrypterReader, Iv};
 use engine_rocks::raw::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
@@ -120,9 +120,10 @@ impl Writer {
             .with_label_values(&[cf.into()])
             .observe(size as f64);
         let file_name = format!("{}_{}.sst", name, cf);
-        let (encrypter_reader, iv) =
-            EncrypterReader::new(sst_reader, cipher.cipher_type, &cipher.cipher_key)
-                .map_err(|e| Error::Other(box_err!("new encrypterReader error: {:?}", e)))?;
+        let iv = Iv::new_ctr();
+        let encrypter_reader =
+            EncrypterReader::new(sst_reader, cipher.cipher_type, &cipher.cipher_key, iv)
+                .map_err(|e| Error::Other(box_err!("new EncrypterReader error: {:?}", e)))?;
 
         let (reader, hasher) = Sha256Reader::new(encrypter_reader)
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
@@ -420,10 +421,10 @@ mod tests {
     use kvproto::encryptionpb;
     use raftstore::store::util::new_peer;
     use std::collections::BTreeMap;
-    use std::f64::INFINITY;
     use std::path::Path;
     use tempfile::TempDir;
     use tikv::storage::TestEngineBuilder;
+    use txn_types::OldValue;
 
     type CfKvs<'a> = (engine_traits::CfName, &'a [(&'a [u8], &'a [u8])]);
 
@@ -489,7 +490,7 @@ mod tests {
             "foo",
             None,
             0,
-            Limiter::new(INFINITY),
+            Limiter::new(f64::INFINITY),
             144 * 1024 * 1024,
             {
                 let mut ci = CipherInfo::default();
@@ -507,7 +508,7 @@ mod tests {
             "foo1",
             None,
             0,
-            Limiter::new(INFINITY),
+            Limiter::new(f64::INFINITY),
             144 * 1024 * 1024,
             {
                 let mut ci = CipherInfo::default();
@@ -521,7 +522,7 @@ mod tests {
                 vec![TxnEntry::Commit {
                     default: (vec![], vec![]),
                     write: (vec![b'a'], vec![b'a']),
-                    old_value: None,
+                    old_value: OldValue::None,
                 }]
                 .into_iter(),
                 false,
@@ -546,7 +547,7 @@ mod tests {
             "foo2",
             None,
             0,
-            Limiter::new(INFINITY),
+            Limiter::new(f64::INFINITY),
             144 * 1024 * 1024,
             {
                 let mut ci = CipherInfo::default();
@@ -561,12 +562,12 @@ mod tests {
                     TxnEntry::Commit {
                         default: (vec![b'a'], vec![b'a']),
                         write: (vec![b'a'], vec![b'a']),
-                        old_value: None,
+                        old_value: OldValue::None,
                     },
                     TxnEntry::Commit {
                         default: (vec![], vec![]),
                         write: (vec![b'b'], vec![]),
-                        old_value: None,
+                        old_value: OldValue::None,
                     },
                 ]
                 .into_iter(),

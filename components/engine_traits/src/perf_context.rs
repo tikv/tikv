@@ -1,4 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+use tikv_util::numeric_enum_serializing_mod;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum PerfLevel {
@@ -10,6 +11,16 @@ pub enum PerfLevel {
     EnableTime,
     OutOfBounds,
 }
+
+numeric_enum_serializing_mod! {perf_level_serde PerfLevel {
+    Uninitialized = 0,
+    Disable = 1,
+    EnableCount = 2,
+    EnableTimeExceptForMutex = 3,
+    EnableTimeAndCPUTimeExceptForMutex = 4,
+    EnableTime = 5,
+    OutOfBounds = 6,
+}}
 
 /// Extensions for measuring engine performance.
 ///

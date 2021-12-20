@@ -18,7 +18,7 @@ nix = "0.19"
 online_config = { path = "../online_config" }
 openssl = "0.10"
 parking_lot = "0.11"
-prometheus = { version = "0.12", features = ["nightly"] }
+prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 rand = "0.8"
 serde = "1.0"
