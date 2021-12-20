@@ -3045,10 +3045,8 @@ where
             return;
         }
 
-        let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
-        if pending_snapshot
-            || msg.get_from() != self.leader_id()
-        {
+        let pending_snapshot = self.is_applying_snapshot() || self.has_pending_snapshot();
+        if pending_snapshot || msg.get_from() != self.leader_id() {
             info!(
                 "reject transferring leader";
                 "region_id" => self.region_id,
