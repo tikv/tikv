@@ -53,9 +53,11 @@ impl std::fmt::Debug for CredentialInfo {
 pub struct Config {
     bucket: BucketConf,
 
-    account_name: StringNonEmpty,
+    account_name: Option<StringNonEmpty>,
     shared_key: Option<StringNonEmpty>,
     credential_info: Option<CredentialInfo>,
+    env_account_name: Option<StringNonEmpty>,
+    env_shared_key: Option<StringNonEmpty>,
 }
 
 impl std::fmt::Debug for Config {
@@ -65,24 +67,23 @@ impl std::fmt::Debug for Config {
             .field("account_name", &self.account_name)
             .field("shared_key", &"?")
             .field("credential_info", &self.credential_info)
+            .field("env_account_name", &self.env_account_name)
+            .field("env_shared_key", &"?")
             .finish()
     }
 }
 
 impl Config {
     #[cfg(test)]
-    pub fn default(bucket: BucketConf, account_name: StringNonEmpty) -> Self {
-        let account_name = if let Some(name) = Self::load_account_name() {
-            name
-        } else {
-            account_name
-        };
+    pub fn default(bucket: BucketConf) -> Self {
 
         Self {
             bucket,
-            account_name,
-            shared_key: Self::load_shared_key(),
+            account_name: None,
+            shared_key: None,
             credential_info: Self::load_credential_info(),
+            env_account_name: Self::load_env_account_name(),
+            env_shared_key: Self::load_env_shared_key(),
         }
     }
 
@@ -105,14 +106,14 @@ impl Config {
         None
     }
 
-    fn load_account_name() -> Option<StringNonEmpty> {
+    fn load_env_account_name() -> Option<StringNonEmpty> {
         match env::var(ENV_ACCOUNT_NAME).ok() {
             Some(name) => StringNonEmpty::opt(name),
             None => None,
         }
     }
 
-    fn load_shared_key() -> Option<StringNonEmpty> {
+    pub fn load_env_shared_key() -> Option<StringNonEmpty> {
         match env::var(ENV_SHARED_KEY).ok() {
             Some(key) => StringNonEmpty::opt(key),
             None => None,
@@ -123,70 +124,76 @@ impl Config {
         let bucket = BucketConf::from_cloud_dynamic(cloud_dynamic)?;
         let attrs = &cloud_dynamic.attrs;
         let def = &String::new();
-        let account_name = if let Some(name) = Self::load_account_name() {
-            name
-        } else {
-            StringNonEmpty::required_field(attrs.get("account_name").unwrap_or(def).clone(), "account_name")?
-        };
-
-        let shared_key = if let Some(key) = Self::load_shared_key() {
-            Some(key)
-        } else {
-            StringNonEmpty::opt(attrs.get("shared_key").unwrap_or(def).clone())
-        };
 
         Ok(Config {
             bucket,
-            account_name,
-            shared_key,
+            account_name: StringNonEmpty::opt(attrs.get("account_name").unwrap_or(def).clone()),
+            shared_key: StringNonEmpty::opt(attrs.get("shared_key").unwrap_or(def).clone()),
             credential_info: Self::load_credential_info(),
+            env_account_name: Self::load_env_account_name(),
+            env_shared_key: Self::load_env_shared_key(),
         })
     }
 
     pub fn from_input(input: InputConfig) -> io::Result<Config> {
-        let endpoint = StringNonEmpty::opt(input.endpoint);
         let bucket = BucketConf {
-            endpoint,
+            endpoint: StringNonEmpty::opt(input.endpoint),
             bucket: StringNonEmpty::required_field(input.bucket, "bucket")?,
             prefix: StringNonEmpty::opt(input.prefix),
             storage_class: StringNonEmpty::opt(input.storage_class),
             region: None,
         };
-
-        let account_name = if let Some(name) = Self::load_account_name() {
-            name
-        } else {
-            StringNonEmpty::required_field(input.account_name, "account_name")?
-        };
-
-        let shared_key = if let Some(key) = Self::load_shared_key() {
-            Some(key)
-        } else {
-            StringNonEmpty::opt(input.shared_key)
-        };
         
         Ok(Config {
             bucket,
-            account_name,
-            shared_key,
+            account_name: StringNonEmpty::opt(input.account_name),
+            shared_key: StringNonEmpty::opt(input.shared_key),
             credential_info: Self::load_credential_info(),
+            env_account_name: Self::load_env_account_name(),
+            env_shared_key: Self::load_env_shared_key(),
         })
     }
 
+
+    pub fn get_account_name(&self) -> io::Result<String> {
+        if let Some(account_name) = self.account_name.as_ref() {
+            Ok(account_name.to_string())
+        } else if let Some(account_name) = self.env_account_name.as_ref() {
+            Ok(account_name.to_string())
+        } else {
+            Err(io::Error::new(io::ErrorKind::InvalidInput, "account name cannot be empty to access azure blob storage"))
+        }
+    }
+
     pub fn parse_plaintext_account_url(&self) -> Option<String> {
-        match self.shared_key.as_ref() {
-            Some(shared_key) => {
-                let blob_endpoint = match self.bucket.endpoint.as_ref() {
-                    Some(s) => s.to_string(),
-                    None => format!("{}", &self.account_name),
-                };
-                Some(ConnectionStringBuilder::new()
-                    .account_name(&self.account_name)
+        if let (Some(account_name), Some(shared_key)) = (self.account_name.as_ref(), self.shared_key.as_ref()) {
+            let blob_endpoint = match self.bucket.endpoint.as_ref() {
+                Some(s) => s.to_string(),
+                None => format!("https://{}.blob.core.windows.net", account_name),
+            };
+            Some(ConnectionStringBuilder::new()
+                    .account_name(account_name)
                     .account_key(shared_key)
                     .blob_endpoint(&blob_endpoint)
                     .build())
-            },
-            None => None,
+        } else {
+            None
+        }
+    }
+
+    pub fn parse_env_plaintext_account_url(&self) -> Option<String> {
+        if let (Some(account_name), Some(shared_key)) = (self.env_account_name.as_ref(), self.env_shared_key.as_ref()) {
+            let blob_endpoint = match self.bucket.endpoint.as_ref() {
+                Some(s) => s.to_string(),
+                None => format!("https://{}.blob.core.windows.net", account_name),
+            };
+            Some(ConnectionStringBuilder::new()
+                    .account_name(account_name)
+                    .account_key(shared_key)
+                    .blob_endpoint(&blob_endpoint)
+                    .build())
+        } else {
+            None
         }
     }
 }
@@ -238,7 +245,7 @@ impl RetryError for RequestError {
 const MINIMUM_BLOCK_SIZE: usize = 128 * 1024 * 1024; // 128MB
 
 /// Specifies the size of data read each time.
-const STREAM_READ_SIZE: u64 = 4 * 1024 * 1024;
+const STREAM_READ_SIZE: u64 = 96 * 1024 * 1024; // 96MB
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 
@@ -412,21 +419,13 @@ impl AzureStorage {
     }
 
     pub fn new(config: Config) -> io::Result<AzureStorage> {
-        // prefer to use token
-        if let Some(credential_info) = config.credential_info.as_ref() {
-            let client = reqwest::Client::new();
-            let token = block_on(client_credentials_flow::perform(
-                client,
-                &credential_info.client_id, 
-                &credential_info.client_secret, 
-                &[&format!("https://{}.blob.core.windows.net/.default", &config.account_name)],
-                &credential_info.tenant_id
-            ))
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?;
+        // priority: explicit shared key > env Azure AD > env shared key
+        if let Some(connection_string) = config.parse_plaintext_account_url() {
             let bucket = (*config.bucket.bucket).to_owned();
             let http_client = new_http_client();
             let storage_client = 
-                StorageAccountClient::new_bearer_token(http_client, (*config.account_name).to_owned(), token.access_token().secret())
+                StorageAccountClient::new_connection_string(http_client.clone(), connection_string.as_str())
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?
                 .as_storage_client()
                 .as_container_client(bucket);
             
@@ -434,7 +433,30 @@ impl AzureStorage {
                 config,
                 client: storage_client,
             })
-        } else if let Some(connection_string) = config.parse_plaintext_account_url() {
+        } else if let Some(credential_info) = config.credential_info.as_ref() {
+            let account_name = config.get_account_name()?;
+            let token_scope = format!("https://{}.blob.core.windows.net/.default", &account_name);
+            let client = reqwest::Client::new();
+            let token = block_on(client_credentials_flow::perform(
+                client,
+                &credential_info.client_id, 
+                &credential_info.client_secret, 
+                &[&token_scope],
+                &credential_info.tenant_id
+            ))
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?;
+            let bucket = (*config.bucket.bucket).to_owned();
+            let http_client = new_http_client();
+            let storage_client = 
+                StorageAccountClient::new_bearer_token(http_client, account_name, token.access_token().secret())
+                .as_storage_client()
+                .as_container_client(bucket);
+            
+            Ok(AzureStorage {
+                config,
+                client: storage_client,
+            })
+        } else if let Some(connection_string) = config.parse_env_plaintext_account_url() {
             let bucket = (*config.bucket.bucket).to_owned();
             let http_client = new_http_client();
             let storage_client = 
@@ -449,8 +471,7 @@ impl AzureStorage {
             })
         } else {
             Err(io::Error::new(io::ErrorKind::InvalidInput, "credential info not found".to_owned()))
-        }
-        
+        }   
     }
 
     fn maybe_prefix_key(&self, key: &str) -> String {
@@ -537,14 +558,14 @@ mod tests {
         let container_name = StringNonEmpty::static_str("container");
         let mut bucket = BucketConf::default(container_name);
         bucket.prefix = Some(StringNonEmpty::static_str("backup 01/prefix/"));
-        let config = Config::default(bucket.clone(), StringNonEmpty::static_str("user"));
+        let config = Config::default(bucket.clone());
 
         assert_eq!(
             config.url().unwrap().to_string(),
             "azure://container/backup%2001/prefix/"
         );
         bucket.endpoint = Some(StringNonEmpty::static_str("http://endpoint.com"));
-        let config = Config::default(bucket, StringNonEmpty::static_str("user"));
+        let config = Config::default(bucket.clone());
         assert_eq!(
             config.url().unwrap().to_string(),
             "http://endpoint.com/container/backup%2001/prefix/"
@@ -562,11 +583,13 @@ mod tests {
         env::remove_var(ENV_CLIENT_ID);
         env::remove_var(ENV_TENANT_ID);
         env::remove_var(ENV_CLIENT_SECRET);
-        let config = Config::default(bucket.clone(), StringNonEmpty::static_str("user"));
+        let config = Config::default(bucket.clone());
         
-        assert_eq!((*config.account_name).to_owned(), "user");
+        assert_eq!(config.account_name.is_none(), true);
         assert_eq!(config.shared_key.is_none(), true);
         assert_eq!(config.credential_info.is_none(), true);
+        assert_eq!(config.env_account_name.is_none(), true);
+        assert_eq!(config.env_shared_key.is_none(), true);
 
         env::set_var(ENV_ACCOUNT_NAME, "user1");
         env::set_var(ENV_SHARED_KEY, "cGFzc3dk");
@@ -574,12 +597,10 @@ mod tests {
         env::set_var(ENV_TENANT_ID, "<tenant_id>");
         env::set_var(ENV_CLIENT_SECRET, "<client_secret>");
 
-        let config = Config::default(bucket, StringNonEmpty::static_str("user"));
+        let config = Config::default(bucket);
         
-        assert_eq!((*config.account_name).to_owned(), "user1");
-        
-        let shared_key = config.shared_key.as_ref().unwrap().to_owned();
-        assert_eq!((*shared_key).to_owned(), "cGFzc3dk");
+        assert_eq!(config.env_account_name.as_ref().unwrap().to_string(), "user1");
+        assert_eq!(config.env_shared_key.as_ref().unwrap().to_string(), "cGFzc3dk");
 
         let cred = config.credential_info.as_ref().unwrap();
         let cred_str = format!("{}, {}, {}", cred.client_id.as_str(), &cred.tenant_id, cred.client_secret.secret());
