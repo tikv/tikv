@@ -53,6 +53,7 @@ use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
 use crate::{CdcObserver, Error, Result};
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
+const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 
 pub enum Deregister {
     Downstream {
@@ -276,6 +277,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let tso_worker = Builder::new()
             .threaded_scheduler()
             .thread_name("tso")
+            .enable_time()
             .core_threads(1)
             .build()
             .unwrap();
@@ -897,7 +899,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         pd_client: Arc<dyn PdClient>,
         security_mgr: Arc<SecurityManager>,
         env: Arc<Environment>,
-        cdc_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
+        tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
         min_ts: TimeStamp,
     ) -> Vec<u64> {
         let region_has_quorum = |region: &Region, stores: &[u64]| {
@@ -1002,61 +1004,67 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 }
             }
         }
-        let stores = store_map.into_iter().map(|(store_id, regions)| {
-            let cdc_clients = cdc_clients.clone();
-            let env = env.clone();
-            let pd_client = pd_client.clone();
-            let security_mgr = security_mgr.clone();
-            async move {
-                if cdc_clients.lock().unwrap().get(&store_id).is_none() {
-                    let store = box_try!(pd_client.get_store_async(store_id).await);
-                    let cb = ChannelBuilder::new(env.clone());
-                    let channel = security_mgr.connect(cb, &store.address);
-                    cdc_clients
-                        .lock()
-                        .unwrap()
-                        .insert(store_id, TikvClient::new(channel));
+        let stores: Vec<_> = store_map
+            .into_iter()
+            .map(|(store_id, regions)| {
+                let tikv_clients = tikv_clients.clone();
+                let env = env.clone();
+                let pd_client = pd_client.clone();
+                let security_mgr = security_mgr.clone();
+                async move {
+                    if tikv_clients.lock().unwrap().get(&store_id).is_none() {
+                        let store = box_try!(pd_client.get_store_async(store_id).await);
+                        let cb = ChannelBuilder::new(env.clone());
+                        let channel = security_mgr.connect(cb, &store.address);
+                        tikv_clients
+                            .lock()
+                            .unwrap()
+                            .insert(store_id, TikvClient::new(channel));
+                    }
+                    let client = tikv_clients.lock().unwrap().get(&store_id).unwrap().clone();
+                    let mut req = CheckLeaderRequest::default();
+                    req.set_regions(regions.into());
+                    req.set_ts(min_ts.into_inner());
+                    let res = box_try!(
+                        tokio::time::timeout(
+                            Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS),
+                            box_try!(client.check_leader_async(&req))
+                        )
+                        .await
+                    );
+                    let resp = match res {
+                        Ok(resp) => resp,
+                        Err(err) => {
+                            tikv_clients.lock().await.remove(&store_id);
+                            return Err(box_err!(err));
+                        }
+                    };
+                    Result::Ok((store_id, resp))
                 }
-                let client = cdc_clients.lock().unwrap().get(&store_id).unwrap().clone();
-                let mut req = CheckLeaderRequest::default();
-                req.set_regions(regions.into());
-                req.set_ts(min_ts.into_inner());
-                let res = box_try!(client.check_leader_async(&req)).await;
-                let resp = box_try!(res);
-                Result::Ok((store_id, resp))
+                .boxed()
+            })
+            .collect();
+
+        for _ in 0..store_count {
+            // Use `select_all` to avoid the process getting blocked when some TiKVs were down.
+            let (res, _, remains) = select_all(stores).await;
+            stores = remains;
+            if let Ok((store_id, resp)) = res {
+                for region_id in resp.regions {
+                    resp_map.entry(region_id).or_default().push(store_id);
+                    if region_has_quorum(&region_map[&region_id], &resp_map[&region_id]) {
+                        valid_regions.insert(region_id);
+                    }
+                }
             }
-        });
-        let resps = futures::future::join_all(stores).await;
-        resps
-            .into_iter()
-            .filter_map(|resp| match resp {
-                Ok(resp) => Some(resp),
-                Err(e) => {
-                    debug!("cdc check leader error"; "err" =>?e);
-                    None
-                }
-            })
-            .map(|(store_id, resp)| {
-                resp.regions
-                    .into_iter()
-                    .map(move |region_id| (store_id, region_id))
-            })
-            .flatten()
-            .for_each(|(store_id, region_id)| {
-                resp_map.entry(region_id).or_default().push(store_id);
-            });
-        resp_map
-            .into_iter()
-            .filter_map(|(region_id, stores)| {
-                if region_has_quorum(&region_map[&region_id], &stores) {
-                    Some(region_id)
-                } else {
-                    debug!("cdc cannot get quorum for resolved ts";
-                        "region_id" => region_id, "stores" => ?stores, "region" => ?&region_map[&region_id]);
-                    None
-                }
-            })
-            .collect()
+            // Return early if all regions had already got quorum.
+            if valid_regions.len() == regions.len() {
+                // break here because all regions have quorum,
+                // so there is no need waiting for other stores to respond.
+                break;
+            }
+        }
+        valid_regions.into_iter().collect()
     }
 
     fn on_open_conn(&mut self, conn: Conn) {
