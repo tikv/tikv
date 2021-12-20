@@ -2209,13 +2209,11 @@ pub struct BackupConfig {
     pub enable_auto_tune: bool,
     pub auto_tune_remain_threads: usize,
     pub auto_tune_refresh_interval: ReadableDuration,
-<<<<<<< HEAD
     pub io_thread_size: usize,
-=======
     // Do not expose this config to user.
     #[serde(skip_serializing)]
     #[online_config(hidden)]
->>>>>>> 6e558e337 (hidden the new config)
+    // It used to debug s3 503 error.
     pub s3_multi_part_size: ReadableSize,
     #[online_config(submodule)]
     pub hadoop: HadoopConfig,
