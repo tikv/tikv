@@ -44,7 +44,7 @@ use tikv_util::time::{Instant, Limiter};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tokio::runtime::{Builder, Runtime};
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use txn_types::{Key, Lock, LockType, TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::channel::{CdcEvent, MemoryQuota, SendError};
@@ -256,7 +256,7 @@ pub struct Endpoint<T> {
     sink_memory_quota: MemoryQuota,
 
     // store_id -> client
-    tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
+    tikv_clients: Arc<AsyncMutex<HashMap<u64, TikvClient>>>,
     env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
 }
@@ -332,7 +332,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             unresolved_region_count: 0,
             old_value_cache,
             sink_memory_quota,
-            tikv_clients: Arc::new(Mutex::new(HashMap::default())),
+            tikv_clients: Arc::new(AsyncMutex::new(HashMap::default())),
         };
         ep.register_min_ts_event();
         ep
@@ -924,7 +924,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         pd_client: Arc<dyn PdClient>,
         security_mgr: Arc<SecurityManager>,
         env: Arc<Environment>,
-        tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
+        tikv_clients: Arc<AsyncMutex<HashMap<u64, TikvClient>>>,
         min_ts: TimeStamp,
     ) -> Vec<u64> {
         let region_has_quorum = |region: &Region, stores: &[u64]| {
@@ -1043,16 +1043,20 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 let pd_client = pd_client.clone();
                 let security_mgr = security_mgr.clone();
                 async move {
-                    if tikv_clients.lock().unwrap().get(&store_id).is_none() {
-                        let store = box_try!(pd_client.get_store_async(store_id).await);
-                        let cb = ChannelBuilder::new(env.clone());
-                        let channel = security_mgr.connect(cb, &store.address);
-                        tikv_clients
-                            .lock()
-                            .unwrap()
-                            .insert(store_id, TikvClient::new(channel));
-                    }
-                    let client = tikv_clients.lock().unwrap().get(&store_id).unwrap().clone();
+                    let client = {
+                        let mut clients = tikv_clients.lock().await;
+                        match clients.get(&store_id).cloned() {
+                            Some(client) => client,
+                            None => {
+                                let store = box_try!(pd_client.get_store_async(store_id).await);
+                                let cb = ChannelBuilder::new(env.clone());
+                                let channel = security_mgr.connect(cb, &store.address);
+                                let client = TikvClient::new(channel);
+                                clients.insert(store_id, client.clone());
+                                client
+                            }
+                        }
+                    };
                     let mut req = CheckLeaderRequest::default();
                     req.set_regions(regions.into());
                     req.set_ts(min_ts.into_inner());
@@ -1066,7 +1070,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     let resp = match res {
                         Ok(resp) => resp,
                         Err(err) => {
-                            tikv_clients.lock().unwrap().remove(&store_id);
+                            tikv_clients.lock().await.remove(&store_id);
                             return Err(box_err!(err));
                         }
                     };
