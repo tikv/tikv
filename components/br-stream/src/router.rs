@@ -269,7 +269,12 @@ impl TempFileKey {
             0
         } else {
             // When we cannot extract the table key, use 0 for the table key(perhaps we insert meta key here.).
-            decode_table_id(&kv.key).unwrap_or(0)
+            // Can we emit the copy here(or at least, take a slice of key instead of decoding the whole key)?
+            Key::from_encoded_slice(&kv.key)
+                .into_raw()
+                .ok()
+                .and_then(|decoded_key| decode_table_id(&decoded_key).ok())
+                .unwrap_or(0)
         };
         Self {
             is_meta: kv.is_meta(),
@@ -545,10 +550,13 @@ mod tests {
         events: Vec<ApplyEvent>,
     }
 
-    fn make_table_key(table_id: u64, key: &[u8]) -> Vec<u8> {
+    fn make_table_key(table_id: i64, key: &[u8]) -> Vec<u8> {
         use std::io::Write;
         let mut table_key = b"t".to_vec();
-        table_key.encode_u64(table_id).unwrap();
+        // make it comparable to uint.
+        table_key
+            .encode_u64(table_id as u64 ^ 0x8000_0000_0000_0000)
+            .unwrap();
         Write::write_all(&mut table_key, key).unwrap();
         table_key
     }
@@ -593,13 +601,13 @@ mod tests {
             }
         }
 
-        fn put_table(&mut self, cf: &'static str, table: u64, key: &[u8], value: &[u8]) {
+        fn put_table(&mut self, cf: &'static str, table: i64, key: &[u8], value: &[u8]) {
             let table_key = make_table_key(table, key);
             self.events
                 .push(self.put_event(cf, table_key, value.to_vec()));
         }
 
-        fn delete_table(&mut self, cf: &'static str, table: u64, key: &[u8]) {
+        fn delete_table(&mut self, cf: &'static str, table: i64, key: &[u8]) {
             let table_key = make_table_key(table, key);
             self.events.push(self.delete_event(cf, table_key));
         }
@@ -665,7 +673,6 @@ mod tests {
             router.on_event(event).await?;
         }
         let end_ts = TimeStamp::physical_now();
-        println!("{:?}", router);
         let files = router.take_temporary_files("dummy")?;
         let meta = files.generate_metadata().await?;
         assert_eq!(meta.files.len(), 3);
@@ -673,12 +680,14 @@ mod tests {
             meta.files.iter().all(|item| {
                 TimeStamp::new(item.meta.min_ts as _).physical() >= start_ts
                     && TimeStamp::new(item.meta.max_ts as _).physical() <= end_ts
+                    && item.meta.min_ts <= item.meta.max_ts
             }),
             "meta = {:#?}; start ts = {}, end ts = {}",
             meta.files,
             start_ts,
             end_ts
         );
+        println!("{:#?}", meta);
         drop(router);
         let cmds = collect_recv(rx);
         assert_eq!(cmds.len(), 1);
