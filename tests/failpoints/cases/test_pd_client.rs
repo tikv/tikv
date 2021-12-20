@@ -71,6 +71,9 @@ fn test_pd_client_deadlock() {
         request!(client => block_on(get_store_stats_async(0))),
         request!(client => get_operator(0)),
         request!(client => block_on(get_tso())),
+        request!(client => load_global_config(vec![])),
+        request!(client => store_global_config(std::collections::HashMap::new())),
+        request!(client => watch_global_config()),
     ];
 
     for (name, func) in test_funcs {

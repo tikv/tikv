@@ -7,8 +7,9 @@ use std::time::Duration;
 use futures::{future, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
 use grpcio::{
     DuplexSink, EnvBuilder, RequestStream, Result as GrpcResult, RpcContext, RpcStatus,
-    RpcStatusCode, Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
+    RpcStatusCode, Server as GrpcServer, ServerBuilder, ServerStreamingSink, UnarySink, WriteFlags,
 };
+
 use pd_client::Error as PdError;
 use security::*;
 
@@ -176,6 +177,33 @@ impl<C: PdMocker> Clone for PdMock<C> {
 }
 
 impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
+    fn load_global_config(
+        &mut self,
+        ctx: RpcContext,
+        req: LoadGlobalConfigRequest,
+        sink: UnarySink<LoadGlobalConfigResponse>,
+    ) {
+        hijack_unary(self, ctx, sink, |c| c.load_global_config(&req))
+    }
+
+    fn store_global_config(
+        &mut self,
+        ctx: RpcContext,
+        req: StoreGlobalConfigRequest,
+        sink: UnarySink<StoreGlobalConfigResponse>,
+    ) {
+        hijack_unary(self, ctx, sink, |c| c.store_global_config(&req))
+    }
+
+    fn watch_global_config(
+        &mut self,
+        _ctx: RpcContext,
+        _req: WatchGlobalConfigRequest,
+        _sink: ServerStreamingSink<WatchGlobalConfigResponse>,
+    ) {
+        // TODO: hijack_streaming(self, ctx, sink, |c| c.watch_global_config())
+    }
+
     fn get_members(
         &mut self,
         ctx: RpcContext<'_>,
@@ -451,18 +479,18 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
 
     fn split_regions(
         &mut self,
-        _: grpcio::RpcContext<'_>,
+        _: RpcContext<'_>,
         _: kvproto::pdpb::SplitRegionsRequest,
-        _: grpcio::UnarySink<kvproto::pdpb::SplitRegionsResponse>,
+        _: UnarySink<kvproto::pdpb::SplitRegionsResponse>,
     ) {
         unimplemented!()
     }
 
     fn get_dc_location_info(
         &mut self,
-        _: grpcio::RpcContext<'_>,
+        _: RpcContext<'_>,
         _: kvproto::pdpb::GetDcLocationInfoRequest,
-        _: grpcio::UnarySink<kvproto::pdpb::GetDcLocationInfoResponse>,
+        _: UnarySink<kvproto::pdpb::GetDcLocationInfoResponse>,
     ) {
         unimplemented!()
     }

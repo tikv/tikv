@@ -23,6 +23,24 @@ pub const DEFAULT_CLUSTER_ID: u64 = 42;
 pub type Result<T> = result::Result<T, String>;
 
 pub trait PdMocker {
+    fn load_global_config(
+        &self,
+        _: &LoadGlobalConfigRequest,
+    ) -> Option<Result<LoadGlobalConfigResponse>> {
+        Some(Ok(LoadGlobalConfigResponse::default()))
+    }
+
+    fn store_global_config(
+        &self,
+        _: &StoreGlobalConfigRequest,
+    ) -> Option<Result<StoreGlobalConfigResponse>> {
+        Some(Ok(StoreGlobalConfigResponse::default()))
+    }
+
+    fn watch_global_config(&self) -> Option<Result<WatchGlobalConfigResponse>> {
+        Some(Ok(WatchGlobalConfigResponse::default()))
+    }
+
     fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         None
     }
