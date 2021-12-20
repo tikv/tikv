@@ -4,6 +4,7 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 
+use crate::store::worker::metrics::*;
 use crate::store::{CasualMessage, CasualRouter};
 
 use engine_traits::{Engines, KvEngine, RaftEngine};
@@ -11,13 +12,8 @@ use file_system::{IOType, WithIOType};
 use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
-<<<<<<< HEAD
 const MAX_GC_REGION_BATCH: usize = 128;
 const COMPACT_LOG_INTERVAL: Duration = Duration::from_secs(60);
-=======
-use crate::store::worker::metrics::*;
-use crate::store::{CasualMessage, CasualRouter};
->>>>>>> b0fcb5fb5... More metrics for raft log gc (#11376)
 
 pub enum Task {
     Gc {
@@ -106,12 +102,8 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
         self.engines.kv.sync().unwrap_or_else(|e| {
             panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
         });
-<<<<<<< HEAD
-        let tasks = std::mem::replace(&mut self.tasks, vec![]);
-=======
         RAFT_LOG_GC_KV_SYNC_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
-        let tasks = std::mem::take(&mut self.tasks);
->>>>>>> b0fcb5fb5... More metrics for raft log gc (#11376)
+        let tasks = std::mem::replace(&mut self.tasks, vec![]);
         for t in tasks {
             let start = Instant::now();
             match t {

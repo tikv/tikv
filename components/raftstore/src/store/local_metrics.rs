@@ -400,17 +400,7 @@ pub struct RaftMetrics {
     pub commit_log: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
-<<<<<<< HEAD
-=======
-    pub write_block_wait: LocalHistogram,
-    pub waterfall_metrics: bool,
-    pub wf_batch_wait: LocalHistogram,
-    pub wf_send_to_queue: LocalHistogram,
-    pub wf_persist_log: LocalHistogram,
-    pub wf_commit_log: LocalHistogram,
-    pub wf_commit_not_persist_log: LocalHistogram,
     pub raft_log_gc_skipped: RaftLogGcSkippedMetrics,
->>>>>>> b0fcb5fb5... More metrics for raft log gc (#11376)
 }
 
 impl Default for RaftMetrics {
@@ -427,17 +417,7 @@ impl Default for RaftMetrics {
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
-<<<<<<< HEAD
-=======
-            write_block_wait: STORE_WRITE_MSG_BLOCK_WAIT_DURATION_HISTOGRAM.local(),
-            waterfall_metrics,
-            wf_batch_wait: STORE_WF_BATCH_WAIT_DURATION_HISTOGRAM.local(),
-            wf_send_to_queue: STORE_WF_SEND_TO_QUEUE_DURATION_HISTOGRAM.local(),
-            wf_persist_log: STORE_WF_PERSIST_LOG_DURATION_HISTOGRAM.local(),
-            wf_commit_log: STORE_WF_COMMIT_LOG_DURATION_HISTOGRAM.local(),
-            wf_commit_not_persist_log: STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM.local(),
             raft_log_gc_skipped: RaftLogGcSkippedMetrics::default(),
->>>>>>> b0fcb5fb5... More metrics for raft log gc (#11376)
         }
     }
 }
@@ -453,18 +433,7 @@ impl RaftMetrics {
         self.commit_log.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
-<<<<<<< HEAD
-=======
-        self.write_block_wait.flush();
         self.raft_log_gc_skipped.flush();
-        if self.waterfall_metrics {
-            self.wf_batch_wait.flush();
-            self.wf_send_to_queue.flush();
-            self.wf_persist_log.flush();
-            self.wf_commit_log.flush();
-            self.wf_commit_not_persist_log.flush();
-        }
->>>>>>> b0fcb5fb5... More metrics for raft log gc (#11376)
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);
         missing.clear();

@@ -3847,8 +3847,6 @@
             "alignLevel": null
           }
         },
-<<<<<<< HEAD
-=======
         {
           "aliasColors": {},
           "bars": false,
@@ -3974,7 +3972,6 @@
       },
       "id": 2745,
       "panels": [
->>>>>>> b0fcb5fb5... More metrics for raft log gc (#11376)
         {
           "aliasColors": {},
           "bars": false,
@@ -11729,9 +11726,6 @@
         "x": 0,
         "y": 14
       },
-<<<<<<< HEAD
-      "id": 2754,
-=======
       "id": 12797,
       "panels": [
         {
@@ -12934,7 +12928,6 @@
         "y": 13
       },
       "id": 2753,
->>>>>>> b0fcb5fb5... More metrics for raft log gc (#11376)
       "panels": [
         {
           "aliasColors": {},
@@ -30622,10 +30615,5 @@
   "timezone": "browser",
   "title": "Test-Cluster-TiKV-Details",
   "uid": "RDVQiEzZz",
-<<<<<<< HEAD
   "version": 4
 }
-=======
-  "version": 1
-}
->>>>>>> b0fcb5fb5... More metrics for raft log gc (#11376)

@@ -544,29 +544,6 @@ lazy_static! {
         "Number of peers in hibernated state.",
         &["state"],
     ).unwrap();
-<<<<<<< HEAD
-=======
-
-    pub static ref STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE: IntGauge = register_int_gauge!(
-        "tikv_raftstore_io_reschedule_region_total",
-        "Total number of io rescheduling peers"
-    ).unwrap();
-
-    pub static ref STORE_IO_RESCHEDULE_PENDING_TASKS_TOTAL_GAUGE: IntGauge = register_int_gauge!(
-        "tikv_raftstore_io_reschedule_pending_tasks_total",
-        "Total number of pending write tasks from io rescheduling peers"
-    ).unwrap();
-
-    pub static ref STORE_INSPECT_DURTION_HISTOGRAM: HistogramVec =
-        register_histogram_vec!(
-            "tikv_raftstore_inspect_duration_seconds",
-            "Bucketed histogram of inspect duration.",
-            &["type"],
-            exponential_buckets(0.0005, 2.0, 20).unwrap()
-        ).unwrap();
-
-    pub static ref STORE_SLOW_SCORE_GAUGE: Gauge =
-    register_gauge!("tikv_raftstore_slow_score", "Slow score of the store.").unwrap();
 
     pub static ref RAFT_LOG_GC_SKIPPED_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_raftstore_raft_log_gc_skipped",
@@ -574,7 +551,7 @@ lazy_static! {
         &["reason"]
     )
     .unwrap();
+
     pub static ref RAFT_LOG_GC_SKIPPED: RaftLogGcSkippedVec =
         auto_flush_from!(RAFT_LOG_GC_SKIPPED_VEC, RaftLogGcSkippedVec);
->>>>>>> b0fcb5fb5... More metrics for raft log gc (#11376)
 }
