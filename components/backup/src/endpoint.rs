@@ -1,12 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::f64::INFINITY;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{borrow::Cow, time::*};
 
 use concurrency_manager::ConcurrencyManager;
 use configuration::Configuration;
@@ -29,8 +29,8 @@ use tikv::storage::txn::{
 };
 use tikv::storage::Statistics;
 use tikv_util::impl_display_as_debug;
-use tikv_util::time::Limiter;
-use tikv_util::worker::{Runnable, RunnableWithTimer};
+use tikv_util::time::{Instant, Limiter};
+use tikv_util::worker::Runnable;
 use txn_types::{Key, Lock, TimeStamp};
 use yatp::task::callback::{Handle, TaskCell};
 use yatp::ThreadPool;
@@ -41,9 +41,6 @@ use crate::Error;
 use crate::*;
 
 const BACKUP_BATCH_LIMIT: usize = 1024;
-
-// if thread pool has been idle for such long time, we will shutdown it.
-const IDLE_THREADPOOL_DURATION: u64 = 30 * 60 * 1000; // 30 mins
 
 #[derive(Clone)]
 struct Request {
@@ -197,7 +194,7 @@ impl BackupRange {
         };
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["snapshot"])
-            .observe(start_snapshot.elapsed().as_secs_f64());
+            .observe(start_snapshot.saturating_elapsed().as_secs_f64());
         let snap_store = SnapshotStore::new(
             snapshot,
             backup_ts,
@@ -286,7 +283,7 @@ impl BackupRange {
         }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["scan"])
-            .observe(start_scan.elapsed().as_secs_f64());
+            .observe(start_scan.saturating_elapsed().as_secs_f64());
 
         if writer.need_flush_keys() {
             match writer.save(&storage.storage) {
@@ -369,7 +366,7 @@ impl BackupRange {
         }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["raw_scan"])
-            .observe(start.elapsed().as_secs_f64());
+            .observe(start.saturating_elapsed().as_secs_f64());
         Ok(statistics)
     }
 
@@ -435,7 +432,6 @@ impl ConfigManager {
 pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     store_id: u64,
     pool: RefCell<ControlThreadPool>,
-    pool_idle_threshold: u64,
     db: Arc<DB>,
     config_manager: ConfigManager,
     concurrency_manager: ConcurrencyManager,
@@ -554,7 +550,6 @@ impl<R: RegionInfoProvider> Progress<R> {
 struct ControlThreadPool {
     size: usize,
     workers: Option<Arc<ThreadPool<TaskCell>>>,
-    last_active: Instant,
 }
 
 impl ControlThreadPool {
@@ -562,7 +557,6 @@ impl ControlThreadPool {
         ControlThreadPool {
             size: 0,
             workers: None,
-            last_active: Instant::now(),
         }
     }
 
@@ -598,22 +592,6 @@ impl ControlThreadPool {
         self.size = new_size;
         BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64);
     }
-
-    fn heartbeat(&mut self) {
-        self.last_active = Instant::now();
-    }
-
-    /// Shutdown the thread pool if it has been idle for a long time.
-    fn check_active(&mut self, idle_threshold: Duration) {
-        if self.last_active.elapsed() >= idle_threshold {
-            self.size = 0;
-            if let Some(w) = self.workers.take() {
-                let start = Instant::now();
-                drop(w);
-                slow_log!(start.elapsed(), "backup thread pool shutdown too long");
-            }
-        }
-    }
 }
 
 impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
@@ -630,7 +608,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             engine,
             region_info,
             pool: RefCell::new(ControlThreadPool::new()),
-            pool_idle_threshold: IDLE_THREADPOOL_DURATION,
             db,
             config_manager: ConfigManager(Arc::new(RwLock::new(config))),
             concurrency_manager,
@@ -844,18 +821,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Runnable for Endpoint<E
         }
         info!("run backup task"; "task" => %task);
         self.handle_backup_task(task);
-        self.pool.borrow_mut().heartbeat();
-    }
-}
-
-impl<E: Engine, R: RegionInfoProvider + Clone + 'static> RunnableWithTimer for Endpoint<E, R> {
-    fn on_timeout(&mut self) {
-        let pool_idle_duration = Duration::from_millis(self.pool_idle_threshold);
-        self.pool.borrow_mut().check_active(pool_idle_duration);
-    }
-
-    fn get_interval(&self) -> Duration {
-        Duration::from_millis(self.pool_idle_threshold)
     }
 }
 
@@ -938,8 +903,9 @@ fn to_sst_compression_type(ct: CompressionType) -> Option<SstCompressionType> {
 
 #[cfg(test)]
 pub mod tests {
+    use std::fs;
     use std::path::{Path, PathBuf};
-    use std::{fs, thread};
+    use std::time::Duration;
 
     use engine_traits::MiscExt;
     use external_storage::{make_local_backend, make_noop_backend};
@@ -956,7 +922,6 @@ pub mod tests {
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::config::ReadableSize;
-    use tikv_util::worker::Worker;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use super::*;
@@ -1496,74 +1461,4 @@ pub mod tests {
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 3);
     }
-
-    pub struct EndpointWrapper<E: Engine, R: RegionInfoProvider + Clone + 'static> {
-        inner: Arc<Mutex<Endpoint<E, R>>>,
-    }
-    impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Runnable for EndpointWrapper<E, R> {
-        type Task = Task;
-
-        fn run(&mut self, task: Task) {
-            self.inner.lock().unwrap().run(task);
-        }
-    }
-
-    impl<E: Engine, R: RegionInfoProvider + Clone + 'static> RunnableWithTimer
-        for EndpointWrapper<E, R>
-    {
-        fn on_timeout(&mut self) {
-            self.inner.lock().unwrap().on_timeout();
-        }
-
-        fn get_interval(&self) -> Duration {
-            self.inner.lock().unwrap().get_interval()
-        }
-    }
-
-    #[test]
-    fn test_thread_pool_shutdown_when_idle() {
-        let (_, mut endpoint) = new_endpoint();
-
-        // set the idle threshold to 100ms
-        endpoint.pool_idle_threshold = 100;
-        let endpoint = Arc::new(Mutex::new(endpoint));
-        let worker = Worker::new("endpoint");
-        let scheduler = {
-            let inner = endpoint.clone();
-            worker.start_with_timer("endpoint", EndpointWrapper { inner })
-        };
-
-        let mut req = BackupRequest::default();
-        req.set_start_key(vec![]);
-        req.set_end_key(vec![]);
-        req.set_start_version(1);
-        req.set_end_version(1);
-        req.set_storage_backend(make_noop_backend());
-
-        endpoint
-            .lock()
-            .unwrap()
-            .get_config_manager()
-            .set_num_threads(10);
-
-        let (tx, resp_rx) = unbounded();
-        let (task, _) = Task::new(req, tx).unwrap();
-
-        // if not task arrive after create the thread pool is empty
-        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
-
-        scheduler.schedule(task).unwrap();
-        // wait until the task finish
-        let _ = block_on(resp_rx.into_future());
-        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
-
-        // thread pool not yet shutdown
-        thread::sleep(Duration::from_millis(50));
-        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
-
-        // thread pool shutdown if not task arrive more than 100ms
-        thread::sleep(Duration::from_millis(160));
-        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
-    }
-    // TODO: region err in txn(engine(request))
 }

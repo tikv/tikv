@@ -69,7 +69,7 @@ pub struct Handler {
 }
 
 impl Handler {
-    fn handle(&mut self, r: &mut Runner) -> Option<usize> {
+    fn handle(&mut self, r: &mut Runner) {
         for _ in 0..16 {
             match r.recv.try_recv() {
                 Ok(Message::Loop(count)) => {
@@ -83,7 +83,6 @@ impl Handler {
                 Err(_) => break,
             }
         }
-        Some(0)
     }
 }
 
@@ -94,15 +93,17 @@ impl PollHandler<Runner, Runner> for Handler {
 
     fn handle_control(&mut self, control: &mut Runner) -> Option<usize> {
         self.local.control += 1;
-        self.handle(control)
+        self.handle(control);
+        Some(0)
     }
 
-    fn handle_normal(&mut self, normal: &mut Runner) -> Option<usize> {
+    fn handle_normal(&mut self, normal: &mut impl TrackedFsm<Target = Runner>) -> HandleResult {
         self.local.normal += 1;
-        self.handle(normal)
+        self.handle(normal);
+        HandleResult::stop_at(0, false)
     }
 
-    fn end(&mut self, _normals: &mut [Box<Runner>]) {
+    fn end(&mut self, _normals: &mut [Option<impl TrackedFsm<Target = Runner>>]) {
         let mut c = self.metrics.lock().unwrap();
         *c += self.local;
         self.local = HandleMetrics::default();
