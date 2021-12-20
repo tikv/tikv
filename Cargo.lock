@@ -415,11 +415,13 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "etcd-client",
+ "file_system",
  "futures 0.3.15",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "online_config",
+ "openssl",
  "prometheus",
  "protobuf",
  "raft",
@@ -428,11 +430,14 @@ dependencies = [
  "slog",
  "slog-global",
  "thiserror",
+ "tidb_query_datatype",
  "tikv",
  "tikv_alloc",
  "tikv_util",
  "tokio",
  "tokio-stream",
+ "txn_types",
+ "uuid",
 ]
 
 [[package]]
@@ -2259,7 +2264,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=br-stream#14a3e9888bd305e48d1f370f7682c6628d60d033"
+source = "git+https://github.com/pingcap/kvproto.git?branch=br-stream#8542b6a075a9ad1dba476385dfa04601441dc80f"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

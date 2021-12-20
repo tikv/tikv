@@ -7,5 +7,6 @@ pub mod errors;
 pub mod metadata;
 pub mod observer;
 mod router;
+mod utils;
 
 pub use endpoint::Endpoint;

@@ -1,8 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::OpenOptions;
+use std::fmt;
 use std::path::PathBuf;
-use std::{fmt, io::Write};
 
 use tokio::io::Result as TokioResult;
 use tokio::runtime::Runtime;
@@ -10,11 +9,12 @@ use tokio_stream::StreamExt;
 
 use crate::metadata::store::{EtcdStore, MetaStore};
 use crate::metadata::{MetadataClient, MetadataEvent, Task as MetaTask};
-use crate::router::Router;
+use crate::router::{ApplyEvent, Router};
+use crate::utils;
 use crate::{errors::Result, observer::BackupStreamObserver};
-use kvproto::raft_cmdpb::{CmdType, Request};
+
 use online_config::ConfigChange;
-use raftstore::coprocessor::{Cmd, CmdBatch};
+use raftstore::coprocessor::CmdBatch;
 use tikv::config::BackupStreamConfig;
 use tikv_util::worker::{Runnable, Scheduler};
 use tikv_util::{debug, error, info};
@@ -54,7 +54,11 @@ impl Endpoint<EtcdStore> {
             }
         };
 
-        let range_router = Router::new();
+        let range_router = Router::new(
+            PathBuf::from(config.streaming_path.clone()),
+            scheduler.clone(),
+            config.temp_file_size_limit_per_task.0,
+        );
 
         if cli.is_none() {
             // unable to connect to etcd
@@ -131,7 +135,7 @@ where
     }
     // TODO use a more efficent encode kv event format
     // TODO move this function to a indepentent module.
-    fn encode_event(&self, key: &[u8], value: &[u8]) -> Vec<u8> {
+    pub fn encode_event(key: &[u8], value: &[u8]) -> Vec<u8> {
         let mut buf = vec![];
         let key_len = (key.len() as u32).to_ne_bytes();
         let val_len = value.len().to_ne_bytes();
@@ -142,99 +146,43 @@ where
         buf
     }
 
-    // TODO improve the bakcup file name
-    fn backup_file_name(
-        &self,
-        task_name: String,
-        table_id: u64,
-        region_id: u64,
-        cf: &str,
-        t: &str,
-    ) -> String {
-        format!("{}{}{}-{}-{}.log", task_name, table_id, region_id, cf, t)
-    }
-
-    // backup kv event to file.
-    fn backup_file(&self, t: CmdType, key: Vec<u8>, value: Vec<u8>, cf: String) {
-        if self.range_router.key_in_ranges(&key) {
-            // drop the key not in filter
-            return;
-        }
-        if let Some(task) = self.range_router.get_task_by_key(&key) {
-            let cmd_type = if t == CmdType::Put { "put" } else { "delete" };
-            let name = self.backup_file_name(task, 0, 0, &cf, cmd_type);
-            let file = PathBuf::from(self.config.streaming_path.clone()).join(name);
-            let mut file = OpenOptions::new()
-                .write(true)
-                .append(true)
-                .open(file)
-                .unwrap();
-            let bytes = self.encode_event(&key, &value);
-            if let Err(e) = file.write_all(&bytes) {
-                error!("backup stream write file failed"; "error" => ?e);
-            }
-        } else {
-            // TODO handle this error
-            error!("backup stream not found task by given key failed"; "key" => ?key);
-        }
-    }
-
-    fn backup_data(&mut self, requests: Vec<Request>) -> Result<()> {
-        for mut req in requests {
-            match req.get_cmd_type() {
-                CmdType::Put => {
-                    let mut put = req.take_put();
-                    self.backup_file(req.get_cmd_type(), put.take_key(), put.take_value(), put.cf);
+    fn backup_batch(&self, batch: CmdBatch) {
+        let kvs = ApplyEvent::from_cmd_batch(batch, /* TODO */ 0);
+        let router = self.range_router.clone();
+        self.pool.spawn(async move {
+            let mut router = router.lock().await;
+            for kv in kvs {
+                // TODO build a error handle mechanism #error 6
+                if kv.should_record() {
+                    if let Err(err) = router.on_event(kv).await {
+                        error!("backup stream failed in backup batch"; "error" => ?err);
+                    }
                 }
-                CmdType::Delete => {
-                    let mut del = req.take_delete();
-                    self.backup_file(req.get_cmd_type(), del.take_key(), Vec::new(), del.cf);
-                }
-                _ => {
-                    debug!(
-                        "backup stream skip other command";
-                        "command" => ?req,
-                    );
-                }
-            };
-        }
-        Ok(())
-    }
-
-    fn backup_batch(&mut self, batch: CmdBatch) -> Result<()> {
-        let region_id = batch.region_id;
-        for cmd in batch.into_iter(region_id) {
-            let Cmd {
-                index: _,
-                request,
-                mut response,
-            } = cmd;
-            if response.get_header().has_error() {
-                let err_header = response.mut_header().take_error();
-                error!("backup stream parse batch cmd failed"; "error" => ?err_header);
-                // TODO find a proper way to handle all related error
             }
-            if !request.has_admin_request() {
-                self.backup_data(request.requests.into())?;
-            } else {
-                error!("backup stream ignore amdin request for now");
-            }
-        }
-        Ok(())
+        });
     }
 
     // register task ranges
     pub fn on_register(&self, task: MetaTask) {
         if let Some(cli) = self.meta_client.as_ref() {
             let cli = cli.clone();
-            let mut range_router = self.range_router.clone();
+            let range_router = self.range_router.clone();
             self.pool.block_on(async move {
                 let task_name = task.info.get_name();
                 match cli.ranges_of_task(task_name).await {
                     Ok(ranges) => {
                         debug!("backup stream register ranges to observer");
                         // TODO implement register ranges
-                        range_router.register_ranges(task_name, ranges.inner);
+                        range_router.lock().await.register_ranges(
+                            task_name,
+                            ranges
+                                .inner
+                                .into_iter()
+                                .map(|(start_key, end_key)| {
+                                    (utils::wrap_key(start_key), utils::wrap_key(end_key))
+                                })
+                                .collect(),
+                        );
                     }
                     Err(e) => {
                         error!("backup stream get tasks failed"; "error" => ?e);
@@ -245,12 +193,28 @@ where
         };
     }
 
+    pub async fn do_flush(router: Router, task: String) -> Result<()> {
+        let temp_files = {
+            let mut router = router.lock().await;
+            router.take_temporary_files(&task)?
+        };
+        let meta = temp_files.generate_metadata().await?;
+        // TODO flush the files to external storage
+        info!("flushing data to external storage"; "local_files" => ?meta);
+        Ok(())
+    }
+
+    pub fn on_flush(&self, task: String) {
+        let router = self.range_router.clone();
+        self.pool.spawn(async move {
+            // TODO handle the error
+            let _ = Self::do_flush(router, task).await;
+        });
+    }
+
     pub fn do_backup(&mut self, events: Vec<CmdBatch>) {
         for batch in events {
-            if let Err(e) = self.backup_batch(batch) {
-                // TODO build a error handle mechanism #error 6
-                error!("backup stream failed in backup batch"; "error" => ?e);
-            }
+            self.backup_batch(batch)
         }
     }
 }
@@ -276,6 +240,8 @@ pub enum Task {
     WatchTask(MetaTask),
     BatchEvent(Vec<CmdBatch>),
     ChangeConfig(ConfigChange),
+    /// Flush the task with name.
+    Flush(String),
 }
 
 impl fmt::Debug for Task {
@@ -293,6 +259,7 @@ impl fmt::Debug for Task {
                 .field("name", &"change_config")
                 .field("change", change)
                 .finish(),
+            Task::Flush(task) => de.field("name", &"flush").field("task", &task).finish(),
         }
     }
 }
@@ -314,6 +281,7 @@ where
         match task {
             Task::WatchTask(task) => self.on_register(task),
             Task::BatchEvent(events) => self.do_backup(events),
+            Task::Flush(task) => self.on_flush(task),
             _ => (),
         }
     }

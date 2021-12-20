@@ -2241,6 +2241,7 @@ pub struct BackupStreamConfig {
     pub num_threads: usize,
     pub enable_streaming: bool,
     pub streaming_path: String,
+    pub temp_file_size_limit_per_task: ReadableSize,
 }
 
 impl BackupStreamConfig {
@@ -2261,6 +2262,7 @@ impl Default for BackupStreamConfig {
             enable_streaming: false,
             // TODO: may be use raft store directory
             streaming_path: env::temp_dir().into_os_string().into_string().unwrap(),
+            temp_file_size_limit_per_task: ReadableSize::mb(128),
         }
     }
 }

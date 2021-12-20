@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use engine_traits::KvEngine;
-use kvproto::metapb::{Peer, Region};
+use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::coprocessor::*;
 use tikv_util::warn;
@@ -59,8 +59,6 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
         if cmd_batches.is_empty() {
             return;
         }
-        let mut region = Region::default();
-        region.mut_peers().push(Peer::default());
         if let Err(e) = self.scheduler.schedule(Task::BatchEvent(cmd_batches)) {
             warn!("backup stream schedule task failed"; "error" => ?e);
         }
