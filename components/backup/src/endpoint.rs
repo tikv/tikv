@@ -14,7 +14,7 @@ use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, CfName, SstCompressionType};
 use external_storage::{BackendConfig, HdfsConfig};
 use external_storage_export::{create_storage, ExternalStorage};
-use file_system::{IOType, WithIOType};
+use file_system::IOType;
 use futures::channel::mpsc::*;
 use futures::Future;
 use kvproto::brpb::*;
@@ -770,7 +770,8 @@ impl ControlThreadPool {
 }
 
 /// Create a standard tokio runtime
-/// (which allows io and time reactor, involve thread memory accessor),
+//  (which allows io and time reactor, involve thread memory accessor),
+/// and set the io type to `IOType::Export`.
 fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
     tokio::runtime::Builder::new_multi_thread()
         .thread_name(thread_name)
@@ -778,6 +779,7 @@ fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<R
         .enable_time()
         .on_thread_start(|| {
             tikv_alloc::add_thread_memory_accessor();
+            file_system::set_io_type(IOType::Export);
         })
         .on_thread_stop(|| {
             tikv_alloc::remove_thread_memory_accessor();
@@ -852,7 +854,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let limit = self.softlimit.limit();
 
         self.pool.borrow_mut().spawn(async move {
-            let _with_io_type = WithIOType::new(IOType::Export);
             let storage = LimitedStorage {
                 limiter: request.limiter,
                 storage: backend,
