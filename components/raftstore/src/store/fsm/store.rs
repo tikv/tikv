@@ -2398,12 +2398,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let meta = self.ctx.store_meta.lock().unwrap();
         fail_point!(
             "before_check_leader_store_2",
-            meta.lock().unwrap().store_id == Some(2),
+            meta.store_id == Some(2),
             |_| {}
         );
         fail_point!(
             "before_check_leader_store_3",
-            meta.lock().unwrap().store_id == Some(3),
+            meta.store_id == Some(3),
             |_| {}
         );
         let regions = leaders

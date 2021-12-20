@@ -343,5 +343,6 @@ fn test_check_leader_timeout() {
     }
 
     fail::remove(store3_fp);
+    event_feed_wrap.replace(None);
     suite.stop();
 }

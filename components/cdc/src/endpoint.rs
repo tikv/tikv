@@ -11,6 +11,8 @@ use configuration::{ConfigChange, Configuration};
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::compat::Future01CompatExt;
+use futures::future::select_all;
+use futures::FutureExt;
 use grpcio::{ChannelBuilder, Environment};
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
@@ -965,15 +967,16 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let mut region_map: HashMap<u64, Region> = HashMap::default();
         // region_id -> peers id, record the responses
         let mut resp_map: HashMap<u64, Vec<u64>> = HashMap::default();
+        let mut valid_regions = HashSet::default();
         {
             let meta = store_meta.lock().unwrap();
             let store_id = match meta.store_id {
                 Some(id) => id,
                 None => return vec![],
             };
-            for (region_id, _) in regions {
-                if let Some(region) = meta.regions.get(&region_id) {
-                    if let Some((term, leader_id)) = meta.leaders.get(&region_id) {
+            for (region_id, _) in &regions {
+                if let Some(region) = meta.regions.get(region_id) {
+                    if let Some((term, leader_id)) = meta.leaders.get(region_id) {
                         let leader_store_id = find_store_id(&region, *leader_id);
                         if leader_store_id.is_none() {
                             continue;
@@ -981,9 +984,13 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                         if leader_store_id.unwrap() != meta.store_id.unwrap() {
                             continue;
                         }
-                        for peer in region.get_peers() {
+                        let peer_list = region.get_peers();
+                        for peer in peer_list {
                             if peer.store_id == store_id && peer.id == *leader_id {
-                                resp_map.entry(region_id).or_default().push(store_id);
+                                resp_map.entry(*region_id).or_default().push(store_id);
+                                if peer_list.len() == 1 {
+                                    valid_regions.insert(*region_id);
+                                }
                                 continue;
                             }
                             if peer.get_role() == PeerRole::Learner {
@@ -992,19 +999,20 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                             let mut leader_info = LeaderInfo::default();
                             leader_info.set_peer_id(*leader_id);
                             leader_info.set_term(*term);
-                            leader_info.set_region_id(region_id);
+                            leader_info.set_region_id(*region_id);
                             leader_info.set_region_epoch(region.get_region_epoch().clone());
                             store_map
                                 .entry(peer.store_id)
                                 .or_default()
                                 .push(leader_info);
                         }
-                        region_map.insert(region_id, region.clone());
+                        region_map.insert(*region_id, region.clone());
                     }
                 }
             }
         }
-        let stores: Vec<_> = store_map
+        let store_count = store_map.len();
+        let mut stores: Vec<_> = store_map
             .into_iter()
             .map(|(store_id, regions)| {
                 let tikv_clients = tikv_clients.clone();
@@ -1035,7 +1043,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     let resp = match res {
                         Ok(resp) => resp,
                         Err(err) => {
-                            tikv_clients.lock().await.remove(&store_id);
+                            tikv_clients.lock().unwrap().remove(&store_id);
                             return Err(box_err!(err));
                         }
                     };
