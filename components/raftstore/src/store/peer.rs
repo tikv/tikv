@@ -4412,20 +4412,23 @@ where
         renew_bound: Timespec,
     ) -> bool {
         let max_lease = ctx.cfg.raft_store_max_leader_lease();
+        let has_overlapped_reads = self.pending_reads.back().map_or(false, |read| {
+            // If there is any read index whose lease can cover till next heartbeat
+            // then we don't need to propose a new one
+            read.propose_time + max_lease > renew_bound
+        });
+        let has_overlapped_writes = self.proposals.back().map_or(false, |proposal| {
+            // If there is any write whose lease can cover till next heartbeat
+            // then we don't need to propose a new one
+            proposal
+                .propose_time
+                .map_or(false, |propose_time| propose_time + max_lease > renew_bound)
+        });
+        if has_overlapped_reads || has_overlapped_writes {
+            return false;
+        }
         match self.leader_lease.inspect(Some(renew_bound)) {
-            LeaseState::Expired => {
-                self.pending_reads.back().map_or(true, |read| {
-                    // If there is any read index whose lease can cover till next heartbeat
-                    // then we don't need to propose a new one
-                    read.propose_time + max_lease < renew_bound
-                }) && self.proposals.back().map_or(true, |proposal| {
-                    // If there is any write whose lease can cover till next heartbeat
-                    // then we don't need to propose a new one
-                    proposal
-                        .propose_time
-                        .map_or(true, |propose_time| propose_time + max_lease < renew_bound)
-                })
-            }
+            LeaseState::Expired => true,
             _ => false,
         }
     }
