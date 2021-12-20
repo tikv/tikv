@@ -223,22 +223,6 @@ where
     pub fn with_capacity_and_sample(capacity: usize, sample_mask: usize) -> LruCache<K, V> {
         Self::with_capacity_sample_and_trace(capacity, sample_mask, CountTracker::default())
     }
-
-    #[inline]
-    pub fn resize(&mut self, mut new_cap: usize) {
-        if new_cap == 0 {
-            new_cap = 1;
-        }
-        if new_cap < self.capacity && self.map.len() > new_cap {
-            for _ in new_cap..self.map.len() {
-                let key = self.trace.remove_tail();
-                let entry = self.map.remove(&key).unwrap();
-                self.size_policy.on_remove(&key, &entry.value);
-            }
-            self.map.shrink_to_fit();
-        }
-        self.capacity = new_cap;
-    }
 }
 
 impl<K, V, T> LruCache<K, V, T>
@@ -323,6 +307,22 @@ where
 
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    #[inline]
+    pub fn resize(&mut self, mut new_cap: usize) {
+        if new_cap == 0 {
+            new_cap = 1;
+        }
+        if new_cap < self.capacity && self.size() > new_cap {
+            while self.size() > new_cap {
+                let key = self.trace.remove_tail();
+                let entry = self.map.remove(&key).unwrap();
+                self.size_policy.on_remove(&key, &entry.value);
+            }
+            self.map.shrink_to_fit();
+        }
+        self.capacity = new_cap;
     }
 }
 

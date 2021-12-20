@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::reader::{MvccReader, OverlappedWrite, TxnCommitRecord};
 use crate::storage::mvcc::Result;
@@ -16,6 +17,15 @@ pub struct GcInfo {
     pub found_versions: usize,
     pub deleted_versions: usize,
     pub is_completed: bool,
+}
+
+impl GcInfo {
+    pub fn report_metrics(&self) {
+        MVCC_VERSIONS_HISTOGRAM.observe(self.found_versions as f64);
+        if self.deleted_versions > 0 {
+            GC_DELETE_VERSIONS_HISTOGRAM.observe(self.deleted_versions as f64);
+        }
+    }
 }
 
 /// Generate the Write record that should be written that means to to perform a specified rollback

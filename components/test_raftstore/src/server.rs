@@ -33,7 +33,8 @@ use raftstore::router::{
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::{
-    AutoSplitController, Callback, LocalReader, SnapManagerBuilder, SplitCheckRunner,
+    AutoSplitController, Callback, LocalReader, SnapManager, SnapManagerBuilder, SplitCheckRunner,
+    SplitConfigManager,
 };
 use raftstore::Result;
 use security::SecurityManager;
@@ -123,6 +124,7 @@ pub struct ServerCluster {
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
     pub security_mgr: Arc<SecurityManager>,
     pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
+    snap_mgrs: HashMap<u64, SnapManager>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<AddressMap, RaftStoreBlackHole>,
@@ -162,6 +164,7 @@ impl ServerCluster {
             snap_paths: HashMap::default(),
             pending_services: HashMap::default(),
             coprocessor_hooks: HashMap::default(),
+            snap_mgrs: HashMap::default(),
             raft_client,
             concurrency_managers: HashMap::default(),
             env,
@@ -242,8 +245,10 @@ impl Simulator for ServerCluster {
 
         // Create storage.
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let storage_read_pool = ReadPool::from(storage::build_read_pool_for_test(
+        let pd_sender = pd_worker.scheduler();
+        let storage_read_pool = ReadPool::from(storage::build_read_pool(
             &tikv::config::StorageReadPoolConfig::default_for_test(),
+            pd_sender,
             raft_engine.clone(),
         ));
 
@@ -301,6 +306,7 @@ impl Simulator for ServerCluster {
         let snap_mgr = SnapManagerBuilder::default()
             .encryption_key_manager(key_manager)
             .build(tmp_str);
+        self.snap_mgrs.insert(node_id, snap_mgr.clone());
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
@@ -396,7 +402,8 @@ impl Simulator for ServerCluster {
         let split_check_runner =
             SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
-
+        let split_config_manager = SplitConfigManager(Arc::new(VersionTrack::new(cfg.split)));
+        let auto_split_controller = AutoSplitController::new(split_config_manager);
         node.start(
             engines,
             simulate_trans.clone(),
@@ -406,7 +413,7 @@ impl Simulator for ServerCluster {
             coprocessor_host,
             importer.clone(),
             split_check_scheduler,
-            AutoSplitController::default(),
+            auto_split_controller,
             concurrency_manager.clone(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
@@ -455,6 +462,10 @@ impl Simulator for ServerCluster {
             .to_str()
             .unwrap()
             .to_owned()
+    }
+
+    fn get_snap_mgr(&self, node_id: u64) -> &SnapManager {
+        self.snap_mgrs.get(&node_id).unwrap()
     }
 
     fn stop_node(&mut self, node_id: u64) {
@@ -573,7 +584,6 @@ fn must_new_and_configure_cluster_mul(
     let mut cluster = new_server_cluster(0, count);
     configure(&mut cluster);
     cluster.run();
-
     let region_id = 1;
     let leader = cluster.leader_of_region(region_id).unwrap();
     let epoch = cluster.get_region_epoch(region_id);
@@ -611,4 +621,17 @@ pub fn must_new_cluster_and_debug_client() -> (Cluster<ServerCluster>, DebugClie
     let client = DebugClient::new(channel);
 
     (cluster, client, leader.get_store_id())
+}
+
+pub fn must_new_and_configure_cluster_and_kv_client(
+    configure: impl FnMut(&mut Cluster<ServerCluster>),
+) -> (Cluster<ServerCluster>, TikvClient, Context) {
+    let (cluster, leader, ctx) = must_new_and_configure_cluster(configure);
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    (cluster, client, ctx)
 }

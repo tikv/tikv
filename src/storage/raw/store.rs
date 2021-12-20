@@ -171,7 +171,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         while cursor.valid()? && pairs.len() < limit {
             row_count += 1;
             if row_count >= MAX_BATCH_SIZE {
-                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
                     reschedule().await;
                     time_slice_start = Instant::now();
                 }
@@ -219,7 +219,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         while cursor.valid()? && pairs.len() < limit {
             row_count += 1;
             if row_count >= MAX_BATCH_SIZE {
-                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
                     reschedule().await;
                     time_slice_start = Instant::now();
                 }
