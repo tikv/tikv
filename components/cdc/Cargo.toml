@@ -65,6 +65,7 @@ raftstore = { path = "../raftstore", default-features = false }
 resolved_ts = { path = "../resolved_ts", default-features = false }
 security = { path = "../security", default-features = false }
 semver = "0.10"
+configuration = { path = "../configuration" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv = { path = "../../", default-features = false }
@@ -90,6 +91,7 @@ test_util = { path = "../test_util", default-features = false }
 panic_hook = { path = "../panic_hook" }
 raft = { version = "0.6.0-alpha", default-features = false }
 time = "0.1"
+criterion = "0.3"
 
 [[test]]
 name = "integrations"
@@ -100,3 +102,8 @@ path = "tests/integrations/mod.rs"
 name = "failpoints"
 path = "tests/failpoints/mod.rs"
 required-features = ["failpoints"]
+
+[[bench]]
+name = "cdc_event"
+harness = false
+required-features = ["protobuf-codec"]

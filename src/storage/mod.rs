@@ -370,10 +370,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
 
                     Ok((result?, statistics, perf_statistics.delta()))
                 }
@@ -414,12 +414,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let mut req_snaps = vec![];
 
                 for (mut req, id) in requests.into_iter().zip(ids) {
-                    let region_id = req.get_context().get_region_id();
-                    let peer = req.get_context().get_peer();
-                    tls_collect_qps(region_id, peer, &req.get_key(), &req.get_key(), false);
-                    let key = Key::from_raw(req.get_key());
-                    let start_ts = req.get_version().into();
                     let mut ctx = req.take_context();
+                    let region_id = ctx.get_region_id();
+                    let peer = ctx.get_peer();
+                    let key = Key::from_raw(req.get_key());
+                    tls_collect_qps(region_id, peer, key.as_encoded(), key.as_encoded(), false);
+                    let start_ts = req.get_version().into();
                     let isolation_level = ctx.get_isolation_level();
                     let fill_cache = !ctx.get_not_fill_cache();
                     let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
@@ -505,7 +505,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 metrics::tls_collect_scan_details(CMD, &statistics);
                 SCHED_HISTOGRAM_VEC_STATIC
                     .get(CMD)
-                    .observe(command_duration.elapsed_secs());
+                    .observe(command_duration.saturating_elapsed_secs());
 
                 Ok(())
             },
@@ -597,10 +597,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
 
                     Ok((result?, statistics, perf_statistics.delta()))
                 }
@@ -616,8 +616,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Scan keys in [`start_key`, `end_key`) up to `limit` keys from the snapshot.
-    ///
-    /// If `end_key` is `None`, it means the upper bound is unbounded.
+    /// If `reverse_scan` is true, it scans [`end_key`, `start_key`) in descending order.
+    /// If `end_key` is `None`, it means the upper bound or the lower bound if reverse scan is unbounded.
     ///
     /// Only writes committed before `start_ts` are visible.
     pub fn scan(
@@ -656,6 +656,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
 
+                let (mut start_key, mut end_key) = (Some(start_key), end_key);
+                if reverse_scan {
+                    std::mem::swap(&mut start_key, &mut end_key);
+                }
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
@@ -665,7 +669,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 if ctx.get_isolation_level() == IsolationLevel::Si {
                     let begin_instant = Instant::now();
                     concurrency_manager
-                        .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
+                        .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
                             Lock::check_ts_conflict(
                                 Cow::Borrowed(lock),
                                 &key,
@@ -677,18 +681,20 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
                                 .get(CMD)
                                 .locked
-                                .observe(begin_instant.elapsed().as_secs_f64());
+                                .observe(begin_instant.saturating_elapsed().as_secs_f64());
                             mvcc::Error::from(e)
                         })?;
                     CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
                         .get(CMD)
                         .unlocked
-                        .observe(begin_instant.elapsed().as_secs_f64());
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
                 }
 
                 let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
                     let mut key_range = KeyRange::default();
-                    key_range.set_start_key(start_key.as_encoded().to_vec());
+                    if let Some(start_key) = &start_key {
+                        key_range.set_start_key(start_key.as_encoded().to_vec());
+                    }
                     if let Some(end_key) = &end_key {
                         key_range.set_end_key(end_key.as_encoded().to_vec());
                     }
@@ -719,14 +725,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         false,
                     );
 
-                    let mut scanner;
-                    if !reverse_scan {
-                        scanner =
-                            snap_store.scanner(false, key_only, false, Some(start_key), end_key)?;
-                    } else {
-                        scanner =
-                            snap_store.scanner(true, key_only, false, end_key, Some(start_key))?;
-                    };
+                    let mut scanner =
+                        snap_store.scanner(reverse_scan, key_only, false, start_key, end_key)?;
                     let res = scanner.scan(limit, sample_step);
 
                     let statistics = scanner.take_statistics();
@@ -734,10 +734,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
 
                     res.map_err(Error::from).map(|results| {
                         KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
@@ -813,7 +813,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
                                 .get(CMD)
                                 .locked
-                                .observe(begin_instant.elapsed().as_secs_f64());
+                                .observe(begin_instant.saturating_elapsed().as_secs_f64());
                             Err(mvcc::Error::from(mvcc::ErrorInner::KeyIsLocked(
                                 lock.clone().into_lock_info(key.to_raw()?),
                             )))
@@ -825,7 +825,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
                     .get(CMD)
                     .unlocked
-                    .observe(begin_instant.elapsed().as_secs_f64());
+                    .observe(begin_instant.saturating_elapsed().as_secs_f64());
 
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
@@ -864,10 +864,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
 
                     Ok(locks)
                 }
@@ -996,10 +996,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
                     r
                 }
             },
@@ -1088,10 +1088,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                     .get(CMD)
-                    .observe(begin_instant.elapsed_secs());
+                    .observe(begin_instant.saturating_elapsed_secs());
                 SCHED_HISTOGRAM_VEC_STATIC
                     .get(CMD)
-                    .observe(command_duration.elapsed_secs());
+                    .observe(command_duration.saturating_elapsed_secs());
                 Ok(())
             },
             priority,
@@ -1161,10 +1161,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
                     Ok(result)
                 }
             },
@@ -1413,10 +1413,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
 
                     result
                 }
@@ -1468,6 +1468,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         return Err(box_err!("Invalid KeyRanges"));
                     };
                     let mut result = Vec::new();
+                    let mut key_ranges = vec![];
+                    for range in &ranges {
+                        key_ranges.push(build_key_range(
+                            &range.start_key,
+                            &range.end_key,
+                            reverse_scan,
+                        ));
+                    }
                     let ranges_len = ranges.len();
                     for i in 0..ranges_len {
                         let start_key = Key::from_encoded(ranges[i].take_start_key());
@@ -1506,14 +1514,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         }?;
                         result.extend(pairs.into_iter());
                     }
-                    let mut key_ranges = vec![];
-                    for range in ranges {
-                        key_ranges.push(build_key_range(
-                            &range.start_key,
-                            &range.end_key,
-                            reverse_scan,
-                        ));
-                    }
                     tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
@@ -1522,10 +1522,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
                     Ok(result)
                 }
             },
@@ -1577,10 +1577,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
                     r
                 }
             },
@@ -1691,14 +1691,14 @@ fn prepare_snap_ctx<'a>(
                     CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
                         .get(cmd)
                         .locked
-                        .observe(begin_instant.elapsed().as_secs_f64());
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
                     mvcc::Error::from(e)
                 })?;
         }
         CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
             .get(cmd)
             .unlocked
-            .observe(begin_instant.elapsed().as_secs_f64());
+            .observe(begin_instant.saturating_elapsed().as_secs_f64());
     }
 
     let mut snap_ctx = SnapContext {
@@ -2004,6 +2004,7 @@ mod tests {
     use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
     use crate::storage::mvcc::LockType;
     use crate::storage::txn::commands::{AcquirePessimisticLock, Prewrite};
+    use crate::storage::txn::tests::must_rollback;
     use crate::storage::{
         config::BlockCacheConfig,
         kv::{Error as EngineError, ErrorInner as EngineErrorInner},
@@ -6089,20 +6090,22 @@ mod tests {
         );
         assert_eq!(key_error.get_locked().get_key(), b"key");
 
-        // Test scan
-        let key_error = extract_key_error(
-            &block_on(storage.scan(
+        let scan = |start_key, end_key, reverse| {
+            block_on(storage.scan(
                 ctx.clone(),
-                Key::from_raw(b"a"),
-                None,
+                start_key,
+                end_key,
                 10,
                 0,
                 100.into(),
                 false,
-                false,
+                reverse,
             ))
-            .unwrap_err(),
-        );
+            .unwrap_err()
+        };
+        let key_error = extract_key_error(&scan(Key::from_raw(b"a"), None, false));
+        assert_eq!(key_error.get_locked().get_key(), b"key");
+        let key_error = extract_key_error(&scan(Key::from_raw(b"\xff"), None, true));
         assert_eq!(key_error.get_locked().get_key(), b"key");
 
         // Test batch_get_command
@@ -6511,5 +6514,203 @@ mod tests {
         on_commited_case.run();
         on_proposed_case.run();
         on_proposed_fallback_case.run();
+    }
+
+    #[test]
+    fn test_resolve_commit_pessimistic_locks() {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+
+        // Pessimistically lock k1, k2, k3, k4, after the pessimistic retry k2 is no longer needed
+        // and the pessimistic lock on k2 is left.
+        storage
+            .sched_txn_command(
+                new_acquire_pessimistic_lock_command(
+                    vec![
+                        (Key::from_raw(b"k1"), false),
+                        (Key::from_raw(b"k2"), false),
+                        (Key::from_raw(b"k3"), false),
+                        (Key::from_raw(b"k4"), false),
+                        (Key::from_raw(b"k5"), false),
+                        (Key::from_raw(b"k6"), false),
+                    ],
+                    10,
+                    10,
+                    false,
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Prewrite keys except the k2.
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::with_defaults(
+                    vec![
+                        (Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())), true),
+                        (Mutation::Put((Key::from_raw(b"k3"), b"v2".to_vec())), true),
+                        (Mutation::Put((Key::from_raw(b"k4"), b"v4".to_vec())), true),
+                        (Mutation::Put((Key::from_raw(b"k5"), b"v5".to_vec())), true),
+                        (Mutation::Put((Key::from_raw(b"k6"), b"v6".to_vec())), true),
+                    ],
+                    b"k1".to_vec(),
+                    10.into(),
+                    10.into(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Commit the primary key.
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(b"k1")],
+                    10.into(),
+                    20.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Pessimistically rollback the k2 lock.
+        // Non lite lock resolve on k1 and k2, there should no errors as lock on k2 is pessimistic type.
+        must_rollback(&storage.engine, b"k2", 10);
+        let mut temp_map = HashMap::default();
+        temp_map.insert(10.into(), 20.into());
+        storage
+            .sched_txn_command(
+                commands::ResolveLock::new(
+                    temp_map.clone(),
+                    None,
+                    vec![
+                        (
+                            Key::from_raw(b"k1"),
+                            mvcc::Lock::new(
+                                mvcc::LockType::Put,
+                                b"k1".to_vec(),
+                                10.into(),
+                                20,
+                                Some(b"v1".to_vec()),
+                                10.into(),
+                                0,
+                                11.into(),
+                            ),
+                        ),
+                        (
+                            Key::from_raw(b"k2"),
+                            mvcc::Lock::new(
+                                mvcc::LockType::Pessimistic,
+                                b"k1".to_vec(),
+                                10.into(),
+                                20,
+                                None,
+                                10.into(),
+                                0,
+                                11.into(),
+                            ),
+                        ),
+                    ],
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Non lite lock resolve on k3 and k4, there should be no errors.
+        storage
+            .sched_txn_command(
+                commands::ResolveLock::new(
+                    temp_map.clone(),
+                    None,
+                    vec![
+                        (
+                            Key::from_raw(b"k3"),
+                            mvcc::Lock::new(
+                                mvcc::LockType::Put,
+                                b"k1".to_vec(),
+                                10.into(),
+                                20,
+                                Some(b"v3".to_vec()),
+                                10.into(),
+                                0,
+                                11.into(),
+                            ),
+                        ),
+                        (
+                            Key::from_raw(b"k4"),
+                            mvcc::Lock::new(
+                                mvcc::LockType::Put,
+                                b"k1".to_vec(),
+                                10.into(),
+                                20,
+                                Some(b"v4".to_vec()),
+                                10.into(),
+                                0,
+                                11.into(),
+                            ),
+                        ),
+                    ],
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Unlock the k6 first.
+        // Non lite lock resolve on k5 and k6, error should be reported.
+        must_rollback(&storage.engine, b"k6", 10);
+        storage
+            .sched_txn_command(
+                commands::ResolveLock::new(
+                    temp_map,
+                    None,
+                    vec![
+                        (
+                            Key::from_raw(b"k5"),
+                            mvcc::Lock::new(
+                                mvcc::LockType::Put,
+                                b"k1".to_vec(),
+                                10.into(),
+                                20,
+                                Some(b"v5".to_vec()),
+                                10.into(),
+                                0,
+                                11.into(),
+                            ),
+                        ),
+                        (
+                            Key::from_raw(b"k6"),
+                            mvcc::Lock::new(
+                                mvcc::LockType::Put,
+                                b"k1".to_vec(),
+                                10.into(),
+                                20,
+                                Some(b"v6".to_vec()),
+                                10.into(),
+                                0,
+                                11.into(),
+                            ),
+                        ),
+                    ],
+                    Context::default(),
+                ),
+                expect_fail_callback(tx, 6, |e| match e {
+                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::TxnLockNotFound { .. },
+                    ))))) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
     }
 }

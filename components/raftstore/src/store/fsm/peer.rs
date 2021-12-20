@@ -10,7 +10,9 @@ use std::{cmp, u64};
 use batch_system::{BasicMailbox, Fsm};
 use collections::HashMap;
 use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatchExt};
+use engine_traits::{
+    Engines, KvEngine, Mutable, RaftEngine, RaftLogBatch, SSTMetaInfo, WriteBatchExt,
+};
 use error_code::ErrorCodeExt;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SwitchMode;
@@ -509,7 +511,7 @@ where
                         .raft_metrics
                         .propose
                         .request_wait_time
-                        .observe(duration_to_sec(cmd.send_time.elapsed()) as f64);
+                        .observe(duration_to_sec(cmd.send_time.saturating_elapsed()) as f64);
                     let req_size = cmd.request.compute_size();
                     if self.fsm.batch_req_builder.can_batch(&cmd.request, req_size) {
                         self.fsm.batch_req_builder.add(cmd, req_size);
@@ -925,25 +927,35 @@ where
         }
     }
 
-    pub fn collect_ready(&mut self) {
+    /// Collect ready if any.
+    ///
+    /// Returns false is no readiness is generated.
+    pub fn collect_ready(&mut self, offset: usize) -> bool {
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
         if !has_ready || self.fsm.stopped {
-            return;
+            return false;
         }
         self.ctx.pending_count += 1;
         self.ctx.has_ready = true;
+        let written = self.ctx.kv_wb.data_size() + self.ctx.raft_wb.size();
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
         if let Some(mut r) = res {
             // This bases on an assumption that fsm array passed in `end` method will have
             // the same order of processing.
-            r.batch_offset = self.ctx.processed_fsm_count;
+            r.batch_offset = offset;
             self.on_role_changed(&r.ready);
             if r.ctx.has_new_entries {
                 self.register_raft_gc_log_tick();
             }
-            self.ctx.ready_res.push(r);
+            if self.ctx.kv_wb.data_size() + self.ctx.raft_wb.size() != written {
+                self.ctx.ready_res.push(r);
+            } else {
+                self.ctx.readonly_ready_res.push(r);
+            }
+            return true;
         }
+        false
     }
 
     pub fn post_raft_ready_append(&mut self, ready: CollectedReady) {
@@ -3437,10 +3449,12 @@ where
             // |------------- entries needs to be compacted ----------|
             // [entries...][the entry at `compact_idx`][the last entry][new compaction entry]
             //             |-------------------- entries will be left ----------------------|
+            self.ctx.raft_metrics.raft_log_gc_skipped.reserve_log += 1;
             return;
         } else if replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold
             && self.fsm.skip_gc_raft_log_ticks < self.ctx.cfg.raft_log_reserve_max_ticks
         {
+            self.ctx.raft_metrics.raft_log_gc_skipped.threshold_limit += 1;
             // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
             self.fsm.skip_gc_raft_log_ticks += 1;
             self.register_raft_gc_log_tick();
@@ -3453,6 +3467,10 @@ where
         compact_idx -= 1;
         if compact_idx < first_idx {
             // In case compact_idx == first_idx before subtraction.
+            self.ctx
+                .raft_metrics
+                .raft_log_gc_skipped
+                .compact_idx_too_small += 1;
             return;
         }
         total_gc_logs += compact_idx - first_idx;
