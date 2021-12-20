@@ -39,16 +39,8 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
-<<<<<<< HEAD
 use raftstore::store::{Callback, CasualMessage, StoreMsg};
 use raftstore::{DiscardReason, Error as RaftStoreError};
-=======
-use raftstore::store::memory::{MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
-use raftstore::store::CheckLeaderTask;
-use raftstore::store::{Callback, CasualMessage, RaftCmdExtraOpts};
-use raftstore::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
-use tikv_alloc::trace::MemoryTraceGuard;
->>>>>>> 8045e1b18... server: fix channel full could break the raft connection (#11048)
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
@@ -118,38 +110,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
             grpc_thread_load,
             enable_req_batch,
             proxy,
-<<<<<<< HEAD
         }
-=======
-            reject_messages_on_memory_ratio,
-        }
-    }
-
-    fn handle_raft_message(
-        store_id: u64,
-        ch: &T,
-        msg: RaftMessage,
-        reject: bool,
-    ) -> RaftStoreResult<()> {
-        let to_store_id = msg.get_to_peer().get_store_id();
-        if to_store_id != store_id {
-            return Err(RaftStoreError::StoreNotMatch {
-                to_store_id,
-                my_store_id: store_id,
-            });
-        }
-        if reject && msg.get_message().get_msg_type() == MessageType::MsgAppend {
-            RAFT_APPEND_REJECTS.inc();
-            let id = msg.get_region_id();
-            let peer_id = msg.get_message().get_from();
-            let m = CasualMessage::RejectRaftAppend { peer_id };
-            let _ = ch.send_casual_msg(id, m);
-            return Ok(());
-        }
-        // `send_raft_msg` may return `RaftStoreError::RegionNotFound` or
-        // `RaftStoreError::Transport(DiscardReason::Full)`
-        ch.send_raft_msg(msg)
->>>>>>> 8045e1b18... server: fix channel full could break the raft connection (#11048)
     }
 }
 
@@ -617,32 +578,16 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         sink: ClientStreamingSink<Done>,
     ) {
         let ch = self.ch.clone();
-<<<<<<< HEAD
-=======
-        let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
-
-        let res = async move {
-            let mut stream = stream.map_err(Error::from);
-            while let Some(msg) = stream.try_next().await? {
-                RAFT_MESSAGE_RECV_COUNTER.inc();
-                let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
-                if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
-                    Self::handle_raft_message(store_id, &ch, msg, reject)
-                {
-                    // Return an error here will break the connection, only do that for `StoreNotMatch` to
-                    // let tikv to resolve a correct address from PD
-                    return Err(Error::from(err));
-                }
-            }
-            Ok::<(), Error>(())
-        };
-
->>>>>>> 8045e1b18... server: fix channel full could break the raft connection (#11048)
         ctx.spawn(async move {
             let res = stream.map_err(Error::from).try_for_each(move |msg| {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
-                let ret = ch.send_raft_msg(msg).map_err(Error::from);
-                future::ready(ret)
+                if let Err(e) = ch.send_raft_msg(msg) {
+                    // `send_raft_msg` may return `RaftStoreError::RegionNotFound` or
+                    // `RaftStoreError::Transport(DiscardReason::Full)`, return the error
+                    // here will cause the connection break which doesn't help the situation
+                    error!("dispatch raft msg from gRPC to raftstore fail"; "err" => ?e);
+                }
+                future::ok(())
             });
             let status = match res.await {
                 Err(e) => {
@@ -672,20 +617,12 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 let len = msgs.get_msgs().len();
                 RAFT_MESSAGE_RECV_COUNTER.inc_by(len as i64);
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
-<<<<<<< HEAD
                 for msg in msgs.take_msgs().into_iter() {
                     if let Err(e) = ch.send_raft_msg(msg) {
-                        return future::err(Error::from(e));
-=======
-                let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
-                for msg in batch_msg.take_msgs().into_iter() {
-                    if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
-                        Self::handle_raft_message(store_id, &ch, msg, reject)
-                    {
-                        // Return an error here will break the connection, only do that for `StoreNotMatch` to
-                        // let tikv to resolve a correct address from PD
-                        return Err(Error::from(err));
->>>>>>> 8045e1b18... server: fix channel full could break the raft connection (#11048)
+                        // `send_raft_msg` may return `RaftStoreError::RegionNotFound` or
+                        // `RaftStoreError::Transport(DiscardReason::Full)`, return the error
+                        // here will cause the connection break which doesn't help the situation
+                        error!("dispatch raft msg from gRPC to raftstore fail"; "err" => ?e);
                     }
                 }
                 future::ok(())
