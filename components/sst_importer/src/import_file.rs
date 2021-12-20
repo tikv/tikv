@@ -294,14 +294,14 @@ impl ImportDir {
     ) -> Result<bool> {
         for meta in metas {
             match (api_version, meta.api_version) {
-                (ApiVersion::V1 | ApiVersion::V1ttl, ApiVersion::V1 | ApiVersion::V1ttl) => {
-                    continue;
-                }
-                (ApiVersion::V2, ApiVersion::V2) => continue,
-                // cannot import V2 into V1 store
-                (ApiVersion::V1 | ApiVersion::V1ttl, ApiVersion::V2) => return Ok(false),
-                // can import V1 if all keys are written by TiDB
-                (ApiVersion::V2, ApiVersion::V1 | ApiVersion::V1ttl) => {
+                (cur_version, meta_version) if cur_version == meta_version => continue,
+                // sometimes client do not know whether ttl is enabled, so a general V1 is accepted as V1ttl
+                (ApiVersion::V1ttl, ApiVersion::V1) => continue,
+                // import V1ttl as V1 will immediatly be rejected because it is never correct.
+                (ApiVersion::V1, ApiVersion::V1ttl) => return Ok(false),
+                // otherwise we are upgrade/downgrade between V1 and V2
+                // this can be done if all keys are written by TiDB
+                _ => {
                     let path = self.join(meta)?;
                     let path_str = path.save.to_str().unwrap();
                     let env = get_env(key_manager.clone(), get_io_rate_limiter())?;
@@ -309,25 +309,30 @@ impl ImportDir {
 
                     for (start, end) in TIDB_RANGES_COMPLEMENT {
                         let mut unexpected_data_key = None;
-                        sst_reader.scan_cf(meta.get_cf_name(), start, end, false, |key, _| {
+                        sst_reader.scan( start, end, false, |key, _| {
                             unexpected_data_key = Some(key[DATA_KEY_PREFIX_LEN..].to_vec());
                             Ok(false)
                         })?;
 
                         if let Some(unexpected_data_key) = unexpected_data_key {
                             error!(
-                                "unable to switch `storage.api_version` from {:?} to {:?} \
-                                 because found data key that is not written by TiDB: {:?}",
-                                meta.api_version,
-                                api_version,
-                                log_wrappers::hex_encode_upper(&unexpected_data_key)
+                                "unable to import: switch api version with non-tidb key";
+                                "sst" => ?meta.api_version,
+                                "current" => ?api_version,
+                                "key" => ?log_wrappers::hex_encode_upper(&unexpected_data_key)
                             );
                             return Ok(false);
                         }
                     }
+                    info!(
+                        "import version check pass";
+                        "sst" => ?meta.api_version,
+                        "current" => ?api_version,
+                    );
                 }
             }
         }
+        info!("api_check success");
         Ok(true)
     }
 
