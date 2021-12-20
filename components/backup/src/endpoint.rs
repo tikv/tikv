@@ -155,26 +155,36 @@ pub struct BackupRange {
 /// The generic saveable writer. for generic `InMemBackupFiles`.
 /// Maybe what we really need is make Writer a trait...
 enum KvWriter {
-    TiDB(BackupWriter),
+    Txn(BackupWriter),
     Raw(BackupRawKVWriter),
+}
+
+impl std::fmt::Debug for KvWriter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Txn(_) => f.debug_tuple("Txn").finish(),
+            Self::Raw(_) => f.debug_tuple("Raw").finish(),
+        }
+    }
 }
 
 impl KvWriter {
     async fn save(self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
         match self {
-            Self::TiDB(writer) => writer.save(storage).await,
+            Self::Txn(writer) => writer.save(storage).await,
             Self::Raw(writer) => writer.save(storage).await,
         }
     }
 
     fn need_flush_keys(&self) -> bool {
         match self {
-            Self::TiDB(writer) => writer.need_flush_keys(),
+            Self::Txn(writer) => writer.need_flush_keys(),
             Self::Raw(_) => true,
         }
     }
 }
 
+#[derive(Debug)]
 struct InMemBackupFiles {
     files: KvWriter,
     start_key: Vec<u8>,
@@ -182,18 +192,6 @@ struct InMemBackupFiles {
     start_version: TimeStamp,
     end_version: TimeStamp,
     region: Region,
-}
-
-impl std::fmt::Debug for InMemBackupFiles {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("InMemBackupFiles")
-            .field("start_key", &self.start_key)
-            .field("end_key", &self.end_key)
-            .field("start_version", &self.start_version)
-            .field("end_version", &self.end_version)
-            .field("region", &self.region)
-            .finish()
-    }
 }
 
 async fn save_backup_file_worker(
@@ -366,7 +364,7 @@ impl BackupRange {
                 )?;
                 let this_start_key = next_file_start_key.clone();
                 let msg = InMemBackupFiles {
-                    files: KvWriter::TiDB(writer),
+                    files: KvWriter::Txn(writer),
                     start_key: this_start_key,
                     end_key: this_end_key.clone(),
                     start_version: begin_ts,
@@ -391,21 +389,22 @@ impl BackupRange {
         }
         drop(snap_store);
         let stat = scanner.take_statistics();
-        if start_scan.saturating_elapsed_secs() > 30.0 {
+        let take = start_scan.saturating_elapsed_secs();
+        if take > 30.0 {
             warn!("backup scan takes long time.";
-                "take(s)" => %start_scan.saturating_elapsed_secs(),
+                "take(s)" => %take,
                 "region" => ?self.region,
-                "start_key" => ?self.start_key,
-                "end_key" => ?self.end_key,
+                "start_key" => %redact_option_key(&self.start_key),
+                "end_key" => %redact_option_key(&self.end_key),
                 "stat" => ?stat,
             );
         }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["scan"])
-            .observe(start_scan.saturating_elapsed().as_secs_f64());
+            .observe(take);
 
         let msg = InMemBackupFiles {
-            files: KvWriter::TiDB(writer),
+            files: KvWriter::Txn(writer),
             start_key: next_file_start_key,
             end_key: self
                 .end_key
@@ -1118,6 +1117,13 @@ fn to_sst_compression_type(ct: CompressionType) -> Option<SstCompressionType> {
         CompressionType::Snappy => Some(SstCompressionType::Snappy),
         CompressionType::Zstd => Some(SstCompressionType::Zstd),
         CompressionType::Unknown => None,
+    }
+}
+
+fn redact_option_key(key: &Option<Key>) -> log_wrappers::Value {
+    match key {
+        None => log_wrappers::Value::key(b""),
+        Some(key) => log_wrappers::Value::key(key.as_encoded().as_slice()),
     }
 }
 
