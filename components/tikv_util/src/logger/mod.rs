@@ -659,9 +659,9 @@ mod tests {
         );
 
         slog_warn!(logger, "Type";
-            "Counter" => std::f64::NAN,
-            "Score" => std::f64::INFINITY,
-            "Other" => std::f64::NEG_INFINITY
+            "Counter" => f64::NAN,
+            "Score" => f64::INFINITY,
+            "Other" => f64::NEG_INFINITY
         );
 
         let none: Option<u8> = None;

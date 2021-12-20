@@ -1367,7 +1367,7 @@ mod tests {
         scheduler
             .inner
             .flow_controller
-            .set_speed_limit(std::f64::INFINITY);
+            .set_speed_limit(f64::INFINITY);
         let mut req = CheckTxnStatusRequest::default();
         req.mut_context().max_execution_duration_ms = 100;
         req.set_primary_key(b"a".to_vec());
