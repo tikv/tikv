@@ -75,6 +75,7 @@ pub trait Simulator {
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_recv_filters(&mut self, node_id: u64);
+    fn get_snap_mgr(&self, node_id: u64) -> &SnapManager;
 
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_store_id();
@@ -1194,6 +1195,10 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn get_snap_dir(&self, node_id: u64) -> String {
         self.sim.rl().get_snap_dir(node_id)
+    }
+
+    pub fn get_snap_mgr(&self, node_id: u64) -> SnapManager {
+        self.sim.rl().get_snap_mgr(node_id).clone()
     }
 
     pub fn clear_send_filters(&mut self) {
