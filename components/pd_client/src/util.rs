@@ -775,5 +775,8 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
         ErrorType::RegionNotFound => Err(Error::RegionNotFound(vec![])),
         ErrorType::Unknown => Err(box_err!(err.get_message())),
         ErrorType::Ok => Ok(()),
+        ErrorType::GlobalConfigNotFound => {
+            Err(Error::GlobalConfigNotFound(err.get_message().to_owned()))
+        }
     }
 }

@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -282,6 +283,62 @@ impl fmt::Debug for RpcClient {
 const LEADER_CHANGE_RETRY: usize = 10;
 
 impl PdClient for RpcClient {
+    fn load_global_config(&self, list: Vec<String>) -> Result<HashMap<String, String>> {
+        use kvproto::pdpb::LoadGlobalConfigRequest;
+        let mut req = LoadGlobalConfigRequest::new();
+        for elem in list {
+            req.names.push(elem);
+        }
+        let grpc_response = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
+            client.load_global_config(&req)
+        })?;
+        let mut res = HashMap::new();
+        for c in grpc_response.get_items() {
+            if c.has_error() {
+                error!("failed to load global config with key {:?}", c.get_error());
+            } else {
+                res.insert(c.get_name().to_owned(), c.get_value().to_owned());
+            }
+        }
+        Ok(res)
+    }
+
+    fn store_global_config(&self, list: HashMap<String, String>) -> Result<()> {
+        use kvproto::pdpb::GlobalConfigItem;
+        use kvproto::pdpb::StoreGlobalConfigRequest;
+        let mut req = StoreGlobalConfigRequest::new();
+        for (k, v) in list {
+            req.changes.push({
+                let mut item = GlobalConfigItem::new();
+                item.set_name(k);
+                item.set_value(v);
+                item
+            });
+        }
+        let res = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
+            client.store_global_config(&req)
+        })?;
+        if res.has_error() {
+            error!(
+                "error received in store global config {:?}",
+                res.get_error()
+            );
+            Err(box_err!("{:?}", res.get_error()))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn watch_global_config(
+        &self,
+    ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
+        use kvproto::pdpb::WatchGlobalConfigRequest;
+        let req = WatchGlobalConfigRequest::default();
+        sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
+            client.watch_global_config(&req)
+        })
+    }
+
     fn get_cluster_id(&self) -> Result<u64> {
         Ok(self.cluster_id)
     }
