@@ -659,6 +659,7 @@ mod tests {
         );
         let now = TimeStamp::physical_now();
         let mut region1 = KvEventsBuilder::new(1, now);
+        let start_ts = TimeStamp::physical_now();
         region1.put_table(CF_DEFAULT, 1, b"hello", b"world");
         region1.put_table(CF_WRITE, 1, b"hello", b"this isn't a write record :3");
         region1.put_table(CF_WRITE, 1, b"bonjour", b"this isn't a write record :3");
@@ -668,7 +669,6 @@ mod tests {
         region1.delete_table(CF_DEFAULT, 1, b"hello");
         println!("{:?}", region1);
         let events = region1.flush_events();
-        let start_ts = TimeStamp::physical_now();
         for event in events {
             router.on_event(event).await?;
         }
