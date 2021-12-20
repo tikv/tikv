@@ -27,13 +27,17 @@ regex = "1"
 tikv_util = {path = "../tikv_util"}
 txn_types = { path = "../txn_types", default-features = false }
 tikv_alloc = {path = "../tikv_alloc"}
-tidb_query_datatype = {path = "../tidb_query_datatype"}
 log_wrappers = { path = "../log_wrappers" }
 lazy_static = "1.4"
 futures = "0.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 hex = "0.4"
+uuid = "0.8"
+openssl = "0.10"
+
+file_system = { path = "../file_system" }
+tidb_query_datatype = {path = "../tidb_query_datatype", default-features = false}
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
