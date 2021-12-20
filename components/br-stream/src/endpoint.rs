@@ -2,7 +2,7 @@
 
 use std::fs::OpenOptions;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::{fmt, io::Write};
 
 use engine_traits::CF_LOCK;
@@ -27,7 +27,7 @@ pub struct Endpoint<S: MetaStore + 'static> {
     #[allow(dead_code)]
     config: BackupStreamConfig,
     meta_client: Option<MetadataClient<S>>,
-    range_router: Arc<Mutex<Router>>,
+    range_router: Arc<RwLock<Router>>,
     #[allow(dead_code)]
     scheduler: Scheduler<Task>,
     #[allow(dead_code)]
@@ -59,7 +59,7 @@ impl Endpoint<EtcdStore> {
             }
         };
 
-        let range_router = Arc::new(Mutex::new(Router::new()));
+        let range_router = Arc::new(RwLock::new(Router::new()));
 
         if cli.is_none() {
             // unable to connect to etcd
@@ -171,7 +171,7 @@ where
         if cf == CF_LOCK {
             return;
         }
-        if !self.range_router.lock().unwrap().key_in_ranges(&key) {
+        if !self.range_router.read().unwrap().key_in_ranges(&key) {
             // drop the key not in filter
             return;
         }
@@ -181,7 +181,7 @@ where
             "cf" => ?cf,
             "key" => &log_wrappers::Value::key(&key),
         );
-        if let Some(task) = self.range_router.lock().unwrap().get_task_by_key(&key) {
+        if let Some(task) = self.range_router.read().unwrap().get_task_by_key(&key) {
             let cmd_type = if t == CmdType::Put { "put" } else { "delete" };
             let table_id = decode_table_id(&key).unwrap_or(0) as u64;
             let name = self.backup_file_name(task, self.store_id, table_id, 0, &cf, cmd_type);
@@ -252,7 +252,7 @@ where
     pub fn on_register(&self, task: MetaTask) {
         if let Some(cli) = self.meta_client.as_ref() {
             let cli = cli.clone();
-            let range_router = self.range_router.clone();
+            let range_router = Arc::clone(&self.range_router);
 
             info!("register task {:?}", task);
 
@@ -267,7 +267,7 @@ where
                         );
                         // TODO implement register ranges
                         range_router
-                            .lock()
+                            .write()
                             .unwrap()
                             .register_ranges(task_name, ranges.inner);
                     }
