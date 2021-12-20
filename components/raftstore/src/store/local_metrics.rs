@@ -370,19 +370,21 @@ impl Default for RaftLogGcSkippedMetrics {
 impl RaftLogGcSkippedMetrics {
     fn flush(&mut self) {
         if self.reserve_log > 0 {
-            RAFT_LOG_GC_SKIPPED.reserve_log.inc_by(self.reserve_log);
+            RAFT_LOG_GC_SKIPPED
+                .reserve_log
+                .inc_by(self.reserve_log as i64);
             self.reserve_log = 0;
         }
         if self.threshold_limit > 0 {
             RAFT_LOG_GC_SKIPPED
                 .threshold_limit
-                .inc_by(self.threshold_limit);
+                .inc_by(self.threshold_limit as i64);
             self.threshold_limit = 0;
         }
         if self.compact_idx_too_small > 0 {
             RAFT_LOG_GC_SKIPPED
                 .compact_idx_too_small
-                .inc_by(self.compact_idx_too_small);
+                .inc_by(self.compact_idx_too_small as i64);
             self.compact_idx_too_small = 0;
         }
     }
