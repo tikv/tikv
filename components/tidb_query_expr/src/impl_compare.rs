@@ -103,7 +103,7 @@ impl<F: CmpOp> Comparer for UintIntComparer<F> {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
             (Some(lhs), Some(rhs)) => {
-                let ordering = if *rhs < 0 || *lhs as u64 > std::i64::MAX as u64 {
+                let ordering = if *rhs < 0 || *lhs as u64 > i64::MAX as u64 {
                     Ordering::Greater
                 } else {
                     lhs.cmp(rhs)
@@ -127,7 +127,7 @@ impl<F: CmpOp> Comparer for IntUintComparer<F> {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
             (Some(lhs), Some(rhs)) => {
-                let ordering = if *lhs < 0 || *rhs as u64 > std::i64::MAX as u64 {
+                let ordering = if *lhs < 0 || *rhs as u64 > i64::MAX as u64 {
                     Ordering::Less
                 } else {
                     lhs.cmp(rhs)
@@ -768,44 +768,32 @@ mod tests {
     fn test_compare_int_2() {
         let test_cases = vec![
             (Some(5), false, Some(3), false, Ordering::Greater),
+            (Some(u64::MAX as i64), false, Some(5), false, Ordering::Less),
             (
-                Some(std::u64::MAX as i64),
-                false,
-                Some(5),
-                false,
-                Ordering::Less,
-            ),
-            (
-                Some(std::u64::MAX as i64),
+                Some(u64::MAX as i64),
                 true,
-                Some((std::u64::MAX - 1) as i64),
+                Some((u64::MAX - 1) as i64),
                 true,
                 Ordering::Greater,
             ),
             (
-                Some(std::u64::MAX as i64),
+                Some(u64::MAX as i64),
                 true,
                 Some(5),
                 true,
                 Ordering::Greater,
             ),
-            (Some(5), true, Some(std::i64::MIN), false, Ordering::Greater),
+            (Some(5), true, Some(i64::MIN), false, Ordering::Greater),
             (
-                Some(std::u64::MAX as i64),
+                Some(u64::MAX as i64),
                 true,
-                Some(std::i64::MIN),
+                Some(i64::MIN),
                 false,
                 Ordering::Greater,
             ),
             (Some(5), true, Some(3), false, Ordering::Greater),
-            (Some(std::i64::MIN), false, Some(3), true, Ordering::Less),
-            (
-                Some(5),
-                false,
-                Some(std::u64::MAX as i64),
-                true,
-                Ordering::Less,
-            ),
+            (Some(i64::MIN), false, Some(3), true, Ordering::Less),
+            (Some(5), false, Some(u64::MAX as i64), true, Ordering::Less),
             (Some(5), false, Some(3), true, Ordering::Greater),
         ];
         for (lhs, lhs_is_unsigned, rhs, rhs_is_unsigned, ordering) in test_cases {

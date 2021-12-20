@@ -1052,14 +1052,7 @@ fn test_check_txn_status_with_max_ts() {
     must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), lock_ts);
 
     // Should return MinCommitTsPushed even if caller_start_ts is max.
-    let status = must_check_txn_status(
-        &client,
-        ctx.clone(),
-        &k,
-        lock_ts,
-        std::u64::MAX,
-        lock_ts + 1,
-    );
+    let status = must_check_txn_status(&client, ctx.clone(), &k, lock_ts, u64::MAX, lock_ts + 1);
     assert_eq!(status.lock_ttl, 3000);
     assert_eq!(status.action, Action::MinCommitTsPushed);
 

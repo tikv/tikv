@@ -451,7 +451,7 @@ impl TestSuite {
         let env = self.env.clone();
         self.cdc_cli.entry(store_id).or_insert_with(|| {
             let channel = ChannelBuilder::new(env)
-                .max_receive_message_len(std::i32::MAX)
+                .max_receive_message_len(i32::MAX)
                 .connect(&addr);
             ChangeDataClient::new(channel)
         })

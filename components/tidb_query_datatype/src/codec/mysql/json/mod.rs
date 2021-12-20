@@ -571,7 +571,7 @@ mod tests {
             let json: Json = jstr.parse().unwrap();
             let get: f64 = json.convert(&mut ctx).unwrap();
             assert!(
-                (get - exp).abs() < std::f64::EPSILON,
+                (get - exp).abs() < f64::EPSILON,
                 "json.as_f64 get: {}, exp: {}",
                 get,
                 exp

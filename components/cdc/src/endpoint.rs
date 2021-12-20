@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::f64::INFINITY;
 use std::fmt;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -304,7 +303,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let speed_limiter = Limiter::new(if config.incremental_scan_speed_limit.0 > 0 {
             config.incremental_scan_speed_limit.0 as f64
         } else {
-            INFINITY
+            f64::INFINITY
         });
 
         CDC_SINK_CAP.set(sink_memory_quota.capacity() as i64);
@@ -389,7 +388,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             let new_speed_limit = if self.config.incremental_scan_speed_limit.0 > 0 {
                 self.config.incremental_scan_speed_limit.0 as f64
             } else {
-                INFINITY
+                f64::INFINITY
             };
 
             self.scan_speed_limiter.set_speed_limit(new_speed_limit);

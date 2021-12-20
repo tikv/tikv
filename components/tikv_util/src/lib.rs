@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
-use std::{env, thread, u64};
+use std::{env, thread};
 
 use nix::sys::wait::{wait, WaitStatus};
 use nix::unistd::{fork, ForkResult};
