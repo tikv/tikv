@@ -33,7 +33,7 @@ use raftstore::router::{
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::{
-    AutoSplitController, Callback, LocalReader, SnapManagerBuilder, SplitCheckRunner,
+    AutoSplitController, Callback, LocalReader, SnapManager, SnapManagerBuilder, SplitCheckRunner,
     SplitConfigManager,
 };
 use raftstore::Result;
@@ -124,6 +124,7 @@ pub struct ServerCluster {
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
     pub security_mgr: Arc<SecurityManager>,
     pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
+    snap_mgrs: HashMap<u64, SnapManager>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<AddressMap, RaftStoreBlackHole>,
@@ -163,6 +164,7 @@ impl ServerCluster {
             snap_paths: HashMap::default(),
             pending_services: HashMap::default(),
             coprocessor_hooks: HashMap::default(),
+            snap_mgrs: HashMap::default(),
             raft_client,
             concurrency_managers: HashMap::default(),
             env,
@@ -304,6 +306,7 @@ impl Simulator for ServerCluster {
         let snap_mgr = SnapManagerBuilder::default()
             .encryption_key_manager(key_manager)
             .build(tmp_str);
+        self.snap_mgrs.insert(node_id, snap_mgr.clone());
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
@@ -459,6 +462,10 @@ impl Simulator for ServerCluster {
             .to_str()
             .unwrap()
             .to_owned()
+    }
+
+    fn get_snap_mgr(&self, node_id: u64) -> &SnapManager {
+        self.snap_mgrs.get(&node_id).unwrap()
     }
 
     fn stop_node(&mut self, node_id: u64) {
