@@ -139,7 +139,7 @@ impl Config {
             }
             ApiVersion::V2 => {
                 self.api_version = 2;
-                self.enable_ttl = false;
+                self.enable_ttl = true;
             }
         }
     }
