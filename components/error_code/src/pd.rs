@@ -10,6 +10,6 @@ define_error_codes!(
     GRPC => ("gRPC", "", ""),
     REGION_NOT_FOUND => ("RegionNotFound", "", ""),
     STORE_TOMBSTONE => ("StoreTombstone", "", ""),
-    UNKNOWN => ("Unknown", "", ""),
-    GLOBAL_CONFIG_NOT_FOUNT => ("GlobalConfigNotFOund","","")
+    GLOBAL_CONFIG_NOT_FOUNT => ("GlobalConfigNotFound","",""),
+    UNKNOWN => ("Unknown", "", "")
 );
