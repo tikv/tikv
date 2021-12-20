@@ -11,7 +11,7 @@ use rand::random;
 
 use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
 
-use engine_traits::{key_prefix, CF_DEFAULT, CF_LOCK};
+use engine_traits::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
 use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
@@ -875,8 +875,8 @@ fn test_txn_store_write_conflict() {
 }
 
 const TIDB_KEY_CASE: &[u8] = b"t_a";
-const TXN_KEY_CASE: &[u8] = &[key_prefix::TXN_KEY_PREFIX, 0, b'a'];
-const RAW_KEY_CASE: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'a'];
+const TXN_KEY_CASE: &[u8] = b"x\0_a";
+const RAW_KEY_CASE: &[u8] = b"r\0_a";
 
 // Test API version verification for txnkv requests.
 // See the following for detail:
@@ -1114,7 +1114,7 @@ fn inc<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, key: &[u8]) -> Re
     let key_address = Key::from_raw(key);
     for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
-        let number: i32 = match store.get(Context::default(), key.to_vec(), start_ts) {
+        let number: i32 = match store.get(Context::default(), &key_address, start_ts) {
             Ok((Some(x), ..)) => String::from_utf8(x).unwrap().parse().unwrap(),
             Ok((None, ..)) => 0,
             Err(_) => {
@@ -1194,11 +1194,10 @@ fn format_key(x: usize) -> Vec<u8> {
 fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -> bool {
     'retry: for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
-        let raw_keys: Vec<Vec<u8>> = (0..n).map(format_key).collect();
-        let keys: Vec<Key> = raw_keys.iter().map(|x| Key::from_raw(&x)).collect();
+        let keys: Vec<Key> = (0..n).map(format_key).map(|x| Key::from_raw(&x)).collect();
         let mut mutations = vec![];
-        for (k, raw_key) in raw_keys.into_iter().take(n).enumerate() {
-            let number = match store.get(Context::default(), raw_key, start_ts) {
+        for key in keys.iter().take(n) {
+            let number = match store.get(Context::default(), key, start_ts) {
                 Ok((Some(n), ..)) => String::from_utf8(n).unwrap().parse().unwrap(),
                 Ok((None, ..)) => 0,
                 Err(_) => {
@@ -1208,7 +1207,7 @@ fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -
             };
             let next = number + 1;
             mutations.push(Mutation::make_put(
-                keys[k].clone(),
+                key.clone(),
                 next.to_string().into_bytes(),
             ));
         }

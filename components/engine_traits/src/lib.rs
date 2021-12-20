@@ -337,8 +337,7 @@ pub use raft_engine::{CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch, 
 // These modules need further scrutiny
 
 pub mod compaction_job;
-pub mod key_prefix;
-pub mod raw_value;
+pub mod raw_ttl;
 pub mod util;
 pub use compaction_job::*;
 

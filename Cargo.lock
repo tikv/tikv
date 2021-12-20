@@ -83,6 +83,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7825f6833612eb2414095684fcf6c635becf3ce97fe48cf6421321e93bfbd53c"
 
 [[package]]
+name = "api_version"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "codec",
+ "engine_traits",
+ "kvproto",
+ "match_template",
+ "thiserror",
+ "tikv_alloc",
+ "tikv_util",
+]
+
+[[package]]
 name = "arbitrary"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1128,6 +1142,7 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "case_macros",
  "collections",
  "encryption",
@@ -1174,9 +1189,7 @@ dependencies = [
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
- "bitflags",
  "case_macros",
- "codec",
  "error_code",
  "fail",
  "file_system",
@@ -4557,6 +4570,7 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 name = "sst_importer"
 version = "0.1.0"
 dependencies = [
+ "api_version",
  "crc32fast",
  "encryption",
  "engine_rocks",
@@ -4961,6 +4975,7 @@ dependencies = [
 name = "tests"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "arrow",
  "batch-system",
  "byteorder",
@@ -5232,6 +5247,7 @@ name = "tikv"
 version = "5.4.0-alpha"
 dependencies = [
  "anyhow",
+ "api_version",
  "async-stream",
  "async-trait",
  "backtrace",

@@ -23,9 +23,7 @@ use raft::eraftpb;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{raw::Writable, Compat};
-use engine_traits::{
-    key_prefix, MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
-};
+use engine_traits::{MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use pd_client::PdClient;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{fsm::store::StoreMeta, AutoSplitController, SnapManager};
@@ -1747,8 +1745,8 @@ fn test_get_lock_wait_info_api() {
 #[test]
 fn test_txn_api_version() {
     const TIDB_KEY_CASE: &[u8] = b"t_a";
-    const TXN_KEY_CASE: &[u8] = &[key_prefix::TXN_KEY_PREFIX, 0, b'a'];
-    const RAW_KEY_CASE: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'a'];
+    const TXN_KEY_CASE: &[u8] = b"x\0a";
+    const RAW_KEY_CASE: &[u8] = b"r\0a";
 
     let test_data = vec![
         // config api_version = V1|V1ttl, for backward compatible.
