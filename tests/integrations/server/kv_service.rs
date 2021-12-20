@@ -1774,13 +1774,13 @@ fn test_txn_api_version() {
             ApiVersion::V2,
             ApiVersion::V1,
             TXN_KEY_CASE,
-            Some("InvalidKeyPrefix"),
+            Some("InvalidKeyMode"),
         ),
         (
             ApiVersion::V2,
             ApiVersion::V1,
             RAW_KEY_CASE,
-            Some("InvalidKeyPrefix"),
+            Some("InvalidKeyMode"),
         ),
         // V2 api validation.
         (ApiVersion::V2, ApiVersion::V2, TXN_KEY_CASE, None),
@@ -1788,13 +1788,13 @@ fn test_txn_api_version() {
             ApiVersion::V2,
             ApiVersion::V2,
             RAW_KEY_CASE,
-            Some("InvalidKeyPrefix"),
+            Some("InvalidKeyMode"),
         ),
         (
             ApiVersion::V2,
             ApiVersion::V2,
             TIDB_KEY_CASE,
-            Some("InvalidKeyPrefix"),
+            Some("InvalidKeyMode"),
         ),
     ];
 

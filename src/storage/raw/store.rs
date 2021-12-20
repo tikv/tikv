@@ -294,7 +294,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
             let mut opts = IterOptions::new(None, None, false);
             opts.set_upper_bound(r.get_end_key(), DATA_KEY_PREFIX_LEN);
             let mut cursor =
-                Cursor::new(self.snapshot.iter_cf(cf, opts)?, ScanMode::Backward, false);
+                Cursor::new(self.snapshot.iter_cf(cf, opts)?, ScanMode::Forward, false);
             cursor.seek(&Key::from_encoded(r.get_start_key().to_vec()), statistics)?;
             while cursor.valid()? {
                 row_count += 1;

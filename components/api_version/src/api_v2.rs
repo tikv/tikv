@@ -39,11 +39,15 @@ impl APIVersion for APIV2 {
     fn parse_range_mode(range: (Option<&[u8]>, Option<&[u8]>)) -> KeyMode {
         match range {
             (Some(start), Some(end)) => {
-                if start.is_empty() || end.is_empty() || start[0] != end[0] {
-                    // Spanned across multiple mode
-                    KeyMode::Unknown
-                } else {
+                if !start.is_empty()
+                    && !end.is_empty()
+                    && (start[0] == end[0] ||
+                        // Special case to represent "".."" within a key mode
+                        (end == [start[0] + 1]))
+                {
                     Self::parse_key_mode(start)
+                } else {
+                    KeyMode::Unknown
                 }
             }
             _ => KeyMode::Unknown,

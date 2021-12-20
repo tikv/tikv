@@ -421,14 +421,23 @@ impl<E: Engine> AssertionStorage<E> {
     pub fn scan_ok(
         &self,
         start_key: &[u8],
+        end_key: Option<&[u8]>,
         limit: usize,
         ts: impl Into<TimeStamp>,
         expect: Vec<Option<(&[u8], &[u8])>>,
     ) {
-        let key_address = Key::from_raw(start_key);
+        let start_key = Key::from_raw(start_key);
+        let end_key = end_key.map(Key::from_raw);
         let result = self
             .store
-            .scan(self.ctx.clone(), key_address, None, limit, false, ts.into())
+            .scan(
+                self.ctx.clone(),
+                start_key,
+                end_key,
+                limit,
+                false,
+                ts.into(),
+            )
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -438,24 +447,47 @@ impl<E: Engine> AssertionStorage<E> {
         assert_eq!(result, expect);
     }
 
-    pub fn scan_err(&self, start_key: &[u8], limit: usize, ts: impl Into<TimeStamp>) {
-        let key_address = Key::from_raw(start_key);
+    pub fn scan_err(
+        &self,
+        start_key: &[u8],
+        end_key: Option<&[u8]>,
+        limit: usize,
+        ts: impl Into<TimeStamp>,
+    ) {
+        let start_key = Key::from_raw(start_key);
+        let end_key = end_key.map(Key::from_raw);
         self.store
-            .scan(self.ctx.clone(), key_address, None, limit, false, ts.into())
+            .scan(
+                self.ctx.clone(),
+                start_key,
+                end_key,
+                limit,
+                false,
+                ts.into(),
+            )
             .unwrap_err();
     }
 
     pub fn reverse_scan_ok(
         &self,
         start_key: &[u8],
+        end_key: Option<&[u8]>,
         limit: usize,
         ts: impl Into<TimeStamp>,
         expect: Vec<Option<(&[u8], &[u8])>>,
     ) {
-        let key_address = Key::from_raw(start_key);
+        let start_key = Key::from_raw(start_key);
+        let end_key = end_key.map(Key::from_raw);
         let result = self
             .store
-            .reverse_scan(self.ctx.clone(), key_address, None, limit, false, ts.into())
+            .reverse_scan(
+                self.ctx.clone(),
+                start_key,
+                end_key,
+                limit,
+                false,
+                ts.into(),
+            )
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -468,14 +500,16 @@ impl<E: Engine> AssertionStorage<E> {
     pub fn scan_key_only_ok(
         &self,
         start_key: &[u8],
+        end_key: Option<&[u8]>,
         limit: usize,
         ts: impl Into<TimeStamp>,
         expect: Vec<Option<&[u8]>>,
     ) {
-        let key_address = Key::from_raw(start_key);
+        let start_key = Key::from_raw(start_key);
+        let end_key = end_key.map(Key::from_raw);
         let result = self
             .store
-            .scan(self.ctx.clone(), key_address, None, limit, true, ts.into())
+            .scan(self.ctx.clone(), start_key, end_key, limit, true, ts.into())
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect

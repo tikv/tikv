@@ -2279,7 +2279,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 let store = RawStore::new(snapshot, api_version);
-                let cf = Self::rawkv_cf("default", api_version)?;
+                let cf = Self::rawkv_cf("", api_version)?;
 
                 let begin_instant = tikv_util::time::Instant::now_coarse();
                 let mut stats = Statistics::default();
