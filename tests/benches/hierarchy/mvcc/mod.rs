@@ -2,7 +2,7 @@
 
 use concurrency_manager::ConcurrencyManager;
 use criterion::{black_box, BatchSize, Bencher, Criterion};
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{AssertionLevel, Context};
 use test_util::KvGenerator;
 use tikv::storage::kv::{Engine, WriteData};
 use tikv::storage::mvcc::{self, MvccReader, MvccTxn, SnapshotReader};
@@ -46,6 +46,7 @@ where
             min_commit_ts: TimeStamp::default(),
             need_old_value: false,
             is_retry_request: false,
+            assertion_level: AssertionLevel::Off,
         };
         prewrite(
             &mut txn,
@@ -95,6 +96,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
                     min_commit_ts: TimeStamp::default(),
                     need_old_value: false,
                     is_retry_request: false,
+                    assertion_level: AssertionLevel::Off,
                 };
                 prewrite(&mut txn, &mut reader, &txn_props, mutation, &None, false).unwrap();
             }

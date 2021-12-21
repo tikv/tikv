@@ -291,7 +291,6 @@ pub fn get_decrypter_reader(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::f64::INFINITY;
 
     use super::*;
     use crate::store::snap::tests::*;
@@ -388,7 +387,7 @@ mod tests {
     #[test]
     fn test_cf_build_and_apply_sst_files() {
         let db_creaters = &[open_test_empty_db, open_test_db_with_100keys];
-        let max_file_sizes = &[u64::MAX, 100];
+        let max_file_sizes = &[f64::MAX, 100];
         let limiter = Limiter::new(INFINITY);
 
         for max_file_size in max_file_sizes {

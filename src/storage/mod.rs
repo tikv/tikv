@@ -96,7 +96,7 @@ use kvproto::pdpb::QueryKind;
 use raftstore::store::{util::build_key_range, TxnExt};
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
-use resource_metering::{FutureExt, ResourceMeteringTag};
+use resource_metering::{FutureExt, ResourceTagFactory};
 use std::{
     borrow::Cow,
     iter,
@@ -152,6 +152,8 @@ pub struct Storage<E: Engine, L: LockManager> {
     // Fields below are storage configurations.
     max_key_size: usize,
 
+    resource_tag_factory: ResourceTagFactory,
+
     api_version: ApiVersion,
 }
 
@@ -172,6 +174,7 @@ impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
             max_key_size: self.max_key_size,
             concurrency_manager: self.concurrency_manager.clone(),
             api_version: self.api_version,
+            resource_tag_factory: self.resource_tag_factory.clone(),
         }
     }
 }
@@ -219,6 +222,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         dynamic_switches: DynamicConfigs,
         flow_controller: Arc<FlowController>,
         reporter: R,
+        resource_tag_factory: ResourceTagFactory,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -228,6 +232,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             dynamic_switches,
             flow_controller,
             reporter,
+            resource_tag_factory.clone(),
         );
 
         info!("Storage started.");
@@ -240,6 +245,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
             api_version: config.api_version(),
+            resource_tag_factory,
         })
     }
 
@@ -370,9 +376,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ///
     /// When config.api_version = V1: accept request of V1 only.
     /// When config.api_version = V2: accept the following:
-    ///   * Request of V1 from TiDB, for compatiblity.
+    ///   * Request of V1 from TiDB, for compatibility.
     ///   * Request of V2 with legal prefix.
-    /// See rfc https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md for detail.
+    /// See the following for detail:
+    ///   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
+    ///   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
     fn check_api_version(
         storage_api_version: ApiVersion,
         req_api_version: ApiVersion,
@@ -431,7 +439,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
@@ -561,8 +569,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // The resource tags of these batched requests are not the same, and it is quite expensive
         // to distinguish them, so we can find random one of them as a representative.
         let rand_index = rand::thread_rng().gen_range(0, requests.len());
-        let resource_tag =
-            ResourceMeteringTag::from_rpc_context(requests[rand_index].get_context());
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag(requests[rand_index].get_context());
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -716,7 +725,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
@@ -864,7 +873,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
@@ -1016,7 +1025,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
         // Do not allow replica read for scan_lock.
@@ -1135,23 +1144,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         }
     }
 
-    // The entry point of all transaction commands. It checks transaction-specific constraints.
-    pub fn sched_txn_command<T: StorageCallbackType>(
-        &self,
-        cmd: TypedCommand<T>,
-        callback: Callback<T>,
-    ) -> Result<()> {
-        if self.api_version == ApiVersion::V1ttl {
-            return Err(box_err!(
-                "can't sched txn cmd({}) in API V1 with TTL enabled",
-                cmd.cmd.tag()
-            ));
-        }
-        self.sched_command(cmd, callback)
-    }
-
     // The entry point of the storage scheduler. Not only transaction commands need to access keys serially.
-    fn sched_command<T: StorageCallbackType>(
+    pub fn sched_txn_command<T: StorageCallbackType>(
         &self,
         cmd: TypedCommand<T>,
         callback: Callback<T>,
@@ -1164,25 +1158,34 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         match &cmd {
             Command::Prewrite(Prewrite { mutations, .. }) => {
-                check_key_size!(
-                    mutations.iter().map(|m| m.key().as_encoded()),
-                    self.max_key_size,
-                    callback
-                );
+                let keys = mutations.iter().map(|m| m.key().as_encoded());
+                Self::check_api_version(
+                    self.api_version,
+                    cmd.ctx().api_version,
+                    CommandKind::prewrite,
+                    keys.clone(),
+                )?;
+                check_key_size!(keys, self.max_key_size, callback);
             }
             Command::PrewritePessimistic(PrewritePessimistic { mutations, .. }) => {
-                check_key_size!(
-                    mutations.iter().map(|(m, _)| m.key().as_encoded()),
-                    self.max_key_size,
-                    callback
-                );
+                let keys = mutations.iter().map(|(m, _)| m.key().as_encoded());
+                Self::check_api_version(
+                    self.api_version,
+                    cmd.ctx().api_version,
+                    CommandKind::prewrite,
+                    keys.clone(),
+                )?;
+                check_key_size!(keys, self.max_key_size, callback);
             }
             Command::AcquirePessimisticLock(AcquirePessimisticLock { keys, .. }) => {
-                check_key_size!(
-                    keys.iter().map(|k| k.0.as_encoded()),
-                    self.max_key_size,
-                    callback
-                );
+                let keys = keys.iter().map(|k| k.0.as_encoded());
+                Self::check_api_version(
+                    self.api_version,
+                    cmd.ctx().api_version,
+                    CommandKind::prewrite,
+                    keys.clone(),
+                )?;
+                check_key_size!(keys, self.max_key_size, callback);
             }
             _ => {}
         }
@@ -1248,7 +1251,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -1320,7 +1323,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // The resource tags of these batched requests are not the same, and it is quite expensive
         // to distinguish them, so we can find random one of them as a representative.
         let rand_index = rand::thread_rng().gen_range(0, gets.len());
-        let resource_tag = ResourceMeteringTag::from_rpc_context(gets[rand_index].get_context());
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag(gets[rand_index].get_context());
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -1421,7 +1426,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -1722,7 +1727,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -1830,7 +1835,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_batch_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -1948,7 +1953,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_get_key_ttl;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -2034,7 +2039,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             self.api_version,
             ctx,
         );
-        self.sched_command(cmd, cb)
+        self.sched_txn_command(cmd, cb)
     }
 
     pub fn raw_batch_put_atomic(
@@ -2084,7 +2089,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             }
         };
         let cmd = RawAtomicStore::new(cf, mutations, self.api_version, ctx);
-        self.sched_command(cmd, callback)
+        self.sched_txn_command(cmd, callback)
     }
 
     pub fn raw_batch_delete_atomic(
@@ -2109,7 +2114,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             })
             .collect();
         let cmd = RawAtomicStore::new(cf, muations, self.api_version, ctx);
-        self.sched_command(cmd, callback)
+        self.sched_txn_command(cmd, callback)
     }
 
     pub fn raw_checksum(
@@ -2121,7 +2126,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_checksum;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -2267,6 +2272,7 @@ pub struct TestStorageBuilder<E: Engine, L: LockManager> {
     pipelined_pessimistic_lock: Arc<AtomicBool>,
     in_memory_pessimistic_lock: Arc<AtomicBool>,
     lock_mgr: L,
+    resource_tag_factory: ResourceTagFactory,
 }
 
 impl TestStorageBuilder<RocksEngine, DummyLockManager> {
@@ -2405,6 +2411,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             pipelined_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             lock_mgr,
+            resource_tag_factory: ResourceTagFactory::new_for_test(),
         }
     }
 
@@ -2438,6 +2445,11 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
         self
     }
 
+    pub fn set_resource_tag_factory(mut self, resource_tag_factory: ResourceTagFactory) -> Self {
+        self.resource_tag_factory = resource_tag_factory;
+        self
+    }
+
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E, L>> {
         let read_pool = build_read_pool_for_test(
@@ -2457,6 +2469,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             },
             Arc::new(FlowController::empty()),
             DummyReporter,
+            self.resource_tag_factory,
         )
     }
 
@@ -2482,6 +2495,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             },
             Arc::new(FlowController::empty()),
             DummyReporter,
+            ResourceTagFactory::new_for_test(),
         )
     }
 }
@@ -2590,6 +2604,7 @@ pub mod test_util {
         start_ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
         return_values: bool,
+        check_existence: bool,
     ) -> PessimisticLockCommand {
         let primary = keys[0].0.clone().to_raw().unwrap();
         let for_update_ts: TimeStamp = for_update_ts.into();
@@ -2604,6 +2619,7 @@ pub mod test_util {
             return_values,
             for_update_ts.next(),
             OldValues::default(),
+            check_existence,
             Context::default(),
         )
     }
@@ -2716,7 +2732,7 @@ mod tests {
     use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
-    use kvproto::kvrpcpb::{CommandPri, Op};
+    use kvproto::kvrpcpb::{AssertionLevel, CommandPri, Op};
     use std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -5246,6 +5262,7 @@ mod tests {
                     TimeStamp::default(),
                     None,
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 expect_ok_callback(tx, 0),
@@ -5898,6 +5915,7 @@ mod tests {
                     TimeStamp::default(),
                     Some(vec![b"k1".to_vec(), b"k2".to_vec()]),
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -6040,6 +6058,7 @@ mod tests {
                     TimeStamp::default(),
                     None,
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -6114,6 +6133,7 @@ mod tests {
                     TimeStamp::default(),
                     None,
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -6141,9 +6161,13 @@ mod tests {
         let (key2, val2) = (Key::from_raw(b"key2"), b"val2".to_vec());
 
         // Key not exist
-        for &return_values in &[false, true] {
+        for &(return_values, check_existence) in
+            &[(false, false), (false, true), (true, false), (true, true)]
+        {
             let pessimistic_lock_res = if return_values {
                 PessimisticLockRes::Values(vec![None])
+            } else if check_existence {
+                PessimisticLockRes::Existence(vec![false])
             } else {
                 PessimisticLockRes::Empty
             };
@@ -6155,13 +6179,14 @@ mod tests {
                         10,
                         10,
                         return_values,
+                        check_existence,
                     ),
                     expect_pessimistic_lock_res_callback(tx.clone(), pessimistic_lock_res.clone()),
                 )
                 .unwrap();
             rx.recv().unwrap();
 
-            if return_values {
+            if return_values || check_existence {
                 assert_eq!(cm.max_ts(), 10.into());
             }
 
@@ -6173,6 +6198,7 @@ mod tests {
                         10,
                         10,
                         return_values,
+                        check_existence,
                     ),
                     expect_pessimistic_lock_res_callback(tx.clone(), pessimistic_lock_res.clone()),
                 )
@@ -6184,14 +6210,22 @@ mod tests {
 
         storage
             .sched_txn_command(
-                new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, false),
+                new_acquire_pessimistic_lock_command(
+                    vec![(key.clone(), false)],
+                    10,
+                    10,
+                    false,
+                    false,
+                ),
                 expect_pessimistic_lock_res_callback(tx.clone(), PessimisticLockRes::Empty),
             )
             .unwrap();
         rx.recv().unwrap();
 
         // KeyIsLocked
-        for &return_values in &[false, true] {
+        for &(return_values, check_existence) in
+            &[(false, false), (false, true), (true, false), (true, true)]
+        {
             storage
                 .sched_txn_command(
                     new_acquire_pessimistic_lock_command(
@@ -6199,6 +6233,7 @@ mod tests {
                         20,
                         20,
                         return_values,
+                        check_existence,
                     ),
                     expect_fail_callback(tx.clone(), 0, |e| match e {
                         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
@@ -6232,6 +6267,7 @@ mod tests {
                     TimeStamp::default(),
                     None,
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -6252,7 +6288,9 @@ mod tests {
         rx.recv().unwrap();
 
         // WriteConflict
-        for &return_values in &[false, true] {
+        for &(return_values, check_existence) in
+            &[(false, false), (false, true), (true, false), (true, true)]
+        {
             storage
                 .sched_txn_command(
                     new_acquire_pessimistic_lock_command(
@@ -6260,6 +6298,7 @@ mod tests {
                         15,
                         15,
                         return_values,
+                        check_existence,
                     ),
                     expect_fail_callback(tx.clone(), 0, |e| match e {
                         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
@@ -6276,9 +6315,13 @@ mod tests {
         assert_eq!(cm.max_ts(), 10.into());
 
         // Return multiple values
-        for &return_values in &[false, true] {
+        for &(return_values, check_existence) in
+            &[(false, false), (false, true), (true, false), (true, true)]
+        {
             let pessimistic_lock_res = if return_values {
                 PessimisticLockRes::Values(vec![Some(val.clone()), Some(val2.clone()), None])
+            } else if check_existence {
+                PessimisticLockRes::Existence(vec![true, true, false])
             } else {
                 PessimisticLockRes::Empty
             };
@@ -6293,13 +6336,14 @@ mod tests {
                         30,
                         30,
                         return_values,
+                        check_existence,
                     ),
                     expect_pessimistic_lock_res_callback(tx.clone(), pessimistic_lock_res),
                 )
                 .unwrap();
             rx.recv().unwrap();
 
-            if return_values {
+            if return_values || check_existence {
                 assert_eq!(cm.max_ts(), 30.into());
             }
 
@@ -6446,6 +6490,7 @@ mod tests {
                     false,
                     21.into(),
                     OldValues::default(),
+                    false,
                     Context::default(),
                 ),
                 expect_ok_callback(tx, 0),
@@ -6554,6 +6599,7 @@ mod tests {
                         keys.iter().map(|k| (k.clone(), false)).collect(),
                         ts,
                         ts,
+                        false,
                         false,
                     ),
                     expect_ok_callback(tx.clone(), 0),
@@ -7022,6 +7068,7 @@ mod tests {
                     TimeStamp::default(),
                     Some(vec![b"a".to_vec(), b"b".to_vec()]),
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 Box::new(move |res| {
@@ -7040,6 +7087,7 @@ mod tests {
                     vec![(Key::from_raw(b"d"), false), (Key::from_raw(b"e"), false)],
                     200,
                     300,
+                    false,
                     false,
                 ),
                 expect_ok_callback(tx, 0),
@@ -7066,6 +7114,7 @@ mod tests {
                     TimeStamp::default(),
                     Some(vec![b"e".to_vec()]),
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 Box::new(move |res| {
@@ -7115,6 +7164,7 @@ mod tests {
                     false,
                     0.into(),
                     OldValues::default(),
+                    false,
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -7136,6 +7186,7 @@ mod tests {
                     false,
                     0.into(),
                     OldValues::default(),
+                    false,
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -7157,6 +7208,7 @@ mod tests {
                     100.into(),
                     None,
                     false,
+                    AssertionLevel::Off,
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -7203,6 +7255,7 @@ mod tests {
                     (1 << 19).into(),
                     Some(vec![k2.to_vec()]),
                     false,
+                    AssertionLevel::Off,
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -7306,6 +7359,7 @@ mod tests {
                 TimeStamp::default(),
                 None,
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             pipelined_pessimistic_lock: false,
@@ -7329,6 +7383,7 @@ mod tests {
                 TimeStamp::default(),
                 Some(vec![]),
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             pipelined_pessimistic_lock: false,
@@ -7354,6 +7409,7 @@ mod tests {
                 false,
                 TimeStamp::new(12),
                 OldValues::default(),
+                false,
                 Context::default(),
             ),
             pipelined_pessimistic_lock: true,
@@ -7378,6 +7434,7 @@ mod tests {
                 false,
                 TimeStamp::new(12),
                 OldValues::default(),
+                false,
                 Context::default(),
             ),
             pipelined_pessimistic_lock: false,
@@ -7411,6 +7468,7 @@ mod tests {
                     ],
                     10,
                     10,
+                    false,
                     false,
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -7602,6 +7660,10 @@ mod tests {
         rx.recv().unwrap();
     }
 
+    // Test check_api_version.
+    // See the following for detail:
+    //   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
+    //   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
     #[test]
     fn test_check_api_version() {
         use error_code::storage::*;
@@ -7623,7 +7685,7 @@ mod tests {
                 ApiVersion::V1,
                 ApiVersion::V1,
                 CommandKind::raw_get,
-                vec![RAW_KEY_CASE],
+                vec![RAW_KEY_CASE, TXN_KEY_CASE],
                 None,
             ),
             // storage api_version = V1ttl, allow RawKV request only.
@@ -7670,6 +7732,13 @@ mod tests {
                 ApiVersion::V1,
                 CommandKind::get,
                 vec![TIDB_KEY_CASE, TXN_KEY_CASE],
+                Some(INVALID_KEY_PREFIX),
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V1,
+                CommandKind::get,
+                vec![RAW_KEY_CASE],
                 Some(INVALID_KEY_PREFIX),
             ),
             // V2 api validation.
@@ -7741,7 +7810,13 @@ mod tests {
         let k1 = Key::from_raw(b"k1");
         storage
             .sched_txn_command(
-                new_acquire_pessimistic_lock_command(vec![(k1.clone(), false)], 10, 10, false),
+                new_acquire_pessimistic_lock_command(
+                    vec![(k1.clone(), false)],
+                    10,
+                    10,
+                    false,
+                    false,
+                ),
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
@@ -7766,7 +7841,13 @@ mod tests {
         // The written in-memory pessimistic lock should be visible, so the new lock request should fail.
         storage
             .sched_txn_command(
-                new_acquire_pessimistic_lock_command(vec![(k1.clone(), false)], 20, 20, false),
+                new_acquire_pessimistic_lock_command(
+                    vec![(k1.clone(), false)],
+                    20,
+                    20,
+                    false,
+                    false,
+                ),
                 Box::new(move |res| {
                     tx.send(res).unwrap();
                 }),
@@ -7789,6 +7870,7 @@ mod tests {
                     TimeStamp::default(),
                     None,
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 Box::new(move |res| {
@@ -7817,7 +7899,13 @@ mod tests {
         let k1 = Key::from_raw(b"k1");
         storage
             .sched_txn_command(
-                new_acquire_pessimistic_lock_command(vec![(k1.clone(), false)], 10, 10, false),
+                new_acquire_pessimistic_lock_command(
+                    vec![(k1.clone(), false)],
+                    10,
+                    10,
+                    false,
+                    false,
+                ),
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
@@ -7839,6 +7927,7 @@ mod tests {
                     TimeStamp::default(),
                     None,
                     false,
+                    AssertionLevel::Off,
                     Context::default(),
                 ),
                 Box::new(move |res| {

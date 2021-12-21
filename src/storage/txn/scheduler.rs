@@ -33,9 +33,10 @@ use std::{mem, u64};
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use futures::compat::Future01CompatExt;
-use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
+use kvproto::kvrpcpb::{CommandPri, Context, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
-use resource_metering::{FutureExt, ResourceMeteringTag};
+use raftstore::store::TxnExt;
+use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
 use tikv_util::{time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::TimeStamp;
@@ -199,6 +200,8 @@ struct SchedulerInner<L: LockManager> {
     in_memory_pessimistic_lock: Arc<AtomicBool>,
 
     enable_async_apply_prewrite: bool,
+
+    resource_tag_factory: ResourceTagFactory,
 }
 
 #[inline]
@@ -309,6 +312,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         dynamic_configs: DynamicConfigs,
         flow_controller: Arc<FlowController>,
         reporter: R,
+        resource_tag_factory: ResourceTagFactory,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -341,6 +345,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             in_memory_pessimistic_lock: dynamic_configs.in_memory_pessimistic_lock,
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
             flow_controller,
+            resource_tag_factory,
         });
 
         slow_log!(
@@ -655,7 +660,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             return;
         }
 
-        let resource_tag = ResourceMeteringTag::from_rpc_context(task.cmd.ctx());
+        let resource_tag = self.inner.resource_tag_factory.new_tag(task.cmd.ctx());
         async {
             let tag = task.cmd.tag();
             fail_point!("scheduler_async_snapshot_finish");
@@ -730,6 +735,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let pessimistic_lock_mode = self.pessimistic_lock_mode();
         let pipelined =
             task.cmd.can_be_pipelined() && pessimistic_lock_mode == PessimisticLockMode::Pipelined;
+        let txn_ext = snapshot.ext().get_txn_ext().cloned();
 
         let deadline = task.cmd.deadline();
         let write_result = {
@@ -742,7 +748,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             };
 
             task.cmd
-                .process_write(snapshot.clone(), context)
+                .process_write(snapshot, context)
                 .map_err(StorageError::from)
         };
         let WriteResult {
@@ -795,7 +801,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         if tag == CommandKind::acquire_pessimistic_lock
             && pessimistic_lock_mode == PessimisticLockMode::InMemory
-            && self.try_write_in_memory_pessimistic_locks(&snapshot, &mut to_be_write)
+            && self.try_write_in_memory_pessimistic_locks(
+                txn_ext.as_deref(),
+                &mut to_be_write,
+                &ctx,
+            )
         {
             scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, false, tag);
             return;
@@ -812,9 +822,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         // This will help us reduce the cost of cloning the keys for the commit command
         // or when the feature is disabled.
         let locks_to_be_removed = {
-            match snapshot
-                .ext()
-                .get_txn_ext()
+            match txn_ext
+                .as_ref()
                 .map(|txn_ext| txn_ext.pessimistic_locks.read())
             {
                 Some(locks) if !locks.map.is_empty() => to_be_write
@@ -896,7 +905,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let sched = scheduler.clone();
         let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
-        let txn_ext = snapshot.ext().get_txn_ext().cloned();
         // The callback to receive async results of write prepare from the storage engine.
         let engine_cb = Box::new(move |result: EngineResult<()>| {
             sched_pool
@@ -990,27 +998,38 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    // Returns whether it succeeds to write pessimistic locks to the in-memory lock table
+    /// Returns whether it succeeds to write pessimistic locks to the in-memory lock table.
     fn try_write_in_memory_pessimistic_locks(
         &self,
-        snapshot: &E::Snap,
+        txn_ext: Option<&TxnExt>,
         to_be_write: &mut WriteData,
+        context: &Context,
     ) -> bool {
-        if let Some(txn_ext) = snapshot.ext().get_txn_ext() {
-            let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
-            // TODO: check `epoch` and `valid`
-            for modify in mem::take(&mut to_be_write.modifies) {
-                match modify {
-                    Modify::PessimisticLock(key, lock) => {
-                        pessimistic_locks.map.insert(key, lock);
-                    }
-                    _ => panic!("all modifies should be PessimisticLock"),
-                }
-            }
-            true
-        } else {
-            false
+        let txn_ext = match txn_ext {
+            Some(txn_ext) => txn_ext,
+            None => return false,
+        };
+        let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
+        // When `is_valid` is false, it only means we cannot write locks to the in-memory lock table,
+        // but it is still possible for the region to propose request.
+        // When term or epoch version has changed, the request must fail. To be simple, here we just
+        // let the request fallback to propose and let raftstore generate an appropriate error.
+        if !pessimistic_locks.is_valid
+            || pessimistic_locks.term != context.get_term()
+            || pessimistic_locks.version != context.get_region_epoch().get_version()
+        {
+            return false;
         }
+        // TODO: add memory limit check
+        for modify in mem::take(&mut to_be_write.modifies) {
+            match modify {
+                Modify::PessimisticLock(key, lock) => {
+                    pessimistic_locks.map.insert(key, lock);
+                }
+                _ => panic!("all modifies should be PessimisticLock"),
+            }
+        }
+        true
     }
 
     /// If the task has expired, return `true` and call the callback of
@@ -1111,6 +1130,7 @@ mod tests {
                 false,
                 TimeStamp::default(),
                 OldValues::default(),
+                false,
                 Context::default(),
             )
             .into(),
@@ -1220,6 +1240,7 @@ mod tests {
             },
             Arc::new(FlowController::empty()),
             DummyReporter,
+            ResourceTagFactory::new_for_test(),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1275,6 +1296,7 @@ mod tests {
             },
             Arc::new(FlowController::empty()),
             DummyReporter,
+            ResourceTagFactory::new_for_test(),
         );
 
         // Spawn a task that sleeps for 500ms to occupy the pool. The next request
@@ -1330,6 +1352,7 @@ mod tests {
             },
             Arc::new(FlowController::empty()),
             DummyReporter,
+            ResourceTagFactory::new_for_test(),
         );
 
         let mut req = CheckTxnStatusRequest::default();
@@ -1359,7 +1382,7 @@ mod tests {
         scheduler
             .inner
             .flow_controller
-            .set_speed_limit(std::f64::INFINITY);
+            .set_speed_limit(f64::INFINITY);
         let mut req = CheckTxnStatusRequest::default();
         req.mut_context().max_execution_duration_ms = 100;
         req.set_primary_key(b"a".to_vec());
@@ -1393,6 +1416,7 @@ mod tests {
             },
             Arc::new(FlowController::empty()),
             DummyReporter,
+            ResourceTagFactory::new_for_test(),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1447,6 +1471,7 @@ mod tests {
             },
             Arc::new(FlowController::empty()),
             DummyReporter,
+            ResourceTagFactory::new_for_test(),
         );
         // Use sync mode if pipelined_pessimistic_lock is false.
         assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);

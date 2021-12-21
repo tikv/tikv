@@ -279,7 +279,7 @@ pub(crate) mod tests {
         kv::{Engine, TestEngineBuilder},
         TxnStatus,
     };
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{AssertionLevel, Context};
     use txn_types::{TimeStamp, WriteType, SHORT_VALUE_MAX_LEN};
 
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
@@ -732,6 +732,7 @@ pub(crate) mod tests {
             min_commit_ts: TimeStamp::default(),
             need_old_value: false,
             is_retry_request: false,
+            assertion_level: AssertionLevel::Off,
         }
     }
 
@@ -1027,6 +1028,8 @@ pub(crate) mod tests {
                     TimeStamp::zero(),
                     TimeStamp::zero(),
                     false,
+                    kvproto::kvrpcpb::Assertion::None,
+                    kvproto::kvrpcpb::AssertionLevel::Off,
                 );
             } else {
                 expected_lock_info.set_lock_type(Op::PessimisticLock);
@@ -1040,6 +1043,7 @@ pub(crate) mod tests {
                     false,
                     expected_lock_info.get_lock_ttl(),
                     expected_lock_info.get_lock_for_update_ts(),
+                    false,
                     false,
                     TimeStamp::zero(),
                 );
@@ -1304,7 +1308,9 @@ pub(crate) mod tests {
         let cm = ConcurrencyManager::new(42.into());
 
         // Simulate that min_commit_ts is pushed forward larger than latest_ts
-        must_acquire_pessimistic_lock_impl(&engine, b"key", b"key", 2, false, 20000, 2, false, 100);
+        must_acquire_pessimistic_lock_impl(
+            &engine, b"key", b"key", 2, false, 20000, 2, false, false, 100,
+        );
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(TimeStamp::new(2), cm);

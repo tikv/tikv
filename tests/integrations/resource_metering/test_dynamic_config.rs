@@ -8,11 +8,19 @@ use std::time::Duration;
 
 use rand::prelude::SliceRandom;
 use test_util::alloc_port;
+use tikv_util::config::ReadableDuration;
+use tokio::time::Instant;
 
-const ONE_SEC: Duration = Duration::from_secs(1);
+#[test]
+pub fn test_enable() {
+    let mut test_suite = TestSuite::new(resource_metering::Config {
+        enabled: false,
+        receiver_address: "".to_string(),
+        report_receiver_interval: ReadableDuration::millis(2500),
+        max_resource_groups: 5000,
+        precision: ReadableDuration::secs(1),
+    });
 
-pub fn case_enable(test_suite: &mut TestSuite) {
-    test_suite.reset();
     let port = alloc_port();
     test_suite.start_receiver_at(port);
 
@@ -23,29 +31,13 @@ pub fn case_enable(test_suite: &mut TestSuite) {
     // | Address | Enabled |
     // |   x     |    o    |
     test_suite.cfg_enabled(true);
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
-    assert!(test_suite.fetch_reported_cpu_time().is_empty());
-
-    // Workload
-    // []
-    test_suite.cancel_workload();
+    sleep(Duration::from_millis(3000));
+    assert!(test_suite.nonblock_receiver_all().is_empty());
 
     // | Address | Enabled |
     // |   o     |    o    |
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
-    test_suite.flush_receiver();
-    assert!(test_suite.fetch_reported_cpu_time().is_empty());
-
-    // Workload
-    // [req-1, req-2]
-    test_suite.setup_workload(vec!["req-1", "req-2"]);
-
-    // | Address | Enabled |
-    // |   o     |    o    |
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
-    let res = test_suite.fetch_reported_cpu_time();
-    assert_eq!(res.len(), 2);
+    let res = test_suite.block_receive_one();
     assert!(res.contains_key("req-1"));
     assert!(res.contains_key("req-2"));
 
@@ -53,67 +45,76 @@ pub fn case_enable(test_suite: &mut TestSuite) {
     // |   x     |    o    |
     test_suite.cfg_receiver_address("");
     test_suite.flush_receiver();
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
-    assert!(test_suite.fetch_reported_cpu_time().is_empty());
+    sleep(Duration::from_millis(3000));
+    assert!(test_suite.nonblock_receiver_all().is_empty());
+
+    // | Address | Enabled |
+    // |   o     |    o    |
+    test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
+    let res = test_suite.block_receive_one();
+    assert!(res.contains_key("req-1"));
+    assert!(res.contains_key("req-2"));
 
     // | Address | Enabled |
     // |   o     |    x    |
     test_suite.cfg_enabled(false);
-    test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
-    assert!(test_suite.fetch_reported_cpu_time().is_empty());
+    test_suite.flush_receiver();
+    sleep(Duration::from_millis(3000));
+    assert!(test_suite.nonblock_receiver_all().is_empty());
 }
 
-pub fn case_report_interval(test_suite: &mut TestSuite) {
-    test_suite.reset();
+#[test]
+pub fn test_report_interval() {
     let port = alloc_port();
+    let mut test_suite = TestSuite::new(resource_metering::Config {
+        enabled: true,
+        receiver_address: format!("127.0.0.1:{}", port),
+        report_receiver_interval: ReadableDuration::secs(3),
+        max_resource_groups: 5000,
+        precision: ReadableDuration::secs(1),
+    });
     test_suite.start_receiver_at(port);
-    test_suite.cfg_enabled(true);
-    test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
 
     // Workload
     // [req-1, req-2]
     test_suite.setup_workload(vec!["req-1", "req-2"]);
 
     // | Report Interval |
-    // |       15s       |
-    test_suite.cfg_report_receiver_interval("15s");
-    test_suite.flush_receiver();
-
-    sleep(Duration::from_secs(5));
-    assert!(test_suite.fetch_reported_cpu_time().is_empty());
-    sleep(Duration::from_secs(5));
-    assert!(test_suite.fetch_reported_cpu_time().is_empty());
-    sleep(Duration::from_secs(10));
-    let res = test_suite.fetch_reported_cpu_time();
-    assert_eq!(res.len(), 2);
+    // |       3s        |
+    let res = test_suite.block_receive_one();
     assert!(res.contains_key("req-1"));
     assert!(res.contains_key("req-2"));
 
     // | Report Interval |
-    // |       5s        |
-    test_suite.cfg_report_receiver_interval("5s");
-    sleep(Duration::from_secs(10));
-    test_suite.flush_receiver();
-
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
-    let res = test_suite.fetch_reported_cpu_time();
-    assert_eq!(res.len(), 2);
+    // |       1s        |
+    test_suite.cfg_report_receiver_interval("1s");
+    let res = test_suite.block_receive_one();
+    let begin = Instant::now();
     assert!(res.contains_key("req-1"));
     assert!(res.contains_key("req-2"));
+    let res = test_suite.block_receive_one();
+    let duration = begin.elapsed();
+    assert!(res.contains_key("req-1"));
+    assert!(res.contains_key("req-2"));
+    assert!(Duration::from_millis(800) < duration && duration < Duration::from_millis(1200));
 }
 
-pub fn case_max_resource_groups(test_suite: &mut TestSuite) {
-    test_suite.reset();
+#[test]
+pub fn test_max_resource_groups() {
     let port = alloc_port();
+    let mut test_suite = TestSuite::new(resource_metering::Config {
+        enabled: true,
+        receiver_address: format!("127.0.0.1:{}", port),
+        report_receiver_interval: ReadableDuration::secs(3),
+        max_resource_groups: 5000,
+        precision: ReadableDuration::secs(1),
+    });
     test_suite.start_receiver_at(port);
-    test_suite.cfg_enabled(true);
-    test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
 
     // Workload
-    // [req-{1..3} * 10, req-{4..5} * 1]
+    // [req-{1..3} * 6, req-{4..5} * 1]
     let mut wl = iter::repeat(1..=3)
-        .take(10)
+        .take(6)
         .flatten()
         .chain(4..=5)
         .map(|n| format!("req-{}", n))
@@ -123,9 +124,7 @@ pub fn case_max_resource_groups(test_suite: &mut TestSuite) {
 
     // | Max Resource Groups |
     // |       5000          |
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
-    let res = test_suite.fetch_reported_cpu_time();
-    assert_eq!(res.len(), 5);
+    let res = test_suite.block_receive_one();
     assert!(res.contains_key("req-1"));
     assert!(res.contains_key("req-2"));
     assert!(res.contains_key("req-3"));
@@ -136,8 +135,7 @@ pub fn case_max_resource_groups(test_suite: &mut TestSuite) {
     // |        3            |
     test_suite.cfg_max_resource_groups(3);
     test_suite.flush_receiver();
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
-    let res = test_suite.fetch_reported_cpu_time();
+    let res = test_suite.block_receive_one();
     assert_eq!(res.len(), 4);
     assert!(res.contains_key("req-1"));
     assert!(res.contains_key("req-2"));
@@ -145,13 +143,17 @@ pub fn case_max_resource_groups(test_suite: &mut TestSuite) {
     assert!(res.contains_key(""));
 }
 
-pub fn case_precision(test_suite: &mut TestSuite) {
-    test_suite.reset();
+#[test]
+pub fn test_precision() {
     let port = alloc_port();
+    let mut test_suite = TestSuite::new(resource_metering::Config {
+        enabled: true,
+        receiver_address: format!("127.0.0.1:{}", port),
+        report_receiver_interval: ReadableDuration::secs(3),
+        max_resource_groups: 5000,
+        precision: ReadableDuration::secs(1),
+    });
     test_suite.start_receiver_at(port);
-    test_suite.cfg_report_receiver_interval("10s");
-    test_suite.cfg_enabled(true);
-    test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
 
     // Workload
     // [req-1]
@@ -159,8 +161,7 @@ pub fn case_precision(test_suite: &mut TestSuite) {
 
     // | Precision |
     // |    1s     |
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
-    let res = test_suite.fetch_reported_cpu_time();
+    let res = test_suite.block_receive_one();
     let (secs, _) = res.get("req-1").unwrap();
     for (l, r) in secs.iter().zip({
         let mut next_secs = secs.iter();
@@ -174,9 +175,9 @@ pub fn case_precision(test_suite: &mut TestSuite) {
     // | Precision |
     // |    3s     |
     test_suite.cfg_precision("3s");
+    test_suite.cfg_report_receiver_interval("9s");
     test_suite.flush_receiver();
-    sleep(test_suite.get_current_cfg().report_receiver_interval.0 + ONE_SEC);
-    let res = test_suite.fetch_reported_cpu_time();
+    let res = test_suite.block_receive_one();
     let (secs, _) = res.get("req-1").unwrap();
     for (l, r) in secs.iter().zip({
         let mut next_secs = secs.iter();

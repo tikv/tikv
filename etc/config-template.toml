@@ -425,6 +425,9 @@
 ## When the size of raft db writebatch exceeds this value, write will be triggered.
 # raft-write-size-limit = "1MB"
 
+## threads to generate raft snapshots
+# snap-generator-pool-size = 2
+
 [coprocessor]
 ## When it is set to `true`, TiKV will try to split a Region with table prefix if that Region
 ## crosses tables.

@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::iter::Peekable;
 use std::mem;
@@ -206,7 +205,7 @@ where
         let limiter = Limiter::new(if cfg.max_write_bytes_per_sec.0 > 0 {
             cfg.max_write_bytes_per_sec.0 as f64
         } else {
-            INFINITY
+            f64::INFINITY
         });
         Self {
             engine,
@@ -407,6 +406,8 @@ where
             "start_key" => %start_key, "end_key" => %end_key
         );
 
+        fail_point!("unsafe_destroy_range");
+
         self.flow_info_sender
             .send(FlowInfo::BeforeUnsafeDestroyRange)
             .unwrap();
@@ -531,8 +532,11 @@ where
     fn refresh_cfg(&mut self) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
             let limit = incoming.max_write_bytes_per_sec.0;
-            self.limiter
-                .set_speed_limit(if limit > 0 { limit as f64 } else { INFINITY });
+            self.limiter.set_speed_limit(if limit > 0 {
+                limit as f64
+            } else {
+                f64::INFINITY
+            });
             self.cfg = incoming.clone();
         }
     }

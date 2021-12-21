@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use grpcio::*;
 use kvproto::kvrpcpb::{
-    self, ApiVersion, BatchRollbackRequest, CommitRequest, Context, GetRequest, Op,
+    self, ApiVersion, AssertionLevel, BatchRollbackRequest, CommitRequest, Context, GetRequest, Op,
     PrewriteRequest, RawPutRequest,
 };
 use kvproto::tikvpb::TikvClient;
@@ -64,6 +64,7 @@ fn test_scheduler_leader_change_twice() {
                 TimeStamp::default(),
                 None,
                 false,
+                AssertionLevel::Off,
                 ctx0,
             ),
             Box::new(move |res: storage::Result<_>| {
@@ -239,6 +240,7 @@ fn test_pipelined_pessimistic_lock() {
                     10,
                     10,
                     true,
+                    false,
                 ),
                 Box::new(move |res| {
                     res.unwrap_err();
@@ -264,7 +266,7 @@ fn test_pipelined_pessimistic_lock() {
     fail::cfg(scheduler_async_write_finish_fp, "pause").unwrap();
     storage
         .sched_txn_command(
-            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, true),
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, true, false),
             expect_pessimistic_lock_res_callback(
                 tx.clone(),
                 PessimisticLockRes::Values(vec![None]),
@@ -287,6 +289,7 @@ fn test_pipelined_pessimistic_lock() {
                 TimeStamp::default(),
                 None,
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             expect_ok_callback(tx.clone(), 0),
@@ -305,7 +308,7 @@ fn test_pipelined_pessimistic_lock() {
     fail::cfg(rockskv_async_write_fp, "return()").unwrap();
     storage
         .sched_txn_command(
-            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 30, 30, true),
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 30, 30, true, false),
             expect_fail_callback(tx.clone(), 0, |_| ()),
         )
         .unwrap();
@@ -317,7 +320,13 @@ fn test_pipelined_pessimistic_lock() {
     for blocked in &[false, true] {
         storage
             .sched_txn_command(
-                new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 40, 40, true),
+                new_acquire_pessimistic_lock_command(
+                    vec![(key.clone(), false)],
+                    40,
+                    40,
+                    true,
+                    false,
+                ),
                 expect_pessimistic_lock_res_callback(
                     tx.clone(),
                     PessimisticLockRes::Values(vec![Some(val.clone())]),
@@ -340,7 +349,7 @@ fn test_pipelined_pessimistic_lock() {
     fail::cfg(scheduler_async_write_finish_fp, "pause").unwrap();
     storage
         .sched_txn_command(
-            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 50, 50, true),
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 50, 50, true, false),
             expect_pessimistic_lock_res_callback(
                 tx.clone(),
                 PessimisticLockRes::Values(vec![Some(val.clone())]),
@@ -361,6 +370,7 @@ fn test_pipelined_pessimistic_lock() {
                 60,
                 60,
                 true,
+                false,
             ),
             expect_pessimistic_lock_res_callback(
                 tx,
@@ -420,6 +430,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
                     TimeStamp::default(),
                     Some(vec![b"k2".to_vec()]),
                     false,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |res: storage::Result<_>| {
@@ -454,6 +465,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
                     TimeStamp::default(),
                     Some(vec![b"k2".to_vec()]),
                     false,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |res: storage::Result<_>| {
@@ -535,6 +547,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
                     false,
                     0.into(),
                     OldValues::default(),
+                    false,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -564,6 +577,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
                     0.into(),
                     secondaries,
                     false,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -586,6 +600,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
                     0.into(),
                     secondaries,
                     false,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -818,6 +833,7 @@ fn test_async_apply_prewrite_fallback() {
                 0.into(),
                 Some(vec![]),
                 false,
+                AssertionLevel::Off,
                 ctx.clone(),
             ),
             Box::new(move |r| tx.send(r).unwrap()),
@@ -875,6 +891,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
                     false,
                     0.into(),
                     OldValues::default(),
+                    false,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -903,6 +920,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
                     0.into(),
                     None,
                     true,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -922,6 +940,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
                     0.into(),
                     None,
                     true,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -1192,6 +1211,7 @@ fn test_resolve_lock_deadline() {
         20.into(),
         None,
         false,
+        AssertionLevel::Off,
         ctx.clone(),
     );
     let (tx, rx) = channel();
