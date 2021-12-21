@@ -7935,6 +7935,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::type_complexity)]
     fn test_check_api_version_ranges() {
         use error_code::storage::*;
 
