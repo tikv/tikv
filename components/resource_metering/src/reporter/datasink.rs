@@ -11,7 +11,4 @@ pub trait DataSink {
     // If the sink is kept full and cannot schedule a send within the specified deadline,
     // or the sink is closed, an error will be returned.
     fn try_send(&mut self, records: Records) -> Result<()>;
-
-    // `on_reporter_closing` notifies DataSink that the reporter is closing.
-    fn on_reporter_closing() {}
 }

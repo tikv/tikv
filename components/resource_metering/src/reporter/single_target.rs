@@ -115,8 +115,6 @@ impl DataSink for SingleTargetDataSink {
 
         Ok(())
     }
-
-    fn on_reporter_closing() {}
 }
 
 impl SingleTargetDataSink {
