@@ -332,7 +332,6 @@ mod tests {
 
     use protobuf::CodedOutputStream;
     use std::io::ErrorKind;
-    use std::{f32, f64, i16, i32, i64, u16, u32, u64};
 
     const U16_TESTS: &[u16] = &[
         i16::MIN as u16,

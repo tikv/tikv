@@ -21,7 +21,7 @@ impl TimeStamp {
     }
 
     pub const fn max() -> TimeStamp {
-        TimeStamp(std::u64::MAX)
+        TimeStamp(u64::MAX)
     }
 
     pub const fn new(ts: u64) -> TimeStamp {
