@@ -378,6 +378,10 @@ impl CfFile {
         format!("{}_{:04}{}", self.file_prefix, file_id, self.file_suffix)
     }
 
+    pub fn gen_clone_file_name(&self, file_id: usize) -> String {
+        format!("{}_{:04}{}{}", self.file_prefix, file_id, self.file_suffix, CLONE_FILE_SUFFIX)
+    }
+
     pub fn gen_tmp_file_name(&self, file_id: usize) -> String {
         format!(
             "{}_{:04}{}{}",
@@ -897,6 +901,36 @@ impl Snapshot {
     }
 
     fn delete(&self) {
+        macro_rules! try_delete_snapshot_files {
+            ($cf_file: ident, $file_name_func: ident) => {
+                let mut file_id = 0;
+                loop {
+                    let file_path = $cf_file.path.join($cf_file.$file_name_func(file_id));
+                    if file_exists(&file_path) {
+                        delete_file_if_exist(&file_path).unwrap();
+                        file_id += 1;
+                    } else {
+                        break;
+                    }
+                }
+            };
+            ($cf_file: ident) => {
+                let mut file_id = 0;
+                loop {
+                    let file_path = $cf_file.path.join($cf_file.gen_file_name(file_id));
+                    if file_exists(&file_path) {
+                        delete_file_if_exist(&file_path).unwrap();
+                        if let Some(ref mgr) = self.mgr.encryption_key_manager {
+                            mgr.delete_file(file_path.to_str().unwrap()).unwrap();
+                        }
+                        file_id += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
         debug!(
             "deleting snapshot file";
             "snapshot" => %self.path(),
@@ -904,26 +938,38 @@ impl Snapshot {
         for cf_file in &self.cf_files {
             // Delete cloned files.
             let clone_file_paths = cf_file.clone_file_paths();
-            for clone_file_path in clone_file_paths {
-                delete_file_if_exist(&clone_file_path).unwrap();
+            if clone_file_paths.is_empty() {
+                try_delete_snapshot_files!(cf_file, gen_clone_file_name);
+            } else {
+                for clone_file_path in clone_file_paths {
+                    delete_file_if_exist(&clone_file_path).unwrap();
+                }
             }
 
             // Delete temp files.
             if self.hold_tmp_files {
                 let tmp_file_paths = cf_file.tmp_file_paths();
-                for tmp_file_path in tmp_file_paths {
-                    delete_file_if_exist(&tmp_file_path).unwrap();
+                if tmp_file_paths.is_empty() {
+                    try_delete_snapshot_files!(cf_file, gen_tmp_file_name); 
+                } else {
+                    for tmp_file_path in tmp_file_paths {
+                        delete_file_if_exist(&tmp_file_path).unwrap();
+                    }
                 }
             }
 
             // Delete cf files.
             let file_paths = cf_file.file_paths();
-            for file_path in &file_paths {
-                delete_file_if_exist(&file_path).unwrap();
-            }
-            if let Some(ref mgr) = self.mgr.encryption_key_manager {
+            if file_paths.is_empty() {
+                try_delete_snapshot_files!(cf_file); 
+            } else {
                 for file_path in &file_paths {
-                    mgr.delete_file(file_path).unwrap();
+                    delete_file_if_exist(&file_path).unwrap();
+                }
+                if let Some(ref mgr) = self.mgr.encryption_key_manager {
+                    for file_path in &file_paths {
+                        mgr.delete_file(file_path).unwrap();
+                    }
                 }
             }
         }
