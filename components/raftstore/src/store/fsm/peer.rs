@@ -32,6 +32,7 @@ use kvproto::raft_serverpb::{
     RaftSnapshotData, RaftTruncatedState, RegionLocalState,
 };
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
+use parking_lot::RwLockWriteGuard;
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, MessageType};
 use raft::{self, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
@@ -2276,36 +2277,36 @@ where
     // before proposing the locks, preventing unexpected lock loss.
     fn propose_locks_before_transfer_leader(&mut self) -> bool {
         // 1. Disable in-memory pessimistic locks.
-        let locks = {
-            let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
-            // If `is_valid` is false, it means we have proposed the pessimistic locks.
-            // We can trigger transferring leader immediately.
-            if !pessimistic_locks.is_valid {
-                return false;
-            }
-            pessimistic_locks.is_valid = false;
-            mem::take(&mut pessimistic_locks.map)
-        };
+        let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
+        if !pessimistic_locks.is_valid {
+            return false;
+        }
+        pessimistic_locks.is_valid = false;
 
         // 2. Propose pessimistic locks
-        if locks.is_empty() {
+        if pessimistic_locks.map.is_empty() {
             return false;
         }
         // FIXME: Raft command has size limit. Either limit the total size of pessimistic locks
         // in a region, or split commands here.
         let mut cmd = RaftCmdRequest::default();
-        for (key, (lock, deleted)) in locks {
-            if deleted {
-                continue;
+        {
+            // Downgrade to a read guard, do not block readers in the scheduler as far as possible.
+            let pessimistic_locks = RwLockWriteGuard::downgrade(pessimistic_locks);
+            fail_point!("invalidate_locks_before_transfer_leader");
+            for (key, (lock, deleted)) in &pessimistic_locks.map {
+                if *deleted {
+                    continue;
+                }
+                let mut put = PutRequest::default();
+                put.set_cf(CF_LOCK.to_string());
+                put.set_key(key.as_encoded().to_owned());
+                put.set_value(lock.to_lock().to_bytes());
+                let mut req = Request::default();
+                req.set_cmd_type(CmdType::Put);
+                req.set_put(put);
+                cmd.mut_requests().push(req);
             }
-            let mut put = PutRequest::default();
-            put.set_cf(CF_LOCK.to_string());
-            put.set_key(key.into_encoded());
-            put.set_value(lock.into_lock().to_bytes());
-            let mut req = Request::default();
-            req.set_cmd_type(CmdType::Put);
-            req.set_put(put);
-            cmd.mut_requests().push(req);
         }
         if cmd.get_requests().is_empty() {
             // If the map is not empty but all locks are deleted, it is possible that a write
