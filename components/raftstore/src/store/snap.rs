@@ -1469,7 +1469,7 @@ impl SnapManager {
                     continue;
                 }
                 let reader = snap_io::get_decrypter_reader(file_path, key_manager)?;
-                cf_file.file_for_sending.push(reader);
+                cf_file.file_for_sending[i] = reader;
             }
         }
         Ok(Box::new(s))
