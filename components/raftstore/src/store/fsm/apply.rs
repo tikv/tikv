@@ -1075,7 +1075,7 @@ where
         // 2. When a leader tries to read index during transferring leader,
         //    it will also propose an empty entry. But that entry will not contain
         //    any associated callback. So no need to clear callback.
-        while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
+        while let Some(mut cmd) = self.pending_cmds.pop_normal(u64::MAX, term - 1) {
             if let Some(cb) = cmd.cb.take() {
                 apply_ctx
                     .applied_batch
