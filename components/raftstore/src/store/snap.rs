@@ -379,7 +379,10 @@ impl CfFile {
     }
 
     pub fn gen_clone_file_name(&self, file_id: usize) -> String {
-        format!("{}_{:04}{}{}", self.file_prefix, file_id, self.file_suffix, CLONE_FILE_SUFFIX)
+        format!(
+            "{}_{:04}{}{}",
+            self.file_prefix, file_id, self.file_suffix, CLONE_FILE_SUFFIX
+        )
     }
 
     pub fn gen_tmp_file_name(&self, file_id: usize) -> String {
@@ -928,7 +931,7 @@ impl Snapshot {
                         break;
                     }
                 }
-            }
+            };
         }
 
         debug!(
@@ -950,7 +953,7 @@ impl Snapshot {
             if self.hold_tmp_files {
                 let tmp_file_paths = cf_file.tmp_file_paths();
                 if tmp_file_paths.is_empty() {
-                    try_delete_snapshot_files!(cf_file, gen_tmp_file_name); 
+                    try_delete_snapshot_files!(cf_file, gen_tmp_file_name);
                 } else {
                     for tmp_file_path in tmp_file_paths {
                         delete_file_if_exist(&tmp_file_path).unwrap();
@@ -961,7 +964,7 @@ impl Snapshot {
             // Delete cf files.
             let file_paths = cf_file.file_paths();
             if file_paths.is_empty() {
-                try_delete_snapshot_files!(cf_file); 
+                try_delete_snapshot_files!(cf_file);
             } else {
                 for file_path in &file_paths {
                     delete_file_if_exist(&file_path).unwrap();
