@@ -7934,7 +7934,206 @@ mod tests {
         }
     }
 
-    //TODO:ADD tests for check_api_ranges
+    #[test]
+    fn test_check_api_version_ranges() {
+        use error_code::storage::*;
+
+        const TIDB_KEY_CASE: &[(Option<&[u8]>, Option<&[u8]>)] = &[
+            (Some(b"t_a"), Some(b"t_z")),
+            (Some(b"t"), Some(b"u")),
+            (Some(b"m"), Some(b"n")),
+            (Some(b"m_a"), Some(b"m_z")),
+        ];
+        const TXN_KEY_CASE: &[(Option<&[u8]>, Option<&[u8]>)] =
+            &[(Some(b"x\0a"), Some(b"x\0z")), (Some(b"x"), Some(b"y"))];
+        const RAW_KEY_CASE: &[(Option<&[u8]>, Option<&[u8]>)] =
+            &[(Some(b"r\0a"), Some(b"r\0z")), (Some(b"r"), Some(b"s"))];
+        // The cases that should fail in API V2
+        const TIDB_KEY_CASE_APIV2_ERR: &[(Option<&[u8]>, Option<&[u8]>)] = &[
+            (Some(b"t_a"), Some(b"ua")),
+            (Some(b"t"), None),
+            (None, Some(b"t_z")),
+            (Some(b"m_a"), Some(b"na")),
+            (Some(b"m"), None),
+            (None, Some(b"m_z")),
+        ];
+        const TXN_KEY_CASE_APIV2_ERR: &[(Option<&[u8]>, Option<&[u8]>)] = &[
+            (Some(b"x\0a"), Some(b"ya")),
+            (Some(b"x"), None),
+            (None, Some(b"x\0z")),
+        ];
+        const RAW_KEY_CASE_APIV2_ERR: &[(Option<&[u8]>, Option<&[u8]>)] = &[
+            (Some(b"r\0a"), Some(b"sa")),
+            (Some(b"r"), None),
+            (None, Some(b"r\0z")),
+        ];
+
+        let test_case = |storage_api_version,
+                         req_api_version,
+                         cmd,
+                         range: &[(Option<&[u8]>, Option<&[u8]>)],
+                         err| {
+            let res = Storage::<RocksEngine, DummyLockManager>::check_api_version_ranges(
+                storage_api_version,
+                req_api_version,
+                cmd,
+                range.iter().cloned(),
+            );
+            if let Some(err) = err {
+                assert!(res.is_err());
+                assert_eq!(res.unwrap_err().error_code(), err);
+            } else {
+                assert!(res.is_ok());
+            }
+        };
+
+        // storage api_version = V1, for backward compatible.
+        test_case(
+            ApiVersion::V1,    // storage api_version
+            ApiVersion::V1,    // request api_version
+            CommandKind::scan, // command kind
+            TIDB_KEY_CASE,     // ranges
+            None,              // expected error code
+        );
+        test_case(
+            ApiVersion::V1,
+            ApiVersion::V1,
+            CommandKind::raw_scan,
+            TIDB_KEY_CASE,
+            None,
+        );
+        test_case(
+            ApiVersion::V1,
+            ApiVersion::V1,
+            CommandKind::raw_scan,
+            TIDB_KEY_CASE_APIV2_ERR,
+            None,
+        );
+        // storage api_version = V1ttl, allow RawKV request only.
+        test_case(
+            ApiVersion::V1ttl,
+            ApiVersion::V1,
+            CommandKind::raw_scan,
+            RAW_KEY_CASE,
+            None,
+        );
+        test_case(
+            ApiVersion::V1ttl,
+            ApiVersion::V1,
+            CommandKind::raw_scan,
+            RAW_KEY_CASE_APIV2_ERR,
+            None,
+        );
+        test_case(
+            ApiVersion::V1ttl,
+            ApiVersion::V1,
+            CommandKind::scan,
+            TIDB_KEY_CASE,
+            Some(API_VERSION_NOT_MATCHED),
+        );
+        // storage api_version = V1, reject V2 request.
+        test_case(
+            ApiVersion::V1,
+            ApiVersion::V2,
+            CommandKind::scan,
+            TIDB_KEY_CASE,
+            Some(API_VERSION_NOT_MATCHED),
+        );
+        // storage api_version = V2.
+        // backward compatible for TiDB request, and TiDB request only.
+        test_case(
+            ApiVersion::V2,
+            ApiVersion::V1,
+            CommandKind::scan,
+            TIDB_KEY_CASE,
+            None,
+        );
+        test_case(
+            ApiVersion::V2,
+            ApiVersion::V1,
+            CommandKind::raw_scan,
+            TIDB_KEY_CASE,
+            Some(API_VERSION_NOT_MATCHED),
+        );
+        test_case(
+            ApiVersion::V2,
+            ApiVersion::V1,
+            CommandKind::scan,
+            TXN_KEY_CASE,
+            Some(INVALID_KEY_MODE),
+        );
+        test_case(
+            ApiVersion::V2,
+            ApiVersion::V1,
+            CommandKind::scan,
+            RAW_KEY_CASE,
+            Some(INVALID_KEY_MODE),
+        );
+        // V2 api validation.
+        test_case(
+            ApiVersion::V2,
+            ApiVersion::V2,
+            CommandKind::scan,
+            TXN_KEY_CASE,
+            None,
+        );
+        test_case(
+            ApiVersion::V2,
+            ApiVersion::V2,
+            CommandKind::raw_scan,
+            RAW_KEY_CASE,
+            None,
+        );
+        test_case(
+            ApiVersion::V2,
+            ApiVersion::V2,
+            CommandKind::scan,
+            RAW_KEY_CASE,
+            Some(INVALID_KEY_MODE),
+        );
+        test_case(
+            ApiVersion::V2,
+            ApiVersion::V2,
+            CommandKind::raw_scan,
+            TXN_KEY_CASE,
+            Some(INVALID_KEY_MODE),
+        );
+        test_case(
+            ApiVersion::V2,
+            ApiVersion::V2,
+            CommandKind::scan,
+            TIDB_KEY_CASE,
+            Some(INVALID_KEY_MODE),
+        );
+
+        for range in TIDB_KEY_CASE_APIV2_ERR {
+            test_case(
+                ApiVersion::V2,
+                ApiVersion::V1,
+                CommandKind::scan,
+                &[*range],
+                Some(INVALID_KEY_MODE),
+            );
+        }
+        for range in TXN_KEY_CASE_APIV2_ERR {
+            test_case(
+                ApiVersion::V2,
+                ApiVersion::V2,
+                CommandKind::scan,
+                &[*range],
+                Some(INVALID_KEY_MODE),
+            );
+        }
+        for range in RAW_KEY_CASE_APIV2_ERR {
+            test_case(
+                ApiVersion::V2,
+                ApiVersion::V2,
+                CommandKind::raw_scan,
+                &[*range],
+                Some(INVALID_KEY_MODE),
+            );
+        }
+    }
 
     #[test]
     fn test_write_in_memory_pessimistic_locks() {
