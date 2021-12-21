@@ -286,8 +286,8 @@ impl MockClient {
     }
 }
 
-impl resource_metering::Client for MockClient {
-    fn upload_records(&mut self, _address: &str, records: Records) {
+impl resource_metering::DataSink for MockClient {
+    fn try_send(&mut self, records: Records) -> resource_metering::error::Result<()> {
         let mut read_keys = 0;
         for r in records.records.values() {
             read_keys += r.read_keys_list.iter().sum::<u32>();
@@ -296,5 +296,6 @@ impl resource_metering::Client for MockClient {
             read_keys += r.read_keys;
         }
         self.tx.send(read_keys).unwrap();
+        Ok(())
     }
 }
