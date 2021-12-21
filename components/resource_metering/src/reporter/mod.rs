@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub mod datasink;
+pub mod data_sink;
 pub mod single_target;
 
 use crate::collector::{CollectorHandle, CollectorImpl, CollectorRegHandle};
@@ -25,7 +25,7 @@ use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 /// [RawRecords]: crate::model::RawRecords
 /// [Records]: crate::model::Records
 pub struct Reporter<D> {
-    datasink: D,
+    data_sink: D,
     config: Config,
     scheduler: Scheduler<Task>,
     collector_reg_handle: CollectorRegHandle,
@@ -69,7 +69,7 @@ where
     D: DataSink + Send,
 {
     pub fn new(
-        datasink: D,
+        data_sink: D,
         config: Config,
         collector_reg_handle: CollectorRegHandle,
         scheduler: Scheduler<Task>,
@@ -78,7 +78,7 @@ where
             collector_reg_handle.register(Box::new(CollectorImpl::new(scheduler.clone())))
         });
         Self {
-            datasink,
+            data_sink,
             config,
             scheduler,
             collector,
@@ -111,7 +111,7 @@ where
         }
         // Whether endpoint exists or not, records should be taken in order to reset.
         let records = std::mem::take(&mut self.records);
-        if let Err(err) = self.datasink.try_send(records) {
+        if let Err(err) = self.data_sink.try_send(records) {
             warn!("failed to send data to datasink"; "error" => ?err);
         }
     }

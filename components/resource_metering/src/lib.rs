@@ -21,7 +21,7 @@ pub use collector::{Collector, CollectorHandle, CollectorId, CollectorRegHandle}
 pub use config::{Config, ConfigManager};
 pub use model::*;
 pub use recorder::{init_recorder, CpuRecorder, Recorder, RecorderBuilder, RecorderHandle};
-pub use reporter::datasink::DataSink;
+pub use reporter::data_sink::DataSink;
 pub use reporter::single_target::SingleTargetDataSink;
 pub use reporter::{Reporter, Task};
 

@@ -3,7 +3,7 @@
 use crate::error::Result;
 use crate::metrics::{IGNORED_DATA_COUNTER, REPORT_DATA_COUNTER, REPORT_DURATION_HISTOGRAM};
 use crate::model::Records;
-use crate::reporter::datasink::DataSink;
+use crate::reporter::data_sink::DataSink;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
