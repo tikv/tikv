@@ -10,8 +10,8 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
 use tikv_util::time::Duration;
-use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 use tikv_util::warn;
+use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 
 /// A structure for reporting statistics through [Client].
 ///

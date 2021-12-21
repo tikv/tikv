@@ -8,7 +8,7 @@
 
 mod collector;
 mod config;
-pub mod error;
+mod error;
 mod localstorage;
 mod model;
 mod recorder;
