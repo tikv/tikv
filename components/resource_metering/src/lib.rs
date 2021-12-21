@@ -6,9 +6,9 @@
 #![feature(hash_drain_filter)]
 #![feature(core_intrinsics)]
 
-mod client;
 mod collector;
 mod config;
+pub mod error;
 mod localstorage;
 mod model;
 mod recorder;
@@ -17,14 +17,15 @@ pub mod utils;
 
 pub(crate) mod metrics;
 
-pub use client::{Client, GrpcClient};
 pub use collector::{Collector, CollectorHandle, CollectorId, CollectorRegHandle};
 pub use config::{Config, ConfigManager};
 pub use model::*;
 pub use recorder::{
-    init_recorder, record_read_keys, record_write_keys, CpuRecorder, RecorderBuilder,
+    init_recorder, record_read_keys, record_write_keys, CpuRecorder, Recorder, RecorderBuilder,
     RecorderHandle, SummaryRecorder,
 };
+pub use reporter::data_sink::DataSink;
+pub use reporter::single_target::SingleTargetDataSink;
 pub use reporter::{Reporter, Task};
 
 pub const MAX_THREAD_REGISTER_RETRY: u32 = 10;

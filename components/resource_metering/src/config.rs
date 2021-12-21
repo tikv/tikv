@@ -4,7 +4,9 @@ use crate::recorder::RecorderHandle;
 use crate::reporter::Task;
 
 use std::error::Error;
+use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use online_config::{ConfigChange, OnlineConfig};
 use serde_derive::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
@@ -92,6 +94,7 @@ pub struct ConfigManager {
     current_config: Config,
     scheduler: Scheduler<Task>,
     recorder: RecorderHandle,
+    address: Arc<ArcSwap<String>>,
 }
 
 impl ConfigManager {
@@ -99,11 +102,13 @@ impl ConfigManager {
         current_config: Config,
         scheduler: Scheduler<Task>,
         recorder: RecorderHandle,
+        address: Arc<ArcSwap<String>>,
     ) -> Self {
         ConfigManager {
             current_config,
             scheduler,
             recorder,
+            address,
         }
     }
 }
@@ -123,6 +128,10 @@ impl online_config::ConfigManager for ConfigManager {
         }
         if self.current_config.precision != new_config.precision {
             self.recorder.precision(new_config.precision.0);
+        }
+        if self.current_config.receiver_address != new_config.receiver_address {
+            self.address
+                .store(Arc::new(new_config.receiver_address.clone()));
         }
         // Notify reporter that the configuration has changed.
         self.scheduler

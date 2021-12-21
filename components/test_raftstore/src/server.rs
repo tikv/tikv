@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
+use arc_swap::ArcSwap;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use kvproto::deadlock::create_deadlock;
@@ -214,10 +215,10 @@ impl ServerCluster {
             .pending_capacity(30)
             .create()
             .lazy_build("resource-metering-reporter");
-        let mut client = resource_metering::GrpcClient::default();
-        client.set_env(self.env.clone());
+        let address = Arc::new(ArcSwap::new(Arc::new(cfg.receiver_address.clone())));
+        let data_sink = resource_metering::SingleTargetDataSink::new(address, self.env.clone());
         let reporter =
-            resource_metering::Reporter::new(client, cfg.clone(), crh, worker.scheduler());
+            resource_metering::Reporter::new(data_sink, cfg.clone(), crh, worker.scheduler());
         worker.start_with_timer(reporter);
         (rtf, worker)
     }

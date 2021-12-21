@@ -1,10 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use arc_swap::ArcSwap;
 use collections::HashMap;
 use kvproto::kvrpcpb::Context;
 use online_config::{ConfigChange, ConfigManager, ConfigValue};
+use resource_metering::error::Result;
 use resource_metering::{
-    Client, Config, Record, RecorderBuilder, Records, Reporter, SummaryRecorder,
+    Config, DataSink, Record, RecorderBuilder, Records, Reporter, SummaryRecorder,
 };
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
@@ -21,12 +23,13 @@ struct MockClient {
     data: Arc<Mutex<HashMap<Vec<u8>, Record>>>,
 }
 
-impl Client for MockClient {
-    fn upload_records(&mut self, _address: &str, records: Records) {
+impl DataSink for MockClient {
+    fn try_send(&mut self, records: Records) -> Result<()> {
         let mut data = self.data.lock().unwrap();
         records.records.iter().for_each(|(k, v)| {
             data.insert(k.clone(), v.clone());
         });
+        Ok(())
     }
 }
 
@@ -47,6 +50,7 @@ fn test_summary() {
     let mut cfg = Config::default();
     cfg.receiver_address = "127.0.0.1:12345".to_owned();
     cfg.report_receiver_interval = ReadableDuration::millis(REPORT_INTERVAL_MS);
+
     let (rh, crh, tf) = RecorderBuilder::default()
         .enable(cfg.enabled)
         .precision_ms(Arc::new(AtomicU64::new(PRECISION_MS)))
@@ -60,7 +64,9 @@ fn test_summary() {
         crh,
         worker.scheduler(),
     ));
-    let mut cfg_manager = resource_metering::ConfigManager::new(cfg, worker.scheduler(), rh);
+    let address = Arc::new(ArcSwap::new(Arc::new(cfg.receiver_address.clone())));
+    let mut cfg_manager =
+        resource_metering::ConfigManager::new(cfg, worker.scheduler(), rh, address);
 
     /* At this point we are ready for everything except turning on the switch. */
 

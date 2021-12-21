@@ -4342,6 +4342,7 @@ dependencies = [
 name = "server"
 version = "0.0.1"
 dependencies = [
+ "arc-swap 1.5.0",
  "backup",
  "cdc",
  "chrono",
@@ -4877,6 +4878,7 @@ dependencies = [
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
+ "arc-swap 1.5.0",
  "backtrace",
  "collections",
  "concurrency_manager",
@@ -4962,6 +4964,7 @@ dependencies = [
 name = "tests"
 version = "0.0.1"
 dependencies = [
+ "arc-swap 1.5.0",
  "arrow",
  "batch-system",
  "byteorder",
