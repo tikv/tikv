@@ -2,6 +2,8 @@
 
 mod mock_receiver_server;
 
+pub use mock_receiver_server::MockReceiverServer;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,7 +15,6 @@ use futures::{select, FutureExt};
 use grpcio::Environment;
 use kvproto::kvrpcpb::{ApiVersion, Context};
 use kvproto::resource_usage_agent::ResourceUsageRecord;
-use mock_receiver_server::MockReceiverServer;
 use resource_metering::{init_recorder, Config, ConfigManager, Task, TEST_TAG_PREFIX};
 use tempfile::TempDir;
 use tikv::config::{ConfigController, Module, TiKvConfig};
@@ -66,9 +67,9 @@ impl TestSuite {
         );
 
         let env = Arc::new(Environment::new(2));
-        let datasink = resource_metering::SingleTargetDataSink::new(address.clone(), env.clone());
+        let data_sink = resource_metering::SingleTargetDataSink::new(address.clone(), env.clone());
         reporter.start_with_timer(resource_metering::Reporter::new(
-            datasink,
+            data_sink,
             cfg,
             collector_reg_handle,
             scheduler.clone(),

@@ -55,7 +55,11 @@ impl SubRecorder for CpuRecorder {
         });
     }
 
-    fn cleanup(&mut self) {
+    fn cleanup(
+        &mut self,
+        _records: &mut RawRecords,
+        _thread_stores: &mut HashMap<usize, LocalStorage>,
+    ) {
         const THREAD_STAT_LEN_THRESHOLD: usize = 500;
 
         if self.thread_stats.capacity() > THREAD_STAT_LEN_THRESHOLD
@@ -65,17 +69,21 @@ impl SubRecorder for CpuRecorder {
         }
     }
 
-    fn reset(&mut self) {
+    fn reset(
+        &mut self,
+        _records: &mut RawRecords,
+        _thread_stores: &mut HashMap<usize, LocalStorage>,
+    ) {
         for (thread_id, stat) in &mut self.thread_stats {
             stat.stat = utils::stat_task(utils::process_id(), *thread_id).unwrap_or_default();
         }
     }
 
-    fn thread_created(&mut self, id: usize, attached_tag: Arc<ArcSwapOption<TagInfos>>) {
+    fn thread_created(&mut self, id: usize, store: &LocalStorage) {
         self.thread_stats.insert(
             id,
             ThreadStat {
-                attached_tag,
+                attached_tag: store.attached_tag.clone(),
                 stat: Stat::default(),
             },
         );
@@ -128,9 +136,10 @@ mod tests {
             peer_id: 0,
             extra_attachment: b"abc".to_vec(),
         });
-        let attached_tag = Arc::new(ArcSwapOption::new(Some(info)));
+        let mut store = LocalStorage::default();
+        store.attached_tag = Arc::new(ArcSwapOption::new(Some(info)));
         let mut recorder = CpuRecorder::default();
-        recorder.thread_created(utils::thread_id(), attached_tag);
+        recorder.thread_created(utils::thread_id(), &store);
         let thread_id = utils::thread_id();
         let prev_stat = &recorder.thread_stats.get(&thread_id).unwrap().stat;
         let prev_cpu_ticks = prev_stat.utime.wrapping_add(prev_stat.stime);
