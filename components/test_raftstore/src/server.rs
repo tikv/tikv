@@ -115,6 +115,7 @@ struct ServerMeta {
     raw_apply_router: ApplyRouter<RocksEngine>,
     gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport>,
     rts_worker: Option<LazyWorker<resolved_ts::Task<RocksSnapshot>>>,
+    res_meter_worker: LazyWorker<resource_metering::Task>,
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
@@ -200,6 +201,24 @@ impl ServerCluster {
 
     pub fn get_concurrency_manager(&self, node_id: u64) -> ConcurrencyManager {
         self.concurrency_managers.get(&node_id).unwrap().clone()
+    }
+
+    fn init_resource_metering(
+        &self,
+        cfg: &resource_metering::Config,
+    ) -> (ResourceTagFactory, LazyWorker<resource_metering::Task>) {
+        let (_, crh, rtf) =
+            resource_metering::init_recorder(cfg.enabled, cfg.precision.as_millis());
+        let mut worker = WorkerBuilder::new("resource-metering-reporter")
+            .pending_capacity(30)
+            .create()
+            .lazy_build("resource-metering-reporter");
+        let mut client = resource_metering::GrpcClient::default();
+        client.set_env(self.env.clone());
+        let reporter =
+            resource_metering::Reporter::new(client, cfg.clone(), crh, worker.scheduler());
+        worker.start_with_timer(reporter);
+        (rtf, worker)
     }
 }
 
@@ -306,6 +325,10 @@ impl Simulator for ServerCluster {
             None
         };
 
+        // Start resource metering.
+        let (res_tag_factory, res_meter_worker) =
+            self.init_resource_metering(&cfg.resource_metering);
+
         let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
         let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
 
@@ -319,7 +342,7 @@ impl Simulator for ServerCluster {
             lock_mgr.get_storage_dynamic_configs(),
             Arc::new(FlowController::empty()),
             pd_sender,
-            ResourceTagFactory::new_for_test(),
+            res_tag_factory.clone(),
         )?;
         self.storages.insert(node_id, raft_engine);
 
@@ -368,7 +391,7 @@ impl Simulator for ServerCluster {
             cop_read_pool.handle(),
             concurrency_manager.clone(),
             PerfLevel::EnableCount,
-            ResourceTagFactory::new_for_test(),
+            res_tag_factory,
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;
@@ -506,6 +529,7 @@ impl Simulator for ServerCluster {
                 sim_trans: simulate_trans,
                 gc_worker,
                 rts_worker,
+                res_meter_worker,
             },
         );
         self.addrs.insert(node_id, format!("{}", addr));
@@ -535,6 +559,7 @@ impl Simulator for ServerCluster {
             if let Some(worker) = meta.rts_worker {
                 worker.stop_worker();
             }
+            meta.res_meter_worker.stop_worker();
         }
     }
 

@@ -191,7 +191,11 @@ mod tests {
                 peer_id: 0,
                 extra_attachment: b"12345".to_vec(),
             }),
-            RawRecord { cpu_time: 1 },
+            RawRecord {
+                cpu_time: 1,
+                read_keys: 2,
+                write_keys: 3,
+            },
         );
         r.run(Task::Records(Arc::new(RawRecords {
             begin_unix_time_secs: 123,
