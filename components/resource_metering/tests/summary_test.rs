@@ -3,11 +3,10 @@
 use arc_swap::ArcSwap;
 use collections::HashMap;
 use kvproto::kvrpcpb::Context;
+use kvproto::resource_usage_agent::ResourceUsageRecord;
 use online_config::{ConfigChange, ConfigManager, ConfigValue};
 use resource_metering::error::Result;
-use resource_metering::{
-    Config, DataSink, Record, RecorderBuilder, Records, Reporter, SummaryRecorder,
-};
+use resource_metering::{Config, DataSink, RecorderBuilder, Reporter, SummaryRecorder};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -20,21 +19,21 @@ const REPORT_INTERVAL_MS: u64 = 3000;
 
 #[derive(Default, Clone)]
 struct MockClient {
-    data: Arc<Mutex<HashMap<Vec<u8>, Record>>>,
+    data: Arc<Mutex<HashMap<Vec<u8>, ResourceUsageRecord>>>,
 }
 
 impl DataSink for MockClient {
-    fn try_send(&mut self, records: Records) -> Result<()> {
+    fn try_send(&mut self, records: Arc<Vec<ResourceUsageRecord>>) -> Result<()> {
         let mut data = self.data.lock().unwrap();
-        records.records.iter().for_each(|(k, v)| {
-            data.insert(k.clone(), v.clone());
+        records.iter().for_each(|r| {
+            data.insert(r.resource_group_tag.clone(), r.clone());
         });
         Ok(())
     }
 }
 
 impl MockClient {
-    fn get(&self, k: &[u8]) -> Option<Record> {
+    fn get(&self, k: &[u8]) -> Option<ResourceUsageRecord> {
         self.data.lock().unwrap().get(k).cloned()
     }
 
@@ -112,8 +111,8 @@ fn test_summary() {
             }
             thread::sleep(Duration::from_millis(REPORT_INTERVAL_MS + 500)); // wait report
             let r = client.get(&b"TAG-1".to_vec()).unwrap();
-            assert_eq!(r.read_keys_list.iter().sum::<u32>(), 123);
-            assert_eq!(r.write_keys_list.iter().sum::<u32>(), 456);
+            assert_eq!(r.get_record_list_read_keys().iter().sum::<u32>(), 123);
+            assert_eq!(r.get_record_list_write_keys().iter().sum::<u32>(), 456);
             client.clear();
         })
         .join()

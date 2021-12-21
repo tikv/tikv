@@ -14,7 +14,7 @@ use kvproto::kvrpcpb::*;
 use kvproto::resource_usage_agent::ResourceUsageRecord;
 use kvproto::tikvpb::*;
 use protobuf::Message;
-use resource_metering::{Records, ResourceTagFactory};
+use resource_metering::ResourceTagFactory;
 use test_coprocessor::{DAGSelect, ProductTable, Store};
 use test_raftstore::*;
 use test_util::alloc_port;
@@ -287,13 +287,13 @@ impl MockClient {
 }
 
 impl resource_metering::DataSink for MockClient {
-    fn try_send(&mut self, records: Records) -> resource_metering::error::Result<()> {
+    fn try_send(
+        &mut self,
+        records: Arc<Vec<ResourceUsageRecord>>,
+    ) -> resource_metering::error::Result<()> {
         let mut read_keys = 0;
-        for r in records.records.values() {
-            read_keys += r.read_keys_list.iter().sum::<u32>();
-        }
-        for r in records.others.values() {
-            read_keys += r.read_keys;
+        for r in records.iter() {
+            read_keys += r.get_record_list_read_keys().iter().sum::<u32>();
         }
         self.tx.send(read_keys).unwrap();
         Ok(())
