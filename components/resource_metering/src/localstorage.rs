@@ -1,11 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::model::SummaryRecord;
 use crate::TagInfos;
 
 use std::cell::RefCell;
-use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use arc_swap::ArcSwapOption;
+use collections::HashMap;
 
 thread_local! {
     /// `STORAGE` is a thread-localized instance of [LocalStorage].
@@ -22,6 +25,9 @@ pub struct LocalStorage {
     pub register_failed_times: u32,
     pub is_set: bool,
     pub attached_tag: Arc<ArcSwapOption<TagInfos>>,
+    pub summary_enable: Arc<AtomicBool>,
+    pub summary_cur_record: Arc<SummaryRecord>,
+    pub summary_records: Arc<Mutex<HashMap<Arc<TagInfos>, SummaryRecord>>>,
 }
 
 /// This structure is transmitted as a event in [STORAGE_CHAN].
