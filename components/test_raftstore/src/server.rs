@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
+use arc_swap::ArcSwap;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use kvproto::deadlock::create_deadlock;
@@ -17,7 +18,6 @@ use kvproto::raft_serverpb;
 use kvproto::tikvpb::TikvClient;
 use tempfile::TempDir;
 use tokio::runtime::Builder as TokioBuilder;
-use arc_swap::ArcSwap;
 
 use super::*;
 use crate::Config;

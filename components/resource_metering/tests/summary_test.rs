@@ -1,19 +1,19 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use arc_swap::ArcSwap;
 use collections::HashMap;
 use kvproto::kvrpcpb::Context;
 use online_config::{ConfigChange, ConfigManager, ConfigValue};
-use resource_metering::{
-    DataSink, Config, Record, RecorderBuilder, Records, Reporter, SummaryRecorder,
-};
 use resource_metering::error::Result;
+use resource_metering::{
+    Config, DataSink, Record, RecorderBuilder, Records, Reporter, SummaryRecorder,
+};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::LazyWorker;
-use arc_swap::ArcSwap;
 
 const PRECISION_MS: u64 = 1000;
 const REPORT_INTERVAL_MS: u64 = 3000;
@@ -65,7 +65,8 @@ fn test_summary() {
         worker.scheduler(),
     ));
     let address = Arc::new(ArcSwap::new(Arc::new(cfg.receiver_address.clone())));
-    let mut cfg_manager = resource_metering::ConfigManager::new(cfg, worker.scheduler(), rh, address);
+    let mut cfg_manager =
+        resource_metering::ConfigManager::new(cfg, worker.scheduler(), rh, address);
 
     /* At this point we are ready for everything except turning on the switch. */
 
