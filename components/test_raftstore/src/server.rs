@@ -17,6 +17,7 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use kvproto::tikvpb::TikvClient;
 use tempfile::TempDir;
+use tikv::storage::kv::SnapContext;
 use tokio::runtime::Builder as TokioBuilder;
 
 use super::*;
@@ -33,11 +34,11 @@ use raftstore::router::{
 };
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
-use raftstore::store::SnapManager;
 use raftstore::store::{
     AutoSplitController, Callback, CheckLeaderRunner, LocalReader, SnapManagerBuilder,
     SplitCheckRunner, SplitConfigManager,
 };
+use raftstore::store::{RegionSnapshot, SnapManager};
 use raftstore::Result;
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
@@ -58,8 +59,8 @@ use tikv::server::{
     create_raft_storage, ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
     Server, ServerTransport,
 };
-use tikv::storage;
 use tikv::storage::txn::flow_controller::FlowController;
+use tikv::storage::{self, Engine};
 use tikv::{config::ConfigController, server::raftkv::ReplicaReadLockChecker};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
@@ -642,6 +643,25 @@ impl Simulator for ServerCluster {
 
     fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
+    }
+}
+
+impl Cluster<ServerCluster> {
+    pub fn must_get_snapshot_of_region(&mut self, region_id: u64) -> RegionSnapshot<RocksSnapshot> {
+        let leader = self.leader_of_region(region_id).unwrap();
+        let store_id = leader.store_id;
+        let epoch = self.get_region_epoch(region_id);
+        let mut ctx = Context::default();
+        ctx.set_region_id(region_id);
+        ctx.set_peer(leader);
+        ctx.set_region_epoch(epoch);
+
+        let storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        storage.snapshot(snap_ctx).unwrap()
     }
 }
 
