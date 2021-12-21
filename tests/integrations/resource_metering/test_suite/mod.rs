@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::channel::oneshot;
 use futures::{select, FutureExt};
@@ -50,9 +51,7 @@ impl TestSuite {
         let (mut tikv_cfg, dir) = TiKvConfig::with_tmp().unwrap();
         tikv_cfg.resource_metering = cfg.clone();
 
-        let address = Arc::new(ArcSwap::new(Arc::new(
-            cfg.resource_metering.receiver_address.clone(),
-        )));
+        let address = Arc::new(ArcSwap::new(Arc::new(cfg.receiver_address.clone())));
         let cfg_controller = ConfigController::new(tikv_cfg);
         let (recorder_handle, collector_reg_handle, resource_tag_factory) =
             init_recorder(cfg.enabled, cfg.precision.as_millis());
