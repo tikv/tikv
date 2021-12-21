@@ -8,6 +8,7 @@ use tikv_util::time::Instant;
 
 use crate::iosnoop::{fetch_io_bytes, flush_io_latency_metrics};
 use crate::metrics::{tls_flush, IO_BYTES_VEC};
+use crate::thread_io;
 use crate::IOBytes;
 use crate::IORateLimiterStatistics;
 use crate::{IOOp, IOType};
@@ -17,6 +18,8 @@ pub enum BytesFetcher {
     FromRateLimiter(Arc<IORateLimiterStatistics>),
     /// Fetch IO statistics from bcc snooper, which traces IO requests spawned by current process.
     FromIOSnooper(),
+    /// Fetch IO statistics from proc, which traces IO requests spawned by current process.
+    FromProc(),
 }
 
 impl BytesFetcher {
@@ -27,6 +30,7 @@ impl BytesFetcher {
                 write: stats.fetch(io_type, IOOp::Write) as u64,
             },
             BytesFetcher::FromIOSnooper() => fetch_io_bytes(io_type),
+            BytesFetcher::FromProc() => thread_io::fetch_all_thread_io_bytes(io_type),
         }
     }
 }
