@@ -307,9 +307,9 @@ impl ImportDir {
                     let env = get_env(key_manager.clone(), get_io_rate_limiter())?;
                     let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
 
-                    for (start, end) in TIDB_RANGES_COMPLEMENT {
+                    for &(start, end) in TIDB_RANGES_COMPLEMENT {
                         let mut unexpected_data_key = None;
-                        sst_reader.scan( start, end, false, |key, _| {
+                        sst_reader.scan(start, end, false, |key, _| {
                             unexpected_data_key = Some(key[DATA_KEY_PREFIX_LEN..].to_vec());
                             Ok(false)
                         })?;
