@@ -285,6 +285,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     )? {
                         self.statistics.write.processed_keys += 1;
                         self.statistics.processed_size += self.scan_policy.output_size(&output);
+                        resource_metering::record_read_keys(1);
                         return Ok(Some(output));
                     }
                 }
