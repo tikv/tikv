@@ -387,8 +387,8 @@ mod tests {
     #[test]
     fn test_cf_build_and_apply_sst_files() {
         let db_creaters = &[open_test_empty_db, open_test_db_with_100keys];
-        let max_file_sizes = &[f64::MAX, 100];
-        let limiter = Limiter::new(INFINITY);
+        let max_file_sizes = &[u64::MAX, 100];
+        let limiter = Limiter::new(f64::INFINITY);
 
         for max_file_size in max_file_sizes {
             for db_creater in db_creaters {
