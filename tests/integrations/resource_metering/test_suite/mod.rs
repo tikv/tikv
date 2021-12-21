@@ -50,6 +50,9 @@ impl TestSuite {
         let (mut tikv_cfg, dir) = TiKvConfig::with_tmp().unwrap();
         tikv_cfg.resource_metering = cfg.clone();
 
+        let address = Arc::new(ArcSwap::new(Arc::new(
+            cfg.resource_metering.receiver_address.clone(),
+        )));
         let cfg_controller = ConfigController::new(tikv_cfg);
         let (recorder_handle, collector_reg_handle, resource_tag_factory) =
             init_recorder(cfg.enabled, cfg.precision.as_millis());
@@ -59,13 +62,14 @@ impl TestSuite {
                 cfg.clone(),
                 scheduler.clone(),
                 recorder_handle,
+                address.clone(),
             )),
         );
+
         let env = Arc::new(Environment::new(2));
-        let mut reporter_client = resource_metering::GrpcClient::default();
-        reporter_client.set_env(env.clone());
+        let datasink = resource_metering::SingleTargetDataSink::new(address.clone(), env.clone());
         reporter.start_with_timer(resource_metering::Reporter::new(
-            reporter_client,
+            datasink,
             cfg,
             collector_reg_handle,
             scheduler.clone(),

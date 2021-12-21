@@ -1,54 +1,57 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::error::Result;
 use crate::metrics::{IGNORED_DATA_COUNTER, REPORT_DATA_COUNTER, REPORT_DURATION_HISTOGRAM};
 use crate::model::Records;
+use crate::reporter::datasink::DataSink;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use futures::SinkExt;
 use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
 use kvproto::resource_usage_agent::{ResourceUsageAgentClient, ResourceUsageRecord};
 use tikv_util::warn;
 
-/// This trait abstracts the interface to communicate with the remote.
-/// We can simply mock this interface to test without RPC.
-pub trait Client {
-    fn upload_records(&mut self, address: &str, records: Records);
-}
-
-/// `GrpcClient` is the default implementation of [Client], which uses gRPC
+/// `SingleTargetDataSink` is the default implementation of [DataSink], which uses gRPC
 /// to report data to the remote end.
-#[derive(Clone)]
-pub struct GrpcClient {
+pub struct SingleTargetDataSink {
     env: Arc<Environment>,
-    address: String,
+
+    address: Arc<ArcSwap<String>>,
+    current_address: Arc<String>,
+
     client: Option<ResourceUsageAgentClient>,
     limiter: Limiter,
 }
 
-impl Default for GrpcClient {
-    fn default() -> Self {
+impl SingleTargetDataSink {
+    pub fn new(address: Arc<ArcSwap<String>>, env: Arc<Environment>) -> Self {
+        let current_address = address.load_full();
         Self {
-            env: Arc::new(Environment::new(2)),
-            address: "".to_owned(),
+            env,
+
+            address,
+            current_address,
+
             client: None,
             limiter: Limiter::default(),
         }
     }
 }
 
-impl Client for GrpcClient {
-    fn upload_records(&mut self, address: &str, records: Records) {
+impl DataSink for SingleTargetDataSink {
+    fn try_send(&mut self, records: Records) -> Result<()> {
         let record_cnt = records.records.len() + if records.others.is_empty() { 0 } else { 1 };
 
-        if address.is_empty() {
+        let new_address = self.address.load_full();
+        if new_address.is_empty() {
             IGNORED_DATA_COUNTER
                 .with_label_values(&["report"])
                 .inc_by(record_cnt as _);
-            warn!("receiver address is empty, discarding the new report data");
-            return;
+            return Err("receiver address is empty".into());
         }
 
         let handle = self.limiter.try_acquire();
@@ -56,11 +59,10 @@ impl Client for GrpcClient {
             IGNORED_DATA_COUNTER
                 .with_label_values(&["report"])
                 .inc_by(record_cnt as _);
-            warn!("the last report has not been completed, discarding the new report data");
-            return;
+            return Err("the last report has not been completed".into());
         }
-        if self.address != address || self.client.is_none() {
-            self.address = address.to_owned();
+        if new_address != self.current_address || self.client.is_none() {
+            self.current_address = new_address;
             self.init_client();
         }
         let client = self.client.as_ref().unwrap();
@@ -70,8 +72,7 @@ impl Client for GrpcClient {
             IGNORED_DATA_COUNTER
                 .with_label_values(&["report"])
                 .inc_by(record_cnt as _);
-            warn!("failed to connect to receiver"; "error" => ?err);
-            return;
+            return Err(format!("{}", err).into());
         }
         let (mut tx, rx) = call.unwrap();
         client.spawn(async move {
@@ -111,10 +112,14 @@ impl Client for GrpcClient {
                 warn!("failed to receive from a grpc call"; "error" => ?err);
             }
         });
+
+        Ok(())
     }
+
+    fn on_reporter_closing() {}
 }
 
-impl GrpcClient {
+impl SingleTargetDataSink {
     pub fn set_env(&mut self, env: Arc<Environment>) {
         self.env = env;
     }
@@ -124,7 +129,7 @@ impl GrpcClient {
             let cb = ChannelBuilder::new(self.env.clone())
                 .keepalive_time(Duration::from_secs(10))
                 .keepalive_timeout(Duration::from_secs(3));
-            cb.connect(&self.address)
+            cb.connect(&self.current_address)
         };
         self.client = Some(ResourceUsageAgentClient::new(channel));
     }
