@@ -46,23 +46,35 @@ impl fmt::Debug for TxnExt {
 }
 
 /// Pessimistic locks of a region peer.
-#[derive(Default)]
 pub struct PeerPessimisticLocks {
     pub map: HashMap<Key, PessimisticLock>,
-    /// `epoch` marks the version of the pessimistic lock table. It is increased when the region
-    /// leadership changes or the range changes, to prevent writing locks to the table incorrectly.
-    pub epoch: u64,
     /// Whether the pessimistic lock map is valid to read or write. If it is invalid,
     /// the in-memory pessimistic lock feature cannot be used at the moment.
-    pub valid: bool,
+    pub is_valid: bool,
+    /// Refers to the Raft term in which the pessimistic lock table is valid.
+    pub term: u64,
+    /// Refers to the region version in which the pessimistic lock table is valid.
+    pub version: u64,
 }
 
 impl fmt::Debug for PeerPessimisticLocks {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PeerPessimisticLocks")
             .field("pessimistic_locks_size", &self.map.len())
-            .field("valid", &self.valid)
-            .field("epoch", &self.epoch)
+            .field("is_valid", &self.is_valid)
+            .field("term", &self.term)
+            .field("version", &self.version)
             .finish()
+    }
+}
+
+impl Default for PeerPessimisticLocks {
+    fn default() -> Self {
+        PeerPessimisticLocks {
+            map: HashMap::default(),
+            is_valid: true,
+            term: 0,
+            version: 0,
+        }
     }
 }

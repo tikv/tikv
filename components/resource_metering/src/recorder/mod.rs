@@ -2,7 +2,7 @@
 
 use crate::collector::{Collector, CollectorReg, CollectorRegHandle};
 use crate::localstorage::{LocalStorage, LocalStorageRef};
-use crate::{utils, RawRecords, ResourceTagFactory, TagInfos};
+use crate::{utils, RawRecords, ResourceTagFactory};
 
 use std::io;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
@@ -12,14 +12,15 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use arc_swap::ArcSwapOption;
 use collections::HashMap;
 use crossbeam::channel::{bounded, Receiver};
 use tikv_util::time::Instant;
 
 mod cpu;
+mod summary;
 
 pub use cpu::CpuRecorder;
+pub use summary::{record_read_keys, record_write_keys, SummaryRecorder};
 
 const RECORD_FREQUENCY: f64 = 99.0;
 const RECORD_LEN_THRESHOLD: usize = 20_000;
@@ -52,6 +53,7 @@ pub trait SubRecorder {
     /// The default period is 1 second.
     ///
     /// The [RawRecords] and [LocalStorage] map of all threads will be passed in through parameters.
+    /// `usize` is thread_id without platform dependency.
     ///
     /// [RawRecords]: crate::model::RawRecords
     /// [LocalStorage]: crate::localstorage::LocalStorage
@@ -64,19 +66,37 @@ pub trait SubRecorder {
 
     /// This function is called when we need to clean up data.
     /// The default period is 5 minutes.
-    fn cleanup(&mut self) {}
+    fn cleanup(
+        &mut self,
+        _records: &mut RawRecords,
+        _thread_stores: &mut HashMap<usize, LocalStorage>,
+    ) {
+    }
+
+    /// This function is called before the [Recorder] thread pause.
+    fn pause(
+        &mut self,
+        _records: &mut RawRecords,
+        _thread_stores: &mut HashMap<usize, LocalStorage>,
+    ) {
+    }
 
     /// This function is called when a reset is required.
     ///
-    /// The typical situation is when the [Recorder] thread is suspended.
-    fn reset(&mut self) {}
+    /// The typical situation is when the [Recorder] thread is resume execution.
+    fn reset(
+        &mut self,
+        _records: &mut RawRecords,
+        _thread_stores: &mut HashMap<usize, LocalStorage>,
+    ) {
+    }
 
     /// This function is called when a new thread accesses thread-local-storage.
     ///
     /// This function exists because the sampling work of `SubRecorder` may need
     /// to be performed on all functions, and `SubRecorder` may wish to maintain
     /// a thread-related data structure by itself.
-    fn thread_created(&mut self, _id: usize, _tag: Arc<ArcSwapOption<TagInfos>>) {}
+    fn thread_created(&mut self, _id: usize, _store: &LocalStorage) {}
 }
 
 /// Give `Recorder` a list of [SubRecorder]s and `Recorder` will make them work
@@ -151,7 +171,7 @@ impl Recorder {
                 self.records.records.shrink_to(RECORD_LEN_THRESHOLD);
             }
             for r in &mut self.recorders {
-                r.cleanup();
+                r.cleanup(&mut self.records, &mut self.thread_stores);
             }
             self.last_cleanup = Instant::now();
         }
@@ -163,13 +183,16 @@ impl Recorder {
         self.last_collect = now;
         self.last_cleanup = now;
         for r in &mut self.recorders {
-            r.reset();
+            r.reset(&mut self.records, &mut self.thread_stores);
         }
     }
 
     fn handle_pause(&mut self) {
         let mut should_reset = false;
         while self.pause.load(SeqCst) {
+            for r in &mut self.recorders {
+                r.pause(&mut self.records, &mut self.thread_stores);
+            }
             thread::park();
             should_reset = true;
         }
@@ -195,7 +218,7 @@ impl Recorder {
         while let Ok(lsr) = self.thread_rx.try_recv() {
             self.thread_stores.insert(lsr.id, lsr.storage.clone());
             for r in &mut self.recorders {
-                r.thread_created(lsr.id, lsr.storage.attached_tag.clone());
+                r.thread_created(lsr.id, &lsr.storage);
             }
         }
     }
@@ -347,6 +370,7 @@ pub fn init_recorder(
         .enable(enable)
         .precision_ms(Arc::new(AtomicU64::new(precision_ms)))
         .add_sub_recorder(Box::new(CpuRecorder::default()))
+        .add_sub_recorder(Box::new(SummaryRecorder::new(enable)))
         .spawn()
         .expect("failed to create resource metering thread")
 }
@@ -390,11 +414,15 @@ mod tests {
             OP_COUNT.fetch_add(1, SeqCst);
         }
 
-        fn reset(&mut self) {
+        fn reset(
+            &mut self,
+            _records: &mut RawRecords,
+            _thread_stores: &mut HashMap<usize, LocalStorage>,
+        ) {
             OP_COUNT.fetch_add(1, SeqCst);
         }
 
-        fn thread_created(&mut self, _id: usize, _tag: Arc<ArcSwapOption<TagInfos>>) {
+        fn thread_created(&mut self, _id: usize, _store: &LocalStorage) {
             OP_COUNT.fetch_add(1, SeqCst);
         }
     }
