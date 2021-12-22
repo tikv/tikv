@@ -184,9 +184,9 @@ impl RouterInner {
         // 2. route kv event to the corresponding file.
 
         for range in ranges {
-            let key_range = KeyRange(Key::from_raw(&range.0).into_encoded());
+            let key_range = KeyRange(range.0);
             let task_range = TaskRange {
-                end: Key::from_raw(&range.1).into_encoded(),
+                end: range.1,
                 task_name: task_name.to_string(),
             };
             debug!(
@@ -222,6 +222,12 @@ impl RouterInner {
     pub async fn on_event(&mut self, kv: ApplyEvent) -> Result<()> {
         let prefix = &self.prefix;
         if let Some(task) = self.get_task_by_key(&kv.key) {
+            debug!(
+                "backup kv";
+                "cmdtype" => ?kv.cmd_type,
+                "cf" => ?kv.cf,
+                "key" => &log_wrappers::Value::key(&kv.key),
+            );
             let inner_router = {
                 if !self.temp_files_of_task.contains_key(&task) {
                     self.temp_files_of_task
@@ -290,7 +296,7 @@ impl TempFileKey {
             cmd_type: kv.cmd_type,
         }
     }
-
+    
     /// The full name of the file owns the key.
     fn temp_file_name(&self) -> String {
         if self.is_meta {
