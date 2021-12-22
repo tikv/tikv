@@ -159,7 +159,95 @@ impl File {
     }
 
     pub fn allocate(&self, len: u64) -> io::Result<()> {
-        self.inner.allocate(len)
+        // Bypass fs2::FileExt::allocate because of its incorrect error handling.
+        // See https://github.com/danburkert/fs2-rs/pull/42.
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "freebsd",
+            target_os = "android",
+            target_os = "emscripten",
+            target_os = "nacl"
+        ))]
+        {
+            use std::os::unix::io::AsRawFd;
+
+            let ret = unsafe {
+                libc::fallocate(
+                    self.inner.as_raw_fd(),
+                    0, /*mode*/
+                    0, /*offset*/
+                    len as libc::off_t,
+                )
+            };
+            if ret == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        }
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            use std::os::unix::fs::MetadataExt;
+            use std::os::unix::io::AsRawFd;
+
+            let stat = self.inner.metadata()?;
+            if stat.blocks() * 512 < len {
+                let mut fstore = libc::fstore_t {
+                    fst_flags: libc::F_ALLOCATECONTIG,
+                    fst_posmode: libc::F_PEOFPOSMODE,
+                    fst_offset: 0,
+                    fst_length: len as libc::off_t,
+                    fst_bytesalloc: 0,
+                };
+
+                let ret =
+                    unsafe { libc::fcntl(self.inner.as_raw_fd(), libc::F_PREALLOCATE, &fstore) };
+                if ret == -1 {
+                    // Unable to allocate contiguous disk space; attempt to allocate non-contiguously.
+                    fstore.fst_flags = libc::F_ALLOCATEALL;
+                    let ret = unsafe {
+                        libc::fcntl(self.inner.as_raw_fd(), libc::F_PREALLOCATE, &fstore)
+                    };
+                    if ret == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+            }
+            if stat.size() < len {
+                self.inner.set_len(len)
+            } else {
+                Ok(())
+            }
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use winapi::shared::minwindef::DWORD;
+            use winapi::um::fileapi::SetFileInformationByHandle;
+            use winapi::um::fileapi::FILE_ALLOCATION_INFO;
+            use winapi::um::minwinbase::FileAllocationInfo;
+
+            if self.allocated_size()? < len {
+                unsafe {
+                    let mut info: FILE_ALLOCATION_INFO = std::mem::zeroed();
+                    *info.AllocationSize.QuadPart_mut() = len as i64;
+                    let ret = SetFileInformationByHandle(
+                        self.inner.as_raw_handle(),
+                        FileAllocationInfo,
+                        &mut info as *mut _ as *mut _,
+                        std::mem::size_of::<FILE_ALLOCATION_INFO>() as DWORD,
+                    );
+                    if ret == 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+            }
+            if self.inner.metadata()?.len() < len {
+                self.inner.set_len(len)
+            } else {
+                Ok(())
+            }
+        }
     }
 
     pub fn lock_shared(&self) -> io::Result<()> {
