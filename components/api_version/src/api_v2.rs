@@ -6,14 +6,20 @@ use tikv_util::codec::Error;
 
 use super::*;
 
-pub const TIDB_RANGES: &[(&[u8], &[u8])] = &[(&[b'm'], &[b'm' + 1]), (&[b't'], &[b't' + 1])];
-pub const TIDB_RANGES_COMPLEMENT: &[(&[u8], &[u8])] =
-    &[(&[], &[b'm']), (&[b'm' + 1], &[b't']), (&[b't' + 1], &[])];
-
 pub const RAW_KEY_PREFIX: u8 = b'r';
 pub const TXN_KEY_PREFIX: u8 = b'x';
 pub const TIDB_META_KEY_PREFIX: u8 = b'm';
 pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
+
+pub const TIDB_RANGES: &[(&[u8], &[u8])] = &[
+    (&[TIDB_META_KEY_PREFIX], &[TIDB_META_KEY_PREFIX + 1]),
+    (&[TIDB_TABLE_KEY_PREFIX], &[TIDB_TABLE_KEY_PREFIX + 1]),
+];
+pub const TIDB_RANGES_COMPLEMENT: &[(&[u8], &[u8])] = &[
+    (&[], &[TIDB_META_KEY_PREFIX]),
+    (&[TIDB_META_KEY_PREFIX + 1], &[TIDB_TABLE_KEY_PREFIX]),
+    (&[TIDB_TABLE_KEY_PREFIX + 1], &[]),
+];
 
 bitflags::bitflags! {
     struct ValueMeta: u8 {
