@@ -914,19 +914,20 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             }
         }
 
+        let (version, term) = (ctx.get_region_epoch().get_version(), ctx.get_term());
         // Mutations on the lock CF should overwrite the memory locks.
-        //
-        // Protected by the latches, there is no concurrent write on the same keys. So,
-        // removing these locks now is safe, even if there is leader or region changes before.
         // We only set a deleted flag here, and the lock will be finally removed when it finishes
         // applying. See the comments in `PeerPessimisticLocks` for how this flag is used.
         let txn_ext2 = txn_ext.clone();
         let mut pessimistic_locks_guard = txn_ext2
             .as_ref()
             .map(|txn_ext| txn_ext.pessimistic_locks.write());
-        let removed_pessimistic_locks = {
-            match pessimistic_locks_guard.as_mut() {
-                Some(locks) if !locks.map.is_empty() => to_be_write
+        let removed_pessimistic_locks = match pessimistic_locks_guard.as_mut() {
+            Some(locks)
+                // If there is a leader or region change, removing the locks is unnecessary.
+                if locks.term == term && locks.version == version && !locks.map.is_empty() =>
+            {
+                to_be_write
                     .modifies
                     .iter()
                     .filter_map(|write| match write {
@@ -938,9 +939,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         }
                         _ => None,
                     })
-                    .collect::<Vec<_>>(),
-                _ => vec![],
+                    .collect::<Vec<_>>()
             }
+            _ => vec![],
         };
         // Keep the read lock guard of the pessimistic lock table until the request is sent to the raftstore.
         //
@@ -952,31 +953,31 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let _downgraded_guard = pessimistic_locks_guard.and_then(|guard| {
             (!removed_pessimistic_locks.is_empty()).then(|| RwLockWriteGuard::downgrade(guard))
         });
-        let (version, term) = (ctx.get_region_epoch().get_version(), ctx.get_term());
+
         // The callback to receive async results of write prepare from the storage engine.
         let engine_cb = Box::new(move |result: EngineResult<()>| {
+            let ok = result.is_ok();
+            if ok && !removed_pessimistic_locks.is_empty() {
+                // Removing pessimistic locks when it succeeds to apply. This should be done in the apply
+                // thread, to make sure it happens before other admin commands are executed.
+                if let Some(mut pessimistic_locks) = txn_ext
+                    .as_ref()
+                    .map(|txn_ext| txn_ext.pessimistic_locks.write())
+                {
+                    // If epoch version or term does not match, region or leader change has happened,
+                    // so we needn't remove the key.
+                    if pessimistic_locks.term == term && pessimistic_locks.version == version {
+                        for key in removed_pessimistic_locks {
+                            pessimistic_locks.map.remove(&key);
+                        }
+                    }
+                }
+            }
+
             sched_pool
                 .spawn(async move {
                     fail_point!("scheduler_async_write_finish");
 
-                    let ok = result.is_ok();
-                    if ok && !removed_pessimistic_locks.is_empty() {
-                        // Removing pessimistic locks when it succeeds to apply.
-                        if let Some(mut pessimistic_locks) = txn_ext
-                            .as_ref()
-                            .map(|txn_ext| txn_ext.pessimistic_locks.write())
-                        {
-                            // If epoch version or term does not match, region or leader change has happened,
-                            // so we needn't remove the key.
-                            if pessimistic_locks.term == term
-                                && pessimistic_locks.version == version
-                            {
-                                for key in removed_pessimistic_locks {
-                                    pessimistic_locks.map.remove(&key);
-                                }
-                            }
-                        }
-                    }
                     sched.on_write_finished(
                         cid,
                         pr,
