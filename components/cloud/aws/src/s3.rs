@@ -170,11 +170,12 @@ impl S3Storage {
         Self::new(Config::from_cloud_dynamic(cloud_dynamic)?)
     }
 
-    pub fn set_multi_part_size(&mut self, size: usize) {
-        if self.config.multi_part_size < size {
-            // default multi_part_size is 5MB, S3 cannot allow the small size.
-            self.config.multi_part_size = size;
+    pub fn set_multi_part_size(&mut self, mut size: usize) {
+        if size < MINIMUM_PART_SIZE {
+            // default multi_part_size is 5MB, S3 cannot allow a smaller size.
+            size = MINIMUM_PART_SIZE
         }
+        self.config.multi_part_size = size;
     }
 
     /// Create a new S3 storage for the given config.
@@ -583,9 +584,16 @@ mod tests {
         // set a less than 5M value not work
         s.set_multi_part_size(1024);
         assert_eq!(s.config.multi_part_size, 5 * 1024 * 1024);
-        // set 8M will work
+        // set 8M
         s.set_multi_part_size(8 * 1024 * 1024);
         assert_eq!(s.config.multi_part_size, 8 * 1024 * 1024);
+        // set 6M
+        s.set_multi_part_size(6 * 1024 * 1024);
+        assert_eq!(s.config.multi_part_size, 6 * 1024 * 1024);
+        // set a less than 5M value will fallback to 5M 
+        s.set_multi_part_size(1024);
+        assert_eq!(s.config.multi_part_size, 5 * 1024 * 1024);
+
         config.bucket.region = StringNonEmpty::opt("foo".to_string());
         assert!(S3Storage::new(config).is_err());
     }
