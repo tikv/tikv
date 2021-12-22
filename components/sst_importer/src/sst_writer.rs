@@ -1,6 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::raw_value::{ttl_to_expire_ts, RawValue};
+use api_version::match_template_api_version;
+use api_version::APIVersion;
+use api_version::RawValue;
+use engine_traits::raw_ttl::ttl_to_expire_ts;
 use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::ApiVersion;
 use std::sync::Arc;
@@ -182,29 +185,35 @@ impl<E: KvEngine> RawSSTWriter<E> {
     pub fn write(&mut self, mut batch: RawWriteBatch) -> Result<()> {
         let start = Instant::now_coarse();
 
-        let expire_ts = if batch.get_ttl() == 0 {
-            None
-        } else {
+        match_template_api_version!(
+            API,
             match self.api_version {
-                ApiVersion::V1 => return Err(crate::Error::TTLNotEnabled),
-                ApiVersion::V1ttl | ApiVersion::V2 => ttl_to_expire_ts(batch.get_ttl()),
-            }
-        };
-
-        for m in batch.take_pairs().into_iter() {
-            match m.get_op() {
-                PairOp::Put => {
-                    let value = RawValue {
-                        user_value: m.get_value(),
-                        expire_ts,
+                ApiVersion::API => {
+                    let expire_ts = if batch.get_ttl() == 0 {
+                        None
+                    } else if API::IS_TTL_ENABLED {
+                        ttl_to_expire_ts(batch.get_ttl())
+                    } else {
+                        return Err(crate::Error::TTLNotEnabled);
                     };
-                    self.put(m.get_key(), &value.to_bytes(self.api_version), PairOp::Put)?;
+
+                    for m in batch.take_pairs().into_iter() {
+                        match m.get_op() {
+                            PairOp::Put => {
+                                let value = RawValue {
+                                    user_value: m.get_value(),
+                                    expire_ts,
+                                };
+                                self.put(m.get_key(), &API::encode_raw_value(value), PairOp::Put)?;
+                            }
+                            PairOp::Delete => {
+                                self.put(m.get_key(), &[], PairOp::Delete)?;
+                            }
+                        };
+                    }
                 }
-                PairOp::Delete => {
-                    self.put(m.get_key(), &[], PairOp::Delete)?;
-                }
-            };
-        }
+            }
+        );
 
         IMPORT_LOCAL_WRITE_CHUNK_DURATION_VEC
             .with_label_values(&["raw"])
