@@ -50,7 +50,7 @@ impl TestSuite {
 
         let (recorder_handle, collector_reg_handle, resource_tag_factory) =
             resource_metering::init_recorder(cfg.enabled, cfg.precision.as_millis());
-        let (reporter_scheduler, data_sink_reg_handle, reporter_worker) =
+        let (config_notifier, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
         let env = Arc::new(Environment::new(2));
         let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
@@ -61,8 +61,8 @@ impl TestSuite {
 
         let cfg_manager = resource_metering::ConfigManager::new(
             cfg,
-            reporter_scheduler,
             recorder_handle,
+            config_notifier,
             address_change_notifier,
         );
         cfg_controller.register(

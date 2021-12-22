@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::recorder::RecorderHandle;
-use crate::reporter::Task;
+use crate::reporter::ConfigChangeNotifier;
 use crate::AddressChangeNotifier;
 
 use std::error::Error;
@@ -91,22 +91,22 @@ impl Config {
 /// to control the dynamic update of the configuration.
 pub struct ConfigManager {
     current_config: Config,
-    scheduler: Scheduler<Task>,
     recorder: RecorderHandle,
+    config_notifier: ConfigChangeNotifier,
     address_notifier: AddressChangeNotifier,
 }
 
 impl ConfigManager {
     pub fn new(
         current_config: Config,
-        scheduler: Scheduler<Task>,
         recorder: RecorderHandle,
+        config_notifier: ConfigChangeNotifier,
         address_notifier: AddressChangeNotifier,
     ) -> Self {
         ConfigManager {
             current_config,
-            scheduler,
             recorder,
+            config_notifier,
             address_notifier,
         }
     }
@@ -133,9 +133,7 @@ impl online_config::ConfigManager for ConfigManager {
                 .notify(new_config.receiver_address.clone());
         }
         // Notify reporter that the configuration has changed.
-        self.scheduler
-            .schedule(Task::ConfigChange(new_config.clone()))
-            .ok();
+        self.config_notifier.notify(new_config.clone());
         self.current_config = new_config;
         Ok(())
     }

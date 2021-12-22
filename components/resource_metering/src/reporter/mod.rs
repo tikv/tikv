@@ -161,13 +161,34 @@ impl Display for Task {
     }
 }
 
+/// [ConfigChangeNotifier] for scheduling [Task::ConfigChange]
+pub struct ConfigChangeNotifier {
+    scheduler: Scheduler<Task>,
+}
+
+impl ConfigChangeNotifier {
+    fn new(scheduler: Scheduler<Task>) -> Self {
+        Self { scheduler }
+    }
+
+    pub fn notify(&self, config: Config) {
+        if let Err(err) = self.scheduler.schedule(Task::ConfigChange(config)) {
+            warn!("failed to schedule Task::ConfigChange"; "err" => ?err);
+        }
+    }
+}
+
 /// Constructs a default [Recorder], start it and return the corresponding [Scheduler], [DataSinkRegHandle] and [LazyWorker].
 ///
 /// This function is intended to simplify external use.
 pub fn init_reporter(
     config: Config,
     collector_reg_handle: CollectorRegHandle,
-) -> (Scheduler<Task>, DataSinkRegHandle, Box<LazyWorker<Task>>) {
+) -> (
+    ConfigChangeNotifier,
+    DataSinkRegHandle,
+    Box<LazyWorker<Task>>,
+) {
     let mut reporter_worker = WorkerBuilder::new("resource-metering-reporter")
         .pending_capacity(30)
         .create()
@@ -177,7 +198,7 @@ pub fn init_reporter(
     let reporter = Reporter::new(config, collector_reg_handle, reporter_scheduler.clone());
     reporter_worker.start_with_timer(reporter);
     (
-        reporter_scheduler,
+        ConfigChangeNotifier::new(reporter_scheduler),
         data_sink_reg_handle,
         Box::new(reporter_worker),
     )

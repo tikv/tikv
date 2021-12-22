@@ -57,15 +57,19 @@ fn test_summary() {
         .add_sub_recorder(Box::new(SummaryRecorder::new(cfg.enabled)))
         .spawn()
         .expect("failed to create resource metering thread");
-    let (scheduler, data_sink_reg_handle, mut reporter_worker) =
+    let (config_notifier, data_sink_reg_handle, mut reporter_worker) =
         init_reporter(cfg.clone(), collector_reg_handle);
     let (address_notifier, mut single_target_worker) = init_single_target(
         cfg.receiver_address.clone(),
         Arc::new(Environment::new(2)),
         data_sink_reg_handle.clone(),
     );
-    let mut cfg_manager =
-        resource_metering::ConfigManager::new(cfg, scheduler, recorder_handle, address_notifier);
+    let mut cfg_manager = resource_metering::ConfigManager::new(
+        cfg,
+        recorder_handle,
+        config_notifier,
+        address_notifier,
+    );
 
     let client = MockClient::default();
     let _handle = data_sink_reg_handle.register(Box::new(client.clone()));
