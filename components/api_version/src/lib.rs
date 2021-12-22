@@ -135,6 +135,8 @@ mod tests {
 
     #[test]
     fn test_parse() {
+        assert_eq!(APIV1::parse_key_mode(&b"t_a"[..]), KeyMode::Unknown);
+        assert_eq!(APIV1TTL::parse_key_mode(&b"ot"[..]), KeyMode::Raw);
         assert_eq!(
             APIV2::parse_key_mode(&[RAW_KEY_PREFIX, b'a', b'b']),
             KeyMode::Raw
@@ -144,8 +146,33 @@ mod tests {
         assert_eq!(APIV2::parse_key_mode(&b"t_a"[..]), KeyMode::TiDB);
         assert_eq!(APIV2::parse_key_mode(&b"m"[..]), KeyMode::TiDB);
         assert_eq!(APIV2::parse_key_mode(&b"ot"[..]), KeyMode::Unknown);
-        assert_eq!(APIV1TTL::parse_key_mode(&b"ot"[..]), KeyMode::Raw);
-        assert_eq!(APIV1::parse_key_mode(&b"t_a"[..]), KeyMode::Unknown);
+    }
+
+    #[test]
+    fn test_parse_range() {
+        assert_eq!(APIV1::parse_range_mode((None, None)), KeyMode::Unknown);
+        assert_eq!(APIV1::parse_range_mode((Some(b"x"), None)), KeyMode::Unknown);
+        assert_eq!(APIV1TTL::parse_range_mode((Some(b"m_a"), Some(b"na"))), KeyMode::Raw);
+        assert_eq!(APIV2::parse_range_mode((Some(b"t_a"), Some(b"t_z"))), KeyMode::TiDB);
+        assert_eq!(APIV2::parse_range_mode((Some(b"t"), Some(b"u"))), KeyMode::TiDB);
+        assert_eq!(APIV2::parse_range_mode((Some(b"m"), Some(b"n"))), KeyMode::TiDB);
+        assert_eq!(APIV2::parse_range_mode((Some(b"m_a"), Some(b"m_z"))), KeyMode::TiDB);
+        assert_eq!(APIV2::parse_range_mode((Some(b"x\0a"), Some(b"x\0z"))), KeyMode::Txn);
+        assert_eq!(APIV2::parse_range_mode((Some(b"x"), Some(b"y"))), KeyMode::Txn);
+        assert_eq!(APIV2::parse_range_mode((Some(b"r\0a"), Some(b"r\0z"))), KeyMode::Raw);
+        assert_eq!(APIV2::parse_range_mode((Some(b"r"), Some(b"s"))), KeyMode::Raw);
+        assert_eq!(APIV2::parse_range_mode((Some(b"t_a"), Some(b"ua"))), KeyMode::Unknown);
+        assert_eq!(APIV2::parse_range_mode((Some(b"t"), None)), KeyMode::Unknown);
+        assert_eq!(APIV2::parse_range_mode((None, Some(b"t_z"))), KeyMode::Unknown);
+        assert_eq!(APIV2::parse_range_mode((Some(b"m_a"), Some(b"na"))), KeyMode::Unknown);
+        assert_eq!(APIV2::parse_range_mode((Some(b"m"), None)), KeyMode::Unknown);
+        assert_eq!(APIV2::parse_range_mode((None, Some(b"m_z"))), KeyMode::Unknown);
+        assert_eq!(APIV2::parse_range_mode((Some(b"x\0a"), Some(b"ya"))), KeyMode::Unknown);
+        assert_eq!(APIV2::parse_range_mode((Some(b"x"), None)), KeyMode::Unknown);
+        assert_eq!(APIV2::parse_range_mode((None, Some(b"x\0z"))), KeyMode::Unknown);
+        assert_eq!(APIV2::parse_range_mode((Some(b"r\0a"), Some(b"sa"))), KeyMode::Unknown);
+        assert_eq!(APIV2::parse_range_mode((Some(b"r"), None)), KeyMode::Unknown);
+        assert_eq!(APIV2::parse_range_mode((None, Some(b"r\0z"))), KeyMode::Unknown);
     }
 
     #[test]
