@@ -2221,11 +2221,11 @@ impl Default for BackupConfig {
         let default_coprocessor = CopConfig::default();
         let cpu_num = SysQuota::cpu_cores_quota();
         Self {
-            // use at most 75% of vCPU by default
-            num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
+            // use at most 50% of vCPU by default
+            num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
             batch_size: 8,
             sst_max_size: default_coprocessor.region_max_size,
-            enable_auto_tune: false,
+            enable_auto_tune: true,
             auto_tune_remain_threads: 2,
             auto_tune_refresh_interval: ReadableDuration::secs(60),
             hadoop: Default::default(),

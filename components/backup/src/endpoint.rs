@@ -32,7 +32,6 @@ use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
 use tikv::storage::Statistics;
-use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::{Instant, Limiter};
 use tikv_util::worker::Runnable;
 use tikv_util::{box_err, debug, error, error_unknown, impl_display_as_debug, info, warn};
@@ -473,7 +472,6 @@ impl SoftLimitKeeper {
     async fn on_tick<S: CpuStatistics>(&self, cpu_quota: &mut SoftLimitByCpu<S>) -> Result<()> {
         let BackupConfig {
             enable_auto_tune,
-            auto_tune_refresh_interval,
             num_threads,
             auto_tune_remain_threads,
             ..

@@ -136,6 +136,7 @@ impl<Statistics: CpuStatistics> SoftLimitByCpu<Statistics> {
     /// apply the limit to the soft limit according to the current CPU remaining.
     /// when calculating the CPU usage, ignore threads with name matched by the exclude predicate.
     /// This would keep at least one thread working.
+    #[cfg(test)]
     pub async fn exec_over_with_exclude(
         &mut self,
         limit: &SoftLimit,
