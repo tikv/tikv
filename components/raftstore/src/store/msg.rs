@@ -588,6 +588,8 @@ where
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
 
     CreatePeer(metapb::Region),
+
+    GcSnapshotFinish,
 }
 
 impl<EK> fmt::Debug for StoreMsg<EK>
@@ -617,6 +619,7 @@ where
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
             StoreMsg::CreatePeer(_) => write!(fmt, "CreatePeer"),
+            StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
         }
     }
 }
