@@ -4,7 +4,6 @@
 extern crate lazy_static;
 #[macro_use]
 extern crate tikv_util;
-extern crate pd_client;
 
 mod cluster;
 mod config;

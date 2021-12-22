@@ -282,7 +282,7 @@ where
     ///
     /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
     #[inline]
-    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<EnumRef>) -> Result<()> {
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<EnumRef<'_>>) -> Result<()> {
         match value {
             None => Ok(()),
             Some(value) => {
@@ -393,7 +393,7 @@ where
     ///
     /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
     #[inline]
-    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<SetRef>) -> Result<()> {
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<SetRef<'_>>) -> Result<()> {
         match value {
             None => Ok(()),
             Some(value) => {
@@ -487,7 +487,7 @@ mod tests {
         assert_eq!(result[1].to_decimal_vec(), &[Decimal::from_f64(3.0).ok()]);
         assert_eq!(result[2].to_decimal_vec(), &[Decimal::from_f64(0.25).ok()]);
 
-        update!(state, &mut ctx, Option::<EnumRef>::None).unwrap();
+        update!(state, &mut ctx, Option::<EnumRef<'_>>::None).unwrap();
         result[0].clear();
         result[1].clear();
         result[2].clear();
@@ -529,7 +529,7 @@ mod tests {
         assert_eq!(result[1].to_decimal_vec(), &[Decimal::from_f64(3.0).ok()]);
         assert_eq!(result[2].to_decimal_vec(), &[Decimal::from_f64(0.25).ok()]);
 
-        update!(state, &mut ctx, Option::<SetRef>::None).unwrap();
+        update!(state, &mut ctx, Option::<SetRef<'_>>::None).unwrap();
         result[0].clear();
         result[1].clear();
         result[2].clear();

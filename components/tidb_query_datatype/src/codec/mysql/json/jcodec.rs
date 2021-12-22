@@ -22,7 +22,7 @@ impl<'a> JsonRef<'a> {
 }
 
 pub trait JsonEncoder: NumberEncoder {
-    fn write_json(&mut self, data: JsonRef) -> Result<()> {
+    fn write_json(&mut self, data: JsonRef<'_>) -> Result<()> {
         self.write_u8(data.get_type() as u8)?;
         self.write_bytes(data.value()).map_err(Error::from)
     }

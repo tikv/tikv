@@ -443,7 +443,7 @@ where
     }
 
     /// Cleans up the data within the range.
-    fn cleanup_range(&self, ranges: &[Range]) -> Result<()> {
+    fn cleanup_range(&self, ranges: &[Range<'_>]) -> Result<()> {
         self.engine
             .delete_all_in_range(DeleteStrategy::DeleteFiles, ranges)
             .unwrap_or_else(|e| {
@@ -544,7 +544,7 @@ where
         while cleanup_ranges.len() > CLEANUP_MAX_REGION_COUNT {
             cleanup_ranges.pop();
         }
-        let ranges: Vec<Range> = cleanup_ranges
+        let ranges: Vec<Range<'_>> = cleanup_ranges
             .iter()
             .map(|(region_id, start, end)| {
                 info!("delete data in range because of stale"; "region_id" => region_id,
@@ -581,7 +581,7 @@ where
         false
     }
 
-    fn delete_all_in_range(&self, ranges: &[Range]) -> Result<()> {
+    fn delete_all_in_range(&self, ranges: &[Range<'_>]) -> Result<()> {
         for cf in self.engine.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
             let strategy = if cf == CF_LOCK {
