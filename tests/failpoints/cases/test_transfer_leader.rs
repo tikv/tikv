@@ -7,9 +7,11 @@ use std::{
 };
 
 use engine_traits::CF_LOCK;
+use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
+use pd_client::PdClient;
 use test_raftstore::*;
 use tikv::storage::Snapshot;
 use tikv_util::HandyRwLock;
@@ -238,4 +240,77 @@ fn test_delete_lock_proposed_before_proposing_locks() {
         }
     }
     panic!("region should succeed to transfer leader to peer 2");
+}
+
+#[test]
+fn test_read_lock_after_become_follower() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
+    cluster.run();
+
+    let region_id = 1;
+    cluster.must_transfer_leader(1, new_peer(3, 3));
+
+    let start_ts = block_on(cluster.pd_client.get_tso()).unwrap();
+
+    // put kv after get start ts, then this commit will cause a PessimisticLockNotFound
+    // if the pessimistic lock get missing.
+    cluster.must_put(b"key", b"value");
+
+    let leader = cluster.leader_of_region(region_id).unwrap();
+    let snapshot = cluster.must_get_snapshot_of_region(region_id);
+    let txn_ext = snapshot.txn_ext.unwrap();
+    let for_update_ts = block_on(cluster.pd_client.get_tso()).unwrap();
+    txn_ext.pessimistic_locks.write().map.insert(
+        Key::from_raw(b"key"),
+        (
+            PessimisticLock {
+                primary: b"key".to_vec().into_boxed_slice(),
+                start_ts,
+                ttl: 1000,
+                for_update_ts,
+                min_commit_ts: for_update_ts,
+            },
+            false,
+        ),
+    );
+
+    let addr = cluster.sim.rl().get_addr(3);
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&addr);
+    let client = TikvClient::new(channel);
+
+    let mut req = PrewriteRequest::default();
+    let mut ctx = Context::default();
+    ctx.set_region_id(region_id);
+    ctx.set_region_epoch(cluster.get_region_epoch(region_id));
+    ctx.set_peer(leader);
+    req.set_context(ctx);
+    req.set_primary_lock(b"key".to_vec());
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"key".to_vec());
+    mutation.set_value(b"value2".to_vec());
+    req.mut_mutations().push(mutation);
+    req.set_start_version(start_ts.into_inner());
+    req.set_lock_ttl(20000);
+
+    // Pause the command before it executes prewrite.
+    fail::cfg("txn_before_process_write", "pause").unwrap();
+    let (tx, resp_rx) = mpsc::channel();
+    thread::spawn(move || tx.send(client.kv_prewrite(&req).unwrap()).unwrap());
+
+    thread::sleep(Duration::from_millis(200));
+    assert!(resp_rx.try_recv().is_err());
+
+    // And pause applying the write on the leader.
+    fail::cfg("on_apply_write_cmd", "pause").unwrap();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    thread::sleep(Duration::from_millis(200));
+
+    // Transfer leader will not make the command fail.
+    fail::remove("txn_before_process_write");
+    let resp = resp_rx.recv().unwrap();
+    // The term has changed, so we should get a stale command error instead a PessimisticLockNotFound.
+    assert!(resp.get_region_error().has_stale_command());
 }
