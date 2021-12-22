@@ -111,7 +111,7 @@ impl Queue {
     /// The method should be called in polling context. If the queue is empty,
     /// it will register current polling task for notifications.
     #[inline]
-    fn pop(&self, ctx: &Context) -> Option<RaftMessage> {
+    fn pop(&self, ctx: &Context<'_>) -> Option<RaftMessage> {
         self.buf.pop().or_else(|| {
             {
                 let mut waker = self.waker.lock().unwrap();
@@ -390,7 +390,7 @@ where
         }
     }
 
-    fn fill_msg(&mut self, ctx: &Context) {
+    fn fill_msg(&mut self, ctx: &Context<'_>) {
         while !self.buffer.full() {
             let msg = match self.queue.pop(ctx) {
                 Some(msg) => msg,
@@ -414,7 +414,7 @@ where
 {
     type Output = grpcio::Result<()>;
 
-    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<grpcio::Result<()>> {
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<grpcio::Result<()>> {
         let s = &mut *self;
         loop {
             s.fill_msg(ctx);

@@ -55,7 +55,11 @@ impl<R: Seek> Seek for EncrypterReader<R> {
 
 impl<R: AsyncRead + Unpin> AsyncRead for EncrypterReader<R> {
     #[inline]
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<IoResult<usize>> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<IoResult<usize>> {
         unsafe { self.map_unchecked_mut(|r| &mut r.0) }.poll_read(cx, buf)
     }
 }
@@ -96,7 +100,11 @@ impl<R: Seek> Seek for DecrypterReader<R> {
 
 impl<R: AsyncRead + Unpin> AsyncRead for DecrypterReader<R> {
     #[inline]
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<IoResult<usize>> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<IoResult<usize>> {
         unsafe { self.map_unchecked_mut(|r| &mut r.0) }.poll_read(cx, buf)
     }
 }
@@ -252,7 +260,11 @@ impl<R: Seek> Seek for CrypterReader<R> {
 
 impl<R: AsyncRead + Unpin> AsyncRead for CrypterReader<R> {
     #[inline]
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<IoResult<usize>> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<IoResult<usize>> {
         let inner = Pin::into_inner(self);
         let poll = Pin::new(&mut inner.reader).poll_read(cx, buf);
         let read_count = match poll {
