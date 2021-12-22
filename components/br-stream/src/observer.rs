@@ -48,7 +48,7 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
     ) {
         assert!(!cmd_batches.is_empty());
         debug!(
-            "observe stream kv";
+            "observe backup stream kv";
             "cmd_batches len" => cmd_batches.len(),
             "level" => ?max_level,
         );

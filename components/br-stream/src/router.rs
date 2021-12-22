@@ -190,7 +190,7 @@ impl RouterInner {
                 task_name: task_name.to_string(),
             };
             debug!(
-                "register observe range";
+                "backup stream register observe range";
                 "task_name" => task_name,
                 "start_key" => &log_wrappers::Value::key(&key_range.0),
                 "end_key" => &log_wrappers::Value::key(&task_range.end),
@@ -223,7 +223,7 @@ impl RouterInner {
         let prefix = &self.prefix;
         if let Some(task) = self.get_task_by_key(&kv.key) {
             debug!(
-                "backup kv";
+                "backup stream kv";
                 "cmdtype" => ?kv.cmd_type,
                 "cf" => ?kv.cf,
                 "key" => &log_wrappers::Value::key(&kv.key),
@@ -243,7 +243,7 @@ impl RouterInner {
             // or we may send multiplied flush requests.
 
             debug!(
-                "static size";
+                "backup stream statics size";
                 "task" => ?task,
                 "prev_size" => prev_size,
                 "next_size" => inner_router.total_size(),

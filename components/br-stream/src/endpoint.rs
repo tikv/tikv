@@ -105,7 +105,7 @@ where
     ) -> Result<()> {
         let tasks = meta_client.get_tasks().await?;
         for task in tasks.inner {
-            info!("watch task"; "task" => ?task);
+            info!("backup stream watch task"; "task" => ?task);
             // move task to schedule
             if let Err(e) = scheduler.schedule(Task::WatchTask(task)) {
                 // TODO build a error handle mechanism #error 3
@@ -116,7 +116,7 @@ where
         let mut watcher = meta_client.events_from(tasks.revision).await?;
         loop {
             if let Some(event) = watcher.stream.next().await {
-                info!("watch event from etcd"; "event" => ?event);
+                info!("backup stream watch event from etcd"; "event" => ?event);
                 match event {
                     MetadataEvent::AddTask { task } => {
                         let t = meta_client.get_task(&task).await?;
@@ -169,13 +169,13 @@ where
             let cli = cli.clone();
             let range_router = self.range_router.clone();
 
-            info!("register task {:?}", task);
+            info!("register backup stream task {:?}", task);
 
             self.pool.block_on(async move {
                 let task_name = task.info.get_name();
                 match cli.ranges_of_task(task_name).await {
                     Ok(ranges) => {
-                        debug!(
+                        info!(
                             "backup stream {:?} ranges len {:?}",
                             task,
                             ranges.inner.len()
@@ -285,7 +285,7 @@ where
     type Task = Task;
 
     fn run(&mut self, task: Task) {
-        debug!("run backup-stream task"; "task" => ?task);
+        debug!("run backup stream task"; "task" => ?task);
         match task {
             Task::WatchTask(task) => self.on_register(task),
             Task::BatchEvent(events) => self.do_backup(events),
