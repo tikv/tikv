@@ -158,12 +158,12 @@ groups:
       summary: TiKV scheduler latch wait duration seconds more than 1s
 
   - alert: TiKV_thread_apply_worker_cpu_seconds
-    expr: sum(rate(tikv_thread_cpu_seconds_total{name="apply_worker"}[1m])) by (instance) > 1.8
+    expr: max(rate(tikv_thread_cpu_seconds_total{name="apply_.*"}[1m])) by (instance) > 0.9
     for: 1m
     labels:
       env: ENV_LABELS_ENV
       level: critical
-      expr:  sum(rate(tikv_thread_cpu_seconds_total{name="apply_worker"}[1m])) by (instance) > 1.8
+      expr:  max(rate(tikv_thread_cpu_seconds_total{name="apply_.*"}[1m])) by (instance) > 0.9
     annotations:
       description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
       value: '{{ $value }}'

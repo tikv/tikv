@@ -6,9 +6,9 @@
 #![feature(hash_drain_filter)]
 #![feature(core_intrinsics)]
 
-mod client;
 mod collector;
 mod config;
+pub mod error;
 mod localstorage;
 mod model;
 mod recorder;
@@ -17,11 +17,15 @@ pub mod utils;
 
 pub(crate) mod metrics;
 
-pub use client::{Client, GrpcClient};
 pub use collector::{Collector, CollectorHandle, CollectorId, CollectorRegHandle};
 pub use config::{Config, ConfigManager};
 pub use model::*;
-pub use recorder::{init_recorder, CpuRecorder, Recorder, RecorderBuilder, RecorderHandle};
+pub use recorder::{
+    init_recorder, record_read_keys, record_write_keys, CpuRecorder, Recorder, RecorderBuilder,
+    RecorderHandle, SummaryRecorder,
+};
+pub use reporter::data_sink::DataSink;
+pub use reporter::single_target::SingleTargetDataSink;
 pub use reporter::{Reporter, Task};
 
 pub const MAX_THREAD_REGISTER_RETRY: u32 = 10;
@@ -31,6 +35,7 @@ use crate::localstorage::{LocalStorage, LocalStorageRef, STORAGE};
 
 use std::intrinsics::unlikely;
 use std::pin::Pin;
+use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -73,9 +78,10 @@ impl ResourceMeteringTag {
             assert!(!ls.is_set, "nested attachment is not allowed");
             ls.attached_tag.store(Some(self.infos.clone()));
             ls.is_set = true;
+            ls.summary_cur_record.reset();
 
             Guard {
-                _tag: self.infos.clone(),
+                tag: self.infos.clone(),
             }
         })
     }
@@ -90,8 +96,13 @@ impl ResourceMeteringTag {
 /// [ResourceMeteringTag]: crate::ResourceMeteringTag
 /// [ResourceMeteringTag::attach]: crate::ResourceMeteringTag::attach
 pub struct Guard {
-    _tag: Arc<TagInfos>,
+    tag: Arc<TagInfos>,
 }
+
+// Unlike attached_tag in STORAGE, summary_records will continue to grow as the
+// request arrives. If the recorder thread is not working properly, these maps
+// will never be cleaned up, so here we need to make some restrictions.
+const MAX_SUMMARY_RECORDS_LEN: usize = 1000;
 
 impl Drop for Guard {
     fn drop(&mut self) {
@@ -99,6 +110,28 @@ impl Drop for Guard {
             let mut ls = s.borrow_mut();
             ls.attached_tag.store(None);
             ls.is_set = false;
+            if !ls.summary_enable.load(SeqCst) {
+                return;
+            }
+            if self.tag.extra_attachment.is_empty() {
+                return;
+            }
+            let cur_record = ls.summary_cur_record.take_and_reset();
+            if cur_record.read_keys.load(Relaxed) == 0 && cur_record.write_keys.load(Relaxed) == 0 {
+                return;
+            }
+            let mut records = ls.summary_records.lock().unwrap();
+            match records.get(&self.tag) {
+                Some(record) => {
+                    record.merge(&cur_record);
+                }
+                None => {
+                    // See MAX_SUMMARY_RECORDS_LEN.
+                    if records.len() < MAX_SUMMARY_RECORDS_LEN {
+                        records.insert(self.tag.clone(), cur_record);
+                    }
+                }
+            }
         })
     }
 }
@@ -254,14 +287,14 @@ mod tests {
             };
             {
                 let guard = tag.attach();
-                assert_eq!(guard._tag, tag.infos);
+                assert_eq!(guard.tag, tag.infos);
                 STORAGE.with(|s| {
                     let ls = s.borrow_mut();
                     let local_tag = ls.attached_tag.swap(None);
                     assert!(local_tag.is_some());
                     let tag_infos = local_tag.unwrap();
                     assert_eq!(tag_infos, tag.infos);
-                    assert_eq!(tag_infos, guard._tag);
+                    assert_eq!(tag_infos, guard.tag);
                     assert!(ls.attached_tag.swap(Some(tag_infos)).is_none());
                 });
                 // drop here.

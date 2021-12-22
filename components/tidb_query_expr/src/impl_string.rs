@@ -1002,8 +1002,8 @@ pub fn quote(input: Option<BytesRef>) -> Result<Option<Bytes>> {
 #[rpn_fn(writer)]
 #[inline]
 pub fn repeat(input: BytesRef, cnt: &Int, writer: BytesWriter) -> Result<BytesGuard> {
-    let cnt = if *cnt > std::i32::MAX.into() {
-        std::i32::MAX.into()
+    let cnt = if *cnt > i32::MAX.into() {
+        i32::MAX.into()
     } else {
         *cnt
     };

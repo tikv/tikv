@@ -939,7 +939,7 @@ impl Default for RegionReadProgressRegistry {
 /// is usually stale i.e seconds ago).
 ///
 /// `safe_ts` is updated by the `(apply index, safe ts)` item:
-/// ```
+/// ```ignore
 /// if self.applied_index >= item.apply_index {
 ///     self.safe_ts = max(self.safe_ts, item.safe_ts)
 /// }

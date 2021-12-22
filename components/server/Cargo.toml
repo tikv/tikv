@@ -70,6 +70,7 @@ toml = "0.5"
 txn_types = { path = "../txn_types", default-features = false }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 resource_metering = { path = "../resource_metering" }
+arc-swap = "1.5.0"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"

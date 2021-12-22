@@ -1628,6 +1628,8 @@ where
                     // A more recent read may happen on the old leader. So max ts should
                     // be updated after a peer becomes leader.
                     self.require_updating_max_ts(&ctx.pd_scheduler);
+                    // Init the in-memory pessimistic lock table when the peer becomes leader.
+                    self.activate_in_memory_pessimistic_locks();
 
                     if !ctx.store_disk_usages.is_empty() {
                         self.refill_disk_full_peers(ctx);
@@ -1642,6 +1644,7 @@ where
                     self.leader_lease.expire();
                     self.mut_store().cancel_generating_snap(None);
                     self.clear_disk_full_peers(ctx);
+                    self.clear_in_memory_pessimistic_locks();
                 }
                 _ => {}
             }
@@ -3918,7 +3921,7 @@ where
         let peers_len = self.get_store().region().get_peers().len();
         let mut normal_peers = HashSet::default();
         let mut next_idxs = Vec::with_capacity(peers_len);
-        let mut min_peer_index = std::u64::MAX;
+        let mut min_peer_index = u64::MAX;
         for peer in self.get_store().region().get_peers() {
             let (peer_id, store_id) = (peer.get_id(), peer.get_store_id());
             let usage = ctx.store_disk_usages.get(&store_id);
@@ -4406,6 +4409,19 @@ where
         }
     }
 
+    fn activate_in_memory_pessimistic_locks(&mut self) {
+        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.is_valid = true;
+        pessimistic_locks.term = self.term();
+        pessimistic_locks.version = self.region().get_region_epoch().get_version();
+    }
+
+    fn clear_in_memory_pessimistic_locks(&mut self) {
+        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.is_valid = false; // Not necessary, but just make it safer.
+        pessimistic_locks.map = Default::default();
+    }
+
     pub fn need_renew_lease_at<T>(
         &self,
         ctx: &PollContext<EK, ER, T>,
@@ -4427,10 +4443,10 @@ where
         if has_overlapped_reads || has_overlapped_writes {
             return false;
         }
-        match self.leader_lease.inspect(Some(renew_bound)) {
-            LeaseState::Expired => true,
-            _ => false,
-        }
+        matches!(
+            self.leader_lease.inspect(Some(renew_bound)),
+            LeaseState::Expired
+        )
     }
 }
 
