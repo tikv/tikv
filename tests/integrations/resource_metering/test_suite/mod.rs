@@ -20,7 +20,7 @@ use tikv::config::{ConfigController, TiKvConfig};
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{RocksEngine, Storage, TestEngineBuilder, TestStorageBuilder};
 use tokio::runtime::{self, Runtime};
-use txn_types::TimeStamp;
+use txn_types::{Key, TimeStamp};
 
 pub struct TestSuite {
     receiver_server: Option<MockReceiverServer>,
@@ -185,7 +185,7 @@ impl TestSuite {
                         t.extend_from_slice(tag.as_bytes());
                         t
                     });
-                    storage.get(ctx, b"".to_vec(), TimeStamp::new(0))
+                    storage.get(ctx, Key::from_raw(b""), TimeStamp::new(0))
                 }))
                 .fuse();
 
