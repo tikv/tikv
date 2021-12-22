@@ -10,6 +10,7 @@ use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
 use futures::task::{Context, Poll, Waker};
 use futures::{ready, Future, Sink};
+use futures_timer::Delay;
 use grpcio::{
     ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, RpcStatusCode,
     WriteFlags,
@@ -27,7 +28,7 @@ use std::marker::Unpin;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{cmp, mem, result};
 use tikv_util::lru::LruCache;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -341,6 +342,7 @@ struct AsyncRaftSender<R, M, B, E> {
     router: R,
     snap_scheduler: Scheduler<SnapTask>,
     addr: String,
+    flush_timeout: Option<Delay>,
     _engine: PhantomData<E>,
 }
 
@@ -417,11 +419,24 @@ where
         loop {
             s.fill_msg(ctx);
             if !s.buffer.empty() {
-                let mut res = Pin::new(&mut s.sender).poll_ready(ctx);
-                if let Poll::Ready(Ok(())) = res {
-                    res = Poll::Ready(s.buffer.flush(&mut s.sender));
+                if s.flush_timeout.is_none() {
+                    ready!(Pin::new(&mut s.sender).poll_ready(ctx))?;
                 }
-                ready!(res)?;
+                if !s.buffer.full() {
+                    if s.flush_timeout.is_none() {
+                        s.flush_timeout = Some(Delay::new(Duration::from_micros(200)));
+                    }
+
+                    if Pin::new(s.flush_timeout.as_mut().unwrap())
+                        .poll(ctx)
+                        .is_pending()
+                    {
+                        return Poll::Pending;
+                    }
+                }
+
+                s.flush_timeout.take();
+                ready!(Poll::Ready(s.buffer.flush(&mut s.sender)))?;
                 continue;
             }
 
@@ -592,6 +607,7 @@ where
                 router: self.builder.router.clone(),
                 snap_scheduler: self.builder.snap_scheduler.clone(),
                 addr,
+                flush_timeout: None,
                 _engine: PhantomData::<E>,
             },
             receiver: batch_stream,
@@ -616,6 +632,7 @@ where
                 router: self.builder.router.clone(),
                 snap_scheduler: self.builder.snap_scheduler.clone(),
                 addr,
+                flush_timeout: None,
                 _engine: PhantomData::<E>,
             },
             receiver: stream,
