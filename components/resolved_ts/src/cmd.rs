@@ -281,6 +281,7 @@ pub fn lock_only_filter(mut cmd_batch: CmdBatch) -> Option<CmdBatch> {
 #[cfg(test)]
 mod tests {
     use concurrency_manager::ConcurrencyManager;
+    use kvproto::kvrpcpb::AssertionLevel;
     use tikv::server::raftkv::modifies_to_requests;
     use tikv::storage::kv::{MockEngineBuilder, TestEngineBuilder};
     use tikv::storage::lock_manager::DummyLockManager;
@@ -397,8 +398,9 @@ mod tests {
                 min_commit_ts: 10.into(),
                 need_old_value: false,
                 is_retry_request: false,
+                assertion_level: AssertionLevel::Off,
             },
-            Mutation::Put((k1.clone(), b"v4".to_vec())),
+            Mutation::make_put(k1.clone(), b"v4".to_vec()),
             &None,
             false,
         )

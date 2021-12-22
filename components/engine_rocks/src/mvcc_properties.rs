@@ -5,16 +5,16 @@ use crate::{RocksEngine, UserProperties};
 use engine_traits::{MvccProperties, MvccPropertiesExt, Result};
 use txn_types::TimeStamp;
 
-pub(crate) const PROP_NUM_ERRORS: &str = "tikv.num_errors";
-pub(crate) const PROP_MIN_TS: &str = "tikv.min_ts";
-pub(crate) const PROP_MAX_TS: &str = "tikv.max_ts";
-pub(crate) const PROP_NUM_ROWS: &str = "tikv.num_rows";
-pub(crate) const PROP_NUM_PUTS: &str = "tikv.num_puts";
-pub(crate) const PROP_NUM_DELETES: &str = "tikv.num_deletes";
-pub(crate) const PROP_NUM_VERSIONS: &str = "tikv.num_versions";
-pub(crate) const PROP_MAX_ROW_VERSIONS: &str = "tikv.max_row_versions";
-pub(crate) const PROP_ROWS_INDEX: &str = "tikv.rows_index";
-pub(crate) const PROP_ROWS_INDEX_DISTANCE: u64 = 10000;
+pub const PROP_NUM_ERRORS: &str = "tikv.num_errors";
+pub const PROP_MIN_TS: &str = "tikv.min_ts";
+pub const PROP_MAX_TS: &str = "tikv.max_ts";
+pub const PROP_NUM_ROWS: &str = "tikv.num_rows";
+pub const PROP_NUM_PUTS: &str = "tikv.num_puts";
+pub const PROP_NUM_DELETES: &str = "tikv.num_deletes";
+pub const PROP_NUM_VERSIONS: &str = "tikv.num_versions";
+pub const PROP_MAX_ROW_VERSIONS: &str = "tikv.max_row_versions";
+pub const PROP_ROWS_INDEX: &str = "tikv.rows_index";
+pub const PROP_ROWS_INDEX_DISTANCE: u64 = 10000;
 
 pub struct RocksMvccProperties;
 

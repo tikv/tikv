@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
@@ -55,7 +55,7 @@ use crate::store::msg::RaftCommand;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{
-    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
+    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, TxnExt,
 };
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
@@ -554,15 +554,8 @@ where
 
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 
-    /// The max timestamp recorded in the concurrency manager is only updated at leader.
-    /// So if a peer becomes leader from a follower, the max timestamp can be outdated.
-    /// We need to update the max timestamp with a latest timestamp from PD before this
-    /// peer can work.
-    /// From the least significant to the most, 1 bit marks whether the timestamp is
-    /// updated, 31 bits for the current epoch version, 32 bits for the current term.
-    /// The version and term are stored to prevent stale UpdateMaxTimestamp task from
-    /// marking the lowest bit.
-    pub max_ts_sync_status: Arc<AtomicU64>,
+    /// Transaction extensions related to this peer.
+    pub txn_ext: Arc<TxnExt>,
 
     /// Check whether this proposal can be proposed based on its epoch.
     cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
@@ -684,7 +677,7 @@ where
             check_stale_peers: vec![],
             local_first_replicate: false,
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
-            max_ts_sync_status: Arc::new(AtomicU64::new(0)),
+            txn_ext: Arc::new(TxnExt::default()),
             cmd_epoch_checker: Default::default(),
             disk_full_peers: DiskFullPeers::default(),
             dangerous_majority_set: false,
@@ -820,13 +813,31 @@ where
             // There are maybe some logs not included in CommitMergeRequest's entries, like CompactLog,
             // so the commit index may exceed the last index of the entires from CommitMergeRequest.
             // If that, no need to append
-            if self.raft_group.raft.raft_log.committed - log_idx > entries.len() as u64 {
+            if self.raft_group.raft.raft_log.committed - log_idx >= entries.len() as u64 {
                 return None;
             }
             entries = &entries[(self.raft_group.raft.raft_log.committed - log_idx) as usize..];
             log_idx = self.raft_group.raft.raft_log.committed;
         }
         let log_term = self.get_index_term(log_idx);
+
+        let last_log = entries.last().unwrap();
+        if last_log.term > self.term() {
+            // Hack: In normal flow, when leader sends the entries, it will use a term that's not less
+            // than the last log term. And follower will update its states correctly. For merge, we append
+            // the log without raft, so we have to take care of term explicitly to get correct metadata.
+            info!(
+                "become follower for new logs";
+                "new_log_term" => last_log.term,
+                "new_log_index" => last_log.index,
+                "term" => self.term(),
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            self.raft_group
+                .raft
+                .become_follower(last_log.term, INVALID_ID);
+        }
 
         self.raft_group
             .raft
@@ -912,7 +923,7 @@ where
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = TiInstant::now();
 
-        let region = self.region().clone();
+        let mut region = self.region().clone();
         info!(
             "begin to destroy";
             "region_id" => self.region_id,
@@ -923,6 +934,14 @@ where
         let mut kv_wb = engines.kv.write_batch();
         let mut raft_wb = engines.raft.log_batch(1024);
         self.mut_store().clear_meta(&mut kv_wb, &mut raft_wb)?;
+
+        // StoreFsmDelegate::check_msg use both epoch and region peer list to check whether
+        // a message is targing a staled peer.  But for an uninitialized peer, both epoch and
+        // peer list are empty, so a removed peer will be created again.  Saving current peer
+        // into the peer list of region will fix this problem.
+        if !self.get_store().is_initialized() {
+            region.mut_peers().push(self.peer.clone());
+        }
         write_peer_state(
             &mut kv_wb,
             &region,
@@ -1606,6 +1625,8 @@ where
                     // A more recent read may happen on the old leader. So max ts should
                     // be updated after a peer becomes leader.
                     self.require_updating_max_ts(&ctx.pd_scheduler);
+                    // Init the in-memory pessimistic lock table when the peer becomes leader.
+                    self.activate_in_memory_pessimistic_locks();
 
                     if !ctx.store_disk_usages.is_empty() {
                         self.refill_disk_full_peers(ctx);
@@ -1620,6 +1641,7 @@ where
                     self.leader_lease.expire();
                     self.mut_store().cancel_generating_snap(None);
                     self.clear_disk_full_peers(ctx);
+                    self.clear_in_memory_pessimistic_locks();
                 }
                 _ => {}
             }
@@ -2995,7 +3017,7 @@ where
                     // In Joint confchange, the leader is allowed to be DemotingVoter
                     || (kind == ConfChangeKind::Simple
                         && change_type == ConfChangeType::AddLearnerNode))
-                && !ctx.cfg.allow_remove_leader
+                && !ctx.cfg.allow_remove_leader()
             {
                 return Err(box_err!(
                     "{} ignore remove leader or demote leader",
@@ -3630,9 +3652,8 @@ where
         msg: &eraftpb::Message,
         peer_disk_usage: DiskUsage,
     ) {
-        #[allow(clippy::suspicious_operation_groupings)]
-        if self.is_handling_snapshot()
-            || self.has_pending_snapshot()
+        let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
+        if pending_snapshot
             || msg.get_from() != self.leader_id()
             // Transfer leader to node with disk full will lead to write availablity downback.
             // But if the current leader is disk full, and send such request, we should allow it,
@@ -3645,6 +3666,8 @@ where
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "from" => msg.get_from(),
+                "pending_snapshot" => pending_snapshot,
+                "disk_usage" => ?ctx.self_disk_usage,
             );
             return;
         }
@@ -3838,7 +3861,7 @@ where
 
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
-            snap.max_ts_sync_status = Some(self.max_ts_sync_status.clone());
+            snap.txn_ext = Some(self.txn_ext.clone());
         }
         resp.txn_extra_op = self.txn_extra_op.load();
         cmd_resp::bind_term(&mut resp.response, self.term());
@@ -3891,7 +3914,7 @@ where
         let peers_len = self.get_store().region().get_peers().len();
         let mut normal_peers = HashSet::default();
         let mut next_idxs = Vec::with_capacity(peers_len);
-        let mut min_peer_index = std::u64::MAX;
+        let mut min_peer_index = u64::MAX;
         for peer in self.get_store().region().get_peers() {
             let (peer_id, store_id) = (peer.get_id(), peer.get_store_id());
             let usage = ctx.store_disk_usages.get(&store_id);
@@ -4359,7 +4382,8 @@ where
         let term_low_bits = self.term() & ((1 << 32) - 1); // 32 bits
         let version_lot_bits = epoch.get_version() & ((1 << 31) - 1); // 31 bits
         let initial_status = (term_low_bits << 32) | (version_lot_bits << 1);
-        self.max_ts_sync_status
+        self.txn_ext
+            .max_ts_sync_status
             .store(initial_status, Ordering::SeqCst);
         info!(
             "require updating max ts";
@@ -4369,13 +4393,26 @@ where
         if let Err(e) = pd_scheduler.schedule(PdTask::UpdateMaxTimestamp {
             region_id: self.region_id,
             initial_status,
-            max_ts_sync_status: self.max_ts_sync_status.clone(),
+            txn_ext: self.txn_ext.clone(),
         }) {
             error!(
                 "failed to update max ts";
                 "err" => ?e,
             );
         }
+    }
+
+    fn activate_in_memory_pessimistic_locks(&mut self) {
+        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.is_valid = true;
+        pessimistic_locks.term = self.term();
+        pessimistic_locks.version = self.region().get_region_epoch().get_version();
+    }
+
+    fn clear_in_memory_pessimistic_locks(&mut self) {
+        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.is_valid = false; // Not necessary, but just make it safer.
+        pessimistic_locks.map = Default::default();
     }
 }
 
@@ -4575,7 +4612,7 @@ pub trait AbstractPeer {
     fn group_state(&self) -> GroupState;
     fn region(&self) -> &metapb::Region;
     fn apply_state(&self) -> &RaftApplyState;
-    fn raft_status(&self) -> raft::Status;
+    fn raft_status(&self) -> raft::Status<'_>;
     fn raft_commit_index(&self) -> u64;
     fn pending_merge_state(&self) -> Option<&MergeState>;
 }

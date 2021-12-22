@@ -420,7 +420,7 @@ impl WriteCompactionFilter {
         Ok(decision)
     }
 
-    fn handle_filtered_write(&mut self, write: WriteRef) -> Result<(), String> {
+    fn handle_filtered_write(&mut self, write: WriteRef<'_>) -> Result<(), String> {
         if write.short_value.is_none() && write.write_type == WriteType::Put {
             let prefix = Key::from_encoded_slice(&self.mvcc_key_prefix);
             let def_key = prefix.append_ts(write.start_ts).into_encoded();
@@ -596,7 +596,7 @@ fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
     }
 }
 
-fn parse_write(value: &[u8]) -> Result<WriteRef, String> {
+fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
     match WriteRef::parse(value) {
         Ok(write) => Ok(write),
         Err(_) => Err(format!(

@@ -123,16 +123,15 @@ lazy_static! {
         "Total number of requests directly executed by local reader."
     )
     .unwrap();
+    pub static ref LOCAL_READ_EXECUTED_STALE_READ_REQUESTS: IntCounter = register_int_counter!(
+        "tikv_raftstore_local_read_executed_stale_read_requests",
+        "Total number of stale read requests directly executed by local reader."
+    )
+    .unwrap();
     pub static ref RAFT_LOG_GC_WRITE_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_raftstore_raft_log_gc_write_duration_secs",
         "Bucketed histogram of write duration of raft log gc.",
         exponential_buckets(0.0001, 2.0, 20).unwrap()
-    )
-    .unwrap();
-    pub static ref RAFT_LOG_GC_PURGE_DURATION_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_raftstore_raft_log_gc_purge_duration_secs",
-        "Bucketed histogram of purge duration of raft log gc.",
-        exponential_buckets(0.000001, 2.0, 30).unwrap()
     )
     .unwrap();
     pub static ref RAFT_LOG_GC_SEEK_OPERATIONS: IntCounter = register_int_counter!(

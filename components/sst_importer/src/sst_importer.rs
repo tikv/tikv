@@ -18,6 +18,7 @@ use engine_traits::{
     CF_WRITE,
 };
 use file_system::{get_io_rate_limiter, OpenOptions};
+use kvproto::kvrpcpb::ApiVersion;
 use tikv_util::time::{Instant, Limiter};
 use txn_types::{Key, TimeStamp, WriteRef};
 
@@ -33,7 +34,7 @@ pub struct SSTImporter {
     dir: ImportDir,
     key_manager: Option<Arc<DataKeyManager>>,
     switcher: ImportModeSwitcher,
-    enable_ttl: bool,
+    api_version: ApiVersion,
     compression_types: HashMap<CfName, SstCompressionType>,
 }
 
@@ -42,14 +43,14 @@ impl SSTImporter {
         cfg: &Config,
         root: P,
         key_manager: Option<Arc<DataKeyManager>>,
-        enable_ttl: bool,
+        api_version: ApiVersion,
     ) -> Result<SSTImporter> {
         let switcher = ImportModeSwitcher::new(cfg);
         Ok(SSTImporter {
             dir: ImportDir::new(root)?,
             key_manager,
             switcher,
-            enable_ttl,
+            api_version,
             compression_types: HashMap::with_capacity(2),
         })
     }
@@ -497,7 +498,7 @@ impl SSTImporter {
             default_path,
             meta,
             self.key_manager.clone(),
-            self.enable_ttl,
+            self.api_version,
         ))
     }
 }
@@ -536,7 +537,6 @@ fn is_after_end_bound<K: AsRef<[u8]>>(value: &[u8], bound: &Bound<K>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::f64::INFINITY;
     use std::io;
 
     use engine_traits::{
@@ -898,7 +898,7 @@ mod tests {
         block_on_external_io(external_storage_export::read_external_storage_into_file(
             &mut input,
             &mut output,
-            &Limiter::new(INFINITY),
+            &Limiter::new(f64::INFINITY),
             input_len,
             8192,
         ))
@@ -915,7 +915,7 @@ mod tests {
         let err = block_on_external_io(external_storage_export::read_external_storage_into_file(
             &mut input,
             &mut output,
-            &Limiter::new(INFINITY),
+            &Limiter::new(f64::INFINITY),
             0,
             usize::MAX,
         ))
@@ -931,7 +931,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
         let db = create_sst_test_engine().unwrap();
 
         let range = importer
@@ -941,7 +941,7 @@ mod tests {
                 "sample.sst",
                 &RewriteRule::default(),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -981,8 +981,13 @@ mod tests {
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
         let (temp_dir, key_manager) = new_key_manager_for_test();
-        let importer =
-            SSTImporter::new(&cfg, &importer_dir, Some(key_manager.clone()), false).unwrap();
+        let importer = SSTImporter::new(
+            &cfg,
+            &importer_dir,
+            Some(key_manager.clone()),
+            ApiVersion::V1,
+        )
+        .unwrap();
 
         let db_path = temp_dir.path().join("db");
         let env = get_env(Some(key_manager), None /*io_rate_limiter*/).unwrap();
@@ -995,7 +1000,7 @@ mod tests {
                 "sample.sst",
                 &RewriteRule::default(),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1034,7 +1039,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
         let db = create_sst_test_engine().unwrap();
 
         let range = importer
@@ -1044,7 +1049,7 @@ mod tests {
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t567", 0),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1079,7 +1084,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
 
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file_txn_default().unwrap();
@@ -1092,7 +1097,7 @@ mod tests {
                 "sample_default.sst",
                 &new_rewrite_rule(b"", b"", 16),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1123,7 +1128,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
 
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file_txn_write().unwrap();
@@ -1136,7 +1141,7 @@ mod tests {
                 "sample_write.sst",
                 &new_rewrite_rule(b"", b"", 16),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1189,7 +1194,7 @@ mod tests {
             // performs the download.
             let importer_dir = tempfile::tempdir().unwrap();
             let cfg = Config::default();
-            let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+            let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
             let db = create_sst_test_engine().unwrap();
 
             let range = importer
@@ -1199,7 +1204,7 @@ mod tests {
                     "sample.sst",
                     &new_rewrite_rule(b"t123", b"t9102", 0),
                     None,
-                    Limiter::new(INFINITY),
+                    Limiter::new(f64::INFINITY),
                     db,
                 )
                 .unwrap()
@@ -1261,7 +1266,7 @@ mod tests {
         let (_ext_sst_dir, backend, mut meta) = create_sample_external_sst_file().unwrap();
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
         let db = create_sst_test_engine().unwrap();
         // note: the range doesn't contain the DATA_PREFIX 'z'.
         meta.mut_range().set_start(b"t123_r02".to_vec());
@@ -1274,7 +1279,7 @@ mod tests {
                 "sample.sst",
                 &RewriteRule::default(),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1307,7 +1312,7 @@ mod tests {
         let (_ext_sst_dir, backend, mut meta) = create_sample_external_sst_file().unwrap();
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
         let db = create_sst_test_engine().unwrap();
         meta.mut_range().set_start(b"t5_r02".to_vec());
         meta.mut_range().set_end(b"t5_r12".to_vec());
@@ -1319,7 +1324,7 @@ mod tests {
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t5", 0),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1354,7 +1359,7 @@ mod tests {
         meta.set_uuid(vec![0u8; 16]);
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
         let db = create_sst_test_engine().unwrap();
         let backend = external_storage_export::make_local_backend(ext_sst_dir.path());
 
@@ -1364,7 +1369,7 @@ mod tests {
             "sample.sst",
             &RewriteRule::default(),
             None,
-            Limiter::new(INFINITY),
+            Limiter::new(f64::INFINITY),
             db,
         );
         match &result {
@@ -1379,7 +1384,7 @@ mod tests {
         let (_ext_sst_dir, backend, mut meta) = create_sample_external_sst_file().unwrap();
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
         let db = create_sst_test_engine().unwrap();
         meta.mut_range().set_start(vec![b'x']);
         meta.mut_range().set_end(vec![b'y']);
@@ -1390,7 +1395,7 @@ mod tests {
             "sample.sst",
             &RewriteRule::default(),
             None,
-            Limiter::new(INFINITY),
+            Limiter::new(f64::INFINITY),
             db,
         );
 
@@ -1405,7 +1410,7 @@ mod tests {
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file().unwrap();
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
         let db = create_sst_test_engine().unwrap();
 
         let result = importer.download::<TestEngine>(
@@ -1414,7 +1419,7 @@ mod tests {
             "sample.sst",
             &new_rewrite_rule(b"xxx", b"yyy", 0),
             None,
-            Limiter::new(INFINITY),
+            Limiter::new(f64::INFINITY),
             db,
         );
 
@@ -1429,6 +1434,12 @@ mod tests {
 
     #[test]
     fn test_download_rawkv_sst() {
+        test_download_rawkv_sst_impl(ApiVersion::V1);
+        test_download_rawkv_sst_impl(ApiVersion::V1ttl);
+        test_download_rawkv_sst_impl(ApiVersion::V2);
+    }
+
+    fn test_download_rawkv_sst_impl(api_version: ApiVersion) {
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) =
             create_sample_external_rawkv_sst_file(b"0", b"z", false).unwrap();
@@ -1436,7 +1447,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
         let db = create_sst_test_engine().unwrap();
 
         let range = importer
@@ -1446,7 +1457,7 @@ mod tests {
                 "sample.sst",
                 &RewriteRule::default(),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1482,6 +1493,12 @@ mod tests {
 
     #[test]
     fn test_download_rawkv_sst_partial() {
+        test_download_rawkv_sst_partial_impl(ApiVersion::V1);
+        test_download_rawkv_sst_partial_impl(ApiVersion::V1ttl);
+        test_download_rawkv_sst_partial_impl(ApiVersion::V2);
+    }
+
+    fn test_download_rawkv_sst_partial_impl(api_version: ApiVersion) {
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) =
             create_sample_external_rawkv_sst_file(b"b", b"c\x00", false).unwrap();
@@ -1489,7 +1506,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
         let db = create_sst_test_engine().unwrap();
 
         let range = importer
@@ -1499,7 +1516,7 @@ mod tests {
                 "sample.sst",
                 &RewriteRule::default(),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1531,6 +1548,12 @@ mod tests {
 
     #[test]
     fn test_download_rawkv_sst_partial_exclusive_end_key() {
+        test_download_rawkv_sst_partial_exclusive_end_key_impl(ApiVersion::V1);
+        test_download_rawkv_sst_partial_exclusive_end_key_impl(ApiVersion::V1ttl);
+        test_download_rawkv_sst_partial_exclusive_end_key_impl(ApiVersion::V2);
+    }
+
+    fn test_download_rawkv_sst_partial_exclusive_end_key_impl(api_version: ApiVersion) {
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) =
             create_sample_external_rawkv_sst_file(b"b", b"c\x00", true).unwrap();
@@ -1538,7 +1561,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
         let db = create_sst_test_engine().unwrap();
 
         let range = importer
@@ -1548,7 +1571,7 @@ mod tests {
                 "sample.sst",
                 &RewriteRule::default(),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1585,7 +1608,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let mut importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let mut importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
         importer.set_compression_type(CF_DEFAULT, Some(SstCompressionType::Snappy));
         let db = create_sst_test_engine().unwrap();
 
@@ -1596,7 +1619,7 @@ mod tests {
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t789", 0),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1617,7 +1640,7 @@ mod tests {
 
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let mut importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let mut importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
         importer.set_compression_type(CF_DEFAULT, Some(SstCompressionType::Zstd));
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);

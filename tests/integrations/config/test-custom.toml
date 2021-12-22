@@ -80,7 +80,7 @@ a = "b"
 [storage]
 data-dir = "/var"
 gc-ratio-threshold = 1.2
-max-key-size = 8192
+max-key-size = 4096
 scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
@@ -608,6 +608,7 @@ enabled = false # test backward compatibility
 wait-for-lock-timeout = "10ms"
 wake-up-delay-duration = 100 # test backward compatibility
 pipelined = false
+in-memory = true
 
 [cdc]
 min-ts-interval = "4s"
@@ -616,6 +617,7 @@ hibernate-regions-compatible = false
 incremental-scan-threads = 3
 incremental-scan-concurrency = 4
 incremental-scan-speed-limit = 7
+incremental-scan-ts-filter-ratio = 0.7
 old-value-cache-memory-quota = "14MB"
 sink-memory-quota = "7MB"
 

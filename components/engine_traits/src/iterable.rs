@@ -72,7 +72,7 @@ pub trait Iterator: Send {
     ///
     /// `true` if seeking succeeded and the iterator is valid,
     /// `false` if seeking failed and the iterator is invalid.
-    fn seek(&mut self, key: SeekKey) -> Result<bool>;
+    fn seek(&mut self, key: SeekKey<'_>) -> Result<bool>;
 
     /// Move the iterator to a specific key.
     ///
@@ -83,7 +83,7 @@ pub trait Iterator: Send {
     ///
     /// `true` if seeking succeeded and the iterator is valid,
     /// `false` if seeking failed and the iterator is invalid.
-    fn seek_for_prev(&mut self, key: SeekKey) -> Result<bool>;
+    fn seek_for_prev(&mut self, key: SeekKey<'_>) -> Result<bool>;
 
     /// Short for `seek(SeekKey::Start)`.
     fn seek_to_first(&mut self) -> Result<bool> {
@@ -202,7 +202,7 @@ where
 }
 
 impl<'a> From<&'a [u8]> for SeekKey<'a> {
-    fn from(bs: &'a [u8]) -> SeekKey {
+    fn from(bs: &'a [u8]) -> SeekKey<'a> {
         SeekKey::Key(bs)
     }
 }

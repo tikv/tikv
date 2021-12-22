@@ -11,14 +11,14 @@ use tikv::storage::{Engine, SnapshotStore, Statistics, Store};
 use txn_types::{Key, Mutation};
 
 fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
-    let store = SyncTestStorageBuilder::new().build().unwrap();
+    let store = SyncTestStorageBuilder::default().build().unwrap();
     let mut mutations = Vec::new();
     let mut keys = Vec::new();
     for i in 0..30000 {
         let user_key = table::encode_row_key(5, i);
         let user_value = vec![b'x'; 60];
         let key = Key::from_raw(&user_key);
-        let mutation = Mutation::Put((key.clone(), user_value));
+        let mutation = Mutation::make_put(key.clone(), user_value);
         mutations.push(mutation);
         keys.push(key);
     }
@@ -42,6 +42,7 @@ fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
         10.into(),
         IsolationLevel::Si,
         true,
+        Default::default(),
         Default::default(),
         false,
     );

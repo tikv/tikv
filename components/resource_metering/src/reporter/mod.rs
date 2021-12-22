@@ -1,12 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::collector::{register_collector, CollectorHandle, CollectorImpl};
-use crate::{Client, Config, RawRecords, Records};
+pub mod data_sink;
+pub mod single_target;
+
+use crate::collector::{CollectorHandle, CollectorImpl, CollectorRegHandle};
+use crate::{Config, DataSink, RawRecords, Records};
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
 use tikv_util::time::Duration;
+use tikv_util::warn;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 
 /// A structure for reporting statistics through [Client].
@@ -20,17 +24,18 @@ use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 /// [Scheduler]: tikv_util::worker::Scheduler
 /// [RawRecords]: crate::model::RawRecords
 /// [Records]: crate::model::Records
-pub struct Reporter<C> {
-    client: C,
+pub struct Reporter<D> {
+    data_sink: D,
     config: Config,
     scheduler: Scheduler<Task>,
+    collector_reg_handle: CollectorRegHandle,
     collector: Option<CollectorHandle>,
     records: Records,
 }
 
-impl<C> Runnable for Reporter<C>
+impl<D> Runnable for Reporter<D>
 where
-    C: Client + Send,
+    D: DataSink + Send,
 {
     type Task = Task;
 
@@ -46,9 +51,9 @@ where
     }
 }
 
-impl<C> RunnableWithTimer for Reporter<C>
+impl<D> RunnableWithTimer for Reporter<D>
 where
-    C: Client + Send,
+    D: DataSink + Send,
 {
     fn on_timeout(&mut self) {
         self.upload();
@@ -59,19 +64,25 @@ where
     }
 }
 
-impl<C> Reporter<C>
+impl<D> Reporter<D>
 where
-    C: Client + Send,
+    D: DataSink + Send,
 {
-    pub fn new(client: C, config: Config, scheduler: Scheduler<Task>) -> Self {
-        let collector = config
-            .should_report()
-            .then(|| register_collector(Box::new(CollectorImpl::new(scheduler.clone()))));
+    pub fn new(
+        data_sink: D,
+        config: Config,
+        collector_reg_handle: CollectorRegHandle,
+        scheduler: Scheduler<Task>,
+    ) -> Self {
+        let collector = config.should_report().then(|| {
+            collector_reg_handle.register(Box::new(CollectorImpl::new(scheduler.clone())))
+        });
         Self {
-            client,
+            data_sink,
             config,
             scheduler,
             collector,
+            collector_reg_handle,
             records: Records::default(),
         }
     }
@@ -87,9 +98,10 @@ where
             self.reset();
         }
         if self.collector.is_none() {
-            self.collector = Some(register_collector(Box::new(CollectorImpl::new(
-                self.scheduler.clone(),
-            ))));
+            self.collector = Some(
+                self.collector_reg_handle
+                    .register(Box::new(CollectorImpl::new(self.scheduler.clone()))),
+            );
         }
     }
 
@@ -99,8 +111,9 @@ where
         }
         // Whether endpoint exists or not, records should be taken in order to reset.
         let records = std::mem::take(&mut self.records);
-        self.client
-            .upload_records(&self.config.receiver_address, records);
+        if let Err(err) = self.data_sink.try_send(records) {
+            warn!("failed to send data to datasink"; "error" => ?err);
+        }
     }
 
     fn reset(&mut self) {
@@ -139,10 +152,13 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{RawRecord, ResourceMeteringTag, TagInfos};
-    use collections::HashMap;
+    use crate::error::Result;
+    use crate::{RawRecord, TagInfos};
+
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::SeqCst;
+
+    use collections::HashMap;
     use tikv_util::config::ReadableDuration;
     use tikv_util::worker::{LazyWorker, Runnable, RunnableWithTimer};
 
@@ -150,17 +166,23 @@ mod tests {
 
     struct MockClient;
 
-    impl Client for MockClient {
-        fn upload_records(&mut self, address: &str, _records: Records) {
-            assert_eq!(address, "abc");
+    impl DataSink for MockClient {
+        fn try_send(&mut self, _records: Records) -> Result<()> {
             OP_COUNT.fetch_add(1, SeqCst);
+            Ok(())
         }
     }
 
     #[test]
     fn test_reporter() {
         let scheduler = LazyWorker::new("test-worker").scheduler();
-        let mut r = Reporter::new(MockClient, Config::default(), scheduler);
+        let collector_reg_handle = CollectorRegHandle::new_for_test();
+        let mut r = Reporter::new(
+            MockClient,
+            Config::default(),
+            collector_reg_handle,
+            scheduler,
+        );
         r.run(Task::ConfigChange(Config {
             enabled: false,
             receiver_address: "abc".to_string(),
@@ -171,15 +193,17 @@ mod tests {
         assert_eq!(r.get_interval(), Duration::from_secs(120));
         let mut records = HashMap::default();
         records.insert(
-            ResourceMeteringTag {
-                infos: Arc::new(TagInfos {
-                    store_id: 0,
-                    region_id: 0,
-                    peer_id: 0,
-                    extra_attachment: b"12345".to_vec(),
-                }),
+            Arc::new(TagInfos {
+                store_id: 0,
+                region_id: 0,
+                peer_id: 0,
+                extra_attachment: b"12345".to_vec(),
+            }),
+            RawRecord {
+                cpu_time: 1,
+                read_keys: 2,
+                write_keys: 3,
             },
-            RawRecord { cpu_time: 1 },
         );
         r.run(Task::Records(Arc::new(RawRecords {
             begin_unix_time_secs: 123,
