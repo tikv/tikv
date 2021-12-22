@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::PathBuf;
 use std::fmt;
+use std::path::PathBuf;
 
 use tokio::io::Result as TokioResult;
 use tokio::runtime::Runtime;

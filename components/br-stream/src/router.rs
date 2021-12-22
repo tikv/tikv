@@ -305,7 +305,7 @@ impl TempFileKey {
             cmd_type: kv.cmd_type,
         }
     }
-    
+
     /// The full name of the file owns the key.
     fn temp_file_name(&self) -> String {
         if self.is_meta {
