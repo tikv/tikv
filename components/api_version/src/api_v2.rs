@@ -12,8 +12,8 @@ pub const TIDB_RANGES_COMPLEMENT: &[(&[u8], &[u8])] =
 
 pub const RAW_KEY_PREFIX: u8 = b'r';
 pub const TXN_KEY_PREFIX: u8 = b'x';
-pub const TIDB_KEY_META_PREFIX: u8 = b'm';
-pub const TIDB_KEY_TABLE_PREFIX: u8 = b't';
+pub const TIDB_META_KEY_PREFIX: u8 = b'm';
+pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
 
 bitflags::bitflags! {
     struct ValueMeta: u8 {
@@ -33,7 +33,7 @@ impl APIVersion for APIV2 {
         match key[0] {
             RAW_KEY_PREFIX => KeyMode::Raw,
             TXN_KEY_PREFIX => KeyMode::Txn,
-            TIDB_KEY_META_PREFIX | TIDB_KEY_TABLE_PREFIX => KeyMode::TiDB,
+            TIDB_META_KEY_PREFIX | TIDB_TABLE_KEY_PREFIX => KeyMode::TiDB,
             _ => KeyMode::Unknown,
         }
     }
