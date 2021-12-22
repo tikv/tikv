@@ -17,7 +17,7 @@ use futures::channel::mpsc::*;
 use futures::Future;
 use kvproto::brpb::*;
 use kvproto::encryptionpb::EncryptionMethod;
-use kvproto::kvrpcpb::{Context, IsolationLevel, ApiVersion};
+use kvproto::kvrpcpb::{ApiVersion, Context, IsolationLevel};
 use kvproto::metapb::*;
 use online_config::OnlineConfig;
 
