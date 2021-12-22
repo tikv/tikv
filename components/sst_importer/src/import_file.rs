@@ -9,9 +9,7 @@ use std::sync::Arc;
 use encryption::{DataKeyManager, EncrypterWriter};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::key_prefix::TIDB_RANGES_COMPLEMENT;
-use engine_traits::{
-    EncryptionKeyManager, Iterable, KvEngine, SSTMetaInfo, SstReader, DATA_KEY_PREFIX_LEN,
-};
+use engine_traits::{EncryptionKeyManager, Iterable, KvEngine, SSTMetaInfo, SstReader};
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
 use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::ApiVersion;
