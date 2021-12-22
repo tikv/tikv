@@ -563,7 +563,7 @@ where
         }
         REPORT_FAILURE_MSG_COUNTER
             .with_label_values(&[reason, &self.store_id.to_string()])
-            .inc_by(len as i64);
+            .inc_by(len as u64);
     }
 
     fn connect(&self, addr: &str) -> TikvClient {
@@ -751,7 +751,7 @@ struct CachedQueue {
 /// ```text
 /// for m in msgs {
 ///     if !raft_client.send(m) {
-///         // handle error.   
+///         // handle error.
 ///     }
 /// }
 /// raft_client.flush();

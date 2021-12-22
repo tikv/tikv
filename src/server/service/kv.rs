@@ -661,7 +661,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         ctx.spawn(async move {
             let res = stream.map_err(Error::from).try_for_each(move |mut msgs| {
                 let len = msgs.get_msgs().len();
-                RAFT_MESSAGE_RECV_COUNTER.inc_by(len as i64);
+                RAFT_MESSAGE_RECV_COUNTER.inc_by(len as u64);
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
                 for msg in msgs.take_msgs().into_iter() {
                     let to_store_id = msg.get_to_peer().get_store_id();

@@ -41,7 +41,7 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
                         .get(cmd)
                         .get((*cf).into())
                         .get((*tag).into())
-                        .inc_by(*count as i64);
+                        .inc_by(*count as u64);
                 }
             }
         }

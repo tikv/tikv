@@ -1248,7 +1248,7 @@ impl Initializer {
         }
         if total_bytes > 0 {
             self.speed_limiter.consume(total_bytes).await;
-            CDC_SCAN_BYTES.inc_by(total_bytes as _);
+            CDC_SCAN_BYTES.inc_by(total_bytes as u64);
         }
 
         if let Some(resolver) = resolver {

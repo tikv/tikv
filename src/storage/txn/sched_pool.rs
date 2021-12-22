@@ -84,7 +84,7 @@ pub fn tls_flush() {
                 for (tag, count) in cf_details.iter() {
                     KV_COMMAND_SCAN_DETAILS
                         .with_label_values(&[cmd, *cf, *tag])
-                        .inc_by(*count as i64);
+                        .inc_by(*count as u64);
                 }
             }
         }
