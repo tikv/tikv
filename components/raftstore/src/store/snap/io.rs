@@ -132,6 +132,7 @@ where
             cf_file.add_file(file_id); // add previous file
             file_length = 0;
             file_id += 1;
+            let prev_path = path.clone();
             path = cf_file
                 .path
                 .join(cf_file.gen_tmp_file_name(file_id))
@@ -143,7 +144,7 @@ where
                 Ok(new_sst_writer) => {
                     let old_writer = sst_writer.replace(new_sst_writer);
                     box_try!(old_writer.finish());
-                    box_try!(File::open(&path).and_then(|f| f.sync_all()));
+                    box_try!(File::open(&prev_path).and_then(|f| f.sync_all()));
                 }
                 Err(e) => {
                     let io_error = io::Error::new(io::ErrorKind::Other, e);
@@ -172,10 +173,11 @@ where
         box_try!(sst_writer.into_inner().finish());
         box_try!(File::open(path).and_then(|f| f.sync_all()));
         info!(
-            "build_sst_cf_file_list builds {} files in cf {}. Total keys {} ",
+            "build_sst_cf_file_list builds {} files in cf {}. Total keys {}, total size {} ",
             file_id + 1,
             cf,
-            stats.key_count
+            stats.key_count,
+            stats.total_size,
         );
     } else {
         box_try!(fs::remove_file(path));
@@ -389,7 +391,6 @@ mod tests {
         let db_creaters = &[open_test_empty_db, open_test_db_with_100keys];
         let max_file_sizes = &[u64::MAX, 100];
         let limiter = Limiter::new(f64::INFINITY);
-
         for max_file_size in max_file_sizes {
             for db_creater in db_creaters {
                 for db_opt in vec![None, Some(gen_db_options_with_encryption())] {
@@ -407,8 +408,8 @@ mod tests {
                         &mut cf_file,
                         &db,
                         &db.snapshot(),
-                        b"a",
-                        b"z",
+                        &keys::data_key(b"a"),
+                        &keys::data_key(b"z"),
                         *max_file_size,
                         &limiter,
                     )
@@ -418,12 +419,17 @@ mod tests {
                         assert_eq!(cf_file.clone_file_paths().len(), 0);
                         assert_eq!(cf_file.tmp_file_paths().len(), 0);
                         assert_eq!(cf_file.size.len(), 0);
+                        assert_eq!(cf_file.checksum.len(), 0);
                         continue;
                     } else {
-                        assert!(cf_file.file_paths().len() > 1);
-                        assert!(cf_file.clone_file_paths().len() > 1);
-                        assert!(cf_file.tmp_file_paths().len() > 1);
-                        assert!(cf_file.size.len() > 1);
+                        assert!(
+                            cf_file.file_paths().len() == 12 && *max_file_size < u64::MAX
+                                || cf_file.file_paths().len() == 1 && *max_file_size == u64::MAX
+                        );
+                        assert!(cf_file.clone_file_paths().len() == cf_file.file_paths().len());
+                        assert!(cf_file.tmp_file_paths().len() == cf_file.file_paths().len());
+                        assert!(cf_file.size.len() == cf_file.file_paths().len());
+                        assert!(cf_file.checksum.len() == cf_file.file_paths().len());
                     }
 
                     let dir1 = Builder::new()

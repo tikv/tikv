@@ -375,21 +375,42 @@ impl CfFile {
     }
 
     pub fn gen_file_name(&self, file_id: usize) -> String {
-        format!("{}_{:04}{}", self.file_prefix, file_id, self.file_suffix)
+        if file_id == 0 {
+            // for backward compatibility
+            format!("{}{}", self.file_prefix, self.file_suffix)
+        } else {
+            format!("{}_{:04}{}", self.file_prefix, file_id, self.file_suffix)
+        }
     }
 
     pub fn gen_clone_file_name(&self, file_id: usize) -> String {
-        format!(
-            "{}_{:04}{}{}",
-            self.file_prefix, file_id, self.file_suffix, CLONE_FILE_SUFFIX
-        )
+        if file_id == 0 {
+            // for backward compatibility
+            format!(
+                "{}{}{}",
+                self.file_prefix, self.file_suffix, CLONE_FILE_SUFFIX
+            )
+        } else {
+            format!(
+                "{}_{:04}{}{}",
+                self.file_prefix, file_id, self.file_suffix, CLONE_FILE_SUFFIX
+            )
+        }
     }
 
     pub fn gen_tmp_file_name(&self, file_id: usize) -> String {
-        format!(
-            "{}_{:04}{}{}",
-            self.file_prefix, file_id, self.file_suffix, TMP_FILE_SUFFIX
-        )
+        if file_id == 0 {
+            // for backward compatibility
+            format!(
+                "{}{}{}",
+                self.file_prefix, self.file_suffix, TMP_FILE_SUFFIX
+            )
+        } else {
+            format!(
+                "{}_{:04}{}{}",
+                self.file_prefix, file_id, self.file_suffix, TMP_FILE_SUFFIX
+            )
+        }
     }
 }
 
@@ -852,14 +873,13 @@ impl Snapshot {
                 let key_mgr = self.mgr.encryption_key_manager.as_ref();
                 snap_io::build_plain_cf_file::<EK>(cf_file, key_mgr, kv_snap, &begin_key, &end_key)?
             } else {
-                let raw_size_per_file = self.mgr.max_per_file_size;
                 snap_io::build_sst_cf_file_list::<EK>(
                     cf_file,
                     engine,
                     kv_snap,
                     &begin_key,
                     &end_key,
-                    raw_size_per_file,
+                    self.mgr.get_actual_max_per_file_size(),
                     &self.mgr.limiter,
                 )?
             };
@@ -942,9 +962,11 @@ impl Snapshot {
         for cf_file in &self.cf_files {
             // Delete cloned files.
             let clone_file_paths = cf_file.clone_file_paths();
+            // in case the meta file is corrupted or deleted, delete snapshot files with best effort
             if clone_file_paths.is_empty() {
                 try_delete_snapshot_files!(cf_file, gen_clone_file_name);
             } else {
+                // delete snapshot files according to meta file
                 for clone_file_path in clone_file_paths {
                     delete_file_if_exist(&clone_file_path).unwrap();
                 }
@@ -1320,6 +1342,7 @@ struct SnapManagerCore {
     temp_sst_id: Arc<AtomicU64>,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     max_per_file_size: u64,
+    enable_multi_snapshot_files: bool,
 }
 
 /// `SnapManagerCore` trace all current processing snapshots.
@@ -1571,7 +1594,16 @@ impl SnapManager {
     }
 
     pub fn set_max_per_file_size(&mut self, max_per_file_size: u64) {
-        self.core.max_per_file_size = max_per_file_size;
+        if max_per_file_size == 0 {
+            self.core.max_per_file_size = u64::MAX;
+        } else {
+            const MIN_MAX_SNAP_FILE_RAW_SIZE: u64 = (1 << 20) * 100; // min max snapshot file size is 100MB (before compresssion)
+            self.core.max_per_file_size = cmp::max(max_per_file_size, MIN_MAX_SNAP_FILE_RAW_SIZE);
+        }
+    }
+
+    pub fn set_enable_multi_snapshot_files(&mut self, enable_multi_snapshot_files: bool) {
+        self.core.enable_multi_snapshot_files = enable_multi_snapshot_files;
     }
 
     pub fn set_speed_limit(&self, bytes_per_sec: f64) {
@@ -1739,6 +1771,13 @@ impl SnapManagerCore {
         }
         Ok(())
     }
+
+    pub fn get_actual_max_per_file_size(&self) -> u64 {
+        if self.enable_multi_snapshot_files {
+            return self.max_per_file_size;
+        }
+        u64::MAX
+    }
 }
 
 #[derive(Clone, Default)]
@@ -1746,6 +1785,7 @@ pub struct SnapManagerBuilder {
     max_write_bytes_per_sec: i64,
     max_total_size: u64,
     max_per_file_size: u64,
+    enable_multi_snapshot_files: bool,
     key_manager: Option<Arc<DataKeyManager>>,
 }
 
@@ -1760,6 +1800,10 @@ impl SnapManagerBuilder {
     }
     pub fn max_per_file_size(mut self, bytes: u64) -> SnapManagerBuilder {
         self.max_per_file_size = bytes;
+        self
+    }
+    pub fn enable_multi_snapshot_files(mut self, enabled: bool) -> SnapManagerBuilder {
+        self.enable_multi_snapshot_files = enabled;
         self
     }
     pub fn encryption_key_manager(mut self, m: Option<Arc<DataKeyManager>>) -> SnapManagerBuilder {
@@ -1777,22 +1821,20 @@ impl SnapManagerBuilder {
         } else {
             u64::MAX
         };
-        let max_per_file_size = if self.max_per_file_size > 0 {
-            self.max_per_file_size
-        } else {
-            u64::MAX
-        };
-        SnapManager {
+        let mut snapshot = SnapManager {
             core: SnapManagerCore {
                 base: path.into(),
                 registry: Default::default(),
                 limiter,
                 temp_sst_id: Arc::new(AtomicU64::new(0)),
                 encryption_key_manager: self.key_manager,
-                max_per_file_size,
+                max_per_file_size: u64::MAX,
+                enable_multi_snapshot_files: self.enable_multi_snapshot_files,
             },
             max_total_size: AtomicU64::new(max_total_size),
-        }
+        };
+        snapshot.set_max_per_file_size(self.max_per_file_size); // set actual max_per_file_size
+        snapshot
     }
 }
 
@@ -1989,14 +2031,15 @@ pub mod tests {
         }
     }
 
-    fn create_manager_core(path: &str) -> SnapManagerCore {
+    fn create_manager_core(path: &str, max_per_file_size: u64) -> SnapManagerCore {
         SnapManagerCore {
             base: path.to_owned(),
             registry: Default::default(),
             limiter: Limiter::new(f64::INFINITY),
             temp_sst_id: Arc::new(AtomicU64::new(0)),
             encryption_key_manager: None,
-            max_per_file_size: u64::MAX,
+            max_per_file_size,
+            enable_multi_snapshot_files: true,
         }
     }
 
@@ -2139,9 +2182,7 @@ pub mod tests {
 
         let key = SnapKey::new(region_id, 1, 1);
 
-        let mut mgr_core = create_manager_core(src_dir.path().to_str().unwrap());
-        mgr_core.max_per_file_size = max_file_size;
-
+        let mgr_core = create_manager_core(src_dir.path().to_str().unwrap(), max_file_size);
         let mut s1 = Snapshot::new_for_building(src_dir.path(), &key, &mgr_core).unwrap();
 
         // Ensure that this snapshot file doesn't exist before being built.
@@ -2257,9 +2298,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let key = SnapKey::new(region_id, 1, 1);
-        let mut mgr_core = create_manager_core(dir.path().to_str().unwrap());
-        mgr_core.max_per_file_size = max_file_size;
-
+        let mgr_core = create_manager_core(dir.path().to_str().unwrap(), max_file_size);
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
@@ -2425,7 +2464,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let key = SnapKey::new(region_id, 1, 1);
-        let mgr_core = create_manager_core(dir.path().to_str().unwrap());
+        let mgr_core = create_manager_core(dir.path().to_str().unwrap(), u64::MAX);
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
@@ -2514,8 +2553,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let key = SnapKey::new(region_id, 1, 1);
-        let mut mgr_core = create_manager_core(dir.path().to_str().unwrap());
-        mgr_core.max_per_file_size = 500;
+        let mgr_core = create_manager_core(dir.path().to_str().unwrap(), 500);
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
@@ -2608,7 +2646,7 @@ pub mod tests {
         let db: KvTestEngine = open_test_db(db_dir.path(), None, None).unwrap();
         let snapshot = db.snapshot();
         let key1 = SnapKey::new(1, 1, 1);
-        let mgr_core = create_manager_core(&path);
+        let mgr_core = create_manager_core(&path, u64::MAX);
         let mut s1 = Snapshot::new_for_building(&path, &key1, &mgr_core).unwrap();
         let mut region = gen_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::default();

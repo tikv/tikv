@@ -490,7 +490,7 @@ fn test_snapshot_gc_after_failed() {
     fail::cfg("get_snapshot_for_gc", "return(0)").unwrap();
     for idx in 1..3 {
         // idx 1 will fail in fail_point("get_snapshot_for_gc"), but idx 2 will succeed
-        for suffix in &[".meta", "_default_0000.sst"] {
+        for suffix in &[".meta", "_default.sst"] {
             let f = format!("gen_{}_{}_{}{}", 2, 6, idx, suffix);
             let mut snap_file_path = PathBuf::from(&snap_dir);
             snap_file_path.push(&f);
