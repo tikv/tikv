@@ -212,7 +212,7 @@ pub struct Range {
 }
 
 impl Debug for Range {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "{{ cf: {:?}, start_key: {:?}, end_key: {:?} }}",
@@ -935,7 +935,7 @@ where
     fn handle_raft_committed_entries<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
-        mut committed_entries_drainer: Drain<Entry>,
+        mut committed_entries_drainer: Drain<'_, Entry>,
     ) {
         if committed_entries_drainer.len() == 0 {
             return;
@@ -3293,7 +3293,7 @@ where
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
-    fn append_proposal(&mut self, props_drainer: Drain<Proposal<EK::Snapshot>>) {
+    fn append_proposal(&mut self, props_drainer: Drain<'_, Proposal<EK::Snapshot>>) {
         let (region_id, peer_id) = (self.delegate.region_id(), self.delegate.id());
         let propose_num = props_drainer.len();
         if self.delegate.stopped {

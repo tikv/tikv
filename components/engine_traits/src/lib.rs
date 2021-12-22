@@ -254,10 +254,6 @@
 #![feature(min_specialization)]
 #![feature(assert_matches)]
 
-#[cfg(test)]
-extern crate serde_derive;
-extern crate slog_global;
-extern crate tikv_alloc;
 #[macro_use(fail_point)]
 extern crate fail;
 
