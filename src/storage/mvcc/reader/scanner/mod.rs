@@ -132,7 +132,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
 
     /// Build `Scanner` from the current configuration.
     pub fn build(mut self) -> Result<Scanner<S>> {
-        let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
+        let lock_cursor = self.build_lock_cursor()?;
         let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
         if self.0.desc {
             Ok(Scanner::Backward(BackwardKvScanner::new(
@@ -156,7 +156,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
         after_ts: TimeStamp,
         output_delete: bool,
     ) -> Result<EntryScanner<S>> {
-        let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
+        let lock_cursor = self.build_lock_cursor()?;
         let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
         // Note: Create a default cf cursor will take key range, so we need to
         //       ensure the default cursor is created after lock and write.
@@ -175,7 +175,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
         from_ts: TimeStamp,
         extra_op: ExtraOp,
     ) -> Result<DeltaScanner<S>> {
-        let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
+        let lock_cursor = self.build_lock_cursor()?;
         let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
         // Note: Create a default cf cursor will take key range, so we need to
         //       ensure the default cursor is created after lock and write.
@@ -189,6 +189,13 @@ impl<S: Snapshot> ScannerBuilder<S> {
             Some(default_cursor),
             DeltaEntryPolicy::new(from_ts, extra_op),
         ))
+    }
+
+    fn build_lock_cursor(&mut self) -> Result<Option<Cursor<<S as Snapshot>::Iter>>> {
+        Ok(match self.0.isolation_level {
+            IsolationLevel::Si => Some(self.0.create_cf_cursor(CF_LOCK)?),
+            IsolationLevel::Rc => None,
+        })
     }
 }
 
