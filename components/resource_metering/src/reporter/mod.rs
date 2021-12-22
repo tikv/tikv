@@ -111,7 +111,8 @@ where
         }
         // Whether endpoint exists or not, records should be taken in order to reset.
         let records = std::mem::take(&mut self.records);
-        if let Err(err) = self.data_sink.try_send(records) {
+        let report_data = Arc::new(records.into());
+        if let Err(err) = self.data_sink.try_send(report_data) {
             warn!("failed to send data to datasink"; "error" => ?err);
         }
     }
@@ -159,6 +160,7 @@ mod tests {
     use std::sync::atomic::Ordering::SeqCst;
 
     use collections::HashMap;
+    use kvproto::resource_usage_agent::ResourceUsageRecord;
     use tikv_util::config::ReadableDuration;
     use tikv_util::worker::{LazyWorker, Runnable, RunnableWithTimer};
 
@@ -167,7 +169,7 @@ mod tests {
     struct MockClient;
 
     impl DataSink for MockClient {
-        fn try_send(&mut self, _records: Records) -> Result<()> {
+        fn try_send(&mut self, _records: Arc<Vec<ResourceUsageRecord>>) -> Result<()> {
             OP_COUNT.fetch_add(1, SeqCst);
             Ok(())
         }
