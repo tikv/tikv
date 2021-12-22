@@ -590,7 +590,7 @@ mod tests {
         // set 6M
         s.set_multi_part_size(6 * 1024 * 1024);
         assert_eq!(s.config.multi_part_size, 6 * 1024 * 1024);
-        // set a less than 5M value will fallback to 5M 
+        // set a less than 5M value will fallback to 5M
         s.set_multi_part_size(1024);
         assert_eq!(s.config.multi_part_size, 5 * 1024 * 1024);
 
