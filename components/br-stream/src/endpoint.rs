@@ -29,7 +29,6 @@ pub struct Endpoint<S: MetaStore + 'static> {
     #[allow(dead_code)]
     observer: BackupStreamObserver,
     pool: Runtime,
-    store_id: u64,
 }
 
 impl Endpoint<EtcdStore> {
@@ -72,7 +71,6 @@ impl Endpoint<EtcdStore> {
                 scheduler,
                 observer,
                 pool,
-                store_id,
             };
         }
 
@@ -92,7 +90,6 @@ impl Endpoint<EtcdStore> {
             scheduler,
             observer,
             pool,
-            store_id,
         }
     }
 }

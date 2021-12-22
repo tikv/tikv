@@ -241,8 +241,17 @@ impl RouterInner {
             // When this event make the size of temporary files exceeds the size limit, make a flush.
             // Note that we only flush if the size is less than the limit before the event,
             // or we may send multiplied flush requests.
+
+            debug!(
+                "static size";
+                "task" => ?task,
+                "prev_size" => prev_size,
+                "next_size" => inner_router.total_size(),
+                "size_limit" => self.temp_file_size_limit,
+            );
+
             if prev_size < self.temp_file_size_limit
-                && inner_router.total_size() > self.temp_file_size_limit
+                && inner_router.total_size() >= self.temp_file_size_limit
             {
                 // TODO: maybe delay the schedule when failure? (Why the scheduler doesn't support blocking send...)
                 self.scheduler
