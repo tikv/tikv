@@ -17,7 +17,7 @@ use futures::channel::mpsc::*;
 use futures::Future;
 use kvproto::brpb::*;
 use kvproto::encryptionpb::EncryptionMethod;
-use kvproto::kvrpcpb::{Context, IsolationLevel};
+use kvproto::kvrpcpb::{Context, IsolationLevel, ApiVersion};
 use kvproto::metapb::*;
 use online_config::OnlineConfig;
 
@@ -500,6 +500,7 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     config_manager: ConfigManager,
     concurrency_manager: ConcurrencyManager,
     softlimit: SoftLimitKeeper,
+    api_version: ApiVersion,
 
     pub(crate) engine: E,
     pub(crate) region_info: R,
@@ -682,6 +683,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         db: Arc<DB>,
         config: BackupConfig,
         concurrency_manager: ConcurrencyManager,
+        api_version: ApiVersion,
     ) -> Endpoint<E, R> {
         let size = config.num_threads;
         let config_manager = ConfigManager(Arc::new(RwLock::new(config)));
@@ -705,6 +707,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             softlimit,
             config_manager,
             concurrency_manager,
+            api_version,
         }
     }
 
@@ -745,6 +748,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let batch_size = self.config_manager.0.read().unwrap().batch_size;
         let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
         let limit = self.softlimit.limit();
+        let api_version = self.api_version;
 
         self.pool.borrow_mut().spawn(async move {
             let _with_io_type = WithIOType::new(IOType::Export);
@@ -878,6 +882,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     }
                     response.set_start_key(start_key);
                     response.set_end_key(end_key);
+                    response.set_api_version(api_version);
 
                     if let Err(e) = tx.unbounded_send(response) {
                         error_unknown!(?e; "backup failed to send response");
@@ -1136,6 +1141,7 @@ pub mod tests {
                     ..Default::default()
                 },
                 concurrency_manager,
+                ApiVersion::V1,
             ),
         )
     }
