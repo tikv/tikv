@@ -45,6 +45,7 @@ impl APIVersion for APIV1TTL {
         buf.encode_u64(value.expire_ts.unwrap_or(0)).unwrap();
         buf
     }
+    
     fn encode_raw_value_owned(mut value: RawValue<Vec<u8>>) -> Vec<u8> {
         value.user_value.reserve(number::U64_SIZE);
         value
