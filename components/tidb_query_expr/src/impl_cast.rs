@@ -351,7 +351,7 @@ fn cast_string_as_int(
                 match parse_res {
                     Ok(x) => {
                         if !is_str_neg {
-                            if !is_unsigned && x as u64 > std::i64::MAX as u64 {
+                            if !is_unsigned && x as u64 > i64::MAX as u64 {
                                 ctx.warnings
                                     .append_warning(Error::cast_as_signed_overflow())
                             }
@@ -371,9 +371,9 @@ fn cast_string_as_int(
                             let warn_err = Error::truncated_wrong_val("INTEGER", val);
                             ctx.handle_overflow_err(warn_err).map_err(|_| err)?;
                             let val = if is_str_neg {
-                                std::i64::MIN
+                                i64::MIN
                             } else {
-                                std::u64::MAX as i64
+                                u64::MAX as i64
                             };
                             Ok(Some(val))
                         }
@@ -3254,7 +3254,7 @@ mod tests {
                 );
             let output: Option<Real> = result.unwrap().into();
             assert!(
-                (output.unwrap().into_inner() - expected).abs() < std::f64::EPSILON,
+                (output.unwrap().into_inner() - expected).abs() < f64::EPSILON,
                 "input={:?}",
                 input
             );
@@ -3437,7 +3437,7 @@ mod tests {
                 );
             let output: Option<Real> = result.unwrap().into();
             assert!(
-                (output.unwrap().into_inner() - expected).abs() < std::f64::EPSILON,
+                (output.unwrap().into_inner() - expected).abs() < f64::EPSILON,
                 "input:{:?}, expected:{:?}, flen:{:?}, decimal:{:?}, truncated:{:?}, overflow:{:?}, in_union:{:?}",
                 input,
                 expected,
@@ -3563,7 +3563,7 @@ mod tests {
                 );
             let output: Option<Real> = result.unwrap().into();
             assert!(
-                (output.unwrap().into_inner() - expected).abs() < std::f64::EPSILON,
+                (output.unwrap().into_inner() - expected).abs() < f64::EPSILON,
                 "input={:?}",
                 input
             );
@@ -3610,7 +3610,7 @@ mod tests {
             if let Some(exp) = expected {
                 assert!(output.is_ok(), "input: {:?}", input);
                 assert!(
-                    (output.unwrap().unwrap().into_inner() - exp).abs() < std::f64::EPSILON,
+                    (output.unwrap().unwrap().into_inner() - exp).abs() < f64::EPSILON,
                     "input={:?}",
                     input
                 );

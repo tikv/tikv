@@ -21,6 +21,7 @@ use std::error;
 use std::io;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use kvproto::kvrpcpb::Assertion;
 use thiserror::Error;
 
 use tikv_util::metrics::CRITICAL_ERROR;
@@ -146,6 +147,18 @@ pub enum ErrorInner {
         max_commit_ts: TimeStamp,
     },
 
+    #[error(
+        "assertion on data failed, start_ts:{}, key:{}, assertion:{:?}, existing_start_ts:{}, existing_commit_ts:{}",
+        .start_ts, log_wrappers::Value::key(.key), .assertion, .existing_start_ts, .existing_commit_ts
+    )]
+    AssertionFailed {
+        start_ts: TimeStamp,
+        key: Vec<u8>,
+        assertion: Assertion,
+        existing_start_ts: TimeStamp,
+        existing_commit_ts: TimeStamp,
+    },
+
     #[error("{0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
 }
@@ -251,6 +264,19 @@ impl ErrorInner {
                 min_commit_ts: *min_commit_ts,
                 max_commit_ts: *max_commit_ts,
             }),
+            ErrorInner::AssertionFailed {
+                start_ts,
+                key,
+                assertion,
+                existing_start_ts,
+                existing_commit_ts,
+            } => Some(ErrorInner::AssertionFailed {
+                start_ts: *start_ts,
+                key: key.clone(),
+                assertion: *assertion,
+                existing_start_ts: *existing_start_ts,
+                existing_commit_ts: *existing_commit_ts,
+            }),
             ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }
     }
@@ -336,6 +362,7 @@ impl ErrorCodeExt for Error {
                 error_code::storage::PESSIMISTIC_LOCK_NOT_FOUND
             }
             ErrorInner::CommitTsTooLarge { .. } => error_code::storage::COMMIT_TS_TOO_LARGE,
+            ErrorInner::AssertionFailed { .. } => error_code::storage::ASSERTION_FAILED,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }

@@ -2,7 +2,6 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::f64::INFINITY;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::{mpsc, Arc, Mutex, RwLock};
@@ -105,7 +104,7 @@ impl Task {
         let limiter = Limiter::new(if speed_limit > 0 {
             speed_limit as f64
         } else {
-            INFINITY
+            f64::INFINITY
         });
         let cf = name_to_cf(req.get_cf()).ok_or_else(|| crate::Error::InvalidCf {
             cf: req.get_cf().to_owned(),
@@ -627,7 +626,7 @@ impl<R: RegionInfoProvider> Progress<R> {
 
 struct ControlThreadPool {
     size: usize,
-    workers: Option<Arc<Runtime>>,
+    workers: Option<Runtime>,
 }
 
 impl ControlThreadPool {
@@ -642,15 +641,11 @@ impl ControlThreadPool {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let workers = self.workers.as_ref().unwrap();
-        let w = workers.clone();
-        workers.spawn(async move {
-            func.await;
-            // Debug service requires jobs in the old thread pool continue to run even after
-            // the pool is recreated. So the pool needs to be ref counted and dropped after
-            // task has finished.
-            drop(w);
-        });
+        let workers = self
+            .workers
+            .as_ref()
+            .expect("ControlThreadPool: please call adjust_with() before spawn()");
+        workers.spawn(func);
     }
 
     /// Lazily adjust the thread pool's size
@@ -663,10 +658,11 @@ impl ControlThreadPool {
         }
         // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
         //   adapt it.
-        let workers = Arc::new(
-            create_tokio_runtime(new_size, "bkwkr")
-                .expect("failed to create tokio runtime for backup worker."),
-        );
+        if let Some(wkrs) = self.workers.take() {
+            wkrs.shutdown_background();
+        }
+        let workers = create_tokio_runtime(new_size, "bkwkr")
+            .expect("failed to create tokio runtime for backup worker.");
         self.workers = Some(workers);
         self.size = new_size;
         BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64);
@@ -1285,7 +1281,7 @@ pub mod tests {
                         start_ts: 1.into(),
                         end_ts: 1.into(),
                         backend,
-                        limiter: Limiter::new(INFINITY),
+                        limiter: Limiter::new(f64::INFINITY),
                         cancel: Arc::default(),
                         is_raw_kv: false,
                         cf: engine_traits::CF_DEFAULT,
@@ -1314,7 +1310,7 @@ pub mod tests {
         // the case.2 is the expected results.
         type Case<'a> = (&'a [u8], &'a [u8], Vec<(&'a [u8], &'a [u8])>);
 
-        let case: Vec<Case> = vec![
+        let case: Vec<Case<'_>> = vec![
             (b"", b"1", vec![(b"", b"1")]),
             (b"", b"2", vec![(b"", b"1"), (b"1", b"2")]),
             (b"1", b"2", vec![(b"1", b"2")]),
@@ -1597,7 +1593,7 @@ pub mod tests {
         req.set_end_version(1);
         req.set_storage_backend(make_noop_backend());
 
-        let (tx, _) = unbounded();
+        let (tx, rx) = unbounded();
 
         // expand thread pool is needed
         endpoint.get_config_manager().set_num_threads(15);
@@ -1615,5 +1611,18 @@ pub mod tests {
         let (task, _) = Task::new(req, tx).unwrap();
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 3);
+
+        // make sure all tasks can finish properly.
+        let responses = block_on(rx.collect::<Vec<_>>());
+        assert_eq!(responses.len(), 3);
+
+        // for testing whether dropping the pool before all tasks finished causes panic.
+        // but the panic must be checked manually... (It may panic at tokio runtime threads...)
+        let mut pool = ControlThreadPool::new();
+        pool.adjust_with(1);
+        pool.spawn(async { tokio::time::sleep(Duration::from_millis(100)).await });
+        pool.adjust_with(2);
+        drop(pool);
+        std::thread::sleep(Duration::from_millis(150));
     }
 }
