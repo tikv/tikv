@@ -1,7 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::fsm::{Fsm, FsmScheduler, FsmState};
 use crate::mailbox::{BasicMailbox, Mailbox};
+use crate::metrics::CHANNEL_FULL_COUNTER_VEC;
 use collections::HashMap;
 use crossbeam::channel::{SendError, TrySendError};
 use std::cell::Cell;
@@ -50,7 +52,7 @@ pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
     // for now.
     pub(crate) normal_scheduler: Ns,
-    control_scheduler: Cs,
+    pub(crate) control_scheduler: Cs,
 
     // Count of Mailboxes that is not destroyed.
     // Added when a Mailbox created, and subtracted it when a Mailbox destroyed.
@@ -211,7 +213,9 @@ where
             match mailbox.try_send(m, &self.normal_scheduler) {
                 Ok(()) => Some(Ok(())),
                 r @ Err(TrySendError::Full(_)) => {
-                    // TODO: report channel full
+                    CHANNEL_FULL_COUNTER_VEC
+                        .with_label_values(&["normal"])
+                        .inc();
                     Some(r)
                 }
                 Err(TrySendError::Disconnected(m)) => {
@@ -265,7 +269,9 @@ where
         match self.control_box.try_send(msg, &self.control_scheduler) {
             Ok(()) => Ok(()),
             r @ Err(TrySendError::Full(_)) => {
-                // TODO: record metrics.
+                CHANNEL_FULL_COUNTER_VEC
+                    .with_label_values(&["control"])
+                    .inc();
                 r
             }
             r => r,

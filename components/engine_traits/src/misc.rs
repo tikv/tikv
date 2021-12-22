@@ -7,6 +7,7 @@
 
 use crate::cf_names::CFNamesExt;
 use crate::errors::Result;
+use crate::flow_control_factors::FlowControlFactorsExt;
 use crate::range::Range;
 
 #[derive(Clone, Debug)]
@@ -25,22 +26,27 @@ pub enum DeleteStrategy {
     DeleteByWriter { sst_path: String },
 }
 
-pub trait MiscExt: CFNamesExt {
+pub trait MiscExt: CFNamesExt + FlowControlFactorsExt {
     fn flush(&self, sync: bool) -> Result<()>;
 
     fn flush_cf(&self, cf: &str, sync: bool) -> Result<()>;
 
-    fn delete_all_in_range(&self, strategy: DeleteStrategy, ranges: &[Range]) -> Result<()> {
+    fn delete_all_in_range(&self, strategy: DeleteStrategy, ranges: &[Range<'_>]) -> Result<()> {
         for cf in self.cf_names() {
             self.delete_ranges_cf(cf, strategy.clone(), ranges)?;
         }
         Ok(())
     }
 
-    fn delete_ranges_cf(&self, cf: &str, strategy: DeleteStrategy, ranges: &[Range]) -> Result<()>;
+    fn delete_ranges_cf(
+        &self,
+        cf: &str,
+        strategy: DeleteStrategy,
+        ranges: &[Range<'_>],
+    ) -> Result<()>;
 
     /// Return the approximate number of records and size in the range of memtables of the cf.
-    fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)>;
+    fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range<'_>) -> Result<(u64, u64)>;
 
     fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool>;
 
@@ -87,12 +93,6 @@ pub trait MiscExt: CFNamesExt {
         start: &[u8],
         end: &[u8],
     ) -> Result<Option<(u64, u64)>>;
-
-    fn get_cf_num_files_at_level(&self, cf: &str, level: usize) -> Result<Option<u64>>;
-
-    fn get_cf_num_immutable_mem_table(&self, cf: &str) -> Result<Option<u64>>;
-
-    fn get_cf_pending_compaction_bytes(&self, cf: &str) -> Result<Option<u64>>;
 
     fn is_stalled_or_stopped(&self) -> bool;
 }

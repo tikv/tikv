@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -12,9 +12,12 @@ use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::kv::FlowStatsReporter;
 use crate::storage::txn::flow_controller::FlowController;
+use crate::storage::DynamicConfigs as StorageDynamicConfigs;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{Engines, KvEngine, RaftEngine};
+use engine_traits::key_prefix::TIDB_RANGES_COMPLEMENT;
+use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
+use kvproto::kvrpcpb::ApiVersion;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
@@ -25,7 +28,8 @@ use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
-use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
+use raftstore::store::{GlobalReplicationState, PdTask, RefreshConfigTask, SplitCheckTask};
+use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
@@ -40,9 +44,10 @@ pub fn create_raft_storage<S, EK, R: FlowStatsReporter>(
     read_pool: ReadPoolHandle,
     lock_mgr: LockManager,
     concurrency_manager: ConcurrencyManager,
-    pipelined_pessimistic_lock: Arc<AtomicBool>,
+    dynamic_configs: StorageDynamicConfigs,
     flow_controller: Arc<FlowController>,
     reporter: R,
+    resource_tag_factory: ResourceTagFactory,
 ) -> Result<Storage<RaftKv<EK, S>, LockManager>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
@@ -54,9 +59,10 @@ where
         read_pool,
         lock_mgr,
         concurrency_manager,
-        pipelined_pessimistic_lock,
+        dynamic_configs,
         flow_controller,
         reporter,
+        resource_tag_factory,
     )?;
     Ok(store)
 }
@@ -67,6 +73,7 @@ pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
+    api_version: ApiVersion,
     system: RaftBatchSystem<EK, ER>,
     has_started: bool,
 
@@ -86,6 +93,7 @@ where
         system: RaftBatchSystem<EK, ER>,
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
+        api_version: ApiVersion,
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
         bg_worker: Worker,
@@ -130,6 +138,7 @@ where
             cluster_id: cfg.cluster_id,
             store,
             store_cfg,
+            api_version,
             pd_client,
             system,
             has_started: false,
@@ -148,6 +157,7 @@ where
                 "injected error: node_after_bootstrap_store"
             )));
         }
+        self.check_api_version(&engines)?;
         self.store.set_id(store_id);
         Ok(())
     }
@@ -161,13 +171,14 @@ where
         engines: Engines<EK, ER>,
         trans: T,
         snap_mgr: SnapManager,
-        pd_worker: LazyWorker<PdTask<EK>>,
+        pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SSTImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
+        collector_reg_handle: CollectorRegHandle,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -203,6 +214,7 @@ where
             split_check_scheduler,
             auto_split_controller,
             concurrency_manager,
+            collector_reg_handle,
         )?;
 
         Ok(())
@@ -211,6 +223,11 @@ where
     /// Gets the store id.
     pub fn id(&self) -> u64 {
         self.store.get_id()
+    }
+
+    /// Gets the Scheduler of RaftstoreConfigTask, it must be called after start.
+    pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
+        self.system.refresh_config_scheduler()
     }
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
@@ -245,7 +262,62 @@ where
         if store_id == INVALID_ID {
             return Err(box_err!("invalid store ident {:?}", ident));
         }
+
         Ok(store_id)
+    }
+
+    // During the api version switch only TiDB data are allowed to exist otherwise
+    // returns error.
+    fn check_api_version(&self, engines: &Engines<EK, ER>) -> Result<()> {
+        let ident = engines
+            .kv
+            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?
+            .expect("Store should have bootstrapped");
+        // API version is not written into `StoreIdent` in legacy TiKV, thus it will be V1 in
+        // `StoreIdent` regardless of `storage.enable_ttl`. To allow upgrading from legacy V1
+        // TiKV, the config switch between V1 and V1ttl are not checked here.
+        // It's safe to do so because `storage.enable_ttl` is impossible to change thanks to the
+        // config check.
+        let should_check = match (ident.api_version, self.api_version) {
+            (ApiVersion::V1, ApiVersion::V1ttl) | (ApiVersion::V1ttl, ApiVersion::V1) => false,
+            (left, right) => left != right,
+        };
+        if should_check {
+            // Check if there are only TiDB data in the engine
+            let snapshot = engines.kv.snapshot();
+            for cf in DATA_CFS {
+                for (start, end) in TIDB_RANGES_COMPLEMENT {
+                    let mut unexpected_data_key = None;
+                    snapshot.scan_cf(
+                        cf,
+                        &keys::data_key(start),
+                        &keys::data_key(end),
+                        false,
+                        |key, _| {
+                            unexpected_data_key = Some(key[DATA_KEY_PREFIX_LEN..].to_vec());
+                            Ok(false)
+                        },
+                    )?;
+                    if let Some(unexpected_data_key) = unexpected_data_key {
+                        return Err(box_err!(
+                            "unable to switch `storage.api_version` from {:?} to {:?} \
+                            because found data key that is not written by TiDB: {:?}",
+                            ident.api_version,
+                            self.api_version,
+                            log_wrappers::hex_encode_upper(&unexpected_data_key)
+                        ));
+                    }
+                }
+            }
+            // Switch api version
+            let ident = StoreIdent {
+                api_version: self.api_version,
+                ..ident
+            };
+            engines.kv.put_msg(keys::STORE_IDENT_KEY, &ident)?;
+            engines.sync_kv()?;
+        }
+        Ok(())
     }
 
     fn alloc_id(&self) -> Result<u64> {
@@ -377,13 +449,14 @@ where
         engines: Engines<EK, ER>,
         trans: T,
         snap_mgr: SnapManager,
-        pd_worker: LazyWorker<PdTask<EK>>,
+        pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SSTImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
+        collector_reg_handle: CollectorRegHandle,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -414,6 +487,7 @@ where
             auto_split_controller,
             self.state.clone(),
             concurrency_manager,
+            collector_reg_handle,
         )?;
         Ok(())
     }
