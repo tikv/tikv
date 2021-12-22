@@ -324,11 +324,6 @@ impl ImportDir {
                             return Ok(false);
                         }
                     }
-                    info!(
-                        "import version check pass";
-                        "sst" => ?meta.api_version,
-                        "current" => ?api_version,
-                    );
                 }
             }
         }
