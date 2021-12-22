@@ -731,6 +731,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let cid = task.cid;
         let priority = task.cmd.priority();
         let ts = task.cmd.ts();
+        let ctx = task.cmd.ctx().clone();
         let scheduler = self.clone();
         let pessimistic_lock_mode = self.pessimistic_lock_mode();
         let pipelined =
@@ -768,7 +769,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             // error to the callback, and releases the latches.
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
-                debug!("write command failed at prewrite"; "cid" => cid, "err" => ?err);
+                error!("write command failed at prewrite"; "cid" => cid, "err" => ?err, "ctx" => ?ctx);
                 scheduler.finish_with_err(cid, err);
                 return;
             }

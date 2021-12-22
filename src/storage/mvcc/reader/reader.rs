@@ -192,9 +192,11 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 .read()
                 .map
                 .get(key)
-                .map(|(lock, deleted)| {
-                    // Protected by latch, deleted must be false.
-                    debug_assert!(!deleted);
+                .map(|(lock, _)| {
+                    // For write commands that are executed in serial, it should be impossible
+                    // to read a deleted lock.
+                    // For read commands in the scheduler, it should read the lock marked deleted
+                    // because the lock is not actually deleted from the underlying storage.
                     lock.to_lock()
                 })
         })
