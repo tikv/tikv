@@ -638,7 +638,7 @@ pub mod tests {
             start_ts: TimeStamp,
             primary: &[u8],
             pessimistic: bool,
-        ) -> TransactionProperties {
+        ) -> TransactionProperties<'_> {
             let kind = if pessimistic {
                 TransactionKind::Pessimistic(TimeStamp::default())
             } else {

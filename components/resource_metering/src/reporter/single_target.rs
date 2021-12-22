@@ -2,7 +2,6 @@
 
 use crate::error::Result;
 use crate::metrics::{IGNORED_DATA_COUNTER, REPORT_DATA_COUNTER, REPORT_DURATION_HISTOGRAM};
-use crate::model::Records;
 use crate::reporter::data_sink::DataSink;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,14 +42,12 @@ impl SingleTargetDataSink {
 }
 
 impl DataSink for SingleTargetDataSink {
-    fn try_send(&mut self, records: Records) -> Result<()> {
-        let record_cnt = records.records.len() + if records.others.is_empty() { 0 } else { 1 };
-
+    fn try_send(&mut self, records: Arc<Vec<ResourceUsageRecord>>) -> Result<()> {
         let new_address = self.address.load_full();
         if new_address.is_empty() {
             IGNORED_DATA_COUNTER
                 .with_label_values(&["report"])
-                .inc_by(record_cnt as _);
+                .inc_by(records.len() as _);
             return Err("receiver address is empty".into());
         }
 
@@ -58,7 +55,7 @@ impl DataSink for SingleTargetDataSink {
         if handle.is_none() {
             IGNORED_DATA_COUNTER
                 .with_label_values(&["report"])
-                .inc_by(record_cnt as _);
+                .inc_by(records.len() as _);
             return Err("the last report has not been completed".into());
         }
         if new_address != self.current_address || self.client.is_none() {
@@ -71,7 +68,7 @@ impl DataSink for SingleTargetDataSink {
         if let Err(err) = &call {
             IGNORED_DATA_COUNTER
                 .with_label_values(&["report"])
-                .inc_by(record_cnt as _);
+                .inc_by(records.len() as _);
             return Err(format!("{}", err).into());
         }
         let (mut tx, rx) = call.unwrap();
@@ -79,30 +76,11 @@ impl DataSink for SingleTargetDataSink {
             let _hd = handle;
 
             let _t = REPORT_DURATION_HISTOGRAM.start_timer();
-            let others = records.others;
             REPORT_DATA_COUNTER
                 .with_label_values(&["to_send"])
-                .inc_by(record_cnt as _);
-            for (tag, record) in records.records {
-                let mut req = ResourceUsageRecord::default();
-                req.set_resource_group_tag(tag);
-                req.set_record_list_timestamp_sec(record.timestamps);
-                req.set_record_list_cpu_time_ms(record.cpu_time_list);
-                req.set_record_list_read_keys(record.read_keys_list);
-                req.set_record_list_write_keys(record.write_keys_list);
-                if let Err(err) = tx.send((req, WriteFlags::default())).await {
-                    warn!("failed to send records"; "error" => ?err);
-                    return;
-                }
-                REPORT_DATA_COUNTER.with_label_values(&["sent"]).inc();
-            }
-            if !others.is_empty() {
-                let mut req = ResourceUsageRecord::default();
-                req.set_record_list_timestamp_sec(others.keys().copied().collect());
-                req.set_record_list_cpu_time_ms(others.values().map(|r| r.cpu_time).collect());
-                req.set_record_list_read_keys(others.values().map(|r| r.read_keys).collect());
-                req.set_record_list_write_keys(others.values().map(|r| r.write_keys).collect());
-                if let Err(err) = tx.send((req, WriteFlags::default())).await {
+                .inc_by(records.len() as _);
+            for record in records.iter() {
+                if let Err(err) = tx.send((record.clone(), WriteFlags::default())).await {
                     warn!("failed to send records"; "error" => ?err);
                     return;
                 }

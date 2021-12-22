@@ -218,7 +218,7 @@ impl<L: LockManager> SchedulerInner<L> {
     }
 
     #[inline]
-    fn get_task_slot(&self, cid: u64) -> MutexGuard<HashMap<u64, TaskContext>> {
+    fn get_task_slot(&self, cid: u64) -> MutexGuard<'_, HashMap<u64, TaskContext>> {
         self.task_slots[id_index(cid)].lock()
     }
 

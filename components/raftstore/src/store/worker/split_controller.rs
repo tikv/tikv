@@ -49,7 +49,7 @@ impl Sample {
 }
 
 // It will return prefix sum of iter. `read` is a function to be used to read data from iter.
-fn prefix_sum<F, T>(iter: Iter<T>, read: F) -> Vec<usize>
+fn prefix_sum<F, T>(iter: Iter<'_, T>, read: F) -> Vec<usize>
 where
     F: Fn(&T) -> usize,
 {

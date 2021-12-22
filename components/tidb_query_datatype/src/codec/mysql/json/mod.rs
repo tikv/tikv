@@ -235,7 +235,7 @@ pub struct Json {
 use std::fmt::{Display, Formatter};
 
 impl Display for Json {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let s = serde_json::to_string(&self.as_ref()).unwrap();
         write!(f, "{}", s)
     }
@@ -316,7 +316,7 @@ impl Json {
     }
 
     /// Creates a `object` JSON from key-value pairs
-    pub fn from_kv_pairs(entries: Vec<(&[u8], JsonRef)>) -> Result<Self> {
+    pub fn from_kv_pairs(entries: Vec<(&[u8], JsonRef<'_>)>) -> Result<Self> {
         let mut value = vec![];
         value.write_json_obj_from_keys_values(entries)?;
         Ok(Self::new(JsonType::Object, value))

@@ -60,7 +60,7 @@ where
     keys
 }
 
-fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
     let cm = ConcurrencyManager::new(1.into());
@@ -100,7 +100,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
     )
 }
 
-fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
     let cm = ConcurrencyManager::new(1.into());
@@ -120,7 +120,10 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
     );
 }
 
-fn txn_rollback_prewrote<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn txn_rollback_prewrote<E: Engine, F: EngineFactory<E>>(
+    b: &mut Bencher<'_>,
+    config: &BenchConfig<F>,
+) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
     let cm = ConcurrencyManager::new(1.into());
@@ -140,7 +143,10 @@ fn txn_rollback_prewrote<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
     )
 }
 
-fn txn_rollback_conflict<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn txn_rollback_conflict<E: Engine, F: EngineFactory<E>>(
+    b: &mut Bencher<'_>,
+    config: &BenchConfig<F>,
+) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
     let cm = ConcurrencyManager::new(1.into());
@@ -161,7 +167,7 @@ fn txn_rollback_conflict<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
 }
 
 fn txn_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
-    b: &mut Bencher,
+    b: &mut Bencher<'_>,
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();

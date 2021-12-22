@@ -32,6 +32,7 @@ impl BatchTableScanExecutor<Box<dyn Storage<Statistics = ()>>> {
 }
 
 impl<S: Storage> BatchTableScanExecutor<S> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         storage: S,
         config: Arc<EvalConfig>,

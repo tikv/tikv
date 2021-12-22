@@ -329,7 +329,7 @@ impl BatchExecutor for BatchFixtureExecutor {
 
 /// Benches the performance of the batch fixture executor itself. When using it as the source
 /// executor in other benchmarks, we need to take out these costs.
-fn bench_util_batch_fixture_executor_next_1024<M>(b: &mut criterion::Bencher<M>)
+fn bench_util_batch_fixture_executor_next_1024<M>(b: &mut criterion::Bencher<'_, M>)
 where
     M: Measurement,
 {
