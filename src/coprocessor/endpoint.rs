@@ -13,9 +13,9 @@ use tokio::sync::Semaphore;
 
 use kvproto::kvrpcpb::{self, IsolationLevel};
 use kvproto::{coprocessor as coppb, errorpb};
-#[cfg(feature = "protobuf-codec")]
 use protobuf::CodedInputStream;
 use protobuf::Message;
+use tikv_kv::SnapshotExt;
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
 
 use crate::server::Config;
@@ -32,8 +32,8 @@ use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
-use resource_metering::cpu::{FutureExt, StreamExt};
-use resource_metering::ResourceMeteringTag;
+use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
+use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::time::Instant;
 use txn_types::Lock;
 
@@ -55,9 +55,9 @@ pub struct Endpoint<E: Engine> {
     // Perf stats level
     perf_level: PerfLevel,
 
+    resource_tag_factory: ResourceTagFactory,
+
     /// The recursion limit when parsing Coprocessor Protobuf requests.
-    ///
-    /// Note that this limit is ignored if we are using Prost.
     recursion_limit: u32,
 
     batch_row_limit: usize,
@@ -80,6 +80,7 @@ impl<E: Engine> Endpoint<E> {
         read_pool: ReadPoolHandle,
         concurrency_manager: ConcurrencyManager,
         perf_level: PerfLevel,
+        resource_tag_factory: ResourceTagFactory,
     ) -> Self {
         // FIXME: When yatp is used, we need to limit coprocessor requests in progress to avoid
         // using too much memory. However, if there are a number of large requests, small requests
@@ -95,6 +96,7 @@ impl<E: Engine> Endpoint<E> {
             semaphore,
             concurrency_manager,
             perf_level,
+            resource_tag_factory,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
@@ -148,45 +150,6 @@ impl<E: Engine> Endpoint<E> {
         peer: Option<String>,
         is_streaming: bool,
     ) -> Result<(RequestHandlerBuilder<E::Snap>, ReqContext)> {
-        // This `Parser` is here because rust-proto supports customising its
-        // recursion limit and Prost does not. Therefore we end up doing things
-        // a bit differently for the two codecs.
-        #[cfg(feature = "protobuf-codec")]
-        struct Parser<'a> {
-            input: CodedInputStream<'a>,
-        }
-
-        #[cfg(feature = "protobuf-codec")]
-        impl<'a> Parser<'a> {
-            fn new(data: &'a [u8], recursion_limit: u32) -> Parser<'a> {
-                let mut input = CodedInputStream::from_bytes(data);
-                input.set_recursion_limit(recursion_limit);
-                Parser { input }
-            }
-
-            fn merge_to(&mut self, target: &mut impl Message) -> Result<()> {
-                box_try!(target.merge_from(&mut self.input));
-                Ok(())
-            }
-        }
-
-        #[cfg(feature = "prost-codec")]
-        struct Parser<'a> {
-            input: &'a [u8],
-        }
-
-        #[cfg(feature = "prost-codec")]
-        impl<'a> Parser<'a> {
-            fn new(input: &'a [u8], _: u32) -> Parser<'a> {
-                Parser { input }
-            }
-
-            fn merge_to(&self, target: &mut impl Message) -> Result<()> {
-                box_try!(target.merge_from_bytes(&self.input));
-                Ok(())
-            }
-        }
-
         fail_point!("coprocessor_parse_request", |_| Err(box_err!(
             "unsupported tp (failpoint)"
         )));
@@ -203,16 +166,15 @@ impl<E: Engine> Endpoint<E> {
             None
         };
 
-        // Prost and rust-proto require different mutability.
-        #[allow(unused_mut)]
-        let mut parser = Parser::new(&data, self.recursion_limit);
+        let mut input = CodedInputStream::from_bytes(&data);
+        input.set_recursion_limit(self.recursion_limit);
         let req_ctx: ReqContext;
         let builder: RequestHandlerBuilder<E::Snap>;
 
         match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut dag = DagRequest::default();
-                parser.merge_to(&mut dag)?;
+                box_try!(dag.merge_from(&mut input));
                 let mut table_scan = false;
                 let mut is_desc_scan = false;
                 if let Some(scan) = dag.get_executors().iter().next() {
@@ -248,15 +210,20 @@ impl<E: Engine> Endpoint<E> {
 
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 builder = Box::new(move |snap, req_ctx| {
-                    let data_version = snap.get_data_version();
+                    let data_version = snap.ext().get_data_version();
                     let store = SnapshotStore::new(
                         snap,
                         start_ts.into(),
                         req_ctx.context.get_isolation_level(),
                         !req_ctx.context.get_not_fill_cache(),
                         req_ctx.bypass_locks.clone(),
+                        req_ctx.access_locks.clone(),
                         req.get_is_cache_enabled(),
                     );
+                    let paging_size = match req.get_paging_size() {
+                        0 => None,
+                        i => Some(i),
+                    };
                     dag::DagHandlerBuilder::new(
                         dag,
                         req_ctx.ranges.clone(),
@@ -265,6 +232,7 @@ impl<E: Engine> Endpoint<E> {
                         batch_row_limit,
                         is_streaming,
                         req.get_is_cache_enabled(),
+                        paging_size,
                     )
                     .data_version(data_version)
                     .build()
@@ -272,7 +240,7 @@ impl<E: Engine> Endpoint<E> {
             }
             REQ_TYPE_ANALYZE => {
                 let mut analyze = AnalyzeReq::default();
-                parser.merge_to(&mut analyze)?;
+                box_try!(analyze.merge_from(&mut input));
                 if start_ts == 0 {
                     start_ts = analyze.get_start_ts_fallback();
                 }
@@ -310,7 +278,7 @@ impl<E: Engine> Endpoint<E> {
             }
             REQ_TYPE_CHECKSUM => {
                 let mut checksum = ChecksumRequest::default();
-                parser.merge_to(&mut checksum)?;
+                box_try!(checksum.merge_from(&mut input));
                 let table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
                 if start_ts == 0 {
                     start_ts = checksum.get_start_ts_fallback();
@@ -394,7 +362,7 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> Result<coppb::Response> {
+    ) -> Result<MemoryTraceGuard<coppb::Response>> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         tracker.on_scheduled();
@@ -410,7 +378,7 @@ impl<E: Engine> Endpoint<E> {
         tracker.req_ctx.deadline.check()?;
 
         let mut handler = if tracker.req_ctx.cache_match_version.is_some()
-            && tracker.req_ctx.cache_match_version == snapshot.get_data_version()
+            && tracker.req_ctx.cache_match_version == snapshot.ext().get_data_version()
         {
             // Build a cached request handler instead if cache version is matching.
             CachedRequestHandler::builder()(snapshot, &tracker.req_ctx)?
@@ -447,7 +415,7 @@ impl<E: Engine> Endpoint<E> {
                 COPR_RESP_SIZE.inc_by(resp.data.len() as u64);
                 resp
             }
-            Err(e) => make_error_response(e),
+            Err(e) => make_error_response(e).into(),
         };
         resp.set_exec_details(exec_details);
         resp.set_exec_details_v2(exec_details_v2);
@@ -462,10 +430,10 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl Future<Output = Result<coppb::Response>> {
+    ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&req_ctx.context);
+        let resource_tag = self.resource_tag_factory.new_tag(&req_ctx.context);
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
@@ -489,15 +457,17 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Future<Output = coppb::Response> {
+    ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
 
         async move {
             match result_of_future {
-                Err(e) => make_error_response(e),
-                Ok(handle_fut) => handle_fut.await.unwrap_or_else(make_error_response),
+                Err(e) => make_error_response(e).into(),
+                Ok(handle_fut) => handle_fut
+                    .await
+                    .unwrap_or_else(|e| make_error_response(e).into()),
             }
         }
     }
@@ -590,7 +560,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
-        let resource_tag = ResourceMeteringTag::from_rpc_context(&req_ctx.context);
+        let resource_tag = self.resource_tag_factory.new_tag(&req_ctx.context);
         let task_id = req_ctx.build_task_id();
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
@@ -733,19 +703,19 @@ mod tests {
 
     #[async_trait]
     impl RequestHandler for UnaryFixture {
-        async fn handle_request(&mut self) -> Result<coppb::Response> {
+        async fn handle_request(&mut self) -> Result<MemoryTraceGuard<coppb::Response>> {
             if self.yieldable {
-                // We split the task into small executions of 1 second.
-                for _ in 0..self.handle_duration_millis / 1_000 {
-                    thread::sleep(Duration::from_millis(1_000));
+                // We split the task into small executions of 100 milliseconds.
+                for _ in 0..self.handle_duration_millis / 100 {
+                    thread::sleep(Duration::from_millis(100));
                     yatp::task::future::reschedule().await;
                 }
-                thread::sleep(Duration::from_millis(self.handle_duration_millis % 1_000));
+                thread::sleep(Duration::from_millis(self.handle_duration_millis % 100));
             } else {
                 thread::sleep(Duration::from_millis(self.handle_duration_millis));
             }
 
-            self.result.take().unwrap()
+            self.result.take().unwrap().map(|x| x.into())
         }
     }
 
@@ -848,6 +818,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         // a normal request
@@ -888,13 +859,12 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
         copr.recursion_limit = 100;
 
         let req = {
             let mut expr = Expr::default();
-            // The recursion limit in Prost and rust-protobuf (by default) is 100 (for rust-protobuf,
-            // that limit is set to 1000 as a configuration default).
             for _ in 0..101 {
                 let mut e = Expr::default();
                 e.mut_children().push(expr);
@@ -910,7 +880,7 @@ mod tests {
             req
         };
 
-        let resp: coppb::Response = block_on(copr.parse_and_handle_unary_request(req, None));
+        let resp = block_on(copr.parse_and_handle_unary_request(req, None));
         assert!(!resp.get_other_error().is_empty());
     }
 
@@ -927,12 +897,13 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         let mut req = coppb::Request::default();
         req.set_tp(9999);
 
-        let resp: coppb::Response = block_on(copr.parse_and_handle_unary_request(req, None));
+        let resp = block_on(copr.parse_and_handle_unary_request(req, None));
         assert!(!resp.get_other_error().is_empty());
     }
 
@@ -949,6 +920,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         let mut req = coppb::Request::default();
@@ -994,6 +966,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         let (tx, rx) = mpsc::channel();
@@ -1041,6 +1014,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         let handler_builder =
@@ -1065,6 +1039,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         // Fail immediately
@@ -1117,6 +1092,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
@@ -1144,6 +1120,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         // handler returns `finished == true` should not be called again.
@@ -1242,6 +1219,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1304,8 +1282,13 @@ mod tests {
         };
 
         let cm = ConcurrencyManager::new(1.into());
-        let copr =
-            Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm, PerfLevel::EnableCount);
+        let copr = Endpoint::<RocksEngine>::new(
+            &config,
+            read_pool.handle(),
+            cm,
+            PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
+        );
 
         let (tx, rx) = std::sync::mpsc::channel();
 
@@ -1514,7 +1497,8 @@ mod tests {
             });
             let resp_future_3 = copr
                 .handle_stream_request(req_with_exec_detail, handler_builder)
-                .unwrap();
+                .unwrap()
+                .map(|x| x.map(|x| x.into()));
             thread::spawn(move || {
                 tx.send(
                     block_on_stream(resp_future_3)
@@ -1631,6 +1615,7 @@ mod tests {
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
 
         {
@@ -1656,7 +1641,7 @@ mod tests {
             });
 
             let mut config = ReqContext::default_for_test();
-            config.deadline = Deadline::from_now(Duration::from_millis(1000));
+            config.deadline = Deadline::from_now(Duration::from_millis(500));
 
             let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
             assert_eq!(resp.get_data().len(), 0);
@@ -1688,9 +1673,13 @@ mod tests {
         });
 
         let config = Config::default();
-        let copr =
-            Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm, PerfLevel::EnableCount);
-
+        let copr = Endpoint::<RocksEngine>::new(
+            &config,
+            read_pool.handle(),
+            cm,
+            PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
+        );
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);
         req.set_start_ts(100);

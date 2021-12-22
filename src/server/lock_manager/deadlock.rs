@@ -1289,7 +1289,7 @@ pub mod tests {
         };
 
         // Detect specified edges sequentially, and expects the last one will cause the deadlock.
-        let test_once = |edges: &[Edge]| {
+        let test_once = |edges: &[Edge<'_>]| {
             let mut detect_table = DetectTable::new(Duration::from_millis(100));
             let mut edge_map = HashMap::default();
 

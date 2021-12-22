@@ -31,10 +31,10 @@ const ROLLBACK_TS_PREFIX: u8 = b'r';
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
         match *mutation {
-            Mutation::Put(_) | Mutation::Insert(_) => Some(LockType::Put),
-            Mutation::Delete(_) => Some(LockType::Delete),
-            Mutation::Lock(_) => Some(LockType::Lock),
-            Mutation::CheckNotExists(_) => None,
+            Mutation::Put(..) | Mutation::Insert(..) => Some(LockType::Put),
+            Mutation::Delete(..) => Some(LockType::Delete),
+            Mutation::Lock(..) => Some(LockType::Lock),
+            Mutation::CheckNotExists(..) => None,
         }
     }
 
@@ -325,7 +325,7 @@ impl Lock {
 
     /// Checks whether the lock conflicts with the given `ts`. If `ts == TimeStamp::max()`, the primary lock will be ignored.
     pub fn check_ts_conflict(
-        lock: Cow<Self>,
+        lock: Cow<'_, Self>,
         key: &Key,
         ts: TimeStamp,
         bypass_locks: &TsSet,
@@ -370,6 +370,59 @@ impl Lock {
     }
 }
 
+/// A specialized lock only for pessimistic lock. This saves memory for cases that only
+/// pessimistic locks exist.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PessimisticLock {
+    /// The primary key in raw format.
+    pub primary: Box<[u8]>,
+    pub start_ts: TimeStamp,
+    pub ttl: u64,
+    pub for_update_ts: TimeStamp,
+    pub min_commit_ts: TimeStamp,
+}
+
+impl PessimisticLock {
+    pub fn to_lock(&self) -> Lock {
+        Lock::new(
+            LockType::Pessimistic,
+            self.primary.to_vec(),
+            self.start_ts,
+            self.ttl,
+            None,
+            self.for_update_ts,
+            0,
+            self.min_commit_ts,
+        )
+    }
+
+    // Same with `to_lock` but does not copy the primary key.
+    pub fn into_lock(self) -> Lock {
+        Lock::new(
+            LockType::Pessimistic,
+            Vec::from(self.primary),
+            self.start_ts,
+            self.ttl,
+            None,
+            self.for_update_ts,
+            0,
+            self.min_commit_ts,
+        )
+    }
+}
+
+impl std::fmt::Debug for PessimisticLock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PessimisticLock")
+            .field("primary_key", &log_wrappers::Value::key(&self.primary))
+            .field("start_ts", &self.start_ts)
+            .field("ttl", &self.ttl)
+            .field("for_update_ts", &self.for_update_ts)
+            .field("min_commit_ts", &self.min_commit_ts)
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,17 +432,17 @@ mod tests {
         let (key, value) = (b"key", b"value");
         let mut tests = vec![
             (
-                Mutation::Put((Key::from_raw(key), value.to_vec())),
+                Mutation::make_put(Key::from_raw(key), value.to_vec()),
                 LockType::Put,
                 FLAG_PUT,
             ),
             (
-                Mutation::Delete(Key::from_raw(key)),
+                Mutation::make_delete(Key::from_raw(key)),
                 LockType::Delete,
                 FLAG_DELETE,
             ),
             (
-                Mutation::Lock(Key::from_raw(key)),
+                Mutation::make_lock(Key::from_raw(key)),
                 LockType::Lock,
                 FLAG_LOCK,
             ),
@@ -742,6 +795,56 @@ mod tests {
             "Lock { lock_type: Put, primary_key: ?, start_ts: TimeStamp(100), ttl: 3, short_value: ?, \
             for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
             use_async_commit: true, secondaries: [], rollback_ts: [] }"
+        );
+    }
+
+    #[test]
+    fn test_pessimistic_lock_to_lock() {
+        let pessimistic_lock = PessimisticLock {
+            primary: b"primary".to_vec().into_boxed_slice(),
+            start_ts: 5.into(),
+            ttl: 1000,
+            for_update_ts: 10.into(),
+            min_commit_ts: 20.into(),
+        };
+        let expected_lock = Lock {
+            lock_type: LockType::Pessimistic,
+            primary: b"primary".to_vec(),
+            ts: 5.into(),
+            ttl: 1000,
+            short_value: None,
+            for_update_ts: 10.into(),
+            txn_size: 0,
+            min_commit_ts: 20.into(),
+            use_async_commit: false,
+            secondaries: vec![],
+            rollback_ts: vec![],
+        };
+        assert_eq!(pessimistic_lock.to_lock(), expected_lock);
+        assert_eq!(pessimistic_lock.into_lock(), expected_lock);
+    }
+
+    #[test]
+    fn test_pessimistic_lock_customize_debug() {
+        let pessimistic_lock = PessimisticLock {
+            primary: b"primary".to_vec().into_boxed_slice(),
+            start_ts: 5.into(),
+            ttl: 1000,
+            for_update_ts: 10.into(),
+            min_commit_ts: 20.into(),
+        };
+        assert_eq!(
+            format!("{:?}", pessimistic_lock),
+            "PessimisticLock { primary_key: 7072696D617279, start_ts: TimeStamp(5), ttl: 1000, \
+            for_update_ts: TimeStamp(10), min_commit_ts: TimeStamp(20) }"
+        );
+        log_wrappers::set_redact_info_log(true);
+        let redact_result = format!("{:?}", pessimistic_lock);
+        log_wrappers::set_redact_info_log(false);
+        assert_eq!(
+            redact_result,
+            "PessimisticLock { primary_key: ?, start_ts: TimeStamp(5), ttl: 1000, \
+            for_update_ts: TimeStamp(10), min_commit_ts: TimeStamp(20) }"
         );
     }
 }

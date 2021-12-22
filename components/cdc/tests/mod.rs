@@ -15,6 +15,7 @@ use online_config::OnlineConfig;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
 use tikv::config::CdcConfig;
+use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::{LazyWorker, Runnable};
 use tikv_util::HandyRwLock;
@@ -33,9 +34,11 @@ pub struct ClientReceiver {
 }
 
 impl ClientReceiver {
-    pub fn replace(&self, rx: Option<ClientDuplexReceiver<ChangeDataEvent>>) {
-        let mut receiver = self.receiver.lock().unwrap();
-        *receiver = rx;
+    pub fn replace(
+        &self,
+        rx: Option<ClientDuplexReceiver<ChangeDataEvent>>,
+    ) -> Option<ClientDuplexReceiver<ChangeDataEvent>> {
+        std::mem::replace(&mut *self.receiver.lock().unwrap(), rx)
     }
 }
 
@@ -161,10 +164,12 @@ impl TestSuiteBuilder {
             let env = Arc::new(Environment::new(1));
             let cfg = CdcConfig::default();
             let mut cdc_endpoint = cdc::Endpoint::new(
+                DEFAULT_CLUSTER_ID,
                 &cfg,
                 pd_cli.clone(),
                 worker.scheduler(),
                 raft_router,
+                cluster.engines[id].kv.clone(),
                 cdc_ob,
                 cluster.store_metas[id].clone(),
                 cm.clone(),
@@ -446,7 +451,7 @@ impl TestSuite {
         let env = self.env.clone();
         self.cdc_cli.entry(store_id).or_insert_with(|| {
             let channel = ChannelBuilder::new(env)
-                .max_receive_message_len(std::i32::MAX)
+                .max_receive_message_len(i32::MAX)
                 .connect(&addr);
             ChangeDataClient::new(channel)
         })

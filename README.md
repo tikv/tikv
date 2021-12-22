@@ -2,7 +2,7 @@
 
 ## [Website](https://tikv.org) | [Documentation](https://tikv.org/docs/latest/concepts/overview/) | [Community Chat](https://tikv.org/chat)
 
-[![Build Status](https://internal.pingcap.net/idc-jenkins/buildStatus/icon?job=build_tikv_multi_branch%2Fmaster)](https://internal.pingcap.net/idc-jenkins/job/build_tikv_multi_branch/)
+[![Build Status](https://ci.pingcap.net/buildStatus/icon?job=tikv_ghpr_build_master)](https://ci.pingcap.net/blue/organizations/jenkins/tikv_ghpr_build_master/activity)
 [![Coverage Status](https://codecov.io/gh/tikv/tikv/branch/master/graph/badge.svg)](https://codecov.io/gh/tikv/tikv)
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/2574/badge)](https://bestpractices.coreinfrastructure.org/projects/2574)
 
@@ -196,4 +196,4 @@ TiKV is under the Apache 2.0 license. See the [LICENSE](./LICENSE) file for deta
 
 - Thanks [etcd](https://github.com/coreos/etcd) for providing some great open source tools.
 - Thanks [RocksDB](https://github.com/facebook/rocksdb) for their powerful storage engines.
-- Thanks [rust-clippy](https://github.com/Manishearth/rust-clippy). We do love the great project.
+- Thanks [rust-clippy](https://github.com/rust-lang/rust-clippy). We do love the great project.

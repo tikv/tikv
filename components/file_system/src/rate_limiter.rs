@@ -438,8 +438,8 @@ pub struct IORateLimiter {
 impl IORateLimiter {
     pub fn new(mode: IORateLimitMode, strict: bool, enable_statistics: bool) -> Self {
         let priority_map: [CachePadded<AtomicU32>; IOType::COUNT] = Default::default();
-        for i in 0..IOType::COUNT {
-            priority_map[i].store(IOPriority::High as u32, Ordering::Relaxed);
+        for p in priority_map.iter() {
+            p.store(IOPriority::High as u32, Ordering::Relaxed);
         }
         IORateLimiter {
             mode,

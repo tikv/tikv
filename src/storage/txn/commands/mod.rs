@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 //! Commands used in the transaction system
 #[macro_use]
 mod macros;
@@ -37,6 +38,7 @@ pub use resolve_lock::ResolveLock;
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
 pub use rollback::Rollback;
+use tikv_util::deadline::Deadline;
 pub use txn_heart_beat::TxnHeartBeat;
 
 pub use resolve_lock::RESOLVE_LOCK_BATCH_SIZE;
@@ -152,6 +154,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_max_commit_ts().into(),
                 secondary_keys,
                 req.get_try_one_pc(),
+                req.get_assertion_level(),
                 req.take_context(),
             )
         } else {
@@ -173,6 +176,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_max_commit_ts().into(),
                 secondary_keys,
                 req.get_try_one_pc(),
+                req.get_assertion_level(),
                 req.take_context(),
             )
         }
@@ -204,6 +208,7 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             req.get_return_values(),
             req.get_min_commit_ts().into(),
             OldValues::default(),
+            req.get_check_existence(),
             req.take_context(),
         )
     }
@@ -465,6 +470,8 @@ pub trait CommandExt: Display {
 
     fn get_ctx_mut(&mut self) -> &mut Context;
 
+    fn deadline(&self) -> Deadline;
+
     fn incr_cmd_metric(&self);
 
     fn ts(&self) -> TimeStamp {
@@ -659,6 +666,10 @@ impl Command {
 
     pub fn ctx_mut(&mut self) -> &mut Context {
         self.command_ext_mut().get_ctx_mut()
+    }
+
+    pub fn deadline(&self) -> Deadline {
+        self.command_ext().deadline()
     }
 }
 

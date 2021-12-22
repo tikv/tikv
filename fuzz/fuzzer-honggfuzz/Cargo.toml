@@ -3,11 +3,6 @@ name = "fuzzer-honggfuzz"
 version = "0.0.1"
 publish = false
 
-[features]
-default = ["protobuf-codec"]
-protobuf-codec = ["fuzz-targets/protobuf-codec"]
-prost-codec = ["fuzz-targets/prost-codec"]
-
 [dependencies]
 fuzz-targets = { path = "../targets", default-features = false }
 

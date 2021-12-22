@@ -276,7 +276,6 @@ impl ImportDir {
         let path_str = path.save.to_str().unwrap();
         let env = get_env(key_manager, get_io_rate_limiter())?;
         let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
-        sst_reader.verify_checksum()?;
         // TODO: check the length and crc32 of ingested file.
         let meta_info = sst_reader.sst_meta_info(meta.to_owned());
         Ok(meta_info)
@@ -284,7 +283,7 @@ impl ImportDir {
 
     pub fn ingest<E: KvEngine>(
         &self,
-        metas: &[SstMeta],
+        metas: &[SSTMetaInfo],
         engine: &E,
         key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<()> {
@@ -292,11 +291,11 @@ impl ImportDir {
 
         let mut paths = HashMap::new();
         let mut ingest_bytes = 0;
-        for meta in metas {
-            let path = self.join(meta)?;
-            let cf = meta.get_cf_name();
+        for info in metas {
+            let path = self.join(&info.meta)?;
+            let cf = info.meta.get_cf_name();
             super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_deref())?;
-            ingest_bytes += meta.get_length();
+            ingest_bytes += info.total_bytes;
             paths.entry(cf).or_insert_with(Vec::new).push(path);
         }
 
@@ -309,6 +308,21 @@ impl ImportDir {
         IMPORTER_INGEST_DURATION
             .with_label_values(&["ingest"])
             .observe(start.saturating_elapsed().as_secs_f64());
+        Ok(())
+    }
+
+    pub fn verify_checksum(
+        &self,
+        metas: &[SstMeta],
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> Result<()> {
+        for meta in metas {
+            let path = self.join(meta)?;
+            let path_str = path.save.to_str().unwrap();
+            let env = get_env(key_manager.clone(), get_io_rate_limiter())?;
+            let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
+            sst_reader.verify_checksum()?;
+        }
         Ok(())
     }
 
@@ -356,7 +370,7 @@ pub fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
         return Err(Error::InvalidSSTPath(path.to_owned()));
     }
     let elems: Vec<_> = file_name.trim_end_matches(SST_SUFFIX).split('_').collect();
-    if elems.len() != 5 {
+    if elems.len() < 4 {
         return Err(Error::InvalidSSTPath(path.to_owned()));
     }
 
@@ -366,7 +380,11 @@ pub fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
     meta.set_region_id(elems[1].parse()?);
     meta.mut_region_epoch().set_conf_ver(elems[2].parse()?);
     meta.mut_region_epoch().set_version(elems[3].parse()?);
-    meta.set_cf_name(elems[4].to_owned());
+    if elems.len() > 4 {
+        // If we upgrade TiKV from 3.0.x to 4.0.x and higher version, we can not read cf_name from
+        // the file path, because TiKV 3.0.x does not encode cf_name to path.
+        meta.set_cf_name(elems[4].to_owned());
+    }
     Ok(meta)
 }
 
@@ -390,6 +408,26 @@ mod test {
         assert_eq!(path.to_str().unwrap(), &expected_path);
 
         let new_meta = path_to_sst_meta(path).unwrap();
+        assert_eq!(meta, new_meta);
+    }
+
+    #[test]
+    fn test_path_to_sst_meta() {
+        let uuid = Uuid::new_v4();
+        let mut meta = SstMeta::default();
+        meta.set_uuid(uuid.as_bytes().to_vec());
+        meta.set_region_id(1);
+        meta.mut_region_epoch().set_conf_ver(222);
+        meta.mut_region_epoch().set_version(333);
+        let path = PathBuf::from(format!(
+            "{}_{}_{}_{}{}",
+            UuidBuilder::from_slice(meta.get_uuid()).unwrap().build(),
+            meta.get_region_id(),
+            meta.get_region_epoch().get_conf_ver(),
+            meta.get_region_epoch().get_version(),
+            SST_SUFFIX,
+        ));
+        let new_meta = path_to_sst_meta(&path).unwrap();
         assert_eq!(meta, new_meta);
     }
 }

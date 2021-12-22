@@ -536,13 +536,12 @@ pub fn generate_index_data_for_test(
 
 #[cfg(test)]
 mod tests {
-    use std::i64;
+    use std::{i64, iter::FromIterator};
 
     use tipb::ColumnInfo;
 
     use crate::codec::datum::{self, Datum};
     use collections::{HashMap, HashSet};
-    use tikv_util::map;
 
     use super::*;
 
@@ -623,21 +622,23 @@ mod tests {
             .set_tp(FieldTypeTp::Duration)
             .set_decimal(2);
 
-        let mut cols = map![
-            1 => FieldTypeTp::LongLong.into(),
-            2 => FieldTypeTp::VarChar.into(),
-            3 => FieldTypeTp::NewDecimal.into(),
-            5 => FieldTypeTp::JSON.into(),
-            6 => duration_col
-        ];
+        let mut cols = HashMap::from_iter([
+            (1, FieldTypeTp::LongLong.into()),
+            (2, FieldTypeTp::VarChar.into()),
+            (3, FieldTypeTp::NewDecimal.into()),
+            (5, FieldTypeTp::JSON.into()),
+            (6, duration_col),
+        ]);
 
-        let mut row = map![
-            1 => Datum::I64(100),
-            2 => Datum::Bytes(b"abc".to_vec()),
-            3 => Datum::Dec(10.into()),
-            5 => Datum::Json(r#"{"name": "John"}"#.parse().unwrap()),
-            6 => Datum::Dur(Duration::parse(&mut EvalContext::default(),"23:23:23.666",2 ).unwrap())
-        ];
+        let duration_row = Duration::parse(&mut EvalContext::default(), "23:23:23.666", 2).unwrap();
+
+        let mut row = HashMap::from_iter([
+            (1, Datum::I64(100)),
+            (2, Datum::Bytes(b"abc".to_vec())),
+            (3, Datum::Dec(10.into())),
+            (5, Datum::Json(r#"{"name": "John"}"#.parse().unwrap())),
+            (6, Datum::Dur(duration_row)),
+        ]);
 
         let mut ctx = EvalContext::default();
         let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();

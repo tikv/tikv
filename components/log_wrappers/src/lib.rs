@@ -101,8 +101,8 @@ impl<'a> Value<'a> {
         Value(key)
     }
 
-    pub fn value(value: &'a [u8]) -> Self {
-        Value(value)
+    pub fn value(v: &'a [u8]) -> Self {
+        Value(v)
     }
 }
 
@@ -124,7 +124,7 @@ impl<'a> slog::Value for Value<'a> {
 
 impl<'a> fmt::Display for Value<'a> {
     #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if REDACT_INFO_LOG.load(Ordering::Relaxed) {
             // Print placeholder instead of the value itself.
             write!(f, "?")
@@ -136,7 +136,7 @@ impl<'a> fmt::Display for Value<'a> {
 
 impl<'a> fmt::Debug for Value<'a> {
     #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)
     }
 }

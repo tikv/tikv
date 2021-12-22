@@ -1,10 +1,11 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
-use txn_types::{Key, Lock, LockType, TimeStamp, Value, WriteRef, WriteType};
+use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
 use crate::storage::kv::SEEK_BOUND;
@@ -55,6 +56,7 @@ pub trait ScanPolicy<S: Snapshot> {
 pub enum HandleRes<T> {
     Return(T),
     Skip(Key),
+    MoveToNext,
 }
 
 pub struct Cursors<S: Snapshot> {
@@ -264,8 +266,12 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     &mut self.cursors,
                     &mut self.statistics,
                 )? {
-                    HandleRes::Return(output) => return Ok(Some(output)),
+                    HandleRes::Return(output) => {
+                        self.statistics.processed_size += self.scan_policy.output_size(&output);
+                        return Ok(Some(output));
+                    }
                     HandleRes::Skip(key) => key,
+                    HandleRes::MoveToNext => continue,
                 };
             }
             if has_write {
@@ -279,6 +285,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     )? {
                         self.statistics.write.processed_keys += 1;
                         self.statistics.processed_size += self.scan_policy.output_size(&output);
+                        resource_metering::record_read_keys(1);
                         return Ok(Some(output));
                     }
                 }
@@ -357,7 +364,43 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
-        scan_latest_handle_lock(current_user_key, cfg, cursors, statistics)
+        if cfg.isolation_level == IsolationLevel::Rc {
+            cursors.lock.next(&mut statistics.lock);
+            return Ok(HandleRes::Skip(current_user_key));
+        }
+        // Only needs to check lock in SI
+        let lock = {
+            let lock_value = cursors.lock.value(&mut statistics.lock);
+            Lock::parse(lock_value)?
+        };
+        cursors.lock.next(&mut statistics.lock);
+        if let Err(e) = Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &current_user_key,
+            cfg.ts,
+            &cfg.bypass_locks,
+        ) {
+            statistics.lock.processed_keys += 1;
+            // Skip current_user_key because this key is either blocked or handled.
+            cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
+            if cfg.access_locks.contains(lock.ts) {
+                cursors.ensure_default_cursor(cfg)?;
+                return super::load_data_by_lock(
+                    &current_user_key,
+                    cfg,
+                    cursors.default.as_mut().unwrap(),
+                    lock,
+                    statistics,
+                )
+                .map(|val| match val {
+                    Some(v) => HandleRes::Return((current_user_key, v)),
+                    None => HandleRes::MoveToNext,
+                })
+                .map_err(Into::into);
+            }
+            return Err(e.into());
+        }
+        Ok(HandleRes::Skip(current_user_key))
     }
 
     fn handle_write(
@@ -503,7 +546,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                     break Some(TxnEntry::Commit {
                         default: entry_default,
                         write: entry_write,
-                        old_value: None,
+                        old_value: OldValue::None,
                     });
                 }
                 WriteType::Delete => {
@@ -511,7 +554,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                         break Some(TxnEntry::Commit {
                             default: (Vec::new(), Vec::new()),
                             write: (write_key.to_vec(), write_value.to_vec()),
-                            old_value: None,
+                            old_value: OldValue::None,
                         });
                     } else {
                         break None;
@@ -563,7 +606,6 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
                 cfg.ts,
                 &cfg.bypass_locks,
             )
-            .map(|_| ())
         }
         IsolationLevel::Rc => Ok(()),
     };
@@ -626,22 +668,23 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             } else {
                 Ok((vec![], vec![]))
             };
-            let old_value = if self.extra_op == ExtraOp::ReadOldValue
-                && (lock.lock_type == LockType::Put || lock.lock_type == LockType::Delete)
+
+            let mut old_value = OldValue::None;
+            if self.extra_op == ExtraOp::ReadOldValue
+                && matches!(lock.lock_type, LockType::Put | LockType::Delete)
             {
                 // When meet a lock, the write cursor must indicate the same user key.
                 // Seek for the last valid committed here.
-                super::seek_for_valid_value(
+                old_value = super::seek_for_valid_value(
                     &mut cursors.write,
                     cursors.default.as_mut().unwrap(),
                     &current_user_key,
                     std::cmp::max(lock.ts, lock.for_update_ts),
                     self.from_ts,
+                    cfg.hint_min_ts,
                     statistics,
-                )?
-            } else {
-                None
-            };
+                )?;
+            }
             load_default_res.map(|default| {
                 HandleRes::Return(TxnEntry::Prewrite {
                     default,
@@ -659,7 +702,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
     fn handle_write(
         &mut self,
         current_user_key: Key,
-        _cfg: &mut ScannerConfig<S>,
+        cfg: &mut ScannerConfig<S>,
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
@@ -724,20 +767,20 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             // Move to the next write record early for getting the old value.
             cursors.write.next(&mut statistics.write);
 
-            let old_value = if self.extra_op == ExtraOp::ReadOldValue
-                && (write_type == WriteType::Put || write_type == WriteType::Delete)
+            let mut old_value = OldValue::None;
+            if self.extra_op == ExtraOp::ReadOldValue
+                && matches!(write_type, WriteType::Put | WriteType::Delete)
             {
-                super::seek_for_valid_value(
+                old_value = super::seek_for_valid_value(
                     &mut cursors.write,
                     cursors.default.as_mut().unwrap(),
                     &current_user_key,
-                    commit_ts,
+                    commit_ts.prev(),
                     self.from_ts,
+                    cfg.hint_min_ts,
                     statistics,
-                )?
-            } else {
-                None
-            };
+                )?;
+            }
 
             let res = Ok(HandleRes::Return(TxnEntry::Commit {
                 default,
@@ -791,7 +834,6 @@ pub mod test_util {
     };
     use crate::storage::Engine;
 
-    #[derive(Default)]
     pub struct EntryBuilder {
         pub key: Vec<u8>,
         pub value: Vec<u8>,
@@ -799,7 +841,21 @@ pub mod test_util {
         pub start_ts: TimeStamp,
         pub commit_ts: TimeStamp,
         pub for_update_ts: TimeStamp,
-        pub old_value: Option<Vec<u8>>,
+        pub old_value: OldValue,
+    }
+
+    impl Default for EntryBuilder {
+        fn default() -> Self {
+            EntryBuilder {
+                key: vec![],
+                value: vec![],
+                primary: vec![],
+                start_ts: 0.into(),
+                commit_ts: 0.into(),
+                for_update_ts: 0.into(),
+                old_value: OldValue::None,
+            }
+        }
     }
 
     impl EntryBuilder {
@@ -828,7 +884,7 @@ pub mod test_util {
             self
         }
         pub fn old_value(&mut self, old_value: &[u8]) -> &mut Self {
-            self.old_value = Some(old_value.to_owned());
+            self.old_value = OldValue::value(old_value.to_owned());
             self
         }
         pub fn build_commit(&self, wt: WriteType, is_short_value: bool) -> TxnEntry {
@@ -898,7 +954,7 @@ pub mod test_util {
             TxnEntry::Commit {
                 default: (vec![], vec![]),
                 write: (write_key.into_encoded(), write_value.as_ref().to_bytes()),
-                old_value: None,
+                old_value: OldValue::None,
             }
         }
     }
