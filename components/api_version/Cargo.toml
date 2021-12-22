@@ -13,5 +13,3 @@ tikv_util = { path = "../tikv_util", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 match_template = { path = "../match_template" }
 tikv_alloc = { path = "../tikv_alloc" }
-
-[dev-dependencies]
