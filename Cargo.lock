@@ -1529,8 +1529,12 @@ dependencies = [
  "crc32fast",
  "libc 0.2.86",
  "libz-sys",
+<<<<<<< HEAD
  "miniz-sys",
  "miniz_oxide",
+=======
+ "miniz_oxide 0.3.7",
+>>>>>>> 92da1842b... tikv_util: update procfs to 0.12.0 (#11703)
 ]
 
 [[package]]
@@ -2569,6 +2573,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd1d63acd1b78403cc0c325605908475dd9b9a3acbf65ed8bcab97e27014afcf"
 
 [[package]]
+<<<<<<< HEAD
 name = "miniz-sys"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2579,6 +2584,8 @@ dependencies = [
 ]
 
 [[package]]
+=======
+>>>>>>> 92da1842b... tikv_util: update procfs to 0.12.0 (#11703)
 name = "miniz_oxide"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3381,14 +3388,17 @@ dependencies = [
 
 [[package]]
 name = "procfs"
-version = "0.9.1"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab8809e0c18450a2db0f236d2a44ec0b4c1412d0eb936233579f0990faa5d5cd"
+checksum = "0941606b9934e2d98a3677759a971756eb821f75764d0e0d26946d08e74d9104"
 dependencies = [
  "bitflags",
  "byteorder",
+<<<<<<< HEAD
  "chrono",
  "flate2",
+=======
+>>>>>>> 92da1842b... tikv_util: update procfs to 0.12.0 (#11703)
  "hex 0.4.2",
  "lazy_static",
  "libc 0.2.86",
