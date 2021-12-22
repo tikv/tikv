@@ -9,9 +9,12 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
-use engine_traits::raw_value::{ttl_to_expire_ts, RawValue};
+use api_version::{match_template_api_version, APIVersion, RawValue};
+use engine_traits::raw_ttl::ttl_to_expire_ts;
 use engine_traits::CfName;
 use kvproto::kvrpcpb::ApiVersion;
+use raw::RawStore;
+use tikv_kv::Statistics;
 use txn_types::{Key, Value};
 
 command! {
@@ -46,18 +49,24 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
         let (cf, key, value, previous_value, ctx) =
             (self.cf, self.key, self.value, self.previous_value, self.ctx);
         let mut data = vec![];
-        let old_value = if self.api_version == ApiVersion::V1 {
-            snapshot.get_cf(cf, &key)?
-        } else {
-            raw::RawEncodeSnapshot::from_snapshot(snapshot, self.api_version).get_cf(cf, &key)?
-        };
+        let old_value = RawStore::new(snapshot, self.api_version).raw_get_key_value(
+            cf,
+            &key,
+            &mut Statistics::default(),
+        )?;
 
         let pr = if old_value == previous_value {
             let raw_value = RawValue {
                 user_value: value,
                 expire_ts: ttl_to_expire_ts(self.ttl),
             };
-            let m = Modify::Put(cf, key, raw_value.to_bytes(self.api_version));
+            let encoded_raw_value = match_template_api_version!(
+                API,
+                match self.api_version {
+                    ApiVersion::API => API::encode_raw_value_owned(raw_value),
+                }
+            );
+            let m = Modify::Put(cf, key, encoded_raw_value);
             data.push(m);
             ProcessResult::RawCompareAndSwapRes {
                 previous_value: old_value,
