@@ -50,7 +50,7 @@ pub enum DataSinkReg {
         id: DataSinkId,
         data_sink: Box<dyn DataSink>,
     },
-    Unregister {
+    Deregister {
         id: DataSinkId,
     },
 }
@@ -70,7 +70,7 @@ impl Drop for DataSinkHandle {
             .reporter_scheduler
             .as_ref()
             .unwrap()
-            .schedule(Task::DataSinkReg(DataSinkReg::Unregister { id: self.id }))
+            .schedule(Task::DataSinkReg(DataSinkReg::Deregister { id: self.id }))
         {
             warn!("failed to unregister datasink"; "err" => ?err);
         }

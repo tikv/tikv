@@ -106,7 +106,7 @@ impl Reporter {
                     self.collector = Some(self.collector_reg_handle.register(collector));
                 }
             }
-            DataSinkReg::Unregister { id } => {
+            DataSinkReg::Deregister { id } => {
                 self.data_sinks.remove(&id);
 
                 if self.data_sinks.is_empty() {
@@ -218,25 +218,28 @@ mod tests {
     use tikv_util::config::ReadableDuration;
     use tikv_util::worker::{LazyWorker, Runnable, RunnableWithTimer};
 
-    static OP_COUNT: AtomicUsize = AtomicUsize::new(0);
+    #[derive(Default, Clone)]
+    struct MockDataSink {
+        op_count: Arc<AtomicUsize>,
+    }
 
-    struct MockClient;
-
-    impl DataSink for MockClient {
+    impl DataSink for MockDataSink {
         fn try_send(&mut self, _records: Arc<Vec<ResourceUsageRecord>>) -> Result<()> {
-            OP_COUNT.fetch_add(1, SeqCst);
+            self.op_count.fetch_add(1, SeqCst);
             Ok(())
         }
     }
 
     #[test]
-    fn test_reporter() {
+    fn test_reporter_basic() {
         let scheduler = LazyWorker::new("test-worker").scheduler();
         let collector_reg_handle = CollectorRegHandle::new_for_test();
         let mut r = Reporter::new(Config::default(), collector_reg_handle, scheduler);
+
+        let client = MockDataSink::default();
         r.run(Task::DataSinkReg(DataSinkReg::Register {
             id: DataSinkId(1),
-            data_sink: Box::new(MockClient),
+            data_sink: Box::new(client.clone()),
         }));
         r.run(Task::ConfigChange(Config {
             enabled: false,
@@ -267,6 +270,71 @@ mod tests {
         })));
         r.on_timeout();
         r.shutdown();
-        assert_eq!(OP_COUNT.load(SeqCst), 1);
+        assert_eq!(client.op_count.load(SeqCst), 1);
+    }
+
+    #[test]
+    fn test_reporter_multiple_data_sinks() {
+        let scheduler = LazyWorker::new("test-worker").scheduler();
+        let collector_reg_handle = CollectorRegHandle::new_for_test();
+        let mut r = Reporter::new(Config::default(), collector_reg_handle, scheduler);
+        let ds1 = MockDataSink::default();
+        let ds2 = MockDataSink::default();
+        let ds3 = MockDataSink::default();
+        r.run(Task::DataSinkReg(DataSinkReg::Register {
+            id: DataSinkId(1),
+            data_sink: Box::new(ds1.clone()),
+        }));
+        r.run(Task::DataSinkReg(DataSinkReg::Register {
+            id: DataSinkId(2),
+            data_sink: Box::new(ds2.clone()),
+        }));
+        r.run(Task::DataSinkReg(DataSinkReg::Register {
+            id: DataSinkId(3),
+            data_sink: Box::new(ds3.clone()),
+        }));
+
+        let mut records = HashMap::default();
+        records.insert(
+            Arc::new(TagInfos {
+                store_id: 0,
+                region_id: 0,
+                peer_id: 0,
+                extra_attachment: b"12345".to_vec(),
+            }),
+            RawRecord {
+                cpu_time: 1,
+                read_keys: 2,
+                write_keys: 3,
+            },
+        );
+
+        r.run(Task::Records(Arc::new(RawRecords {
+            begin_unix_time_secs: 123,
+            duration: Duration::default(),
+            records: records.clone(),
+        })));
+
+        r.on_timeout();
+        assert_eq!(ds1.op_count.load(SeqCst), 1);
+        assert_eq!(ds2.op_count.load(SeqCst), 1);
+        assert_eq!(ds3.op_count.load(SeqCst), 1);
+
+        r.run(Task::DataSinkReg(DataSinkReg::Deregister {
+            id: DataSinkId(2),
+        }));
+
+        r.run(Task::Records(Arc::new(RawRecords {
+            begin_unix_time_secs: 123,
+            duration: Duration::default(),
+            records,
+        })));
+
+        r.on_timeout();
+        assert_eq!(ds1.op_count.load(SeqCst), 2);
+        assert_eq!(ds2.op_count.load(SeqCst), 1);
+        assert_eq!(ds3.op_count.load(SeqCst), 2);
+
+        r.shutdown();
     }
 }

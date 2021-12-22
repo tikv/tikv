@@ -9,7 +9,6 @@ use std::error::Error;
 use online_config::{ConfigChange, OnlineConfig};
 use serde_derive::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
-use tikv_util::worker::Scheduler;
 
 const MIN_PRECISION: ReadableDuration = ReadableDuration::millis(100);
 const MAX_PRECISION: ReadableDuration = ReadableDuration::hours(1);

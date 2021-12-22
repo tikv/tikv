@@ -104,7 +104,7 @@ pub enum CollectorReg {
         id: CollectorId,
         collector: Box<dyn Collector>,
     },
-    Unregister {
+    Deregister {
         id: CollectorId,
     },
 }
@@ -124,7 +124,7 @@ impl Drop for CollectorHandle {
             .tx
             .as_ref()
             .unwrap()
-            .send(CollectorReg::Unregister { id: self.id })
+            .send(CollectorReg::Deregister { id: self.id })
         {
             warn!("failed to unregister collector"; "err" => ?err);
         }
