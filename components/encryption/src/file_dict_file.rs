@@ -43,7 +43,7 @@ pub struct FileDictionaryFile {
     enable_log: bool,
     // Determine whether compact the log.
     file_rewrite_threshold: u64,
-    // Record the number of `REMOVE` to determine whether compact the log.
+    // Record the number of `Remove` to determine whether compact the log.
     removed: u64,
     // Record size of the file.
     file_size: usize,

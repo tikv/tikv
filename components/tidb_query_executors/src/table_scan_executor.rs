@@ -32,6 +32,7 @@ impl BatchTableScanExecutor<Box<dyn Storage<Statistics = ()>>> {
 }
 
 impl<S: Storage> BatchTableScanExecutor<S> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         storage: S,
         config: Arc<EvalConfig>,
@@ -553,7 +554,7 @@ mod tests {
         /// Returns whole table's ranges which include point range and non-point range.
         fn mixed_ranges_for_whole_table(&self) -> Vec<KeyRange> {
             vec![
-                self.table_range(std::i64::MIN, 3),
+                self.table_range(i64::MIN, 3),
                 {
                     let mut r = KeyRange::default();
                     r.set_start(table::encode_row_key(self.table_id, 3));
@@ -561,7 +562,7 @@ mod tests {
                     convert_to_prefix_next(r.mut_end());
                     r
                 },
-                self.table_range(4, std::i64::MAX),
+                self.table_range(4, i64::MAX),
             ]
         }
 
@@ -596,7 +597,7 @@ mod tests {
 
         /// Returns the range for the whole table.
         fn whole_table_range(&self) -> KeyRange {
-            self.table_range(std::i64::MIN, std::i64::MAX)
+            self.table_range(i64::MIN, i64::MAX)
         }
 
         /// Returns the values start from `start_row` limit `rows`.
@@ -1161,8 +1162,8 @@ mod tests {
         let value = table::encode_row(&mut EvalContext::default(), row, &col_ids).unwrap();
 
         let mut key_range = KeyRange::default();
-        key_range.set_start(table::encode_row_key(TABLE_ID, std::i64::MIN));
-        key_range.set_end(table::encode_row_key(TABLE_ID, std::i64::MAX));
+        key_range.set_start(table::encode_row_key(TABLE_ID, i64::MIN));
+        key_range.set_end(table::encode_row_key(TABLE_ID, i64::MAX));
 
         let store = FixtureStorage::new(iter::once((key, (Ok(value)))).collect());
 

@@ -295,7 +295,7 @@ where
         }
     }
 
-    pub fn iter(&self) -> Iter<K, V> {
+    pub fn iter(&self) -> Iter<'_, K, V> {
         Iter {
             base: self.map.iter(),
         }
@@ -343,7 +343,7 @@ where
     }
 }
 
-pub struct Iter<'a, K: 'a, V: 'a> {
+pub struct Iter<'a, K, V> {
     base: std::collections::hash_map::Iter<'a, K, ValueEntry<K, V>>,
 }
 

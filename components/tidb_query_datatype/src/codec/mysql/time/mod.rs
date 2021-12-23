@@ -77,7 +77,7 @@ fn last_day_of_month(year: u32, month: u32) -> u32 {
 fn round_components(parts: &mut [u32]) -> Option<()> {
     debug_assert_eq!(parts.len(), 7);
     let modulus = [
-        std::u32::MAX,
+        u32::MAX,
         12,
         last_day_of_month(parts[0], parts[1]),
         // hms[.fraction]
@@ -100,6 +100,7 @@ fn round_components(parts: &mut [u32]) -> Option<()> {
 }
 
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn chrono_datetime<T: TimeZone>(
     time_zone: &T,
     year: u32,
@@ -719,7 +720,7 @@ mod parser {
             991_232..=99_991_231 => input * 1_000_000,
             101_000_000..=691_231_235_959 => input + 20_000_000_000_000,
             700_101_000_000..=991_231_235_959 => input + 19_000_000_000_000,
-            1_000_000_000_000..=std::i64::MAX => input,
+            1_000_000_000_000..=i64::MAX => input,
             _ => return None,
         };
 
@@ -3018,7 +3019,7 @@ mod tests {
             let t = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
             let get: f64 = t.convert(&mut ctx).unwrap();
             assert!(
-                (expect - get).abs() < std::f64::EPSILON,
+                (expect - get).abs() < f64::EPSILON,
                 "expect: {}, got: {}",
                 expect,
                 get

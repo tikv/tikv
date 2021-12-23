@@ -52,7 +52,7 @@ where
             apply(*cf, &mut opt);
             opt.add_table_properties_collector_factory(
                 "tikv.test_properties",
-                Box::new(TestPropertiesCollectorFactory::new(*cf)),
+                TestPropertiesCollectorFactory::new(*cf),
             );
             CFOptions::new(*cf, opt)
         })
@@ -166,9 +166,9 @@ impl TestPropertiesCollectorFactory {
     }
 }
 
-impl TablePropertiesCollectorFactory for TestPropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(TestPropertiesCollector::new(self.cf.clone()))
+impl TablePropertiesCollectorFactory<TestPropertiesCollector> for TestPropertiesCollectorFactory {
+    fn create_table_properties_collector(&mut self, _: u32) -> TestPropertiesCollector {
+        TestPropertiesCollector::new(self.cf.clone())
     }
 }
 

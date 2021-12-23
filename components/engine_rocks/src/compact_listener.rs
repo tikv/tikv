@@ -113,7 +113,7 @@ pub struct RocksCompactedEvent {
 
 impl RocksCompactedEvent {
     pub fn new(
-        info: &RocksCompactionJobInfo,
+        info: &RocksCompactionJobInfo<'_>,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         input_props: Vec<RangeProperties>,
@@ -197,7 +197,7 @@ impl CompactedEvent for RocksCompactedEvent {
     }
 }
 
-pub type Filter = fn(&RocksCompactionJobInfo) -> bool;
+pub type Filter = fn(&RocksCompactionJobInfo<'_>) -> bool;
 
 pub struct CompactionListener {
     ch: Box<dyn Fn(RocksCompactedEvent) + Send + Sync>,

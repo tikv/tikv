@@ -527,7 +527,8 @@ pub fn right_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<Bytes
 #[inline]
 pub fn upper_utf8(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     let s = str::from_utf8(arg)?;
-    Ok(writer.write_ref(Some(s.to_uppercase().as_bytes())))
+    let res = s.chars().flat_map(char::to_uppercase);
+    Ok(writer.write_from_char_iter(res))
 }
 
 #[rpn_fn(writer)]
@@ -542,7 +543,8 @@ pub fn upper(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 #[inline]
 pub fn lower_utf8(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     let s = str::from_utf8(arg)?;
-    Ok(writer.write_ref(Some(s.to_lowercase().as_bytes())))
+    let res = s.chars().flat_map(char::to_lowercase);
+    Ok(writer.write_from_char_iter(res))
 }
 
 #[rpn_fn(writer)]
@@ -1000,8 +1002,8 @@ pub fn quote(input: Option<BytesRef>) -> Result<Option<Bytes>> {
 #[rpn_fn(writer)]
 #[inline]
 pub fn repeat(input: BytesRef, cnt: &Int, writer: BytesWriter) -> Result<BytesGuard> {
-    let cnt = if *cnt > std::i32::MAX.into() {
-        std::i32::MAX.into()
+    let cnt = if *cnt > i32::MAX.into() {
+        i32::MAX.into()
     } else {
         *cnt
     };

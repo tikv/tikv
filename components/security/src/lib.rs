@@ -183,7 +183,7 @@ struct CNChecker {
 }
 
 impl ServerChecker for CNChecker {
-    fn check(&mut self, ctx: &RpcContext) -> CheckResult {
+    fn check(&mut self, ctx: &RpcContext<'_>) -> CheckResult {
         match check_common_name(&self.allowed_cn, ctx) {
             Ok(()) => CheckResult::Continue,
             Err(reason) => CheckResult::Abort(RpcStatus::with_message(
@@ -234,7 +234,10 @@ impl ServerCredentialsFetcher for Fetcher {
 /// Check peer CN with cert-allowed-cn field.
 /// Return true when the match is successful (support wildcard pattern).
 /// Skip the check when the secure channel is not used.
-fn check_common_name(cert_allowed_cn: &HashSet<String>, ctx: &RpcContext) -> Result<(), String> {
+fn check_common_name(
+    cert_allowed_cn: &HashSet<String>,
+    ctx: &RpcContext<'_>,
+) -> Result<(), String> {
     if let Some(auth_ctx) = ctx.auth_context() {
         if let Some(auth_property) = auth_ctx
             .into_iter()

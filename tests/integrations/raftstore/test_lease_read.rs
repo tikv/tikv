@@ -242,8 +242,7 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     assert_eq!(detector.ctx.rl().len(), 3);
 
     // Check if the leader also propose an entry to renew its lease.
-    let state = cluster.raft_local_state(region_id, store_id);
-    assert_eq!(state.get_last_index(), last_index + 1);
+    cluster.wait_last_index(region_id, store_id, last_index + 1, Duration::from_secs(5));
 
     // Wait some time for the proposal to be applied.
     let now = Instant::now();
