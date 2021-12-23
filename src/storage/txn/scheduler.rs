@@ -731,7 +731,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let cid = task.cid;
         let priority = task.cmd.priority();
         let ts = task.cmd.ts();
-        let ctx = task.cmd.ctx().clone();
         let scheduler = self.clone();
         let pessimistic_lock_mode = self.pessimistic_lock_mode();
         let pipelined =
