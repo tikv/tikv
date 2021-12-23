@@ -179,9 +179,9 @@ fn test_read_keys_coprocessor() {
     cfg.precision = ReadableDuration::millis(100);
     cfg.report_receiver_interval = ReadableDuration::millis(400);
 
-    let (_, collector_reg_handle, resource_tag_factory) =
-        resource_metering::init_recorder(cfg.enabled, cfg.precision.as_millis());
-    let (_, data_sink_reg_handle, worker) =
+    let (_, collector_reg_handle, resource_tag_factory, recorder_worker) =
+        resource_metering::init_recorder(cfg.precision.as_millis());
+    let (_, data_sink_reg_handle, reporter_worker) =
         resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
 
     let client = MockClient::new();
@@ -217,7 +217,8 @@ fn test_read_keys_coprocessor() {
     assert_eq!(client.wait_read_keys(Duration::from_secs(30)).unwrap(), 4);
 
     // Cleanup.
-    worker.stop_worker();
+    reporter_worker.stop_worker();
+    recorder_worker.stop_worker();
 }
 
 fn init_coprocessor_with_data(

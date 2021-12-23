@@ -208,8 +208,8 @@ impl ServerCluster {
         &self,
         cfg: &resource_metering::Config,
     ) -> (ResourceTagFactory, CollectorRegHandle, Box<dyn FnOnce()>) {
-        let (_, collector_reg_handle, resource_tag_factory) =
-            resource_metering::init_recorder(cfg.enabled, cfg.precision.as_millis());
+        let (_, collector_reg_handle, resource_tag_factory, recorder_worker) =
+            resource_metering::init_recorder(cfg.precision.as_millis());
         let (_, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
         let (_, single_target_worker) = resource_metering::init_single_target(
@@ -222,8 +222,9 @@ impl ServerCluster {
             resource_tag_factory,
             collector_reg_handle,
             Box::new(move || {
-                reporter_worker.stop_worker();
                 single_target_worker.stop_worker();
+                reporter_worker.stop_worker();
+                recorder_worker.stop_worker();
             }),
         )
     }

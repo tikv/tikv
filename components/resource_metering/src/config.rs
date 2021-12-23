@@ -20,9 +20,12 @@ const MIN_REPORT_RECEIVER_INTERVAL: ReadableDuration = ReadableDuration::millis(
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    /// Turn on resource metering.
+    /// `enabled` is deprecated.
     ///
-    /// This configuration will affect all resource modules such as cpu/summary.
+    /// Whether resource metering is enabled depends on the number of non-observed
+    /// collectors. See [CollectorRegHandle::register].
+    ///
+    /// [CollectorRegHandle::register]: crate::CollectorRegHandle::register
     pub enabled: bool,
 
     /// Data reporting destination address.
@@ -116,14 +119,6 @@ impl online_config::ConfigManager for ConfigManager {
         let mut new_config = self.current_config.clone();
         new_config.update(change);
         new_config.validate()?;
-        // Pause or resume the recorder thread.
-        if self.current_config.enabled != new_config.enabled {
-            if new_config.enabled {
-                self.recorder.resume();
-            } else {
-                self.recorder.pause();
-            }
-        }
         if self.current_config.precision != new_config.precision {
             self.recorder.precision(new_config.precision.0);
         }

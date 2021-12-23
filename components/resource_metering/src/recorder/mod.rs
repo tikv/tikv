@@ -1,102 +1,66 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::collector::{Collector, CollectorReg, CollectorRegHandle};
-use crate::localstorage::{LocalStorage, LocalStorageRef};
+use self::collector_reg::CollectorReg;
+use self::sub_recorder::SubRecorder;
+use crate::collector::Collector;
 use crate::{utils, RawRecords, ResourceTagFactory};
 
-use std::io;
+use std::fmt::{self, Display, Formatter};
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
-use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
-use std::thread;
-use std::thread::JoinHandle;
 use std::time::Duration;
 
 use collections::HashMap;
-use crossbeam::channel::{bounded, Receiver};
 use tikv_util::time::Instant;
+use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker, Runnable, RunnableWithTimer};
 
-mod cpu;
-mod summary;
+mod collector_reg;
+mod localstorage;
+mod sub_recorder;
 
-pub use cpu::CpuRecorder;
-pub use summary::{record_read_keys, record_write_keys, SummaryRecorder};
+pub use self::collector_reg::{CollectorHandle, CollectorId, CollectorRegHandle};
+pub use self::localstorage::{LocalStorage, LocalStorageRef, STORAGE};
+pub use self::sub_recorder::cpu::CpuRecorder;
+pub use self::sub_recorder::summary::{record_read_keys, record_write_keys, SummaryRecorder};
 
 const RECORD_FREQUENCY: f64 = 99.0;
+const RECORD_INTERVAL: Duration =
+    Duration::from_micros((1_000.0 / RECORD_FREQUENCY * 1_000.0) as _);
 const RECORD_LEN_THRESHOLD: usize = 20_000;
 const CLEANUP_INTERVAL_SECS: u64 = 15 * 60;
 
-/// This trait defines a general framework that works at a certain frequency. Typically,
-/// it describes the recorder(sampler) framework for a specific resource.
-///
-/// [Recorder] will maintain a list of sub-recorders, driving all sub-recorders to work
-/// according to the behavior described in this trait.
-pub trait SubRecorder {
-    /// This function is called at a fixed frequency. (A typical frequency is 99hz.)
-    ///
-    /// The [RawRecords] and [LocalStorage] map of all threads will be passed in through
-    /// parameters. We need to collect resources (may be from each `LocalStorage`) and
-    /// write them into `RawRecords`.
-    ///
-    /// The implementation needs to sample the resource in this function (in general).
-    ///
-    /// [RawRecords]: crate::model::RawRecords
-    /// [LocalStorage]: crate::localstorage::LocalStorage
-    fn tick(
-        &mut self,
-        _records: &mut RawRecords,
-        _thread_stores: &mut HashMap<usize, LocalStorage>,
-    ) {
+impl Runnable for Recorder {
+    type Task = Task;
+
+    fn run(&mut self, task: Self::Task) {
+        match task {
+            Task::CollectorReg(reg) => self.handle_collector_registration(reg),
+            Task::NewThread(lsr) => self.handle_thread_registration(lsr),
+        }
     }
 
-    /// This function is called every time before reporting to Collector.
-    /// The default period is 1 second.
-    ///
-    /// The [RawRecords] and [LocalStorage] map of all threads will be passed in through parameters.
-    /// `usize` is thread_id without platform dependency.
-    ///
-    /// [RawRecords]: crate::model::RawRecords
-    /// [LocalStorage]: crate::localstorage::LocalStorage
-    fn collect(
-        &mut self,
-        _records: &mut RawRecords,
-        _thread_stores: &mut HashMap<usize, LocalStorage>,
-    ) {
+    fn shutdown(&mut self) {
+        self.reset();
+    }
+}
+
+impl RunnableWithTimer for Recorder {
+    fn on_timeout(&mut self) {
+        if self.collectors.is_empty() {
+            self.pause();
+            return;
+        } else {
+            self.resume();
+        }
+
+        self.tick();
+        self.cleanup();
     }
 
-    /// This function is called when we need to clean up data.
-    /// The default period is 5 minutes.
-    fn cleanup(
-        &mut self,
-        _records: &mut RawRecords,
-        _thread_stores: &mut HashMap<usize, LocalStorage>,
-    ) {
+    fn get_interval(&self) -> Duration {
+        RECORD_INTERVAL
     }
-
-    /// This function is called before the [Recorder] thread pause.
-    fn pause(
-        &mut self,
-        _records: &mut RawRecords,
-        _thread_stores: &mut HashMap<usize, LocalStorage>,
-    ) {
-    }
-
-    /// This function is called when a reset is required.
-    ///
-    /// The typical situation is when the [Recorder] thread is resume execution.
-    fn reset(
-        &mut self,
-        _records: &mut RawRecords,
-        _thread_stores: &mut HashMap<usize, LocalStorage>,
-    ) {
-    }
-
-    /// This function is called when a new thread accesses thread-local-storage.
-    ///
-    /// This function exists because the sampling work of `SubRecorder` may need
-    /// to be performed on all functions, and `SubRecorder` may wish to maintain
-    /// a thread-related data structure by itself.
-    fn thread_created(&mut self, _id: usize, _store: &LocalStorage) {}
 }
 
 /// Give `Recorder` a list of [SubRecorder]s and `Recorder` will make them work
@@ -108,29 +72,45 @@ pub trait SubRecorder {
 /// [RecorderBuilder]. We can pass the `SubRecorder` (and other parameters)
 /// that the `Recorder` needs to load through the `RecorderBuilder`.
 pub struct Recorder {
-    pause: Arc<AtomicBool>,
     precision_ms: Arc<AtomicU64>,
     records: RawRecords,
-    recorders: Vec<Box<dyn SubRecorder + Send>>,
-    collector_rx: Receiver<CollectorReg>,
-    collectors: HashMap<u64, Box<dyn Collector>>,
-    thread_rx: Receiver<LocalStorageRef>,
-    thread_stores: HashMap<usize, LocalStorage>,
     last_collect: Instant,
     last_cleanup: Instant,
+
+    running: bool,
+    recorders: Vec<Box<dyn SubRecorder>>,
+
+    thread_stores: HashMap<usize, LocalStorage>,
+
+    collectors: HashMap<CollectorId, Box<dyn Collector>>,
+    observers: HashMap<CollectorId, Box<dyn Collector>>,
 }
 
 impl Recorder {
-    // The main loop of recorder thread.
-    fn run(&mut self) {
-        let duration = 1_000.0 / RECORD_FREQUENCY * 1_000.0;
-        loop {
-            self.handle_pause();
-            self.handle_collector_registration();
-            self.handle_thread_registration();
-            self.tick();
-            self.cleanup();
-            thread::sleep(Duration::from_micros(duration as _));
+    fn handle_collector_registration(&mut self, reg: CollectorReg) {
+        match reg {
+            CollectorReg::Register {
+                id,
+                collector,
+                as_observer,
+            } => {
+                if as_observer {
+                    self.observers.insert(id, collector);
+                } else {
+                    self.collectors.insert(id, collector);
+                }
+            }
+            CollectorReg::Deregister { id } => {
+                self.collectors.remove(&id);
+                self.observers.remove(&id);
+            }
+        }
+    }
+
+    fn handle_thread_registration(&mut self, lsr: LocalStorageRef) {
+        self.thread_stores.insert(lsr.id, lsr.storage.clone());
+        for r in &mut self.recorders {
+            r.thread_created(lsr.id, &lsr.storage);
         }
     }
 
@@ -147,7 +127,7 @@ impl Recorder {
             records.duration = duration;
             if !records.records.is_empty() {
                 let records = Arc::new(records);
-                for collector in self.collectors.values() {
+                for collector in self.collectors.values().chain(self.observers.values()) {
                     collector.collect(records.clone());
                 }
             }
@@ -177,64 +157,68 @@ impl Recorder {
         }
     }
 
-    fn reset(&mut self) {
+    fn pause(&mut self) {
+        if !self.running {
+            return;
+        }
+        self.running = false;
+
+        for r in &mut self.recorders {
+            r.pause(&mut self.records, &mut self.thread_stores);
+        }
+    }
+
+    fn resume(&mut self) {
+        if self.running {
+            return;
+        }
+        self.running = true;
+
         let now = Instant::now();
         self.records = RawRecords::default();
         self.last_collect = now;
         self.last_cleanup = now;
         for r in &mut self.recorders {
-            r.reset(&mut self.records, &mut self.thread_stores);
+            r.resume(&mut self.records, &mut self.thread_stores);
         }
     }
 
-    fn handle_pause(&mut self) {
-        let mut should_reset = false;
-        while self.pause.load(SeqCst) {
-            for r in &mut self.recorders {
-                r.pause(&mut self.records, &mut self.thread_stores);
-            }
-            thread::park();
-            should_reset = true;
-        }
-        if should_reset {
-            self.reset();
-        }
+    fn reset(&mut self) {
+        self.collectors.clear();
+        self.observers.clear();
+        self.thread_stores.clear();
+        self.recorders.clear();
     }
+}
 
-    fn handle_collector_registration(&mut self) {
-        while let Ok(msg) = self.collector_rx.try_recv() {
-            match msg {
-                CollectorReg::Register { id, collector } => {
-                    self.collectors.insert(id.0, collector);
-                }
-                CollectorReg::Deregister { id } => {
-                    self.collectors.remove(&id.0);
-                }
+pub enum Task {
+    CollectorReg(CollectorReg),
+    NewThread(LocalStorageRef),
+}
+
+impl Display for Task {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Task::CollectorReg(_) => {
+                write!(f, "CollectorReg")?;
+            }
+            Task::NewThread(_) => {
+                write!(f, "NewThread")?;
             }
         }
-    }
-
-    fn handle_thread_registration(&mut self) {
-        while let Ok(lsr) = self.thread_rx.try_recv() {
-            self.thread_stores.insert(lsr.id, lsr.storage.clone());
-            for r in &mut self.recorders {
-                r.thread_created(lsr.id, &lsr.storage);
-            }
-        }
+        Ok(())
     }
 }
 
 /// Builder for [Recorder].
 pub struct RecorderBuilder {
-    enable: bool,
     precision_ms: Arc<AtomicU64>,
-    recorders: Vec<Box<dyn SubRecorder + Send>>,
+    recorders: Vec<Box<dyn SubRecorder>>,
 }
 
 impl Default for RecorderBuilder {
     fn default() -> Self {
         Self {
-            enable: false,
             precision_ms: Arc::new(AtomicU64::new(1000)),
             recorders: Vec::new(),
         }
@@ -242,12 +226,6 @@ impl Default for RecorderBuilder {
 }
 
 impl RecorderBuilder {
-    /// Sets whether to start recorder.
-    pub fn enable(mut self, enable: bool) -> Self {
-        self.enable = enable;
-        self
-    }
-
     /// Sets the precision_ms parameter of [Recorder].
     pub fn precision_ms(mut self, precision_ms: Arc<AtomicU64>) -> Self {
         self.precision_ms = precision_ms;
@@ -255,44 +233,26 @@ impl RecorderBuilder {
     }
 
     /// Add a [SubRecorder] for the execution of [Recorder].
-    pub fn add_sub_recorder(mut self, r: Box<dyn SubRecorder + Send>) -> Self {
+    pub fn add_sub_recorder(mut self, r: Box<dyn SubRecorder>) -> Self {
         self.recorders.push(r);
         self
     }
 
-    /// Spawn a new thread that executes the main loop of the [Recorder].
-    ///
-    /// This function does not return the `Recorder` instance directly, instead
-    /// it returns a [RecorderHandle] that is used to control the execution, and
-    /// a [ResourceTagFactory] that is used for construction of resource tag.
-    pub fn spawn(self) -> io::Result<(RecorderHandle, CollectorRegHandle, ResourceTagFactory)> {
-        let pause = Arc::new(AtomicBool::new(!self.enable));
+    pub fn build(self) -> (Recorder, RecorderHandle) {
         let precision_ms = self.precision_ms.clone();
-        let (thread_tx, thread_rx) = bounded(1024);
-        let (collector_tx, collector_rx) = bounded(1024);
         let now = Instant::now();
-        let mut recorder = Recorder {
-            pause: pause.clone(),
+        let recorder = Recorder {
             precision_ms: precision_ms.clone(),
             records: RawRecords::default(),
+            running: false,
             recorders: self.recorders,
-            collector_rx,
             collectors: HashMap::default(),
-            thread_rx,
+            observers: HashMap::default(),
             thread_stores: HashMap::default(),
             last_collect: now,
             last_cleanup: now,
         };
-        thread::Builder::new()
-            .name("resource-metering-recorder".to_owned())
-            .spawn(move || recorder.run())
-            .map(move |h| {
-                (
-                    RecorderHandle::new(h, pause, precision_ms),
-                    CollectorRegHandle::new(collector_tx),
-                    ResourceTagFactory::new(thread_tx),
-                )
-            })
+        (recorder, RecorderHandle::new(precision_ms))
     }
 }
 
@@ -309,8 +269,6 @@ pub struct RecorderHandle {
 }
 
 struct RecorderHandleInner {
-    h: JoinHandle<()>,
-    pause: Arc<AtomicBool>,
     precision_ms: Arc<AtomicU64>,
 }
 
@@ -322,28 +280,9 @@ impl RecorderHandle {
     /// controlling the execution logic from the outside.
     ///
     /// [JoinHandle]: std::thread::JoinHandle
-    pub fn new(h: JoinHandle<()>, pause: Arc<AtomicBool>, precision_ms: Arc<AtomicU64>) -> Self {
+    pub fn new(precision_ms: Arc<AtomicU64>) -> Self {
         Self {
-            inner: Some(Arc::new(RecorderHandleInner {
-                h,
-                pause,
-                precision_ms,
-            })),
-        }
-    }
-
-    /// Pause the execution of [Recorder].
-    pub fn pause(&self) {
-        if let Some(inner) = self.inner.as_ref() {
-            inner.pause.store(true, SeqCst);
-        }
-    }
-
-    /// Resume the execution of [Recorder].
-    pub fn resume(&self) {
-        if let Some(inner) = self.inner.as_ref() {
-            inner.pause.store(false, SeqCst);
-            inner.h.thread().unpark();
+            inner: Some(Arc::new(RecorderHandleInner { precision_ms })),
         }
     }
 
@@ -359,51 +298,60 @@ impl RecorderHandle {
     }
 }
 
-/// Constructs a default [Recorder], spawn it and return the corresponding [RecorderHandle] and [ResourceTagFactory].
+/// Constructs a default [Recorder], spawn it and return the corresponding [RecorderHandle], [CollectorRegHandle],
+/// [ResourceTagFactory] and [LazyWorker].
 ///
 /// This function is intended to simplify external use.
 pub fn init_recorder(
-    enable: bool,
     precision_ms: u64,
-) -> (RecorderHandle, CollectorRegHandle, ResourceTagFactory) {
-    RecorderBuilder::default()
-        .enable(enable)
+) -> (
+    RecorderHandle,
+    CollectorRegHandle,
+    ResourceTagFactory,
+    Box<LazyWorker<Task>>,
+) {
+    let (recorder, recorder_handle) = RecorderBuilder::default()
         .precision_ms(Arc::new(AtomicU64::new(precision_ms)))
         .add_sub_recorder(Box::new(CpuRecorder::default()))
-        .add_sub_recorder(Box::new(SummaryRecorder::new(enable)))
-        .spawn()
-        .expect("failed to create resource metering thread")
+        .add_sub_recorder(Box::new(SummaryRecorder::default()))
+        .build();
+    let mut recorder_worker = WorkerBuilder::new("resource-metering-recorder")
+        .pending_capacity(256)
+        .create()
+        .lazy_build("resource-metering-recorder");
+
+    let collector_reg_handle = CollectorRegHandle::new(recorder_worker.scheduler());
+    let resource_tag_factory = ResourceTagFactory::new(recorder_worker.scheduler());
+
+    recorder_worker.start_with_timer(recorder);
+    (
+        recorder_handle,
+        collector_reg_handle,
+        resource_tag_factory,
+        Box::new(recorder_worker),
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    use super::*;
+    use crate::recorder::localstorage::{LocalStorage, LocalStorageRef};
 
     #[test]
     fn test_recorder_handle() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let join_handle = std::thread::spawn(move || {
-            thread::park();
-            tx.send(true).unwrap();
-        });
-        let pause = Arc::new(AtomicBool::new(true));
         let precision_ms = Arc::new(AtomicU64::new(0));
-        let handle = RecorderHandle::new(join_handle, pause.clone(), precision_ms.clone());
+        let handle = RecorderHandle::new(precision_ms.clone());
         let new_precision = Duration::from_secs(1);
         handle.precision(new_precision);
         assert_eq!(precision_ms.load(SeqCst), new_precision.as_millis() as u64);
-        assert!(pause.load(SeqCst));
-        handle.resume();
-        assert!(!pause.load(SeqCst));
-        assert!(rx.recv().unwrap());
-        handle.pause();
-        assert!(pause.load(SeqCst));
     }
 
-    static OP_COUNT: AtomicUsize = AtomicUsize::new(0);
-
-    struct MockSubRecorder;
+    #[derive(Clone, Default)]
+    struct MockSubRecorder {
+        op_count: Arc<AtomicUsize>,
+    }
 
     impl SubRecorder for MockSubRecorder {
         fn tick(
@@ -411,46 +359,38 @@ mod tests {
             _records: &mut RawRecords,
             _thread_stores: &mut HashMap<usize, LocalStorage>,
         ) {
-            OP_COUNT.fetch_add(1, SeqCst);
+            self.op_count.fetch_add(1, SeqCst);
         }
 
-        fn reset(
+        fn resume(
             &mut self,
             _records: &mut RawRecords,
             _thread_stores: &mut HashMap<usize, LocalStorage>,
         ) {
-            OP_COUNT.fetch_add(1, SeqCst);
+            self.op_count.fetch_add(1, SeqCst);
         }
 
         fn thread_created(&mut self, _id: usize, _store: &LocalStorage) {
-            OP_COUNT.fetch_add(1, SeqCst);
+            self.op_count.fetch_add(1, SeqCst);
         }
     }
 
     #[test]
-    fn test_recorder() {
-        let (thread_tx, thread_rx) = bounded(1024);
-        let resource_tag_factory = ResourceTagFactory::new(thread_tx);
-        resource_tag_factory.register_local_storage(&LocalStorage::default());
+    fn test_recorder_basic() {
+        let sub_recorder = MockSubRecorder::default();
+        let (mut recorder, _) = RecorderBuilder::default()
+            .add_sub_recorder(Box::new(sub_recorder.clone()))
+            .build();
 
-        let (_, collector_rx) = bounded(1024);
-        let now = Instant::now();
-        let mut recorder = Recorder {
-            pause: Arc::new(AtomicBool::new(false)),
-            precision_ms: Arc::new(AtomicU64::new(1000)),
-            records: RawRecords::default(),
-            recorders: vec![Box::new(MockSubRecorder)],
-            collector_rx,
-            collectors: HashMap::default(),
-            thread_rx,
-            thread_stores: HashMap::default(),
-            last_collect: now,
-            last_cleanup: now,
-        };
         recorder.tick();
-        recorder.reset();
-        recorder.handle_thread_registration();
+        recorder.resume();
+        recorder.run(Task::NewThread(LocalStorageRef {
+            id: 0,
+            storage: LocalStorage::default(),
+        }));
         assert!(!recorder.thread_stores.is_empty());
-        assert!(OP_COUNT.load(SeqCst) >= 3);
+        assert!(sub_recorder.op_count.load(SeqCst) >= 3);
     }
+
+
 }

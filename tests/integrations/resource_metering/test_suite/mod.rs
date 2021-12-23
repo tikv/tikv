@@ -14,7 +14,7 @@ use futures::{select, FutureExt};
 use grpcio::Environment;
 use kvproto::kvrpcpb::{ApiVersion, Context};
 use kvproto::resource_usage_agent::ResourceUsageRecord;
-use resource_metering::{Config, TEST_TAG_PREFIX};
+use resource_metering::Config;
 use tempfile::TempDir;
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::storage::lock_manager::DummyLockManager;
@@ -42,14 +42,12 @@ pub struct TestSuite {
 
 impl TestSuite {
     pub fn new(cfg: resource_metering::Config) -> Self {
-        fail::cfg("cpu-record-test-filter", "return").unwrap();
-
         let (mut tikv_cfg, dir) = TiKvConfig::with_tmp().unwrap();
         tikv_cfg.resource_metering = cfg.clone();
         let cfg_controller = ConfigController::new(tikv_cfg);
 
-        let (recorder_handle, collector_reg_handle, resource_tag_factory) =
-            resource_metering::init_recorder(cfg.enabled, cfg.precision.as_millis());
+        let (recorder_handle, collector_reg_handle, resource_tag_factory, recorder_worker) =
+            resource_metering::init_recorder(cfg.precision.as_millis());
         let (config_notifier, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
         let env = Arc::new(Environment::new(2));
@@ -99,8 +97,9 @@ impl TestSuite {
             wait_for_cancel: None,
             _dir: dir,
             stop_workers: Some(Box::new(move || {
-                reporter_worker.stop_worker();
                 single_target_worker.stop_worker();
+                reporter_worker.stop_worker();
+                recorder_worker.stop_worker();
             })),
         }
     }
@@ -179,12 +178,7 @@ impl TestSuite {
             loop {
                 let mut workload = futures::future::join_all(tags.iter().map(|tag| {
                     let mut ctx = Context::default();
-                    ctx.set_resource_group_tag({
-                        let mut t = Vec::from(TEST_TAG_PREFIX);
-                        let tag = tag.clone();
-                        t.extend_from_slice(tag.as_bytes());
-                        t
-                    });
+                    ctx.set_resource_group_tag(tag.as_bytes().to_vec());
                     storage.get(ctx, Key::from_raw(b""), TimeStamp::new(0))
                 }))
                 .fuse();
@@ -228,12 +222,7 @@ impl TestSuite {
         records: Vec<ResourceUsageRecord>,
     ) {
         for r in records {
-            let tag = String::from_utf8_lossy(
-                (!r.get_resource_group_tag().is_empty())
-                    .then(|| r.resource_group_tag.split_at(TEST_TAG_PREFIX.len()).1)
-                    .unwrap_or(b""),
-            )
-            .into_owned();
+            let tag = String::from_utf8_lossy(r.get_resource_group_tag()).into_owned();
             let (ts, cpu_time) = map.entry(tag).or_insert((vec![], vec![]));
             ts.extend(&r.record_list_timestamp_sec);
             cpu_time.extend(&r.record_list_cpu_time_ms);

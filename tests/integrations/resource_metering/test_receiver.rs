@@ -12,11 +12,11 @@ use tikv_util::config::ReadableDuration;
 pub fn test_alter_receiver_address() {
     let port = alloc_port();
     let mut test_suite = TestSuite::new(resource_metering::Config {
-        enabled: true,
         receiver_address: format!("127.0.0.1:{}", port),
         report_receiver_interval: ReadableDuration::secs(3),
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(1),
+        ..Default::default()
     });
     test_suite.start_receiver_at(port);
 
@@ -24,21 +24,21 @@ pub fn test_alter_receiver_address() {
     // [req-1, req-2]
     test_suite.setup_workload(vec!["req-1", "req-2"]);
 
-    // | Address | Enabled |
-    // |   o     |    o    |
+    // | Address |
+    // |   o     |
     let res = test_suite.block_receive_one();
     assert!(res.contains_key("req-1"));
     assert!(res.contains_key("req-2"));
 
-    // | Address | Enabled |
-    // |   !     |    o    |
+    // | Address |
+    // |   !     |
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port + 1));
     test_suite.flush_receiver();
     sleep(Duration::from_millis(3500));
     assert!(test_suite.nonblock_receiver_all().is_empty());
 
-    // | Address | Enabled |
-    // |   o     |    o    |
+    // | Address |
+    // |   o     |
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
     let res = test_suite.block_receive_one();
     assert!(res.contains_key("req-1"));
@@ -49,11 +49,11 @@ pub fn test_alter_receiver_address() {
 pub fn test_receiver_blocking() {
     let port = alloc_port();
     let mut test_suite = TestSuite::new(resource_metering::Config {
-        enabled: true,
         receiver_address: format!("127.0.0.1:{}", port),
         report_receiver_interval: ReadableDuration::secs(3),
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(1),
+        ..Default::default()
     });
     test_suite.start_receiver_at(port);
 
@@ -88,11 +88,11 @@ pub fn test_receiver_blocking() {
 pub fn test_receiver_shutdown() {
     let port = alloc_port();
     let mut test_suite = TestSuite::new(resource_metering::Config {
-        enabled: true,
         receiver_address: format!("127.0.0.1:{}", port),
         report_receiver_interval: ReadableDuration::secs(3),
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(1),
+        ..Default::default()
     });
     test_suite.start_receiver_at(port);
 

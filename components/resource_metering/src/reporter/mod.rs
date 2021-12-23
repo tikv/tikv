@@ -1,10 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+pub mod collector_impl;
 pub mod data_sink;
 pub mod data_sink_reg;
 pub mod single_target;
 
-use crate::collector::{CollectorHandle, CollectorImpl, CollectorRegHandle};
+use crate::recorder::{CollectorHandle, CollectorRegHandle};
+use crate::reporter::collector_impl::CollectorImpl;
 use crate::reporter::data_sink_reg::{DataSinkId, DataSinkReg, DataSinkRegHandle};
 use crate::{Config, DataSink, RawRecords, Records};
 
@@ -103,7 +105,7 @@ impl Reporter {
 
                 if self.collector.is_none() {
                     let collector = Box::new(CollectorImpl::new(self.scheduler.clone()));
-                    self.collector = Some(self.collector_reg_handle.register(collector));
+                    self.collector = Some(self.collector_reg_handle.register(collector, false));
                 }
             }
             DataSinkReg::Deregister { id } => {
