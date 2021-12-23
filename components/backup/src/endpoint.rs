@@ -1397,7 +1397,7 @@ pub mod tests {
         // the case.2 is the expected results.
         type Case<'a> = (&'a [u8], &'a [u8], Vec<(&'a [u8], &'a [u8])>);
 
-        let case: Vec<Case> = vec![
+        let case: Vec<Case<'_>> = vec![
             (b"", b"1", vec![(b"", b"1")]),
             (b"", b"2", vec![(b"", b"1"), (b"1", b"2")]),
             (b"1", b"2", vec![(b"1", b"2")]),

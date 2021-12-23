@@ -677,7 +677,7 @@ where
 
     fn poll_accept(
         self: Pin<&mut Self>,
-        cx: &mut Context,
+        cx: &mut Context<'_>,
     ) -> Poll<Option<std::io::Result<Self::Conn>>> {
         self.project().0.poll_next(cx)
     }

@@ -16,6 +16,8 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::usize;
 
+use api_version::match_template_api_version;
+use api_version::APIVersion;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::raw::{
@@ -591,19 +593,26 @@ impl DefaultCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        if let ApiVersion::V1ttl | ApiVersion::V2 = api_version {
-            cf_opts.add_table_properties_collector_factory(
-                "tikv.ttl-properties-collector",
-                TtlPropertiesCollectorFactory { api_version },
-            );
-            cf_opts
-                .set_compaction_filter_factory(
-                    "ttl_compaction_filter_factory",
-                    Box::new(TTLCompactionFilterFactory { api_version })
-                        as Box<dyn CompactionFilterFactory>,
-                )
-                .unwrap();
-        }
+        match_template_api_version!(
+            API,
+            match api_version {
+                ApiVersion::API => {
+                    if API::IS_TTL_ENABLED {
+                        cf_opts.add_table_properties_collector_factory(
+                            "tikv.ttl-properties-collector",
+                            TtlPropertiesCollectorFactory::<API>::default(),
+                        );
+                        cf_opts
+                            .set_compaction_filter_factory(
+                                "ttl_compaction_filter_factory",
+                                Box::new(TTLCompactionFilterFactory::<API>::default())
+                                    as Box<dyn CompactionFilterFactory>,
+                            )
+                            .unwrap();
+                    }
+                }
+            }
+        );
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }

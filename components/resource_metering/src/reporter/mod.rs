@@ -1,12 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+pub mod data_sink;
+pub mod single_target;
+
 use crate::collector::{CollectorHandle, CollectorImpl, CollectorRegHandle};
-use crate::{Client, Config, RawRecords, Records};
+use crate::{Config, DataSink, RawRecords, Records};
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
 use tikv_util::time::Duration;
+use tikv_util::warn;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 
 /// A structure for reporting statistics through [Client].
@@ -20,8 +24,8 @@ use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 /// [Scheduler]: tikv_util::worker::Scheduler
 /// [RawRecords]: crate::model::RawRecords
 /// [Records]: crate::model::Records
-pub struct Reporter<C> {
-    client: C,
+pub struct Reporter<D> {
+    data_sink: D,
     config: Config,
     scheduler: Scheduler<Task>,
     collector_reg_handle: CollectorRegHandle,
@@ -29,9 +33,9 @@ pub struct Reporter<C> {
     records: Records,
 }
 
-impl<C> Runnable for Reporter<C>
+impl<D> Runnable for Reporter<D>
 where
-    C: Client + Send,
+    D: DataSink + Send,
 {
     type Task = Task;
 
@@ -47,9 +51,9 @@ where
     }
 }
 
-impl<C> RunnableWithTimer for Reporter<C>
+impl<D> RunnableWithTimer for Reporter<D>
 where
-    C: Client + Send,
+    D: DataSink + Send,
 {
     fn on_timeout(&mut self) {
         self.upload();
@@ -60,12 +64,12 @@ where
     }
 }
 
-impl<C> Reporter<C>
+impl<D> Reporter<D>
 where
-    C: Client + Send,
+    D: DataSink + Send,
 {
     pub fn new(
-        client: C,
+        data_sink: D,
         config: Config,
         collector_reg_handle: CollectorRegHandle,
         scheduler: Scheduler<Task>,
@@ -74,7 +78,7 @@ where
             collector_reg_handle.register(Box::new(CollectorImpl::new(scheduler.clone())))
         });
         Self {
-            client,
+            data_sink,
             config,
             scheduler,
             collector,
@@ -107,8 +111,10 @@ where
         }
         // Whether endpoint exists or not, records should be taken in order to reset.
         let records = std::mem::take(&mut self.records);
-        self.client
-            .upload_records(&self.config.receiver_address, records);
+        let report_data = Arc::new(records.into());
+        if let Err(err) = self.data_sink.try_send(report_data) {
+            warn!("failed to send data to datasink"; "error" => ?err);
+        }
     }
 
     fn reset(&mut self) {
@@ -147,10 +153,14 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Result;
     use crate::{RawRecord, TagInfos};
-    use collections::HashMap;
+
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::SeqCst;
+
+    use collections::HashMap;
+    use kvproto::resource_usage_agent::ResourceUsageRecord;
     use tikv_util::config::ReadableDuration;
     use tikv_util::worker::{LazyWorker, Runnable, RunnableWithTimer};
 
@@ -158,10 +168,10 @@ mod tests {
 
     struct MockClient;
 
-    impl Client for MockClient {
-        fn upload_records(&mut self, address: &str, _records: Records) {
-            assert_eq!(address, "abc");
+    impl DataSink for MockClient {
+        fn try_send(&mut self, _records: Arc<Vec<ResourceUsageRecord>>) -> Result<()> {
             OP_COUNT.fetch_add(1, SeqCst);
+            Ok(())
         }
     }
 
@@ -191,7 +201,11 @@ mod tests {
                 peer_id: 0,
                 extra_attachment: b"12345".to_vec(),
             }),
-            RawRecord { cpu_time: 1 },
+            RawRecord {
+                cpu_time: 1,
+                read_keys: 2,
+                write_keys: 3,
+            },
         );
         r.run(Task::Records(Arc::new(RawRecords {
             begin_unix_time_secs: 123,

@@ -8,7 +8,8 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
-use engine_traits::raw_value::{ttl_to_expire_ts, RawValue};
+use api_version::{match_template_api_version, APIVersion, RawValue};
+use engine_traits::raw_ttl::ttl_to_expire_ts;
 use engine_traits::CfName;
 use kvproto::kvrpcpb::ApiVersion;
 use txn_types::RawMutation;
@@ -57,21 +58,29 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
         let mut data = vec![];
         let rows = self.mutations.len();
         let (cf, mutations, ctx) = (self.cf, self.mutations, self.ctx);
-        for m in mutations {
-            match m {
-                RawMutation::Put { key, value, ttl } => {
-                    let raw_value = RawValue {
-                        user_value: value,
-                        expire_ts: ttl_to_expire_ts(ttl),
-                    };
-                    let m = Modify::Put(cf, key, raw_value.to_bytes(self.api_version));
-                    data.push(m);
-                }
-                RawMutation::Delete { key } => {
-                    data.push(Modify::Delete(cf, key));
+        match_template_api_version!(
+            API,
+            match self.api_version {
+                ApiVersion::API => {
+                    for m in mutations {
+                        match m {
+                            RawMutation::Put { key, value, ttl } => {
+                                let raw_value = RawValue {
+                                    user_value: value,
+                                    expire_ts: ttl_to_expire_ts(ttl),
+                                };
+                                let m =
+                                    Modify::Put(cf, key, API::encode_raw_value_owned(raw_value));
+                                data.push(m);
+                            }
+                            RawMutation::Delete { key } => {
+                                data.push(Modify::Delete(cf, key));
+                            }
+                        }
+                    }
                 }
             }
-        }
+        );
         let mut to_be_write = WriteData::from_modifies(data);
         to_be_write.set_allowed_on_disk_almost_full();
         Ok(WriteResult {

@@ -97,11 +97,11 @@ pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::
 
 pub trait Encoding {
     /// decode convert bytes from a specific charset to utf-8 charset.
-    fn decode(data: BytesRef) -> Result<Bytes>;
+    fn decode(data: BytesRef<'_>) -> Result<Bytes>;
 
     /// encode convert bytes from utf-8 charset to a specific charset.
     #[inline]
-    fn encode(data: BytesRef) -> Result<Bytes> {
+    fn encode(data: BytesRef<'_>) -> Result<Bytes> {
         Ok(Bytes::from(data))
     }
 }

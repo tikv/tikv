@@ -197,6 +197,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             if let Some(v) = result? {
                 self.statistics.write.processed_keys += 1;
                 self.statistics.processed_size += current_user_key.len() + v.len();
+                resource_metering::record_read_keys(1);
                 return Ok(Some((current_user_key, v)));
             }
         }

@@ -27,7 +27,7 @@ impl RowSlice<'_> {
     /// # Panics
     ///
     /// Panics if the value of first byte is not 128(v2 version code)
-    pub fn from_bytes(mut data: &[u8]) -> Result<RowSlice> {
+    pub fn from_bytes(mut data: &[u8]) -> Result<RowSlice<'_>> {
         let origin = data;
         assert_eq!(data.read_u8()?, super::CODEC_VERSION);
         let is_big = super::Flags::from_bits_truncate(data.read_u8()?) == super::Flags::BIG;
