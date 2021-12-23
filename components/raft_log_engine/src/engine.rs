@@ -246,8 +246,8 @@ impl RaftEngineReadOnly for RaftLogEngine {
 impl RaftEngine for RaftLogEngine {
     type LogBatch = RaftLogBatch;
 
-    fn log_batch(&self, _capacity: usize) -> Self::LogBatch {
-        RaftLogBatch::default()
+    fn log_batch(&self, capacity: usize) -> Self::LogBatch {
+        RaftLogBatch(LogBatch::with_capacity(capacity))
     }
 
     fn sync(&self) -> Result<()> {

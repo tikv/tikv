@@ -565,7 +565,6 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::CompactCheck => self.on_compact_check_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSST => self.on_cleanup_import_sst_tick(),
-            StoreTick::RaftEnginePurge => self.on_raft_engine_purge_tick(),
         }
         let elapsed = t.saturating_elapsed();
         RAFT_EVENT_DURATION
@@ -632,7 +631,6 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
         self.register_consistency_check_tick();
-        self.register_raft_engine_purge_tick();
     }
 }
 
@@ -1208,6 +1206,9 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     // blocking operation, which can take an extensive amount of time.
     cleanup_worker: Worker,
     region_worker: Worker,
+    // Used for calling `purge_expired_files`, which can be time-consuming for certain
+    // engine implementations.
+    purge_worker: Worker,
 
     coprocessor_host: CoprocessorHost<EK>,
 }
@@ -1262,6 +1263,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             background_worker,
             cleanup_worker: Worker::new("cleanup-worker"),
             region_worker: Worker::new("region-worker"),
+            purge_worker: Worker::new("purge-worker"),
             coprocessor_host: coprocessor_host.clone(),
         };
         mgr.init()?;
@@ -1278,13 +1280,32 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .start_with_timer("snapshot-worker", region_runner);
 
         let raftlog_gc_runner = RaftlogGcRunner::new(
-            self.router(),
             engines.clone(),
             cfg.value().raft_log_compact_sync_interval.0,
         );
         let raftlog_gc_scheduler = workers
             .background_worker
             .start_with_timer("raft-gc-worker", raftlog_gc_runner);
+        let router_clone = self.router();
+        let engines_clone = engines.clone();
+        workers.purge_worker.spawn_interval_task(
+            cfg.value().raft_engine_purge_interval.0,
+            move || {
+                match engines_clone.raft.purge_expired_files() {
+                    Ok(regions) => {
+                        for region_id in regions {
+                            let _ = router_clone.send(
+                                region_id,
+                                PeerMsg::CasualMessage(CasualMessage::ForceCompactRaftLogs),
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!("purge expired files"; "err" => %e);
+                    }
+                };
+            },
+        );
         let compact_runner = CompactRunner::new(engines.kv.clone());
         let cleanup_sst_runner = CleanupSSTRunner::new(
             meta.get_id(),
@@ -2593,19 +2614,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .router
             .force_send(region.get_id(), PeerMsg::Start)
             .unwrap();
-    }
-
-    fn register_raft_engine_purge_tick(&self) {
-        self.ctx.schedule_store_tick(
-            StoreTick::RaftEnginePurge,
-            self.ctx.cfg.raft_engine_purge_interval.0,
-        )
-    }
-
-    fn on_raft_engine_purge_tick(&self) {
-        let scheduler = &self.ctx.raftlog_gc_scheduler;
-        let _ = scheduler.schedule(RaftlogGcTask::Purge);
-        self.register_raft_engine_purge_tick();
     }
 }
 
