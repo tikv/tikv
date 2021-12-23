@@ -35466,7 +35466,15 @@
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
-          "seriesOverrides": [],
+          "seriesOverrides": [
+            {
+              "$$hashKey": "object:2663",
+              "alias": "/backup-auto-throttle/",
+              "fill": 5,
+              "linewidth": 0,
+              "fillGradient": 2
+            }
+          ],
           "spaceLength": 10,
           "stack": false,
           "steppedLine": false,
@@ -35481,14 +35489,24 @@
               "step": 4
             },
             {
-              "expr": "sum(rate(tikv_thread_cpu_seconds_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"backup_endpoint\"}[1m])) by (instance)",
+              "expr": "sum(rate(tikv_thread_cpu_seconds_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"backup_io\"}[1m])) by (instance)",
+              "legendFormat": "backup-io-{{instance}}",
+              "interval": "",
+              "exemplar": true,
               "format": "time_series",
               "hide": true,
               "intervalFactor": 2,
-              "legendFormat": "backup-endpoint",
               "metric": "tikv_thread_cpu_seconds_total",
               "refId": "B",
               "step": 4
+            },
+            {
+              "expr": "tikv_backup_softlimit{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}",
+              "legendFormat": "backup-auto-throttle-{{instance}}",
+              "interval": "",
+              "exemplar": true,
+              "refId": "C",
+              "hide": false
             }
           ],
           "thresholds": [],
