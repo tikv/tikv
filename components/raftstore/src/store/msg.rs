@@ -180,14 +180,15 @@ where
 }
 
 bitflags! {
-    pub struct PeerTicks: u8 {
-        const RAFT                   = 0b00000001;
-        const RAFT_LOG_GC            = 0b00000010;
-        const SPLIT_REGION_CHECK     = 0b00000100;
-        const PD_HEARTBEAT           = 0b00001000;
-        const CHECK_MERGE            = 0b00010000;
-        const CHECK_PEER_STALE_STATE = 0b00100000;
-        const ENTRY_CACHE_EVICT      = 0b01000000;
+    pub struct PeerTicks: u16 {
+        const RAFT                   = 0b0000000000000001;
+        const RAFT_LOG_GC            = 0b0000000000000010;
+        const SPLIT_REGION_CHECK     = 0b0000000000000100;
+        const PD_HEARTBEAT           = 0b0000000000001000;
+        const CHECK_MERGE            = 0b0000000000010000;
+        const CHECK_PEER_STALE_STATE = 0b0000000000100000;
+        const ENTRY_CACHE_EVICT      = 0b0000000001000000;
+        const REPORT_REGION_FLOW     = 0b0000000101000000;
     }
 }
 
@@ -202,6 +203,7 @@ impl PeerTicks {
             PeerTicks::CHECK_MERGE => "check_merge",
             PeerTicks::CHECK_PEER_STALE_STATE => "check_peer_stale_state",
             PeerTicks::ENTRY_CACHE_EVICT => "entry_cache_evict",
+            PeerTicks::REPORT_REGION_FLOW => "report_region_flow",
             _ => unreachable!(),
         }
     }
@@ -214,6 +216,7 @@ impl PeerTicks {
             PeerTicks::CHECK_MERGE,
             PeerTicks::CHECK_PEER_STALE_STATE,
             PeerTicks::ENTRY_CACHE_EVICT,
+            PeerTicks::REPORT_REGION_FLOW,
         ];
         TICKS
     }

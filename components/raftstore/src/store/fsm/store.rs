@@ -435,6 +435,8 @@ where
             self.cfg.peer_stale_state_check_interval.0;
         self.tick_batch[PeerTicks::CHECK_MERGE.bits() as usize].wait_duration =
             self.cfg.merge_check_tick_interval.0;
+        self.tick_batch[PeerTicks::REPORT_REGION_FLOW.bits() as usize].wait_duration =
+            self.cfg.report_region_flow_interval.0;
     }
 }
 

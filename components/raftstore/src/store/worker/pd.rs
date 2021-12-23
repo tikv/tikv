@@ -171,6 +171,11 @@ where
         duration: RaftstoreDuration,
     },
     RegionCPURecords(Arc<RawRecords>),
+    ReportRegionFlow {
+        region_id: u64,
+        written_bytes: u64,
+        written_keys: u64,
+    },
 }
 
 pub struct StoreStat {
@@ -337,6 +342,17 @@ where
             }
             Task::RegionCPURecords(ref cpu_records) => {
                 write!(f, "get region cpu records: {:?}", cpu_records)
+            }
+            Task::ReportRegionFlow {
+                region_id,
+                written_bytes,
+                written_keys,
+            } => {
+                write!(
+                    f,
+                    "report region stat: region_id {}, written_bytes {}, written_keys {}",
+                    region_id, written_bytes, written_keys,
+                )
             }
         }
     }
@@ -1684,6 +1700,11 @@ where
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => self.slow_score.record(id, duration.sum()),
             Task::RegionCPURecords(records) => self.handle_region_cpu_records(records),
+            Task::ReportRegionFlow {
+                region_id: _,
+                written_bytes: _,
+                written_keys: _,
+            } => {}
         };
     }
 
