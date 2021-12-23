@@ -734,7 +734,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(process_cpu_seconds_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", job=\"tikv\"}[1m])) by (instance)",
+              "expr": "sum(rate(process_cpu_seconds_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", job=~\".*tikv\"}[1m])) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
@@ -841,7 +841,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "avg(process_resident_memory_bytes{tidb_cluster=\"$tidb_cluster\", job=\"tikv\"}) by (instance)",
+              "expr": "avg(process_resident_memory_bytes{tidb_cluster=\"$tidb_cluster\", job=~\".*tikv\"}) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
@@ -1633,7 +1633,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "(time() - process_start_time_seconds{tidb_cluster=\"$tidb_cluster\", job=\"tikv\"})",
+              "expr": "(time() - process_start_time_seconds{tidb_cluster=\"$tidb_cluster\", job=~\".*tikv\"})",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
