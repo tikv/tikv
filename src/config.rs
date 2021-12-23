@@ -2209,6 +2209,7 @@ pub struct BackupConfig {
     pub enable_auto_tune: bool,
     pub auto_tune_remain_threads: usize,
     pub auto_tune_refresh_interval: ReadableDuration,
+    pub io_thread_size: usize,
     #[online_config(submodule)]
     pub hadoop: HadoopConfig,
 }
@@ -2237,6 +2238,7 @@ impl Default for BackupConfig {
             enable_auto_tune: false,
             auto_tune_remain_threads: 2,
             auto_tune_refresh_interval: ReadableDuration::secs(60),
+            io_thread_size: 2,
             hadoop: Default::default(),
         }
     }
