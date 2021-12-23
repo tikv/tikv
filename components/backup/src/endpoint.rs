@@ -1121,7 +1121,8 @@ fn to_sst_compression_type(ct: CompressionType) -> Option<SstCompressionType> {
     }
 }
 
-fn redact_option_key(key: &Option<Key>) -> log_wrappers::Value {
+/// warp a Option<Key> to the redact wrapper.
+fn redact_option_key(key: &Option<Key>) -> log_wrappers::Value<'_> {
     match key {
         None => log_wrappers::Value::key(b""),
         Some(key) => log_wrappers::Value::key(key.as_encoded().as_slice()),
