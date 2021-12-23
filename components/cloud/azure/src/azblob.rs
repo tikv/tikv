@@ -113,7 +113,7 @@ impl Config {
         }
     }
 
-    pub fn load_env_shared_key() -> Option<StringNonEmpty> {
+    fn load_env_shared_key() -> Option<StringNonEmpty> {
         match env::var(ENV_SHARED_KEY).ok() {
             Some(key) => StringNonEmpty::opt(key),
             None => None,
