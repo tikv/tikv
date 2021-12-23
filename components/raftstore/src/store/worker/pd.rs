@@ -135,6 +135,7 @@ where
     StoreHeartbeat {
         stats: pdpb::StoreStats,
         store_info: StoreInfo<E>,
+        dr_autosync_status: Option<pdpb::StoreDRAutoSyncStatus>,
     },
     ReportBatchSplit {
         regions: Vec<metapb::Region>,
