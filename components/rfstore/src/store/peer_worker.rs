@@ -70,7 +70,6 @@ pub(crate) struct RaftWorker {
     receiver: Receiver<(u64, PeerMsg)>,
     router: RaftRouter,
     apply_sender: Sender<ApplyBatch>,
-    inboxes: HashMap<u64, PeerInbox>,
     last_tick: Instant,
     tick_millis: u64,
 }
@@ -90,7 +89,6 @@ impl RaftWorker {
                 receiver,
                 router,
                 apply_sender,
-                inboxes: HashMap::new(),
                 last_tick: Instant::now(),
                 tick_millis,
             },
@@ -108,14 +106,14 @@ impl RaftWorker {
                 self.process_inbox(inbox);
             });
             self.persist_state();
-            self.handle_post_persist_tasks();
+            self.handle_post_persist_tasks(&mut inboxes);
             self.round_end();
         }
     }
 
     /// return true means channel is disconnected, return outer loop.
     fn receive_msgs(&mut self, inboxes: &mut Inboxes) -> std::result::Result<(), RecvTimeoutError> {
-        inboxes.inboxes.retain(|region_id, inbox| -> bool {
+        inboxes.inboxes.retain(|_, inbox| -> bool {
             if inbox.msgs.len() == 0 {
                 false
             } else {
@@ -161,12 +159,17 @@ impl RaftWorker {
         }
         PeerMsgHandler::new(&mut peer_fsm, &mut self.ctx).handle_msgs(&mut inbox.msgs);
         peer_fsm.peer.handle_raft_ready(&mut self.ctx);
+        self.maybe_send_apply(&inbox.peer.applier);
+        peer_fsm.peer.maybe_finish_split(&mut self.ctx);
+    }
+
+    fn maybe_send_apply(&mut self, applier: &Arc<Mutex<Applier>>) {
         if !self.ctx.apply_msgs.msgs.is_empty() {
             let peer_batch = ApplyBatch {
                 msgs: mem::take(&mut self.ctx.apply_msgs.msgs),
-                applier: inbox.peer.applier.clone(),
+                applier: applier.clone(),
             };
-            self.apply_sender.send(peer_batch);
+            self.apply_sender.send(peer_batch).unwrap();
         }
     }
 
@@ -181,12 +184,13 @@ impl RaftWorker {
         raft_wb.reset();
     }
 
-    fn handle_post_persist_tasks(&mut self) {
+    fn handle_post_persist_tasks(&mut self, inboxes: &mut Inboxes) {
         let tasks = mem::take(&mut self.ctx.post_persist_tasks);
         for task in tasks {
-            let inbox = self.inboxes.get(&task.region_id).unwrap();
+            let inbox = inboxes.inboxes.get_mut(&task.region_id).unwrap();
             let peer = &mut inbox.peer.peer_fsm.lock().unwrap().peer;
-            peer.handle_post_persist_task(&mut self.ctx, task)
+            peer.handle_post_persist_task(&mut self.ctx, task);
+            self.maybe_send_apply(&inbox.peer.applier);
         }
     }
 

@@ -2,10 +2,8 @@
 
 use std::{mem, slice};
 
-use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
-use bytes::{BufMut, Bytes, BytesMut};
-
-use crate::table::table::Error;
+use byteorder::{ByteOrder, LittleEndian};
+use bytes::{BufMut, BytesMut};
 
 use super::super::table::Value;
 use farmhash;

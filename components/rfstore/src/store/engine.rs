@@ -1,13 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use slog::Level::Debug;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::{path::PathBuf, sync::Mutex};
 
 use crate::store::StoreMsg;
-use crate::*;
 use kvengine::Engine;
 use kvenginepb::ChangeSet;
 use rfengine::RFEngine;

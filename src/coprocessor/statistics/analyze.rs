@@ -35,6 +35,7 @@ use crate::coprocessor::dag::TiKVStorage;
 use crate::coprocessor::MEMTRACE_ANALYZE;
 use crate::coprocessor::*;
 use crate::storage::{Snapshot, SnapshotStore, Statistics};
+use crate::storage::txn::CloudStore;
 
 const ANALYZE_VERSION_V1: i32 = 1;
 const ANALYZE_VERSION_V2: i32 = 2;
@@ -42,7 +43,7 @@ const ANALYZE_VERSION_V2: i32 = 2;
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
     req: AnalyzeReq,
-    storage: Option<TiKVStorage<SnapshotStore<S>>>,
+    storage: Option<TiKVStorage<CloudStore<S>>>,
     ranges: Vec<KeyRange>,
     storage_stats: Statistics,
 }
@@ -55,15 +56,16 @@ impl<S: Snapshot> AnalyzeContext<S> {
         snap: S,
         req_ctx: &ReqContext,
     ) -> Result<Self> {
-        let store = SnapshotStore::new(
-            snap,
-            start_ts.into(),
-            req_ctx.context.get_isolation_level(),
-            !req_ctx.context.get_not_fill_cache(),
-            req_ctx.bypass_locks.clone(),
-            req_ctx.access_locks.clone(),
-            false,
-        );
+        // let store = SnapshotStore::new(
+        //     snap,
+        //     start_ts.into(),
+        //     req_ctx.context.get_isolation_level(),
+        //     !req_ctx.context.get_not_fill_cache(),
+        //     req_ctx.bypass_locks.clone(),
+        //     req_ctx.access_locks.clone(),
+        //     false,
+        // );
+        let store = CloudStore::new(snap, start_ts, req_ctx.bypass_locks.clone());
         Ok(Self {
             req,
             storage: Some(TiKVStorage::new(store, false)),
@@ -114,7 +116,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
     // it would build a histogram and count-min sketch of index values.
     async fn handle_index(
         req: AnalyzeIndexReq,
-        scanner: &mut RangesScanner<TiKVStorage<SnapshotStore<S>>>,
+        scanner: &mut RangesScanner<TiKVStorage<CloudStore<S>>>,
         is_common_handle: bool,
     ) -> Result<Vec<u8>> {
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
@@ -297,7 +299,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
 }
 
 struct RowSampleBuilder<S: Snapshot> {
-    data: BatchTableScanExecutor<TiKVStorage<SnapshotStore<S>>>,
+    data: BatchTableScanExecutor<TiKVStorage<CloudStore<S>>>,
 
     max_sample_size: usize,
     max_fm_sketch_size: usize,
@@ -309,7 +311,7 @@ struct RowSampleBuilder<S: Snapshot> {
 impl<S: Snapshot> RowSampleBuilder<S> {
     fn new(
         mut req: AnalyzeColumnsReq,
-        storage: TiKVStorage<SnapshotStore<S>>,
+        storage: TiKVStorage<CloudStore<S>>,
         ranges: Vec<KeyRange>,
     ) -> Result<Self> {
         let columns_info: Vec<_> = req.take_columns_info().into();
@@ -756,7 +758,7 @@ impl Drop for BaseRowSampleCollector {
 }
 
 struct SampleBuilder<S: Snapshot> {
-    data: BatchTableScanExecutor<TiKVStorage<SnapshotStore<S>>>,
+    data: BatchTableScanExecutor<TiKVStorage<CloudStore<S>>>,
 
     max_bucket_size: usize,
     max_sample_size: usize,
@@ -777,7 +779,7 @@ impl<S: Snapshot> SampleBuilder<S> {
     fn new(
         mut req: AnalyzeColumnsReq,
         common_handle_req: Option<tipb::AnalyzeIndexReq>,
-        storage: TiKVStorage<SnapshotStore<S>>,
+        storage: TiKVStorage<CloudStore<S>>,
         ranges: Vec<KeyRange>,
     ) -> Result<Self> {
         let columns_info: Vec<_> = req.take_columns_info().into();

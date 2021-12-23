@@ -63,34 +63,34 @@ impl InMemFS {
 
 #[async_trait]
 impl DFS for InMemFS {
-    fn open(&self, file_id: u64, opts: Options) -> Result<Arc<dyn File>> {
+    fn open(&self, file_id: u64, _opts: Options) -> Result<Arc<dyn File>> {
         if let Some(file) = self.files.get(&file_id).as_deref() {
             return Ok(file.clone());
         }
         Err(Error::NotExists(file_id))
     }
 
-    async fn prefetch(&self, file_id: u64, opts: Options) -> Result<()> {
+    async fn prefetch(&self, file_id: u64, _opts: Options) -> Result<()> {
         if self.files.contains_key(&file_id) {
             return Ok(());
         }
         return Err(Error::NotExists(file_id));
     }
 
-    async fn read_file(&self, file_id: u64, opts: Options) -> Result<Bytes> {
+    async fn read_file(&self, file_id: u64, _opts: Options) -> Result<Bytes> {
         if let Some(file) = self.files.get(&file_id).as_deref() {
             return Ok(file.data.slice(..));
         }
         return Err(Error::NotExists(file_id));
     }
 
-    async fn create(&self, file_id: u64, data: Bytes, opts: Options) -> Result<()> {
+    async fn create(&self, file_id: u64, data: Bytes, _opts: Options) -> Result<()> {
         let file = InMemFile::new(file_id, data);
         self.files.insert(file_id, Arc::new(file));
         Ok(())
     }
 
-    fn remove(&self, file_id: u64, opts: Options) {
+    fn remove(&self, file_id: u64, _opts: Options) {
         self.files.remove(&file_id);
     }
 

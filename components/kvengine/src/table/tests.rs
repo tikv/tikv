@@ -2,8 +2,6 @@
 
 use bytes::{Buf, Bytes};
 
-use crate::table::new_merge_iterator;
-
 use super::table::*;
 use rand::Rng;
 use std::cmp::Ordering::*;

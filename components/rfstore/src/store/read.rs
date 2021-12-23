@@ -6,11 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::store::{
-    cf_name_to_num, cmd_resp, rlog, util, Callback, Peer, PeerMsg, RaftCommand, ReadResponse,
+    cf_name_to_num, cmd_resp, util, Callback, Peer, PeerMsg, RaftCommand, ReadResponse,
     RegionSnapshot, RequestInspector, RequestPolicy, StoreMeta,
 };
-use crate::{RaftRouter, RaftStoreRouter, Result};
-use engine_traits::{KvEngine, Peekable};
+use crate::{RaftRouter, Result};
 use fail::fail_point;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -20,7 +19,6 @@ use kvproto::raft_cmdpb::{
 };
 use raftstore::store::util::{LeaseState, RemoteLease};
 use raftstore::store::worker_metrics::*;
-use tikv_util::codec::number::decode_u64;
 use tikv_util::lru::LruCache;
 use tikv_util::time::{monotonic_raw_now, Instant, ThreadReadId};
 use tikv_util::{debug, error};
@@ -74,7 +72,7 @@ pub trait ReadExecutor {
         msg: &RaftCmdRequest,
         region: &Arc<metapb::Region>,
         read_index: Option<u64>,
-        mut ts: Option<ThreadReadId>,
+        _ts: Option<ThreadReadId>,
     ) -> ReadResponse {
         let requests = msg.get_requests();
         let mut response = ReadResponse {
@@ -218,7 +216,7 @@ impl LocalReader {
         }
     }
 
-    fn redirect(&mut self, mut cmd: RaftCommand) {
+    fn redirect(&mut self, cmd: RaftCommand) {
         debug!("localreader redirects command"; "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
@@ -226,8 +224,8 @@ impl LocalReader {
         if result.is_ok() {
             return;
         }
-        if let crate::Error::SendPeerMsgError(mut peerMsg) = result.err().unwrap() {
-            let callback = peerMsg.take_callback();
+        if let crate::Error::SendPeerMsgError(mut msg) = result.err().unwrap() {
+            let callback = msg.take_callback();
             self.metrics.rejected_by_no_region += 1;
             err.set_message(format!("region {} is missing", region_id));
             err.mut_region_not_found().set_region_id(region_id);

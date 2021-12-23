@@ -12,7 +12,7 @@ use engine_traits::{
 };
 use std::collections::BTreeMap;
 use std::ops::Deref;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 type TraitsResult<T> = std::result::Result<T, engine_traits::Error>;
 
@@ -25,10 +25,10 @@ impl CFNamesExt for Engine {
 impl CFOptionsExt for Engine {
     type ColumnFamilyOptions = EngineColumnFamilyOptions;
 
-    fn get_options_cf(&self, cf: &str) -> TraitsResult<Self::ColumnFamilyOptions> {
+    fn get_options_cf(&self, _cf: &str) -> TraitsResult<Self::ColumnFamilyOptions> {
         panic!()
     }
-    fn set_options_cf(&self, cf: &str, options: &[(&str, &str)]) -> TraitsResult<()> {
+    fn set_options_cf(&self, _cf: &str, _options: &[(&str, &str)]) -> TraitsResult<()> {
         panic!()
     }
 }
@@ -50,7 +50,7 @@ impl ColumnFamilyOptions for EngineColumnFamilyOptions {
     fn get_level_zero_stop_writes_trigger(&self) -> u32 {
         panic!()
     }
-    fn set_level_zero_file_num_compaction_trigger(&mut self, v: i32) {
+    fn set_level_zero_file_num_compaction_trigger(&mut self, _v: i32) {
         panic!()
     }
     fn get_soft_pending_compaction_bytes_limit(&self) -> u64 {
@@ -62,16 +62,16 @@ impl ColumnFamilyOptions for EngineColumnFamilyOptions {
     fn get_block_cache_capacity(&self) -> u64 {
         panic!()
     }
-    fn set_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String> {
+    fn set_block_cache_capacity(&self, _capacity: u64) -> std::result::Result<(), String> {
         panic!()
     }
-    fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {
+    fn set_titandb_options(&mut self, _opts: &Self::TitanDBOptions) {
         panic!()
     }
     fn get_target_file_size_base(&self) -> u64 {
         panic!()
     }
-    fn set_disable_auto_compactions(&mut self, v: bool) {
+    fn set_disable_auto_compactions(&mut self, _v: bool) {
         panic!()
     }
     fn get_disable_auto_compactions(&self) -> bool {
@@ -80,7 +80,7 @@ impl ColumnFamilyOptions for EngineColumnFamilyOptions {
     fn get_disable_write_stall(&self) -> bool {
         panic!()
     }
-    fn set_sst_partitioner_factory<F: SstPartitionerFactory>(&mut self, factory: F) {
+    fn set_sst_partitioner_factory<F: SstPartitionerFactory>(&mut self, _factory: F) {
         panic!()
     }
 }
@@ -94,41 +94,41 @@ impl CompactExt for Engine {
 
     fn compact_range(
         &self,
-        cf: &str,
-        start_key: Option<&[u8]>,
-        end_key: Option<&[u8]>,
-        exclusive_manual: bool,
-        max_subcompactions: u32,
+        _cf: &str,
+        _start_key: Option<&[u8]>,
+        _end_key: Option<&[u8]>,
+        _exclusive_manual: bool,
+        _max_subcompactions: u32,
     ) -> TraitsResult<()> {
         panic!()
     }
 
     fn compact_files_in_range(
         &self,
-        start: Option<&[u8]>,
-        end: Option<&[u8]>,
-        output_level: Option<i32>,
+        _start: Option<&[u8]>,
+        _end: Option<&[u8]>,
+        _output_level: Option<i32>,
     ) -> TraitsResult<()> {
         panic!()
     }
 
     fn compact_files_in_range_cf(
         &self,
-        cf: &str,
-        start: Option<&[u8]>,
-        end: Option<&[u8]>,
-        output_level: Option<i32>,
+        _cf: &str,
+        _start: Option<&[u8]>,
+        _end: Option<&[u8]>,
+        _output_level: Option<i32>,
     ) -> TraitsResult<()> {
         panic!()
     }
 
     fn compact_files_cf(
         &self,
-        cf: &str,
-        files: Vec<String>,
-        output_level: Option<i32>,
-        max_subcompactions: u32,
-        exclude_l0: bool,
+        _cf: &str,
+        _files: Vec<String>,
+        _output_level: Option<i32>,
+        _max_subcompactions: u32,
+        _exclude_l0: bool,
     ) -> TraitsResult<()> {
         panic!()
     }
@@ -141,7 +141,7 @@ impl CompactedEvent for EngineCompactedEvent {
         panic!()
     }
 
-    fn is_size_declining_trivial(&self, split_check_diff: u64) -> bool {
+    fn is_size_declining_trivial(&self, _split_check_diff: u64) -> bool {
         panic!()
     }
 
@@ -151,8 +151,8 @@ impl CompactedEvent for EngineCompactedEvent {
 
     fn calc_ranges_declined_bytes(
         self,
-        ranges: &BTreeMap<Vec<u8>, u64>,
-        bytes_threshold: u64,
+        _ranges: &BTreeMap<Vec<u8>, u64>,
+        _bytes_threshold: u64,
     ) -> Vec<(u64, u64)> {
         panic!()
     }
@@ -168,7 +168,7 @@ impl DBOptionsExt for Engine {
     fn get_db_options(&self) -> Self::DBOptions {
         panic!()
     }
-    fn set_db_options(&self, options: &[(&str, &str)]) -> TraitsResult<()> {
+    fn set_db_options(&self, _options: &[(&str, &str)]) -> TraitsResult<()> {
         panic!()
     }
 }
@@ -190,7 +190,7 @@ impl DBOptions for EngineDBOptions {
         panic!()
     }
 
-    fn set_rate_bytes_per_sec(&mut self, rate_bytes_per_sec: i64) -> TraitsResult<()> {
+    fn set_rate_bytes_per_sec(&mut self, _rate_bytes_per_sec: i64) -> TraitsResult<()> {
         panic!()
     }
 
@@ -198,11 +198,11 @@ impl DBOptions for EngineDBOptions {
         panic!()
     }
 
-    fn set_rate_limiter_auto_tuned(&mut self, rate_limiter_auto_tuned: bool) -> TraitsResult<()> {
+    fn set_rate_limiter_auto_tuned(&mut self, _rate_limiter_auto_tuned: bool) -> TraitsResult<()> {
         panic!()
     }
 
-    fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {
+    fn set_titandb_options(&mut self, _opts: &Self::TitanDBOptions) {
         panic!()
     }
 }
@@ -213,7 +213,7 @@ impl TitanDBOptions for EngineTitanDBOptions {
     fn new() -> Self {
         panic!()
     }
-    fn set_min_blob_size(&mut self, size: u64) {
+    fn set_min_blob_size(&mut self, _size: u64) {
         panic!()
     }
 }
@@ -256,39 +256,40 @@ impl Peekable for Engine {
 
     fn get_value_opt(
         &self,
-        opts: &ReadOptions,
-        key: &[u8],
+        _opts: &ReadOptions,
+        _key: &[u8],
     ) -> TraitsResult<Option<Self::DBVector>> {
         panic!()
     }
+
     fn get_value_cf_opt(
         &self,
-        opts: &ReadOptions,
-        cf: &str,
-        key: &[u8],
+        _opts: &ReadOptions,
+        _cf: &str,
+        _key: &[u8],
     ) -> TraitsResult<Option<Self::DBVector>> {
         panic!()
     }
 }
 
 impl SyncMutable for Engine {
-    fn put(&self, key: &[u8], value: &[u8]) -> TraitsResult<()> {
+    fn put(&self, _key: &[u8], _value: &[u8]) -> TraitsResult<()> {
         panic!()
     }
-    fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> TraitsResult<()> {
+    fn put_cf(&self, _cf: &str, _key: &[u8], _value: &[u8]) -> TraitsResult<()> {
         panic!()
     }
 
-    fn delete(&self, key: &[u8]) -> TraitsResult<()> {
+    fn delete(&self, _key: &[u8]) -> TraitsResult<()> {
         panic!()
     }
-    fn delete_cf(&self, cf: &str, key: &[u8]) -> TraitsResult<()> {
+    fn delete_cf(&self, _cf: &str, _key: &[u8]) -> TraitsResult<()> {
         panic!()
     }
-    fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> TraitsResult<()> {
+    fn delete_range(&self, _begin_key: &[u8], _end_key: &[u8]) -> TraitsResult<()> {
         panic!()
     }
-    fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> TraitsResult<()> {
+    fn delete_range_cf(&self, _cf: &str, _begin_key: &[u8], _end_key: &[u8]) -> TraitsResult<()> {
         panic!()
     }
 }
@@ -296,10 +297,10 @@ impl SyncMutable for Engine {
 impl Iterable for Engine {
     type Iterator = EngineIterator;
 
-    fn iterator_opt(&self, opts: IterOptions) -> TraitsResult<Self::Iterator> {
+    fn iterator_opt(&self, _opts: IterOptions) -> TraitsResult<Self::Iterator> {
         panic!()
     }
-    fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> TraitsResult<Self::Iterator> {
+    fn iterator_cf_opt(&self, _cf: &str, _opts: IterOptions) -> TraitsResult<Self::Iterator> {
         panic!()
     }
 }
@@ -307,10 +308,10 @@ impl Iterable for Engine {
 pub struct EngineIterator;
 
 impl engine_traits::Iterator for EngineIterator {
-    fn seek(&mut self, key: SeekKey) -> TraitsResult<bool> {
+    fn seek(&mut self, _key: SeekKey) -> TraitsResult<bool> {
         panic!()
     }
-    fn seek_for_prev(&mut self, key: SeekKey) -> TraitsResult<bool> {
+    fn seek_for_prev(&mut self, _key: SeekKey) -> TraitsResult<bool> {
         panic!()
     }
 
@@ -336,7 +337,7 @@ impl engine_traits::Iterator for EngineIterator {
 impl ImportExt for Engine {
     type IngestExternalFileOptions = EngineIngestExternalFileOptions;
 
-    fn ingest_external_file_cf(&self, cf: &str, files: &[&str]) -> TraitsResult<()> {
+    fn ingest_external_file_cf(&self, _cf: &str, _files: &[&str]) -> TraitsResult<()> {
         panic!()
     }
 }
@@ -347,67 +348,67 @@ impl IngestExternalFileOptions for EngineIngestExternalFileOptions {
     fn new() -> Self {
         panic!()
     }
-    fn move_files(&mut self, f: bool) {
+    fn move_files(&mut self, _f: bool) {
         panic!()
     }
 
     fn get_write_global_seqno(&self) -> bool {
-        todo!()
+        panic!()
     }
 
-    fn set_write_global_seqno(&mut self, f: bool) {
-        todo!()
+    fn set_write_global_seqno(&mut self, _f: bool) {
+        panic!()
     }
 }
 
 impl FlowControlFactorsExt for Engine {
     fn get_cf_num_files_at_level(
         &self,
-        cf: &str,
-        level: usize,
+        _cf: &str,
+        _level: usize,
     ) -> engine_traits::Result<Option<u64>> {
         // TODO(x)
         return Ok(Some(1));
     }
 
-    fn get_cf_num_immutable_mem_table(&self, cf: &str) -> engine_traits::Result<Option<u64>> {
+    fn get_cf_num_immutable_mem_table(&self, _cf: &str) -> engine_traits::Result<Option<u64>> {
         // TODO(x)
         return Ok(Some(1));
     }
 
-    fn get_cf_pending_compaction_bytes(&self, cf: &str) -> engine_traits::Result<Option<u64>> {
+    fn get_cf_pending_compaction_bytes(&self, _cf: &str) -> engine_traits::Result<Option<u64>> {
         // TODO(x)
         return Ok(Some(0));
     }
 }
 
 impl MiscExt for Engine {
-    fn flush(&self, sync: bool) -> TraitsResult<()> {
+    fn flush(&self, _sync: bool) -> TraitsResult<()> {
         panic!()
     }
 
-    fn flush_cf(&self, cf: &str, sync: bool) -> TraitsResult<()> {
+    fn flush_cf(&self, _cf: &str, _sync: bool) -> TraitsResult<()> {
         panic!()
     }
 
     fn delete_ranges_cf(
         &self,
-        cf: &str,
-        strategy: DeleteStrategy,
-        ranges: &[Range],
+        _cf: &str,
+        _strategy: DeleteStrategy,
+        _ranges: &[Range],
     ) -> TraitsResult<()> {
         panic!()
     }
 
     fn get_approximate_memtable_stats_cf(
         &self,
-        cf: &str,
-        range: &Range,
+        _cf: &str,
+        _range: &Range,
     ) -> TraitsResult<(u64, u64)> {
         panic!()
     }
 
-    fn ingest_maybe_slowdown_writes(&self, cf: &str) -> TraitsResult<bool> {
+    fn ingest_maybe_slowdown_writes(&self, _cf: &str) -> TraitsResult<bool> {
         panic!()
     }
 
@@ -415,7 +416,7 @@ impl MiscExt for Engine {
         panic!()
     }
 
-    fn roughly_cleanup_ranges(&self, ranges: &[(Vec<u8>, Vec<u8>)]) -> TraitsResult<()> {
+    fn roughly_cleanup_ranges(&self, _ranges: &[(Vec<u8>, Vec<u8>)]) -> TraitsResult<()> {
         panic!()
     }
 
@@ -427,7 +428,7 @@ impl MiscExt for Engine {
         panic!()
     }
 
-    fn exists(path: &str) -> bool {
+    fn exists(_path: &str) -> bool {
         panic!()
     }
 
@@ -443,15 +444,15 @@ impl MiscExt for Engine {
         panic!()
     }
 
-    fn get_total_sst_files_size_cf(&self, cf: &str) -> TraitsResult<Option<u64>> {
+    fn get_total_sst_files_size_cf(&self, _cf: &str) -> TraitsResult<Option<u64>> {
         panic!()
     }
 
     fn get_range_entries_and_versions(
         &self,
-        cf: &str,
-        start: &[u8],
-        end: &[u8],
+        _cf: &str,
+        _start: &[u8],
+        _end: &[u8],
     ) -> TraitsResult<Option<(u64, u64)>> {
         panic!()
     }
@@ -464,10 +465,10 @@ impl MiscExt for Engine {
 impl MvccPropertiesExt for Engine {
     fn get_mvcc_properties_cf(
         &self,
-        cf: &str,
-        safe_point: txn_types::TimeStamp,
-        start_key: &[u8],
-        end_key: &[u8],
+        _cf: &str,
+        _safe_point: txn_types::TimeStamp,
+        _start_key: &[u8],
+        _end_key: &[u8],
     ) -> Option<MvccProperties> {
         panic!()
     }
@@ -476,7 +477,7 @@ impl MvccPropertiesExt for Engine {
 impl PerfContextExt for Engine {
     type PerfContext = EnginePerfContext;
 
-    fn get_perf_context(&self, level: PerfLevel, kind: PerfContextKind) -> Self::PerfContext {
+    fn get_perf_context(&self, _level: PerfLevel, _kind: PerfContextKind) -> Self::PerfContext {
         panic!()
     }
 }
@@ -494,45 +495,53 @@ impl PerfContext for EnginePerfContext {
 }
 
 impl RangePropertiesExt for Engine {
-    fn get_range_approximate_keys(&self, range: Range, large_threshold: u64) -> TraitsResult<u64> {
+    fn get_range_approximate_keys(
+        &self,
+        _range: Range,
+        _large_threshold: u64,
+    ) -> TraitsResult<u64> {
         panic!()
     }
 
     fn get_range_approximate_keys_cf(
         &self,
-        cfname: &str,
-        range: Range,
-        large_threshold: u64,
+        _cfname: &str,
+        _range: Range,
+        _large_threshold: u64,
     ) -> TraitsResult<u64> {
         panic!()
     }
 
-    fn get_range_approximate_size(&self, range: Range, large_threshold: u64) -> TraitsResult<u64> {
+    fn get_range_approximate_size(
+        &self,
+        _range: Range,
+        _large_threshold: u64,
+    ) -> TraitsResult<u64> {
         panic!()
     }
 
     fn get_range_approximate_size_cf(
         &self,
-        cfname: &str,
-        range: Range,
-        large_threshold: u64,
+        _cfname: &str,
+        _range: Range,
+        _large_threshold: u64,
     ) -> TraitsResult<u64> {
         panic!()
     }
 
     fn get_range_approximate_split_keys(
         &self,
-        range: Range,
-        key_count: usize,
+        _range: Range,
+        _key_count: usize,
     ) -> TraitsResult<Vec<Vec<u8>>> {
         panic!()
     }
 
     fn get_range_approximate_split_keys_cf(
         &self,
-        cfname: &str,
-        range: Range,
-        key_count: usize,
+        _cfname: &str,
+        _range: Range,
+        _key_count: usize,
     ) -> TraitsResult<Vec<Vec<u8>>> {
         panic!()
     }
@@ -552,16 +561,16 @@ impl Peekable for EngineSnapshot {
 
     fn get_value_opt(
         &self,
-        opts: &ReadOptions,
-        key: &[u8],
+        _opts: &ReadOptions,
+        _key: &[u8],
     ) -> TraitsResult<Option<Self::DBVector>> {
         panic!()
     }
     fn get_value_cf_opt(
         &self,
-        opts: &ReadOptions,
-        cf: &str,
-        key: &[u8],
+        _opts: &ReadOptions,
+        _cf: &str,
+        _key: &[u8],
     ) -> TraitsResult<Option<Self::DBVector>> {
         panic!()
     }
@@ -570,10 +579,10 @@ impl Peekable for EngineSnapshot {
 impl Iterable for EngineSnapshot {
     type Iterator = PanicSnapshotIterator;
 
-    fn iterator_opt(&self, opts: IterOptions) -> TraitsResult<Self::Iterator> {
+    fn iterator_opt(&self, _opts: IterOptions) -> TraitsResult<Self::Iterator> {
         panic!()
     }
-    fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> TraitsResult<Self::Iterator> {
+    fn iterator_cf_opt(&self, _cf: &str, _opts: IterOptions) -> TraitsResult<Self::Iterator> {
         panic!()
     }
 }
@@ -581,10 +590,10 @@ impl Iterable for EngineSnapshot {
 pub struct PanicSnapshotIterator;
 
 impl engine_traits::Iterator for PanicSnapshotIterator {
-    fn seek(&mut self, key: SeekKey) -> TraitsResult<bool> {
+    fn seek(&mut self, _key: SeekKey) -> TraitsResult<bool> {
         panic!()
     }
-    fn seek_for_prev(&mut self, key: SeekKey) -> TraitsResult<bool> {
+    fn seek_for_prev(&mut self, _key: SeekKey) -> TraitsResult<bool> {
         panic!()
     }
 
@@ -616,7 +625,7 @@ impl SstExt for Engine {
 pub struct EngineSstReader;
 
 impl SstReader for EngineSstReader {
-    fn open(path: &str) -> TraitsResult<Self> {
+    fn open(_path: &str) -> TraitsResult<Self> {
         panic!()
     }
     fn verify_checksum(&self) -> TraitsResult<()> {
@@ -630,10 +639,10 @@ impl SstReader for EngineSstReader {
 impl Iterable for EngineSstReader {
     type Iterator = EngineSstReaderIterator;
 
-    fn iterator_opt(&self, opts: IterOptions) -> TraitsResult<Self::Iterator> {
+    fn iterator_opt(&self, _opts: IterOptions) -> TraitsResult<Self::Iterator> {
         panic!()
     }
-    fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> TraitsResult<Self::Iterator> {
+    fn iterator_cf_opt(&self, _cf: &str, _opts: IterOptions) -> TraitsResult<Self::Iterator> {
         panic!()
     }
 }
@@ -641,10 +650,10 @@ impl Iterable for EngineSstReader {
 pub struct EngineSstReaderIterator;
 
 impl engine_traits::Iterator for EngineSstReaderIterator {
-    fn seek(&mut self, key: SeekKey) -> TraitsResult<bool> {
+    fn seek(&mut self, _key: SeekKey) -> TraitsResult<bool> {
         panic!()
     }
-    fn seek_for_prev(&mut self, key: SeekKey) -> TraitsResult<bool> {
+    fn seek_for_prev(&mut self, _key: SeekKey) -> TraitsResult<bool> {
         panic!()
     }
 
@@ -673,10 +682,10 @@ impl SstWriter for EngineSstWriter {
     type ExternalSstFileInfo = EngineExternalSstFileInfo;
     type ExternalSstFileReader = EngineExternalSstFileReader;
 
-    fn put(&mut self, key: &[u8], val: &[u8]) -> TraitsResult<()> {
+    fn put(&mut self, _key: &[u8], _val: &[u8]) -> TraitsResult<()> {
         panic!()
     }
-    fn delete(&mut self, key: &[u8]) -> TraitsResult<()> {
+    fn delete(&mut self, _key: &[u8]) -> TraitsResult<()> {
         panic!()
     }
     fn file_size(&mut self) -> u64 {
@@ -696,23 +705,23 @@ impl SstWriterBuilder<Engine> for EngineSstWriterBuilder {
     fn new() -> Self {
         panic!()
     }
-    fn set_db(self, db: &Engine) -> Self {
+    fn set_db(self, _db: &Engine) -> Self {
         panic!()
     }
-    fn set_cf(self, cf: &str) -> Self {
+    fn set_cf(self, _cf: &str) -> Self {
         panic!()
     }
-    fn set_in_memory(self, in_memory: bool) -> Self {
+    fn set_in_memory(self, _in_memory: bool) -> Self {
         panic!()
     }
-    fn set_compression_type(self, compression: Option<SstCompressionType>) -> Self {
+    fn set_compression_type(self, _compression: Option<SstCompressionType>) -> Self {
         panic!()
     }
-    fn set_compression_level(self, level: i32) -> Self {
+    fn set_compression_level(self, _level: i32) -> Self {
         panic!()
     }
 
-    fn build(self, path: &str) -> TraitsResult<EngineSstWriter> {
+    fn build(self, _path: &str) -> TraitsResult<EngineSstWriter> {
         panic!()
     }
 }
@@ -746,7 +755,7 @@ impl ExternalSstFileInfo for EngineExternalSstFileInfo {
 pub struct EngineExternalSstFileReader;
 
 impl std::io::Read for EngineExternalSstFileReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
         panic!()
     }
 }
@@ -776,8 +785,8 @@ impl TablePropertiesExt for Engine {
 
     fn table_properties_collection(
         &self,
-        cf: &str,
-        ranges: &[Range],
+        _cf: &str,
+        _ranges: &[Range],
     ) -> TraitsResult<Self::TablePropertiesCollection> {
         panic!()
     }
@@ -786,9 +795,9 @@ impl TablePropertiesExt for Engine {
 impl TtlPropertiesExt for Engine {
     fn get_range_ttl_properties_cf(
         &self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
+        _cf: &str,
+        _start_key: &[u8],
+        _end_key: &[u8],
     ) -> TraitsResult<Vec<(String, TtlProperties)>> {
         panic!()
     }
@@ -807,7 +816,7 @@ impl WriteBatchExt for Engine {
     fn write_batch(&self) -> Self::WriteBatch {
         panic!()
     }
-    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
+    fn write_batch_with_cap(&self, _cap: usize) -> Self::WriteBatch {
         panic!()
     }
 }
@@ -848,29 +857,34 @@ impl engine_traits::WriteBatch<Engine> for EngineWriteBatch {
     fn rollback_to_save_point(&mut self) -> TraitsResult<()> {
         panic!()
     }
-    fn merge(&mut self, src: Self) {
+    fn merge(&mut self, _src: Self) {
         panic!()
     }
 }
 
 impl Mutable for EngineWriteBatch {
-    fn put(&mut self, key: &[u8], value: &[u8]) -> TraitsResult<()> {
+    fn put(&mut self, _key: &[u8], _value: &[u8]) -> TraitsResult<()> {
         panic!()
     }
-    fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> TraitsResult<()> {
+    fn put_cf(&mut self, _cf: &str, _key: &[u8], _value: &[u8]) -> TraitsResult<()> {
         panic!()
     }
 
-    fn delete(&mut self, key: &[u8]) -> TraitsResult<()> {
+    fn delete(&mut self, _key: &[u8]) -> TraitsResult<()> {
         panic!()
     }
-    fn delete_cf(&mut self, cf: &str, key: &[u8]) -> TraitsResult<()> {
+    fn delete_cf(&mut self, _cf: &str, _key: &[u8]) -> TraitsResult<()> {
         panic!()
     }
-    fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> TraitsResult<()> {
+    fn delete_range(&mut self, _begin_key: &[u8], _end_key: &[u8]) -> TraitsResult<()> {
         panic!()
     }
-    fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> TraitsResult<()> {
+    fn delete_range_cf(
+        &mut self,
+        _cf: &str,
+        _begin_key: &[u8],
+        _end_key: &[u8],
+    ) -> TraitsResult<()> {
         panic!()
     }
 }

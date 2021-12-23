@@ -1,29 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
-use std::sync::mpsc::{self, Sender};
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
-};
-use std::thread::{Builder, JoinHandle};
+use std::sync::{atomic::Ordering, Arc};
 use std::time::{Duration, Instant};
-use std::{cmp, io};
 
-use crate::store::cmd_resp::new_error;
-use crate::store::rlog;
-use crate::store::{Callback, CasualMessage, PeerMsg, RaftCommand, StoreInfo, StoreMsg};
+use crate::store::{Callback, CasualMessage, PeerMsg, StoreInfo};
 use crate::{RaftRouter, RaftStoreRouter};
-use raftstore::store::metrics::*;
 
 #[cfg(feature = "failpoints")]
 use fail::fail_point;
-use futures::future::TryFutureExt;
 
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{KvEngine, MiscExt, RaftEngine};
+use engine_traits::MiscExt;
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use kvproto::raft_cmdpb::{
@@ -34,18 +25,16 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::RegionReplicationStatus;
 use kvproto::{metapb, pdpb};
 use pd_client::metrics::*;
-use pd_client::{Error, PdClient, RegionStat};
+use pd_client::{PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 use raftstore::store::util::ConfChangeKind;
 use raftstore::store::{util, QueryStats, ReadStats, TxnExt, WriteStats};
-use tikv_util::metrics::ThreadInfoStatistics;
-use tikv_util::sys::disk;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::topn::TopN;
-use tikv_util::worker::{Runnable, Scheduler, Stopped};
-use tikv_util::{box_err, debug, error, info, thd_name, warn};
+use tikv_util::worker::{Runnable, Scheduler};
+use tikv_util::{debug, error, info, warn};
 use yatp::Remote;
 
 type RecordPairVec = Vec<pdpb::RecordPair>;

@@ -4,7 +4,6 @@ use byteorder::{ByteOrder, LittleEndian};
 use rand::Rng;
 use std::fmt::Display;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
-use std::sync::Arc;
 use std::{mem, ptr, slice};
 
 use super::super::table::Value;

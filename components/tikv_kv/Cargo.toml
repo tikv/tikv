@@ -27,6 +27,7 @@ fail = "0.5"
 file_system = { path = "../file_system" }
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 into_other = { path = "../into_other", default-features = false }
+kvengine = { path = "../kvengine", default-features = false }
 kvproto = { git = "https://github.com/coocood/kvproto.git", rev = "128b6a780ee757fe66484bf324673abb4f868473" }
 log_wrappers = { path = "../log_wrappers" }
 prometheus = { version = "0.13", features = ["nightly"] }

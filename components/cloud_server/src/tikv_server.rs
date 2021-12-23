@@ -27,6 +27,7 @@ use std::{
 
 use crate::server::Server;
 use crate::setup::{initial_logger, initial_metric, validate_and_persist_config};
+use crate::status_server::StatusServer;
 use crate::{node::*, raft_client::*, raftkv::*, resolve, signal_handler};
 use cdc::MemoryQuota;
 use concurrency_manager::ConcurrencyManager;
@@ -73,7 +74,6 @@ use tikv::{
         config::ServerConfigManager,
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
-        status_server::StatusServer,
         ttl::TTLChecker,
         CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
@@ -112,6 +112,7 @@ pub fn run_tikv(config: TiKvConfig) {
     let _m = Monitor::default();
 
     let mut tikv = TiKVServer::new(config);
+    info!("created tikv server");
 
     // Must be called after `TiKVServer::init`.
     let memory_limit = tikv.config.memory_usage_limit.0.unwrap().0;
@@ -122,13 +123,10 @@ pub fn run_tikv(config: TiKvConfig) {
     tikv.init_fs();
     tikv.init_yatp();
     tikv.init_encryption();
-    let (limiter, fetcher) = tikv.init_io_utility();
-    // TODO
-    // limiter.set_low_priority_io_adjustor_if_needed(Some(engines_info.clone()));
+    // TODO(x) io limiter and metrics flusher
     tikv.init_engines();
     let server_config = tikv.init_servers();
     tikv.register_services();
-    tikv.init_metrics_flusher(fetcher);
     tikv.run_server(server_config);
     tikv.run_status_server();
 
@@ -376,29 +374,6 @@ impl TiKVServer {
                 tikv_util::panic_mark_file_path(&self.config.storage.data_dir).display()
             );
         }
-
-        // We truncate a big file to make sure that both raftdb and kvdb of TiKV have enough space
-        // to do compaction and region migration when TiKV recover. This file is created in
-        // data_dir rather than db_path, because we must not increase store size of db_path.
-        let disk_stats = fs2::statvfs(&self.config.storage.data_dir).unwrap();
-        let mut capacity = disk_stats.total_space();
-        if self.config.raft_store.capacity.0 > 0 {
-            capacity = cmp::min(capacity, self.config.raft_store.capacity.0);
-        }
-        //TODO after disk full readonly impl, such file should be removed.
-        file_system::reserve_space_for_recover(
-            &self.config.storage.data_dir,
-            if self.config.storage.reserve_space.0 == 0 {
-                0
-            } else {
-                // Max one of configured `reserve_space` and `storage.capacity * 5%`.
-                cmp::max(
-                    (capacity as f64 * 0.05) as u64,
-                    self.config.storage.reserve_space.0,
-                )
-            },
-        )
-        .unwrap();
     }
 
     fn init_yatp(&self) {
@@ -424,6 +399,7 @@ impl TiKVServer {
     }
 
     fn init_engines(&mut self) {
+        info!("init engines");
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let engine = RaftKv::new(
             ServerRaftStoreRouter::new(
@@ -441,32 +417,11 @@ impl TiKVServer {
     }
 
     fn init_servers(&mut self) -> Arc<VersionTrack<ServerConfig>> {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let flow_controller = Arc::new(FlowController::new(
-            &self.config.storage.flow_control,
-            self.engines.as_ref().unwrap().engine.kv_engine(),
-            rx,
-        ));
+        info!("init servers");
         let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
         let ttl_scheduler = ttl_checker.scheduler();
 
-        let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        // Create cdc.
-        let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
-        let cdc_scheduler = cdc_worker.scheduler();
-        let txn_extra_scheduler = cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone());
-
-        self.engines
-            .as_mut()
-            .unwrap()
-            .engine
-            .set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
-
         let lock_mgr = LockManager::new(self.config.pessimistic_txn.pipelined);
-        cfg_controller.register(
-            tikv::config::Module::PessimisticTxn,
-            Box::new(lock_mgr.config_manager()),
-        );
         lock_mgr.register_detector_role_change_observer(self.coprocessor_host.as_mut().unwrap());
 
         let engines = self.engines.as_mut().unwrap();
@@ -518,7 +473,7 @@ impl TiKVServer {
             lock_mgr.clone(),
             self.concurrency_manager.clone(),
             lock_mgr.get_pipelined(),
-            flow_controller,
+            Arc::new(FlowController::empty()),
             reporter,
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
@@ -558,8 +513,10 @@ impl TiKVServer {
             self.pd_client.clone(),
             self.background_worker.clone(),
         );
+        info!("bootstrap store");
         node.try_bootstrap_store(self.raw_engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
+        info!("store bootstrapped");
 
         // Create server
         let server = Server::new(
@@ -696,17 +653,15 @@ impl TiKVServer {
     }
 
     fn run_status_server(&mut self) {
-        todo!();
-        /*
         // Create a status server.
         let status_enabled = !self.config.server.status_addr.is_empty();
         if status_enabled {
             let mut status_server = match StatusServer::new(
                 self.config.server.status_thread_pool_size,
-                Some(self.pd_client.clone()),
                 self.cfg_controller.take().unwrap(),
                 Arc::new(self.config.security.clone()),
                 self.router.clone(),
+                self.store_path.clone(),
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
@@ -715,16 +670,12 @@ impl TiKVServer {
                 }
             };
             // Start the status server.
-            if let Err(e) = status_server.start(
-                self.config.server.status_addr.clone(),
-                self.config.server.advertise_status_addr.clone(),
-            ) {
+            if let Err(e) = status_server.start(self.config.server.status_addr.clone()) {
                 error_unknown!(%e; "failed to bind addr for status service");
             } else {
                 self.to_stop.push(status_server);
             }
         }
-        */
     }
 
     fn stop(self) {
@@ -779,7 +730,23 @@ struct PdIDAllocator {
 
 impl kvengine::IDAllocator for PdIDAllocator {
     fn alloc_id(&self, count: usize) -> std::result::Result<Vec<u64>, String> {
-        todo!()
+        let mut futs = vec![];
+        for i in 0..count {
+            futs.push(self.pd.get_tso());
+        }
+        let mut timestamps = vec![];
+        while !futs.is_empty() {
+            match block_on(futures::future::select_all(futs)) {
+                (Ok(val), _index, remaining) => {
+                    timestamps.push(val.into_inner());
+                    futs = remaining;
+                }
+                (Err(_e), _index, remaining) => {
+                    return Err(_e.to_string());
+                }
+            }
+        }
+        Ok(timestamps)
     }
 }
 
@@ -879,11 +846,7 @@ trait Stop {
     fn stop(self: Box<Self>);
 }
 
-impl<E, R> Stop for StatusServer<E, R>
-where
-    E: 'static,
-    R: 'static + Send,
-{
+impl Stop for StatusServer {
     fn stop(self: Box<Self>) {
         (*self).stop()
     }

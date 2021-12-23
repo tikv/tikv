@@ -1,19 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use core::slice::{self};
-use std::borrow::BorrowMut;
-use std::cell::RefCell;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
-use std::rc::Rc;
 use std::sync::Arc;
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
-use crossbeam::atomic::AtomicCell;
-use slog_global::info;
+use bytes::{Buf, BytesMut};
 
 use crate::shard::{L0Tables, MemTables};
-use crate::table::{memtable, sstable, table, EmptyIterator};
+use crate::table::table;
 use crate::*;
 use crossbeam_epoch as epoch;
 
@@ -52,7 +46,14 @@ pub struct SnapAccess {
 
 impl Debug for SnapAccess {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        todo!()
+        write!(
+            f,
+            "snap access {}:{}, seq: {}, splitting: {}",
+            self.shard.id,
+            self.shard.ver,
+            self.write_sequence,
+            self.splitting.is_some(),
+        )
     }
 }
 
@@ -97,6 +98,17 @@ impl SnapAccess {
             key: BytesMut::new(),
             val: table::Value::new(),
             inner: self.new_table_iterator(cf, reversed),
+        }
+    }
+
+    pub fn new_data_iterator(&self, reversed: bool, read_ts: u64, all_versions: bool) -> Iterator {
+        Iterator {
+            all_versions,
+            reversed,
+            read_ts,
+            key: BytesMut::new(),
+            val: table::Value::new(),
+            inner: self.new_table_iterator(0, reversed),
         }
     }
 
@@ -183,8 +195,9 @@ impl SnapAccess {
             if lh.tables.len() == 0 {
                 continue;
             }
-            iters.push(Box::new(sstable::ConcatIterator::new(
-                lh.tables.clone(),
+            iters.push(Box::new(ConcatIterator::new(
+                scf.clone(),
+                lh.level,
                 reversed,
             )));
         }

@@ -3,42 +3,29 @@
 use crate::errors::*;
 use byteorder::{ByteOrder, LittleEndian};
 use kvproto::*;
-use std::cell::RefCell;
-use std::error;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::Receiver;
-use std::sync::Arc;
 
 use super::keys::raft_state_key;
 use crate::store::{
-    region_state_key, Engines, RaftApplyState, RaftContext, RaftState, RegionTag, RegionTask,
+    region_state_key, Engines, RaftApplyState, RaftContext, RaftState, RegionIDVer, RegionTask,
     KV_ENGINE_META_KEY, TERM_KEY,
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use engine_traits::{Mutable, RaftEngineReadOnly, RaftLogBatch};
-use futures::channel::mpsc::UnboundedSender;
+use engine_traits::RaftEngineReadOnly;
 use kvengine::ShardMeta;
-use kvenginepb::Snapshot;
-use kvproto::metapb::Region;
-use kvproto::raft_serverpb::{PeerState, RaftLocalState};
+use kvproto::raft_serverpb::PeerState;
 use protobuf::Message;
-use raft::StorageError::Unavailable;
-use raft::{is_empty_snap, StorageError};
+use raft::StorageError;
 use raft_proto::eraftpb;
 use raft_proto::eraftpb::{ConfState, HardState};
 use raftstore::store::util;
 use raftstore::store::util::conf_state_from_region;
 use rfengine;
-use tikv_util::mpsc::Sender;
-use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, info};
-use tokio::sync::mpsc;
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
 pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
-const MAX_SNAP_TRY_CNT: usize = 5;
 
 /// The initial region epoch version.
 pub const INIT_EPOCH_VER: u64 = 1;
@@ -87,7 +74,6 @@ pub(crate) struct PeerStorage {
     last_term: u64,
 
     pub(crate) snap_state: SnapState,
-    snap_tried_cnt: usize,
 
     pub(crate) initial_flushed: bool,
     pub(crate) shard_meta: Option<kvengine::ShardMeta>,
@@ -206,7 +192,7 @@ impl PeerStorage {
             change_set.merge_from_bytes(&shard_meta_bin).unwrap();
             let meta = kvengine::ShardMeta::new(change_set);
             meta_index = meta.seq;
-            meta_term = meta.properties.get(TERM_KEY).unwrap().get_u64_le();
+            meta_term = meta.get_property(TERM_KEY).unwrap().get_u64_le();
             shard_meta = Some(meta);
         }
         let last_term = init_last_term(&engines.raft, &region, raft_state, meta_index, meta_term)?;
@@ -222,15 +208,14 @@ impl PeerStorage {
             apply_state,
             last_term,
             snap_state: SnapState::Relax,
-            snap_tried_cnt: 0,
             initial_flushed,
             shard_meta,
             split_stage: kvenginepb::SplitStage::Initial,
         })
     }
 
-    pub(crate) fn tag(&self) -> RegionTag {
-        RegionTag::from_region(&self.region)
+    pub(crate) fn tag(&self) -> RegionIDVer {
+        RegionIDVer::from_region(&self.region)
     }
 
     pub(crate) fn clear_meta(&self, rwb: &mut rfengine::WriteBatch) {
@@ -305,7 +290,7 @@ impl PeerStorage {
     pub fn truncated_term(&self) -> u64 {
         self.shard_meta
             .as_ref()
-            .map_or(0, |m| m.properties.get(TERM_KEY).unwrap().get_u64_le())
+            .map_or(0, |m| m.get_property(TERM_KEY).unwrap().get_u64_le())
     }
 
     pub fn region(&self) -> &metapb::Region {
@@ -353,7 +338,7 @@ impl PeerStorage {
         let prev_raft_state = self.raft_state;
         if !ready.snapshot().is_empty() {
             let prev_region = self.region().clone();
-            self.apply_snapshot(ready.snapshot(), ctx);
+            self.apply_snapshot(ready.snapshot(), ctx).unwrap();
             let region = self.region.clone();
             res = Some(ApplySnapResult {
                 prev_region,
@@ -373,11 +358,27 @@ impl PeerStorage {
             }
         }
         if prev_raft_state != self.raft_state || !ready.snapshot().is_empty() {
-            let key = raft_state_key(self.region.get_region_epoch().get_version());
-            ctx.raft_wb
-                .set_state(self.get_region_id(), &key, &self.raft_state.marshal());
+            self.write_raft_state(ctx);
         }
         res
+    }
+
+    pub fn handle_persisted_light_ready(
+        &mut self,
+        ctx: &mut RaftContext,
+        light_ready: raft::LightReady,
+    ) {
+        if let Some(commit_idx) = light_ready.commit_index() {
+            assert!(self.raft_state.commit < commit_idx);
+            self.raft_state.commit = commit_idx;
+            self.write_raft_state(ctx);
+        }
+    }
+
+    fn write_raft_state(&mut self, ctx: &mut RaftContext) {
+        let key = raft_state_key(self.region.get_region_epoch().get_version());
+        ctx.raft_wb
+            .set_state(self.get_region_id(), &key, &self.raft_state.marshal());
     }
 
     fn apply_snapshot(&mut self, snap: &eraftpb::Snapshot, ctx: &mut RaftContext) -> Result<()> {
@@ -411,7 +412,7 @@ impl PeerStorage {
         self.region = region;
 
         let snap_task = RegionTask::ApplyChangeSet { change: change_set };
-        ctx.global.region_scheduler.schedule(snap_task);
+        ctx.global.region_scheduler.schedule(snap_task).unwrap();
         self.snap_state = SnapState::Applying;
         Ok(())
     }
@@ -441,7 +442,7 @@ fn init_raft_state(raft_engine: &rfengine::RFEngine, region: &metapb::Region) ->
     let mut rs = RaftState::default();
     let rs_key = raft_state_key(region.id);
     let rs_val = raft_engine.get_state(region.id, rs_key.chunk());
-    if let Some(val) = rs_val {
+    if rs_val.is_none() {
         if region.peers.len() > 0 {
             // new split region.
             rs.last_index = RAFT_INIT_LOG_INDEX;
@@ -451,6 +452,8 @@ fn init_raft_state(raft_engine: &rfengine::RFEngine, region: &metapb::Region) ->
             wb.set_state(region.id, rs_key.chunk(), rs.marshal().chunk());
             raft_engine.write(&wb)?;
         }
+    } else {
+        rs.unmarshal(&rs_val.unwrap())
     }
     Ok(rs)
 }
@@ -501,7 +504,7 @@ pub fn clear_meta(
     region: &metapb::Region,
 ) {
     let region_id = region.get_id();
-    raft.iterate_region_states(region_id, false, |k, v| {
+    raft.iterate_region_states(region_id, false, |k, _| {
         raft_wb.set_state(region_id, k, &[]);
         Ok(())
     })
@@ -513,7 +516,7 @@ pub fn clear_meta(
 
 // When we bootstrap the region we must call this to initialize region local state first.
 pub fn write_initial_raft_state(raft_wb: &mut rfengine::WriteBatch, region_id: u64) -> Result<()> {
-    let mut raft_state = RaftState {
+    let raft_state = RaftState {
         last_index: RAFT_INIT_LOG_INDEX,
         vote: 0,
         term: RAFT_INIT_LOG_TERM,
@@ -521,12 +524,6 @@ pub fn write_initial_raft_state(raft_wb: &mut rfengine::WriteBatch, region_id: u
     };
     raft_wb.set_state(region_id, &raft_state_key(1), &raft_state.marshal());
     Ok(())
-}
-
-// When we bootstrap the region or handling split new region, we must
-// call this to initialize region apply state first.
-pub fn write_initial_apply_state(kv_wb: &mut kvengine::WriteBatch) {
-    kv_wb.set_sequence(RAFT_INIT_LOG_INDEX);
 }
 
 pub fn write_peer_state(raft_wb: &mut rfengine::WriteBatch, region: &metapb::Region) {

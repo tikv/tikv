@@ -17,13 +17,12 @@ impl TickSchedule {
 }
 
 pub(crate) struct Ticker {
-    region_id: u64,
     tick: u64,
     schedules: Vec<TickSchedule>,
 }
 
 impl Ticker {
-    pub(crate) fn new(region_id: u64, config: &Config) -> Self {
+    pub(crate) fn new(config: &Config) -> Self {
         let base_interval = config.raft_base_tick_interval.as_millis();
         let schedules = vec![
             TickSchedule::new(1),
@@ -32,11 +31,7 @@ impl Ticker {
             TickSchedule::new(config.pd_heartbeat_tick_interval.as_millis() / base_interval),
             TickSchedule::new(config.peer_stale_state_check_interval.as_millis() / base_interval),
         ];
-        Self {
-            region_id,
-            tick: 1,
-            schedules,
-        }
+        Self { tick: 1, schedules }
     }
 
     pub(crate) fn new_store(config: &Config) -> Self {
@@ -45,11 +40,7 @@ impl Ticker {
             TickSchedule::new(config.pd_store_heartbeat_tick_interval.as_millis() / base_interval),
             TickSchedule::new(config.consistency_check_interval.as_millis() / base_interval),
         ];
-        Self {
-            region_id: 0,
-            tick: 0,
-            schedules,
-        }
+        Self { tick: 0, schedules }
     }
 
     pub(crate) fn tick_clock(&mut self) {

@@ -1,10 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cell::Cell,
-    fmt::Display,
-    ops::{Deref, DerefMut},
-    ptr::{self, null_mut},
+    ops::Deref,
+    ptr,
     sync::{
         atomic::{AtomicU32, AtomicU64, Ordering::*},
         Arc, Mutex,
@@ -12,11 +10,10 @@ use std::{
 };
 
 use crate::table::table::{Iterator, Value};
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Buf, BytesMut};
 
 use super::arena::*;
 use std::cmp::Ordering::*;
-use std::str;
 
 pub const MAX_HEIGHT: usize = 14;
 const HEIGHT_INCREASE: u32 = u32::MAX / 4;

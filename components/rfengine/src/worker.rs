@@ -6,7 +6,7 @@ use std::{
     io::Write,
     path::Path,
     path::PathBuf,
-    sync::mpsc::{Receiver, Sender},
+    sync::mpsc::Receiver,
 };
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -76,7 +76,7 @@ impl Worker {
         let mut epoch = Epoch::new(epoch_id);
         epoch.has_wal_file = true;
         if let Err(err) = self.write_states(epoch_id, states) {
-            error!("failed to write states");
+            error!("failed to write states {:?}", err);
         } else {
             epoch.has_state_file = true;
         }

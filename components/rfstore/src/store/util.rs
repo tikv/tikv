@@ -1,24 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::{Error, Result};
-use core::cmp;
-use kvproto::kvrpcpb::{self, KeyRange, LeaderInfo};
-use kvproto::metapb::{self, Peer, PeerRole, Region, RegionEpoch};
-use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
+use kvproto::metapb;
+use kvproto::raft_cmdpb::RaftCmdRequest;
 use protobuf::Message;
 use raft_proto::eraftpb::{self, MessageType};
 use slog::{Key, Record, Serializer};
-use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering as AtomicOrdering;
-use std::sync::{Arc, Mutex};
 use tikv_util::box_err;
-use tikv_util::time::monotonic_raw_now;
-use tikv_util::Either;
-use tikv_util::{debug, info};
-use time::{Duration, Timespec};
+use tikv_util::debug;
 
 /// WARNING: `NORMAL_REQ_CHECK_VER` and `NORMAL_REQ_CHECK_CONF_VER` **MUST NOT** be changed.
 /// The reason is the same as `admin_cmd_epoch_lookup`.
@@ -191,7 +182,7 @@ pub fn cf_name_to_num(cf_name: &str) -> usize {
 /// If `data` is corrupted, this function will panic.
 // TODO: make sure received entries are not corrupted
 #[inline]
-pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64, tag: RegionTag) -> T {
+pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64, tag: RegionIDVer) -> T {
     let mut result = T::default();
     result.merge_from_bytes(data).unwrap_or_else(|e| {
         panic!("{} data is corrupted at {}: {:?}", tag, index, e);
@@ -199,18 +190,15 @@ pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64, tag: RegionT
     result
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RegionTag {
-    region_id: u64,
-    region_ver: u64,
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub struct RegionIDVer {
+    id: u64,
+    ver: u64,
 }
 
-impl RegionTag {
-    pub fn new(region_id: u64, region_ver: u64) -> Self {
-        Self {
-            region_id,
-            region_ver,
-        }
+impl RegionIDVer {
+    pub fn new(id: u64, ver: u64) -> Self {
+        Self { id, ver }
     }
 
     pub fn from_region(region: &metapb::Region) -> Self {
@@ -218,14 +206,14 @@ impl RegionTag {
     }
 }
 
-impl slog::Value for RegionTag {
+impl slog::Value for RegionIDVer {
     fn serialize(&self, _record: &Record, key: Key, serializer: &mut Serializer) -> slog::Result {
         serializer.emit_str(key, &self.to_string())
     }
 }
 
-impl Display for RegionTag {
+impl Display for RegionIDVer {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}:{}]", self.region_id, self.region_ver)
+        write!(f, "[{}:{}]", self.id, self.ver)
     }
 }

@@ -10,6 +10,7 @@ pub mod scheduler;
 mod actions;
 mod latch;
 mod store;
+mod cloud_store;
 
 use std::error::Error as StdError;
 use std::io::Error as IoError;
@@ -40,6 +41,7 @@ pub use self::store::{
     EntryBatch, FixtureStore, FixtureStoreScanner, Scanner, SnapshotStore, Store, TxnEntry,
     TxnEntryScanner, TxnEntryStore,
 };
+pub use self::cloud_store::{CloudStore, CloudStoreScanner};
 
 /// Process result of a command.
 #[derive(Debug)]

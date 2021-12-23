@@ -22,14 +22,6 @@ struct L0Footer {
 }
 
 impl L0Footer {
-    fn marshal(&self) -> [u8; L0_FOOTER_SIZE] {
-        let mut bin = [0u8; L0_FOOTER_SIZE];
-        LittleEndian::write_u64(&mut bin, self.commit_ts);
-        LittleEndian::write_u32(&mut bin[8..], self.num_cfs);
-        LittleEndian::write_u32(&mut bin[12..], self.magic);
-        bin
-    }
-
     fn unmarshal(&mut self, bin: &[u8]) {
         self.commit_ts = LittleEndian::read_u64(bin);
         self.num_cfs = LittleEndian::read_u32(&bin[8..]);
@@ -169,7 +161,7 @@ pub struct L0Builder {
 impl L0Builder {
     pub fn new(fid: u64, opt: TableBuilderOptions, commit_ts: u64) -> Self {
         let mut builders = Vec::with_capacity(4);
-        for i in 0..NUM_CFS {
+        for _ in 0..NUM_CFS {
             let builder = Builder::new(fid, opt);
             builders.push(builder);
         }

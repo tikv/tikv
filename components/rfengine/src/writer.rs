@@ -8,10 +8,9 @@ use std::{
     os::unix::fs::OpenOptionsExt,
     os::unix::prelude::FileExt,
     path::{Path, PathBuf},
-    time::Instant,
 };
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut};
 
 pub const ENTRY_HEADER_SIZE: usize = 8;
 pub const BATCH_HEADER_SIZE: usize = 12;
@@ -34,7 +33,7 @@ pub fn alloc_aligned(n_bytes: usize) -> Vec<u8> {
     let cap_units = aligned.capacity();
 
     mem::forget(aligned);
-    let mut result =
+    let result =
         unsafe { Vec::from_raw_parts(ptr as *mut u8, 0, cap_units * mem::size_of::<AlignTo4K>()) };
     result
 }
@@ -152,7 +151,7 @@ impl WALWriter {
 
     pub(crate) fn open_file(&mut self) -> Result<()> {
         let file = open_direct_file(&self.dir, self.epoch_id, self.wal_size)?;
-        mem::replace(&mut self.fd, file);
+        self.fd = file;
         self.reset_batch();
         self.file_off = 0;
         Ok(())

@@ -2,20 +2,17 @@
 
 use super::*;
 use crate::errors::*;
-use crate::store::{Progress as ReadProgress, ReadDelegate, RegionTask};
+use crate::store::RegionTask;
 use bitflags::bitflags;
-use byteorder::BigEndian;
-use bytes::{BufMut, Bytes, BytesMut};
 use collections::{HashMap, HashSet};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use futures::channel::mpsc::UnboundedSender;
 use kvproto::disk_usage::DiskUsage;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::PeerRole;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminResponse, BatchSplitRequest, ChangePeerRequest, CmdType, CustomRequest,
+    AdminCmdType, AdminResponse, BatchSplitRequest, ChangePeerRequest, CustomRequest,
     RaftCmdRequest, RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::RaftMessage;
@@ -23,37 +20,33 @@ use kvproto::*;
 use protobuf::{Message, ProtobufEnum};
 use raft;
 use raft::{
-    Changer, LightReady, ProgressState, ProgressTracker, RawNode, Ready, SnapshotStatus, SoftState,
-    StateRole, Storage, INVALID_ID,
+    Changer, LightReady, ProgressState, ProgressTracker, RawNode, Ready, SnapshotStatus, StateRole,
+    Storage, INVALID_ID,
 };
 use raft_proto::eraftpb::{ConfChangeType, Entry, MessageType};
 use raft_proto::*;
 use raftstore::coprocessor;
 use raftstore::store::util::{
-    admin_cmd_epoch_lookup, find_peer, is_initial_msg, is_region_initialized, AdminCmdEpochState,
-    ChangePeerI, ConfChangeKind, Lease, LeaseState,
+    admin_cmd_epoch_lookup, is_initial_msg, is_region_initialized, AdminCmdEpochState, ChangePeerI,
+    ConfChangeKind, Lease, LeaseState,
 };
 use raftstore::store::{local_metrics::*, metrics::*, QueryStats, TxnExt};
 use std::cell::RefCell;
+use std::cmp;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::{cmp, mem};
-use tikv_util::codec::number::decode_u64;
-use tikv_util::mpsc::Sender;
-use tikv_util::sys::disk;
-use tikv_util::time::{duration_to_sec, monotonic_raw_now, ThreadReadId};
+use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
-use tikv_util::{box_err, debug, error, info, warn, Either, MustConsumeVec};
+use tikv_util::{box_err, debug, error, info, warn, Either};
 use time::Timespec;
-use txn_types::WriteBatchFlags;
 use uuid::Uuid;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
-const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
-const REGION_READ_PROGRESS_CAP: usize = 128;
 const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
+pub(crate) const EXTRA_CTX_SPLIT_FILE_DONE: u8 = 8;
+pub(crate) const PENDING_CONF_CHANGE_ERR_MSG: &str = "pending conf change";
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug, PartialEq, Eq)]
@@ -112,7 +105,7 @@ impl ProposalQueue {
     /// in front that term and index
     fn find_proposal(
         &mut self,
-        tag: RegionTag,
+        tag: RegionIDVer,
         term: u64,
         index: u64,
         current_term: u64,
@@ -522,7 +515,7 @@ impl Peer {
         Ok(peer)
     }
 
-    pub(crate) fn tag(&self) -> RegionTag {
+    pub(crate) fn tag(&self) -> RegionIDVer {
         self.get_store().tag()
     }
 
@@ -607,7 +600,6 @@ impl Peer {
     pub fn set_region(
         &mut self,
         host: &coprocessor::CoprocessorHost<kvengine::Engine>,
-        reader: &mut ReadDelegate,
         region: metapb::Region,
     ) {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
@@ -745,74 +737,6 @@ impl Peer {
         }
     }
 
-    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) -> bool {
-        let mut send_msg = self.prepare_raft_message();
-
-        let to_peer = match self.get_peer_from_cache(msg.get_to()) {
-            Some(p) => p,
-            None => {
-                warn!(
-                    "failed to look up recipient peer";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                    "to_peer" => msg.get_to(),
-                );
-                return false;
-            }
-        };
-
-        let to_peer_id = to_peer.get_id();
-        let to_store_id = to_peer.get_store_id();
-        let msg_type = msg.get_msg_type();
-        debug!(
-            "send raft msg";
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-            "msg_type" => ?msg_type,
-            "to" => to_peer_id,
-        );
-
-        send_msg.set_to_peer(to_peer);
-
-        // There could be two cases:
-        // 1. Target peer already exists but has not established communication with leader yet
-        // 2. Target peer is added newly due to member change or region split, but it's not
-        //    created yet
-        // For both cases the region start key and end key are attached in RequestVote and
-        // Heartbeat message for the store of that peer to check whether to create a new peer
-        // when receiving these messages, or just to wait for a pending region split to perform
-        // later.
-        if self.get_store().is_initialized() && is_initial_msg(&msg) {
-            let region = self.region();
-            send_msg.set_start_key(region.get_start_key().to_vec());
-            send_msg.set_end_key(region.get_end_key().to_vec());
-        }
-
-        send_msg.set_message(msg);
-
-        if let Err(e) = trans.send(send_msg) {
-            let ec = e.error_code();
-            // We use metrics to observe failure on production.
-            debug!(
-                "failed to send msg to other peer";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "target_peer_id" => to_peer_id,
-                "target_store_id" => to_store_id,
-                "err" => ?e,
-                "error_code" => %ec,
-            );
-            // unreachable store
-            self.raft_group.report_unreachable(to_peer_id);
-            if msg_type == eraftpb::MessageType::MsgSnapshot {
-                self.raft_group
-                    .report_snapshot(to_peer_id, SnapshotStatus::Failure);
-            }
-            return false;
-        }
-        true
-    }
-
     fn build_raft_message(&mut self, msg: eraftpb::Message) -> Option<RaftMessage> {
         let mut send_msg = self.prepare_raft_message();
 
@@ -883,14 +807,14 @@ impl Peer {
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
             fail_point!("on_step_read_index_msg");
-            /// TODO: ctx.coprocessor_host.on_step_read_index(&mut m);
-            /// Must use the commit index of `PeerStorage` instead of the commit index
-            /// in raft-rs which may be greater than the former one.
-            /// For more details, see the annotations above `on_leader_commit_idx_changed`.
+            // TODO: ctx.coprocessor_host.on_step_read_index(&mut m);
+            // Must use the commit index of `PeerStorage` instead of the commit index
+            // in raft-rs which may be greater than the former one.
+            // For more details, see the annotations above `on_leader_commit_idx_changed`.
             let index = self.get_store().commit_index();
-            /// Check if the log term of this index is equal to current term, if so,
-            /// this index can be used to reply the read index request if the leader holds
-            /// the lease. Please also take a look at raft-rs.
+            // Check if the log term of this index is equal to current term, if so,
+            // this index can be used to reply the read index request if the leader holds
+            // the lease. Please also take a look at raft-rs.
             if self.get_store().term(index).unwrap() == self.term() {
                 let state = self.inspect_lease();
                 if let LeaseState::Valid = state {
@@ -1238,6 +1162,12 @@ impl Peer {
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
         send_msg.set_from_peer(self.peer.clone());
+        if !self.is_leader()
+            && self.get_store().split_stage == kvenginepb::SplitStage::SplitFileDone
+        {
+            send_msg.mut_extra_ctx().push(EXTRA_CTX_SPLIT_FILE_DONE);
+            info!("follower add extra ctx split files done"; "region" => self.tag());
+        }
         send_msg
     }
 
@@ -1259,17 +1189,7 @@ impl Peer {
         );
         self.on_role_changed(ctx, &ready);
         let raft_msgs = self.build_raft_messages(ctx, ready.take_messages());
-        if self.is_leader() {
-            // The leader can write to disk and replicate to the followers concurrently
-            // For more details, check raft thesis 10.2.1.
-            self.send_raft_messages(ctx, raft_msgs);
-        } else {
-            let task = PostPersistTask {
-                region_id: self.region_id,
-                msgs: raft_msgs,
-            };
-            ctx.post_persist_tasks.push(task);
-        }
+        self.send_raft_messages(ctx, raft_msgs);
         if let Some(snap_res) = self.mut_store().handle_raft_ready(ctx, &mut ready) {
             // The peer may change from learner to voter after snapshot persisted.
             let peer = self
@@ -1297,6 +1217,11 @@ impl Peer {
                 self.heartbeat_pd(ctx)
             }
         }
+        let task = PostPersistTask {
+            region_id: self.region_id,
+            ready,
+        };
+        ctx.post_persist_tasks.push(task);
     }
 
     fn handle_raft_committed_entries(
@@ -1372,7 +1297,7 @@ impl Peer {
             } else {
                 vec![]
             };
-            let mut apply_msg = ApplyMsg::Apply(MsgApply {
+            let apply_msg = ApplyMsg::Apply(MsgApply {
                 region_id: self.region_id,
                 term: self.term(),
                 entries: committed_entries,
@@ -1442,7 +1367,7 @@ impl Peer {
         }
         if rejected {
             let task = RegionTask::RejectChangeSet { change: cs };
-            ctx.global.region_scheduler.schedule(task);
+            ctx.global.region_scheduler.schedule(task).unwrap();
             return;
         }
         shard_meta.apply_change_set(&mut cs);
@@ -2188,7 +2113,13 @@ impl Peer {
         }
 
         match req.get_admin_request().get_cmd_type() {
-            AdminCmdType::Split | AdminCmdType::BatchSplit => ctx.insert(ProposalContext::SPLIT),
+            AdminCmdType::Split | AdminCmdType::BatchSplit => {
+                ctx.insert(ProposalContext::SPLIT);
+                if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
+                    info!("there is a pending conf change, try later"; "region" => self.tag());
+                    return Err(box_err!(PENDING_CONF_CHANGE_ERR_MSG));
+                }
+            }
             _ => {}
         }
 
@@ -2396,7 +2327,6 @@ impl Peer {
         change_peer: impl ChangePeerI,
         data: Vec<u8>,
     ) -> Result<u64> {
-        let data_size = data.len();
         let cc = change_peer.to_confchange(data);
         let changes = change_peer.get_change_peers();
 
@@ -2453,7 +2383,12 @@ impl Peer {
         ctx: &mut RaftContext,
         task: PostPersistTask,
     ) {
-        self.send_raft_messages(ctx, task.msgs);
+        let mut light_ready = self.raft_group.advance_append(task.ready);
+        let raft_messages = self.build_raft_messages(ctx, light_ready.take_messages());
+        self.send_raft_messages(ctx, raft_messages);
+        self.handle_raft_committed_entries(ctx, light_ready.take_committed_entries(), None);
+        self.mut_store()
+            .handle_persisted_light_ready(ctx, light_ready);
     }
 
     /// Pings if followers are still connected.
@@ -2463,6 +2398,30 @@ impl Peer {
     pub fn ping(&mut self) {
         if self.is_leader() {
             self.raft_group.ping();
+        }
+    }
+
+    pub(crate) fn maybe_finish_split(&mut self, ctx: &mut RaftContext) {
+        if self.wait_follower_split_files.is_some() {
+            if self.get_store().split_stage == kvenginepb::SplitStage::SplitFileDone {
+                let epoch_ver = self.region().get_region_epoch().get_version();
+                let mut match_cnt = 0usize;
+                for (_, follower_ver) in &self.followers_split_files_done {
+                    if *follower_ver == epoch_ver {
+                        match_cnt += 1;
+                    }
+                }
+                if match_cnt == self.region().get_peers().len() - 1 {
+                    info!("leader schedule finish split"; "region" => self.tag());
+                    ctx.global
+                        .region_scheduler
+                        .schedule(RegionTask::FinishSplit {
+                            region: self.region().clone(),
+                            wait: self.wait_follower_split_files.take().unwrap(),
+                        })
+                        .unwrap();
+                }
+            }
         }
     }
 }

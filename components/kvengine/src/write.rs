@@ -1,15 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    collections::HashMap,
-    fs::File,
-    intrinsics::transmute,
-    sync::{atomic::Ordering, Arc},
-    time::Instant,
-};
+use std::{collections::HashMap, intrinsics::transmute, sync::atomic::Ordering, time::Instant};
 
 use byteorder::{ByteOrder, LittleEndian};
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Buf, BytesMut};
 use slog_global::info;
 
 use crate::table::{self, memtable};
@@ -199,10 +193,6 @@ impl Engine {
         }
     }
 
-    fn get_property(shard: &Shard, key: &str) -> Option<Bytes> {
-        shard.properties.get(key)
-    }
-
     pub(crate) fn schedule_flush_task(&self, shard: &Shard, mut mem_tbl: memtable::CFTable) {
         let last_switch_val = shard.last_switch_time.load(Ordering::Acquire);
         let last_switch_instant: Instant = unsafe { transmute(last_switch_val) };
@@ -231,7 +221,7 @@ impl Engine {
                 next_mem_tbl_size,
                 mem_tbl,
             };
-            self.flush_tx.send(task);
+            self.flush_tx.send(task).unwrap();
         }
     }
 }

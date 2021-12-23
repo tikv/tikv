@@ -35,7 +35,7 @@ fn test_engine() {
     let meta_change_listener = Box::new(TestMetaChangeListener {
         sender: listener_tx,
     });
-    let mut engine = Engine::open(
+    let engine = Engine::open(
         tester.fs.clone(),
         tester.opts.clone(),
         tester.clone(),
@@ -141,7 +141,7 @@ impl MetaIterator for EngineTester {
 }
 
 impl RecoverHandler for EngineTester {
-    fn recover(&self, engine: &Engine, shard: &Shard, info: &ShardMeta) -> Result<()> {
+    fn recover(&self, _engine: &Engine, _shard: &Arc<Shard>, _info: &ShardMeta) -> Result<()> {
         return Ok(());
     }
 }
@@ -467,20 +467,19 @@ fn check_get(
 ) {
     for i in begin..end {
         let key = format!("key{:06}", i);
-        let g = &epoch::pin();
         let shard = get_shard_for_key(key.as_bytes(), en);
         let snap = SnapAccess::new(&shard);
         if let Some(item) = snap.get(cf, key.as_bytes(), 2) {
             assert_eq!(item.get_value(), key.repeat(val_repeat).as_bytes());
         } else {
-            panic!(format!(
+            panic!(
                 "failed to get key {}, shard {}:{}, start {:?}, end {:?}",
                 key,
                 shard.id,
                 shard.ver,
                 bytes_to_str(&shard.start),
                 bytes_to_str(&shard.end)
-            ));
+            );
         }
     }
 }

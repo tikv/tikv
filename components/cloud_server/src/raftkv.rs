@@ -13,8 +13,11 @@ use std::{
 use raft::eraftpb::{self, MessageType};
 use thiserror::Error;
 
+use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_DEFAULT};
+use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use kvproto::kvrpcpb::Op;
+use kvproto::raft_cmdpb::CustomRequest;
 use kvproto::{
     errorpb,
     kvrpcpb::Context,
@@ -28,7 +31,8 @@ use raftstore::coprocessor::{
     dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
 };
 use rfstore::store::{
-    Callback as StoreCallback, ReadIndexContext, ReadResponse, RegionSnapshot, WriteResponse,
+    rlog, Callback as StoreCallback, CustomBuilder, ReadIndexContext, ReadResponse, RegionSnapshot,
+    WriteResponse,
 };
 use rfstore::{
     Error as RaftServerError, LocalReadRouter, RaftRouter, RaftStoreRouter, ServerRaftStoreRouter,
@@ -41,7 +45,9 @@ use tikv::storage::kv::{
 use tikv::storage::{self};
 use tikv_util::codec::number::NumberEncoder;
 use tikv_util::time::Instant;
-use txn_types::{Key, TimeStamp, TxnExtraScheduler, WriteBatchFlags};
+use txn_types::{
+    Key, Lock, LockType, TimeStamp, TxnExtraScheduler, WriteBatchFlags, WriteRef, WriteType,
+};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -228,9 +234,8 @@ impl RaftKv {
             raftkv_early_error_report_fp()?;
         }
 
-        let reqs = modifies_to_requests(batch.modifies);
+        let req = modifies_to_requests(ctx, batch.modifies);
         let txn_extra = batch.extra;
-        let len = reqs.len();
         let mut header = self.new_request_header(ctx);
         if txn_extra.one_pc {
             header.set_flags(WriteBatchFlags::ONE_PC.bits());
@@ -238,7 +243,7 @@ impl RaftKv {
 
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
-        cmd.set_requests(reqs.into());
+        cmd.set_custom_request(req);
 
         if let Some(tx) = self.txn_extra_scheduler.as_ref() {
             if !txn_extra.is_empty() {
@@ -435,7 +440,8 @@ impl Engine for RaftKv {
         start: &[u8],
         end: &[u8],
     ) -> Option<MvccProperties> {
-        todo!()
+        // TODO(x)
+        None
     }
 }
 
@@ -509,43 +515,242 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
     }
 }
 
-pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<Request> {
-    let mut reqs = Vec::with_capacity(modifies.len());
-    for m in modifies {
-        let mut req = Request::default();
-        match m {
-            Modify::Delete(cf, k) => {
-                let mut delete = DeleteRequest::default();
-                delete.set_key(k.into_encoded());
-                if cf != CF_DEFAULT {
-                    delete.set_cf(cf.to_string());
-                }
-                req.set_cmd_type(CmdType::Delete);
-                req.set_delete(delete);
-            }
-            Modify::Put(cf, k, v) => {
-                let mut put = PutRequest::default();
-                put.set_key(k.into_encoded());
-                put.set_value(v);
-                if cf != CF_DEFAULT {
-                    put.set_cf(cf.to_string());
-                }
-                req.set_cmd_type(CmdType::Put);
-                req.set_put(put);
-            }
-            Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
-                let mut delete_range = DeleteRangeRequest::default();
-                delete_range.set_cf(cf.to_string());
-                delete_range.set_start_key(start_key.into_encoded());
-                delete_range.set_end_key(end_key.into_encoded());
-                delete_range.set_notify_only(notify_only);
-                req.set_cmd_type(CmdType::DeleteRange);
-                req.set_delete_range(delete_range);
-            }
-        }
-        reqs.push(req);
+#[derive(Default)]
+struct Operation {
+    tp: u8,
+    key: Option<Vec<u8>>,
+    lock: Option<Lock>,
+    val: Option<Vec<u8>>,
+    ts: u64,
+    del: bool,
+}
+
+/**
+Reconstruct transaction operations from separated modifications.
+
+pessimistic_lock
+    modify::put lock(pessimistic)
+
+prewrite
+    optional modify::put cf_default
+    | modify::put cf_lock
+
+1pc
+    optional modify::put cf_default
+    | modify::put cf_write:put
+    | modify::put cf_write:del
+
+commit
+    modify:put cf_write + modify::del cf_lock
+
+rollback
+    modify:del cf_lock
+    | modify::put cf_write::put overlapped + modify:del cf_lock
+    | modify::put cf_write::rollback
+    | modify::put cf_write::rollback + modify:del cf_lock
+    | modify::put cf_lock(has rollback_ts) + modify:put cf_write:rollback
+*/
+pub fn modifies_to_requests(ctx: &Context, modifies: Vec<Modify>) -> CustomRequest {
+    let builder = &mut rlog::CustomBuilder::new();
+    let custom_type = detect_custom_type(&modifies);
+    builder.set_type(custom_type);
+    match custom_type {
+        rlog::TYPE_PREWRITE => build_prewrite(builder, modifies),
+        rlog::TYPE_PESSIMISTIC_LOCK => build_pessimistic_lock(builder, modifies),
+        rlog::TYPE_COMMIT => build_commit(builder, modifies),
+        rlog::TYPE_ONE_PC => build_one_pc(builder, modifies),
+        rlog::TYPE_ROLLBACK => build_rollback(builder, modifies),
+        rlog::TYPE_PESSIMISTIC_ROLLBACK => build_pessimistic_rollback(builder, modifies),
+        _ => unreachable!(),
     }
-    reqs
+    builder.build()
+}
+
+fn detect_custom_type(modifies: &Vec<Modify>) -> rlog::CustomRaftlogType {
+    for (i, m) in modifies.iter().enumerate() {
+        match m {
+            Modify::Delete(cf, _) => {
+                assert_eq!(*cf, CF_LOCK);
+                return rlog::TYPE_PESSIMISTIC_ROLLBACK;
+            }
+            Modify::Put(cf, key, value) => {
+                match *cf {
+                    CF_DEFAULT => {
+                        // undetermined
+                    }
+                    CF_WRITE => {
+                        let write = WriteRef::parse(value).unwrap();
+                        match write.write_type {
+                            WriteType::Put | WriteType::Delete | WriteType::Lock => {
+                                if write.has_overlapped_rollback {
+                                    return rlog::TYPE_ROLLBACK;
+                                }
+                                if is_same_key_del_lock(modifies, i + 1, key) {
+                                    return rlog::TYPE_COMMIT;
+                                }
+                                return rlog::TYPE_ONE_PC;
+                            }
+                            WriteType::Rollback => {
+                                return rlog::TYPE_ROLLBACK;
+                            }
+                        }
+                    }
+                    CF_LOCK => {
+                        let lock = Lock::parse(value).unwrap();
+                        match lock.lock_type {
+                            LockType::Put | LockType::Lock | LockType::Delete => {
+                                return rlog::TYPE_PREWRITE;
+                            }
+                            LockType::Pessimistic => {
+                                return rlog::TYPE_PESSIMISTIC_LOCK;
+                            }
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            Modify::DeleteRange(..) => unreachable!(),
+        }
+    }
+    unreachable!()
+}
+
+fn build_pessimistic_lock(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
+    for m in &modifies {
+        match m {
+            Modify::Put(cf, key, val) => {
+                assert_eq!(*cf, CF_LOCK);
+                let raw_key = key.to_raw().unwrap();
+                builder.append_lock(&raw_key, val);
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn build_prewrite(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
+    let mut values = HashMap::default();
+    for m in modifies {
+        match m {
+            Modify::Put(cf, key, val) => match cf {
+                CF_DEFAULT => {
+                    let raw_key = key.truncate_ts().unwrap().to_raw().unwrap();
+                    values.insert(raw_key, val);
+                }
+                CF_LOCK => {
+                    let raw_key = key.to_raw().unwrap();
+                    let mut lock = Lock::parse(&val).unwrap();
+                    if lock.lock_type == LockType::Put && lock.short_value.is_none() {
+                        lock.short_value = values.remove(&raw_key);
+                    }
+                    builder.append_lock(&raw_key, &lock.to_bytes());
+                }
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn build_commit(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
+    for m in modifies {
+        match m {
+            Modify::Put(cf, key, val) => match cf {
+                CF_WRITE => {
+                    let commit_ts = key.decode_ts().unwrap();
+                    let raw_key = key.truncate_ts().unwrap().to_raw().unwrap();
+                    builder.append_commit(&raw_key, commit_ts.into_inner());
+                }
+                _ => unreachable!(),
+            },
+            Modify::Delete(cf, key) => {
+                assert_eq!(cf, CF_LOCK);
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn build_one_pc(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
+    let mut values = HashMap::default();
+    for m in modifies {
+        match m {
+            Modify::Put(cf, key, val) => match cf {
+                CF_DEFAULT => {
+                    let raw_key = key.truncate_ts().unwrap().to_raw().unwrap();
+                    values.insert(raw_key, val);
+                }
+                CF_WRITE => {
+                    let commit_ts = key.decode_ts().unwrap().into_inner();
+                    let raw_key = key.truncate_ts().unwrap().to_raw().unwrap();
+                    let write = WriteRef::parse(&val).unwrap();
+                    let mut value = vec![];
+                    if write.write_type == WriteType::Put {
+                        if write.short_value.is_none() {
+                            value = values.remove(&raw_key).unwrap();
+                        } else {
+                            value = write.short_value.unwrap().to_vec();
+                        }
+                    }
+                    let is_extra = write.write_type == WriteType::Lock;
+                    let start_ts = write.start_ts.into_inner();
+                    builder.append_one_pc(&raw_key, &value, is_extra, start_ts, commit_ts);
+                }
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn build_pessimistic_rollback(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
+    for m in modifies {
+        match m {
+            Modify::Delete(cf, key) => {
+                assert_eq!(cf, CF_LOCK);
+                let raw_key = key.to_raw().unwrap();
+                builder.append_del_lock(&raw_key);
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn build_rollback(builder: &mut CustomBuilder, mut modifies: Vec<Modify>) {
+    for (i, m) in modifies.iter().enumerate() {
+        match m {
+            Modify::Put(cf, key, val) => {
+                assert_eq!(*cf, CF_WRITE);
+                let start_ts = key.decode_ts().unwrap().into_inner();
+                let raw_key = key.clone().truncate_ts().unwrap().to_raw().unwrap();
+                let delete_lock = is_same_key_del_lock(&modifies, i + 1, key);
+                builder.append_rollback(&raw_key, start_ts, delete_lock);
+            }
+            Modify::Delete(cf, key) => {
+                assert_eq!(*cf, CF_LOCK)
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn is_same_key_del_lock(modifies: &Vec<Modify>, next_idx: usize, key: &Key) -> bool {
+    if modifies.len() <= next_idx {
+        return false;
+    }
+    let next_modify = &modifies[next_idx];
+    match next_modify {
+        Modify::Delete(cf, next_key) => {
+            if *cf != CF_LOCK {
+                return false;
+            }
+            let next_encoded = next_key.as_encoded();
+            let key_encoded_with_ts = key.as_encoded();
+            let key_encoded = &key_encoded_with_ts[..key_encoded_with_ts.len() - 1];
+            next_encoded == key_encoded
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]

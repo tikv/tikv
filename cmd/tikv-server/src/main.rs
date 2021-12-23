@@ -177,6 +177,5 @@ fn main() {
         println!("config check successful");
         process::exit(0)
     }
-
-    server::server::run_tikv(config);
+    cloud_server::run_tikv(config);
 }

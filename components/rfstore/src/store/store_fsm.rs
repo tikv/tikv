@@ -4,12 +4,9 @@ use super::Config;
 use crate::{RaftRouter, RaftStoreRouter};
 use bytes::Bytes;
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::RaftEngineReadOnly;
 use fail::fail_point;
-use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
 use pd_client::PdClient;
 use protobuf::Message;
@@ -18,18 +15,17 @@ use raftstore::coprocessor::{BoxAdminObserver, CoprocessorHost};
 use raftstore::store::local_metrics::RaftMetrics;
 use raftstore::store::util;
 use raftstore::store::util::is_initial_msg;
-use raftstore::store::QueryStats;
 use std::collections::{BTreeMap, HashMap};
-use std::ops::Bound::{Excluded, Unbounded};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tikv_util::config::VersionTrack;
-use tikv_util::mpsc::{Receiver, Sender};
-use tikv_util::worker::{FutureScheduler, FutureWorker, LazyWorker, Scheduler, Worker};
+use tikv_util::mpsc::Receiver;
+use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 use tikv_util::{box_err, debug, error, info, warn, RingQueue};
 use time::Timespec;
 
 use super::*;
+use crate::store::peer_worker::{ApplyWorker, StoreWorker};
 use crate::{Error, Result};
 
 pub const PENDING_MSG_CAP: usize = 100;
@@ -132,7 +128,7 @@ impl RaftBatchSystem {
             coprocessor_host,
         };
 
-        let mut region_peers = self.load_peers()?;
+        let mut region_peers = self.load_peers(&ctx)?;
         let mut region_ids = Vec::with_capacity(region_peers.len());
         for peer in region_peers.drain(..) {
             region_ids.push(peer.peer.region_id);
@@ -180,7 +176,7 @@ impl RaftBatchSystem {
             store: self.ctx.as_ref().unwrap().store.clone(),
         });
         for region_id in region_ids {
-            self.router.send(region_id, PeerMsg::Start);
+            self.router.send(region_id, PeerMsg::Start).unwrap();
         }
         Ok(())
     }
@@ -202,9 +198,8 @@ impl RaftBatchSystem {
     /// load_peers loads peers in this store. It scans the kv engine, loads all regions
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
-    fn load_peers(&self) -> Result<Vec<PeerFsm>> {
+    fn load_peers(&self, ctx: &GlobalContext) -> Result<Vec<PeerFsm>> {
         // Scan region meta to get saved regions.
-        let ctx = self.ctx.as_ref().unwrap();
         let mut regions = vec![];
         let mut last_region_id: u64 = 0;
         ctx.engines
@@ -218,12 +213,12 @@ impl RaftBatchSystem {
                 }
                 last_region_id = region_id;
                 let mut local_state = RegionLocalState::default();
-                local_state.merge_from_bytes(val);
+                local_state.merge_from_bytes(val).unwrap();
                 regions.push(local_state.get_region().clone());
                 true
             });
         let mut peers = vec![];
-        let store_id = self.store_fsm.as_ref().unwrap().id;
+        let store_id = ctx.store.id;
         let mut store_meta = ctx.store_meta.lock().unwrap();
         for region in &regions {
             let mut peer =
@@ -291,8 +286,7 @@ impl StoreMeta {
             // TODO: may not be a good idea to panic when holding a lock.
             panic!("{} region corrupted", peer.region_id);
         }
-        let reader = self.readers.get_mut(&region.get_id()).unwrap();
-        peer.set_region(host, reader, region);
+        peer.set_region(host, region);
     }
 }
 
@@ -322,7 +316,7 @@ pub(crate) struct RaftContext {
 
 pub(crate) struct PostPersistTask {
     pub(crate) region_id: u64,
-    pub(crate) msgs: Vec<RaftMessage>,
+    pub(crate) ready: raft::Ready,
 }
 
 impl RaftContext {
@@ -417,17 +411,12 @@ enum CheckMsgStatus {
 pub(crate) struct StoreMsgHandler {
     store: StoreFSM,
     pub(crate) ctx: RaftContext,
-    start_time: Option<Instant>,
 }
 
 impl StoreMsgHandler {
     pub(crate) fn new(store: StoreFSM, ctx: GlobalContext) -> StoreMsgHandler {
         let ctx = RaftContext::new(ctx);
-        Self {
-            store,
-            ctx,
-            start_time: None,
-        }
+        Self { store, ctx }
     }
 
     pub(crate) fn get_receiver(&self) -> &Receiver<StoreMsg> {
@@ -495,11 +484,11 @@ impl StoreMsgHandler {
     }
 
     fn start(&mut self, store: metapb::Store) {
-        if self.start_time.is_some() {
+        if self.store.start_time.is_some() {
             panic!("store unable to start again");
         }
         self.store.id = store.id;
-        self.start_time = Some(Instant::now());
+        self.store.start_time = Some(time::get_time());
         self.store_heartbeat_pd();
         self.store.ticker.schedule_store(STORE_TICK_PD_HEARTBEAT);
     }
@@ -524,7 +513,7 @@ impl StoreMsgHandler {
         // It's possible to acquire the lock and only send notification to
         // involved regions. However loop over all the regions can take a
         // lot of time, which may block other operations.
-        self.ctx.global.router.report_unreachable(store_id);
+        self.ctx.global.router.report_unreachable(store_id).unwrap();
     }
 
     /// Checks if the message is targeting a stale peer.
@@ -690,7 +679,7 @@ impl StoreMsgHandler {
                 )? {
                     // Peer created, send the message again.
                     let peer_msg = PeerMsg::RaftMessage(msg);
-                    self.ctx.global.router.send(region_id, peer_msg);
+                    self.ctx.global.router.send(region_id, peer_msg).unwrap();
                     return Ok(());
                 }
                 // Can't create peer, see if we should keep this message
@@ -727,7 +716,7 @@ impl StoreMsgHandler {
         let peer_msg = PeerMsg::GenerateEngineChangeSet(change_set);
         // If the region is not found, there is no need to handle the engine meta change, so
         // we can ignore not found error.
-        self.ctx.global.router.send(id, peer_msg);
+        self.ctx.global.router.send(id, peer_msg).unwrap();
     }
 
     /// If target peer doesn't exist, create it.

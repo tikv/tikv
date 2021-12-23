@@ -255,6 +255,11 @@ pub trait Snapshot: Sync + Send + Clone {
     }
 
     fn ext(&self) -> Self::Ext<'_>;
+
+    /// Specific for KVEngine.
+    fn get_kvengine_snap(&self) -> Option<&Arc<kvengine::SnapAccess>> {
+        return None;
+    }
 }
 
 pub trait SnapshotExt {

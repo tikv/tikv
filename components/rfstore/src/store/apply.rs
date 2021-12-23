@@ -3,39 +3,31 @@
 use super::*;
 use crate::errors::*;
 use crate::store::cmd_resp::{bind_term, err_resp};
-use crate::{mvcc, RaftRouter};
-use bytes::{Buf, BufMut, Bytes};
+use crate::{mvcc, RaftRouter, UserMeta};
+use bytes::Buf;
 use fail::fail_point;
-use futures_util::AsyncReadExt;
-use kvengine::{Item, SnapAccess};
+use kvengine::SnapAccess;
 use kvproto::metapb;
 use kvproto::metapb::{PeerRole, Region};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, BatchSplitRequest, BatchSplitResponse,
     ChangePeerRequest, RaftCmdRequest, RaftCmdResponse, RaftResponseHeader,
 };
-use kvproto::raft_serverpb::{MergeState, PeerState, RaftTruncatedState};
 use protobuf::{ProtobufEnum, RepeatedField};
-use raft::eraftpb::{
-    ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
-};
+use raft::eraftpb::{ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType};
 use raft::StateRole;
 use raft_proto::eraftpb;
-use raft_proto::ConfChangeI;
 use raftstore::store::fsm::metrics::*;
-use raftstore::store::memory::*;
 use raftstore::store::metrics::*;
 use raftstore::store::util;
 use raftstore::store::util::{ChangePeerI, ConfChangeKind};
 use raftstore::store::QueryStats;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{self, Debug, Formatter};
-use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::vec::Drain;
-use tikv_alloc::trace::TraceEvent;
 use tikv_util::worker::Scheduler;
-use tikv_util::{box_err, debug, defer, error, info, warn};
+use tikv_util::{box_err, error, info, warn};
 use time::Timespec;
 
 pub(crate) struct PendingCmd {
@@ -251,8 +243,8 @@ impl Applier {
         }
     }
 
-    fn tag(&self) -> RegionTag {
-        RegionTag::new(
+    fn tag(&self) -> RegionIDVer {
+        RegionIDVer::new(
             self.region.get_id(),
             self.region.get_region_epoch().get_version(),
         )
@@ -297,25 +289,16 @@ impl Applier {
         kv: &kvengine::Engine,
         wb: &mut kvengine::WriteBatch,
         key: &[u8],
-        val: &[u8],
         commit_ts: u64,
     ) {
-        let mut lock: mvcc::Lock;
-        if val.len() == 0 {
-            let val = self.get_lock_for_commit(kv, key, commit_ts);
-            if val.len() == 0 {
-                return;
-            }
-            lock = mvcc::Lock::decode(val.as_slice());
-        } else {
-            lock = mvcc::Lock::decode(val);
-        }
+        let val = self.get_lock_for_commit(kv, key, commit_ts);
+        let mut lock = mvcc::Lock::decode(&val);
         if lock.op as i32 == kvproto::kvrpcpb::Op::PessimisticLock.value() {
             lock.header.op = kvproto::kvrpcpb::Op::Lock.value() as u8;
         }
         let user_meta = &mvcc::UserMeta::new(lock.start_ts, commit_ts).to_array()[..];
         if lock.op as i32 != kvproto::kvrpcpb::Op::Lock.value() {
-            wb.put(mvcc::WRITE_CF, key, val, 0, user_meta, commit_ts);
+            wb.put(mvcc::WRITE_CF, key, &val, 0, user_meta, commit_ts);
         } else {
             let op_lock_key = mvcc::encode_extra_txn_status_key(key, lock.start_ts);
             wb.put(
@@ -433,20 +416,29 @@ impl Applier {
         }
         match cl.get_type() {
             TYPE_PREWRITE => cl.iterate_lock(|k, v| {
-                wb.put(mvcc::LOCK_CF, k.chunk(), v.chunk(), 0, &[], 0);
+                wb.put(mvcc::LOCK_CF, k, v, 0, &[], 0);
                 self.lock_cache.insert(k.to_vec(), v.to_vec());
             }),
             TYPE_PESSIMISTIC_LOCK => cl.iterate_lock(|k, v| {
-                wb.put(mvcc::LOCK_CF, k.chunk(), v.chunk(), 0, &[], 0);
+                wb.put(mvcc::LOCK_CF, k, v, 0, &[], 0);
             }),
-            TYPE_COMMIT => cl.iterate_commit(|k, v, commit_ts| {
-                self.commit_lock(engine, wb, k, v, commit_ts);
+            TYPE_COMMIT => cl.iterate_commit(|k, commit_ts| {
+                self.commit_lock(engine, wb, k, commit_ts);
+            }),
+            TYPE_ONE_PC => cl.iterate_one_pc(|k, v, is_extra, start_ts, commit_ts| {
+                let user_meta = UserMeta::new(start_ts, commit_ts).to_array();
+                if is_extra {
+                    let op_lock_key = mvcc::encode_extra_txn_status_key(k, start_ts);
+                    wb.put(mvcc::EXTRA_CF, &op_lock_key, v, 0, &user_meta, commit_ts);
+                } else {
+                    wb.put(mvcc::WRITE_CF, k, v, 0, &user_meta, commit_ts);
+                }
             }),
             TYPE_ROLLBACK => cl.iterate_rollback(|k, start_ts, delete_lock| {
                 self.rollback(wb, k, start_ts, delete_lock);
             }),
             TYPE_PESSIMISTIC_ROLLBACK => {
-                cl.iterate_keys_only(|k| {
+                cl.iterate_del_lock(|k| {
                     wb.delete(mvcc::LOCK_CF, k, 0);
                 });
             }
@@ -1427,7 +1419,7 @@ pub(crate) fn split_gen_new_region_metas(
     let mut derived = old_region.clone();
     let mut new_regions = Vec::with_capacity(new_region_cnt + 1);
     let old_version = old_region.get_region_epoch().get_version();
-    let tag = RegionTag::from_region(old_region);
+    let tag = RegionIDVer::from_region(old_region);
     info!("split region"; "region" => tag);
     derived
         .mut_region_epoch()

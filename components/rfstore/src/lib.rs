@@ -1,6 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(vecdeque_binary_search)]
 #![feature(in_band_lifetimes)]
 
 pub mod errors;

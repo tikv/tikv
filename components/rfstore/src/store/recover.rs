@@ -2,9 +2,8 @@
 
 use crate::store::{
     parse_region_state_key, raft_state_key, rlog, Applier, ApplyContext, RaftApplyState, RaftState,
-    KV_ENGINE_META_KEY, RAFT_INIT_LOG_TERM, REGION_META_KEY_BYTE, STORE_IDENT_KEY, TERM_KEY,
+    KV_ENGINE_META_KEY, REGION_META_KEY_BYTE, STORE_IDENT_KEY, TERM_KEY,
 };
-use crate::Result;
 use bytes::Buf;
 use engine_traits::RaftEngineReadOnly;
 use kvengine::{Engine, Shard, ShardMeta};
@@ -14,7 +13,6 @@ use kvproto::{metapb, raft_serverpb};
 use protobuf::{Message, ProtobufEnum};
 use raft_proto::eraftpb;
 use slog_global::info;
-use std::fmt::format;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -52,7 +50,7 @@ impl RecoverHandler {
                         return Ok(());
                     }
                     let mut state = raft_serverpb::RegionLocalState::new();
-                    if let Err(err) = state.merge_from_bytes(v) {
+                    if let Err(_) = state.merge_from_bytes(v) {
                         return Err(rfengine::Error::ParseError);
                     }
                     region = Some(state.take_region());

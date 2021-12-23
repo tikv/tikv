@@ -10,7 +10,7 @@ use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
 
 impl RaftEngineReadOnly for RFEngine {
-    fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
+    fn get_raft_state(&self, _raft_group_id: u64) -> Result<Option<RaftLocalState>> {
         panic!()
     }
 
@@ -58,7 +58,7 @@ impl RaftEngineReadOnly for RFEngine {
 impl RaftEngine for RFEngine {
     type LogBatch = WriteBatch;
 
-    fn log_batch(&self, capacity: usize) -> Self::LogBatch {
+    fn log_batch(&self, _capacity: usize) -> Self::LogBatch {
         panic!()
     }
 
@@ -66,38 +66,38 @@ impl RaftEngine for RFEngine {
         panic!()
     }
 
-    fn consume(&self, batch: &mut Self::LogBatch, sync_log: bool) -> Result<usize> {
+    fn consume(&self, _batch: &mut Self::LogBatch, _sync_log: bool) -> Result<usize> {
         panic!()
     }
 
     fn consume_and_shrink(
         &self,
-        batch: &mut Self::LogBatch,
-        sync_log: bool,
-        max_capacity: usize,
-        shrink_to: usize,
+        _batch: &mut Self::LogBatch,
+        _sync_log: bool,
+        _max_capacity: usize,
+        _shrink_to: usize,
     ) -> Result<usize> {
         panic!()
     }
 
     fn clean(
         &self,
-        raft_group_id: u64,
-        state: &RaftLocalState,
-        batch: &mut Self::LogBatch,
+        _raft_group_id: u64,
+        _state: &RaftLocalState,
+        _batch: &mut Self::LogBatch,
     ) -> Result<()> {
         panic!()
     }
 
-    fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize> {
+    fn append(&self, _raft_group_id: u64, _entries: Vec<Entry>) -> Result<usize> {
         panic!()
     }
 
-    fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
+    fn put_raft_state(&self, _raft_group_id: u64, _state: &RaftLocalState) -> Result<()> {
         panic!()
     }
 
-    fn gc(&self, raft_group_id: u64, mut from: u64, to: u64) -> Result<usize> {
+    fn gc(&self, _raft_group_id: u64, mut _from: u64, _to: u64) -> Result<usize> {
         panic!()
     }
 
@@ -109,7 +109,7 @@ impl RaftEngine for RFEngine {
         panic!()
     }
 
-    fn flush_metrics(&self, instance: &str) {
+    fn flush_metrics(&self, _instance: &str) {
         panic!()
     }
 
@@ -127,15 +127,15 @@ impl RaftEngine for RFEngine {
 }
 
 impl RaftLogBatch for WriteBatch {
-    fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
+    fn append(&mut self, _raft_group_id: u64, _entries: Vec<Entry>) -> Result<()> {
         panic!()
     }
 
-    fn cut_logs(&mut self, raft_group_id: u64, from: u64, to: u64) {
+    fn cut_logs(&mut self, _raft_group_id: u64, _from: u64, _to: u64) {
         panic!()
     }
 
-    fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
+    fn put_raft_state(&mut self, _raft_group_id: u64, _state: &RaftLocalState) -> Result<()> {
         panic!()
     }
 

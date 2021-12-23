@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use dyn_clone::DynClone;
-use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 

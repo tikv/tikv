@@ -3,7 +3,6 @@
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes};
 use dashmap::DashMap;
-use pb::changeset;
 use protobuf::ProtobufEnum;
 use std::iter::Iterator;
 use std::{
@@ -19,14 +18,13 @@ use crate::{
     meta::ShardMeta,
     table::{
         self,
-        memtable::{self, CFTable, Hint},
+        memtable::{self, CFTable},
         search,
         sstable::L0Table,
         sstable::SSTable,
     },
 };
 use crossbeam_epoch as epoch;
-use crossbeam_epoch::pin;
 use epoch::{Atomic, Guard, Owned, Shared};
 use kvenginepb as pb;
 use slog_global::*;
@@ -259,7 +257,7 @@ impl Shard {
             ids.push(tbl.id());
         }
         let ids_ref = &mut ids;
-        self.for_each_level(|cf, l| {
+        self.for_each_level(|_cf, l| {
             for tbl in l.tables.iter() {
                 ids_ref.push(tbl.id());
             }
@@ -463,7 +461,7 @@ impl Shard {
         for l0 in &l0s.tbls {
             files.push(l0.id());
         }
-        self.for_each_level(|cf, lh| {
+        self.for_each_level(|_cf, lh| {
             for tbl in lh.tables.iter() {
                 files.push(tbl.id())
             }
@@ -547,7 +545,6 @@ impl Shard {
             self.id, self.ver, n,
         );
         loop {
-            let mut size = 0;
             let shared = self.l0_tbls.load(Acquire, g);
             let old_l0_tbls = unsafe { &shared.deref().tbls };
             let new_len = old_l0_tbls.len() - n;
@@ -606,6 +603,10 @@ pub fn load_resource<'a, T>(ptr: &Atomic<T>, g: &'a Guard) -> &'a T {
 pub fn cas_resource<'a, T>(ptr: &Atomic<T>, g: &'a Guard, old: epoch::Shared<T>, new: T) -> bool {
     ptr.compare_exchange(old, Owned::new(new), Release, Relaxed, g)
         .is_ok()
+}
+
+pub fn store_resource<'a, T>(ptr: &Atomic<T>, new: T) {
+    ptr.store(Owned::new(new), Release);
 }
 
 pub fn store_u64(ptr: &AtomicU64, val: u64) {
@@ -684,7 +685,7 @@ impl LevelHandlerBuilder {
             total_size += tbl.size()
         }
         LevelHandler {
-            tables: Arc::new(tables),
+            tables,
             level,
             total_size,
         }
@@ -730,7 +731,7 @@ impl ShardCF {
 
 #[derive(Default, Clone)]
 pub struct LevelHandler {
-    pub(crate) tables: Arc<Vec<SSTable>>,
+    pub(crate) tables: Vec<SSTable>,
     pub(crate) level: usize,
     pub(crate) total_size: u64,
 }
@@ -738,7 +739,7 @@ pub struct LevelHandler {
 impl LevelHandler {
     pub fn new(level: usize) -> Self {
         Self {
-            tables: Arc::new(Vec::new()),
+            tables: Vec::new(),
             level,
             total_size: 0,
         }
@@ -775,14 +776,6 @@ impl LevelHandler {
             return None;
         }
         return Some(&self.tables[idx]);
-    }
-
-    pub(crate) fn add_total_size(&mut self, size: u64) {
-        self.total_size += size;
-    }
-
-    pub(crate) fn sub_total_size(&mut self, size: u64) {
-        self.total_size -= size;
     }
 }
 

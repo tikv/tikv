@@ -1,23 +1,19 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::store::{
-    rlog, Applier, Callback, CasualMessage, CasualRouter, LocalReader, PeerFsm, PeerMsg,
-    PeerStates, ProposalRouter, RaftCommand, SignificantMsg, StoreFSM, StoreMsg, StoreRouter,
+    Applier, Callback, CasualMessage, CasualRouter, LocalReader, PeerFsm, PeerMsg, PeerStates,
+    ProposalRouter, RaftCommand, SignificantMsg, StoreMsg, StoreRouter,
 };
 use crate::Error::RegionNotFound;
-use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
-use crossbeam::channel::SendError;
-use kvproto::kvrpcpb::Op;
+use crate::{Error as RaftStoreError, Result as RaftStoreResult};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
-use raft::SnapshotStatus;
 use slog_global::info;
 use std::cell::RefCell;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tikv_util::deadline::Deadline;
-use tikv_util::error;
-use tikv_util::mpsc::{Receiver, Sender};
+use tikv_util::mpsc::Sender;
 use tikv_util::time::ThreadReadId;
 
 /// Routes messages to the raftstore.
@@ -273,8 +269,6 @@ fn send_command_impl(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_run() {
         println!("run")

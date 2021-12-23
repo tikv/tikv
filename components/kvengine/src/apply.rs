@@ -7,11 +7,8 @@ use crate::{
 };
 use crossbeam_epoch as epoch;
 use kvenginepb as pb;
-use slog_global::info;
 use std::collections::HashSet;
-use std::fs;
-use std::sync::atomic::Ordering;
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 
 impl Engine {
     pub fn apply_change_set(&self, cs: pb::ChangeSet) -> Result<()> {
@@ -156,7 +153,6 @@ impl Engine {
         let level_idx = level as usize - 1;
         let mut new_level = &mut new_scf.levels[level_idx];
         let old_level = &old_scf.levels[level_idx];
-        let mut new_level_tables = vec![];
         new_level.total_size = 0;
         let mut need_update = false;
         for create in creates {
@@ -166,7 +162,7 @@ impl Engine {
             let file = self.fs.open(create.id, opts)?;
             let tbl = sstable::SSTable::new(file, self.cache.clone())?;
             new_level.total_size += tbl.size();
-            new_level_tables.push(tbl);
+            new_level.tables.push(tbl);
             need_update = true;
         }
 
@@ -177,15 +173,16 @@ impl Engine {
                 need_update = true;
             } else {
                 new_level.total_size += old_tbl.size();
-                new_level_tables.push(old_tbl.clone());
+                new_level.tables.push(old_tbl.clone());
             }
         }
         if !need_update {
             return Ok(());
         }
-        new_level_tables.sort_by(|a, b| a.smallest().cmp(b.smallest()));
-        assert_tables_order(&new_level_tables);
-        new_level.tables = Arc::new(new_level_tables);
+        new_level
+            .tables
+            .sort_by(|a, b| a.smallest().cmp(b.smallest()));
+        assert_tables_order(&new_level.tables);
         if !cas_resource(&shard.cfs[cf], g, shared, Arc::new(new_scf)) {
             error!("there maybe concurrent apply compaction.");
             panic!("failed to update level_handler")
@@ -238,10 +235,9 @@ impl Engine {
             scf_builder.add_table(table, level);
         }
         for cf in 0..NUM_CFS {
-            let mut scf_builder = &mut scf_builders[cf];
+            let scf_builder = &mut scf_builders[cf];
             let max_level = self.opts.cfs[cf].max_levels;
             let (old_shared, old_cf) = load_resource_with_shared(&shard.cfs[cf], g);
-            let old_cf = unsafe { old_shared.deref() };
             for level in 1..=max_level {
                 let old_handler = &old_cf.levels[level - 1];
                 for old_tbl in old_handler.tables.iter() {
@@ -258,7 +254,7 @@ impl Engine {
         Ok(())
     }
 
-    fn pre_load_files(&self, cs: &pb::ChangeSet) -> Result<()> {
+    pub fn pre_load_files(&self, cs: &pb::ChangeSet) -> Result<()> {
         let mut ids = vec![];
         if cs.has_flush() {
             let flush = cs.get_flush();

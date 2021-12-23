@@ -1,21 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use bytes::{Buf, Bytes};
-use error_code::{ErrorCode, ErrorCodeExt};
-use libc::NOTE_EXITSTATUS;
 use protobuf::ProtobufEnum;
 use raft_proto::eraftpb;
-use slog_global::info;
 use std::sync::{Arc, Mutex, RwLock};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
-    fs, mem,
+    fs,
     num::ParseIntError,
     path::Path,
     path::PathBuf,
     sync::mpsc::SyncSender,
     thread::{self, JoinHandle},
-    time::Instant,
 };
 use thiserror::Error as ThisError;
 
@@ -315,10 +311,10 @@ impl RFEngine {
     }
 
     pub fn stop_worker(&mut self) {
-        self.task_sender.send(Task::Close);
+        self.task_sender.send(Task::Close).unwrap();
         let mut handle_ref = self.worker_handle.lock().unwrap();
         if let Some(h) = handle_ref.take() {
-            h.join();
+            h.join().unwrap();
         }
     }
 }

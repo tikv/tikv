@@ -1,9 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use byteorder::{ByteOrder, LittleEndian};
-use bytes::{Buf, BufMut, Bytes, BytesMut};
-use kvproto::raft_cmdpb;
-use kvproto::raft_cmdpb::{CmdType, CustomRequest, RaftCmdRequest, Request};
+use bytes::BufMut;
+use kvproto::raft_cmdpb::{CustomRequest, RaftCmdRequest};
 use protobuf::Message;
 use std::mem;
 
@@ -16,19 +15,20 @@ pub(crate) fn get_custom_log(req: &RaftCmdRequest) -> Option<CustomRaftLog> {
     })
 }
 
-type CustomRaftlogType = u8;
+pub type CustomRaftlogType = u8;
 
 pub const TYPE_PREWRITE: CustomRaftlogType = 1;
 pub const TYPE_COMMIT: CustomRaftlogType = 2;
 pub const TYPE_ROLLBACK: CustomRaftlogType = 3;
 pub const TYPE_PESSIMISTIC_LOCK: CustomRaftlogType = 4;
 pub const TYPE_PESSIMISTIC_ROLLBACK: CustomRaftlogType = 5;
-pub const TYPE_PRE_SPLIT: CustomRaftlogType = 6;
-pub const TYPE_FLUSH: CustomRaftlogType = 7;
-pub const TYPE_COMPACTION: CustomRaftlogType = 8;
-pub const TYPE_SPLIT_FILES: CustomRaftlogType = 9;
-pub const TYPE_NEX_MEM_TABLE_SIZE: CustomRaftlogType = 10;
-pub const TYPE_DELETE_RANGE: CustomRaftlogType = 11;
+pub const TYPE_ONE_PC: CustomRaftlogType = 6;
+pub const TYPE_PRE_SPLIT: CustomRaftlogType = 7;
+pub const TYPE_FLUSH: CustomRaftlogType = 8;
+pub const TYPE_COMPACTION: CustomRaftlogType = 9;
+pub const TYPE_SPLIT_FILES: CustomRaftlogType = 10;
+pub const TYPE_NEX_MEM_TABLE_SIZE: CustomRaftlogType = 11;
+pub const TYPE_DELETE_RANGE: CustomRaftlogType = 12;
 
 const HEADER_SIZE: usize = 2;
 
@@ -69,10 +69,27 @@ impl CustomRaftLog<'a> {
         }
     }
 
-    // F: (key, val, commit_ts)
+    // F: (key, commit_ts)
     pub(crate) fn iterate_commit<F>(&self, mut f: F)
     where
-        F: FnMut(&[u8], &[u8], u64),
+        F: FnMut(&[u8], u64),
+    {
+        let mut i = HEADER_SIZE;
+        while i < self.data.len() {
+            let key_len = LittleEndian::read_u16(&self.data[i..]) as usize;
+            i += 2;
+            let key = &self.data[i..i + key_len];
+            i += key_len;
+            let commit_ts = LittleEndian::read_u64(&self.data[i..]);
+            i += 8;
+            f(key, commit_ts)
+        }
+    }
+
+    // F: (key, val, is_extra, start_ts, commit_ts)
+    pub(crate) fn iterate_one_pc<F>(&self, mut f: F)
+    where
+        F: FnMut(&[u8], &[u8], bool, u64, u64),
     {
         let mut i = HEADER_SIZE;
         while i < self.data.len() {
@@ -84,9 +101,13 @@ impl CustomRaftLog<'a> {
             i += 4;
             let val = &self.data[i..i + val_len];
             i += val_len;
+            let is_extra = self.data[i] > 0;
+            i += 1;
+            let start_ts = LittleEndian::read_u64(&self.data[i..]);
+            i += 8;
             let commit_ts = LittleEndian::read_u64(&self.data[i..]);
             i += 8;
-            f(key, val, commit_ts)
+            f(key, val, is_extra, start_ts, commit_ts)
         }
     }
 
@@ -109,7 +130,7 @@ impl CustomRaftLog<'a> {
         }
     }
 
-    pub(crate) fn iterate_keys_only<F>(&self, mut f: F)
+    pub(crate) fn iterate_del_lock<F>(&self, mut f: F)
     where
         F: FnMut(&[u8]),
     {
@@ -145,14 +166,14 @@ pub struct CustomBuilder {
 }
 
 impl CustomBuilder {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             buf: vec![0; HEADER_SIZE],
             cnt: 0,
         }
     }
 
-    pub(crate) fn append_lock(&mut self, key: &[u8], val: &[u8]) {
+    pub fn append_lock(&mut self, key: &[u8], val: &[u8]) {
         self.buf.put_u16_le(key.len() as u16);
         self.buf.extend_from_slice(key);
         self.buf.put_u32_le(val.len() as u32);
@@ -160,16 +181,32 @@ impl CustomBuilder {
         self.cnt += 1;
     }
 
-    pub(crate) fn append_commit(&mut self, key: &[u8], val: &[u8], commit_ts: u64) {
+    pub fn append_commit(&mut self, key: &[u8], commit_ts: u64) {
         self.buf.put_u16_le(key.len() as u16);
         self.buf.extend_from_slice(key);
-        self.buf.put_u32_le(val.len() as u32);
-        self.buf.extend_from_slice(val);
         self.buf.put_u64_le(commit_ts);
         self.cnt += 1;
     }
 
-    pub(crate) fn append_rollback(&mut self, key: &[u8], start_ts: u64, delete_lock: bool) {
+    pub fn append_one_pc(
+        &mut self,
+        key: &[u8],
+        val: &[u8],
+        is_extra: bool,
+        start_ts: u64,
+        commit_ts: u64,
+    ) {
+        self.buf.put_u16_le(key.len() as u16);
+        self.buf.extend_from_slice(key);
+        self.buf.put_u32_le(val.len() as u32);
+        self.buf.extend_from_slice(val);
+        self.buf.put_u8(is_extra as u8);
+        self.buf.put_u64_le(start_ts);
+        self.buf.put_u64_le(commit_ts);
+        self.cnt += 1;
+    }
+
+    pub fn append_rollback(&mut self, key: &[u8], start_ts: u64, delete_lock: bool) {
         self.buf.put_u16_le(key.len() as u16);
         self.buf.extend_from_slice(key);
         self.buf.put_u64_le(start_ts);
@@ -177,13 +214,13 @@ impl CustomBuilder {
         self.cnt += 1;
     }
 
-    pub(crate) fn append_key_only(&mut self, key: &[u8]) {
+    pub fn append_del_lock(&mut self, key: &[u8]) {
         self.buf.put_u16_le(key.len() as u16);
         self.buf.extend_from_slice(key);
         self.cnt += 1;
     }
 
-    pub(crate) fn set_change_set(&mut self, cs: kvenginepb::ChangeSet) {
+    pub fn set_change_set(&mut self, cs: kvenginepb::ChangeSet) {
         assert_eq!(self.buf.len(), HEADER_SIZE);
         let mut tp: CustomRaftlogType = 0;
         if cs.has_flush() {
@@ -203,22 +240,22 @@ impl CustomBuilder {
         self.set_type(tp);
     }
 
-    pub(crate) fn set_type(&mut self, tp: CustomRaftlogType) {
+    pub fn set_type(&mut self, tp: CustomRaftlogType) {
         self.buf[0] = tp as u8;
     }
 
-    pub(crate) fn get_type(&self) -> CustomRaftlogType {
+    pub fn get_type(&self) -> CustomRaftlogType {
         self.buf[0] as CustomRaftlogType
     }
 
-    pub(crate) fn build(&mut self) -> CustomRequest {
+    pub fn build(&mut self) -> CustomRequest {
         let mut req = CustomRequest::default();
         let buf = mem::take(&mut self.buf);
         req.set_data(buf);
         req
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.cnt as usize
     }
 }
@@ -247,5 +284,12 @@ pub fn is_pre_split_log(data: &[u8]) -> bool {
 
 #[test]
 fn test_run() {
-    println!("run")
+    use slog::Drain;
+    let decorator = slog_term::PlainDecorator::new(std::io::stdout());
+    let drain = slog_term::CompactFormat::new(decorator).build();
+    let drain = std::sync::Mutex::new(drain).fuse();
+    let logger = slog::Logger::root(drain, slog::o!());
+    slog_global::set_global(logger);
+
+    warn!("abc {}", 2; "next" => 2);
 }

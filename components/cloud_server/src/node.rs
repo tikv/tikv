@@ -9,9 +9,10 @@ use super::RaftKv;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Peekable, RaftEngine};
 use kvproto::metapb;
-use kvproto::raft_serverpb::StoreIdent;
+use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
 use kvproto::replication_modepb::ReplicationStatus;
 use pd_client::{Error as PdError, PdClient, INVALID_ID};
+use protobuf::Message;
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::store::{initial_region, FlowStatsReporter};
 use rfengine::RFEngine;
@@ -198,10 +199,21 @@ where
         self.system.router()
     }
 
+    fn load_store_ident(&self, engines: &Engines) -> Result<Option<StoreIdent>> {
+        match engines.raft.get_state(0, keys::STORE_IDENT_KEY) {
+            None => Ok(None),
+            Some(bin) => {
+                let mut ident = StoreIdent::default();
+                ident.merge_from_bytes(&bin)?;
+                Ok(Some(ident))
+            }
+        }
+    }
+
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
     fn check_store(&self, engines: &Engines) -> Result<u64> {
-        let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
+        let res = self.load_store_ident(engines)?;
         if res.is_none() {
             return Ok(INVALID_ID);
         }
@@ -229,7 +241,7 @@ where
     }
 
     fn load_all_stores(&mut self, status: Option<ReplicationStatus>) {
-        todo!();
+        // TODO(x)
         /*
         info!("initializing replication mode"; "status" => ?status, "store_id" => self.store.id);
         let stores = match self.pd_client.get_all_stores(false) {
@@ -279,13 +291,15 @@ where
         engines: &Engines,
         store_id: u64,
     ) -> Result<Option<metapb::Region>> {
-        if let Some(first_region) = engines.kv.get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
-            Ok(Some(first_region))
-        } else if self.check_cluster_bootstrapped()? {
-            Ok(None)
-        } else {
-            self.prepare_bootstrap_cluster(engines, store_id).map(Some)
+        if let Some(bin) = engines.raft.get_state(0, keys::PREPARE_BOOTSTRAP_KEY) {
+            let mut local_state = RegionLocalState::default();
+            local_state.merge_from_bytes(&bin)?;
+            return Ok(Some(local_state.take_region()));
         }
+        if self.check_cluster_bootstrapped()? {
+            return Ok(None);
+        }
+        self.prepare_bootstrap_cluster(engines, store_id).map(Some)
     }
 
     fn bootstrap_cluster(&mut self, engines: &Engines, first_region: metapb::Region) -> Result<()> {

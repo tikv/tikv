@@ -2,26 +2,21 @@
 
 use bytes::Bytes;
 use kvproto::metapb;
-use kvproto::metapb::Region;
-use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{CustomRequest, RaftCmdRequest, RaftRequestHeader};
 use online_config::ConfigChange;
-use protobuf::{ProtobufEnum, RepeatedField};
-use std::borrow::Borrow;
+use protobuf::ProtobufEnum;
 use std::fmt::{self, Display, Formatter};
 use std::thread::sleep;
-use std::time::Instant;
 
 use crate::store::{
-    Callback, CustomBuilder, MsgWaitFollowerSplitFiles, PeerMsg, RaftCommand, RegionTag,
-    WriteCallback, WriteResponse,
+    Callback, CasualMessage, CustomBuilder, MsgWaitFollowerSplitFiles, PeerMsg, RegionIDVer,
+    WriteResponse, PENDING_CONF_CHANGE_ERR_MSG,
 };
 use crate::{RaftRouter, RaftStoreRouter};
-use raftstore::coprocessor::Config;
 use tikv_util::codec::bytes::encode_bytes;
 use tikv_util::mpsc::Receiver;
 use tikv_util::time::Duration;
-use tikv_util::worker::{Runnable, RunnableWithTimer};
+use tikv_util::worker::Runnable;
 use tikv_util::{box_err, error, info, warn};
 
 #[derive(Debug)]
@@ -36,7 +31,7 @@ impl Display for SplitCheckTask {
         write!(
             f,
             "[split check worker] Split Check Task for {}, max_size: {}",
-            RegionTag::from_region(&self.region),
+            RegionIDVer::from_region(&self.region),
             self.max_size,
         )
     }
@@ -69,7 +64,7 @@ impl Runnable for SplitCheckRunner {
     fn run(&mut self, task: SplitCheckTask) {
         let region = task.region;
         let shard = self.kv.get_shard(region.get_id());
-        let tag = RegionTag::from_region(&region);
+        let tag = RegionIDVer::from_region(&region);
         if shard.is_none() {
             warn!("split check shard not found"; "region" => tag);
             return;
@@ -101,7 +96,7 @@ pub fn split_engine_and_region(
 ) -> crate::Result<Receiver<WriteResponse>> {
     pre_split_region(router, kv, region, peer, &keys)?;
     split_shard_files(router, kv, region, peer)?;
-    let tag = RegionTag::from_region(region);
+    let tag = RegionIDVer::from_region(region);
     info!("send a msg to wait for followers to finish splitting files"; "region" => tag);
     let (tx, rx) = tikv_util::mpsc::bounded(1);
     let cb = Callback::write(Box::new(move |resp| {
@@ -131,8 +126,8 @@ fn pre_split_region(
     peer: &metapb::Peer,
     keys: &Vec<Bytes>,
 ) -> crate::Result<()> {
-    let mut shard_opt = None;
-    let tag = RegionTag::from_region(region);
+    let mut shard_opt;
+    let tag = RegionIDVer::from_region(region);
     loop {
         shard_opt = kv.get_shard(region.get_id());
         if shard_opt.is_none() {
@@ -157,9 +152,9 @@ fn pre_split_region(
     change_set.set_shard_id(region.get_id());
     change_set.set_shard_ver(region.get_region_epoch().get_version());
     change_set.set_stage(kvenginepb::SplitStage::PreSplit);
-    let mut pre_split = change_set.mut_pre_split();
+    let pre_split = change_set.mut_pre_split();
     for key in keys {
-        pre_split.keys.push(key.to_vec());
+        pre_split.mut_keys().push(key.to_vec());
     }
     let mut custom_builder = CustomBuilder::new();
     custom_builder.set_change_set(change_set);
@@ -205,7 +200,7 @@ pub fn split_shard_files(
         let err_msg = header.get_error().get_message();
         return Err(box_err!(
             "{} failed to split shard files {}",
-            RegionTag::from_region(region),
+            RegionIDVer::from_region(region),
             err_msg
         ));
     }
@@ -216,13 +211,70 @@ pub fn finish_split(
     router: &RaftRouter,
     region: &metapb::Region,
     keys: Vec<Bytes>,
-) -> crate::Result<()> {
-    let mut encoded_keys = Vec::with_capacity(keys.len());
-    for key in keys {
-        let encoded_key = encode_bytes(&key);
-        encoded_keys.push(encoded_key);
-    }
-    loop {}
+) -> crate::Result<Vec<metapb::Region>> {
+    loop {
+        let mut encoded_keys = Vec::with_capacity(keys.len());
+        for key in &keys {
+            let encoded_key = encode_bytes(key);
+            encoded_keys.push(encoded_key);
+        }
+        let (tx, rx) = tikv_util::mpsc::bounded(1);
+        let callback = Callback::write(Box::new(move |resp| {
+            tx.send(resp);
+        }));
+        let split = CasualMessage::SplitRegion {
+            region_epoch: region.get_region_epoch().clone(),
+            split_keys: encoded_keys,
+            callback,
+            source: Default::default(),
+        };
+        let id_ver = RegionIDVer::from_region(region);
+        let msg = PeerMsg::CasualMessage(split);
+        router.send(region.get_id(), msg)?;
+        let resp = rx.recv().unwrap();
+        let header = resp.response.get_header();
+        if header.has_error() {
+            if header.get_error().has_epoch_not_match() {
+                let epoch_not_match = header.get_error().get_epoch_not_match();
+                let mut r = None;
+                if epoch_not_match.get_current_regions().len() > 0 {
+                    for cr in epoch_not_match.get_current_regions() {
+                        if cr.get_id() == region.get_id() {
+                            r = Some(cr.clone());
+                            break;
+                        }
+                    }
+                }
 
-    todo!()
+                if r.is_some()
+                    && r.as_ref().unwrap().get_region_epoch().get_version()
+                        == region.get_region_epoch().get_version()
+                {
+                    let err_msg = header.get_error().get_message();
+                    warn!("leader finish split error"; "region" => id_ver, "error" => err_msg);
+                }
+            } else if header
+                .get_error()
+                .get_message()
+                .contains(PENDING_CONF_CHANGE_ERR_MSG)
+            {
+                warn!("leader finish split error";
+                    "region" => id_ver,
+                    "error" => header.get_error().get_message(),
+                );
+                // TODO(z) this may block worker for a long time.
+                sleep(Duration::from_millis(100));
+                continue;
+            }
+            error!("leader finished split error"; "region" => id_ver, "error" => header.get_error().get_message());
+            return Err(box_err!(header.get_error().get_message()));
+        }
+        info!("leader finished split successfully"; "region" => id_ver);
+        return Ok(resp
+            .response
+            .get_admin_response()
+            .get_splits()
+            .get_regions()
+            .to_vec());
+    }
 }

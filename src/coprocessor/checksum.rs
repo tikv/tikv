@@ -15,11 +15,12 @@ use yatp::task::future::reschedule;
 use crate::coprocessor::dag::TiKVStorage;
 use crate::coprocessor::*;
 use crate::storage::{Snapshot, SnapshotStore, Statistics};
+use crate::storage::txn::CloudStore;
 
 // `ChecksumContext` is used to handle `ChecksumRequest`
 pub struct ChecksumContext<S: Snapshot> {
     req: ChecksumRequest,
-    scanner: RangesScanner<TiKVStorage<SnapshotStore<S>>>,
+    scanner: RangesScanner<TiKVStorage<CloudStore<S>>>,
 }
 
 impl<S: Snapshot> ChecksumContext<S> {
@@ -30,15 +31,16 @@ impl<S: Snapshot> ChecksumContext<S> {
         snap: S,
         req_ctx: &ReqContext,
     ) -> Result<Self> {
-        let store = SnapshotStore::new(
-            snap,
-            start_ts.into(),
-            req_ctx.context.get_isolation_level(),
-            !req_ctx.context.get_not_fill_cache(),
-            req_ctx.bypass_locks.clone(),
-            req_ctx.access_locks.clone(),
-            false,
-        );
+        // let store = SnapshotStore::new(
+        //     snap,
+        //     start_ts.into(),
+        //     req_ctx.context.get_isolation_level(),
+        //     !req_ctx.context.get_not_fill_cache(),
+        //     req_ctx.bypass_locks.clone(),
+        //     req_ctx.access_locks.clone(),
+        //     false,
+        // );
+        let store = CloudStore::new(snap, start_ts, req_ctx.bypass_locks.clone());
         let scanner = RangesScanner::new(RangesScannerOptions {
             storage: TiKVStorage::new(store, false),
             ranges: ranges

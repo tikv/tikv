@@ -4,21 +4,17 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 use std::time::Instant;
 
-use crate::store::{ApplyMetrics, ApplyResult, ExecResult, Proposal, RegionSnapshot, StoreTick};
-use crate::Error;
+use crate::store::{ExecResult, Proposal, RegionSnapshot};
 use bytes::Bytes;
-use kvproto::kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp};
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
-use kvproto::{metapb, pdpb, raft_cmdpb, raft_serverpb as rspb};
+use kvproto::{metapb, pdpb, raft_serverpb as rspb};
 use raft_proto::eraftpb;
 use raftstore::store::util::KeysInfoFormatter;
-use tikv_util::deadline::Deadline;
-use tikv_util::escape;
 
-use super::{rlog, Peer, RaftApplyState};
+use super::{Peer, RaftApplyState};
 
 #[derive(Debug)]
 pub enum PeerMsg {

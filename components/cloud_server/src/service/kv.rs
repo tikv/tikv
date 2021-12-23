@@ -261,7 +261,7 @@ impl<T: RaftStoreRouter + 'static, L: LockManager> Tikv for Service<T, L> {
         sink: UnarySink<UnsafeDestroyRangeResponse>,
     ) {
         let begin_instant = Instant::now_coarse();
-        todo!();
+        // TODO(x)
         /*
         // DestroyRange is a very dangerous operation. We don't allow passing MIN_KEY as start, or
         // MAX_KEY as end here.

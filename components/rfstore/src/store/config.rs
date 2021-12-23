@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig};
+use online_config::OnlineConfig;
 use raftstore::coprocessor;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -75,7 +75,6 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
             prevote: true,
             capacity: ReadableSize(0),

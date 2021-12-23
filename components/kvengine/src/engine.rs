@@ -52,7 +52,7 @@ impl Engine {
         id_allocator: Arc<dyn IDAllocator>,
         meta_change_listener: Box<dyn MetaChangeListener>,
     ) -> Result<Engine> {
-        info!("Open Engine");
+        info!("open KVEngine");
         check_options(&opts)?;
         // TODO: add diretory lock to avoid multiple instance open the same dir.
         let lock_path = opts.dir.join("LOCK");
@@ -81,6 +81,7 @@ impl Engine {
             meta_change_listener,
         };
         let metas = en.read_meta(meta_iter)?;
+        info!("engine load {} shards", metas.len());
         en.load_shards(metas, recoverer)?;
         let flush_en = en.clone();
         thread::spawn(move || {
@@ -103,7 +104,7 @@ impl Engine {
         recoverer: impl RecoverHandler,
     ) -> Result<()> {
         let mut parents = HashSet::new();
-        for (id, meta) in &metas {
+        for meta in metas.values() {
             if let Some(parent) = &meta.parent {
                 if !parents.contains(&parent.id) {
                     parents.insert(parent.id);
@@ -150,7 +151,7 @@ impl EngineCore {
         let mut l0_tbls = Vec::new();
         let mut scf_builders = Vec::new();
         for cf in 0..NUM_CFS {
-            let mut scf_builder = ShardCFBuilder::new(self.opts.cfs[cf].max_levels);
+            let scf_builder = ShardCFBuilder::new(self.opts.cfs[cf].max_levels);
             scf_builders.push(scf_builder);
         }
         for (fid, fm) in &meta.files {
@@ -195,7 +196,6 @@ impl EngineCore {
     }
 
     pub fn remove_shard(&self, shard_id: u64) -> bool {
-        let g = epoch::pin();
         let x = self.shards.remove(&shard_id);
         if let Some((_, ptr)) = x {
             return true;

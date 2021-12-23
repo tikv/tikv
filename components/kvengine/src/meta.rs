@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::iter::Iterator;
-use std::{collections::HashMap, ops::Deref, str::FromStr};
+use std::collections::HashMap;
 
 use bytes::{Buf, Bytes};
 use kvenginepb as pb;
@@ -19,7 +18,7 @@ pub struct ShardMeta {
     pub seq: u64,
     pub(crate) files: HashMap<u64, FileMeta>,
 
-    pub properties: Properties,
+    pub(crate) properties: Properties,
     pub pre_split: Option<pb::PreSplit>,
     split: Option<pb::Split>,
     pub split_stage: pb::SplitStage,
@@ -103,7 +102,7 @@ impl ShardMeta {
         self.files.get(&id).map(|fm| fm.level as u32)
     }
 
-    fn get_property(&self, key: &str) -> Option<Bytes> {
+    pub fn get_property(&self, key: &str) -> Option<Bytes> {
         self.properties.get(key).map(|v| v.clone())
     }
 
@@ -381,14 +380,4 @@ trait MetaReader {
     fn iterate_meta<F>(&self, f: F) -> Result<()>
     where
         F: Fn(&pb::ChangeSet) -> Result<()>;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_meta() {
-        println!("dd")
-    }
 }

@@ -2,6 +2,7 @@
 
 pub mod apply;
 pub mod compaction;
+mod concat_iterator;
 pub mod dfs;
 pub mod engine;
 pub mod engine_trait;
@@ -21,11 +22,11 @@ extern crate slog_global;
 #[cfg(test)]
 mod tests;
 
-pub use apply::*;
 pub use compaction::*;
+use concat_iterator::ConcatIterator;
 pub use engine::*;
 pub use error::*;
-pub use flush::*;
+use flush::*;
 pub use ingest::*;
 pub use meta::*;
 pub use options::*;

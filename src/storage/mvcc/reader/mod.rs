@@ -3,6 +3,7 @@
 mod point_getter;
 mod reader;
 mod scanner;
+mod cloud_reader;
 
 pub use self::point_getter::{PointGetter, PointGetterBuilder};
 #[cfg(test)]

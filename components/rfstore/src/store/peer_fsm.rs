@@ -1,68 +1,42 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use bytes::Bytes;
-use engine_traits::SSTMetaInfo;
-use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvengine::ShardMeta;
-use kvproto::errorpb;
-use kvproto::import_sstpb::SwitchMode;
-use kvproto::kvrpcpb::DiskFullOpt;
 use kvproto::metapb::{self, Region, RegionEpoch};
-use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
     Request, StatusCmdType, StatusResponse,
 };
-use kvproto::raft_serverpb::{
-    ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
-    RaftSnapshotData, RaftTruncatedState, RegionLocalState,
-};
-use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
+use kvproto::raft_serverpb::RaftMessage;
 use protobuf::{Message, ProtobufEnum};
-use raft::eraftpb::{ConfChangeType, Entry, EntryType, MessageType};
-use raft::{self, Progress, ReadState, Ready, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
+use raft::eraftpb::{ConfChangeType, MessageType};
+use raft::{self, Ready, StateRole};
 use raft_proto::eraftpb;
-use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::collections::{HashMap, VecDeque};
-use std::iter::Iterator;
+use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 use std::time::Instant;
-use std::{cmp, mem, u64};
-use tikv_alloc::trace::TraceEvent;
-use tikv_util::mpsc::{self, Receiver, Sender};
-use tikv_util::sys::{disk, memory_usage_reaches_high_water};
-use tikv_util::time::duration_to_sec;
-use tikv_util::worker::{ScheduleError, Scheduler, Stopped};
+use std::{cmp, u64};
+use tikv_util::worker::ScheduleError;
 use tikv_util::{box_err, debug, error, info, trace, warn};
-use tikv_util::{escape, is_zero_duration, Either};
 
 use crate::store::cmd_resp::{bind_term, new_error};
-use crate::store::msg::{Callback, ExtCallback};
-use crate::store::peer::{ConsistencyState, Peer, StaleState};
-use crate::store::transport::Transport;
+use crate::store::msg::Callback;
+use crate::store::peer::{ConsistencyState, Peer};
+use crate::store::SplitCheckTask;
+use crate::store::{notify_req_region_removed, CustomBuilder, MsgWaitFollowerSplitFiles, PdTask};
 use crate::store::{
-    apply, write_peer_state, ApplyMetrics, ChangePeer, ExecResult, MsgApply,
-    MsgApplyChangeSetResult, SnapState,
+    raw_end_key, ApplyMsg, Engines, MsgApplyResult, RaftContext, ReadDelegate, Ticker,
+    PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT, PEER_TICK_SPLIT_CHECK,
 };
+use crate::store::{util as _util, CasualMessage, Config, PeerMsg, SignificantMsg};
 use crate::store::{
-    notify_req_region_removed, ApplySnapResult, CustomBuilder, MsgWaitFollowerSplitFiles, PdTask,
+    write_peer_state, ChangePeer, ExecResult, MsgApplyChangeSetResult, SnapState,
+    EXTRA_CTX_SPLIT_FILE_DONE,
 };
-use crate::store::{
-    raw_end_key, raw_start_key, region_state_key, rlog, ApplyMsg, Engines, MsgApplyResult,
-    PeerTick, RaftContext, ReadDelegate, StoreMeta, Ticker, PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT,
-    PEER_TICK_SPLIT_CHECK,
-};
-use crate::store::{
-    util as _util, CasualMessage, Config, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
-};
-use crate::store::{RegionTask, SplitCheckTask};
 use crate::{Error, Result};
 use raftstore::coprocessor::RegionChangeEvent;
-use raftstore::store::local_metrics::RaftProposeMetrics;
-use raftstore::store::memory::*;
-use raftstore::store::metrics::*;
 use raftstore::store::util;
 use txn_types::WriteBatchFlags;
 
@@ -114,7 +88,7 @@ impl PeerFsm {
         Ok(PeerFsm {
             peer: Peer::new(store_id, cfg, engines, region, meta_peer)?,
             stopped: false,
-            ticker: Ticker::new(region.get_id(), cfg),
+            ticker: Ticker::new(cfg),
         })
     }
 
@@ -140,7 +114,7 @@ impl PeerFsm {
         Ok(PeerFsm {
             peer: Peer::new(store_id, cfg, engines, &region, peer)?,
             stopped: false,
-            ticker: Ticker::new(region_id, cfg),
+            ticker: Ticker::new(cfg),
         })
     }
 
@@ -457,6 +431,11 @@ impl<'a> PeerMsgHandler<'a> {
         if result.is_err() {
             return result;
         }
+        self.update_follower_split_file_done(
+            from_peer_id,
+            msg.get_extra_ctx(),
+            msg.get_region_epoch().version,
+        );
         Ok(())
     }
 
@@ -732,6 +711,7 @@ impl<'a> PeerMsgHandler<'a> {
                             .retain(|&(p, _)| p != peer_id);
                     }
                     self.fsm.peer.remove_peer_from_cache(peer_id);
+                    self.peer.followers_split_files_done.remove(&peer_id);
                     // We only care remove itself now.
                     if self.store_id() == store_id {
                         if self.fsm.peer.peer_id() == peer_id {
@@ -1297,6 +1277,24 @@ impl<'a> PeerMsgHandler<'a> {
         let custom_req = builder.build();
         req.set_custom_request(custom_req);
         self.propose_raft_command(req, Callback::None);
+    }
+
+    fn update_follower_split_file_done(
+        &mut self,
+        from_peer: u64,
+        extra_ctx: &[u8],
+        epoch_ver: u64,
+    ) {
+        if extra_ctx.len() != 1 || extra_ctx[0] != EXTRA_CTX_SPLIT_FILE_DONE {
+            return;
+        }
+        if from_peer == self.peer_id() {
+            return;
+        }
+        info!("follower {} split file done ", from_peer; "region" => self.peer.tag());
+        self.peer
+            .followers_split_files_done
+            .insert(from_peer, epoch_ver);
     }
 
     fn new_raft_cmd_request(&self) -> RaftCmdRequest {

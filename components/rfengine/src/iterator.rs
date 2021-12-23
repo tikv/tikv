@@ -2,14 +2,13 @@
 
 use std::{
     fs::{self, File},
-    io::{self, BufRead, BufReader, Read},
+    io::{BufReader, Read},
     path::PathBuf,
 };
 
 use crate::*;
 use byteorder::{ByteOrder, LittleEndian};
-use bytes::{Buf, BufMut, Bytes, BytesMut};
-use slog_global::info;
+use bytes::{Buf, Bytes, BytesMut};
 
 pub(crate) struct WALIterator {
     dir: PathBuf,

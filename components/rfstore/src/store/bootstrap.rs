@@ -1,23 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::peer_storage::{
-    write_initial_apply_state, write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
-};
+use super::peer_storage::{write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use super::PREPARE_BOOTSTRAP_KEY;
 use crate::Result;
 use bytes::{Buf, BufMut};
-use engine_traits::{CF_DEFAULT, CF_RAFT};
 
 use crate::store::{
-    raft_state_key, region_state_key, Engines, RaftApplyState, EMPTY_KEY, KV_ENGINE_META_KEY,
-    RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM, STORE_IDENT_KEY, TERM_KEY,
+    raft_state_key, region_state_key, Engines, EMPTY_KEY, KV_ENGINE_META_KEY, RAFT_INIT_LOG_INDEX,
+    RAFT_INIT_LOG_TERM, STORE_IDENT_KEY, TERM_KEY,
 };
 use kvenginepb::{ChangeSet, Snapshot};
 use kvproto::metapb;
-use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, StoreIdent};
+use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
 use protobuf::{Message, RepeatedField};
 use raftstore::store::util;
-use tikv_util::{box_err, box_try};
+use tikv_util::box_err;
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
     let mut region = metapb::Region::default();
@@ -82,17 +79,18 @@ fn initial_ingest_tree(region_id: u64, version: u64) -> kvengine::IngestTree {
     change_set.set_sequence(RAFT_INIT_LOG_INDEX);
     let mut snap = Snapshot::default();
     snap.set_end(kvengine::GLOBAL_SHARD_END_KEY.to_vec());
-    let props = new_initial_properties();
+    let props = new_initial_properties(region_id);
     snap.set_properties(props);
     change_set.set_snapshot(snap);
     kvengine::IngestTree {
         change_set,
-        passive: false,
+        active: true,
     }
 }
 
-fn new_initial_properties() -> kvenginepb::Properties {
+fn new_initial_properties(shard_id: u64) -> kvenginepb::Properties {
     let mut props = kvenginepb::Properties::default();
+    props.set_shard_id(shard_id);
     props.set_keys(RepeatedField::from_slice(&[TERM_KEY.to_string()]));
     let mut val = Vec::with_capacity(8);
     val.put_u64_le(RAFT_INIT_LOG_TERM);

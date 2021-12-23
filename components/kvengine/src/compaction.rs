@@ -1,23 +1,19 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    path::PathBuf,
-    sync::{atomic::Ordering, mpsc, Arc},
-};
+use std::sync::{atomic::Ordering, mpsc, Arc};
 
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes, BytesMut};
-use futures::future::join_all;
 use moka::sync::SegmentedCache;
 use protobuf::RepeatedField;
 use slog_global::error;
 
+use crate::dfs;
 use crate::table::{
     search,
     sstable::{self, SSTable},
 };
 use crate::*;
-use crate::{dfs, table::sstable::L0Table};
 use crossbeam_epoch as epoch;
 use kvenginepb as pb;
 
@@ -414,7 +410,7 @@ impl Engine {
         req: &mut CompactionRequest,
         total_size: u64,
     ) -> Result<()> {
-        let id_cnt = total_size as usize / req.max_table_size + 100; // Add 100 here just in case we run out of ID.
+        let id_cnt = total_size as usize / req.max_table_size + 16; // Add 16 here just in case we run out of ID.
         let ids = self
             .id_allocator
             .alloc_id(id_cnt)
@@ -530,14 +526,18 @@ pub(crate) fn compact_l0(
         let bot_ids = &req.multi_cf_bottoms[cf];
         let bot_files = load_table_files(&bot_ids, fs.clone(), opts)?;
         let bot_tbls = in_mem_files_to_tables(&bot_files, cache.clone());
-        mult_cf_bot_tbls.push(Arc::new(bot_tbls));
+        mult_cf_bot_tbls.push(bot_tbls);
     }
 
     let channel_cap = req.end_id - req.start_id;
     let (tx, rx) = mpsc::sync_channel(channel_cap as usize);
     let mut id = req.start_id;
     for cf in 0..NUM_CFS {
-        let mut iter = build_compact_l0_iterator(cf, l0_tbls.clone(), mult_cf_bot_tbls[cf].clone());
+        let mut iter = build_compact_l0_iterator(
+            cf,
+            l0_tbls.clone(),
+            std::mem::take(&mut mult_cf_bot_tbls[cf]),
+        );
         let mut helper = CompactL0Helper::new(cf, req);
         loop {
             let (tbl_create, data) = helper.build_one(&mut iter, id)?;
@@ -550,7 +550,7 @@ pub(crate) fn compact_l0(
                 if let Err(err) = afs.create(tbl_create.id, data, opts).await {
                     atx.send(Err(err)).unwrap();
                 } else {
-                    atx.send(Ok(tbl_create));
+                    atx.send(Ok(tbl_create)).unwrap();
                 }
             });
             id += 1;
@@ -619,7 +619,7 @@ fn in_mem_files_to_tables(
 fn build_compact_l0_iterator(
     cf: usize,
     top_tbls: Vec<sstable::L0Table>,
-    bot_tbls: Arc<Vec<sstable::SSTable>>,
+    bot_tbls: Vec<sstable::SSTable>,
 ) -> Box<dyn table::Iterator> {
     let mut iters: Vec<Box<dyn table::Iterator>> = vec![];
     for top_tbl in top_tbls {
@@ -629,7 +629,7 @@ fn build_compact_l0_iterator(
         }
     }
     if bot_tbls.len() > 0 {
-        let iter = sstable::ConcatIterator::new(bot_tbls, false);
+        let iter = ConcatIterator::new_with_tables(bot_tbls, false);
         iters.push(Box::new(iter));
     }
     let mut iter = table::new_merge_iterator(iters, false);
@@ -738,11 +738,11 @@ pub(crate) fn compact_tables(
     let cache = SegmentedCache::new(256, 1);
     let opts = dfs::Options::new(req.shard_id, req.shard_ver);
     let top_files = load_table_files(&req.tops, fs.clone(), opts)?;
-    let top_tables = Arc::new(in_mem_files_to_tables(&top_files, cache.clone()));
+    let top_tables = in_mem_files_to_tables(&top_files, cache.clone());
     let bot_files = load_table_files(&req.bottoms, fs.clone(), opts)?;
-    let bot_tables = Arc::new(in_mem_files_to_tables(&bot_files, cache.clone()));
-    let top_iter = Box::new(sstable::ConcatIterator::new(top_tables, false));
-    let bot_iter = Box::new(sstable::ConcatIterator::new(bot_tables, false));
+    let bot_tables = in_mem_files_to_tables(&bot_files, cache.clone());
+    let top_iter = Box::new(ConcatIterator::new_with_tables(top_tables, false));
+    let bot_iter = Box::new(ConcatIterator::new_with_tables(bot_tables, false));
     let mut iter = table::new_merge_iterator(vec![top_iter, bot_iter], false);
     iter.rewind();
 
@@ -863,9 +863,10 @@ fn filter(safe_ts: u64, cf: usize, val: table::Value) -> Decision {
     } else if cf == LOCK_CF {
         return Decision::Keep;
     } else {
+        assert_eq!(cf, EXTRA_CF);
         if user_meta.len() == 16 {
             let start_ts = LittleEndian::read_u64(user_meta);
-            if safe_ts < safe_ts {
+            if start_ts < safe_ts {
                 return Decision::Drop;
             }
         }

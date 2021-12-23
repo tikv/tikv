@@ -3,17 +3,11 @@
 use std::sync::Arc;
 use std::{collections::HashSet, thread, time};
 
-use crate::{
-    table::sstable::{self, TableIterator},
-    *,
-};
+use crate::{table::sstable, *};
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes, BytesMut};
 use crossbeam_epoch as epoch;
-use futures::{
-    future::{join_all, try_join_all},
-    join,
-};
+use futures::future::try_join_all;
 use kvenginepb as pb;
 use slog_global::{info, warn};
 
@@ -350,7 +344,6 @@ impl Engine {
                 for tbl in lh.tables.iter() {
                     self.insert_table_to_shard(
                         tbl,
-                        cf,
                         lh.level,
                         &mut new_scfs,
                         &new_shards,
@@ -381,7 +374,6 @@ impl Engine {
     fn insert_table_to_shard(
         &self,
         tbl: &sstable::SSTable,
-        cf: usize,
         level: usize,
         scf_builders: &mut Vec<ShardCFBuilder>,
         new_shards: &Vec<Arc<Shard>>,

@@ -22,7 +22,7 @@ use crate::server::Config;
 use crate::storage::kv::PerfStatisticsInstant;
 use crate::storage::kv::{self, with_tls_engine};
 use crate::storage::mvcc::Error as MvccError;
-use crate::storage::{self, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore};
+use crate::storage::{self, need_check_locks_in_replica_read, Engine, Snapshot};
 use crate::{read_pool::ReadPoolHandle, storage::kv::SnapContext};
 
 use crate::coprocessor::cache::CachedRequestHandler;
@@ -36,6 +36,7 @@ use resource_metering::{FutureExt, ResourceMeteringTag, StreamExt};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::time::Instant;
 use txn_types::Lock;
+use crate::storage::txn::CloudStore;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -207,15 +208,16 @@ impl<E: Engine> Endpoint<E> {
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 builder = Box::new(move |snap, req_ctx| {
                     let data_version = snap.ext().get_data_version();
-                    let store = SnapshotStore::new(
-                        snap,
-                        start_ts.into(),
-                        req_ctx.context.get_isolation_level(),
-                        !req_ctx.context.get_not_fill_cache(),
-                        req_ctx.bypass_locks.clone(),
-                        req_ctx.access_locks.clone(),
-                        req.get_is_cache_enabled(),
-                    );
+                    // let store = SnapshotStore::new(
+                    //     snap,
+                    //     start_ts.into(),
+                    //     req_ctx.context.get_isolation_level(),
+                    //     !req_ctx.context.get_not_fill_cache(),
+                    //     req_ctx.bypass_locks.clone(),
+                    //     req_ctx.access_locks.clone(),
+                    //     req.get_is_cache_enabled(),
+                    // );
+                    let store = CloudStore::new(snap, start_ts, req_ctx.bypass_locks.clone());
                     let paging_size = match req.get_paging_size() {
                         0 => None,
                         i => Some(i),
