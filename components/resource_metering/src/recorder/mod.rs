@@ -462,23 +462,29 @@ mod tests {
     }
 
     #[test]
-    fn test_recorder_observer() {
+    fn test_recorder_multiple_collectors() {
         let sub_recorder = MockSubRecorder::default();
         let (mut recorder, handle) = RecorderBuilder::default()
             .precision_ms(Arc::new(AtomicU64::new(20)))
             .add_sub_recorder(Box::new(sub_recorder.clone()))
             .build();
 
-        // register a non-observed collector and an observer
-        let collector = MockCollector::default();
+        // register 2 non-observed collectors and an observer
+        let collector1 = MockCollector::default();
+        let collector2 = MockCollector::default();
         let observer = MockCollector::default();
         recorder.run(Task::CollectorReg(CollectorReg::Register {
             id: CollectorId(1),
             as_observer: false,
-            collector: Box::new(collector.clone()),
+            collector: Box::new(collector1.clone()),
         }));
         recorder.run(Task::CollectorReg(CollectorReg::Register {
             id: CollectorId(2),
+            as_observer: false,
+            collector: Box::new(collector2.clone()),
+        }));
+        recorder.run(Task::CollectorReg(CollectorReg::Register {
+            id: CollectorId(3),
             as_observer: true,
             collector: Box::new(observer.clone()),
         }));
@@ -495,22 +501,25 @@ mod tests {
         assert_eq!(sub_recorder.resume_count.load(SeqCst), 1);
         assert_eq!(sub_recorder.tick_count.load(SeqCst), 2);
         assert_eq!(sub_recorder.thread_created_count.load(SeqCst), 0);
-        let records = { collector.records.lock().unwrap().take().unwrap() };
+        let records = { collector1.records.lock().unwrap().take().unwrap() };
         assert_eq!(records.records.len(), 1);
         assert_eq!(
             &records.records.keys().next().unwrap().extra_attachment,
             &[1]
         );
-        let records = { observer.records.lock().unwrap().take().unwrap() };
-        assert_eq!(records.records.len(), 1);
-        assert_eq!(
-            &records.records.keys().next().unwrap().extra_attachment,
-            &[1]
-        );
+        assert_eq!(records, {
+            collector2.records.lock().unwrap().take().unwrap()
+        });
+        assert_eq!(records, {
+            observer.records.lock().unwrap().take().unwrap()
+        });
 
-        // deregister the non-observed collector
+        // deregister all non-observed collectors
         recorder.run(Task::CollectorReg(CollectorReg::Deregister {
             id: CollectorId(1),
+        }));
+        recorder.run(Task::CollectorReg(CollectorReg::Deregister {
+            id: CollectorId(2),
         }));
         recorder.on_timeout();
         assert_eq!(sub_recorder.pause_count.load(SeqCst), 1);
@@ -518,7 +527,7 @@ mod tests {
         assert_eq!(sub_recorder.tick_count.load(SeqCst), 2);
         assert_eq!(sub_recorder.thread_created_count.load(SeqCst), 0);
 
-        // observer will not collect
+        // observer will not collect records
         sleep(Duration::from_millis(handle.precision_ms.load(SeqCst)));
         recorder.on_timeout();
         assert_eq!(sub_recorder.pause_count.load(SeqCst), 1);
@@ -530,9 +539,9 @@ mod tests {
 
         // reregister a non-observed collector
         recorder.run(Task::CollectorReg(CollectorReg::Register {
-            id: CollectorId(3),
+            id: CollectorId(4),
             as_observer: false,
-            collector: Box::new(collector.clone()),
+            collector: Box::new(collector1.clone()),
         }));
         recorder.on_timeout();
         assert_eq!(sub_recorder.pause_count.load(SeqCst), 1);
@@ -547,17 +556,14 @@ mod tests {
         assert_eq!(sub_recorder.resume_count.load(SeqCst), 2);
         assert_eq!(sub_recorder.tick_count.load(SeqCst), 4);
         assert_eq!(sub_recorder.thread_created_count.load(SeqCst), 0);
-        let records = { collector.records.lock().unwrap().take().unwrap() };
+        let records = { collector1.records.lock().unwrap().take().unwrap() };
         assert_eq!(records.records.len(), 1);
         assert_eq!(
             &records.records.keys().next().unwrap().extra_attachment,
             &[1]
         );
-        let records = { observer.records.lock().unwrap().take().unwrap() };
-        assert_eq!(records.records.len(), 1);
-        assert_eq!(
-            &records.records.keys().next().unwrap().extra_attachment,
-            &[1]
-        );
+        assert_eq!(records, {
+            observer.records.lock().unwrap().take().unwrap()
+        });
     }
 }
