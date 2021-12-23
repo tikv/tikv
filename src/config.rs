@@ -2226,7 +2226,7 @@ impl Default for BackupConfig {
             batch_size: 8,
             sst_max_size: default_coprocessor.region_max_size,
             enable_auto_tune: true,
-            auto_tune_remain_threads: 2,
+            auto_tune_remain_threads: (cpu_num * 0.2).round() as usize,
             auto_tune_refresh_interval: ReadableDuration::secs(60),
             hadoop: Default::default(),
         }
