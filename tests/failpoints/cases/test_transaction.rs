@@ -1,16 +1,27 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures::executor::block_on;
-use kvproto::kvrpcpb::Context;
+use grpcio::{ChannelBuilder, Environment};
+use kvproto::kvrpcpb::{
+    self as pb, ApiVersion, AssertionLevel, Context, Op, PessimisticLockRequest,
+};
+use kvproto::tikvpb::TikvClient;
+use raftstore::store::util::new_peer;
+use std::sync::Arc;
 use std::{sync::mpsc::channel, thread, time::Duration};
 use storage::mvcc::tests::must_get;
 use storage::mvcc::{self, tests::must_locked};
 use storage::txn::{self, commands};
+use test_raftstore::new_server_cluster;
+use tikv::storage::kv::SnapshotExt;
 use tikv::storage::txn::tests::{
     must_acquire_pessimistic_lock, must_commit, must_pessimistic_prewrite_put,
     must_pessimistic_prewrite_put_err, must_prewrite_put, must_prewrite_put_err,
 };
-use tikv::storage::{self, lock_manager::DummyLockManager, TestEngineBuilder, TestStorageBuilder};
+use tikv::storage::{
+    self, lock_manager::DummyLockManager, Snapshot, TestEngineBuilder, TestStorageBuilder,
+};
+use tikv_util::HandyRwLock;
 use txn_types::{Key, Mutation, TimeStamp};
 
 #[test]
@@ -45,6 +56,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -55,7 +67,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
     storage
         .sched_txn_command(
             commands::Prewrite::new(
-                vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
+                vec![Mutation::make_put(Key::from_raw(b"k"), b"v".to_vec())],
                 b"k".to_vec(),
                 40.into(),
                 20000,
@@ -65,6 +77,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
                 TimeStamp::default(),
                 Some(vec![]),
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -94,6 +107,7 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -108,7 +122,7 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
     storage
         .sched_txn_command(
             commands::Prewrite::new(
-                vec![Mutation::Put((Key::from_raw(b"j"), b"v".to_vec()))],
+                vec![Mutation::make_put(Key::from_raw(b"j"), b"v".to_vec())],
                 b"j".to_vec(),
                 10.into(),
                 20000,
@@ -118,6 +132,7 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
                 TimeStamp::default(),
                 Some(vec![]),
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -137,6 +152,7 @@ fn test_update_max_ts_before_scan_memory_locks() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -150,7 +166,7 @@ fn test_update_max_ts_before_scan_memory_locks() {
     storage
         .sched_txn_command(
             commands::Prewrite::new(
-                vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
+                vec![Mutation::make_put(Key::from_raw(b"k"), b"v".to_vec())],
                 b"k".to_vec(),
                 10.into(),
                 20000,
@@ -160,6 +176,7 @@ fn test_update_max_ts_before_scan_memory_locks() {
                 TimeStamp::default(),
                 Some(vec![]),
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -185,6 +202,7 @@ macro_rules! lock_release_test {
             let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
                 engine,
                 DummyLockManager {},
+                ApiVersion::V1,
             )
             .build()
             .unwrap();
@@ -199,7 +217,7 @@ macro_rules! lock_release_test {
             storage
                 .sched_txn_command(
                     commands::Prewrite::new(
-                        vec![Mutation::Put((key.clone(), b"v".to_vec()))],
+                        vec![Mutation::make_put(key.clone(), b"v".to_vec())],
                         b"k".to_vec(),
                         10.into(),
                         20000,
@@ -209,6 +227,7 @@ macro_rules! lock_release_test {
                         TimeStamp::default(),
                         Some(vec![]),
                         false,
+                        AssertionLevel::Off,
                         Context::default(),
                     ),
                     Box::new(move |res| {
@@ -263,6 +282,7 @@ fn test_max_commit_ts_error() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -274,8 +294,8 @@ fn test_max_commit_ts_error() {
         .sched_txn_command(
             commands::Prewrite::new(
                 vec![
-                    Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())),
-                    Mutation::Put((Key::from_raw(b"k2"), b"v".to_vec())),
+                    Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec()),
+                    Mutation::make_put(Key::from_raw(b"k2"), b"v".to_vec()),
                 ],
                 b"k1".to_vec(),
                 10.into(),
@@ -286,6 +306,7 @@ fn test_max_commit_ts_error() {
                 100.into(),
                 Some(vec![b"k2".to_vec()]),
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -320,6 +341,7 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -331,8 +353,8 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
 
     cm.update_max_ts(40.into());
     let mutations = vec![
-        Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())),
-        Mutation::Put((Key::from_raw(b"k2"), b"v".to_vec())),
+        Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec()),
+        Mutation::make_put(Key::from_raw(b"k2"), b"v".to_vec()),
     ];
     storage
         .sched_txn_command(
@@ -347,6 +369,7 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
                 50.into(),
                 Some(vec![]),
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -393,6 +416,7 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
                 50.into(),
                 Some(vec![]),
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -403,4 +427,110 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     let res = prewrite_rx.recv().unwrap().unwrap();
     assert!(res.min_commit_ts.is_zero());
     assert!(res.one_pc_commit_ts.is_zero());
+}
+
+#[test]
+fn test_pessimistic_lock_check_epoch() {
+    let mut cluster = new_server_cluster(0, 2);
+    cluster.cfg.pessimistic_txn.pipelined = true;
+    cluster.cfg.pessimistic_txn.in_memory = true;
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let region = cluster.get_region(b"");
+    let leader = region.get_peers()[0].clone();
+
+    let epoch = cluster.get_region_epoch(region.id);
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.id);
+    ctx.set_peer(leader.clone());
+    ctx.set_region_epoch(epoch);
+
+    fail::cfg("acquire_pessimistic_lock", "pause").unwrap();
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader);
+
+    let mut mutation = pb::Mutation::default();
+    mutation.set_op(Op::PessimisticLock);
+    mutation.key = b"key".to_vec();
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(ctx.clone());
+    req.set_mutations(vec![mutation].into());
+    req.set_start_version(10);
+    req.set_for_update_ts(10);
+    req.set_primary_lock(b"key".to_vec());
+
+    let lock_resp = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
+    thread::sleep(Duration::from_millis(300));
+
+    // Transfer leader out and back, so the term should have changed.
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    fail::remove("acquire_pessimistic_lock");
+
+    let resp = lock_resp.join().unwrap();
+    // Region leader changes, so we should get a StaleCommand error.
+    assert!(resp.get_region_error().has_stale_command());
+}
+
+#[test]
+fn test_pessimistic_lock_check_valid() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.cfg.pessimistic_txn.pipelined = true;
+    cluster.cfg.pessimistic_txn.in_memory = true;
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let txn_ext = cluster
+        .must_get_snapshot_of_region(1)
+        .ext()
+        .get_txn_ext()
+        .unwrap()
+        .clone();
+
+    let region = cluster.get_region(b"");
+    let leader = region.get_peers()[0].clone();
+
+    fail::cfg("acquire_pessimistic_lock", "pause").unwrap();
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader);
+
+    let mut mutation = pb::Mutation::default();
+    mutation.set_op(Op::PessimisticLock);
+    mutation.key = b"key".to_vec();
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(ctx.clone());
+    req.set_mutations(vec![mutation].into());
+    req.set_start_version(10);
+    req.set_for_update_ts(10);
+    req.set_primary_lock(b"key".to_vec());
+
+    let lock_resp = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
+    thread::sleep(Duration::from_millis(300));
+    // Set `is_valid` to false, but the region remains available to serve.
+    txn_ext.pessimistic_locks.write().is_valid = false;
+    fail::remove("acquire_pessimistic_lock");
+
+    let resp = lock_resp.join().unwrap();
+    // There should be no region error.
+    assert!(!resp.has_region_error());
+    // The lock should not be written to the in-memory pessimistic lock table.
+    assert!(txn_ext.pessimistic_locks.read().map.is_empty());
 }

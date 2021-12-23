@@ -7,7 +7,7 @@ use tidb_query_executors::interface::*;
 use tikv::coprocessor::RequestHandler;
 
 pub trait Bencher {
-    fn bench<M>(&mut self, b: &mut criterion::Bencher<M>)
+    fn bench<M>(&mut self, b: &mut criterion::Bencher<'_, M>)
     where
         M: Measurement;
 }
@@ -24,7 +24,7 @@ impl<E: BatchExecutor, F: FnMut() -> E> BatchNext1024Bencher<E, F> {
 }
 
 impl<E: BatchExecutor, F: FnMut() -> E> Bencher for BatchNext1024Bencher<E, F> {
-    fn bench<M>(&mut self, b: &mut criterion::Bencher<M>)
+    fn bench<M>(&mut self, b: &mut criterion::Bencher<'_, M>)
     where
         M: Measurement,
     {
@@ -54,7 +54,7 @@ impl<E: BatchExecutor, F: FnMut() -> E> BatchNextAllBencher<E, F> {
 }
 
 impl<E: BatchExecutor, F: FnMut() -> E> Bencher for BatchNextAllBencher<E, F> {
-    fn bench<M>(&mut self, b: &mut criterion::Bencher<M>)
+    fn bench<M>(&mut self, b: &mut criterion::Bencher<'_, M>)
     where
         M: Measurement,
     {
@@ -88,7 +88,7 @@ impl<F: FnMut() -> Box<dyn RequestHandler>> DAGHandleBencher<F> {
 }
 
 impl<F: FnMut() -> Box<dyn RequestHandler>> Bencher for DAGHandleBencher<F> {
-    fn bench<M>(&mut self, b: &mut criterion::Bencher<M>)
+    fn bench<M>(&mut self, b: &mut criterion::Bencher<'_, M>)
     where
         M: Measurement,
     {

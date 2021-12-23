@@ -4,7 +4,8 @@ use procfs::process::{MountInfo, Process};
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::mem::MaybeUninit;
-use std::path::{Component, Path, PathBuf};
+use std::num::IntErrorKind;
+use std::path::{Path, PathBuf};
 
 // ## Differences between cgroup v1 and v2:
 // ### memory subsystem, memory limitation
@@ -79,14 +80,17 @@ impl CGroupSys {
     pub fn memory_limit_in_bytes(&self) -> i64 {
         let component = if self.is_v2 { "" } else { "memory" };
         if let Some(group) = self.cgroups.get(component) {
-            let (root, mount_point) = self.mount_points.get(component).unwrap();
-            let path = build_path(group, root, mount_point);
-            let path = if self.is_v2 {
-                format!("{}/memory.max", path.to_str().unwrap())
+            if let Some((root, mount_point)) = self.mount_points.get(component) {
+                let path = build_path(group, root, mount_point);
+                let path = if self.is_v2 {
+                    format!("{}/memory.max", path.to_str().unwrap())
+                } else {
+                    format!("{}/memory.limit_in_bytes", path.to_str().unwrap())
+                };
+                return read_to_string(&path).map_or(-1, |x| parse_memory_max(x.trim()));
             } else {
-                format!("{}/memory.limit_in_bytes", path.to_str().unwrap())
-            };
-            return read_to_string(&path).map_or(-1, |x| parse_memory_max(x.trim()));
+                warn!("Cgroup memory controller found but not mounted.");
+            }
         }
         -1
     }
@@ -94,11 +98,14 @@ impl CGroupSys {
     pub fn cpuset_cores(&self) -> HashSet<usize> {
         let component = if self.is_v2 { "" } else { "cpuset" };
         if let Some(group) = self.cgroups.get(component) {
-            let (root, mount_point) = self.mount_points.get(component).unwrap();
-            let path = build_path(group, root, mount_point);
-            let path = format!("{}/cpuset.cpus", path.to_str().unwrap());
-            return read_to_string(&path)
-                .map_or_else(|_| HashSet::new(), |x| parse_cpu_cores(x.trim()));
+            if let Some((root, mount_point)) = self.mount_points.get(component) {
+                let path = build_path(group, root, mount_point);
+                let path = format!("{}/cpuset.cpus", path.to_str().unwrap());
+                return read_to_string(&path)
+                    .map_or_else(|_| HashSet::new(), |x| parse_cpu_cores(x.trim()));
+            } else {
+                warn!("Cgroup cpuset controller found but not mounted.");
+            }
         }
         Default::default()
     }
@@ -107,20 +114,24 @@ impl CGroupSys {
     pub fn cpu_quota(&self) -> Option<f64> {
         let component = if self.is_v2 { "" } else { "cpu" };
         if let Some(group) = self.cgroups.get(component) {
-            let (root, mount_point) = self.mount_points.get(component).unwrap();
-            let path = build_path(group, root, mount_point);
-            if self.is_v2 {
-                let path = format!("{}/cpu.max", path.to_str().unwrap());
-                if let Ok(buffer) = read_to_string(&path) {
-                    return parse_cpu_quota_v2(buffer.trim());
+            if let Some((root, mount_point)) = self.mount_points.get(component) {
+                let path = build_path(group, root, mount_point);
+                if self.is_v2 {
+                    let path = format!("{}/cpu.max", path.to_str().unwrap());
+                    if let Ok(buffer) = read_to_string(&path) {
+                        return parse_cpu_quota_v2(buffer.trim());
+                    }
+                } else {
+                    let path1 = format!("{}/cpu.cfs_quota_us", path.to_str().unwrap());
+                    let path2 = format!("{}/cpu.cfs_period_us", path.to_str().unwrap());
+                    if let (Ok(buffer1), Ok(buffer2)) =
+                        (read_to_string(&path1), read_to_string(&path2))
+                    {
+                        return parse_cpu_quota_v1(buffer1.trim(), buffer2.trim());
+                    }
                 }
             } else {
-                let path1 = format!("{}/cpu.cfs_quota_us", path.to_str().unwrap());
-                let path2 = format!("{}/cpu.cfs_period_us", path.to_str().unwrap());
-                if let (Ok(buffer1), Ok(buffer2)) = (read_to_string(&path1), read_to_string(&path2))
-                {
-                    return parse_cpu_quota_v1(buffer1.trim(), buffer2.trim());
-                }
+                warn!("Cgroup cpu controller found but not mounted.");
             }
         }
         None
@@ -206,7 +217,7 @@ fn parse_mountinfos_v2(infos: Vec<MountInfo>) -> HashMap<String, (String, PathBu
 // `root` is mounted on `mount_point`. `path` is a sub path of `root`.
 // This is used to build an absolute path starts with `mount_point`.
 fn build_path(path: &str, root: &str, mount_point: &Path) -> PathBuf {
-    let abs_root = normalize_path(Path::new(root));
+    let abs_root = super::super::config::normalize_path(Path::new(root));
     let root = abs_root.to_str().unwrap();
     assert!(path.starts_with('/') && root.starts_with('/'));
 
@@ -216,38 +227,16 @@ fn build_path(path: &str, root: &str, mount_point: &Path) -> PathBuf {
     absolute
 }
 
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut components = path.components().peekable();
-    let mut ret = if let Some(c @ Component::Prefix(..)) = components.peek().cloned() {
-        components.next();
-        PathBuf::from(c.as_os_str())
-    } else {
-        PathBuf::new()
-    };
-
-    for component in components {
-        match component {
-            Component::Prefix(..) => unreachable!(),
-            Component::RootDir => {
-                ret.push(component.as_os_str());
-            }
-            Component::CurDir => {}
-            Component::ParentDir => {
-                ret.pop();
-            }
-            Component::Normal(c) => {
-                ret.push(c);
-            }
-        }
-    }
-    ret
-}
-
 fn parse_memory_max(line: &str) -> i64 {
     if line == "max" {
         return -1;
     }
-    line.parse().unwrap()
+    match line.parse::<i64>() {
+        Ok(x) => x,
+        Err(e) if matches!(e.kind(), IntErrorKind::PosOverflow) => i64::MAX,
+        Err(e) if matches!(e.kind(), IntErrorKind::NegOverflow) => i64::MIN,
+        Err(e) => panic!("parse int: {}", e),
+    }
 }
 
 fn parse_cpu_cores(value: &str) -> HashSet<usize> {
@@ -382,6 +371,35 @@ mod tests {
     }
 
     #[test]
+    fn test_cgroup_without_mountinfo() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path().to_str().unwrap();
+        std::fs::copy("/proc/self/stat", &format!("{}/stat", dir)).unwrap();
+
+        let mut f = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&format!("{}/mountinfo", dir))
+            .unwrap();
+        f.write_all(b"1663 1661 0:27 /../../../../../.. /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup cgroup rw\n").unwrap();
+
+        let cgroups = parse_proc_cgroup_v1("3:cpu:/\n");
+        let mount_points = {
+            let infos = Process::new_with_root(PathBuf::from(dir))
+                .and_then(|x| x.mountinfo())
+                .unwrap();
+            parse_mountinfos_v1(infos)
+        };
+        let cgroup_sys = CGroupSys {
+            cgroups,
+            mount_points,
+            is_v2: false,
+        };
+
+        assert_eq!(cgroup_sys.cpu_quota(), None);
+    }
+
+    #[test]
     fn test_parse_proc_cgroup_v1() {
         let content = r#"
             10:cpuset:/test-cpuset
@@ -409,8 +427,22 @@ mod tests {
 
     #[test]
     fn test_parse_memory_max() {
-        let contents = vec!["max", "-1", "9223372036854771712", "21474836480"];
-        let expects = vec![-1, -1, 9223372036854771712, 21474836480];
+        let contents = vec![
+            "max",
+            "-1",
+            "9223372036854771712",
+            "21474836480",
+            "18446744073709551610",
+            "-18446744073709551610",
+        ];
+        let expects = vec![
+            -1,
+            -1,
+            9223372036854771712,
+            21474836480,
+            9223372036854775807,
+            -9223372036854775808,
+        ];
         for (content, expect) in contents.into_iter().zip(expects) {
             let limit = parse_memory_max(content);
             assert_eq!(limit, expect);
@@ -476,7 +508,7 @@ mod tests {
 
         // cgroup-v2 $ cgset -r memory.max=1G tikv-test
         // cgroup-v1 $ cgset -r memory.limit_in_bytes=1G tikv-test
-        let mut child = if is_cgroup2_unified_mode() {
+        let mut child = if is_cgroup2_unified_mode().unwrap() {
             Command::new("cgset")
                 .args(&["-r", "memory.max=1G", &group])
                 .spawn()
@@ -492,7 +524,7 @@ mod tests {
         // cgroup-v2 $ cgset -r cpu.max='1000000 1000000' tikv-test
         // cgroup-v1 $ cgset -r cpu.cfs_quota_us=1000000 tikv-test
         // cgroup-v1 $ cgset -r cpu.cfs_period_us=1000000 tikv-test
-        if is_cgroup2_unified_mode() {
+        if is_cgroup2_unified_mode().unwrap() {
             let mut child = Command::new("cgset")
                 .args(&["-r", "cpu.max=1000000 1000000", &group])
                 .spawn()

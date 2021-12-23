@@ -22,6 +22,8 @@ define_error_codes!(
     KEY_IS_LOCKED => ("KeyIsLocked", "", ""),
     MAX_TIMESTAMP_NOT_SYNCED => ("MaxTimestampNotSynced", "", ""),
     DEADLINE_EXCEEDED => ("DeadlineExceeded", "", ""),
+    API_VERSION_NOT_MATCHED => ("ApiVersionNotMatched", "", ""),
+    INVALID_KEY_MODE => ("InvalidKeyMode", "", ""),
 
     COMMITTED => ("Committed", "", ""),
     PESSIMISTIC_LOCK_ROLLED_BACK => ("PessimisticLockRolledBack", "", ""),
@@ -36,6 +38,8 @@ define_error_codes!(
     KEY_VERSION => ("KeyVersion", "",""),
     PESSIMISTIC_LOCK_NOT_FOUND => ("PessimisticLockNotFound", "", ""),
     COMMIT_TS_TOO_LARGE => ("CommitTsTooLarge", "", ""),
+
+    ASSERTION_FAILED => ("AssertionFailed", "", ""),
 
     UNKNOWN => ("Unknown", "", "")
 );

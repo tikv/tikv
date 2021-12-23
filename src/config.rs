@@ -16,6 +16,8 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::usize;
 
+use api_version::match_template_api_version;
+use api_version::APIVersion;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::raw::{
@@ -36,6 +38,7 @@ use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrai
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use file_system::IOPriority;
 use keys::region_raft_prefix_len;
+use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use pd_client::Config as PdConfig;
 use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
@@ -582,26 +585,34 @@ impl DefaultCfConfig {
         &self,
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
-        enable_ttl: bool,
+        api_version: ApiVersion,
     ) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, region_info_accessor);
-        let f = Box::new(RangePropertiesCollectorFactory {
+        let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
-        });
+        };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        if enable_ttl {
-            cf_opts.add_table_properties_collector_factory(
-                "tikv.ttl-properties-collector",
-                Box::new(TtlPropertiesCollectorFactory {}),
-            );
-            cf_opts
-                .set_compaction_filter_factory(
-                    "ttl_compaction_filter_factory",
-                    Box::new(TTLCompactionFilterFactory {}) as Box<dyn CompactionFilterFactory>,
-                )
-                .unwrap();
-        }
+        match_template_api_version!(
+            API,
+            match api_version {
+                ApiVersion::API => {
+                    if API::IS_TTL_ENABLED {
+                        cf_opts.add_table_properties_collector_factory(
+                            "tikv.ttl-properties-collector",
+                            TtlPropertiesCollectorFactory::<API>::default(),
+                        );
+                        cf_opts
+                            .set_compaction_filter_factory(
+                                "ttl_compaction_filter_factory",
+                                Box::new(TTLCompactionFilterFactory::<API>::default())
+                                    as Box<dyn CompactionFilterFactory>,
+                            )
+                            .unwrap();
+                    }
+                }
+            }
+        );
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
@@ -688,12 +699,14 @@ impl WriteCfConfig {
         // Create prefix bloom filter for memtable.
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
         // Collects user defined properties.
-        let f = Box::new(MvccPropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
-        let f = Box::new(RangePropertiesCollectorFactory {
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.mvcc-properties-collector",
+            MvccPropertiesCollectorFactory::default(),
+        );
+        let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
-        });
+        };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts
             .set_compaction_filter_factory(
@@ -772,10 +785,10 @@ impl LockCfConfig {
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
             .unwrap();
-        let f = Box::new(RangePropertiesCollectorFactory {
+        let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
-        });
+        };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
         cf_opts.set_titandb_options(&self.titan.build_opts());
@@ -1081,13 +1094,13 @@ impl DbConfig {
         &self,
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
-        enable_ttl: bool,
+        api_version: ApiVersion,
     ) -> Vec<CFOptions<'_>> {
         vec![
             CFOptions::new(
                 CF_DEFAULT,
                 self.defaultcf
-                    .build_opt(cache, region_info_accessor, enable_ttl),
+                    .build_opt(cache, region_info_accessor, api_version),
             ),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(
@@ -1369,7 +1382,7 @@ pub struct RaftEngineConfig {
 
 impl RaftEngineConfig {
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        self.config.validate().map_err(Box::new)?;
+        self.config.sanitize().map_err(Box::new)?;
         Ok(())
     }
 
@@ -2178,6 +2191,14 @@ mod readpool_tests {
     }
 }
 
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct HadoopConfig {
+    pub home: String,
+    pub linux_user: String,
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -2185,6 +2206,12 @@ pub struct BackupConfig {
     pub num_threads: usize,
     pub batch_size: usize,
     pub sst_max_size: ReadableSize,
+    pub enable_auto_tune: bool,
+    pub auto_tune_remain_threads: usize,
+    pub auto_tune_refresh_interval: ReadableDuration,
+    pub io_thread_size: usize,
+    #[online_config(submodule)]
+    pub hadoop: HadoopConfig,
 }
 
 impl BackupConfig {
@@ -2208,6 +2235,11 @@ impl Default for BackupConfig {
             num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
             batch_size: 8,
             sst_max_size: default_coprocessor.region_max_size,
+            enable_auto_tune: false,
+            auto_tune_remain_threads: 2,
+            auto_tune_refresh_interval: ReadableDuration::secs(60),
+            io_thread_size: 2,
+            hadoop: Default::default(),
         }
     }
 }
@@ -2223,6 +2255,13 @@ pub struct CdcConfig {
     pub incremental_scan_threads: usize,
     pub incremental_scan_concurrency: usize,
     pub incremental_scan_speed_limit: ReadableSize,
+    /// `TsFilter` can increase speed and decrease resource usage when incremental content is much
+    /// less than total content. However in other cases, `TsFilter` can make performance worse
+    /// because it needs to re-fetch old row values if they are required.
+    ///
+    /// `TsFilter` will be enabled if `incremental/total <= incremental_scan_ts_filter_ratio`.
+    /// Set `incremental_scan_ts_filter_ratio` to 0 will disable it.
+    pub incremental_scan_ts_filter_ratio: f64,
     pub sink_memory_quota: ReadableSize,
     pub old_value_cache_memory_quota: ReadableSize,
     // Deprecated! preserved for compatibility check.
@@ -2244,6 +2283,7 @@ impl Default for CdcConfig {
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
+            incremental_scan_ts_filter_ratio: 0.2,
             // 512MB memory for CDC sink.
             sink_memory_quota: ReadableSize::mb(512),
             // 512MB memory for old value cache.
@@ -2265,6 +2305,14 @@ impl CdcConfig {
         if self.incremental_scan_concurrency < self.incremental_scan_threads {
             return Err(
                 "cdc.incremental-scan-concurrency must be larger than cdc.incremental-scan-threads"
+                    .into(),
+            );
+        }
+        if self.incremental_scan_ts_filter_ratio < 0.0
+            || self.incremental_scan_ts_filter_ratio > 1.0
+        {
+            return Err(
+                "cdc.incremental-scan-ts-filter-ratio should be larger than 0 and less than 1"
                     .into(),
             );
         }
@@ -2456,6 +2504,29 @@ impl Default for TiKvConfig {
 }
 
 impl TiKvConfig {
+    pub fn infer_raft_db_path(&self, data_dir: Option<&str>) -> Result<String, Box<dyn Error>> {
+        if self.raft_store.raftdb_path.is_empty() {
+            let data_dir = data_dir.unwrap_or(&self.storage.data_dir);
+            config::canonicalize_sub_path(data_dir, "raft")
+        } else {
+            config::canonicalize_path(&self.raft_store.raftdb_path)
+        }
+    }
+
+    pub fn infer_raft_engine_path(&self, data_dir: Option<&str>) -> Result<String, Box<dyn Error>> {
+        if self.raft_engine.config.dir.is_empty() {
+            let data_dir = data_dir.unwrap_or(&self.storage.data_dir);
+            config::canonicalize_sub_path(data_dir, "raft-engine")
+        } else {
+            config::canonicalize_path(&self.raft_engine.config.dir)
+        }
+    }
+
+    pub fn infer_kv_engine_path(&self, data_dir: Option<&str>) -> Result<String, Box<dyn Error>> {
+        let data_dir = data_dir.unwrap_or(&self.storage.data_dir);
+        config::canonicalize_sub_path(data_dir, DEFAULT_ROCKSDB_SUB_DIR)
+    }
+
     // TODO: change to validate(&self)
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.readpool.validate()?;
@@ -2469,26 +2540,14 @@ impl TiKvConfig {
                 .to_owned();
         }
 
-        let default_raftdb_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
-        if self.raft_store.raftdb_path.is_empty() {
-            self.raft_store.raftdb_path = default_raftdb_path;
-        } else {
-            self.raft_store.raftdb_path = config::canonicalize_path(&self.raft_store.raftdb_path)?;
-        }
+        self.raft_store.raftdb_path = self.infer_raft_db_path(None)?;
+        self.raft_engine.config.dir = self.infer_raft_engine_path(None)?;
 
-        let default_er_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft-engine")?;
-        if self.raft_engine.config.dir.is_empty() {
-            self.raft_engine.config.dir = default_er_path;
-        } else {
-            self.raft_engine.config.dir = config::canonicalize_path(&self.raft_engine.config.dir)?;
-        }
         if self.raft_engine.config.dir == self.raft_store.raftdb_path {
             return Err("raft_engine.config.dir can't be same as raft_store.raftdb_path".into());
         }
 
-        let kv_db_path =
-            config::canonicalize_sub_path(&self.storage.data_dir, DEFAULT_ROCKSDB_SUB_DIR)?;
-
+        let kv_db_path = self.infer_kv_engine_path(None)?;
         if kv_db_path == self.raft_store.raftdb_path {
             return Err("raft_store.raftdb_path can't be same as storage.data_dir/db".into());
         }
@@ -2963,6 +3022,28 @@ lazy_static! {
     pub static ref TIKVCONFIG_TYPED: ConfigChange = TiKvConfig::default().typed();
 }
 
+fn serde_to_online_config(name: String) -> String {
+    match name.as_ref() {
+        "raftstore.store-pool-size" => name.replace(
+            "raftstore.store-pool-size",
+            "raft_store.store_batch_system.pool_size",
+        ),
+        "raftstore.apply-pool-size" => name.replace(
+            "raftstore.apply-pool-size",
+            "raft_store.apply_batch_system.pool_size",
+        ),
+        "raftstore.store_pool_size" => name.replace(
+            "raftstore.store_pool_size",
+            "raft_store.store_batch_system.pool_size",
+        ),
+        "raftstore.apply_pool_size" => name.replace(
+            "raftstore.apply_pool_size",
+            "raft_store.apply_batch_system.pool_size",
+        ),
+        _ => name.replace("raftstore", "raft_store").replace("-", "_"),
+    }
+}
+
 fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> {
     fn helper(
         mut fields: Vec<String>,
@@ -2971,19 +3052,14 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
         value: String,
     ) -> CfgResult<()> {
         if let Some(field) = fields.pop() {
-            let f = if field == "raftstore" {
-                "raft_store".to_owned()
-            } else {
-                field.replace("-", "_")
-            };
-            return match typed.get(&f) {
+            return match typed.get(&field) {
                 None => Err(format!("unexpect fields: {}", field).into()),
                 Some(ConfigValue::Skip) => {
                     Err(format!("config {} can not be changed", field).into())
                 }
                 Some(ConfigValue::Module(m)) => {
                     if let ConfigValue::Module(n_dst) = dst
-                        .entry(f)
+                        .entry(field)
                         .or_insert_with(|| ConfigValue::Module(HashMap::new()))
                     {
                         return helper(fields, n_dst, m, value);
@@ -2995,7 +3071,7 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
                         return match to_change_value(&value, v) {
                             Err(_) => Err(format!("failed to parse: {}", value).into()),
                             Ok(v) => {
-                                dst.insert(f, v);
+                                dst.insert(field, v);
                                 Ok(())
                             }
                         };
@@ -3008,7 +3084,8 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
         Ok(())
     }
     let mut res = HashMap::new();
-    for (name, value) in change {
+    for (mut name, value) in change {
+        name = serde_to_online_config(name);
         let fields: Vec<_> = name
             .as_str()
             .split('.')
@@ -3045,12 +3122,7 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
 fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, String>> {
     fn helper(mut fields: Vec<String>, typed: &ConfigChange) -> CfgResult<bool> {
         if let Some(field) = fields.pop() {
-            let f = if field == "raftstore" {
-                "raft_store".to_owned()
-            } else {
-                field.replace("-", "_")
-            };
-            match typed.get(&f) {
+            match typed.get(&field) {
                 None | Some(ConfigValue::Skip) => {
                     Err(format!("failed to get field: {}", field).into())
                 }
@@ -3076,7 +3148,8 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
     }
     let mut dst = HashMap::new();
     for (name, value) in change {
-        let fields: Vec<_> = name
+        let online_config_name = serde_to_online_config(name.clone());
+        let fields: Vec<_> = online_config_name
             .as_str()
             .split('.')
             .map(|s| s.to_owned())
@@ -3239,14 +3312,29 @@ mod tests {
     use crate::server::ttl::TTLCheckerTask;
     use crate::storage::config::StorageConfigManger;
     use crate::storage::txn::flow_controller::FlowController;
+    use case_macros::*;
     use engine_rocks::raw_util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
-    use raft_log_engine::RecoveryMode;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use slog::Level;
     use std::sync::Arc;
     use std::time::Duration;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+
+    #[test]
+    fn test_case_macro() {
+        let h = kebab_case!(HelloWorld);
+        assert_eq!(h, "hello-world");
+
+        let h = kebab_case!(WelcomeToMyHouse);
+        assert_eq!(h, "welcome-to-my-house");
+
+        let h = snake_case!(HelloWorld);
+        assert_eq!(h, "hello_world");
+
+        let h = snake_case!(WelcomeToMyHouse);
+        assert_eq!(h, "welcome_to_my_house");
+    }
 
     #[test]
     fn test_check_critical_cfg_with() {
@@ -3493,6 +3581,8 @@ mod tests {
             "rocksdb.defaultcf.titan.blob-run-mode".to_owned(),
             "read-only".to_owned(),
         );
+        change.insert("raftstore.apply_pool_size".to_owned(), "7".to_owned());
+        change.insert("raftstore.store-pool-size".to_owned(), "17".to_owned());
         let res = to_toml_encode(change).unwrap();
         assert_eq!(
             res.get("raftstore.pd-heartbeat-tick-interval"),
@@ -3510,6 +3600,8 @@ mod tests {
             res.get("rocksdb.defaultcf.titan.blob-run-mode"),
             Some(&"\"read-only\"".to_owned())
         );
+        assert_eq!(res.get("raftstore.apply-pool-size"), Some(&"7".to_owned()));
+        assert_eq!(res.get("raftstore.store-pool-size"), Some(&"17".to_owned()));
     }
 
     fn new_engines(
@@ -3527,7 +3619,7 @@ mod tests {
                 cfg.rocksdb.build_cf_opts(
                     &cfg.storage.block_cache.build_shared_cache(),
                     None,
-                    cfg.storage.enable_ttl,
+                    cfg.storage.api_version(),
                 ),
             )
             .unwrap(),
@@ -3907,26 +3999,6 @@ mod tests {
     }
 
     #[test]
-    fn test_raft_engine() {
-        let content = r#"
-            [raft-engine]
-            enable = true
-            recovery_mode = "tolerate-corrupted-tail-records"
-            bytes-per-sync = "64KB"
-            purge-threshold = "1GB"
-        "#;
-        let cfg: TiKvConfig = toml::from_str(content).unwrap();
-        assert!(cfg.raft_engine.enable);
-        let config = &cfg.raft_engine.config;
-        assert_eq!(
-            config.recovery_mode,
-            RecoveryMode::TolerateCorruptedTailRecords
-        );
-        assert_eq!(config.bytes_per_sync.0, ReadableSize::kb(64).0);
-        assert_eq!(config.purge_threshold.0, ReadableSize::gb(1).0);
-    }
-
-    #[test]
     fn test_raft_engine_dir() {
         let content = r#"
             [raft-engine]
@@ -4211,6 +4283,32 @@ mod tests {
     }
 
     #[test]
+    fn test_compatibility_with_old_config_template() {
+        let mut buf = Vec::new();
+        let resp = reqwest::blocking::get(
+            "https://raw.githubusercontent.com/tikv/tikv/master/etc/config-template.toml",
+        );
+        match resp {
+            Ok(mut resp) => {
+                std::io::copy(&mut resp, &mut buf).expect("failed to copy content");
+                let template_config = std::str::from_utf8(&buf)
+                    .unwrap()
+                    .lines()
+                    .map(|l| l.strip_prefix('#').unwrap_or(l))
+                    .join("\n");
+                let _: TiKvConfig = toml::from_str(&template_config).unwrap();
+            }
+            Err(e) => {
+                if e.is_timeout() {
+                    println!("warn: fail to download latest config template due to timeout");
+                } else {
+                    panic!("fail to download latest config template");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_cdc() {
         let content = r#"
             [cdc]
@@ -4282,5 +4380,56 @@ mod tests {
         for (name, module) in cases {
             assert_eq!(Module::from(name), module);
         }
+    }
+
+    #[test]
+    fn test_numeric_enum_serializing() {
+        let normal_string_config = r#"
+            compaction-style = 1
+        "#;
+        let config: DefaultCfConfig = toml::from_str(normal_string_config).unwrap();
+        assert_eq!(config.compaction_style, DBCompactionStyle::Universal);
+
+        // Test if we support string value
+        let normal_string_config = r#"
+            compaction-style = "universal"
+        "#;
+        let config: DefaultCfConfig = toml::from_str(normal_string_config).unwrap();
+        assert_eq!(config.compaction_style, DBCompactionStyle::Universal);
+        assert!(
+            toml::to_string(&config)
+                .unwrap()
+                .contains("compaction-style = 1")
+        );
+
+        let bad_string_config = r#"
+            compaction-style = "level1"
+        "#;
+        let r = panic_hook::recover_safe(|| {
+            let _: DefaultCfConfig = toml::from_str(bad_string_config).unwrap();
+        });
+        assert!(r.is_err());
+
+        let bad_string_config = r#"
+            compaction-style = 4
+        "#;
+        let r = panic_hook::recover_safe(|| {
+            let _: DefaultCfConfig = toml::from_str(bad_string_config).unwrap();
+        });
+        assert!(r.is_err());
+
+        // rate-limiter-mode defalut values is 2
+        let config_str = r#"
+            rate-limiter-mode = 1
+        "#;
+
+        let config: DbConfig = toml::from_str(config_str).unwrap();
+        assert_eq!(config.rate_limiter_mode, DBRateLimiterMode::ReadOnly);
+
+        assert!(
+            toml::to_string(&config)
+                .unwrap()
+                .contains("rate-limiter-mode = 1")
+        );
     }
 }

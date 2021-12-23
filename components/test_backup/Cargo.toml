@@ -5,22 +5,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec", "cloud-aws", "cloud-gcp"]
-protobuf-codec = [
-  "backup/protobuf-codec",
-  "external_storage_export/protobuf-codec",
-  "file_system/protobuf-codec",
-  "tikv_util/protobuf-codec",
-  "txn_types/protobuf-codec",
-  "external_storage_export/protobuf-codec",
-]
-prost-codec = [
-  "backup/prost-codec",
-  "external_storage_export/prost-codec",
-  "file_system/prost-codec",
-  "tikv_util/prost-codec",
-  "txn_types/prost-codec",
-]
+default = ["cloud-aws", "cloud-gcp"]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]
 
@@ -35,8 +20,8 @@ file_system = { path = "../file_system", default-features = false }
 futures = "0.3"
 futures-executor = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
-grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 rand = "0.8"
 tempfile = "3.0"
 test_raftstore = { path = "../test_raftstore" }

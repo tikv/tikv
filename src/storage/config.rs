@@ -21,7 +21,7 @@ use tikv_util::worker::Scheduler;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
-const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
+const DEFAULT_MAX_KEY_SIZE: usize = 8 * 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 1024 * 512;
 const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
 
@@ -56,12 +56,11 @@ pub struct Config {
     #[online_config(skip)]
     pub enable_async_apply_prewrite: bool,
     #[online_config(skip)]
+    pub api_version: u8,
+    #[online_config(skip)]
     pub enable_ttl: bool,
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
-    #[online_config(skip)]
-    #[serde(with = "api_version_serde")]
-    pub api_version: ApiVersion,
     #[online_config(submodule)]
     pub flow_control: FlowControlConfig,
     #[online_config(submodule)]
@@ -82,12 +81,12 @@ impl Default for Config {
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),
             enable_async_apply_prewrite: false,
+            api_version: 1,
             enable_ttl: false,
             ttl_check_poll_interval: ReadableDuration::hours(12),
             flow_control: FlowControlConfig::default(),
             block_cache: BlockCacheConfig::default(),
             io_rate_limit: IORateLimitConfig::default(),
-            api_version: ApiVersion::V1,
         }
     }
 }
@@ -105,45 +104,44 @@ impl Config {
             );
             self.scheduler_concurrency = MAX_SCHED_CONCURRENCY;
         }
-        if self.api_version == ApiVersion::V2 && !self.enable_ttl {
-            warn!("storage.enable_ttl is deprecated in API V2 since API V2 forces to enable TTL.");
-            self.enable_ttl = true;
+        if !matches!(self.api_version, 1 | 2) {
+            return Err("storage.api_version can only be set to 1 or 2.".into());
+        }
+        if self.api_version == 2 && !self.enable_ttl {
+            return Err(
+                "storage.enable_ttl must be true in API V2 because API V2 forces to enable TTL."
+                    .into(),
+            );
         };
         self.io_rate_limit.validate()?;
 
         Ok(())
     }
-}
 
-mod api_version_serde {
-    use kvproto::kvrpcpb::ApiVersion;
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(value: &ApiVersion, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        Ok(match value {
-            ApiVersion::V1 => serializer.serialize_u32(1)?,
-            ApiVersion::V2 => serializer.serialize_u32(2)?,
-        })
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<ApiVersion, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = u32::deserialize(deserializer)?;
-        Ok(match value {
+    pub fn api_version(&self) -> ApiVersion {
+        match self.api_version {
+            1 if self.enable_ttl => ApiVersion::V1ttl,
             1 => ApiVersion::V1,
             2 => ApiVersion::V2,
-            _ => {
-                return Err(serde::de::Error::custom(format!(
-                    "unknown storage.api_version: {}",
-                    value
-                )));
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn set_api_version(&mut self, api_version: ApiVersion) {
+        match api_version {
+            ApiVersion::V1 => {
+                self.api_version = 1;
+                self.enable_ttl = false;
             }
-        })
+            ApiVersion::V1ttl => {
+                self.api_version = 1;
+                self.enable_ttl = true;
+            }
+            ApiVersion::V2 => {
+                self.api_version = 2;
+                self.enable_ttl = true;
+            }
+        }
     }
 }
 

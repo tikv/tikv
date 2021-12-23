@@ -158,7 +158,7 @@ impl LazyBatchColumn {
         &mut self,
         ctx: &mut EvalContext,
         field_type: &FieldType,
-        logical_rows: LogicalRows,
+        logical_rows: LogicalRows<'_>,
     ) -> Result<()> {
         if self.is_decoded() {
             return Ok(());

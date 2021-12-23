@@ -4,18 +4,23 @@ use std::cmp;
 use std::i64;
 use std::thread;
 
-use kvproto::coprocessor::Response;
-use kvproto::kvrpcpb::Context;
+use kvproto::coprocessor::{Request, Response};
+use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
-use tipb::{Chunk, Expr, ExprType, ScalarFuncSig, SelectResponse};
+use tipb::{
+    AnalyzeColumnsReq, AnalyzeReq, AnalyzeType, ChecksumRequest, Chunk, Expr, ExprType,
+    ScalarFuncSig, SelectResponse,
+};
 
 use test_coprocessor::*;
 use test_storage::*;
 use tidb_query_datatype::codec::{datum, Datum};
 use tidb_query_datatype::expr::EvalContext;
+use tikv::coprocessor::{REQ_TYPE_ANALYZE, REQ_TYPE_CHECKSUM};
 use tikv::server::Config;
 use tikv::storage::TestEngineBuilder;
 use tikv_util::codec::number::*;
+use txn_types::TimeStamp;
 
 const FLAG_IGNORE_TRUNCATE: u64 = 1;
 const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
@@ -1678,8 +1683,8 @@ fn test_invalid_range() {
     let (_, endpoint) = init_with_data(&product, &data);
 
     let mut select = DAGSelect::from(&product);
-    select.key_range.set_start(b"xxx".to_vec());
-    select.key_range.set_end(b"zzz".to_vec());
+    select.key_ranges[0].set_start(b"xxx".to_vec());
+    select.key_ranges[0].set_end(b"zzz".to_vec());
     let req = select.build();
     let resp = handle_request(&endpoint, req);
     assert!(!resp.get_other_error().is_empty());
@@ -1761,4 +1766,123 @@ fn test_cache() {
         resp4.get_cache_last_version()
     );
     assert_eq!(resp.get_data(), resp4.get_data());
+}
+
+#[test]
+fn test_copr_bypass_or_access_locks() {
+    let data = vec![
+        (1, Some("name:1"), 1), /* no lock */
+        (2, Some("name:2"), 2), /* bypass lock */
+        (3, Some("name:3"), 3), /* access lock(range) */
+        (4, Some("name:4"), 4), /* access lock(range) */
+        (6, Some("name:6"), 6), /* access lock(point) */
+        (8, Some("name:8"), 8), /* not conflict lock */
+    ];
+
+    let product = ProductTable::new();
+    let (store, _) = init_with_data(&product, &data);
+    let expected_data = vec![
+        (1, Some("name:1"), 1),
+        (2, Some("name:2"), 2),
+        (3, Some("name:33"), 33),
+        (4, Some("name:44"), 44),
+        (6, Some("name:66"), 66),
+        (8, Some("name:8"), 8),
+    ];
+    // lock row 3, 4, 6
+    let (mut store, endpoint) = init_data_with_engine_and_commit(
+        Default::default(),
+        store.get_engine(),
+        &product,
+        &expected_data[2..5],
+        false,
+    );
+    let access_lock = store.current_ts();
+    // lock row 2
+    store.begin();
+    store.delete_from(&product).execute(
+        data[1].0,
+        vec![
+            data[1].0.into(),
+            data[1].1.clone().map(|s| s.as_bytes()).into(),
+            data[1].2.into(),
+        ],
+    );
+    let bypass_lock = store.current_ts();
+    let read_ts = TimeStamp::new(next_id() as u64);
+    // lock row 8 with larger ts
+    store.begin();
+    store.delete_from(&product).execute(
+        data[5].0,
+        vec![
+            data[5].0.into(),
+            data[5].1.clone().map(|s| s.as_bytes()).into(),
+            data[5].2.into(),
+        ],
+    );
+
+    let mut ctx = Context::default();
+    ctx.set_isolation_level(IsolationLevel::Si);
+    ctx.set_resolved_locks(vec![bypass_lock.into_inner()]);
+    ctx.set_committed_locks(vec![access_lock.into_inner()]);
+    let ranges = vec![
+        product.get_record_range(1, 4),
+        product.get_record_range_one(6),
+        product.get_record_range_one(8),
+    ];
+
+    // DAG
+    {
+        let mut req = DAGSelect::from(&product).build_with(ctx.clone(), &[0]);
+        req.set_start_ts(read_ts.into_inner());
+        req.set_ranges(ranges.clone().into());
+
+        let mut resp = handle_select(&endpoint, req);
+        let mut row_count = 0;
+        let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+        for (row, (id, name, cnt)) in spliter.zip(expected_data) {
+            let name_datum = name.map(|s| s.as_bytes()).into();
+            let expected_encoded = datum::encode_value(
+                &mut EvalContext::default(),
+                &[Datum::I64(id), name_datum, cnt.into()],
+            )
+            .unwrap();
+            let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+            assert_eq!(result_encoded, &*expected_encoded);
+            row_count += 1;
+        }
+        assert_eq!(row_count, data.len());
+    }
+
+    // analyze
+    {
+        let mut col_req = AnalyzeColumnsReq::default();
+        col_req.set_columns_info(product.columns_info().into());
+        let mut analy_req = AnalyzeReq::default();
+        analy_req.set_tp(AnalyzeType::TypeColumn);
+        analy_req.set_col_req(col_req);
+        let mut req = Request::default();
+        req.set_context(ctx.clone());
+        req.set_start_ts(read_ts.into_inner());
+        req.set_ranges(ranges.clone().into());
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(analy_req.write_to_bytes().unwrap());
+        let resp = handle_request(&endpoint, req);
+        assert!(!resp.get_data().is_empty());
+        assert!(!resp.has_locked(), "{:?}", resp);
+    }
+
+    // checksum
+    {
+        let checksum = ChecksumRequest::default();
+        let mut req = Request::default();
+        req.set_context(ctx);
+        req.set_start_ts(read_ts.into_inner());
+        req.set_ranges(ranges.clone().into());
+        req.set_tp(REQ_TYPE_CHECKSUM);
+        req.set_data(checksum.write_to_bytes().unwrap());
+        let resp = handle_request(&endpoint, req);
+        assert!(!resp.get_data().is_empty());
+        assert!(!resp.has_locked(), "{:?}", resp);
+    }
 }

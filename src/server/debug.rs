@@ -326,7 +326,7 @@ impl<ER: RaftEngine> Debugger<ER> {
     /// Set regions to tombstone by manual, and apply other status(such as
     /// peers, version, and key range) from `region` which comes from PD normally.
     pub fn set_region_tombstone(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
-        let store_id = self.get_store_id()?;
+        let store_id = self.get_store_ident()?.get_store_id();
         let db = &self.engines.kv;
         let mut wb = db.write_batch();
 
@@ -499,7 +499,7 @@ impl<ER: RaftEngine> Debugger<ER> {
             }
 
             let region = local_state.get_region();
-            let store_id = self.get_store_id()?;
+            let store_id = self.get_store_ident()?.get_store_id();
 
             let peer_id = raftstore_util::find_peer(region, store_id)
                 .map(|peer| peer.get_id())
@@ -557,7 +557,7 @@ impl<ER: RaftEngine> Debugger<ER> {
         region_ids: Option<Vec<u64>>,
         promote_learner: bool,
     ) -> Result<()> {
-        let store_id = self.get_store_id()?;
+        let store_id = self.get_store_ident()?.get_store_id();
         if store_ids.iter().any(|&s| s == store_id) {
             let msg = format!("Store {} in the failed list", store_id);
             return Err(Error::Other(msg.into()));
@@ -682,7 +682,12 @@ impl<ER: RaftEngine> Debugger<ER> {
             })?;
 
             let applied_index = old_raft_apply_state.applied_index;
+            let commit_index = old_raft_apply_state.commit_index;
             let last_index = old_raft_local_state.last_index;
+
+            if last_index == applied_index && commit_index == applied_index {
+                continue;
+            }
 
             let new_raft_local_state = RaftLocalState {
                 last_index: applied_index,
@@ -803,23 +808,13 @@ impl<ER: RaftEngine> Debugger<ER> {
         Ok(())
     }
 
-    pub fn get_store_id(&self) -> Result<u64> {
+    pub fn get_store_ident(&self) -> Result<StoreIdent> {
         let db = &self.engines.kv;
         db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
             .map_err(|e| box_err!(e))
             .and_then(|ident| match ident {
-                Some(ident) => Ok(ident.get_store_id()),
+                Some(ident) => Ok(ident),
                 None => Err(Error::NotFound("No store ident key".to_owned())),
-            })
-    }
-
-    pub fn get_cluster_id(&self) -> Result<u64> {
-        let db = &self.engines.kv;
-        db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
-            .map_err(|e| box_err!(e))
-            .and_then(|ident| match ident {
-                Some(ident) => Ok(ident.get_cluster_id()),
-                None => Err(Error::NotFound("No cluster ident key".to_owned())),
             })
     }
 
@@ -851,7 +846,9 @@ impl<ER: RaftEngine> Debugger<ER> {
         let start = keys::enc_start_key(region);
         let end = keys::enc_end_key(region);
 
-        let mut res = dump_mvcc_properties(self.engines.kv.as_inner(), &start, &end)?;
+        let mut res = dump_write_cf_properties(self.engines.kv.as_inner(), &start, &end)?;
+        let mut res1 = dump_default_cf_properties(self.engines.kv.as_inner(), &start, &end)?;
+        res.append(&mut res1);
 
         let middle_key = match box_try!(get_region_approximate_middle(&self.engines.kv, region)) {
             Some(data_key) => keys::origin_key(&data_key).to_vec(),
@@ -872,15 +869,60 @@ impl<ER: RaftEngine> Debugger<ER> {
     }
 
     pub fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
-        dump_mvcc_properties(
+        let mut props = dump_write_cf_properties(
             self.engines.kv.as_inner(),
             &keys::data_key(start),
             &keys::data_end_key(end),
-        )
+        )?;
+        let mut props1 = dump_default_cf_properties(
+            self.engines.kv.as_inner(),
+            &keys::data_key(start),
+            &keys::data_end_key(end),
+        )?;
+        props.append(&mut props1);
+        Ok(props)
     }
 }
 
-fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
+fn dump_default_cf_properties(
+    db: &Arc<DB>,
+    start: &[u8],
+    end: &[u8],
+) -> Result<Vec<(String, String)>> {
+    let mut num_entries = 0; // number of Rocksdb K/V entries.
+
+    let collection = box_try!(db.c().get_range_properties_cf(CF_DEFAULT, start, end));
+    let num_files = collection.len();
+
+    for (_, v) in collection.iter() {
+        num_entries += v.num_entries();
+    }
+
+    let sst_files = collection
+        .iter()
+        .map(|(k, _)| {
+            Path::new(&*k)
+                .file_name()
+                .map(|f| f.to_str().unwrap())
+                .unwrap_or(&*k)
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let res = vec![
+        ("defaultcf.num_entries".to_owned(), num_entries.to_string()),
+        ("defaultcf.num_files".to_owned(), num_files.to_string()),
+        ("defaultcf.sst_files".to_owned(), sst_files),
+    ];
+    Ok(res)
+}
+
+fn dump_write_cf_properties(
+    db: &Arc<DB>,
+    start: &[u8],
+    end: &[u8],
+) -> Result<Vec<(String, String)>> {
     let mut num_entries = 0; // number of Rocksdb K/V entries.
 
     let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, start, end));
@@ -906,7 +948,14 @@ fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(S
         .join(", ");
 
     let mut res: Vec<(String, String)> = [
-        ("mvcc.min_ts", mvcc_properties.min_ts.into_inner()),
+        (
+            "mvcc.min_ts",
+            if mvcc_properties.min_ts == TimeStamp::max() {
+                0
+            } else {
+                mvcc_properties.min_ts.into_inner()
+            },
+        ),
         ("mvcc.max_ts", mvcc_properties.max_ts.into_inner()),
         ("mvcc.num_rows", mvcc_properties.num_rows),
         ("mvcc.num_puts", mvcc_properties.num_puts),
@@ -920,12 +969,12 @@ fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(S
 
     // Entries and delete marks of RocksDB.
     let num_deletes = num_entries - mvcc_properties.num_versions;
-    res.push(("num_entries".to_owned(), num_entries.to_string()));
-    res.push(("num_deletes".to_owned(), num_deletes.to_string()));
+    res.push(("writecf.num_entries".to_owned(), num_entries.to_string()));
+    res.push(("writecf.num_deletes".to_owned(), num_deletes.to_string()));
 
     // count and list of files.
-    res.push(("num_files".to_owned(), num_files.to_string()));
-    res.push(("sst_files".to_owned(), sst_files));
+    res.push(("writecf.num_files".to_owned(), num_files.to_string()));
+    res.push(("writecf.sst_files".to_owned(), sst_files));
 
     Ok(res)
 }
@@ -1326,6 +1375,7 @@ mod tests {
     use std::sync::Arc;
 
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
+    use kvproto::kvrpcpb::ApiVersion;
     use kvproto::metapb::{Peer, PeerRole, Region};
     use raft::eraftpb::EntryType;
     use tempfile::Builder;
@@ -1486,30 +1536,25 @@ mod tests {
     }
 
     impl Debugger<RocksEngine> {
-        fn get_store_ident(&self) -> Result<StoreIdent> {
-            let db = &self.engines.kv;
-            db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
-                .map_err(|e| box_err!(e))
-                .map(|ident| match ident {
-                    Some(ident) => ident,
-                    None => StoreIdent::default(),
-                })
-        }
-
         fn set_store_id(&self, store_id: u64) {
-            if let Ok(mut ident) = self.get_store_ident() {
-                ident.set_store_id(store_id);
-                let db = &self.engines.kv;
-                db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
-            }
+            let mut ident = self.get_store_ident().unwrap_or_default();
+            ident.set_store_id(store_id);
+            let db = &self.engines.kv;
+            db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
         }
 
         fn set_cluster_id(&self, cluster_id: u64) {
-            if let Ok(mut ident) = self.get_store_ident() {
-                ident.set_cluster_id(cluster_id);
-                let db = &self.engines.kv;
-                db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
-            }
+            let mut ident = self.get_store_ident().unwrap_or_default();
+            ident.set_cluster_id(cluster_id);
+            let db = &self.engines.kv;
+            db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
+        }
+
+        fn set_store_api_version(&self, api_version: ApiVersion) {
+            let mut ident = self.get_store_ident().unwrap_or_default();
+            ident.set_api_version(api_version);
+            let db = &self.engines.kv;
+            db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
         }
     }
 
@@ -2207,10 +2252,28 @@ mod tests {
         let cluster_id: u64 = 4242;
         debugger.set_store_id(store_id);
         debugger.set_cluster_id(cluster_id);
-        assert_eq!(store_id, debugger.get_store_id().expect("get store id"));
+        debugger.set_store_api_version(ApiVersion::V2);
+        assert_eq!(
+            store_id,
+            debugger
+                .get_store_ident()
+                .expect("get store id")
+                .get_store_id()
+        );
         assert_eq!(
             cluster_id,
-            debugger.get_cluster_id().expect("get cluster id")
+            debugger
+                .get_store_ident()
+                .expect("get cluster id")
+                .get_cluster_id()
         );
+
+        assert_eq!(
+            ApiVersion::V2,
+            debugger
+                .get_store_ident()
+                .expect("get api version")
+                .get_api_version()
+        )
     }
 }
