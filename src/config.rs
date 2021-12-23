@@ -1126,6 +1126,25 @@ impl DbConfig {
                 return Err("pipelined_write is not compatible with unordered_write".into());
             }
         }
+
+        // Since the following configuration supports online update, in order to
+        // prevent mistakenly inputting too large values, the max limit is made
+        // according to the cpu quota.
+        let cpu_num = SysQuota::cpu_cores_quota() as i32;
+        if self.max_background_jobs <= 0 || self.max_background_jobs > cpu_num {
+            return Err(format!(
+                "max_background_jobs should be greater than 0 and less than or equal to {:?}",
+                cpu_num,
+            )
+            .into());
+        }
+        if self.max_background_flushes <= 0 || self.max_background_flushes > cpu_num {
+            return Err(format!(
+                "max_background_flushes should be greater than 0 and less than or equal to {:?}",
+                cpu_num,
+            )
+            .into());
+        }
         Ok(())
     }
 
