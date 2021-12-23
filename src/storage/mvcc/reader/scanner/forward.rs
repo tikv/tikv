@@ -372,7 +372,6 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
         if cfg.isolation_level == IsolationLevel::Rc {
-            // cursors.lock.as_mut().unwrap().next(&mut statistics.lock);
             return Ok(HandleRes::Skip(current_user_key));
         }
         // Only needs to check lock in SI

@@ -985,4 +985,47 @@ mod tests {
             assert_eq!(delta.block_read_count, block_reads);
         }
     }
+
+    #[test]
+    fn test_rc_scan_skip_lock() {
+        test_rc_scan_skip_lock_impl(false);
+        test_rc_scan_skip_lock_impl(true);
+    }
+
+    fn test_rc_scan_skip_lock_impl(desc: bool) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (key1, val1, val12) = (b"foo1", b"bar1", b"bar12");
+        let (key2, val2) = (b"foo2", b"bar2");
+        let mut expected = vec![(key1, val1), (key2, val2)];
+        if desc {
+            expected.reverse();
+        }
+
+        must_prewrite_put(&engine, key1, val1, key1, 10);
+        must_commit(&engine, key1, 10, 20);
+
+        must_prewrite_put(&engine, key2, val2, key2, 30);
+        must_commit(&engine, key2, 30, 40);
+
+        // use async commit to avoid skipping lock.
+        must_prewrite_put_async_commit(&engine, key1, val12, key1, &Some(vec![]), 50, 0);
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max())
+            .fill_cache(false)
+            .range(Some(Key::from_raw(key1)), None)
+            .desc(desc)
+            .isolation_level(IsolationLevel::Rc)
+            .build()
+            .unwrap();
+        
+        for e in expected {
+            let (k, v) = scanner.next().unwrap().unwrap();
+            assert_eq!(k, Key::from_raw(e.0));
+            assert_eq!(v, e.1);
+        }
+
+        assert!(scanner.next().unwrap().is_none());
+        assert_eq!(scanner.take_statistics().lock.total_op_count(), 0);
+    }
 }
