@@ -215,7 +215,9 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     } else {
                         None
                     }
-                } else {None};
+                } else {
+                    None
+                };
 
                 // `res` is `(current_user_key_slice, has_write, has_lock)`
                 let res = match (w_key, l_key) {
@@ -690,7 +692,12 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             return Ok(HandleRes::Skip(current_user_key));
         }
         // TODO: Skip pessimistic locks.
-        let lock_value = cursors.lock.as_mut().unwrap().value(&mut statistics.lock).to_owned();
+        let lock_value = cursors
+            .lock
+            .as_mut()
+            .unwrap()
+            .value(&mut statistics.lock)
+            .to_owned();
         let lock = Lock::parse(&lock_value)?;
         let result = if lock.ts > cfg.ts {
             Ok(HandleRes::Skip(current_user_key))

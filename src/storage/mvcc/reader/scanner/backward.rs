@@ -84,7 +84,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                     self.cfg.upper_bound.as_ref().unwrap(),
                     &mut self.statistics.write,
                 )?;
-                if let Some(lock_cursor) = self.lock_cursor.as_mut(){
+                if let Some(lock_cursor) = self.lock_cursor.as_mut() {
                     lock_cursor.reverse_seek(
                         self.cfg.upper_bound.as_ref().unwrap(),
                         &mut self.statistics.lock,
@@ -92,7 +92,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 }
             } else {
                 self.write_cursor.seek_to_last(&mut self.statistics.write);
-                if let Some(lock_cursor) = self.lock_cursor.as_mut(){
+                if let Some(lock_cursor) = self.lock_cursor.as_mut() {
                     lock_cursor.seek_to_last(&mut self.statistics.lock);
                 }
             }
@@ -155,8 +155,11 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 match self.cfg.isolation_level {
                     IsolationLevel::Si => {
                         let lock = {
-                            let lock_value =
-                                self.lock_cursor.as_mut().unwrap().value(&mut self.statistics.lock);
+                            let lock_value = self
+                                .lock_cursor
+                                .as_mut()
+                                .unwrap()
+                                .value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
                         if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
