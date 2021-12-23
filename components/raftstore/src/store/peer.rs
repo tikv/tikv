@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use bitflags::bitflags;
+use bytes::Bytes;
 use crossbeam::atomic::AtomicCell;
 use crossbeam::channel::TrySendError;
 use engine_traits::{
@@ -3651,6 +3652,7 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         from: u64,
         peer_disk_usage: DiskUsage,
+        reply_cmd: bool, // whether it is a reply to a TransferLeader command
     ) {
         let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
         if pending_snapshot
@@ -3678,6 +3680,9 @@ where
         msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
         msg.set_index(self.get_store().applied_index());
         msg.set_log_term(self.term());
+        if reply_cmd {
+            msg.set_context(Bytes::from_static(TRANSFER_LEADER_COMMAND_REPLY_CTX));
+        }
         self.raft_group.raft.msgs.push(msg);
     }
 
@@ -4449,7 +4454,10 @@ pub trait RequestInspector {
             if apply::is_conf_change_cmd(req) {
                 return Ok(RequestPolicy::ProposeConfChange);
             }
-            if get_transfer_leader_cmd(req).is_some() {
+            if get_transfer_leader_cmd(req).is_some()
+                && !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+                    .contains(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL)
+            {
                 return Ok(RequestPolicy::ProposeTransferLeader);
             }
             return Ok(RequestPolicy::ProposeNormal);
@@ -4611,6 +4619,10 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
     resp.set_admin_response(response);
     resp
 }
+
+// The Raft message context for a MsgTransferLeader if it is a reply of a TransferLeader command.
+// It is declared as a const so we don't
+pub const TRANSFER_LEADER_COMMAND_REPLY_CTX: &[u8] = &[1];
 
 /// A poor version of `Peer` to avoid port generic variables everywhere.
 pub trait AbstractPeer {

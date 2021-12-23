@@ -98,7 +98,17 @@ fn test_prewrite_before_max_ts_is_synced() {
 }
 
 #[test]
-fn test_delete_lock_proposed_after_proposing_locks() {
+fn test_delete_lock_proposed_after_proposing_locks_1() {
+    test_delete_lock_proposed_after_proposing_locks_impl(1);
+}
+
+#[test]
+fn test_delete_lock_proposed_after_proposing_locks_2() {
+    // Repeated transfer leader command before proposing the write command
+    test_delete_lock_proposed_after_proposing_locks_impl(2);
+}
+
+fn test_delete_lock_proposed_after_proposing_locks_impl(transfer_msg_count: usize) {
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.run();
@@ -143,7 +153,9 @@ fn test_delete_lock_proposed_after_proposing_locks() {
     thread::sleep(Duration::from_millis(200));
     assert!(resp_rx.try_recv().is_err());
 
-    cluster.transfer_leader(1, new_peer(2, 2));
+    for _ in 0..transfer_msg_count {
+        cluster.transfer_leader(1, new_peer(2, 2));
+    }
     thread::sleep(Duration::from_millis(200));
 
     // Transfer leader will not make the command fail.
