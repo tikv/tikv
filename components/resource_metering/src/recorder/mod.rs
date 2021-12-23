@@ -256,34 +256,22 @@ impl RecorderBuilder {
     }
 }
 
-/// This structure is returned by [RecorderBuilder::spawn] and can be used to
+/// This structure is returned by [RecorderBuilder::build] and can be used to
 /// control the execution of [Recorder].
 ///
 /// In addition, because the caller can only get an instance of `RecorderHandle`
 /// and cannot directly manipulate `Recorder`, some parameters that need to be
 /// controlled externally must also be stored in a thread-safe reference
 /// in `RecorderHandle`.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct RecorderHandle {
-    inner: Option<Arc<RecorderHandleInner>>,
-}
-
-struct RecorderHandleInner {
     precision_ms: Arc<AtomicU64>,
 }
 
 impl RecorderHandle {
     /// Create a new `RecorderHandle`.
-    ///
-    /// The key pointer here is to pass a [JoinHandle], which means that `RecorderHandle`
-    /// does not care about the specific execution logic, but is only responsible for
-    /// controlling the execution logic from the outside.
-    ///
-    /// [JoinHandle]: std::thread::JoinHandle
     pub fn new(precision_ms: Arc<AtomicU64>) -> Self {
-        Self {
-            inner: Some(Arc::new(RecorderHandleInner { precision_ms })),
-        }
+        Self { precision_ms }
     }
 
     /// Modify the value of the precision parameter.
@@ -292,9 +280,7 @@ impl RecorderHandle {
     ///
     /// [Config]: crate::Config
     pub fn precision(&self, v: Duration) {
-        if let Some(inner) = self.inner.as_ref() {
-            inner.precision_ms.store(v.as_millis() as _, SeqCst);
-        }
+        self.precision_ms.store(v.as_millis() as _, SeqCst);
     }
 }
 
@@ -334,10 +320,13 @@ pub fn init_recorder(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicUsize;
-
     use super::*;
     use crate::recorder::localstorage::{LocalStorage, LocalStorageRef};
+    use crate::TagInfos;
+
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Mutex;
+    use std::thread::sleep;
 
     #[test]
     fn test_recorder_handle() {
@@ -350,7 +339,10 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct MockSubRecorder {
-        op_count: Arc<AtomicUsize>,
+        tick_count: Arc<AtomicUsize>,
+        resume_count: Arc<AtomicUsize>,
+        thread_created_count: Arc<AtomicUsize>,
+        pause_count: Arc<AtomicUsize>,
     }
 
     impl SubRecorder for MockSubRecorder {
@@ -359,7 +351,25 @@ mod tests {
             _records: &mut RawRecords,
             _thread_stores: &mut HashMap<usize, LocalStorage>,
         ) {
-            self.op_count.fetch_add(1, SeqCst);
+            self.tick_count.fetch_add(1, SeqCst);
+        }
+
+        fn collect(
+            &mut self,
+            records: &mut RawRecords,
+            _thread_stores: &mut HashMap<usize, LocalStorage>,
+        ) {
+            let mut tag = TagInfos::default();
+            tag.extra_attachment.push(1);
+            records.records.entry(Arc::new(tag)).or_default().cpu_time = 2;
+        }
+
+        fn pause(
+            &mut self,
+            _records: &mut RawRecords,
+            _thread_stores: &mut HashMap<usize, LocalStorage>,
+        ) {
+            self.pause_count.fetch_add(1, SeqCst);
         }
 
         fn resume(
@@ -367,28 +377,187 @@ mod tests {
             _records: &mut RawRecords,
             _thread_stores: &mut HashMap<usize, LocalStorage>,
         ) {
-            self.op_count.fetch_add(1, SeqCst);
+            self.resume_count.fetch_add(1, SeqCst);
         }
 
         fn thread_created(&mut self, _id: usize, _store: &LocalStorage) {
-            self.op_count.fetch_add(1, SeqCst);
+            self.thread_created_count.fetch_add(1, SeqCst);
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct MockCollector {
+        records: Arc<Mutex<Option<Arc<RawRecords>>>>,
+    }
+
+    impl Collector for MockCollector {
+        fn collect(&self, records: Arc<RawRecords>) {
+            *self.records.lock().unwrap() = Some(records);
         }
     }
 
     #[test]
     fn test_recorder_basic() {
         let sub_recorder = MockSubRecorder::default();
-        let (mut recorder, _) = RecorderBuilder::default()
+        let (mut recorder, handle) = RecorderBuilder::default()
+            .precision_ms(Arc::new(AtomicU64::new(20)))
             .add_sub_recorder(Box::new(sub_recorder.clone()))
             .build();
 
-        recorder.tick();
-        recorder.resume();
+        // register a new thread
         recorder.run(Task::NewThread(LocalStorageRef {
             id: 0,
             storage: LocalStorage::default(),
         }));
+        recorder.on_timeout();
         assert!(!recorder.thread_stores.is_empty());
-        assert!(sub_recorder.op_count.load(SeqCst) >= 3);
+        assert_eq!(sub_recorder.pause_count.load(SeqCst), 0);
+        assert_eq!(sub_recorder.resume_count.load(SeqCst), 0);
+        assert_eq!(sub_recorder.tick_count.load(SeqCst), 0);
+        assert_eq!(sub_recorder.thread_created_count.load(SeqCst), 1);
+
+        // register a non-observed collector
+        let collector = MockCollector::default();
+        recorder.run(Task::CollectorReg(CollectorReg::Register {
+            id: CollectorId(1),
+            as_observer: false,
+            collector: Box::new(collector.clone()),
+        }));
+        recorder.on_timeout();
+        assert_eq!(sub_recorder.pause_count.load(SeqCst), 0);
+        assert_eq!(sub_recorder.resume_count.load(SeqCst), 1);
+        assert_eq!(sub_recorder.tick_count.load(SeqCst), 1);
+        assert_eq!(sub_recorder.thread_created_count.load(SeqCst), 1);
+
+        // trigger collection
+        sleep(Duration::from_millis(handle.precision_ms.load(SeqCst)));
+        recorder.on_timeout();
+        assert_eq!(sub_recorder.pause_count.load(SeqCst), 0);
+        assert_eq!(sub_recorder.resume_count.load(SeqCst), 1);
+        assert_eq!(sub_recorder.tick_count.load(SeqCst), 2);
+        assert_eq!(sub_recorder.thread_created_count.load(SeqCst), 1);
+        let records = { collector.records.lock().unwrap().take().unwrap() };
+        assert_eq!(records.records.len(), 1);
+        assert_eq!(
+            &records.records.keys().next().unwrap().extra_attachment,
+            &[1]
+        );
+
+        // deregister collector
+        recorder.run(Task::CollectorReg(CollectorReg::Deregister {
+            id: CollectorId(1),
+        }));
+        recorder.on_timeout();
+        assert_eq!(sub_recorder.pause_count.load(SeqCst), 1);
+        assert_eq!(sub_recorder.resume_count.load(SeqCst), 1);
+        assert_eq!(sub_recorder.tick_count.load(SeqCst), 2);
+        assert_eq!(sub_recorder.thread_created_count.load(SeqCst), 1);
+
+        // nothing happens
+        recorder.on_timeout();
+        assert_eq!(sub_recorder.pause_count.load(SeqCst), 1);
+        assert_eq!(sub_recorder.resume_count.load(SeqCst), 1);
+        assert_eq!(sub_recorder.tick_count.load(SeqCst), 2);
+        assert_eq!(sub_recorder.thread_created_count.load(SeqCst), 1);
+    }
+
+    #[test]
+    fn test_recorder_observer() {
+        let sub_recorder = MockSubRecorder::default();
+        let (mut recorder, handle) = RecorderBuilder::default()
+            .precision_ms(Arc::new(AtomicU64::new(20)))
+            .add_sub_recorder(Box::new(sub_recorder.clone()))
+            .build();
+
+        // register a non-observed collector and an observer
+        let collector = MockCollector::default();
+        let observer = MockCollector::default();
+        recorder.run(Task::CollectorReg(CollectorReg::Register {
+            id: CollectorId(1),
+            as_observer: false,
+            collector: Box::new(collector.clone()),
+        }));
+        recorder.run(Task::CollectorReg(CollectorReg::Register {
+            id: CollectorId(2),
+            as_observer: true,
+            collector: Box::new(observer.clone()),
+        }));
+        recorder.on_timeout();
+        assert_eq!(sub_recorder.pause_count.load(SeqCst), 0);
+        assert_eq!(sub_recorder.resume_count.load(SeqCst), 1);
+        assert_eq!(sub_recorder.tick_count.load(SeqCst), 1);
+        assert_eq!(sub_recorder.thread_created_count.load(SeqCst), 0);
+
+        // trigger collection
+        sleep(Duration::from_millis(handle.precision_ms.load(SeqCst)));
+        recorder.on_timeout();
+        assert_eq!(sub_recorder.pause_count.load(SeqCst), 0);
+        assert_eq!(sub_recorder.resume_count.load(SeqCst), 1);
+        assert_eq!(sub_recorder.tick_count.load(SeqCst), 2);
+        assert_eq!(sub_recorder.thread_created_count.load(SeqCst), 0);
+        let records = { collector.records.lock().unwrap().take().unwrap() };
+        assert_eq!(records.records.len(), 1);
+        assert_eq!(
+            &records.records.keys().next().unwrap().extra_attachment,
+            &[1]
+        );
+        let records = { observer.records.lock().unwrap().take().unwrap() };
+        assert_eq!(records.records.len(), 1);
+        assert_eq!(
+            &records.records.keys().next().unwrap().extra_attachment,
+            &[1]
+        );
+
+        // deregister the non-observed collector
+        recorder.run(Task::CollectorReg(CollectorReg::Deregister {
+            id: CollectorId(1),
+        }));
+        recorder.on_timeout();
+        assert_eq!(sub_recorder.pause_count.load(SeqCst), 1);
+        assert_eq!(sub_recorder.resume_count.load(SeqCst), 1);
+        assert_eq!(sub_recorder.tick_count.load(SeqCst), 2);
+        assert_eq!(sub_recorder.thread_created_count.load(SeqCst), 0);
+
+        // observer will not collect
+        sleep(Duration::from_millis(handle.precision_ms.load(SeqCst)));
+        recorder.on_timeout();
+        assert_eq!(sub_recorder.pause_count.load(SeqCst), 1);
+        assert_eq!(sub_recorder.resume_count.load(SeqCst), 1);
+        assert_eq!(sub_recorder.tick_count.load(SeqCst), 2);
+        assert_eq!(sub_recorder.thread_created_count.load(SeqCst), 0);
+        let records = { observer.records.lock().unwrap().take() };
+        assert!(records.is_none());
+
+        // reregister a non-observed collector
+        recorder.run(Task::CollectorReg(CollectorReg::Register {
+            id: CollectorId(3),
+            as_observer: false,
+            collector: Box::new(collector.clone()),
+        }));
+        recorder.on_timeout();
+        assert_eq!(sub_recorder.pause_count.load(SeqCst), 1);
+        assert_eq!(sub_recorder.resume_count.load(SeqCst), 2);
+        assert_eq!(sub_recorder.tick_count.load(SeqCst), 3);
+        assert_eq!(sub_recorder.thread_created_count.load(SeqCst), 0);
+
+        // trigger collection
+        sleep(Duration::from_millis(handle.precision_ms.load(SeqCst)));
+        recorder.on_timeout();
+        assert_eq!(sub_recorder.pause_count.load(SeqCst), 1);
+        assert_eq!(sub_recorder.resume_count.load(SeqCst), 2);
+        assert_eq!(sub_recorder.tick_count.load(SeqCst), 4);
+        assert_eq!(sub_recorder.thread_created_count.load(SeqCst), 0);
+        let records = { collector.records.lock().unwrap().take().unwrap() };
+        assert_eq!(records.records.len(), 1);
+        assert_eq!(
+            &records.records.keys().next().unwrap().extra_attachment,
+            &[1]
+        );
+        let records = { observer.records.lock().unwrap().take().unwrap() };
+        assert_eq!(records.records.len(), 1);
+        assert_eq!(
+            &records.records.keys().next().unwrap().extra_attachment,
+            &[1]
+        );
     }
 }

@@ -187,7 +187,7 @@ mod linux {
         let collector = DummyCollector::default();
         let _handle = collector_reg_handle.register(Box::new(collector.clone()), false);
 
-        let (handle, expected) = Operations::begin(resource_tag_factory.clone())
+        let (handle, expected) = Operations::begin(resource_tag_factory)
             .then(SetContext("ctx-0"))
             .then(CpuHeavy(2000))
             .then(ResetContext)
@@ -206,7 +206,7 @@ mod linux {
         let collector = DummyCollector::default();
         let _handle = collector_reg_handle.register(Box::new(collector.clone()), false);
 
-        let (handle, expected) = Operations::begin(resource_tag_factory.clone())
+        let (handle, expected) = Operations::begin(resource_tag_factory)
             .then(SetContext("ctx-0"))
             .then(Sleep(2000))
             .then(ResetContext)
@@ -226,7 +226,7 @@ mod linux {
         let collector = DummyCollector::default();
         let _handle = collector_reg_handle.register(Box::new(collector.clone()), false);
 
-        let (handle, expected) = Operations::begin(resource_tag_factory.clone())
+        let (handle, expected) = Operations::begin(resource_tag_factory)
             .then(SetContext("ctx-0"))
             .then(CpuHeavy(600))
             .then(Sleep(400))
@@ -264,7 +264,7 @@ mod linux {
             .then(CpuHeavy(1500))
             .then(ResetContext)
             .spawn();
-        let (handle2, expected2) = Operations::begin(resource_tag_factory.clone())
+        let (handle2, expected2) = Operations::begin(resource_tag_factory)
             .then(SetContext("ctx-2"))
             .then(CpuHeavy(1500))
             .then(ResetContext)
