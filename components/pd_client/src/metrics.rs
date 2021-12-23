@@ -70,4 +70,15 @@ lazy_static! {
         "Total number of pending tso requests"
     )
     .unwrap();
+    pub static ref PD_REGION_STATS_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_pd_region_stats_message_total",
+        "Total number of PD regions stat messages.",
+        &["type"]
+    )
+    .unwrap();
+    pub static ref PD_PENDING_REGION_STATS_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_pd_pending_region_stats_total",
+        "Total number of pending region stats"
+    )
+    .unwrap();
 }

@@ -42,7 +42,7 @@ use concurrency_manager::ConcurrencyManager;
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use pd_client::metrics::*;
-use pd_client::{Error, PdClient, RegionStat};
+use pd_client::{Error, PdClient, RegionPerfStat, RegionStat};
 use protobuf::Message;
 use resource_metering::{Collector, CollectorHandle, CollectorRegHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
@@ -171,6 +171,13 @@ where
         duration: RaftstoreDuration,
     },
     RegionCPURecords(Arc<RawRecords>),
+    ReportRegionStat {
+        region_id: u64,
+        written_bytes: u64,
+        written_keys: u64,
+        approximate_size: u64,
+        approximate_keys: u64,
+    },
 }
 
 pub struct StoreStat {
@@ -337,6 +344,19 @@ where
             }
             Task::RegionCPURecords(ref cpu_records) => {
                 write!(f, "get region cpu records: {:?}", cpu_records)
+            }
+            Task::ReportRegionStat {
+                region_id,
+                written_bytes,
+                written_keys,
+                approximate_size,
+                approximate_keys,
+            } => {
+                write!(
+                    f,
+                    "report region stat: region_id {}, written_bytes {}, written_keys {}, approximate_size {}, approximate_keys {}",
+                    region_id, written_bytes, written_keys, approximate_size, approximate_keys
+                )
             }
         }
     }
@@ -888,16 +908,16 @@ where
     ) {
         self.store_stat
             .region_bytes_written
-            .observe(region_stat.written_bytes as f64);
+            .observe(region_stat.perf_stat.written_bytes as f64);
         self.store_stat
             .region_keys_written
-            .observe(region_stat.written_keys as f64);
+            .observe(region_stat.perf_stat.written_keys as f64);
         self.store_stat
             .region_bytes_read
-            .observe(region_stat.read_bytes as f64);
+            .observe(region_stat.perf_stat.read_bytes as f64);
         self.store_stat
             .region_keys_read
-            .observe(region_stat.read_keys as f64);
+            .observe(region_stat.perf_stat.read_keys as f64);
 
         let resp = self.pd_client.region_heartbeat(
             term,
@@ -1468,6 +1488,78 @@ where
     fn handle_region_cpu_records(&mut self, records: Arc<RawRecords>) {
         calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records);
     }
+
+    fn region_perf_stat(
+        &mut self,
+        region_id: u64,
+        written_bytes: u64,
+        written_keys: u64,
+        approximate_size: u64,
+        approximate_keys: u64,
+    ) -> RegionPerfStat {
+        let peer_stat = self
+            .region_peers
+            .entry(region_id)
+            .or_insert_with(PeerStat::default);
+        peer_stat.approximate_size = approximate_size;
+        peer_stat.approximate_keys = approximate_keys;
+
+        let read_bytes_delta = peer_stat.read_bytes - peer_stat.last_region_report_read_bytes;
+        let read_keys_delta = peer_stat.read_keys - peer_stat.last_region_report_read_keys;
+        let written_bytes_delta = written_bytes - peer_stat.last_region_report_written_bytes;
+        let written_keys_delta = written_keys - peer_stat.last_region_report_written_keys;
+        let query_stats = peer_stat
+            .query_stats
+            .sub_query_stats(&peer_stat.last_region_report_query_stats);
+        let mut last_report_ts = peer_stat.last_region_report_ts;
+        peer_stat.last_region_report_written_bytes = written_bytes;
+        peer_stat.last_region_report_written_keys = written_keys;
+        peer_stat.last_region_report_read_bytes = peer_stat.read_bytes;
+        peer_stat.last_region_report_read_keys = peer_stat.read_keys;
+        peer_stat.last_region_report_query_stats = peer_stat.query_stats.clone();
+        let unix_secs_now = UnixSecs::now();
+        peer_stat.last_region_report_ts = unix_secs_now;
+
+        if last_report_ts.is_zero() {
+            last_report_ts = self.start_ts;
+        }
+        // Calculate the CPU usage since the last region heartbeat.
+        let cpu_usage = {
+            // Take out the region CPU record.
+            let cpu_time_duration = Duration::from_millis(
+                self.region_cpu_records.remove(&region_id).unwrap_or(0) as u64,
+            );
+            let interval_second = unix_secs_now.into_inner() - last_report_ts.into_inner();
+            // Keep consistent with the calculation of cpu_usages in a store heartbeat.
+            // See components/tikv_util/src/metrics/threads_linux.rs for more details.
+            (interval_second > 0)
+                .then(|| {
+                    ((cpu_time_duration.as_secs_f64() * 100.0) / interval_second as f64) as u64
+                })
+                .unwrap_or(0)
+        };
+        RegionPerfStat {
+            approximate_size,
+            approximate_keys,
+            cpu_usage,
+            last_report_ts,
+            written_bytes: written_bytes_delta,
+            written_keys: written_keys_delta,
+            read_bytes: read_bytes_delta,
+            read_keys: read_keys_delta,
+            query_stats: query_stats.0,
+        }
+    }
+
+    fn handle_report_region_stats(&self, region_id: u64, perf_stat: RegionPerfStat) {
+        let resp = self.pd_client.report_region_stats(region_id, perf_stat);
+        let f = async move {
+            if let Err(e) = resp.await {
+                error!("report region stats failed"; "err" => ?e);
+            }
+        };
+        self.remote.spawn(f);
+    }
 }
 
 fn calculate_region_cpu_records(
@@ -1574,73 +1666,13 @@ where
                     None => 0, // size uninitialized
                 };
                 let approximate_keys = hb_task.approximate_keys.unwrap_or_default();
-                let (
-                    read_bytes_delta,
-                    read_keys_delta,
-                    written_bytes_delta,
-                    written_keys_delta,
-                    last_report_ts,
-                    query_stats,
-                    cpu_usage,
-                ) = {
-                    let region_id = hb_task.region.get_id();
-                    let peer_stat = self
-                        .region_peers
-                        .entry(region_id)
-                        .or_insert_with(PeerStat::default);
-                    peer_stat.approximate_size = approximate_size;
-                    peer_stat.approximate_keys = approximate_keys;
-
-                    let read_bytes_delta =
-                        peer_stat.read_bytes - peer_stat.last_region_report_read_bytes;
-                    let read_keys_delta =
-                        peer_stat.read_keys - peer_stat.last_region_report_read_keys;
-                    let written_bytes_delta =
-                        hb_task.written_bytes - peer_stat.last_region_report_written_bytes;
-                    let written_keys_delta =
-                        hb_task.written_keys - peer_stat.last_region_report_written_keys;
-                    let query_stats = peer_stat
-                        .query_stats
-                        .sub_query_stats(&peer_stat.last_region_report_query_stats);
-                    let mut last_report_ts = peer_stat.last_region_report_ts;
-                    peer_stat.last_region_report_written_bytes = hb_task.written_bytes;
-                    peer_stat.last_region_report_written_keys = hb_task.written_keys;
-                    peer_stat.last_region_report_read_bytes = peer_stat.read_bytes;
-                    peer_stat.last_region_report_read_keys = peer_stat.read_keys;
-                    peer_stat.last_region_report_query_stats = peer_stat.query_stats.clone();
-                    let unix_secs_now = UnixSecs::now();
-                    peer_stat.last_region_report_ts = unix_secs_now;
-
-                    if last_report_ts.is_zero() {
-                        last_report_ts = self.start_ts;
-                    }
-                    // Calculate the CPU usage since the last region heartbeat.
-                    let cpu_usage = {
-                        // Take out the region CPU record.
-                        let cpu_time_duration = Duration::from_millis(
-                            self.region_cpu_records.remove(&region_id).unwrap_or(0) as u64,
-                        );
-                        let interval_second =
-                            unix_secs_now.into_inner() - last_report_ts.into_inner();
-                        // Keep consistent with the calculation of cpu_usages in a store heartbeat.
-                        // See components/tikv_util/src/metrics/threads_linux.rs for more details.
-                        (interval_second > 0)
-                            .then(|| {
-                                ((cpu_time_duration.as_secs_f64() * 100.0) / interval_second as f64)
-                                    as u64
-                            })
-                            .unwrap_or(0)
-                    };
-                    (
-                        read_bytes_delta,
-                        read_keys_delta,
-                        written_bytes_delta,
-                        written_keys_delta,
-                        last_report_ts,
-                        query_stats.0,
-                        cpu_usage,
-                    )
-                };
+                let perf_stat = self.region_perf_stat(
+                    hb_task.region.id,
+                    hb_task.written_bytes,
+                    hb_task.written_keys,
+                    approximate_size,
+                    approximate_keys,
+                );
                 self.handle_heartbeat(
                     hb_task.term,
                     hb_task.region,
@@ -1648,15 +1680,7 @@ where
                     RegionStat {
                         down_peers: hb_task.down_peers,
                         pending_peers: hb_task.pending_peers,
-                        written_bytes: written_bytes_delta,
-                        written_keys: written_keys_delta,
-                        read_bytes: read_bytes_delta,
-                        read_keys: read_keys_delta,
-                        query_stats,
-                        approximate_size,
-                        approximate_keys,
-                        last_report_ts,
-                        cpu_usage,
+                        perf_stat,
                     },
                     hb_task.replication_status,
                 )
@@ -1684,6 +1708,22 @@ where
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => self.slow_score.record(id, duration.sum()),
             Task::RegionCPURecords(records) => self.handle_region_cpu_records(records),
+            Task::ReportRegionStat {
+                region_id,
+                written_bytes,
+                written_keys,
+                approximate_size,
+                approximate_keys,
+            } => {
+                let perf_stat = self.region_perf_stat(
+                    region_id,
+                    written_bytes,
+                    written_keys,
+                    approximate_size,
+                    approximate_keys,
+                );
+                self.handle_report_region_stats(region_id, perf_stat);
+            }
         };
     }
 

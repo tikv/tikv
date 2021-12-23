@@ -34,6 +34,11 @@ pub type PdFuture<T> = BoxFuture<'static, Result<T>>;
 pub struct RegionStat {
     pub down_peers: Vec<pdpb::PeerStats>,
     pub pending_peers: Vec<metapb::Peer>,
+    pub perf_stat: RegionPerfStat,
+}
+
+#[derive(Default, Clone)]
+pub struct RegionPerfStat {
     pub written_bytes: u64,
     pub written_keys: u64,
     pub read_bytes: u64,
@@ -41,10 +46,10 @@ pub struct RegionStat {
     pub query_stats: QueryStats,
     pub approximate_size: u64,
     pub approximate_keys: u64,
-    pub last_report_ts: UnixSecs,
     // cpu_usage is the CPU time usage of the leader region since the last heartbeat,
     // which is calculated by cpu_time_delta/heartbeat_reported_interval.
     pub cpu_usage: u64,
+    pub last_report_ts: UnixSecs,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -266,6 +271,10 @@ pub trait PdClient: Send + Sync {
 
     /// Gets the internal `FeatureGate`.
     fn feature_gate(&self) -> &FeatureGate {
+        unimplemented!()
+    }
+
+    fn report_region_stats(&self, _region_id: u64, _perf_stat: RegionPerfStat) -> PdFuture<()> {
         unimplemented!()
     }
 }

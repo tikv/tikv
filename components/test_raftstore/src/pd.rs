@@ -682,11 +682,11 @@ impl PdCluster {
         self.leaders.insert(region.get_id(), leader.clone());
 
         self.region_approximate_size
-            .insert(region.get_id(), region_stat.approximate_size);
+            .insert(region.get_id(), region_stat.perf_stat.approximate_size);
         self.region_approximate_keys
-            .insert(region.get_id(), region_stat.approximate_keys);
+            .insert(region.get_id(), region_stat.perf_stat.approximate_keys);
         self.region_last_report_ts
-            .insert(region.get_id(), region_stat.last_report_ts);
+            .insert(region.get_id(), region_stat.perf_stat.last_report_ts);
         self.region_last_report_term.insert(region.get_id(), term);
 
         if let Some(status) = replication_status {
