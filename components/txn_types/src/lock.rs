@@ -325,7 +325,7 @@ impl Lock {
 
     /// Checks whether the lock conflicts with the given `ts`. If `ts == TimeStamp::max()`, the primary lock will be ignored.
     pub fn check_ts_conflict(
-        lock: Cow<Self>,
+        lock: Cow<'_, Self>,
         key: &Key,
         ts: TimeStamp,
         bypass_locks: &TsSet,

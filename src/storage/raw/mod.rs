@@ -3,5 +3,4 @@
 pub mod encoded;
 mod store;
 
-pub use encoded::RawEncodeSnapshot;
-pub use store::{raw_checksum_ranges, RawStore};
+pub use store::RawStore;

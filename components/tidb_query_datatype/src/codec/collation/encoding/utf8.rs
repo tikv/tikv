@@ -8,7 +8,7 @@ pub trait UTF8CompatibleEncoding {
 
 impl<T: UTF8CompatibleEncoding> Encoding for T {
     #[inline]
-    fn decode(data: BytesRef) -> Result<Bytes> {
+    fn decode(data: BytesRef<'_>) -> Result<Bytes> {
         match str::from_utf8(data) {
             Ok(v) => Ok(Bytes::from(v)),
             Err(_) => Err(Error::cannot_convert_string(T::NAME)),

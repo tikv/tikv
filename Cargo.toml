@@ -55,6 +55,7 @@ testing = []
 name = "tikv"
 
 [dependencies]
+api_version = { path = "components/api_version", default-features = false }
 anyhow = "1.0"
 async-stream = "0.2"
 async-trait = "0.1"
@@ -253,6 +254,7 @@ members = [
   "components/coprocessor_plugin_api",
   "components/test_coprocessor_plugin/example_plugin",
   "components/resource_metering",
+  "components/api_version",
 ]
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 

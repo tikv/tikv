@@ -65,7 +65,7 @@ where
     (snapshot, keys)
 }
 
-fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
@@ -105,7 +105,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
     )
 }
 
-fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
@@ -122,7 +122,7 @@ fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCo
 }
 
 fn mvcc_rollback_prewrote<E: Engine, F: EngineFactory<E>>(
-    b: &mut Bencher,
+    b: &mut Bencher<'_>,
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
@@ -148,7 +148,7 @@ fn mvcc_rollback_prewrote<E: Engine, F: EngineFactory<E>>(
 }
 
 fn mvcc_rollback_conflict<E: Engine, F: EngineFactory<E>>(
-    b: &mut Bencher,
+    b: &mut Bencher<'_>,
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
@@ -174,7 +174,7 @@ fn mvcc_rollback_conflict<E: Engine, F: EngineFactory<E>>(
 }
 
 fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
-    b: &mut Bencher,
+    b: &mut Bencher<'_>,
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
@@ -209,7 +209,10 @@ fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
     )
 }
 
-fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(
+    b: &mut Bencher<'_>,
+    config: &BenchConfig<F>,
+) {
     let engine = config.engine_factory.build();
     let test_keys: Vec<Key> = KvGenerator::with_seed(
         config.key_length,
@@ -237,7 +240,7 @@ fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
 }
 
 fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
-    b: &mut Bencher,
+    b: &mut Bencher<'_>,
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();

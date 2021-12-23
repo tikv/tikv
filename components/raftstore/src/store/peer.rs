@@ -4612,7 +4612,7 @@ pub trait AbstractPeer {
     fn group_state(&self) -> GroupState;
     fn region(&self) -> &metapb::Region;
     fn apply_state(&self) -> &RaftApplyState;
-    fn raft_status(&self) -> raft::Status;
+    fn raft_status(&self) -> raft::Status<'_>;
     fn raft_commit_index(&self) -> u64;
     fn pending_merge_state(&self) -> Option<&MergeState>;
 }
