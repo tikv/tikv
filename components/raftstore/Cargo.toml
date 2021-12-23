@@ -70,7 +70,7 @@ derivative = "2"
 encryption = { path = "../encryption", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
-fail = "0.4"
+fail = "0.5"
 openssl = "0.10"
 file_system = { path = "../file_system", default-features = false }
 fs2 = "0.4"
@@ -86,7 +86,7 @@ log_wrappers = { path = "../log_wrappers" }
 memory_trace_macros = { path = "../memory_trace_macros" }
 ordered-float = "2.6"
 pd_client = { path = "../pd_client", default-features = false }
-prometheus = { version = "0.12", features = ["nightly"] }
+prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 prost = { version = "0.7", optional = true }
 protobuf = "2.8"

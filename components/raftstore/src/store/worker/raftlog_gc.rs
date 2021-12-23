@@ -10,9 +10,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine};
 use file_system::{IOType, WithIOType};
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
-use tikv_util::{box_try, debug, error, warn};
-
-use crate::store::{CasualMessage, CasualRouter};
+use tikv_util::{box_try, debug, error};
 
 pub enum Task {
     Gc {
@@ -20,7 +18,6 @@ pub enum Task {
         start_idx: u64,
         end_idx: u64,
     },
-    Purge,
 }
 
 impl Task {
@@ -45,7 +42,6 @@ impl Display for Task {
                 "GC Raft Logs [region: {}, from: {}, to: {}]",
                 region_id, start_idx, end_idx
             ),
-            Task::Purge => write!(f, "Purge Expired Files",),
         }
     }
 }
@@ -56,22 +52,16 @@ enum Error {
     Other(#[from] Box<dyn StdError + Sync + Send>),
 }
 
-pub struct Runner<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> {
-    ch: R,
+pub struct Runner<EK: KvEngine, ER: RaftEngine> {
     tasks: Vec<Task>,
     engines: Engines<EK, ER>,
     gc_entries: Option<Sender<usize>>,
     compact_sync_interval: Duration,
 }
 
-impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
-    pub fn new(
-        ch: R,
-        engines: Engines<EK, ER>,
-        compact_log_interval: Duration,
-    ) -> Runner<EK, ER, R> {
+impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
+    pub fn new(engines: Engines<EK, ER>, compact_log_interval: Duration) -> Runner<EK, ER> {
         Runner {
-            ch,
             engines,
             tasks: vec![],
             gc_entries: None,
@@ -127,28 +117,15 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
                         }
                     }
                 }
-                Task::Purge => {
-                    let regions = match self.engines.raft.purge_expired_files() {
-                        Ok(regions) => regions,
-                        Err(e) => {
-                            warn!("purge expired files"; "err" => %e);
-                            return;
-                        }
-                    };
-                    for region_id in regions {
-                        let _ = self.ch.send(region_id, CasualMessage::ForceCompactRaftLogs);
-                    }
-                }
             }
         }
     }
 }
 
-impl<EK, ER, R> Runnable for Runner<EK, ER, R>
+impl<EK, ER> Runnable for Runner<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    R: CasualRouter<EK>,
 {
     type Task = Task;
 
@@ -162,11 +139,10 @@ where
     }
 }
 
-impl<EK, ER, R> RunnableWithTimer for Runner<EK, ER, R>
+impl<EK, ER> RunnableWithTimer for Runner<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    R: CasualRouter<EK>,
 {
     fn on_timeout(&mut self) {
         self.flush();
@@ -198,11 +174,9 @@ mod tests {
         let engines = Engines::new(kv_db, raft_db.clone());
 
         let (tx, rx) = mpsc::channel();
-        let (r, _) = mpsc::sync_channel(1);
         let mut runner = Runner {
             gc_entries: Some(tx),
             engines,
-            ch: r,
             tasks: vec![],
             compact_sync_interval: Duration::from_secs(5),
         };
