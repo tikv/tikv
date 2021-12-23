@@ -14,7 +14,6 @@ use external_storage::{BackendConfig, HdfsConfig};
 use external_storage_export::{create_storage, ExternalStorage};
 use file_system::{IOType, WithIOType};
 use futures::channel::mpsc::*;
-use futures::Future;
 use kvproto::brpb::*;
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
@@ -34,12 +33,11 @@ use tikv::storage::Statistics;
 use tikv_util::time::{Instant, Limiter};
 use tikv_util::worker::Runnable;
 use tikv_util::{box_err, debug, error, error_unknown, impl_display_as_debug, info, warn};
-use tokio::io::Result as TokioResult;
-use tokio::runtime::Runtime;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::metrics::*;
 use crate::softlimit::{CpuStatistics, SoftLimit, SoftLimitByCpu};
+use crate::utils::ControlThreadPool;
 use crate::writer::{BackupWriterBuilder, CfNameWrap};
 use crate::Error;
 use crate::*;
@@ -622,68 +620,6 @@ impl<R: RegionInfoProvider> Progress<R> {
         }
         branges
     }
-}
-
-struct ControlThreadPool {
-    size: usize,
-    workers: Option<Runtime>,
-}
-
-impl ControlThreadPool {
-    fn new() -> Self {
-        ControlThreadPool {
-            size: 0,
-            workers: None,
-        }
-    }
-
-    fn spawn<F>(&self, func: F)
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        let workers = self
-            .workers
-            .as_ref()
-            .expect("ControlThreadPool: please call adjust_with() before spawn()");
-        workers.spawn(func);
-    }
-
-    /// Lazily adjust the thread pool's size
-    ///
-    /// Resizing if the thread pool need to expend or there
-    /// are too many idle threads. Otherwise do nothing.
-    fn adjust_with(&mut self, new_size: usize) {
-        if self.size >= new_size && self.size - new_size <= 10 {
-            return;
-        }
-        // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
-        //   adapt it.
-        if let Some(wkrs) = self.workers.take() {
-            wkrs.shutdown_background();
-        }
-        let workers = create_tokio_runtime(new_size, "bkwkr")
-            .expect("failed to create tokio runtime for backup worker.");
-        self.workers = Some(workers);
-        self.size = new_size;
-        BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64);
-    }
-}
-
-/// Create a standard tokio runtime
-/// (which allows io and time reactor, involve thread memory accessor),
-fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
-    tokio::runtime::Builder::new_multi_thread()
-        .thread_name(thread_name)
-        .enable_io()
-        .enable_time()
-        .on_thread_start(|| {
-            tikv_alloc::add_thread_memory_accessor();
-        })
-        .on_thread_stop(|| {
-            tikv_alloc::remove_thread_memory_accessor();
-        })
-        .worker_threads(thread_count)
-        .build()
 }
 
 impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
@@ -1587,7 +1523,7 @@ pub mod tests {
             .set_regions(vec![(b"".to_vec(), b"".to_vec(), 1)]);
 
         let mut req = BackupRequest::default();
-        req.set_start_key(vec![]);
+        req.set_start_key(vec![b'1']);
         req.set_end_key(vec![]);
         req.set_start_version(1);
         req.set_end_version(1);
@@ -1603,18 +1539,20 @@ pub mod tests {
 
         // shrink thread pool only if there are too many idle threads
         endpoint.get_config_manager().set_num_threads(10);
+        req.set_start_key(vec![b'2']);
         let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 15);
 
         endpoint.get_config_manager().set_num_threads(3);
+        req.set_start_key(vec![b'3']);
         let (task, _) = Task::new(req, tx).unwrap();
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 3);
 
         // make sure all tasks can finish properly.
         let responses = block_on(rx.collect::<Vec<_>>());
-        assert_eq!(responses.len(), 3);
+        assert_eq!(responses.len(), 3, "{:?}", responses);
 
         // for testing whether dropping the pool before all tasks finished causes panic.
         // but the panic must be checked manually... (It may panic at tokio runtime threads...)
