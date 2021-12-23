@@ -76,7 +76,7 @@ impl SubRecorder for CpuRecorder {
             id,
             ThreadStat {
                 attached_tag: store.attached_tag.clone(),
-                stat: utils::stat_task(utils::process_id(), id).unwrap_or_default(),
+                stat: Stat::default(),
             },
         );
     }

@@ -391,6 +391,4 @@ mod tests {
         assert!(!recorder.thread_stores.is_empty());
         assert!(sub_recorder.op_count.load(SeqCst) >= 3);
     }
-
-
 }
