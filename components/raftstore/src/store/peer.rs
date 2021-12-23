@@ -4417,6 +4417,8 @@ where
         let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
         pessimistic_locks.is_valid = false; // Not necessary, but just make it safer.
         pessimistic_locks.map = Default::default();
+        pessimistic_locks.term = self.term();
+        pessimistic_locks.version = self.region().get_region_epoch().get_version();
     }
 }
 
