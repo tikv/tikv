@@ -53,7 +53,7 @@ lazy_static! {
     )
     .unwrap();
     pub static ref BACKUP_SCAN_KV_SIZE : IntCounterVec = register_int_counter_vec!(
-        "tikv_backup_scan_kv_size",
+        "tikv_backup_scan_kv_size_bytes",
         "Total size of kvs backed up",
         &["cf"],
     )

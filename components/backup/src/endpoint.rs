@@ -1501,7 +1501,7 @@ pub mod tests {
             assert!(!resp.has_error(), "{:?}", resp);
             let file_len = if *len <= SHORT_VALUE_MAX_LEN { 1 } else { 2 };
             let files = resp.get_files();
-            println!("{:?}", files);
+            info!("{:?}", files);
             assert_eq!(
                 files.len(),
                 file_len, /* default and write */
