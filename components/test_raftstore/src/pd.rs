@@ -290,7 +290,7 @@ struct PdCluster {
     region_id_keys: HashMap<u64, Key>,
     region_approximate_size: HashMap<u64, u64>,
     region_approximate_keys: HashMap<u64, u64>,
-    region_last_report_ts: HashMap<u64, UnixSecs>,
+    region_last_report_heartbeat_ts: HashMap<u64, UnixSecs>,
     region_last_report_term: HashMap<u64, u64>,
     base_id: AtomicUsize,
 
@@ -330,7 +330,7 @@ impl PdCluster {
             region_id_keys: HashMap::default(),
             region_approximate_size: HashMap::default(),
             region_approximate_keys: HashMap::default(),
-            region_last_report_ts: HashMap::default(),
+            region_last_report_heartbeat_ts: HashMap::default(),
             region_last_report_term: HashMap::default(),
             base_id: AtomicUsize::new(1000),
             store_stats: HashMap::default(),
@@ -445,7 +445,9 @@ impl PdCluster {
     }
 
     fn get_region_last_report_ts(&self, region_id: u64) -> Option<UnixSecs> {
-        self.region_last_report_ts.get(&region_id).cloned()
+        self.region_last_report_heartbeat_ts
+            .get(&region_id)
+            .cloned()
     }
 
     fn get_region_last_report_term(&self, region_id: u64) -> Option<u64> {
@@ -682,11 +684,11 @@ impl PdCluster {
         self.leaders.insert(region.get_id(), leader.clone());
 
         self.region_approximate_size
-            .insert(region.get_id(), region_stat.perf_stat.approximate_size);
+            .insert(region.get_id(), region_stat.approximate_size);
         self.region_approximate_keys
-            .insert(region.get_id(), region_stat.perf_stat.approximate_keys);
-        self.region_last_report_ts
-            .insert(region.get_id(), region_stat.perf_stat.last_report_ts);
+            .insert(region.get_id(), region_stat.approximate_keys);
+        self.region_last_report_heartbeat_ts
+            .insert(region.get_id(), region_stat.last_report_ts);
         self.region_last_report_term.insert(region.get_id(), term);
 
         if let Some(status) = replication_status {

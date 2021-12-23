@@ -29,7 +29,7 @@ use yatp::ThreadPool;
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, Client, PdConnector};
 use super::{Config, FeatureGate, PdFuture, UnixSecs};
-use super::{Error, PdClient, RegionInfo, RegionPerfStat, RegionStat, Result, REQUEST_TIMEOUT};
+use super::{Error, PdClient, RegionFlow, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
@@ -523,19 +523,21 @@ impl PdClient for RpcClient {
         req.set_leader(leader);
         req.set_down_peers(region_stat.down_peers.into());
         req.set_pending_peers(region_stat.pending_peers.into());
-        req.set_bytes_written(region_stat.perf_stat.written_bytes);
-        req.set_keys_written(region_stat.perf_stat.written_keys);
-        req.set_bytes_read(region_stat.perf_stat.read_bytes);
-        req.set_keys_read(region_stat.perf_stat.read_keys);
-        req.set_query_stats(region_stat.perf_stat.query_stats);
-        req.set_approximate_size(region_stat.perf_stat.approximate_size);
-        req.set_approximate_keys(region_stat.perf_stat.approximate_keys);
-        req.set_cpu_usage(region_stat.perf_stat.cpu_usage);
+        if let Some(flow) = region_stat.flow {
+            req.set_bytes_written(flow.written_bytes);
+            req.set_keys_written(flow.written_keys);
+            req.set_bytes_read(flow.read_bytes);
+            req.set_keys_read(flow.read_keys);
+            req.set_query_stats(flow.query_stats);
+            req.set_cpu_usage(flow.cpu_usage);
+        }
+        req.set_approximate_size(region_stat.approximate_size);
+        req.set_approximate_keys(region_stat.approximate_keys);
         if let Some(s) = replication_status {
             req.set_replication_status(s);
         }
         let mut interval = pdpb::TimeInterval::default();
-        interval.set_start_timestamp(region_stat.perf_stat.last_report_ts.into_inner());
+        interval.set_start_timestamp(region_stat.last_report_ts.into_inner());
         interval.set_end_timestamp(UnixSecs::now().into_inner());
         req.set_interval(interval);
 
@@ -853,12 +855,12 @@ impl PdClient for RpcClient {
         &self.pd_client.feature_gate
     }
 
-    fn report_region_stats(&self, region_id: u64, perf_stat: RegionPerfStat) -> PdFuture<()> {
+    fn report_region_flow(&self, region_id: u64, perf_stat: RegionFlow) -> PdFuture<()> {
         PD_REGION_STATS_COUNTER_VEC
             .with_label_values(&["send"])
             .inc();
 
-        let mut req = pdpb::ReportRegionStatsRequest::default();
+        let mut req = pdpb::ReportRegionFlowRequest::default();
         req.set_header(self.header());
         req.set_region_id(region_id);
         req.set_bytes_written(perf_stat.written_bytes);
@@ -874,16 +876,16 @@ impl PdClient for RpcClient {
         interval.set_end_timestamp(UnixSecs::now().into_inner());
         req.set_interval(interval);
 
-        let executor = |client: &Client, req: pdpb::ReportRegionStatsRequest| {
+        let executor = |client: &Client, req: pdpb::ReportRegionFlowRequest| {
             let mut inner = client.inner.wl();
-            if let Either::Left(ref mut left) = inner.stats_sender {
+            if let Either::Left(ref mut left) = inner.flow_sender {
                 debug!("region stats sender is refreshed");
                 let sender = left.take().expect("expect report region stats sink");
                 let (tx, rx) = mpsc::unbounded();
-                let pending_region_stats = Arc::new(AtomicU64::new(0));
-                inner.stats_sender = Either::Right(tx);
-                inner.pending_region_stats = pending_region_stats.clone();
-                let resp = inner.stats_resp.take().unwrap();
+                let pending_region_flow = Arc::new(AtomicU64::new(0));
+                inner.flow_sender = Either::Right(tx);
+                inner.pending_region_stats = pending_region_flow.clone();
+                let resp = inner.flow_resp.take().unwrap();
                 inner.client_stub.spawn(async {
                     let res = resp.await;
                     info!("region stats stream exited: {:?}", res);
@@ -893,7 +895,7 @@ impl PdClient for RpcClient {
                     let mut last_report = u64::MAX;
                     let result = sender
                         .send_all(&mut rx.map(|r| {
-                            let last = pending_region_stats.fetch_sub(1, Ordering::Relaxed);
+                            let last = pending_region_flow.fetch_sub(1, Ordering::Relaxed);
                             // Sender will update pending at every send operation, so as long as
                             // pending task is increasing, pending count should be reported by
                             // sender.
@@ -922,7 +924,7 @@ impl PdClient for RpcClient {
             let last = inner.pending_region_stats.fetch_add(1, Ordering::Relaxed);
             PD_PENDING_REGION_STATS_GAUGE.set(last as i64 + 1);
             let sender = inner
-                .stats_sender
+                .flow_sender
                 .as_mut()
                 .right()
                 .expect("expect region stats sender");

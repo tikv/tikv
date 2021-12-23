@@ -42,7 +42,7 @@ use concurrency_manager::ConcurrencyManager;
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use pd_client::metrics::*;
-use pd_client::{Error, PdClient, RegionPerfStat, RegionStat};
+use pd_client::{Error, PdClient, RegionFlow, RegionStat};
 use protobuf::Message;
 use resource_metering::{Collector, CollectorHandle, CollectorRegHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
@@ -171,12 +171,10 @@ where
         duration: RaftstoreDuration,
     },
     RegionCPURecords(Arc<RawRecords>),
-    ReportRegionStat {
+    ReportRegionFlow {
         region_id: u64,
         written_bytes: u64,
         written_keys: u64,
-        approximate_size: u64,
-        approximate_keys: u64,
     },
 }
 
@@ -233,7 +231,8 @@ pub struct PeerStat {
     pub last_region_report_query_stats: QueryStats,
     pub last_region_report_written_bytes: u64,
     pub last_region_report_written_keys: u64,
-    pub last_region_report_ts: UnixSecs,
+    pub last_region_report_heartbeat_ts: UnixSecs,
+    pub last_region_report_flow_ts: UnixSecs,
     // last_store_report_attributes records the state of the last store heartbeat
     pub last_store_report_read_bytes: u64,
     pub last_store_report_read_keys: u64,
@@ -345,17 +344,15 @@ where
             Task::RegionCPURecords(ref cpu_records) => {
                 write!(f, "get region cpu records: {:?}", cpu_records)
             }
-            Task::ReportRegionStat {
+            Task::ReportRegionFlow {
                 region_id,
                 written_bytes,
                 written_keys,
-                approximate_size,
-                approximate_keys,
             } => {
                 write!(
                     f,
-                    "report region stat: region_id {}, written_bytes {}, written_keys {}, approximate_size {}, approximate_keys {}",
-                    region_id, written_bytes, written_keys, approximate_size, approximate_keys
+                    "report region stat: region_id {}, written_bytes {}, written_keys {}",
+                    region_id, written_bytes, written_keys,
                 )
             }
         }
@@ -906,18 +903,20 @@ where
         region_stat: RegionStat,
         replication_status: Option<RegionReplicationStatus>,
     ) {
-        self.store_stat
-            .region_bytes_written
-            .observe(region_stat.perf_stat.written_bytes as f64);
-        self.store_stat
-            .region_keys_written
-            .observe(region_stat.perf_stat.written_keys as f64);
-        self.store_stat
-            .region_bytes_read
-            .observe(region_stat.perf_stat.read_bytes as f64);
-        self.store_stat
-            .region_keys_read
-            .observe(region_stat.perf_stat.read_keys as f64);
+        if let Some(flow) = &region_stat.flow {
+            self.store_stat
+                .region_bytes_written
+                .observe(flow.written_bytes as f64);
+            self.store_stat
+                .region_keys_written
+                .observe(flow.written_keys as f64);
+            self.store_stat
+                .region_bytes_read
+                .observe(flow.read_bytes as f64);
+            self.store_stat
+                .region_keys_read
+                .observe(flow.read_keys as f64);
+        }
 
         let resp = self.pd_client.region_heartbeat(
             term,
@@ -1489,20 +1488,11 @@ where
         calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records);
     }
 
-    fn region_perf_stat(
-        &mut self,
-        region_id: u64,
-        written_bytes: u64,
-        written_keys: u64,
-        approximate_size: u64,
-        approximate_keys: u64,
-    ) -> RegionPerfStat {
+    fn region_flow(&mut self, region_id: u64, written_bytes: u64, written_keys: u64) -> RegionFlow {
         let peer_stat = self
             .region_peers
             .entry(region_id)
             .or_insert_with(PeerStat::default);
-        peer_stat.approximate_size = approximate_size;
-        peer_stat.approximate_keys = approximate_keys;
 
         let read_bytes_delta = peer_stat.read_bytes - peer_stat.last_region_report_read_bytes;
         let read_keys_delta = peer_stat.read_keys - peer_stat.last_region_report_read_keys;
@@ -1511,14 +1501,14 @@ where
         let query_stats = peer_stat
             .query_stats
             .sub_query_stats(&peer_stat.last_region_report_query_stats);
-        let mut last_report_ts = peer_stat.last_region_report_ts;
+        let mut last_report_ts = peer_stat.last_region_report_flow_ts;
         peer_stat.last_region_report_written_bytes = written_bytes;
         peer_stat.last_region_report_written_keys = written_keys;
         peer_stat.last_region_report_read_bytes = peer_stat.read_bytes;
         peer_stat.last_region_report_read_keys = peer_stat.read_keys;
         peer_stat.last_region_report_query_stats = peer_stat.query_stats.clone();
         let unix_secs_now = UnixSecs::now();
-        peer_stat.last_region_report_ts = unix_secs_now;
+        peer_stat.last_region_report_flow_ts = unix_secs_now;
 
         if last_report_ts.is_zero() {
             last_report_ts = self.start_ts;
@@ -1538,9 +1528,7 @@ where
                 })
                 .unwrap_or(0)
         };
-        RegionPerfStat {
-            approximate_size,
-            approximate_keys,
+        RegionFlow {
             cpu_usage,
             last_report_ts,
             written_bytes: written_bytes_delta,
@@ -1551,8 +1539,8 @@ where
         }
     }
 
-    fn handle_report_region_stats(&self, region_id: u64, perf_stat: RegionPerfStat) {
-        let resp = self.pd_client.report_region_stats(region_id, perf_stat);
+    fn handle_report_region_flow(&self, region_id: u64, flow: RegionFlow) {
+        let resp = self.pd_client.report_region_flow(region_id, flow);
         let f = async move {
             if let Err(e) = resp.await {
                 error!("report region stats failed"; "err" => ?e);
@@ -1666,21 +1654,36 @@ where
                     None => 0, // size uninitialized
                 };
                 let approximate_keys = hb_task.approximate_keys.unwrap_or_default();
-                let perf_stat = self.region_perf_stat(
+                let peer_stat = self
+                    .region_peers
+                    .entry(hb_task.region.id)
+                    .or_insert_with(PeerStat::default);
+                peer_stat.approximate_size = approximate_size;
+                peer_stat.approximate_keys = approximate_keys;
+                let mut last_report_ts = peer_stat.last_region_report_heartbeat_ts;
+                let unix_secs_now = UnixSecs::now();
+                peer_stat.last_region_report_heartbeat_ts = unix_secs_now;
+
+                if last_report_ts.is_zero() {
+                    last_report_ts = self.start_ts;
+                }
+
+                let flow = self.region_flow(
                     hb_task.region.id,
                     hb_task.written_bytes,
                     hb_task.written_keys,
-                    approximate_size,
-                    approximate_keys,
                 );
                 self.handle_heartbeat(
                     hb_task.term,
                     hb_task.region,
                     hb_task.peer,
                     RegionStat {
+                        approximate_size,
+                        approximate_keys,
+                        last_report_ts,
                         down_peers: hb_task.down_peers,
                         pending_peers: hb_task.pending_peers,
-                        perf_stat,
+                        flow: Some(flow),
                     },
                     hb_task.replication_status,
                 )
@@ -1708,21 +1711,13 @@ where
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => self.slow_score.record(id, duration.sum()),
             Task::RegionCPURecords(records) => self.handle_region_cpu_records(records),
-            Task::ReportRegionStat {
+            Task::ReportRegionFlow {
                 region_id,
                 written_bytes,
                 written_keys,
-                approximate_size,
-                approximate_keys,
             } => {
-                let perf_stat = self.region_perf_stat(
-                    region_id,
-                    written_bytes,
-                    written_keys,
-                    approximate_size,
-                    approximate_keys,
-                );
-                self.handle_report_region_stats(region_id, perf_stat);
+                let flow = self.region_flow(region_id, written_bytes, written_keys);
+                self.handle_report_region_flow(region_id, flow);
             }
         };
     }

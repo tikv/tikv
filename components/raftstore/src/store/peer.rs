@@ -4227,6 +4227,23 @@ where
         fail_point!("schedule_check_split");
     }
 
+    pub fn report_region_flow<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
+        let task = PdTask::ReportRegionFlow {
+            region_id: self.region_id,
+            written_bytes: self.peer_stat.written_bytes,
+            written_keys: self.peer_stat.written_keys,
+        };
+        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+            error!(
+                "failed to notify pd";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "err" => ?e,
+            );
+            return;
+        }
+    }
+
     fn prepare_raft_message(&self) -> RaftMessage {
         let mut send_msg = RaftMessage::default();
         send_msg.set_region_id(self.region_id);

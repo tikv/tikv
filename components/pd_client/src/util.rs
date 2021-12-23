@@ -29,8 +29,8 @@ use grpcio::{
 };
 use kvproto::pdpb::{
     ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
-    RegionHeartbeatRequest, RegionHeartbeatResponse, ReportRegionStatsRequest,
-    ReportRegionStatsResponse, ResponseHeader,
+    RegionHeartbeatRequest, RegionHeartbeatResponse, ReportRegionFlowRequest,
+    ReportRegionFlowResponse, ResponseHeader,
 };
 use security::SecurityManager;
 use tikv_util::time::Instant;
@@ -87,11 +87,11 @@ pub struct Inner {
         UnboundedSender<RegionHeartbeatRequest>,
     >,
     pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Waker>,
-    pub stats_sender: Either<
-        Option<ClientDuplexSender<ReportRegionStatsRequest>>,
-        UnboundedSender<ReportRegionStatsRequest>,
+    pub flow_sender: Either<
+        Option<ClientDuplexSender<ReportRegionFlowRequest>>,
+        UnboundedSender<ReportRegionFlowRequest>,
     >,
-    pub stats_resp: Option<ClientCStreamReceiver<ReportRegionStatsResponse>>,
+    pub flow_resp: Option<ClientCStreamReceiver<ReportRegionFlowResponse>>,
     pub client_stub: PdClientStub,
     target: TargetInfo,
     members: GetMembersResponse,
@@ -174,8 +174,8 @@ impl Client {
         let (hb_tx, hb_rx) = client_stub
             .region_heartbeat_opt(target.call_option())
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
-        let (stats_tx, stats_rx) = client_stub
-            .report_region_stats_opt(target.call_option())
+        let (flow_tx, flow_resp) = client_stub
+            .report_region_flow_opt(target.call_option())
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "report_region_stats", e));
         Client {
             timer: GLOBAL_TIMER_HANDLE.clone(),
@@ -183,8 +183,8 @@ impl Client {
                 env,
                 hb_sender: Either::Left(Some(hb_tx)),
                 hb_receiver: Either::Left(Some(hb_rx)),
-                stats_sender: Either::Left(Some(stats_tx)),
-                stats_resp: Some(stats_rx),
+                flow_sender: Either::Left(Some(flow_tx)),
+                flow_resp: Some(flow_resp),
                 client_stub,
                 members,
                 target,
@@ -223,16 +223,16 @@ impl Client {
         let prev_receiver = std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(hb_rx)));
         let _ = prev_receiver.right().map(|t| t.wake());
 
-        let (stats_tx, stats_rx) = client_stub
-            .report_region_stats_opt(target.call_option())
+        let (flow_tx, flow_resp) = client_stub
+            .report_region_flow_opt(target.call_option())
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
         info!("heartbeat sender and receiver are stale, refreshing ...");
         // Try to cancel an unused heartbeat sender.
-        if let Either::Left(Some(ref mut r)) = inner.stats_sender {
+        if let Either::Left(Some(ref mut r)) = inner.flow_sender {
             r.cancel();
         }
-        inner.stats_sender = Either::Left(Some(stats_tx));
-        inner.stats_resp = Some(stats_rx);
+        inner.flow_sender = Either::Left(Some(flow_tx));
+        inner.flow_resp = Some(flow_resp);
 
         inner.client_stub = client_stub;
         inner.members = members;

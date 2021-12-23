@@ -931,6 +931,7 @@ where
             PeerTicks::CHECK_MERGE => self.on_check_merge(),
             PeerTicks::CHECK_PEER_STALE_STATE => self.on_check_peer_stale_state_tick(),
             PeerTicks::ENTRY_CACHE_EVICT => self.on_entry_cache_evict_tick(),
+            PeerTicks::REPORT_REGION_FLOW => self.on_report_region_flow_tick(),
             _ => unreachable!(),
         }
     }
@@ -1437,6 +1438,9 @@ where
                 if self.fsm.peer.is_leader() {
                     self.register_pd_heartbeat_tick();
                     self.register_split_region_check_tick();
+                    if res.metrics.written_keys != 0 || res.metrics.written_bytes != 0 {
+                        self.register_report_region_flow_tick();
+                    }
                 }
             }
             ApplyTaskRes::Destroy {
@@ -4037,6 +4041,17 @@ where
         {
             self.register_entry_cache_evict_tick();
         }
+    }
+
+    fn register_report_region_flow_tick(&mut self) {
+        self.schedule_tick(PeerTicks::REPORT_REGION_FLOW)
+    }
+
+    fn on_report_region_flow_tick(&mut self) {
+        if !self.fsm.peer.is_leader() {
+            return;
+        }
+        self.fsm.peer.report_region_flow(self.ctx);
     }
 
     fn register_split_region_check_tick(&mut self) {
