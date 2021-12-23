@@ -30,7 +30,7 @@ pub struct ChunkedVecSet {
 
 impl ChunkedVecSet {
     #[inline]
-    pub fn get(&self, idx: usize) -> Option<SetRef> {
+    pub fn get(&self, idx: usize) -> Option<SetRef<'_>> {
         assert!(idx < self.len());
         if self.bitmap.get(idx) {
             Some(SetRef::new(&self.data, self.value[idx]))

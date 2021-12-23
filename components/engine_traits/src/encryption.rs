@@ -27,7 +27,7 @@ impl Default for FileEncryptionInfo {
 }
 
 impl Debug for FileEncryptionInfo {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "FileEncryptionInfo [method={:?}, key=...<{} bytes>, iv=...<{} bytes>]",

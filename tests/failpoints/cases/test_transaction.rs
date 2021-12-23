@@ -1,16 +1,27 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures::executor::block_on;
-use kvproto::kvrpcpb::{ApiVersion, AssertionLevel, Context};
+use grpcio::{ChannelBuilder, Environment};
+use kvproto::kvrpcpb::{
+    self as pb, ApiVersion, AssertionLevel, Context, Op, PessimisticLockRequest,
+};
+use kvproto::tikvpb::TikvClient;
+use raftstore::store::util::new_peer;
+use std::sync::Arc;
 use std::{sync::mpsc::channel, thread, time::Duration};
 use storage::mvcc::tests::must_get;
 use storage::mvcc::{self, tests::must_locked};
 use storage::txn::{self, commands};
+use test_raftstore::new_server_cluster;
+use tikv::storage::kv::SnapshotExt;
 use tikv::storage::txn::tests::{
     must_acquire_pessimistic_lock, must_commit, must_pessimistic_prewrite_put,
     must_pessimistic_prewrite_put_err, must_prewrite_put, must_prewrite_put_err,
 };
-use tikv::storage::{self, lock_manager::DummyLockManager, TestEngineBuilder, TestStorageBuilder};
+use tikv::storage::{
+    self, lock_manager::DummyLockManager, Snapshot, TestEngineBuilder, TestStorageBuilder,
+};
+use tikv_util::HandyRwLock;
 use txn_types::{Key, Mutation, TimeStamp};
 
 #[test]
@@ -76,7 +87,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
         .unwrap();
     // sleep a while so prewrite gets max ts before get is triggered
     thread::sleep(Duration::from_millis(200));
-    match block_on(storage.get(Context::default(), b"k".to_vec(), 100.into())) {
+    match block_on(storage.get(Context::default(), Key::from_raw(b"k"), 100.into())) {
         // In this case, min_commit_ts is smaller than the start ts, but the lock is visible
         // to the get.
         Err(storage::Error(box storage::ErrorInner::Txn(txn::Error(
@@ -104,7 +115,7 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
     // Suppose snapshot was before updating max_ts, after sleeping for 500ms the following prewrite should complete.
     fail::cfg("after-snapshot", "sleep(500)").unwrap();
     let read_ts = 20.into();
-    let get_fut = storage.get(Context::default(), b"j".to_vec(), read_ts);
+    let get_fut = storage.get(Context::default(), Key::from_raw(b"j"), read_ts);
     thread::sleep(Duration::from_millis(100));
     fail::remove("after-snapshot");
     let (prewrite_tx, prewrite_rx) = channel();
@@ -147,7 +158,7 @@ fn test_update_max_ts_before_scan_memory_locks() {
     .unwrap();
 
     fail::cfg("before-storage-check-memory-locks", "sleep(500)").unwrap();
-    let get_fut = storage.get(Context::default(), b"k".to_vec(), 100.into());
+    let get_fut = storage.get(Context::default(), Key::from_raw(b"k"), 100.into());
 
     thread::sleep(Duration::from_millis(200));
 
@@ -375,9 +386,14 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     assert!(res.min_commit_ts.is_zero());
     assert!(res.one_pc_commit_ts.is_zero());
 
-    let locks =
-        block_on(storage.scan_lock(Context::default(), 20.into(), Some(b"k1".to_vec()), None, 2))
-            .unwrap();
+    let locks = block_on(storage.scan_lock(
+        Context::default(),
+        20.into(),
+        Some(Key::from_raw(b"k1")),
+        None,
+        2,
+    ))
+    .unwrap();
     assert_eq!(locks.len(), 2);
     assert_eq!(locks[0].get_key(), b"k1");
     assert!(locks[0].get_use_async_commit());
@@ -411,4 +427,110 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     let res = prewrite_rx.recv().unwrap().unwrap();
     assert!(res.min_commit_ts.is_zero());
     assert!(res.one_pc_commit_ts.is_zero());
+}
+
+#[test]
+fn test_pessimistic_lock_check_epoch() {
+    let mut cluster = new_server_cluster(0, 2);
+    cluster.cfg.pessimistic_txn.pipelined = true;
+    cluster.cfg.pessimistic_txn.in_memory = true;
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let region = cluster.get_region(b"");
+    let leader = region.get_peers()[0].clone();
+
+    let epoch = cluster.get_region_epoch(region.id);
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.id);
+    ctx.set_peer(leader.clone());
+    ctx.set_region_epoch(epoch);
+
+    fail::cfg("acquire_pessimistic_lock", "pause").unwrap();
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader);
+
+    let mut mutation = pb::Mutation::default();
+    mutation.set_op(Op::PessimisticLock);
+    mutation.key = b"key".to_vec();
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(ctx.clone());
+    req.set_mutations(vec![mutation].into());
+    req.set_start_version(10);
+    req.set_for_update_ts(10);
+    req.set_primary_lock(b"key".to_vec());
+
+    let lock_resp = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
+    thread::sleep(Duration::from_millis(300));
+
+    // Transfer leader out and back, so the term should have changed.
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    fail::remove("acquire_pessimistic_lock");
+
+    let resp = lock_resp.join().unwrap();
+    // Region leader changes, so we should get a StaleCommand error.
+    assert!(resp.get_region_error().has_stale_command());
+}
+
+#[test]
+fn test_pessimistic_lock_check_valid() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.cfg.pessimistic_txn.pipelined = true;
+    cluster.cfg.pessimistic_txn.in_memory = true;
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let txn_ext = cluster
+        .must_get_snapshot_of_region(1)
+        .ext()
+        .get_txn_ext()
+        .unwrap()
+        .clone();
+
+    let region = cluster.get_region(b"");
+    let leader = region.get_peers()[0].clone();
+
+    fail::cfg("acquire_pessimistic_lock", "pause").unwrap();
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader);
+
+    let mut mutation = pb::Mutation::default();
+    mutation.set_op(Op::PessimisticLock);
+    mutation.key = b"key".to_vec();
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(ctx.clone());
+    req.set_mutations(vec![mutation].into());
+    req.set_start_version(10);
+    req.set_for_update_ts(10);
+    req.set_primary_lock(b"key".to_vec());
+
+    let lock_resp = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
+    thread::sleep(Duration::from_millis(300));
+    // Set `is_valid` to false, but the region remains available to serve.
+    txn_ext.pessimistic_locks.write().is_valid = false;
+    fail::remove("acquire_pessimistic_lock");
+
+    let resp = lock_resp.join().unwrap();
+    // There should be no region error.
+    assert!(!resp.has_region_error());
+    // The lock should not be written to the in-memory pessimistic lock table.
+    assert!(txn_ext.pessimistic_locks.read().map.is_empty());
 }

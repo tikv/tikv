@@ -388,11 +388,11 @@ impl LoadedPlugin {
     pub unsafe fn new<P: AsRef<OsStr>>(file_path: P) -> Result<Self, PluginLoadingError> {
         let lib = Library::new(&file_path)?;
 
-        let get_build_info: Symbol<PluginGetBuildInfoSignature> =
+        let get_build_info: Symbol<'_, PluginGetBuildInfoSignature> =
             lib.get(PLUGIN_GET_BUILD_INFO_SYMBOL)?;
-        let get_plugin_info: Symbol<PluginGetPluginInfoSignature> =
+        let get_plugin_info: Symbol<'_, PluginGetPluginInfoSignature> =
             lib.get(PLUGIN_GET_PLUGIN_INFO_SYMBOL)?;
-        let plugin_constructor: Symbol<PluginConstructorSignature> =
+        let plugin_constructor: Symbol<'_, PluginConstructorSignature> =
             lib.get(PLUGIN_CONSTRUCTOR_SYMBOL)?;
 
         // It's important to check the ABI before calling the constructor.

@@ -427,7 +427,6 @@ mod tests {
     use kvproto::encryptionpb;
     use raftstore::store::util::new_peer;
     use std::collections::BTreeMap;
-    use std::f64::INFINITY;
     use std::path::Path;
     use tempfile::TempDir;
     use tikv::storage::TestEngineBuilder;
@@ -435,7 +434,7 @@ mod tests {
 
     type CfKvs<'a> = (engine_traits::CfName, &'a [(&'a [u8], &'a [u8])]);
 
-    fn check_sst(ssts: &[(engine_traits::CfName, &Path)], kvs: &[CfKvs]) {
+    fn check_sst(ssts: &[(engine_traits::CfName, &Path)], kvs: &[CfKvs<'_>]) {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
@@ -497,7 +496,7 @@ mod tests {
             "foo",
             None,
             0,
-            Limiter::new(INFINITY),
+            Limiter::new(f64::INFINITY),
             144 * 1024 * 1024,
             {
                 let mut ci = CipherInfo::default();
@@ -515,7 +514,7 @@ mod tests {
             "foo1",
             None,
             0,
-            Limiter::new(INFINITY),
+            Limiter::new(f64::INFINITY),
             144 * 1024 * 1024,
             {
                 let mut ci = CipherInfo::default();
@@ -554,7 +553,7 @@ mod tests {
             "foo2",
             None,
             0,
-            Limiter::new(INFINITY),
+            Limiter::new(f64::INFINITY),
             144 * 1024 * 1024,
             {
                 let mut ci = CipherInfo::default();

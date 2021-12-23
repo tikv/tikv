@@ -2125,7 +2125,14 @@ mod tests {
                     let resource_tag = Arc::new(TagInfos::from_rpc_context(&context));
 
                     let mut records = HashMap::default();
-                    records.insert(resource_tag, RawRecord { cpu_time: 10 });
+                    records.insert(
+                        resource_tag,
+                        RawRecord {
+                            cpu_time: 10,
+                            read_keys: 0,
+                            write_keys: 0,
+                        },
+                    );
                     records
                 },
             });

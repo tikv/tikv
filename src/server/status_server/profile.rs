@@ -78,7 +78,7 @@ impl<'a, I, T> ProfileGuard<'a, I, T> {
 
 impl<'a, I, T> Future for ProfileGuard<'a, I, T> {
     type Output = Result<T, String>;
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.end.as_mut().poll(cx) {
             Poll::Ready(res) => {
                 let item = self.item.take().unwrap();

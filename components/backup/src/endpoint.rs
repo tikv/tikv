@@ -2,7 +2,6 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::f64::INFINITY;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::{mpsc, Arc, Mutex, RwLock};
@@ -106,7 +105,7 @@ impl Task {
         let limiter = Limiter::new(if speed_limit > 0 {
             speed_limit as f64
         } else {
-            INFINITY
+            f64::INFINITY
         });
         let cf = name_to_cf(req.get_cf()).ok_or_else(|| crate::Error::InvalidCf {
             cf: req.get_cf().to_owned(),
@@ -1370,7 +1369,7 @@ pub mod tests {
                         start_ts: 1.into(),
                         end_ts: 1.into(),
                         backend,
-                        limiter: Limiter::new(INFINITY),
+                        limiter: Limiter::new(f64::INFINITY),
                         cancel: Arc::default(),
                         is_raw_kv: false,
                         cf: engine_traits::CF_DEFAULT,
@@ -1399,7 +1398,7 @@ pub mod tests {
         // the case.2 is the expected results.
         type Case<'a> = (&'a [u8], &'a [u8], Vec<(&'a [u8], &'a [u8])>);
 
-        let case: Vec<Case> = vec![
+        let case: Vec<Case<'_>> = vec![
             (b"", b"1", vec![(b"", b"1")]),
             (b"", b"2", vec![(b"", b"1"), (b"1", b"2")]),
             (b"1", b"2", vec![(b"1", b"2")]),

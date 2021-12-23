@@ -23,9 +23,7 @@ use raft::eraftpb;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{raw::Writable, Compat};
-use engine_traits::{
-    key_prefix, MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
-};
+use engine_traits::{MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use pd_client::PdClient;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{fsm::store::StoreMeta, AutoSplitController, SnapManager};
@@ -1052,14 +1050,7 @@ fn test_check_txn_status_with_max_ts() {
     must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), lock_ts);
 
     // Should return MinCommitTsPushed even if caller_start_ts is max.
-    let status = must_check_txn_status(
-        &client,
-        ctx.clone(),
-        &k,
-        lock_ts,
-        std::u64::MAX,
-        lock_ts + 1,
-    );
+    let status = must_check_txn_status(&client, ctx.clone(), &k, lock_ts, u64::MAX, lock_ts + 1);
     assert_eq!(status.lock_ttl, 3000);
     assert_eq!(status.action, Action::MinCommitTsPushed);
 
@@ -1754,8 +1745,8 @@ fn test_get_lock_wait_info_api() {
 #[test]
 fn test_txn_api_version() {
     const TIDB_KEY_CASE: &[u8] = b"t_a";
-    const TXN_KEY_CASE: &[u8] = &[key_prefix::TXN_KEY_PREFIX, 0, b'a'];
-    const RAW_KEY_CASE: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'a'];
+    const TXN_KEY_CASE: &[u8] = b"x\0a";
+    const RAW_KEY_CASE: &[u8] = b"r\0a";
 
     let test_data = vec![
         // config api_version = V1|V1ttl, for backward compatible.
@@ -1783,13 +1774,13 @@ fn test_txn_api_version() {
             ApiVersion::V2,
             ApiVersion::V1,
             TXN_KEY_CASE,
-            Some("InvalidKeyPrefix"),
+            Some("InvalidKeyMode"),
         ),
         (
             ApiVersion::V2,
             ApiVersion::V1,
             RAW_KEY_CASE,
-            Some("InvalidKeyPrefix"),
+            Some("InvalidKeyMode"),
         ),
         // V2 api validation.
         (ApiVersion::V2, ApiVersion::V2, TXN_KEY_CASE, None),
@@ -1797,13 +1788,13 @@ fn test_txn_api_version() {
             ApiVersion::V2,
             ApiVersion::V2,
             RAW_KEY_CASE,
-            Some("InvalidKeyPrefix"),
+            Some("InvalidKeyMode"),
         ),
         (
             ApiVersion::V2,
             ApiVersion::V2,
             TIDB_KEY_CASE,
-            Some("InvalidKeyPrefix"),
+            Some("InvalidKeyMode"),
         ),
     ];
 
