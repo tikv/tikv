@@ -169,16 +169,19 @@ where
             let cli = cli.clone();
             let range_router = self.range_router.clone();
 
-            info!("register backup stream task {:?}", task);
+            info!(
+                "register backup stream task";
+                "task" => ?task,
+            );
 
             self.pool.block_on(async move {
                 let task_name = task.info.get_name();
                 match cli.ranges_of_task(task_name).await {
                     Ok(ranges) => {
                         info!(
-                            "backup stream {:?} ranges len {:?}",
-                            task,
-                            ranges.inner.len()
+                            "register backup stream ranges";
+                            "task" => ?task,
+                            "ranges-count" => ranges.inner.len(),
                         );
                         // TODO implement register ranges
                         range_router.lock().await.register_ranges(
