@@ -195,7 +195,7 @@ pub use self::linux::{fetch_all_thread_io_bytes, get_io_type, set_io_type};
 use self::linux::fetch_thread_io_bytes;
 
 #[cfg(not(target_os = "linux"))]
-mod notlinux {
+mod non_linux {
     use crate::{IOBytes, IOType};
 
     pub fn fetch_all_thread_io_bytes(io_type: IOType) -> IOBytes {
@@ -210,7 +210,7 @@ mod notlinux {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub use self::notlinux::{fetch_all_thread_io_bytes, get_io_type, set_io_type};
+pub use self::non_linux::{fetch_all_thread_io_bytes, get_io_type, set_io_type};
 
 #[cfg(target_os = "linux")]
 #[cfg(test)]
