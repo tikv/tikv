@@ -78,12 +78,12 @@ pub const INVALID_ID: u64 = 0;
 /// all the time.
 pub trait PdClient: Send + Sync {
     /// Load a list of GlobalConfig
-    fn load_global_config(&self, _list: Vec<String>) -> Result<HashMap<String, String>> {
+    fn load_global_config(&self, _list: Vec<String>) -> PdFuture<HashMap<String, String>> {
         unimplemented!();
     }
 
     /// Store a list of GlobalConfig
-    fn store_global_config(&self, _list: HashMap<String, String>) -> Result<()> {
+    fn store_global_config(&self, _list: HashMap<String, String>) -> PdFuture<()> {
         unimplemented!();
     }
 

@@ -283,27 +283,46 @@ impl fmt::Debug for RpcClient {
 const LEADER_CHANGE_RETRY: usize = 10;
 
 impl PdClient for RpcClient {
-    fn load_global_config(&self, list: Vec<String>) -> Result<HashMap<String, String>> {
+    fn load_global_config(&self, list: Vec<String>) -> PdFuture<HashMap<String, String>> {
         use kvproto::pdpb::LoadGlobalConfigRequest;
         let mut req = LoadGlobalConfigRequest::new();
-        for elem in list {
-            req.names.push(elem);
-        }
-        let grpc_response = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.load_global_config(&req)
-        })?;
-        let mut res = HashMap::new();
-        for c in grpc_response.get_items() {
-            if c.has_error() {
-                error!("failed to load global config with key {:?}", c.get_error());
-            } else {
-                res.insert(c.get_name().to_owned(), c.get_value().to_owned());
-            }
-        }
-        Ok(res)
+        req.set_names(list.into());
+        let executor = |client: &Client, req| match client
+            .inner
+            .rl()
+            .client_stub
+            .clone()
+            .load_global_config_async(&req)
+        {
+            Ok(grpc_response) => Box::pin(async move {
+                {
+                    let mut res = HashMap::new();
+                    match grpc_response.await {
+                        Ok(grpc_response) => {
+                            for c in grpc_response.get_items() {
+                                if c.has_error() {
+                                    error!(
+                                        "failed to load global config with key {:?}",
+                                        c.get_error()
+                                    );
+                                } else {
+                                    res.insert(c.get_name().to_owned(), c.get_value().to_owned());
+                                }
+                            }
+                            Ok(res)
+                        }
+                        Err(err) => Err(box_err!("{:?}", err)),
+                    }
+                }
+            }) as PdFuture<_>,
+            Err(err) => Box::pin(async move { Err(box_err!("{:?}", err)) }) as PdFuture<_>,
+        };
+        self.pd_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
     }
 
-    fn store_global_config(&self, list: HashMap<String, String>) -> Result<()> {
+    fn store_global_config(&self, list: HashMap<String, String>) -> PdFuture<()> {
         use kvproto::pdpb::GlobalConfigItem;
         use kvproto::pdpb::StoreGlobalConfigRequest;
         let mut req = StoreGlobalConfigRequest::new();
@@ -315,18 +334,34 @@ impl PdClient for RpcClient {
                 item
             });
         }
-        let res = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.store_global_config(&req)
-        })?;
-        if res.has_error() {
-            error!(
-                "error received in store global config {:?}",
-                res.get_error()
-            );
-            Err(box_err!("{:?}", res.get_error()))
-        } else {
-            Ok(())
-        }
+        let executor = |client: &Client, req| match client
+            .inner
+            .rl()
+            .client_stub
+            .clone()
+            .store_global_config_async(&req)
+        {
+            Ok(grpc_response) => Box::pin(async move {
+                match grpc_response.await {
+                    Ok(grpc_response) => {
+                        if grpc_response.has_error() {
+                            error!(
+                                "error received in store global config {:?}",
+                                grpc_response.get_error()
+                            );
+                            Err(box_err!("{:?}", grpc_response.get_error()))
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    Err(err) => Err(box_err!("{:?}", err)),
+                }
+            }) as PdFuture<_>,
+            Err(err) => Box::pin(async move { Err(box_err!("{:?}", err)) }) as PdFuture<_>,
+        };
+        self.pd_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
     }
 
     fn watch_global_config(

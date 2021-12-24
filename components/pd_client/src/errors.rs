@@ -39,7 +39,7 @@ impl ErrorCodeExt for Error {
             Error::Grpc(_) => error_code::pd::GRPC,
             Error::RegionNotFound(_) => error_code::pd::REGION_NOT_FOUND,
             Error::StoreTombstone(_) => error_code::pd::STORE_TOMBSTONE,
-            Error::GlobalConfigNotFound(_) => error_code::pd::GLOBAL_CONFIG_NOT_FOUNT,
+            Error::GlobalConfigNotFound(_) => error_code::pd::GLOBAL_CONFIG_NOT_FOUND,
             Error::Other(_) => error_code::pd::UNKNOWN,
         }
     }
