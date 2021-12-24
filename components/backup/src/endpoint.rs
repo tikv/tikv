@@ -18,7 +18,7 @@ use futures::channel::mpsc::*;
 use futures::Future;
 use kvproto::brpb::*;
 use kvproto::encryptionpb::EncryptionMethod;
-use kvproto::kvrpcpb::{Context, IsolationLevel};
+use kvproto::kvrpcpb::{ApiVersion, Context, IsolationLevel};
 use kvproto::metapb::*;
 use online_config::OnlineConfig;
 
@@ -197,6 +197,7 @@ async fn save_backup_file_worker(
     rx: async_channel::Receiver<InMemBackupFiles>,
     tx: UnboundedSender<BackupResponse>,
     storage: Arc<dyn ExternalStorage>,
+    api_version: ApiVersion,
 ) {
     while let Ok(msg) = rx.recv().await {
         let files = if msg.files.need_flush_keys() {
@@ -234,6 +235,7 @@ async fn save_backup_file_worker(
         }
         response.set_start_key(msg.start_key.clone());
         response.set_end_key(msg.end_key.clone());
+        response.set_api_version(api_version);
         if let Err(e) = tx.unbounded_send(response) {
             error_unknown!(?e; "backup failed to send response"; "region" => ?msg.region,
             "start_key" => &log_wrappers::Value::key(&msg.start_key),
@@ -611,6 +613,7 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     config_manager: ConfigManager,
     concurrency_manager: ConcurrencyManager,
     softlimit: SoftLimitKeeper,
+    api_version: ApiVersion,
 
     pub(crate) engine: E,
     pub(crate) region_info: R,
@@ -795,6 +798,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         db: Arc<DB>,
         config: BackupConfig,
         concurrency_manager: ConcurrencyManager,
+        api_version: ApiVersion,
     ) -> Endpoint<E, R> {
         let pool = ControlThreadPool::new();
         let rt = create_tokio_runtime(config.io_thread_size, "backup-io").unwrap();
@@ -811,6 +815,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             softlimit,
             config_manager,
             concurrency_manager,
+            api_version,
         }
     }
 
@@ -1025,6 +1030,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 rx.clone(),
                 resp.clone(),
                 backend.clone(),
+                self.api_version,
             ));
         }
     }
@@ -1236,6 +1242,7 @@ pub mod tests {
                     ..Default::default()
                 },
                 concurrency_manager,
+                ApiVersion::V1,
             ),
         )
     }
