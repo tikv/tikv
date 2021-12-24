@@ -10,6 +10,7 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use collections::HashMap;
+use kvproto::resource_usage_agent::ResourceUsageRecord;
 
 thread_local! {
     static STATIC_BUF: Cell<Vec<u32>> = Cell::new(vec![]);
@@ -87,6 +88,50 @@ pub struct Record {
 pub struct Records {
     pub records: HashMap<Vec<u8>, Record>,
     pub others: HashMap<u64, RawRecord>,
+}
+
+impl From<Records> for Vec<ResourceUsageRecord> {
+    fn from(records: Records) -> Vec<ResourceUsageRecord> {
+        let mut res = Vec::with_capacity(records.records.len() + 1);
+        for (tag, record) in records.records {
+            let mut req = ResourceUsageRecord::default();
+            req.set_resource_group_tag(tag);
+            req.set_record_list_timestamp_sec(record.timestamps);
+            req.set_record_list_cpu_time_ms(record.cpu_time_list);
+            req.set_record_list_read_keys(record.read_keys_list);
+            req.set_record_list_write_keys(record.write_keys_list);
+            res.push(req);
+        }
+
+        if !records.others.is_empty() {
+            let others = records.others;
+            let mut req = ResourceUsageRecord::default();
+            let len = others.len();
+            req.mut_record_list_timestamp_sec().reserve(len);
+            req.mut_record_list_cpu_time_ms().reserve(len);
+            req.mut_record_list_read_keys().reserve(len);
+            req.mut_record_list_write_keys().reserve(len);
+
+            for (
+                ts,
+                RawRecord {
+                    cpu_time,
+                    read_keys,
+                    write_keys,
+                },
+            ) in others
+            {
+                req.mut_record_list_timestamp_sec().push(ts);
+                req.mut_record_list_cpu_time_ms().push(cpu_time);
+                req.mut_record_list_read_keys().push(read_keys);
+                req.mut_record_list_write_keys().push(write_keys);
+            }
+
+            res.push(req);
+        }
+
+        res
+    }
 }
 
 impl Records {

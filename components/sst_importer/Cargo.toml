@@ -12,6 +12,7 @@ cloud-storage-grpc = ["external_storage_export/cloud-storage-grpc"]
 cloud-storage-dylib = ["external_storage_export/cloud-storage-dylib"]
 
 [dependencies]
+api_version = { path = "../api_version", default-features = false }
 crc32fast = "1.2"
 encryption = { path = "../encryption", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
