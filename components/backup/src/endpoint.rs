@@ -197,7 +197,7 @@ async fn save_backup_file_worker(
     rx: async_channel::Receiver<InMemBackupFiles>,
     tx: UnboundedSender<BackupResponse>,
     storage: Arc<dyn ExternalStorage>,
-    api_version: ApiVersion
+    api_version: ApiVersion,
 ) {
     while let Ok(msg) = rx.recv().await {
         let files = if msg.files.need_flush_keys() {
