@@ -93,11 +93,12 @@ fn test_server_huge_snapshot_multi_files() {
     test_huge_snapshot(&mut cluster, 1024 * 1024);
 }
 
-#[test]
-fn test_server_snap_gc() {
+fn test_server_snap_gc_internal(version: &str) {
     let mut cluster = new_server_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
+    cluster.pd_client.reset_version(version);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
+    cluster.cfg.server.max_snapshot_file_raw_size = ReadableSize::mb(100);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
@@ -154,6 +155,16 @@ fn test_server_snap_gc() {
         .collect();
     assert!(snapfiles.len() >= 2);
 
+    let actual_max_per_file_size = cluster.get_snap_mgr(1).get_actual_max_per_file_size();
+
+    // version > 6.0.0 should enable multi_snapshot_file feature, which means actual max_per_file_size equals the config
+    if version == "6.5.0" {
+        assert!(actual_max_per_file_size == cluster.cfg.server.max_snapshot_file_raw_size.0);
+    } else {
+        // the feature is disabled, and the actual_max_per_file_size should be u64::MAX (so that only one file is generated)
+        assert!(actual_max_per_file_size == u64::MAX);
+    }
+
     cluster.sim.wl().clear_recv_filters(3);
     debug!("filters cleared.");
 
@@ -177,6 +188,16 @@ fn test_server_snap_gc() {
         }
         sleep_ms(20);
     }
+}
+
+#[test]
+fn test_server_snap_gc_with_multi_snapshot_files() {
+    test_server_snap_gc_internal("6.5.0");
+}
+
+#[test]
+fn test_server_snap_gc() {
+    test_server_snap_gc_internal("5.1.0");
 }
 
 /// A helper function for testing the handling of snapshot is correct

@@ -1607,6 +1607,10 @@ impl SnapManager {
         }
     }
 
+    pub fn get_actual_max_per_file_size(&self) -> u64 {
+        self.core.get_actual_max_per_file_size()
+    }
+
     pub fn set_enable_multi_snapshot_files(&mut self, enable_multi_snapshot_files: bool) {
         self.core
             .enable_multi_snapshot_files
