@@ -3,6 +3,8 @@
 // #[PerformanceCriticalPath]
 use std::borrow::Cow;
 use std::fmt;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -526,6 +528,10 @@ pub enum PeerMsg<EK: KvEngine> {
     UpdateReplicationMode,
     Destroy(u64),
     UpdateRegionForUnsafeRecover(metapb::Region),
+    UnsafeRecoveryWaitApply {
+        commit_index: u64,
+        counter: Arc<AtomicUsize>,
+    },
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
@@ -556,6 +562,16 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
             PeerMsg::UpdateRegionForUnsafeRecover(region) => {
                 write!(fmt, "Update Region {} to {:?}", region.get_id(), region)
+            }
+            PeerMsg::UnsafeRecoveryWaitApply {
+                commit_index,
+                counter,
+            } => {
+                write!(
+                    fmt,
+                    "Waitting for the apply index equals to {:?} , remaining tasks {:?}",
+                    commit_index, *counter
+                )
             }
         }
     }

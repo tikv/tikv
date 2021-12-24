@@ -6,7 +6,9 @@ use std::cell::Cell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
-use std::time::Instant;
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 use std::{cmp, mem, u64};
 
 use batch_system::{BasicMailbox, Fsm};
@@ -22,7 +24,7 @@ use kvproto::errorpb;
 use kvproto::import_sstpb::SwitchMode;
 use kvproto::kvrpcpb::DiskFullOpt;
 use kvproto::metapb::{self, Region, RegionEpoch};
-use kvproto::pdpb::CheckPolicy;
+use kvproto::pdpb::{CheckPolicy, StoreStats};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
     StatusCmdType, StatusResponse,
@@ -56,7 +58,7 @@ use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::fsm::store::{PollContext, StoreMeta};
 use crate::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
-    ExecResult,
+    ExecResult, StoreInfo,
 };
 use crate::store::hibernate_state::{GroupState, HibernateState};
 use crate::store::local_metrics::RaftMetrics;
@@ -663,6 +665,10 @@ where
                 PeerMsg::UpdateRegionForUnsafeRecover(region) => {
                     self.on_update_region_for_unsafe_recover(region)
                 }
+                PeerMsg::UnsafeRecoveryWaitApply {
+                    commit_index,
+                    counter,
+                } => self.on_unsafe_recovery_wait_apply(commit_index, counter),
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -857,6 +863,36 @@ where
         self.fsm.peer.post_split();
         self.fsm.reset_hibernate_state(GroupState::Chaos);
         self.register_raft_base_tick();
+    }
+
+    fn on_unsafe_recovery_wait_apply(&mut self, commit_index: u64, counter: Arc<AtomicUsize>) {
+        if self.fsm.peer.raft_group.store().applied_index() != commit_index {
+            sleep(Duration::from_millis(1000));
+            let _ = self.ctx.router.force_send(
+                self.fsm.region_id(),
+                PeerMsg::UnsafeRecoveryWaitApply {
+                    commit_index,
+                    counter: counter.clone(),
+                },
+            );
+        } else {
+            if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
+                let stats = StoreStats::default();
+                let store_info = StoreInfo {
+                    kv_engine: self.ctx.engines.kv.clone(),
+                    raft_engine: self.ctx.engines.raft.clone(),
+                    capacity: self.ctx.cfg.capacity.0,
+                };
+                let task = PdTask::StoreHeartbeat {
+                    stats,
+                    store_info,
+                    send_detailed_report: true,
+                };
+                if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
+                    panic!("fail to send detailed report to pd {:?}", e);
+                }
+            }
+        }
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
