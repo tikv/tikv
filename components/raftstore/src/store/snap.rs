@@ -6,7 +6,7 @@ use std::fmt::{self, Display, Formatter};
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::{error::Error as StdError, result, str, thread, time, u64};
 
@@ -1341,21 +1341,21 @@ struct SnapManagerCore {
     limiter: Limiter,
     temp_sst_id: Arc<AtomicU64>,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
-    max_per_file_size: u64,
-    enable_multi_snapshot_files: bool,
+    max_per_file_size: Arc<AtomicU64>,
+    enable_multi_snapshot_files: Arc<AtomicBool>,
 }
 
 /// `SnapManagerCore` trace all current processing snapshots.
 pub struct SnapManager {
     core: SnapManagerCore,
-    max_total_size: AtomicU64,
+    max_total_size: Arc<AtomicU64>,
 }
 
 impl Clone for SnapManager {
     fn clone(&self) -> Self {
         SnapManager {
             core: self.core.clone(),
-            max_total_size: AtomicU64::new(self.max_total_size.load(Ordering::Acquire)),
+            max_total_size: self.max_total_size.clone(),
         }
     }
 }
@@ -1595,15 +1595,22 @@ impl SnapManager {
 
     pub fn set_max_per_file_size(&mut self, max_per_file_size: u64) {
         if max_per_file_size == 0 {
-            self.core.max_per_file_size = u64::MAX;
+            self.core
+                .max_per_file_size
+                .store(u64::MAX, Ordering::Release);
         } else {
             const MIN_MAX_SNAP_FILE_RAW_SIZE: u64 = (1 << 20) * 100; // min max snapshot file size is 100MB (before compresssion)
-            self.core.max_per_file_size = cmp::max(max_per_file_size, MIN_MAX_SNAP_FILE_RAW_SIZE);
+            self.core.max_per_file_size.store(
+                cmp::max(max_per_file_size, MIN_MAX_SNAP_FILE_RAW_SIZE),
+                Ordering::Release,
+            );
         }
     }
 
     pub fn set_enable_multi_snapshot_files(&mut self, enable_multi_snapshot_files: bool) {
-        self.core.enable_multi_snapshot_files = enable_multi_snapshot_files;
+        self.core
+            .enable_multi_snapshot_files
+            .store(enable_multi_snapshot_files, Ordering::Release);
     }
 
     pub fn set_speed_limit(&self, bytes_per_sec: f64) {
@@ -1773,8 +1780,8 @@ impl SnapManagerCore {
     }
 
     pub fn get_actual_max_per_file_size(&self) -> u64 {
-        if self.enable_multi_snapshot_files {
-            return self.max_per_file_size;
+        if self.enable_multi_snapshot_files.load(Ordering::Relaxed) {
+            return self.max_per_file_size.load(Ordering::Relaxed);
         }
         u64::MAX
     }
@@ -1828,10 +1835,12 @@ impl SnapManagerBuilder {
                 limiter,
                 temp_sst_id: Arc::new(AtomicU64::new(0)),
                 encryption_key_manager: self.key_manager,
-                max_per_file_size: u64::MAX,
-                enable_multi_snapshot_files: self.enable_multi_snapshot_files,
+                max_per_file_size: Arc::new(AtomicU64::new(u64::MAX)),
+                enable_multi_snapshot_files: Arc::new(AtomicBool::new(
+                    self.enable_multi_snapshot_files,
+                )),
             },
-            max_total_size: AtomicU64::new(max_total_size),
+            max_total_size: Arc::new(AtomicU64::new(max_total_size)),
         };
         snapshot.set_max_per_file_size(self.max_per_file_size); // set actual max_per_file_size
         snapshot
@@ -1844,7 +1853,7 @@ pub mod tests {
     use std::cmp;
     use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, AtomicUsize};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
     use std::sync::Arc;
 
     use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
@@ -2038,8 +2047,8 @@ pub mod tests {
             limiter: Limiter::new(f64::INFINITY),
             temp_sst_id: Arc::new(AtomicU64::new(0)),
             encryption_key_manager: None,
-            max_per_file_size,
-            enable_multi_snapshot_files: true,
+            max_per_file_size: Arc::new(AtomicU64::new(max_per_file_size)),
+            enable_multi_snapshot_files: Arc::new(AtomicBool::new(true)),
         }
     }
 

@@ -173,11 +173,12 @@ where
         box_try!(sst_writer.into_inner().finish());
         box_try!(File::open(path).and_then(|f| f.sync_all()));
         info!(
-            "build_sst_cf_file_list builds {} files in cf {}. Total keys {}, total size {} ",
+            "build_sst_cf_file_list builds {} files in cf {}. Total keys {}, total size {}. raw_size_per_file {}",
             file_id + 1,
             cf,
             stats.key_count,
             stats.total_size,
+            raw_size_per_file,
         );
     } else {
         box_try!(fs::remove_file(path));
