@@ -498,19 +498,13 @@ impl Snapshot {
             mgr: mgr.clone(),
         };
 
+        if check_policy == CheckPolicy::None {
+            return Ok(s);
+        }
+
         // load snapshot meta if meta_file exists
         if file_exists(&s.meta_file.path) {
             if let Err(e) = s.load_snapshot_meta() {
-                if check_policy == CheckPolicy::None {
-                    warn!(
-                        "failed to load existent snapshot meta when try to build snapshot and ignore this error anyway due to None checkpolicy.";
-                        "snapshot" => %s.path(),
-                        "err" => ?e,
-                        "error_code" => %e.error_code(),
-                    );
-                    return Ok(s);
-                }
-
                 if check_policy == CheckPolicy::ErrNotAllowed {
                     return Err(e);
                 }
