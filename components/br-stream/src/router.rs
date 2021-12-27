@@ -235,7 +235,8 @@ impl RouterInner {
             let inner_router = {
                 let mut tasks = self.temp_files_of_task.lock().await;
                 if !tasks.contains_key(&task) {
-                    tasks.insert(
+                    info!("creating temp dir for task."; "task" => %task);
+                    let inserted = tasks.insert(
                         task.clone(),
                         Arc::new(
                             TemporaryFiles::new(
@@ -246,6 +247,7 @@ impl RouterInner {
                             .await?,
                         ),
                     );
+                    assert!(inserted.is_none(), "double created map.")
                 }
                 tasks.get_mut(&task).unwrap().clone()
             };
@@ -729,6 +731,7 @@ mod tests {
         let events = region1.flush_events();
         for event in events {
             router.on_event(event).await?;
+            tokio::time::sleep(Duration::from_millis(200)).await;
         }
         let end_ts = TimeStamp::physical_now();
         let files = router.take_temporary_files("dummy").await?;
