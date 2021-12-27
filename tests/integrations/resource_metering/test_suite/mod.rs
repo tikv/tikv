@@ -2,17 +2,19 @@
 
 mod mock_receiver_server;
 
+pub use mock_receiver_server::MockReceiverServer;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::channel::oneshot;
 use futures::{select, FutureExt};
 use grpcio::Environment;
 use kvproto::kvrpcpb::{ApiVersion, Context};
 use kvproto::resource_usage_agent::ResourceUsageRecord;
-use mock_receiver_server::MockReceiverServer;
 use resource_metering::{init_recorder, Config, ConfigManager, Task, TEST_TAG_PREFIX};
 use tempfile::TempDir;
 use tikv::config::{ConfigController, Module, TiKvConfig};
@@ -20,7 +22,7 @@ use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{RocksEngine, Storage, TestEngineBuilder, TestStorageBuilder};
 use tikv_util::worker::LazyWorker;
 use tokio::runtime::{self, Runtime};
-use txn_types::TimeStamp;
+use txn_types::{Key, TimeStamp};
 
 pub struct TestSuite {
     receiver_server: Option<MockReceiverServer>,
@@ -50,6 +52,7 @@ impl TestSuite {
         let (mut tikv_cfg, dir) = TiKvConfig::with_tmp().unwrap();
         tikv_cfg.resource_metering = cfg.clone();
 
+        let address = Arc::new(ArcSwap::new(Arc::new(cfg.receiver_address.clone())));
         let cfg_controller = ConfigController::new(tikv_cfg);
         let (recorder_handle, collector_reg_handle, resource_tag_factory) =
             init_recorder(cfg.enabled, cfg.precision.as_millis());
@@ -59,13 +62,14 @@ impl TestSuite {
                 cfg.clone(),
                 scheduler.clone(),
                 recorder_handle,
+                address.clone(),
             )),
         );
+
         let env = Arc::new(Environment::new(2));
-        let mut reporter_client = resource_metering::GrpcClient::default();
-        reporter_client.set_env(env.clone());
+        let data_sink = resource_metering::SingleTargetDataSink::new(address.clone(), env.clone());
         reporter.start_with_timer(resource_metering::Reporter::new(
-            reporter_client,
+            data_sink,
             cfg,
             collector_reg_handle,
             scheduler.clone(),
@@ -183,7 +187,7 @@ impl TestSuite {
                         t.extend_from_slice(tag.as_bytes());
                         t
                     });
-                    storage.get(ctx, b"".to_vec(), TimeStamp::new(0))
+                    storage.get(ctx, Key::from_raw(b""), TimeStamp::new(0))
                 }))
                 .fuse();
 

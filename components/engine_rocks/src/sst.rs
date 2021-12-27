@@ -111,13 +111,13 @@ pub struct RocksSstIterator(DBIterator<Rc<SstFileReader>>);
 unsafe impl Send for RocksSstIterator {}
 
 impl Iterator for RocksSstIterator {
-    fn seek(&mut self, key: SeekKey) -> Result<bool> {
-        let k: RocksSeekKey = key.into();
+    fn seek(&mut self, key: SeekKey<'_>) -> Result<bool> {
+        let k: RocksSeekKey<'_> = key.into();
         self.0.seek(k.into_raw()).map_err(Error::Engine)
     }
 
-    fn seek_for_prev(&mut self, key: SeekKey) -> Result<bool> {
-        let k: RocksSeekKey = key.into();
+    fn seek_for_prev(&mut self, key: SeekKey<'_>) -> Result<bool> {
+        let k: RocksSeekKey<'_> = key.into();
         self.0.seek_for_prev(k.into_raw()).map_err(Error::Engine)
     }
 

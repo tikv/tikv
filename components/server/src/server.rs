@@ -101,6 +101,7 @@ use tokio::runtime::Builder;
 
 use crate::raft_engine_switch::{check_and_dump_raft_db, check_and_dump_raft_engine};
 use crate::{memory::*, setup::*, signal_handler};
+use arc_swap::ArcSwap;
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
@@ -472,7 +473,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn create_raftstore_compaction_listener(&self) -> engine_rocks::CompactionListener {
-        fn size_change_filter(info: &engine_rocks::RocksCompactionJobInfo) -> bool {
+        fn size_change_filter(info: &engine_rocks::RocksCompactionJobInfo<'_>) -> bool {
             // When calculating region size, we only consider write and default
             // column families.
             let cf = info.cf_name();
@@ -636,11 +637,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .pending_capacity(30)
             .create()
             .lazy_build("resource-metering-reporter");
+        let address = Arc::new(ArcSwap::new(Arc::new(
+            self.config.resource_metering.receiver_address.clone(),
+        )));
+        let datasink =
+            resource_metering::SingleTargetDataSink::new(address.clone(), self.env.clone());
         let reporter_scheduler = reporter_worker.scheduler();
-        let mut resource_metering_client = resource_metering::GrpcClient::default();
-        resource_metering_client.set_env(self.env.clone());
         let reporter = resource_metering::Reporter::new(
-            resource_metering_client,
+            datasink,
             self.config.resource_metering.clone(),
             collector_reg_handle.clone(),
             reporter_scheduler.clone(),
@@ -652,6 +656,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.config.resource_metering.clone(),
             reporter_scheduler,
             recorder_handle,
+            address,
         );
         cfg_controller.register(
             tikv::config::Module::ResourceMetering,
@@ -1038,6 +1043,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             engines.engines.kv.as_inner().clone(),
             self.config.backup.clone(),
             self.concurrency_manager.clone(),
+            self.config.storage.api_version(),
         );
         self.cfg_controller.as_mut().unwrap().register(
             tikv::config::Module::Backup,

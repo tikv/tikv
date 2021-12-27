@@ -10,11 +10,12 @@ use raft::StateRole;
 use raftstore::coprocessor::*;
 use raftstore::store::RegionSnapshot;
 use raftstore::Error as RaftStoreError;
+use tikv::storage::Statistics;
 use tikv_util::worker::Scheduler;
 use tikv_util::{error, warn};
 
 use crate::endpoint::{Deregister, Task};
-use crate::old_value::{self, OldValueCache, OldValueReader};
+use crate::old_value::{self, OldValueCache};
 use crate::Error as CdcError;
 
 /// An Observer for CDC.
@@ -119,9 +120,11 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
         // Create a snapshot here for preventing the old value was GC-ed.
         // TODO: only need it after enabling old value, may add a flag to indicate whether to get it.
         let snapshot = RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
-        let reader = OldValueReader::new(snapshot);
-        let get_old_value = move |key, query_ts, old_value_cache: &mut OldValueCache| {
-            old_value::get_old_value(&reader, key, query_ts, old_value_cache)
+        let get_old_value = move |key,
+                                  query_ts,
+                                  old_value_cache: &mut OldValueCache,
+                                  statistics: &mut Statistics| {
+            old_value::get_old_value(&snapshot, key, query_ts, old_value_cache, statistics)
         };
         if let Err(e) = self.sched.schedule(Task::MultiBatch {
             multi: cmd_batches,

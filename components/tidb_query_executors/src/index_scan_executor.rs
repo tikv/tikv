@@ -640,7 +640,7 @@ impl IndexScanExecutorImpl {
         &mut self,
         mut key_payload: &[u8],
         columns: &mut LazyBatchColumnVec,
-        restore_data: RestoreData,
+        restore_data: RestoreData<'_>,
     ) -> Result<()> {
         match restore_data {
             RestoreData::NotExists => {
@@ -679,9 +679,9 @@ impl IndexScanExecutorImpl {
     #[inline]
     fn decode_handle_columns(
         &mut self,
-        decode_handle: DecodeHandleOp,
+        decode_handle: DecodeHandleOp<'_>,
         columns: &mut LazyBatchColumnVec,
-        restore_data: RestoreData,
+        restore_data: RestoreData<'_>,
     ) -> Result<()> {
         match decode_handle {
             DecodeHandleOp::Nop => {}
@@ -731,7 +731,7 @@ impl IndexScanExecutorImpl {
     fn decode_pid_columns(
         &mut self,
         columns: &mut LazyBatchColumnVec,
-        decode_pid: DecodePartitionIdOp,
+        decode_pid: DecodePartitionIdOp<'_>,
     ) -> Result<()> {
         match decode_pid {
             DecodePartitionIdOp::Nop => {}

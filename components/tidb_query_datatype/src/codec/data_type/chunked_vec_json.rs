@@ -23,7 +23,7 @@ pub struct ChunkedVecJson {
 
 impl ChunkedVecJson {
     #[inline]
-    pub fn get(&self, idx: usize) -> Option<JsonRef> {
+    pub fn get(&self, idx: usize) -> Option<JsonRef<'_>> {
         assert!(idx < self.len());
         if self.bitmap.get(idx) {
             let json_type = JsonType::try_from(self.data[self.var_offset[idx]]).unwrap();

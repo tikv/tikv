@@ -65,6 +65,7 @@ sse = ["tikv/sse"]
 portable = ["tikv/portable"]
 
 [dependencies]
+api_version = { path = "../components/api_version", default-features = false }
 fail = "0.5"
 batch-system = { path = "../components/batch-system", default-features = false }
 crc64fast = "0.1"
@@ -104,6 +105,7 @@ txn_types = { path = "../components/txn_types", default-features = false }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 time = "0.1"
 libc = "0.2"
+arc-swap = "1.5.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }

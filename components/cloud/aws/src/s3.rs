@@ -673,7 +673,6 @@ mod tests {
     // reliable way to test s3 (rusoto_mock requires custom logic to verify the
     // body stream which itself can have bug)
     fn test_real_s3_storage() {
-        use std::f64::INFINITY;
         use tikv_util::time::Limiter;
 
         let bucket = BucketConf {
@@ -689,7 +688,7 @@ mod tests {
             ..Config::default()
         };
 
-        let limiter = Limiter::new(INFINITY);
+        let limiter = Limiter::new(f64::INFINITY);
 
         let storage = S3Storage::new(&s3).unwrap();
         const LEN: usize = 1024 * 1024 * 4;

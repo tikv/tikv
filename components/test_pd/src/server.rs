@@ -179,7 +179,7 @@ impl<C: PdMocker> Clone for PdMock<C> {
 impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     fn load_global_config(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: LoadGlobalConfigRequest,
         sink: UnarySink<LoadGlobalConfigResponse>,
     ) {
@@ -188,7 +188,7 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
 
     fn store_global_config(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: StoreGlobalConfigRequest,
         sink: UnarySink<StoreGlobalConfigResponse>,
     ) {
@@ -197,7 +197,7 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
 
     fn watch_global_config(
         &mut self,
-        _ctx: RpcContext,
+        _ctx: RpcContext<'_>,
         _req: WatchGlobalConfigRequest,
         _sink: ServerStreamingSink<WatchGlobalConfigResponse>,
     ) {

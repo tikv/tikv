@@ -228,7 +228,7 @@ mod tests {
     #[test]
     fn test_encode_unsigned() {
         let cols = vec![
-            Column::new(1, std::u64::MAX as i64).with_unsigned(),
+            Column::new(1, u64::MAX as i64).with_unsigned(),
             Column::new(2, -1),
         ];
         let exp: Vec<u8> = vec![
