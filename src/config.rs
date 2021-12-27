@@ -2211,8 +2211,6 @@ pub struct BackupConfig {
     pub auto_tune_refresh_interval: ReadableDuration,
     pub io_thread_size: usize,
     // Do not expose this config to user.
-    #[serde(skip_serializing)]
-    #[online_config(hidden)]
     // It used to debug s3 503 error.
     pub s3_multi_part_size: ReadableSize,
     #[online_config(submodule)]
