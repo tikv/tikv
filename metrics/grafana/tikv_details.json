@@ -734,7 +734,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(process_cpu_seconds_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", job=\"tikv\"}[1m])) by (instance)",
+              "expr": "sum(rate(process_cpu_seconds_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", job=~\".*tikv\"}[1m])) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
@@ -841,7 +841,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "avg(process_resident_memory_bytes{tidb_cluster=\"$tidb_cluster\", job=\"tikv\"}) by (instance)",
+              "expr": "avg(process_resident_memory_bytes{tidb_cluster=\"$tidb_cluster\", job=~\".*tikv\"}) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
@@ -1633,7 +1633,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "(time() - process_start_time_seconds{tidb_cluster=\"$tidb_cluster\", job=\"tikv\"})",
+              "expr": "(time() - process_start_time_seconds{tidb_cluster=\"$tidb_cluster\", job=~\".*tikv\"})",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
@@ -35466,7 +35466,15 @@
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
-          "seriesOverrides": [],
+          "seriesOverrides": [
+            {
+              "$$hashKey": "object:2663",
+              "alias": "/backup-auto-throttle/",
+              "fill": 5,
+              "linewidth": 0,
+              "fillGradient": 2
+            }
+          ],
           "spaceLength": 10,
           "stack": false,
           "steppedLine": false,
@@ -35481,14 +35489,24 @@
               "step": 4
             },
             {
-              "expr": "sum(rate(tikv_thread_cpu_seconds_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"backup_endpoint\"}[1m])) by (instance)",
+              "expr": "sum(rate(tikv_thread_cpu_seconds_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"backup_io\"}[1m])) by (instance)",
+              "legendFormat": "backup-io-{{instance}}",
+              "interval": "",
+              "exemplar": true,
               "format": "time_series",
               "hide": true,
               "intervalFactor": 2,
-              "legendFormat": "backup-endpoint",
               "metric": "tikv_thread_cpu_seconds_total",
               "refId": "B",
               "step": 4
+            },
+            {
+              "expr": "tikv_backup_softlimit{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}",
+              "legendFormat": "backup-auto-throttle-{{instance}}",
+              "interval": "",
+              "exemplar": true,
+              "refId": "C",
+              "hide": false
             }
           ],
           "thresholds": [],
