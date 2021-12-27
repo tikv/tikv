@@ -145,6 +145,14 @@ fn test_store_heartbeat_report_hotspots() {
     }
     // raw get k3 10 times
     for _i in 0..10 {
+        let mut get_req = RawGetRequest::default();
+        get_req.set_context(right_ctx.clone());
+        get_req.key = k3.clone();
+        get_req.key = v3.clone();
+        client.raw_get(&get_req).unwrap();
+    }
+    // raw put k3 10 times
+    for _i in 0..10 {
         let mut put_req = RawPutRequest::default();
         put_req.set_context(right_ctx.clone());
         put_req.key = k3.clone();
