@@ -141,6 +141,12 @@ trait Buffer {
         &mut self,
         sender: &mut ClientCStreamSender<Self::OutputMessage>,
     ) -> grpcio::Result<()>;
+
+    /// If the buffer is not full, suggest whether sender should wait
+    /// for next message.
+    fn wait_hint(&self) -> Option<Duration> {
+        None
+    }
 }
 
 /// A buffer for BatchRaftMessage.
@@ -213,6 +219,15 @@ impl Buffer for BatchMessageBuffer {
             self.push(more);
         }
         res
+    }
+
+    #[inline]
+    fn wait_hint(&self) -> Option<Duration> {
+        if !self.cfg.raft_msg_flush_interval.0.is_zero() {
+            Some(self.cfg.raft_msg_flush_interval.0)
+        } else {
+            None
+        }
     }
 }
 
@@ -421,22 +436,29 @@ where
         loop {
             s.fill_msg(ctx);
             if !s.buffer.empty() {
+                // Then it's the first time visit this block since last flush.
                 if s.flush_timeout.is_none() {
                     ready!(Pin::new(&mut s.sender).poll_ready(ctx))?;
                 }
+                // Only set up a timer if buffer is not full.
                 if !s.buffer.full() {
                     if s.flush_timeout.is_none() {
-                        s.flush_timeout = Some(Delay::new(Duration::from_micros(200)));
+                        // Only set up a timer if necessary.
+                        if let Some(wait_time) = s.buffer.wait_hint() {
+                            s.flush_timeout = Some(Delay::new(wait_time));
+                        }
                     }
 
-                    if Pin::new(s.flush_timeout.as_mut().unwrap())
-                        .poll(ctx)
-                        .is_pending()
+                    // It will be woken up again when the timer fires or new messages are enqueued.
+                    if s.flush_timeout
+                        .as_mut()
+                        .map_or(false, |t| Pin::new(t).poll(ctx).is_pending())
                     {
                         return Poll::Pending;
                     }
                 }
 
+                // So either enough messages are batched up or don't need to wait or wait timeouts.
                 s.flush_timeout.take();
                 ready!(Poll::Ready(s.buffer.flush(&mut s.sender)))?;
                 continue;
