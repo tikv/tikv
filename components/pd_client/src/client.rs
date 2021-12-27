@@ -322,48 +322,6 @@ impl PdClient for RpcClient {
             .execute()
     }
 
-    fn store_global_config(&self, list: HashMap<String, String>) -> PdFuture<()> {
-        use kvproto::pdpb::GlobalConfigItem;
-        use kvproto::pdpb::StoreGlobalConfigRequest;
-        let mut req = StoreGlobalConfigRequest::new();
-        for (k, v) in list {
-            req.changes.push({
-                let mut item = GlobalConfigItem::new();
-                item.set_name(k);
-                item.set_value(v);
-                item
-            });
-        }
-        let executor = |client: &Client, req| match client
-            .inner
-            .rl()
-            .client_stub
-            .clone()
-            .store_global_config_async(&req)
-        {
-            Ok(grpc_response) => Box::pin(async move {
-                match grpc_response.await {
-                    Ok(grpc_response) => {
-                        if grpc_response.has_error() {
-                            error!(
-                                "error received in store global config {:?}",
-                                grpc_response.get_error()
-                            );
-                            Err(box_err!("{:?}", grpc_response.get_error()))
-                        } else {
-                            Ok(())
-                        }
-                    }
-                    Err(err) => Err(box_err!("{:?}", err)),
-                }
-            }) as PdFuture<_>,
-            Err(err) => Box::pin(async move { Err(box_err!("{:?}", err)) }) as PdFuture<_>,
-        };
-        self.pd_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
-            .execute()
-    }
-
     fn watch_global_config(
         &self,
     ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
