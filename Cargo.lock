@@ -1503,8 +1503,7 @@ dependencies = [
 [[package]]
 name = "fs2"
 version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+source = "git+https://github.com/tabokie/fs2-rs?branch=tikv#9e17642f4ddec02a8d7733d8c5977cf211de6552"
 dependencies = [
  "libc 0.2.106",
  "winapi 0.3.9",
@@ -5304,7 +5303,6 @@ dependencies = [
  "example_plugin",
  "fail",
  "file_system",
- "fs2",
  "futures 0.3.15",
  "futures-executor",
  "futures-util",
@@ -5408,7 +5406,6 @@ dependencies = [
  "engine_traits",
  "error_code",
  "file_system",
- "fs2",
  "futures 0.3.15",
  "gag",
  "grpcio",
