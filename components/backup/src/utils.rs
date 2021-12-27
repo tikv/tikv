@@ -84,6 +84,7 @@ pub fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResu
         .enable_time()
         .on_thread_start(|| {
             tikv_alloc::add_thread_memory_accessor();
+            file_system::set_io_type(IOType::Export);
         })
         .on_thread_stop(|| {
             tikv_alloc::remove_thread_memory_accessor();
