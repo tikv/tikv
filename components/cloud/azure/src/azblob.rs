@@ -494,7 +494,7 @@ impl ContainerBuilder for TokenCredContainerBuilder {
             modify_lock = Some(self.modify_place.lock().await);
         }
 
-        if let Some(lock) = modify_lock {
+        if let Some(_lock) = modify_lock {
             // check whether there is another thread already updates the token.
             {
                 let token_response = self.token_cache.read().unwrap();

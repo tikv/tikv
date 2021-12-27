@@ -181,11 +181,11 @@ fn create_azure_storage(opt: &Opt) -> Result<StorageBackend> {
         let props = ini
             .section(Some("default"))
             .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse section"))?;
-        config.access_key = props
+        config.account_name = props
             .get("azure_storage_name")
             .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse credential"))?
             .clone();
-        config.secret_access_key = props
+        config.shared_key = props
             .get("azure_storage_key")
             .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse credential"))?
             .clone();
@@ -201,6 +201,7 @@ fn create_azure_storage(opt: &Opt) -> Result<StorageBackend> {
     if let Some(prefix) = &opt.prefix {
         config.prefix = prefix.to_string();
     }
+    Ok(make_azblob_backend(config))
 }
 
 fn process() -> Result<()> {
