@@ -2,10 +2,14 @@
 use std::{
     collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, RwLock as SyncRwLock,
+    },
+    time::Duration,
 };
 
-use crate::{endpoint::Task, errors::Error, metadata::store::EtcdStore};
+use crate::{endpoint::Task, errors::Error, metadata::store::EtcdStore, utils::SlotMap};
 
 use super::errors::Result;
 use engine_traits::{CF_DEFAULT, CF_WRITE};
@@ -16,10 +20,10 @@ use raftstore::coprocessor::CmdBatch;
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 
-use tikv_util::{box_err, worker::Scheduler};
-use tokio::fs::File;
+use tikv_util::{box_err, warn, worker::Scheduler};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
+use tokio::{fs::File, sync::RwLock};
 use txn_types::{Key, TimeStamp};
 
 impl ApplyEvent {
@@ -96,21 +100,21 @@ impl ApplyEvent {
 
 /// The shared version of router.
 #[derive(Debug, Clone)]
-pub struct Router(Arc<Mutex<RouterInner>>);
+pub struct Router(Arc<RouterInner>);
 
 impl Router {
     /// Create a new router with the temporary folder.
     pub fn new(prefix: PathBuf, scheduler: Scheduler<Task>, temp_file_size_limit: u64) -> Self {
-        Self(Arc::new(Mutex::new(RouterInner::new(
+        Self(Arc::new(RouterInner::new(
             prefix,
             scheduler,
             temp_file_size_limit,
-        ))))
+        )))
     }
 }
 
 impl std::ops::Deref for Router {
-    type Target = Mutex<RouterInner>;
+    type Target = RouterInner;
 
     fn deref(&self) -> &Self::Target {
         Arc::deref(&self.0)
@@ -130,9 +134,9 @@ pub struct RouterInner {
     /// It uses the `start_key` of range as the key.
     /// Given there isn't overlapping, we can simply use binary search to find
     /// which range a point belongs to.
-    ranges: BTreeMap<KeyRange, TaskRange>,
+    ranges: SyncRwLock<BTreeMap<KeyRange, TaskRange>>,
     /// The temporary files associated to some task.
-    temp_files_of_task: HashMap<String, TemporaryFiles>,
+    temp_files_of_task: Mutex<HashMap<String, Arc<TemporaryFiles>>>,
     /// The temporary directory for all tasks.
     prefix: PathBuf,
 
@@ -165,8 +169,8 @@ pub struct ApplyEvent {
 impl RouterInner {
     pub fn new(prefix: PathBuf, scheduler: Scheduler<Task>, temp_file_size_limit: u64) -> Self {
         RouterInner {
-            ranges: BTreeMap::default(),
-            temp_files_of_task: HashMap::default(),
+            ranges: SyncRwLock::new(BTreeMap::default()),
+            temp_files_of_task: Mutex::new(HashMap::default()),
             prefix,
             scheduler,
             temp_file_size_limit,
@@ -177,12 +181,13 @@ impl RouterInner {
     /// Because the observer interface yields encoded data key, the key should be ENCODED DATA KEY too.    
     /// (i.e. encoded by `Key::from_raw(key).into_encoded()`, [`utils::wrap_key`] could be a shortcut.).    
     /// We keep ranges in memory to filter kv events not in these ranges.  
-    pub fn register_ranges(&mut self, task_name: &str, ranges: Vec<(Vec<u8>, Vec<u8>)>) {
+    pub fn register_ranges(&self, task_name: &str, ranges: Vec<(Vec<u8>, Vec<u8>)>) {
         // TODO reigister ranges to filter kv event
         // register ranges has two main purpose.
         // 1. filter kv event that no need to backup
         // 2. route kv event to the corresponding file.
 
+        let mut w = self.ranges.write().unwrap();
         for range in ranges {
             let key_range = KeyRange(range.0);
             let task_range = TaskRange {
@@ -195,22 +200,21 @@ impl RouterInner {
                 "start_key" => &log_wrappers::Value::key(&key_range.0),
                 "end_key" => &log_wrappers::Value::key(&task_range.end),
             );
-            self.ranges.insert(key_range, task_range);
+            w.insert(key_range, task_range);
         }
     }
 
     /// get the task name by a key.
     pub fn get_task_by_key(&self, key: &[u8]) -> Option<String> {
         // TODO avoid key.to_vec()
+        let r = self.ranges.read().unwrap();
         let k = &KeyRange(key.to_vec());
-        self.ranges
-            .range(..k)
+        r.range(..k)
             .next_back()
             .filter(|r| key <= &r.1.end[..] && key >= &r.0.0[..])
             .map_or_else(
                 || {
-                    self.ranges
-                        .range(k..)
+                    r.range(k..)
                         .next()
                         .filter(|r| key <= &r.1.end[..] && key >= &r.0.0[..])
                         .map(|r| r.1.task_name.clone())
@@ -219,7 +223,7 @@ impl RouterInner {
             )
     }
 
-    pub async fn on_event(&mut self, kv: ApplyEvent) -> Result<()> {
+    pub async fn on_event(&self, kv: ApplyEvent) -> Result<()> {
         let prefix = &self.prefix;
         if let Some(task) = self.get_task_by_key(&kv.key) {
             debug!(
@@ -229,11 +233,14 @@ impl RouterInner {
                 "key" => &log_wrappers::Value::key(&kv.key),
             );
             let inner_router = {
-                if !self.temp_files_of_task.contains_key(&task) {
-                    self.temp_files_of_task
-                        .insert(task.clone(), TemporaryFiles::new(prefix.join(&task)).await?);
+                let mut tasks = self.temp_files_of_task.lock().await;
+                if !tasks.contains_key(&task) {
+                    tasks.insert(
+                        task.clone(),
+                        Arc::new(TemporaryFiles::new(prefix.join(&task)).await?),
+                    );
                 }
-                self.temp_files_of_task.get_mut(&task).unwrap()
+                tasks.get_mut(&task).unwrap().clone()
             };
             let prev_size = inner_router.total_size();
             inner_router.on_event(kv).await?;
@@ -262,13 +269,24 @@ impl RouterInner {
         Ok(())
     }
 
-    pub fn take_temporary_files(&mut self, task: &str) -> Result<TemporaryFiles> {
-        self.temp_files_of_task.remove(task).map_or(
+    pub async fn take_temporary_files(&self, task: &str) -> Result<TemporaryFiles> {
+        let mut arc = self.temp_files_of_task.lock().await.remove(task).map_or(
             Err(Error::NoSuchTask {
                 task_name: task.to_owned(),
             }),
             |data| Ok(data),
-        )
+        )?;
+        // TODO: use channels / condvars to replace the busy waiting.
+        loop {
+            match Arc::try_unwrap(arc) {
+                Ok(files) => return Ok(files),
+                Err(arc_returned) => {
+                    arc = arc_returned;
+                    warn!("busy waiting the temporary files write done."; "task" => %task);
+                    tokio::time::sleep(Duration::from_millis(800)).await
+                }
+            }
+        }
     }
 }
 
@@ -327,11 +345,11 @@ pub struct TemporaryFiles {
     /// The parent directory of temporary files.
     temp_dir: PathBuf,
     /// The temporary file index. Both meta (m prefixed keys) and data (t prefixed keys).
-    files: HashMap<TempFileKey, DataFile>,
+    files: SlotMap<TempFileKey, DataFile>,
     /// The min resolved TS of all regions involved.
     min_resolved_ts: TimeStamp,
     /// Total size of all temporary files in byte.
-    total_size: usize,
+    total_size: AtomicUsize,
 }
 
 impl TemporaryFiles {
@@ -348,14 +366,23 @@ impl TemporaryFiles {
     // TODO: make a file-level lock for getting rid of the &mut.
     /// Append a event to the files. This wouldn't trigger `fsync` syscall.
     /// i.e. No guarantee of persistence.
-    pub async fn on_event(&mut self, kv: ApplyEvent) -> Result<()> {
+    pub async fn on_event(&self, kv: ApplyEvent) -> Result<()> {
         let key = TempFileKey::of(&kv);
-        if !self.files.contains_key(&key) {
-            let path = self.temp_dir.join(key.temp_file_name());
-            let data_file = DataFile::new(path).await?;
-            self.files.insert(key.clone(), data_file);
+        if !self.files.read().await.contains_key(&key) {
+            // slow path: try to insert the element.
+            let mut w = self.files.write().await;
+            // double check before insert. there may be someone already insert that
+            // when we are waiting for the write lock.
+            if !w.contains_key(&key) {
+                let path = self.temp_dir.join(key.temp_file_name());
+                let val = Mutex::new(DataFile::new(path).await?);
+                w.insert(key.to_owned(), val);
+            }
         }
-        self.total_size += self.files.get_mut(&key).unwrap().on_event(kv).await?;
+        let r = self.files.read().await;
+        let f = r.get(&key).unwrap();
+        self.total_size
+            .fetch_add(f.lock().await.on_event(kv).await?, Ordering::SeqCst);
         Ok(())
     }
 
@@ -373,22 +400,23 @@ impl TemporaryFiles {
     }
 
     pub fn total_size(&self) -> u64 {
-        self.total_size as _
-    }
-
-    /// Flush all temporary files to disk.
-    async fn flush(&mut self) -> Result<()> {
-        futures::future::join_all(self.files.values_mut().map(|f| f.inner.sync_all()))
-            .await
-            .into_iter()
-            .map(|r| r.map_err(Error::from))
-            .fold(Ok(()), Result::and)
+        self.total_size.load(Ordering::SeqCst) as _
     }
 
     /// Flush all files and generate corresponding metadata.
-    pub async fn generate_metadata(mut self) -> Result<MetadataOfFlush> {
-        self.flush().await?;
-        let mut result = MetadataOfFlush::with_capacity(self.files.len());
+    pub async fn generate_metadata(self) -> Result<MetadataOfFlush> {
+        let mut w = RwLock::into_inner(self.files);
+        // Let's flush all files first...
+        futures::future::join_all(
+            w.values_mut()
+                .map(|f| async move { f.lock().await.inner.sync_all().await }),
+        )
+        .await
+        .into_iter()
+        .map(|r| r.map_err(Error::from))
+        .fold(Ok(()), Result::and)?;
+
+        let mut result = MetadataOfFlush::with_capacity(w.len());
         for (
             TempFileKey {
                 table_id,
@@ -398,8 +426,9 @@ impl TemporaryFiles {
                 ..
             },
             data_file,
-        ) in self.files.into_iter()
+        ) in w.into_iter()
         {
+            let data_file = Mutex::into_inner(data_file);
             let mut file_meta = data_file.generate_metadata()?;
             let path = if is_meta {
                 Self::path_to_schema_file(file_meta.meta.min_ts)
@@ -641,7 +670,7 @@ mod tests {
     #[test]
     fn test_register() {
         let (tx, _) = dummy_scheduler();
-        let mut router = RouterInner::new(PathBuf::new(), tx, 1024);
+        let router = RouterInner::new(PathBuf::new(), tx, 1024);
         // -----t1.start-----t1.end-----t2.start-----t2.end------
         // --|------------|----------|------------|-----------|--
         // case1        case2      case3        case4       case5
@@ -670,7 +699,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&tmp).await?;
         let (tx, rx) = dummy_scheduler();
-        let mut router = RouterInner::new(tmp.clone(), tx, 32);
+        let router = RouterInner::new(tmp.clone(), tx, 32);
         router.register_ranges(
             "dummy",
             vec![(
@@ -694,7 +723,7 @@ mod tests {
             router.on_event(event).await?;
         }
         let end_ts = TimeStamp::physical_now();
-        let files = router.take_temporary_files("dummy")?;
+        let files = router.take_temporary_files("dummy").await?;
         let meta = files.generate_metadata().await?;
         assert_eq!(meta.files.len(), 3);
         assert!(
