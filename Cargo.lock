@@ -2221,7 +2221,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/oh-my-tidb/kvproto?branch=async-wait#32d1edcd796879e5c6c6f2e5ea63c8629115091e"
+source = "git+https://github.com/oh-my-tidb/kvproto?branch=async-wait#b3b2e8505f600542db415d3980acdc3d57616195"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
