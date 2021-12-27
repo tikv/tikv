@@ -428,13 +428,21 @@ pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) ->
         }
         delete_file_if_exist(&path)?;
     }
-    if file_size > 0 {
+    fn do_reserve(dir: &Path, path: &Path, file_size: u64) -> io::Result<()> {
         let f = File::create(&path)?;
         f.allocate(file_size)?;
         f.sync_all()?;
-        sync_dir(data_dir)?;
+        sync_dir(dir)
     }
-    Ok(())
+    if file_size > 0 {
+        let res = do_reserve(data_dir.as_ref(), &path, file_size);
+        if res.is_err() {
+            let _ = delete_file_if_exist(&path);
+        }
+        res
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
