@@ -220,7 +220,7 @@ where
         let temp_files = router.take_temporary_files(&task).await?;
         let meta = temp_files.generate_metadata().await?;
         // TODO flush the files to external storage
-        info!("flushing data to external storage"; "local_files" => ?meta);
+        info!("flushing data to external storage"; "local_file_simple" => ?meta.files.get(0));
         Ok(())
     }
 

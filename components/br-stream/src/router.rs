@@ -20,7 +20,7 @@ use raftstore::coprocessor::CmdBatch;
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 
-use tikv_util::{box_err, warn, worker::Scheduler};
+use tikv_util::{box_err, info, warn, worker::Scheduler};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::{fs::File, sync::RwLock};
@@ -237,7 +237,14 @@ impl RouterInner {
                 if !tasks.contains_key(&task) {
                     tasks.insert(
                         task.clone(),
-                        Arc::new(TemporaryFiles::new(prefix.join(&task)).await?),
+                        Arc::new(
+                            TemporaryFiles::new(
+                                prefix
+                                    .join(&task)
+                                    .join(format!("{}", TimeStamp::physical_now())),
+                            )
+                            .await?,
+                        ),
                     );
                 }
                 tasks.get_mut(&task).unwrap().clone()
@@ -355,6 +362,7 @@ pub struct TemporaryFiles {
 impl TemporaryFiles {
     /// Create a new temporary file set at the `temp_dir`.
     pub async fn new(temp_dir: PathBuf) -> Result<Self> {
+        info!("creating new temporary dir for task"; "dir" => %temp_dir.display());
         tokio::fs::create_dir_all(&temp_dir).await?;
         Ok(Self {
             temp_dir,
