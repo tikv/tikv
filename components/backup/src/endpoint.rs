@@ -13,7 +13,6 @@ use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, CfName, SstCompressionType};
 use external_storage::{BackendConfig, HdfsConfig};
 use external_storage_export::{create_storage, ExternalStorage};
-use file_system::IOType;
 use futures::channel::mpsc::*;
 use kvproto::brpb::*;
 use kvproto::encryptionpb::EncryptionMethod;
@@ -34,6 +33,7 @@ use tikv::storage::Statistics;
 use tikv_util::time::{Instant, Limiter};
 use tikv_util::worker::Runnable;
 use tikv_util::{box_err, debug, error, error_unknown, impl_display_as_debug, info, warn};
+use tokio::runtime::Runtime;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::metrics::*;
@@ -747,7 +747,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         api_version: ApiVersion,
     ) -> Endpoint<E, R> {
         let pool = ControlThreadPool::new();
-        let rt = create_tokio_runtime(config.io_thread_size, "backup-io").unwrap();
+        let rt = utils::create_tokio_runtime(config.io_thread_size, "backup-io").unwrap();
         let config_manager = ConfigManager(Arc::new(RwLock::new(config)));
         let softlimit = SoftLimitKeeper::new(config_manager.clone());
         rt.spawn(softlimit.clone().run());
@@ -1088,7 +1088,7 @@ pub mod tests {
 
     use engine_traits::MiscExt;
     use external_storage_export::{make_local_backend, make_noop_backend};
-    use file_system::{IOOp, IORateLimiter};
+    use file_system::{IOOp, IORateLimiter, IOType};
     use futures::executor::block_on;
     use futures::stream::StreamExt;
     use kvproto::metapb;

@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::metrics::*;
+use file_system::IOType;
 use futures::Future;
 use tokio::io::Result as TokioResult;
 use tokio::runtime::Runtime;
