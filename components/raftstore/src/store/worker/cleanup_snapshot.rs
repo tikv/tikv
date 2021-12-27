@@ -2,9 +2,7 @@
 
 use std::fmt;
 
-use crate::store::{
-    CasualMessage, PeerMsg, RaftRouter, SnapKey, SnapManager, Snapshot, StoreMsg, StoreRouter,
-};
+use crate::store::{CasualMessage, PeerMsg, RaftRouter, SnapManager, StoreMsg, StoreRouter};
 use crate::Result;
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
@@ -12,22 +10,16 @@ use fail::fail_point;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use tikv_util::worker::Runnable;
-use tikv_util::{debug, error, info, warn};
+use tikv_util::{debug, error, info};
 
 pub enum Task {
     GcSnapshot,
-    DeleteSnapshotFiles {
-        key: SnapKey,
-        snapshot: Box<Snapshot>,
-        check_entry: bool,
-    },
 }
 
 impl fmt::Display for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &*self {
+        match *self {
             Task::GcSnapshot => write!(f, "Gc Snapshot"),
-            Task::DeleteSnapshotFiles { key, .. } => write!(f, "Delete Snapshot Files for {}", key),
         }
     }
 }
@@ -125,10 +117,6 @@ where
         }
         Ok(())
     }
-
-    fn delete_snapshot(&self, key: &SnapKey, snap: &Snapshot, check_entry: bool) -> bool {
-        self.snap_mgr.delete_snapshot(key, snap, check_entry)
-    }
 }
 
 impl<EK, ER> Runnable for Runner<EK, ER>
@@ -151,24 +139,6 @@ where
                 let msg = StoreMsg::GcSnapshotFinish;
                 if let Err(e) = StoreRouter::send(&self.router, msg) {
                     error!(%e; "send StoreMsg::GcSnapshotFinish failed");
-                }
-            }
-            Task::DeleteSnapshotFiles {
-                key,
-                mut snapshot,
-                check_entry,
-            } => {
-                let snapshot = snapshot.as_mut();
-                if let Err(e) = snapshot.load_snapshot_meta_if_necessary() {
-                    warn!(
-                        "failed to load existent snapshot meta when try to build snapshot";
-                        "snapshot" => %snapshot.path(),
-                        "err" => ?e,
-                    );
-                }
-                let ok = self.delete_snapshot(&key, snapshot, check_entry);
-                if !ok {
-                    error!("failed to delete snapshot for key {}", key);
                 }
             }
         }
