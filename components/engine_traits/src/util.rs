@@ -1,9 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::{Error, Result};
-use tikv_util::codec;
-use tikv_util::codec::number::{self, NumberEncoder};
-use tikv_util::time::UnixSecs;
 
 /// Check if key in range [`start_key`, `end_key`).
 #[allow(dead_code)]
@@ -23,43 +20,4 @@ pub fn check_key_in_range(
             end: end_key.to_vec(),
         })
     }
-}
-
-pub fn ttl_current_ts() -> u64 {
-    fail_point!("ttl_current_ts", |r| r.map_or(2, |e| e.parse().unwrap()));
-    UnixSecs::now().into_inner()
-}
-
-pub fn ttl_to_expire_ts(ttl: u64) -> u64 {
-    if ttl == 0 {
-        return 0;
-    }
-    ttl.saturating_add(ttl_current_ts())
-}
-
-pub fn append_expire_ts(value: &mut Vec<u8>, expire_ts: u64) {
-    value.encode_u64(expire_ts).unwrap();
-}
-
-pub fn get_expire_ts(value_with_ttl: &[u8]) -> Result<u64> {
-    let len = value_with_ttl.len();
-    if len < number::U64_SIZE {
-        return Err(Error::Codec(codec::Error::ValueLength));
-    }
-    let mut ts = &value_with_ttl[len - number::U64_SIZE..];
-    Ok(number::decode_u64(&mut ts)?)
-}
-
-pub fn strip_expire_ts(value_with_ttl: &[u8]) -> &[u8] {
-    let len = value_with_ttl.len();
-    &value_with_ttl[..len - number::U64_SIZE]
-}
-
-pub fn truncate_expire_ts(value_with_ttl: &mut Vec<u8>) -> Result<()> {
-    let len = value_with_ttl.len();
-    if len < number::U64_SIZE {
-        return Err(Error::Codec(codec::Error::ValueLength));
-    }
-    value_with_ttl.truncate(len - number::U64_SIZE);
-    Ok(())
 }

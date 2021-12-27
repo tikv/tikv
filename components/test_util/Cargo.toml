@@ -13,7 +13,7 @@ cloud-azure = [ "encryption_export/cloud-azure" ]
 [dependencies]
 backtrace = "0.3"
 encryption_export = { path = "../encryption/export", default-features = false }
-fail = "0.4"
+fail = "0.5"
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 rand = "0.8"

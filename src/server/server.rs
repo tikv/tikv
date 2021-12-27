@@ -407,12 +407,14 @@ mod tests {
     use crate::server::TestRaftStoreRouter;
     use crate::storage::TestStorageBuilder;
     use grpcio::EnvBuilder;
+    use kvproto::kvrpcpb::ApiVersion;
     use raftstore::store::transport::Transport;
     use raftstore::store::*;
 
     use crate::storage::lock_manager::DummyLockManager;
     use engine_rocks::{PerfLevel, RocksSnapshot};
     use kvproto::raft_serverpb::RaftMessage;
+    use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
     use tokio::runtime::Builder as TokioBuilder;
 
@@ -460,7 +462,7 @@ mod tests {
             ..Default::default()
         };
 
-        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
+        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
             .build()
             .unwrap();
 
@@ -497,6 +499,7 @@ mod tests {
             cop_read_pool.handle(),
             storage.get_concurrency_manager(),
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
         let debug_thread_pool = Arc::new(

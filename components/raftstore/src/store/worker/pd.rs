@@ -3,10 +3,7 @@
 use std::cmp::Ordering as CmpOrdering;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
-};
+use std::sync::{atomic::Ordering, Arc};
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 use std::{cmp, io};
@@ -37,7 +34,7 @@ use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats, WriteStats};
 use crate::store::{
     Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-    SnapManager, StoreInfo, StoreMsg,
+    SnapManager, StoreInfo, StoreMsg, TxnExt,
 };
 
 use collections::HashMap;
@@ -47,7 +44,7 @@ use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use protobuf::Message;
-use resource_metering::{register_collector, Collector, CollectorHandle, RawRecords};
+use resource_metering::{Collector, CollectorHandle, CollectorRegHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -164,7 +161,7 @@ where
     UpdateMaxTimestamp {
         region_id: u64,
         initial_status: u64,
-        max_ts_sync_status: Arc<AtomicU64>,
+        txn_ext: Arc<TxnExt>,
     },
     QueryRegionLeader {
         region_id: u64,
@@ -707,6 +704,7 @@ where
         concurrency_manager: ConcurrencyManager,
         snap_mgr: SnapManager,
         remote: Remote<yatp::task::future::TaskCell>,
+        collector_reg_handle: CollectorRegHandle,
     ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
@@ -714,8 +712,8 @@ where
             error!("failed to start stats collector, error = {:?}", e);
         }
 
-        let _region_cpu_records_collector =
-            register_collector(Box::new(RegionCPUMeteringCollector::new(scheduler.clone())));
+        let _region_cpu_records_collector = collector_reg_handle
+            .register(Box::new(RegionCPUMeteringCollector::new(scheduler.clone())));
 
         Runner {
             store_id,
@@ -1382,18 +1380,19 @@ where
         &mut self,
         region_id: u64,
         initial_status: u64,
-        max_ts_sync_status: Arc<AtomicU64>,
+        txn_ext: Arc<TxnExt>,
     ) {
         let pd_client = self.pd_client.clone();
         let concurrency_manager = self.concurrency_manager.clone();
         let f = async move {
             let mut success = false;
-            while max_ts_sync_status.load(Ordering::SeqCst) == initial_status {
+            while txn_ext.max_ts_sync_status.load(Ordering::SeqCst) == initial_status {
                 match pd_client.get_tso().await {
                     Ok(ts) => {
                         concurrency_manager.update_max_ts(ts);
                         // Set the least significant bit to 1 to mark it as synced.
-                        success = max_ts_sync_status
+                        success = txn_ext
+                            .max_ts_sync_status
                             .compare_exchange(
                                 initial_status,
                                 initial_status | 1,
@@ -1477,12 +1476,12 @@ fn calculate_region_cpu_records(
     region_cpu_records: &mut HashMap<u64, u32>,
 ) {
     for (tag, record) in &records.records {
-        let record_store_id = tag.infos.store_id;
+        let record_store_id = tag.store_id;
         if record_store_id != store_id {
             continue;
         }
         // Reporting a region heartbeat later will clear the corresponding record.
-        *region_cpu_records.entry(tag.infos.region_id).or_insert(0) += record.cpu_time;
+        *region_cpu_records.entry(tag.region_id).or_insert(0) += record.cpu_time;
     }
 }
 
@@ -1680,8 +1679,8 @@ where
             Task::UpdateMaxTimestamp {
                 region_id,
                 initial_status,
-                max_ts_sync_status,
-            } => self.handle_update_max_timestamp(region_id, initial_status, max_ts_sync_status),
+                txn_ext,
+            } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => self.slow_score.record(id, duration.sum()),
             Task::RegionCPURecords(records) => self.handle_region_cpu_records(records),
@@ -2100,7 +2099,7 @@ mod tests {
     }
 
     use metapb::Peer;
-    use resource_metering::{RawRecord, ResourceMeteringTag};
+    use resource_metering::{RawRecord, TagInfos};
 
     #[test]
     fn test_calculate_region_cpu_records() {
@@ -2123,10 +2122,17 @@ mod tests {
                     context.set_peer(peer);
                     context.set_region_id(region_id);
                     context.set_resource_group_tag(resource_group_tag);
-                    let resource_tag = ResourceMeteringTag::from_rpc_context(&context);
+                    let resource_tag = Arc::new(TagInfos::from_rpc_context(&context));
 
                     let mut records = HashMap::default();
-                    records.insert(resource_tag, RawRecord { cpu_time: 10 });
+                    records.insert(
+                        resource_tag,
+                        RawRecord {
+                            cpu_time: 10,
+                            read_keys: 0,
+                            write_keys: 0,
+                        },
+                    );
                     records
                 },
             });

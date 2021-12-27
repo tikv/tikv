@@ -10,7 +10,7 @@ use txn_types::{Key, Mutation};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
 
-fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
     b.iter_batched(
@@ -32,7 +32,7 @@ fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Ben
     );
 }
 
-fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
     b.iter_batched(
@@ -45,7 +45,7 @@ fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Be
                 .map(|(k, v)| {
                     (
                         Context::default(),
-                        vec![Mutation::Put((Key::from_raw(k), v.clone()))],
+                        vec![Mutation::make_put(Key::from_raw(k), v.clone())],
                         k.clone(),
                     )
                 })
@@ -61,7 +61,7 @@ fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Be
     );
 }
 
-fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
     b.iter_batched(
@@ -73,7 +73,7 @@ fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Benc
                 store
                     .prewrite(
                         Context::default(),
-                        vec![Mutation::Put((Key::from_raw(k), v.clone()))],
+                        vec![Mutation::make_put(Key::from_raw(k), v.clone())],
                         k.clone(),
                         1,
                     )

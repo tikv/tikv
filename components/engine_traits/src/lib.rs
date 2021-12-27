@@ -252,11 +252,8 @@
 //!   `engine_traits` and reexported from `engine` to ease the transition.
 //!   Likewise `engine_rocks` can temporarily call code from inside `engine`.
 #![feature(min_specialization)]
+#![feature(assert_matches)]
 
-#[cfg(test)]
-extern crate serde_derive;
-extern crate slog_global;
-extern crate tikv_alloc;
 #[macro_use(fail_point)]
 extern crate fail;
 
@@ -336,6 +333,7 @@ pub use raft_engine::{CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch, 
 // These modules need further scrutiny
 
 pub mod compaction_job;
+pub mod raw_ttl;
 pub mod util;
 pub use compaction_job::*;
 

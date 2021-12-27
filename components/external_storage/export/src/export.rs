@@ -196,7 +196,7 @@ fn create_backend_inner(
                 return Err(bad_backend(Backend::CloudDynamic(dyn_backend.clone())));
             }
         },
-        #[cfg(not(all(feature = "cloud-gcp", feature = "cloud-aws", feature = "cloud-azure")))]
+        #[allow(unreachable_patterns)]
         _ => return Err(bad_backend(backend.clone())),
     };
     record_storage_create(start, &*storage);

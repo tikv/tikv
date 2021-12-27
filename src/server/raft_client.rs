@@ -111,7 +111,7 @@ impl Queue {
     /// The method should be called in polling context. If the queue is empty,
     /// it will register current polling task for notifications.
     #[inline]
-    fn pop(&self, ctx: &Context) -> Option<RaftMessage> {
+    fn pop(&self, ctx: &Context<'_>) -> Option<RaftMessage> {
         self.buf.pop().or_else(|| {
             {
                 let mut waker = self.waker.lock().unwrap();
@@ -174,7 +174,9 @@ impl Buffer for BatchMessageBuffer {
         let mut msg_size = msg.start_key.len()
             + msg.end_key.len()
             + msg.get_message().context.len()
-            + msg.extra_ctx.len();
+            + msg.extra_ctx.len()
+            // index: 3, term: 2, data tag and size: 3, entry tag and size: 3
+            + 11 * msg.get_message().get_entries().len();
         for entry in msg.get_message().get_entries() {
             msg_size += entry.data.len();
         }
@@ -388,7 +390,7 @@ where
         }
     }
 
-    fn fill_msg(&mut self, ctx: &Context) {
+    fn fill_msg(&mut self, ctx: &Context<'_>) {
         while !self.buffer.full() {
             let msg = match self.queue.pop(ctx) {
                 Some(msg) => msg,
@@ -412,7 +414,7 @@ where
 {
     type Output = grpcio::Result<()>;
 
-    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<grpcio::Result<()>> {
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<grpcio::Result<()>> {
         let s = &mut *self;
         loop {
             s.fill_msg(ctx);
@@ -533,6 +535,9 @@ where
                             let sid: u64 = sid.parse().unwrap();
                             if sid == store_id {
                                 mem::swap(&mut addr, &mut Err(box_err!("injected failure")));
+                                // Sleep some time to avoid race between enqueuing message and
+                                // resolving address.
+                                std::thread::sleep(std::time::Duration::from_millis(10));
                             }
                         })
                     };
@@ -568,7 +573,6 @@ where
 
         let cb = ChannelBuilder::new(self.builder.env.clone())
             .stream_initial_window_size(self.builder.cfg.grpc_stream_initial_window_size.0 as i32)
-            .max_send_message_len(self.builder.cfg.max_grpc_send_msg_len)
             .keepalive_time(self.builder.cfg.grpc_keepalive_time.0)
             .keepalive_timeout(self.builder.cfg.grpc_keepalive_timeout.0)
             .default_compression_algorithm(self.builder.cfg.grpc_compression_algorithm())
