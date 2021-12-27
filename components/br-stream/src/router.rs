@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, RwLock as SyncRwLock,
     },
     time::Duration,
@@ -235,7 +235,7 @@ impl RouterInner {
             let inner_router = {
                 let mut tasks = self.temp_files_of_task.lock().await;
                 if !tasks.contains_key(&task) {
-                    info!("creating temp dir for task."; "task" => %task);
+                    info!("creating temp dir for task."; "task" => %task, "maps" => ?tasks);
                     let inserted = tasks.insert(
                         task.clone(),
                         Arc::new(
@@ -251,7 +251,6 @@ impl RouterInner {
                 }
                 tasks.get_mut(&task).unwrap().clone()
             };
-            let prev_size = inner_router.total_size();
             inner_router.on_event(kv).await?;
 
             // When this event make the size of temporary files exceeds the size limit, make a flush.
@@ -261,18 +260,25 @@ impl RouterInner {
             debug!(
                 "backup stream statics size";
                 "task" => ?task,
-                "prev_size" => prev_size,
                 "next_size" => inner_router.total_size(),
                 "size_limit" => self.temp_file_size_limit,
             );
 
-            if prev_size < self.temp_file_size_limit
-                && inner_router.total_size() >= self.temp_file_size_limit
+            let cur_size = inner_router.total_size();
+            if cur_size > self.temp_file_size_limit && !inner_router.flushed.load(Ordering::SeqCst)
             {
-                // TODO: maybe delay the schedule when failure? (Why the scheduler doesn't support blocking send...)
-                self.scheduler
-                    .schedule(Task::Flush(task))
-                    .expect("failed to schedule");
+                info!("try flushing task"; "task" => %task, "size" => %cur_size);
+                if inner_router
+                    .flushed
+                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+                {
+                    // delay the schedule when failure? (Why the scheduler doesn't support blocking send...)
+                    if self.scheduler.schedule(Task::Flush(task)).is_err() {
+                        // oops... we failed, let's leave the chance to next challenger.
+                        inner_router.flushed.store(false, Ordering::SeqCst);
+                    }
+                }
             }
         }
         Ok(())
@@ -349,7 +355,7 @@ impl TempFileKey {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct TemporaryFiles {
     /// The parent directory of temporary files.
     temp_dir: PathBuf,
@@ -359,12 +365,29 @@ pub struct TemporaryFiles {
     min_resolved_ts: TimeStamp,
     /// Total size of all temporary files in byte.
     total_size: AtomicUsize,
+    /// Whether those files are already requested to be flushed.
+    ///
+    /// This should only be set to `true` by `compare_and_set(current=false, value=ture)`.
+    /// The thread who setting it to `true` takes the responsibility of sending the request to the
+    /// scheduler for flushing the files then.
+    ///
+    /// If the request failed, that thread can set it to `false` back then.
+    flushed: AtomicBool,
+}
+
+impl std::fmt::Debug for TemporaryFiles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TemporaryFiles")
+            .field("temp_dir", &self.temp_dir)
+            .field("min_resolved_ts", &self.min_resolved_ts)
+            .field("total_size", &self.total_size)
+            .finish()
+    }
 }
 
 impl TemporaryFiles {
     /// Create a new temporary file set at the `temp_dir`.
     pub async fn new(temp_dir: PathBuf) -> Result<Self> {
-        info!("creating new temporary dir for task"; "dir" => %temp_dir.display());
         tokio::fs::create_dir_all(&temp_dir).await?;
         Ok(Self {
             temp_dir,
