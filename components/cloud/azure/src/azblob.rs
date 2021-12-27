@@ -1,15 +1,17 @@
 use async_trait::async_trait;
+use azure_core::auth::{TokenResponse, TokenCredential};
 use azure_core::prelude::*;
-use azure_identity::client_credentials_flow;
+use azure_identity::token_credentials::{ClientSecretCredential, TokenCredentialOptions};
 use azure_storage::blob::prelude::*;
 use azure_storage::core::{prelude::*, ConnectionStringBuilder};
+use chrono::{Duration as chDuration, Utc};
 use cloud::blob::{
     none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
 };
-use futures::executor::block_on;
 use futures_util::{
     stream::StreamExt,
     TryStreamExt,
+    stream,
     io::{AsyncRead, AsyncReadExt},
 };
 pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, AzureBlobStorage as InputConfig};
@@ -17,10 +19,11 @@ use oauth2::{ClientId, ClientSecret};
 use tikv_util::debug;
 use tikv_util::stream::{retry, RetryError};
 use tokio::time::{timeout, Duration};
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use std::str::FromStr;
-use std::{env, io, sync::Arc};
+use std::{env, io, sync::{Arc, RwLock}};
 
 const ENV_CLIENT_ID: &str = "AZURE_CLIENT_ID";
 const ENV_TENANT_ID: &str = "AZURE_TENANT_ID";
@@ -214,6 +217,7 @@ impl BlobConfig for Config {
 }
 
 enum RequestError {
+    IO(io::Error),
     InvalidInput(Box<dyn std::error::Error + Send + Sync>, String),
     TimeOut(String),
 }
@@ -221,6 +225,7 @@ enum RequestError {
 impl From<RequestError> for io::Error {
     fn from(err: RequestError) -> Self {
         match err {
+            RequestError::IO(e) => e,
             RequestError::InvalidInput(e, tag) => Self::new(io::ErrorKind::InvalidInput, format!("{}: {}", tag, &e)),
             RequestError::TimeOut(msg) => Self::new(io::ErrorKind::TimedOut, msg),
         }
@@ -244,16 +249,14 @@ impl RetryError for RequestError {
 /// while azure-sdk-for-go use 256 MiB
 const MINIMUM_BLOCK_SIZE: usize = 128 * 1024 * 1024; // 128MB
 
-/// Specifies the size of data read each time.
-const STREAM_READ_SIZE: u64 = 96 * 1024 * 1024; // 96MB
-
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// A helper for uploading a large file to Azure storage.
 ///
 /// 
 struct AzureUploader {
-    client: Arc<BlobClient>,
+    client_builder: Arc<dyn ContainerBuilder>,
+    name: String,
     block_list: BlockList,
 
     storage_class: AccessTier,
@@ -261,10 +264,11 @@ struct AzureUploader {
 
 impl AzureUploader {
     /// Creates a new uploader with a given target location and upload configuration.
-    fn new(client: Arc<ContainerClient>, config: &Config, key: &str) -> Self {
+    fn new(client_builder: Arc<dyn ContainerBuilder>, config: &Config, name: String) -> Self {
 
         AzureUploader {
-            client: client.as_blob_client(key),
+            client_builder,
+            name,
             block_list: BlockList::default(),
 
             storage_class: Self::parse_storage_class(none_to_empty(config.bucket.storage_class.clone())),
@@ -318,10 +322,15 @@ impl AzureUploader {
     async fn complete(&self) -> Result<(), RequestError> {
         match timeout(
             Self::get_timeout(),
-            self.client
-                .put_block_list(&self.block_list)
-                .access_tier(self.storage_class)
-                .execute()
+            self
+                    .client_builder
+                    .get_client()
+                    .await
+                    .map_err(|e| RequestError::IO(e))?
+                    .as_blob_client(&self.name)
+                    .put_block_list(&self.block_list)
+                    .access_tier(self.storage_class)
+                    .execute()
         )
         .await
         {
@@ -348,9 +357,14 @@ impl AzureUploader {
     ) -> Result<(), RequestError> {
         match timeout(
             Self::get_timeout(),
-            self.client
-                .put_block(block_number, data.to_vec())
-                .execute(),
+            self
+                    .client_builder
+                    .get_client()
+                    .await
+                    .map_err(|e| RequestError::IO(e))?
+                    .as_blob_client(&self.name)
+                    .put_block(block_number, data.to_vec())
+                    .execute(),
         )
         .await
         {
@@ -372,7 +386,12 @@ impl AzureUploader {
     /// retry the entire upload.
     async fn upload(&self, data: &[u8]) -> Result<(), RequestError> {
         match timeout(Self::get_timeout(), async {
-            self.client
+            self
+                .client_builder
+                .get_client()
+                .await
+                .map_err(|e| e.to_string())?
+                .as_blob_client(&self.name)
                 .put_block_blob(data.to_vec())
                 .access_tier(self.storage_class.clone())
                 .execute()
@@ -398,15 +417,124 @@ impl AzureUploader {
     }
 }
 
+// if use azure ad to access the azure blob,
+// it need to update the token at regular intervals,
+// so wrap the client builder
+#[async_trait]
+trait ContainerBuilder: 'static + Send + Sync {
+    async fn get_client(&self) -> io::Result<Arc<ContainerClient>>;
+}
 
+struct SharedKeyContainerBuilder {
+    container_client: Arc<ContainerClient>,
+}
+
+#[async_trait]
+impl ContainerBuilder for SharedKeyContainerBuilder {
+    async fn get_client(&self) -> io::Result<Arc<ContainerClient>> {
+        return Ok(self.container_client.clone())
+    }
+}
+
+struct TokenCredContainerBuilder {
+    account_name: String,
+    container_name: String,
+    token_resource: String,
+    token_cred: Arc<ClientSecretCredential>,
+    token_cache: Arc<RwLock<Option<(TokenResponse, Arc<ContainerClient>)>>>,
+
+    modify_place: Arc<Mutex<bool>>,
+}
+
+impl TokenCredContainerBuilder {
+    fn new(account_name: String, container_name: String, token_resource: String, token_cred: Arc<ClientSecretCredential>) -> Self {
+        return Self {
+            account_name,
+            container_name,
+            token_resource,
+            token_cred,
+            token_cache: Arc::new(RwLock::new(None)),
+
+            modify_place: Arc::new(Mutex::new(true)),
+        }
+    }
+}
+
+#[async_trait]
+impl ContainerBuilder for TokenCredContainerBuilder {
+    async fn get_client(&self) -> io::Result<Arc<ContainerClient>> {
+        // only the thread get the modify_lock can update the token,
+        // so that this thread can get the token before lock wirte-lock
+        // avoid to block other threads too much time.
+        let mut modify_lock = None;
+        {
+            let token_response = self.token_cache.read().unwrap();
+            if let Some(ref t) = *token_response {
+                let interval = t.0.expires_on - Utc::now();
+                // keep token updated 5 minutes before it expires
+                if interval > chDuration::minutes(5) {
+                    return Ok(t.1.clone());
+                }
+    
+                if interval > chDuration::minutes(2) {
+                    // there still have time to use the token,
+                    // and only need one thread to update token.
+                    if let Ok(l) = self.modify_place.try_lock() {
+                        modify_lock = Some(l);
+                    } else {
+                        // otherwise, continue to use the current token
+                        return Ok(t.1.clone());
+                    }
+                }
+            }
+        } // release the read lock
+
+        // give up getting the client from cache, try update it
+        if modify_lock.is_none() {
+            modify_lock = Some(self.modify_place.lock().await);
+        }
+
+        if let Some(lock) = modify_lock {
+            // check whether there is another thread already updates the token.
+            {
+                let token_response = self.token_cache.read().unwrap();
+                if let Some(ref t) = *token_response {
+                    let interval = t.0.expires_on - Utc::now();
+                    // token is already updated
+                    if interval > chDuration::minutes(5) {
+                        return Ok(t.1.clone());
+                    }
+                }
+            }
+            // release read lock, the thread still have modify lock,
+            // so no other threads can write the token_cache, so read lock is not blocked.
+            let token = self.token_cred
+                .get_token(&self.token_resource)
+                .await
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?;
+            let http_client = new_http_client();
+            let storage_client = 
+                StorageAccountClient::new_bearer_token(http_client, self.account_name.clone(), token.token.secret())
+                .as_storage_client()
+                .as_container_client(self.container_name.clone());
+            
+            {
+                let mut token_response = self.token_cache.write().unwrap();
+                *token_response = Some((token, storage_client.clone()));
+            }
+            return Ok(storage_client)
+        } else {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "failed to get either modify_lock or client"))
+        }
+    }
+}
 
 const STORAGE_NAME: &str = "azure";
 
 #[derive(Clone)]
 pub struct AzureStorage {
     config: Config,
-    client: Arc<ContainerClient>,
-    
+    client_builder: Arc<dyn ContainerBuilder>,
 }
 
 impl AzureStorage {
@@ -423,51 +551,58 @@ impl AzureStorage {
         if let Some(connection_string) = config.parse_plaintext_account_url() {
             let bucket = (*config.bucket.bucket).to_owned();
             let http_client = new_http_client();
-            let storage_client = 
+            let container_client = 
                 StorageAccountClient::new_connection_string(http_client.clone(), connection_string.as_str())
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?
                 .as_storage_client()
                 .as_container_client(bucket);
-            
+
+            let client_builder = Arc::new(SharedKeyContainerBuilder {
+                container_client,
+            });
             Ok(AzureStorage {
                 config,
-                client: storage_client,
+                client_builder,
             })
         } else if let Some(credential_info) = config.credential_info.as_ref() {
-            let account_name = config.get_account_name()?;
-            let token_scope = format!("https://{}.blob.core.windows.net/.default", &account_name);
-            let client = reqwest::Client::new();
-            let token = block_on(client_credentials_flow::perform(
-                client,
-                &credential_info.client_id, 
-                &credential_info.client_secret, 
-                &[&token_scope],
-                &credential_info.tenant_id
-            ))
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?;
             let bucket = (*config.bucket.bucket).to_owned();
-            let http_client = new_http_client();
-            let storage_client = 
-                StorageAccountClient::new_bearer_token(http_client, account_name, token.access_token().secret())
-                .as_storage_client()
-                .as_container_client(bucket);
+            let account_name = config.get_account_name()?;
+            let token_resource = format!("https://{}.blob.core.windows.net", &account_name);
+            let cred = ClientSecretCredential::new(
+                credential_info.tenant_id.clone(),
+                credential_info.client_id.to_string(),
+                credential_info.client_secret.secret().clone(),
+                TokenCredentialOptions::default(),
+            );
             
+            let client_builder = Arc::new(
+                TokenCredContainerBuilder::new(
+                    account_name, 
+                    bucket, 
+                    token_resource, 
+                    Arc::new(cred),
+                )
+            );
+            // get token later
             Ok(AzureStorage {
                 config,
-                client: storage_client,
+                client_builder,
             })
         } else if let Some(connection_string) = config.parse_env_plaintext_account_url() {
             let bucket = (*config.bucket.bucket).to_owned();
             let http_client = new_http_client();
-            let storage_client = 
+            let container_client = 
                 StorageAccountClient::new_connection_string(http_client.clone(), connection_string.as_str())
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?
                 .as_storage_client()
                 .as_container_client(bucket);
             
+            let client_builder = Arc::new(SharedKeyContainerBuilder {
+                container_client,
+            });
             Ok(AzureStorage {
                 config,
-                client: storage_client,
+                client_builder,
             })
         } else {
             Err(io::Error::new(io::ErrorKind::InvalidInput, "credential info not found".to_owned()))
@@ -499,9 +634,9 @@ impl BlobStorage for AzureStorage {
         debug!("save file to Azure storage"; "key" => %name);
 
         let uploader = AzureUploader::new(
-            self.client.clone(), 
+            self.client_builder.clone(),
             &self.config, 
-            &name
+            name,
         );
         
         uploader.run(
@@ -513,41 +648,22 @@ impl BlobStorage for AzureStorage {
     fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
         let name = self.maybe_prefix_key(name);
         debug!("read file from Azure storage"; "key" => %name);
-        let t = Box::new(AzblobReader::new(
-            self.client.as_blob_client(name), 
-            |client| Box::new(
-                client.get()
-                    .stream(STREAM_READ_SIZE)
-                    .map(|res| match res {
-                        Ok(response) => Ok(response.data),
-                        Err(e) => Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e))),
-                    })
-                    .boxed().into_async_read()),
-        ));
-        t
+        let t = async move {
+            self.client_builder.get_client()
+                .await?
+                .as_blob_client(name)
+                .get()
+                .execute()
+                .await
+                .map(|res| res.data)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e)))
+        };
+        let k = stream::once(t);
+        let t = k.boxed().into_async_read();
+        Box::new(t)
+        
     }
 }
-
-use std::{pin::Pin, task::{Context, Poll}};
-use ouroboros::self_referencing;
-#[self_referencing]
-struct AzblobReader {
-    client: Arc<BlobClient>,
-    #[borrows(client)]
-    #[covariant]
-    stream: Box<dyn AsyncRead + Unpin + 'this>,
-}
-
-impl AsyncRead for AzblobReader {
-    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<io::Result<usize>> {
-        self.as_mut().with_stream_mut(|stream| Pin::new(stream).poll_read(cx, buf))
-    }
-
-    fn poll_read_vectored(mut self: Pin<&mut Self>, cx: &mut Context<'_>, bufs: &mut [io::IoSliceMut<'_>]) -> Poll<io::Result<usize>> {
-        self.as_mut().with_stream_mut(|stream| Pin::new(stream).poll_read_vectored(cx, bufs))
-    }
-}
-
 
 #[cfg(test)]
 mod tests {
