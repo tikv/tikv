@@ -17,7 +17,7 @@ use tokio_timer::timer::Handle;
 use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb;
 use kvproto::replication_modepb::{
-    DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus,
+    DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus, StoreDrAutoSyncStatus,
 };
 use raft::eraftpb::ConfChangeType;
 
@@ -1499,6 +1499,7 @@ impl PdClient for TestPdClient {
         &self,
         stats: pdpb::StoreStats,
         _: Option<pdpb::StoreReport>,
+        _: Option<StoreDrAutoSyncStatus>,
     ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         if let Err(e) = self.check_bootstrap() {
             return Box::pin(err(e));
