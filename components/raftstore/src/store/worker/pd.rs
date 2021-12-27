@@ -224,6 +224,9 @@ impl Default for StoreStat {
 pub struct PeerStat {
     pub read_bytes: u64,
     pub read_keys: u64,
+    // written_bytes and written_keys are only used for reporting flow through store heartbeat
+    pub written_bytes: u64,
+    pub written_keys: u64,
     pub query_stats: QueryStats,
     // last_region_report_attributes records the state of the last region heartbeat
     pub last_region_report_read_bytes: u64,
@@ -236,31 +239,33 @@ pub struct PeerStat {
     pub last_store_report_read_bytes: u64,
     pub last_store_report_read_keys: u64,
     pub last_store_report_query_stats: QueryStats,
+    pub last_store_report_written_bytes: u64,
+    pub last_store_report_written_keys: u64,
     pub approximate_keys: u64,
     pub approximate_size: u64,
 }
 
 #[derive(Default, Clone)]
-struct PeerCmpReadStat {
+struct PeerCmpStat {
     pub region_id: u64,
     pub report_stat: u64,
 }
 
-impl Ord for PeerCmpReadStat {
+impl Ord for PeerCmpStat {
     fn cmp(&self, other: &Self) -> CmpOrdering {
         self.report_stat.cmp(&other.report_stat)
     }
 }
 
-impl Eq for PeerCmpReadStat {}
+impl Eq for PeerCmpStat {}
 
-impl PartialEq for PeerCmpReadStat {
+impl PartialEq for PeerCmpStat {
     fn eq(&self, other: &Self) -> bool {
         self.report_stat == other.report_stat
     }
 }
 
-impl PartialOrd for PeerCmpReadStat {
+impl PartialOrd for PeerCmpStat {
     fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
         Some(self.report_stat.cmp(&other.report_stat))
     }
@@ -959,26 +964,36 @@ where
             let query_stats = region_peer
                 .query_stats
                 .sub_query_stats(&region_peer.last_store_report_query_stats);
+            let written_bytes =
+                region_peer.written_bytes - region_peer.last_store_report_written_bytes;
+            let written_keys =
+                region_peer.written_keys - region_peer.last_store_report_written_keys;
             region_peer.last_store_report_read_bytes = region_peer.read_bytes;
             region_peer.last_store_report_read_keys = region_peer.read_keys;
+            region_peer.last_store_report_written_bytes = region_peer.written_bytes;
+            region_peer.last_store_report_written_keys = region_peer.written_keys;
             region_peer
                 .last_store_report_query_stats
                 .fill_query_stats(&region_peer.query_stats);
             if read_bytes < hotspot_byte_report_threshold()
                 && read_keys < hotspot_key_report_threshold()
+                && written_bytes < hotspot_byte_report_threshold()
+                && written_keys < hotspot_key_report_threshold()
                 && query_stats.get_read_query_num() < hotspot_query_num_report_threshold()
             {
                 continue;
             }
-            let mut read_stat = pdpb::PeerStat::default();
-            read_stat.set_region_id(*region_id);
-            read_stat.set_read_keys(read_keys);
-            read_stat.set_read_bytes(read_bytes);
-            read_stat.set_query_stats(query_stats.0);
-            report_peers.insert(*region_id, read_stat);
+            let mut peer_stat = pdpb::PeerStat::default();
+            peer_stat.set_region_id(*region_id);
+            peer_stat.set_read_keys(read_keys);
+            peer_stat.set_read_bytes(read_bytes);
+            peer_stat.set_query_stats(query_stats.0);
+            peer_stat.set_written_keys(written_keys);
+            peer_stat.set_written_bytes(written_bytes);
+            report_peers.insert(*region_id, peer_stat);
         }
 
-        stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
+        stats = collect_report_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
 
         let disk_cap = disk_stats.total_space();
         let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
@@ -1701,10 +1716,17 @@ where
             Task::UpdateSlowScore { id, duration } => self.slow_score.record(id, duration.sum()),
             Task::RegionCPURecords(records) => self.handle_region_cpu_records(records),
             Task::ReportRegionFlow {
-                region_id: _,
-                written_bytes: _,
-                written_keys: _,
-            } => {}
+                region_id,
+                written_bytes,
+                written_keys,
+            } => {
+                let peer_stat = self
+                    .region_peers
+                    .entry(region_id)
+                    .or_insert_with(PeerStat::default);
+                peer_stat.written_bytes = written_bytes;
+                peer_stat.written_keys = written_keys;
+            }
         };
     }
 
@@ -1899,48 +1921,73 @@ fn send_destroy_peer_message<EK, ER>(
     }
 }
 
-fn collect_report_read_peer_stats(
+fn collect_report_peer_stats(
     capacity: usize,
-    mut report_read_stats: HashMap<u64, pdpb::PeerStat>,
+    mut report_peer_stats: HashMap<u64, pdpb::PeerStat>,
     mut stats: pdpb::StoreStats,
 ) -> pdpb::StoreStats {
-    if report_read_stats.len() < capacity * 3 {
-        for (_, read_stat) in report_read_stats {
+    if report_peer_stats.len() < capacity * 3 {
+        for (_, read_stat) in report_peer_stats {
             stats.peer_stats.push(read_stat);
         }
         return stats;
     }
-    let mut keys_topn_report = TopN::new(capacity);
-    let mut bytes_topn_report = TopN::new(capacity);
+    let mut read_keys_topn_report = TopN::new(capacity);
+    let mut read_bytes_topn_report = TopN::new(capacity);
+    let mut written_keys_topn_report = TopN::new(capacity);
+    let mut written_bytes_topn_report = TopN::new(capacity);
     let mut stats_topn_report = TopN::new(capacity);
-    for read_stat in report_read_stats.values() {
-        let mut cmp_stat = PeerCmpReadStat::default();
-        cmp_stat.region_id = read_stat.region_id;
-        let mut key_cmp_stat = cmp_stat.clone();
-        key_cmp_stat.report_stat = read_stat.read_keys;
-        keys_topn_report.push(key_cmp_stat);
-        let mut byte_cmp_stat = cmp_stat.clone();
-        byte_cmp_stat.report_stat = read_stat.read_bytes;
-        bytes_topn_report.push(byte_cmp_stat);
+    for peer_stat in report_peer_stats.values() {
+        let mut cmp_stat = PeerCmpStat::default();
+        cmp_stat.region_id = peer_stat.region_id;
+
+        let mut read_key_cmp_stat = cmp_stat.clone();
+        read_key_cmp_stat.report_stat = peer_stat.read_keys;
+        read_keys_topn_report.push(read_key_cmp_stat);
+
+        let mut read_byte_cmp_stat = cmp_stat.clone();
+        read_byte_cmp_stat.report_stat = peer_stat.read_bytes;
+        read_bytes_topn_report.push(read_byte_cmp_stat);
+
+        let mut written_key_cmp_stat = cmp_stat.clone();
+        written_key_cmp_stat.report_stat = peer_stat.written_keys;
+        written_keys_topn_report.push(written_key_cmp_stat);
+
+        let mut written_byte_cmp_stat = cmp_stat.clone();
+        written_byte_cmp_stat.report_stat = peer_stat.written_bytes;
+        written_bytes_topn_report.push(written_byte_cmp_stat);
+
         let mut query_cmp_stat = cmp_stat.clone();
-        query_cmp_stat.report_stat = get_read_query_num(read_stat.get_query_stats());
+        query_cmp_stat.report_stat = get_read_query_num(peer_stat.get_query_stats());
         stats_topn_report.push(query_cmp_stat);
     }
 
-    for x in keys_topn_report {
-        if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
+    for x in read_keys_topn_report {
+        if let Some(report_stat) = report_peer_stats.remove(&x.region_id) {
             stats.peer_stats.push(report_stat);
         }
     }
 
-    for x in bytes_topn_report {
-        if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
+    for x in read_bytes_topn_report {
+        if let Some(report_stat) = report_peer_stats.remove(&x.region_id) {
+            stats.peer_stats.push(report_stat);
+        }
+    }
+
+    for x in written_keys_topn_report {
+        if let Some(report_stat) = report_peer_stats.remove(&x.region_id) {
+            stats.peer_stats.push(report_stat);
+        }
+    }
+
+    for x in written_bytes_topn_report {
+        if let Some(report_stat) = report_peer_stats.remove(&x.region_id) {
             stats.peer_stats.push(report_stat);
         }
     }
 
     for x in stats_topn_report {
-        if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
+        if let Some(report_stat) = report_peer_stats.remove(&x.region_id) {
             stats.peer_stats.push(report_stat);
         }
     }
@@ -2052,25 +2099,24 @@ mod tests {
     #[test]
     fn test_collect_report_peers() {
         let mut report_stats = HashMap::default();
-        for i in 1..5 {
+        for i in 1..8 {
             let mut stat = pdpb::PeerStat::default();
             stat.set_region_id(i);
             stat.set_read_keys(i);
-            stat.set_read_bytes(6 - i);
-            stat.read_keys = i;
-            stat.read_bytes = 6 - i;
+            stat.set_read_bytes(8 - i);
             let mut query_stat = QueryStats::default();
-            if i == 3 {
-                query_stat.add_query_num(QueryKind::Get, 6);
-            } else {
-                query_stat.add_query_num(QueryKind::Get, 0);
+            match i {
+                3 => query_stat.add_query_num(QueryKind::Get, 6),
+                4 => stat.set_written_keys(1),
+                5 => stat.set_written_bytes(2),
+                _ => query_stat.add_query_num(QueryKind::Get, 0),
             }
             stat.set_query_stats(query_stat.0);
             report_stats.insert(i, stat);
         }
         let mut store_stats = pdpb::StoreStats::default();
-        store_stats = collect_report_read_peer_stats(1, report_stats, store_stats);
-        assert_eq!(store_stats.peer_stats.len(), 3)
+        store_stats = collect_report_peer_stats(1, report_stats, store_stats);
+        assert_eq!(store_stats.peer_stats.len(), 5)
     }
 
     #[test]

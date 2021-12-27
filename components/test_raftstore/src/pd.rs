@@ -1517,11 +1517,15 @@ impl PdClient for TestPdClient {
                 .or_insert_with(pdpb::PeerStat::default);
             let read_keys = peer_stat.get_read_keys() + peer_stat_sum.get_read_keys();
             let read_bytes = peer_stat.get_read_bytes() + peer_stat_sum.get_read_bytes();
+            let written_keys = peer_stat.get_written_keys() + peer_stat_sum.get_written_keys();
+            let written_bytes = peer_stat.get_written_bytes() + peer_stat_sum.get_written_bytes();
             let mut read_query_stats = QueryStats::default();
             read_query_stats.add_query_stats(peer_stat.get_query_stats());
             read_query_stats.add_query_stats(peer_stat_sum.get_query_stats());
             peer_stat_sum.set_read_keys(read_keys);
             peer_stat_sum.set_read_bytes(read_bytes);
+            peer_stat_sum.set_written_keys(written_keys);
+            peer_stat_sum.set_written_bytes(written_bytes);
             peer_stat_sum.set_query_stats(read_query_stats.0);
             peer_stat_sum.set_region_id(region_id);
         }

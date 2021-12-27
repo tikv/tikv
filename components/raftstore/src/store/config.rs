@@ -137,6 +137,7 @@ pub struct Config {
     // Interval (ms) to check region whether the data is consistent.
     pub consistency_check_interval: ReadableDuration,
 
+    // Interval to report region flow to pd worker.
     #[online_config(hidden)]
     pub report_region_flow_interval: ReadableDuration,
 
@@ -300,7 +301,7 @@ impl Default for Config {
             // Disable consistency check by default as it will hurt performance.
             // We should turn on this only in our tests.
             consistency_check_interval: ReadableDuration::secs(0),
-            report_region_flow_interval: ReadableDuration::secs(10),
+            report_region_flow_interval: ReadableDuration::secs(1),
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             right_derive_when_split: true,
             #[cfg(any(test, feature = "testexport"))]

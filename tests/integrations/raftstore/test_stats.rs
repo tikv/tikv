@@ -108,6 +108,7 @@ fn test_store_heartbeat_report_hotspots() {
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
     let (mut cluster, client, _) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(10);
+        cluster.cfg.raft_store.report_region_flow_interval = ReadableDuration::millis(10);
     });
     let (k1, v1) = (b"k1".to_vec(), b"v1".to_vec());
     let (k3, v3) = (b"k3".to_vec(), b"v3".to_vec());
@@ -134,20 +135,30 @@ fn test_store_heartbeat_report_hotspots() {
         let get_resp = client.raw_get(&get_req).unwrap();
         assert_eq!(get_resp.value, v1);
     }
+    // raw put k1 100 times
+    for _i in 0..100 {
+        let mut put_req = RawPutRequest::default();
+        put_req.set_context(left_ctx.clone());
+        put_req.key = k1.clone();
+        put_req.value = v1.clone();
+        client.raw_put(&put_req).unwrap();
+    }
     // raw get k3 10 times
     for _i in 0..10 {
-        let mut get_req = RawGetRequest::default();
-        get_req.set_context(right_ctx.clone());
-        get_req.key = k3.clone();
-        let get_resp = client.raw_get(&get_req).unwrap();
-        assert_eq!(get_resp.value, v3);
+        let mut put_req = RawPutRequest::default();
+        put_req.set_context(right_ctx.clone());
+        put_req.key = k3.clone();
+        put_req.key = v3.clone();
+        client.raw_put(&put_req).unwrap();
     }
-    sleep_ms(50);
+    sleep_ms(100);
     let store_id = 1;
     let hot_peers = cluster.pd_client.get_store_hotspots(store_id).unwrap();
     let peer_stat = hot_peers.get(&left.id).unwrap();
     assert!(peer_stat.get_read_keys() > 0);
     assert!(peer_stat.get_read_bytes() > 0);
+    assert!(peer_stat.get_written_keys() > 0);
+    assert!(peer_stat.get_written_bytes() > 0);
     fail::remove("mock_tick_interval");
     fail::remove("mock_hotspot_threshold");
 }
