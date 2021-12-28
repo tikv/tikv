@@ -845,6 +845,9 @@ where
             CasualMessage::RegionApproximateKeys { keys } => {
                 self.on_approximate_region_keys(keys);
             }
+            CasualMessage::RefreshRegionBuckets { region_buckets } => {
+                self.on_refresh_region_buckets(region_buckets);
+            }
             CasualMessage::CompactionDeclinedBytes { bytes } => {
                 self.on_compaction_declined_bytes(bytes);
             }
@@ -4374,6 +4377,11 @@ where
     fn on_approximate_region_keys(&mut self, keys: u64) {
         self.fsm.peer.approximate_keys = Some(keys);
         self.register_split_region_check_tick();
+        self.register_pd_heartbeat_tick();
+    }
+
+    fn on_refresh_region_buckets(&mut self, region_buckets: metapb::Buckets) {
+        self.fsm.peer.region_buckets = region_buckets;
         self.register_pd_heartbeat_tick();
     }
 

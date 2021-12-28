@@ -273,6 +273,7 @@ pub mod tests {
                     }
                     break;
                 }
+                Ok((_region_id, CasualMessage::RefreshRegionBuckets { .. })) => {}
                 others => panic!("expect split check result, but got {:?}", others),
             }
         }
@@ -284,6 +285,27 @@ pub mod tests {
         exp_split_keys: Vec<Vec<u8>>,
     ) {
         must_split_at_impl(rx, exp_region, exp_split_keys, false)
+    }
+
+    pub fn must_generate_buckets(
+        rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
+        exp_buckets_keys: Vec<Vec<u8>>,
+    ) {
+        loop {
+            match rx.try_recv() {
+                Ok((_, CasualMessage::RefreshRegionBuckets { region_buckets })) => {
+                    let mut i = 0;
+                    let keys = region_buckets.get_keys();
+                    assert_eq!(keys.len(), exp_buckets_keys.len());
+                    while i < keys.len() {
+                        assert_eq!(keys[i], exp_buckets_keys[i]);
+                        i += 1
+                    }
+                    break;
+                }
+                _ => {}
+            }
+        }
     }
 
     fn test_split_check_impl(cfs_with_range_prop: &[CfName], data_cf: CfName) {
@@ -402,12 +424,97 @@ pub mod tests {
         runnable.run(SplitCheckTask::split_check(region, true, CheckPolicy::Scan));
     }
 
+    fn test_generate_bucket_impl(cfs_with_range_prop: &[CfName], data_cf: CfName) {
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let cfs_with_range_prop: HashSet<_> = cfs_with_range_prop.iter().cloned().collect();
+        let mut cf_opt = ColumnFamilyOptions::new();
+        cf_opt.set_no_range_properties(true);
+
+        let cfs_opts = ALL_CFS
+            .iter()
+            .map(|cf| {
+                if cfs_with_range_prop.contains(cf) {
+                    CFOptions::new(cf, ColumnFamilyOptions::new())
+                } else {
+                    CFOptions::new(cf, cf_opt.clone())
+                }
+            })
+            .collect();
+        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.set_start_key(vec![]);
+        region.set_end_key(vec![]);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            region_max_size: ReadableSize(100),
+            region_split_size: ReadableSize(60),
+            batch_split_limit: 5,
+            enable_region_bucket: true,
+            region_bucket_size: ReadableSize(60),
+            ..Default::default()
+        };
+
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+        let mut exp_bucket_keys = vec![];
+        for i in 0..41 {
+            let s = keys::data_key(format!("{:04}", i).as_bytes()); // size is 4 + 1 = 5
+            engine.put_cf(data_cf, &s, &s).unwrap();
+            if i % 10 == 0 && i > 0 {
+                if i < 40 {
+                    exp_bucket_keys.push(keys::origin_key(&s).to_vec());
+                }
+                engine.flush_cf(data_cf, true).unwrap();
+            }
+        }
+
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Approximate,
+        ));
+
+        loop {
+            match rx.try_recv() {
+                Ok((_, CasualMessage::RefreshRegionBuckets { region_buckets })) => {
+                    let mut i = 0;
+                    let keys = region_buckets.get_keys();
+                    assert_eq!(keys.len(), exp_bucket_keys.len());
+                    while i < keys.len() {
+                        assert_eq!(keys[i], exp_bucket_keys[i]);
+                        i += 1
+                    }
+                    break;
+                }
+                _ => {}
+            }
+        }
+        drop(rx);
+    }
+
     #[test]
     fn test_split_check() {
         test_split_check_impl(&[CF_DEFAULT, CF_WRITE], CF_DEFAULT);
         test_split_check_impl(&[CF_DEFAULT, CF_WRITE], CF_WRITE);
         for cf in LARGE_CFS {
             test_split_check_impl(LARGE_CFS, cf);
+        }
+    }
+
+    #[test]
+    fn test_generate_bucket_by_approximate() {
+        test_generate_bucket_impl(&[CF_DEFAULT, CF_WRITE], CF_DEFAULT);
+        test_generate_bucket_impl(&[CF_DEFAULT, CF_WRITE], CF_WRITE);
+        for cf in LARGE_CFS {
+            test_generate_bucket_impl(LARGE_CFS, cf);
         }
     }
 

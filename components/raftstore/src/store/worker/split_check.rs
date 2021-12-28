@@ -6,8 +6,7 @@ use std::fmt::{self, Display, Formatter};
 use std::mem;
 
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
-use kvproto::metapb::Region;
-use kvproto::metapb::RegionEpoch;
+use kvproto::metapb::{Buckets, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 
 #[cfg(any(test, feature = "testexport"))]
@@ -186,8 +185,8 @@ where
         }
     }
 
-    /// Checks a Region with split checkers to produce split keys and generates split admin command.
-    fn check_split(&mut self, region: &Region, auto_split: bool, policy: CheckPolicy) {
+    /// Checks a Region with split and bucket checkers to produce split keys and buckets keys and generates split admin command.
+    fn check_split_and_bucket(&mut self, region: &Region, auto_split: bool, policy: CheckPolicy) {
         let region_id = region.get_id();
         let start_key = keys::enc_start_key(region);
         let end_key = keys::enc_end_key(region);
@@ -207,6 +206,29 @@ where
             return;
         }
 
+        if host.policy() == CheckPolicy::Approximate {
+            if host.enable_region_bucket() {
+                let bucket_keys = match host.approximate_bucket_keys(region, &self.engine) {
+                    Ok(keys) => keys.into_iter().map(|k| keys::origin_key(&k).to_vec()).collect(),
+                    Err(e) => {
+                        error!(%e;
+                            "failed to get approximate bucket key";
+                            "region_id" => region_id,
+                        );
+                        vec![]
+                    }
+                };
+                info!("starting approximate_bucket_keys {}", bucket_keys.len());
+                if bucket_keys.len() > 0 {
+                    let mut region_buckets = Buckets::default();
+                    region_buckets.set_keys(::protobuf::RepeatedField::from_vec(bucket_keys));
+                    let _ = self.router.send(
+                        region.get_id(),
+                        CasualMessage::RefreshRegionBuckets { region_buckets },
+                    );
+                }
+            }
+        }
         let split_keys = match host.policy() {
             CheckPolicy::Scan => {
                 match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
@@ -267,6 +289,7 @@ where
         end_key: &[u8],
     ) -> Result<Vec<Vec<u8>>> {
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
+        let mut region_buckets = Buckets::default();
         MergedIterator::<<E as Iterable>::Iterator>::new(
             &self.engine,
             LARGE_CFS,
@@ -277,12 +300,21 @@ where
         .map(|mut iter| {
             let mut size = 0;
             let mut keys = 0;
+            let mut bucket_size: u64 = 0;
+            region_buckets.keys = ::protobuf::RepeatedField::new();
             while let Some(e) = iter.next() {
                 if host.on_kv(region, &e) {
                     return;
                 }
                 size += e.entry_size() as u64;
                 keys += 1;
+                if host.enable_region_bucket() {
+                    bucket_size += e.entry_size() as u64;
+                    if bucket_size >= host.region_bucket_size() {
+                        region_buckets.keys.push(keys::origin_key(e.key()).to_vec());
+                        bucket_size = 0;
+                    }
+                }
             }
 
             // if we scan the whole range, we can update approximate size and keys with accurate value.
@@ -291,6 +323,8 @@ where
                 "region_id" => region.get_id(),
                 "size" => size,
                 "keys" => keys,
+                "bucket_count" => region_buckets.get_keys().len(),
+                "bucket_size" => bucket_size,
             );
             let _ = self.router.send(
                 region.get_id(),
@@ -300,6 +334,12 @@ where
                 region.get_id(),
                 CasualMessage::RegionApproximateKeys { keys },
             );
+            if host.enable_region_bucket() {
+                let _ = self.router.send(
+                    region.get_id(),
+                    CasualMessage::RefreshRegionBuckets { region_buckets },
+                );
+            }
         })?;
         timer.observe_duration();
 
@@ -328,7 +368,7 @@ where
                 region,
                 auto_split,
                 policy,
-            } => self.check_split(&region, auto_split, policy),
+            } => self.check_split_and_bucket(&region, auto_split, policy),
             Task::ChangeConfig(c) => self.change_cfg(c),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(f) => f(&self.coprocessor.cfg),

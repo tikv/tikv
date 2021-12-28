@@ -43,6 +43,10 @@ pub struct Config {
     #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub perf_level: PerfLevel,
+
+    // enable subsplit ranges (aka bucket) within the region
+    pub enable_region_bucket: bool,
+    pub region_bucket_size: ReadableSize,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -63,6 +67,8 @@ pub const SPLIT_KEYS: u64 = 960000;
 /// Default batch split limit.
 pub const BATCH_SPLIT_LIMIT: u64 = 10;
 
+pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(96);
+
 impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(SPLIT_SIZE_MB);
@@ -75,6 +81,8 @@ impl Default for Config {
             region_max_keys: SPLIT_KEYS / 2 * 3,
             consistency_check_method: ConsistencyCheckMethod::Mvcc,
             perf_level: PerfLevel::EnableCount,
+            enable_region_bucket: false,
+            region_bucket_size: DEFAULT_BUCKET_SIZE,
         }
     }
 }

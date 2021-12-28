@@ -20,6 +20,7 @@ pub use self::table::TableCheckObserver;
 
 pub struct Host<'a, E> {
     checkers: Vec<Box<dyn SplitChecker<E>>>,
+    bucket_checker: size::Checker,
     auto_split: bool,
     cfg: &'a Config,
 }
@@ -30,6 +31,12 @@ impl<'a, E> Host<'a, E> {
             auto_split,
             checkers: vec![],
             cfg,
+            bucket_checker: size::Checker::new(
+                cfg.region_bucket_size.0 * 2,
+                cfg.region_bucket_size.0,
+                100000,
+                CheckPolicy::Approximate,
+            ),
         }
     }
 
@@ -85,8 +92,30 @@ impl<'a, E> Host<'a, E> {
         Ok(vec![])
     }
 
+    pub fn approximate_bucket_keys<Kv: engine_traits::KvEngine>(
+        &mut self,
+        region: &Region,
+        engine: &Kv,
+    ) -> Result<Vec<Vec<u8>>> {
+        let keys = box_try!(self.bucket_checker.approximate_split_keys(region, engine));
+        if !keys.is_empty() {
+            return Ok(keys);
+        }
+        Ok(vec![])
+    }
+
     #[inline]
     pub fn add_checker(&mut self, checker: Box<dyn SplitChecker<E>>) {
         self.checkers.push(checker);
+    }
+
+    #[inline]
+    pub fn enable_region_bucket(&self) -> bool {
+        return self.cfg.enable_region_bucket;
+    }
+
+    #[inline]
+    pub fn region_bucket_size(&self) -> u64 {
+        return self.cfg.region_bucket_size.0;
     }
 }

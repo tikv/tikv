@@ -19,7 +19,7 @@ use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo};
-use kvproto::metapb::{self, PeerRole};
+use kvproto::metapb::{self, PeerRole, Buckets};
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
     self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
@@ -590,6 +590,8 @@ where
     persisted_number: u64,
     /// The context of applying snapshot.
     apply_snap_ctx: Option<ApplySnapshotContext>,
+    /// region buckets.
+    pub region_buckets: metapb::Buckets,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -700,6 +702,7 @@ where
             unpersisted_ready: None,
             persisted_number: 0,
             apply_snap_ctx: None,
+            region_buckets: Buckets::default(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -4223,9 +4226,16 @@ where
     }
 
     pub fn heartbeat_pd<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
+        let mut region = self.region().clone();
+        if self.region_buckets.get_keys().len() != 0 {
+            debug!("notifying pd with region_bucket";
+                "region_bucket size" => self.region_buckets.get_keys().len(),
+            );
+            region.set_buckets(self.region_buckets.clone());
+        }
         let task = PdTask::Heartbeat(HeartbeatTask {
             term: self.term(),
-            region: self.region().clone(),
+            region,
             down_peers: self.collect_down_peers(ctx),
             peer: self.peer.clone(),
             pending_peers: self.collect_pending_peers(ctx),
