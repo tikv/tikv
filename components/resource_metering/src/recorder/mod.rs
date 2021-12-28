@@ -19,7 +19,7 @@ mod collector_reg;
 mod localstorage;
 mod sub_recorder;
 
-pub use self::collector_reg::{CollectorHandle, CollectorId, CollectorRegHandle};
+pub use self::collector_reg::{CollectorGuard, CollectorId, CollectorRegHandle};
 pub use self::localstorage::{LocalStorage, LocalStorageRef, STORAGE};
 pub use self::sub_recorder::cpu::CpuRecorder;
 pub use self::sub_recorder::summary::{record_read_keys, record_write_keys, SummaryRecorder};

@@ -3,7 +3,7 @@
 use crate::error::Result;
 use crate::metrics::{IGNORED_DATA_COUNTER, REPORT_DATA_COUNTER, REPORT_DURATION_HISTOGRAM};
 use crate::reporter::data_sink::DataSink;
-use crate::reporter::data_sink_reg::{DataSinkHandle, DataSinkRegHandle};
+use crate::reporter::data_sink_reg::{DataSinkGuard, DataSinkRegHandle};
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,7 +22,7 @@ impl Runnable for SingleTargetDataSink {
     fn run(&mut self, task: Self::Task) {
         match task {
             Task::Records(records) => self.handle_records(records),
-            Task::ChangeAddress(address) => self.update_data_sink_and_client(address),
+            Task::ChangeAddress(address) => self.update_data_sink(address),
         }
     }
 
@@ -36,12 +36,13 @@ impl Runnable for SingleTargetDataSink {
 pub struct SingleTargetDataSink {
     scheduler: Scheduler<Task>,
     data_sink_reg: DataSinkRegHandle,
-    data_sink: Option<DataSinkHandle>,
+    data_sink: Option<DataSinkGuard>,
 
     env: Arc<Environment>,
-    address: String,
     client: Option<ResourceUsageAgentClient>,
     limiter: Limiter,
+
+    address: String,
 }
 
 impl SingleTargetDataSink {
@@ -57,11 +58,13 @@ impl SingleTargetDataSink {
             data_sink: None,
 
             env,
-            address: String::default(),
             client: None,
             limiter: Limiter::default(),
+
+            address: String::default(),
         };
-        single_target.update_data_sink_and_client(address);
+
+        single_target.update_data_sink(address);
         single_target
     }
 
@@ -75,12 +78,22 @@ impl SingleTargetDataSink {
             return;
         }
 
-        if self.client.is_none() {
+        if self.address.is_empty() {
             IGNORED_DATA_COUNTER
                 .with_label_values(&["report"])
                 .inc_by(records.len() as _);
             warn!("the client of single target datasink is not ready");
             return;
+        }
+
+        if self.client.is_none() {
+            let channel = {
+                let cb = ChannelBuilder::new(self.env.clone())
+                    .keepalive_time(Duration::from_secs(10))
+                    .keepalive_timeout(Duration::from_secs(3));
+                cb.connect(&self.address)
+            };
+            self.client = Some(ResourceUsageAgentClient::new(channel));
         }
 
         let client = self.client.as_ref().unwrap();
@@ -118,7 +131,7 @@ impl SingleTargetDataSink {
         });
     }
 
-    fn update_data_sink_and_client(&mut self, new_address: String) {
+    fn update_data_sink(&mut self, new_address: String) {
         if new_address.is_empty() {
             self.reset();
             return;
@@ -126,13 +139,7 @@ impl SingleTargetDataSink {
 
         if self.address != new_address {
             self.address = new_address;
-            let channel = {
-                let cb = ChannelBuilder::new(self.env.clone())
-                    .keepalive_time(Duration::from_secs(10))
-                    .keepalive_timeout(Duration::from_secs(3));
-                cb.connect(&self.address)
-            };
-            self.client = Some(ResourceUsageAgentClient::new(channel));
+            self.client = None; // discard previous connection
         }
 
         if self.data_sink.is_none() {

@@ -5,7 +5,7 @@ pub mod data_sink;
 pub mod data_sink_reg;
 pub mod single_target;
 
-use crate::recorder::{CollectorHandle, CollectorRegHandle};
+use crate::recorder::{CollectorGuard, CollectorRegHandle};
 use crate::reporter::collector_impl::CollectorImpl;
 use crate::reporter::data_sink_reg::{DataSinkId, DataSinkReg, DataSinkRegHandle};
 use crate::{Config, DataSink, RawRecords, Records};
@@ -36,7 +36,7 @@ pub struct Reporter {
     config: Config,
     scheduler: Scheduler<Task>,
     collector_reg_handle: CollectorRegHandle,
-    collector: Option<CollectorHandle>,
+    collector: Option<CollectorGuard>,
 
     data_sinks: HashMap<DataSinkId, Box<dyn DataSink>>,
     records: Records,
@@ -180,7 +180,7 @@ impl ConfigChangeNotifier {
     }
 }
 
-/// Constructs a default [Recorder], start it and return the corresponding [Scheduler], [DataSinkRegHandle] and [LazyWorker].
+/// Constructs a default [Recorder], start it and return the corresponding [ConfigChangeNotifier], [DataSinkRegHandle] and [LazyWorker].
 ///
 /// This function is intended to simplify external use.
 pub fn init_reporter(

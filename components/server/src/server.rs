@@ -14,7 +14,6 @@ use std::{
     cmp,
     convert::TryFrom,
     env, fmt,
-    fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
     str::FromStr,
@@ -36,10 +35,9 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use file_system::{
-    get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, IOBudgetAdjustor,
+    get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IOBudgetAdjustor,
     MetricsManager as IOMetricsManager,
 };
-use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use kvproto::{
@@ -364,10 +362,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let lock_dir = get_lock_dir();
 
         let search_base = env::temp_dir().join(&lock_dir);
-        std::fs::create_dir_all(&search_base)
+        file_system::create_dir_all(&search_base)
             .unwrap_or_else(|_| panic!("create {} failed", search_base.display()));
 
-        for entry in fs::read_dir(&search_base).unwrap().flatten() {
+        for entry in file_system::read_dir(&search_base).unwrap().flatten() {
             if !entry.file_type().unwrap().is_file() {
                 continue;
             }
@@ -1033,6 +1031,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             engines.engines.kv.as_inner().clone(),
             self.config.backup.clone(),
             self.concurrency_manager.clone(),
+            self.config.storage.api_version(),
         );
         self.cfg_controller.as_mut().unwrap().register(
             tikv::config::Module::Backup,

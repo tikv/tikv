@@ -77,7 +77,7 @@ fn test_summary() {
     }
 
     // turn on
-    let handle = data_sink_reg_handle.register(Box::new(data_sink.clone()));
+    let reg_guard = data_sink_reg_handle.register(Box::new(data_sink.clone()));
 
     // expect can get data
     {
@@ -104,7 +104,7 @@ fn test_summary() {
     }
 
     // turn off
-    drop(handle);
+    drop(reg_guard);
 
     // expect no data
     thread::spawn(move || {

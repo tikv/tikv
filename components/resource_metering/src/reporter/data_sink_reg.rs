@@ -10,7 +10,7 @@ use tikv_util::worker::Scheduler;
 
 /// `DataSinkRegHandle` accepts registrations of [DataSink].
 ///
-/// [Collector]: crate::collector::Collector
+/// [DataSink]: crate::DataSink
 #[derive(Clone)]
 pub struct DataSinkRegHandle {
     reporter_scheduler: Scheduler<Task>,
@@ -21,19 +21,19 @@ impl DataSinkRegHandle {
         Self { reporter_scheduler }
     }
 
-    pub fn register(&self, data_sink: Box<dyn DataSink>) -> DataSinkHandle {
+    pub fn register(&self, data_sink: Box<dyn DataSink>) -> DataSinkGuard {
         static NEXT_DATA_SINK_ID: AtomicU64 = AtomicU64::new(1);
         let id = DataSinkId(NEXT_DATA_SINK_ID.fetch_add(1, Ordering::SeqCst));
 
         let reg_msg = Task::DataSinkReg(DataSinkReg::Register { data_sink, id });
         match self.reporter_scheduler.schedule(reg_msg) {
-            Ok(_) => DataSinkHandle {
+            Ok(_) => DataSinkGuard {
                 id,
                 reporter_scheduler: Some(self.reporter_scheduler.clone()),
             },
             Err(err) => {
                 warn!("failed to register datasink"; "err" => ?err);
-                DataSinkHandle {
+                DataSinkGuard {
                     id,
                     reporter_scheduler: None,
                 }
@@ -55,12 +55,12 @@ pub enum DataSinkReg {
     },
 }
 
-pub struct DataSinkHandle {
+pub struct DataSinkGuard {
     id: DataSinkId,
     reporter_scheduler: Option<Scheduler<Task>>,
 }
 
-impl Drop for DataSinkHandle {
+impl Drop for DataSinkGuard {
     fn drop(&mut self) {
         if self.reporter_scheduler.is_none() {
             return;

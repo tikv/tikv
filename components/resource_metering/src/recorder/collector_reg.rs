@@ -30,7 +30,7 @@ impl CollectorRegHandle {
         }
     }
 
-    /// Register a collector to the recorder. Dropping the returned [CollectorHandle] will
+    /// Register a collector to the recorder. Dropping the returned [CollectorGuard] will
     /// preform deregistering.
     ///
     /// The second argument `as_observer` indicates that whether the given `collector` will
@@ -40,7 +40,7 @@ impl CollectorRegHandle {
     ///   will keep running.
     /// - When `as_observer` is true, whether the recorder to be on or off won't depend on if
     ///   the collector exists.
-    pub fn register(&self, collector: Box<dyn Collector>, as_observer: bool) -> CollectorHandle {
+    pub fn register(&self, collector: Box<dyn Collector>, as_observer: bool) -> CollectorGuard {
         static NEXT_COLLECTOR_ID: AtomicU64 = AtomicU64::new(1);
         let id = CollectorId(NEXT_COLLECTOR_ID.fetch_add(1, Ordering::SeqCst));
 
@@ -50,13 +50,13 @@ impl CollectorRegHandle {
             id,
         });
         match self.scheduler.schedule(reg_msg) {
-            Ok(_) => CollectorHandle {
+            Ok(_) => CollectorGuard {
                 id,
                 tx: Some(self.scheduler.clone()),
             },
             Err(err) => {
                 warn!("failed to register collector"; "err" => ?err);
-                CollectorHandle { id, tx: None }
+                CollectorGuard { id, tx: None }
             }
         }
     }
@@ -76,12 +76,12 @@ pub enum CollectorReg {
     },
 }
 
-pub struct CollectorHandle {
+pub struct CollectorGuard {
     id: CollectorId,
     tx: Option<Scheduler<Task>>,
 }
 
-impl Drop for CollectorHandle {
+impl Drop for CollectorGuard {
     fn drop(&mut self) {
         if self.tx.is_none() {
             return;

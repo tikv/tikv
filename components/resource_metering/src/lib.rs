@@ -19,7 +19,7 @@ pub use recorder::{
     init_recorder, record_read_keys, record_write_keys, CpuRecorder, Recorder, RecorderBuilder,
     RecorderHandle, SummaryRecorder,
 };
-pub use recorder::{CollectorHandle, CollectorId, CollectorRegHandle};
+pub use recorder::{CollectorGuard, CollectorId, CollectorRegHandle};
 use recorder::{LocalStorage, LocalStorageRef, STORAGE};
 pub use reporter::data_sink::DataSink;
 pub use reporter::init_reporter;
