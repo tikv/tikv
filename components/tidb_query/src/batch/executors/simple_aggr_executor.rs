@@ -646,16 +646,8 @@ mod tests {
         assert!(!r.is_drained.unwrap());
 
         let r = exec.next_batch(1);
-<<<<<<< HEAD:components/tidb_query/src/batch/executors/simple_aggr_executor.rs
-        assert_eq!(&r.logical_rows, &[0]);
-        assert_eq!(r.physical_columns.rows_len(), 1);
-        assert_eq!(r.physical_columns.columns_len(), 1);
-        assert!(r.physical_columns[0].is_decoded());
-        assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(42)]);
-=======
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
->>>>>>> 8cbc5f67c... coprocessor: not return rows when there is no input for simple aggregation (#11708):components/tidb_query_executors/src/simple_aggr_executor.rs
         assert!(r.is_drained.unwrap());
     }
 }
