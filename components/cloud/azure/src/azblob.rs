@@ -1,5 +1,6 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use async_trait::async_trait;
-use azure_core::auth::{TokenResponse, TokenCredential};
+use azure_core::auth::{TokenCredential, TokenResponse};
 use azure_core::prelude::*;
 use azure_identity::token_credentials::{ClientSecretCredential, TokenCredentialOptions};
 use azure_storage::blob::prelude::*;
@@ -9,21 +10,24 @@ use cloud::blob::{
     none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
 };
 use futures_util::{
+    io::{AsyncRead, AsyncReadExt},
+    stream,
     stream::StreamExt,
     TryStreamExt,
-    stream,
-    io::{AsyncRead, AsyncReadExt},
 };
-pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, AzureBlobStorage as InputConfig};
+pub use kvproto::brpb::{AzureBlobStorage as InputConfig, Bucket as InputBucket, CloudDynamic};
 use oauth2::{ClientId, ClientSecret};
 use tikv_util::debug;
 use tikv_util::stream::{retry, RetryError};
-use tokio::time::{timeout, Duration};
 use tokio::sync::Mutex;
+use tokio::time::{timeout, Duration};
 use uuid::Uuid;
 
 use std::str::FromStr;
-use std::{env, io, sync::{Arc, RwLock}};
+use std::{
+    env, io,
+    sync::{Arc, RwLock},
+};
 
 const ENV_CLIENT_ID: &str = "AZURE_CLIENT_ID";
 const ENV_TENANT_ID: &str = "AZURE_TENANT_ID";
@@ -32,12 +36,12 @@ const ENV_ACCOUNT_NAME: &str = "AZURE_STORAGE_ACCOUNT";
 const ENV_SHARED_KEY: &str = "AZURE_STORAGE_KEY";
 
 /// CredentialInfo saves the credential variables from the enviroment:
-/// client_id:      $AZURE_CLIENT_ID, 
-/// tenant_id:      $AZURE_TENANT_ID, 
+/// client_id:      $AZURE_CLIENT_ID,
+/// tenant_id:      $AZURE_TENANT_ID,
 /// client_secret:  $AZURE_CLIENT_SECRET,
 #[derive(Clone)]
 struct CredentialInfo {
-    client_id: ClientId, 
+    client_id: ClientId,
     tenant_id: String,
     client_secret: ClientSecret,
 }
@@ -79,7 +83,6 @@ impl std::fmt::Debug for Config {
 impl Config {
     #[cfg(test)]
     pub fn default(bucket: BucketConf) -> Self {
-
         Self {
             bucket,
             account_name: None,
@@ -94,7 +97,7 @@ impl Config {
         if let (Some(client_id), Some(tenant_id), Some(client_secret)) = (
             env::var(ENV_CLIENT_ID).ok(),
             env::var(ENV_TENANT_ID).ok(),
-            env::var(ENV_CLIENT_SECRET).ok()
+            env::var(ENV_CLIENT_SECRET).ok(),
         ) {
             if !(client_id.is_empty() || tenant_id.is_empty() || client_secret.is_empty()) {
                 let client_id = ClientId::new(client_id);
@@ -146,7 +149,7 @@ impl Config {
             storage_class: StringNonEmpty::opt(input.storage_class),
             region: None,
         };
-        
+
         Ok(Config {
             bucket,
             account_name: StringNonEmpty::opt(input.account_name),
@@ -157,44 +160,54 @@ impl Config {
         })
     }
 
-
     pub fn get_account_name(&self) -> io::Result<String> {
         if let Some(account_name) = self.account_name.as_ref() {
             Ok(account_name.to_string())
         } else if let Some(account_name) = self.env_account_name.as_ref() {
             Ok(account_name.to_string())
         } else {
-            Err(io::Error::new(io::ErrorKind::InvalidInput, "account name cannot be empty to access azure blob storage"))
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "account name cannot be empty to access azure blob storage",
+            ))
         }
     }
 
     pub fn parse_plaintext_account_url(&self) -> Option<String> {
-        if let (Some(account_name), Some(shared_key)) = (self.account_name.as_ref(), self.shared_key.as_ref()) {
+        if let (Some(account_name), Some(shared_key)) =
+            (self.account_name.as_ref(), self.shared_key.as_ref())
+        {
             let blob_endpoint = match self.bucket.endpoint.as_ref() {
                 Some(s) => s.to_string(),
                 None => format!("https://{}.blob.core.windows.net", account_name),
             };
-            Some(ConnectionStringBuilder::new()
+            Some(
+                ConnectionStringBuilder::new()
                     .account_name(account_name)
                     .account_key(shared_key)
                     .blob_endpoint(&blob_endpoint)
-                    .build())
+                    .build(),
+            )
         } else {
             None
         }
     }
 
     pub fn parse_env_plaintext_account_url(&self) -> Option<String> {
-        if let (Some(account_name), Some(shared_key)) = (self.env_account_name.as_ref(), self.env_shared_key.as_ref()) {
+        if let (Some(account_name), Some(shared_key)) =
+            (self.env_account_name.as_ref(), self.env_shared_key.as_ref())
+        {
             let blob_endpoint = match self.bucket.endpoint.as_ref() {
                 Some(s) => s.to_string(),
                 None => format!("https://{}.blob.core.windows.net", account_name),
             };
-            Some(ConnectionStringBuilder::new()
+            Some(
+                ConnectionStringBuilder::new()
                     .account_name(account_name)
                     .account_key(shared_key)
                     .blob_endpoint(&blob_endpoint)
-                    .build())
+                    .build(),
+            )
         } else {
             None
         }
@@ -226,12 +239,13 @@ impl From<RequestError> for io::Error {
     fn from(err: RequestError) -> Self {
         match err {
             RequestError::IO(e) => e,
-            RequestError::InvalidInput(e, tag) => Self::new(io::ErrorKind::InvalidInput, format!("{}: {}", tag, &e)),
+            RequestError::InvalidInput(e, tag) => {
+                Self::new(io::ErrorKind::InvalidInput, format!("{}: {}", tag, &e))
+            }
             RequestError::TimeOut(msg) => Self::new(io::ErrorKind::TimedOut, msg),
         }
     }
 }
-
 
 impl RetryError for RequestError {
     fn is_retryable(&self) -> bool {
@@ -241,7 +255,6 @@ impl RetryError for RequestError {
         }
     }
 }
-
 
 /// Specifies the minimum size to use multi-block upload.
 /// Azure requires each part to be at least 4 MiB compatible with 2016 version.
@@ -253,7 +266,7 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// A helper for uploading a large file to Azure storage.
 ///
-/// 
+///
 struct AzureUploader {
     client_builder: Arc<dyn ContainerBuilder>,
     name: String,
@@ -265,13 +278,14 @@ struct AzureUploader {
 impl AzureUploader {
     /// Creates a new uploader with a given target location and upload configuration.
     fn new(client_builder: Arc<dyn ContainerBuilder>, config: &Config, name: String) -> Self {
-
         AzureUploader {
             client_builder,
             name,
             block_list: BlockList::default(),
 
-            storage_class: Self::parse_storage_class(none_to_empty(config.bucket.storage_class.clone())),
+            storage_class: Self::parse_storage_class(none_to_empty(
+                config.bucket.storage_class.clone(),
+            )),
         }
     }
 
@@ -300,10 +314,14 @@ impl AzureUploader {
                         break;
                     }
                     // keep the length of the block_id the same
-                    
-                    let block_id = BlockId::new(base64::encode(Uuid::new_v4().to_hyphenated().to_string()));
-                    let _ = retry(|| self.upload_block(block_id.clone(), &buf[..data_size])).await?;
-                    self.block_list.blocks.push(BlobBlockType::new_uncommitted(block_id));
+
+                    let block_id =
+                        BlockId::new(base64::encode(Uuid::new_v4().to_hyphenated().to_string()));
+                    let _ =
+                        retry(|| self.upload_block(block_id.clone(), &buf[..data_size])).await?;
+                    self.block_list
+                        .blocks
+                        .push(BlobBlockType::new_uncommitted(block_id));
                 }
                 Ok(())
             }
@@ -315,68 +333,62 @@ impl AzureUploader {
             }
             upload_res
         }
-
     }
 
     /// Completes a multipart upload process, asking Azure to commit all the previously uploaded blocks.
     async fn complete(&self) -> Result<(), RequestError> {
         match timeout(
             Self::get_timeout(),
-            self
-                    .client_builder
-                    .get_client()
-                    .await
-                    .map_err(|e| RequestError::IO(e))?
-                    .as_blob_client(&self.name)
-                    .put_block_list(&self.block_list)
-                    .access_tier(self.storage_class)
-                    .execute()
+            self.client_builder
+                .get_client()
+                .await
+                .map_err(|e| RequestError::IO(e))?
+                .as_blob_client(&self.name)
+                .put_block_list(&self.block_list)
+                .access_tier(self.storage_class)
+                .execute(),
         )
         .await
         {
             Ok(res) => match res {
                 Ok(_) => Ok(()),
-                Err(err) => Err(RequestError::InvalidInput(err, "upload block_list failed".to_owned())),
+                Err(err) => Err(RequestError::InvalidInput(
+                    err,
+                    "upload block_list failed".to_owned(),
+                )),
             },
-            Err(_) => Err(
-                RequestError::TimeOut(
-                    "timeout after 15mins for complete in azure storage".to_owned(),
-                ),
-            ),
+            Err(_) => Err(RequestError::TimeOut(
+                "timeout after 15mins for complete in azure storage".to_owned(),
+            )),
         }
     }
-
 
     /// Uploads a part of the file.
     ///
     /// The `block_number` must be between 1 to 50000.
-    async fn upload_block(
-        &self,
-        block_number: BlockId,
-        data: &[u8],
-    ) -> Result<(), RequestError> {
+    async fn upload_block(&self, block_number: BlockId, data: &[u8]) -> Result<(), RequestError> {
         match timeout(
             Self::get_timeout(),
-            self
-                    .client_builder
-                    .get_client()
-                    .await
-                    .map_err(|e| RequestError::IO(e))?
-                    .as_blob_client(&self.name)
-                    .put_block(block_number, data.to_vec())
-                    .execute(),
+            self.client_builder
+                .get_client()
+                .await
+                .map_err(|e| RequestError::IO(e))?
+                .as_blob_client(&self.name)
+                .put_block(block_number, data.to_vec())
+                .execute(),
         )
         .await
         {
             Ok(res) => match res {
                 Ok(_) => Ok(()),
-                Err(err) => Err(RequestError::InvalidInput(err, "upload block failed".to_owned())),
+                Err(err) => Err(RequestError::InvalidInput(
+                    err,
+                    "upload block failed".to_owned(),
+                )),
             },
-            Err(_) => Err(
-                RequestError::TimeOut(
-                    "timeout after 15mins for complete in azure storage".to_owned(),
-                ),
-            ),
+            Err(_) => Err(RequestError::TimeOut(
+                "timeout after 15mins for complete in azure storage".to_owned(),
+            )),
         }
     }
 
@@ -386,8 +398,7 @@ impl AzureUploader {
     /// retry the entire upload.
     async fn upload(&self, data: &[u8]) -> Result<(), RequestError> {
         match timeout(Self::get_timeout(), async {
-            self
-                .client_builder
+            self.client_builder
                 .get_client()
                 .await
                 .map_err(|e| e.to_string())?
@@ -402,14 +413,15 @@ impl AzureUploader {
         {
             Ok(res) => match res {
                 Ok(_) => Ok(()),
-                Err(err) => Err(RequestError::InvalidInput(err, "upload block failed".to_owned())),
+                Err(err) => Err(RequestError::InvalidInput(
+                    err,
+                    "upload block failed".to_owned(),
+                )),
             },
-            Err(_) => Err(
-                RequestError::TimeOut(
-                    "timeout after 15mins for complete in azure storage".to_owned(),
-                ),
-            ),
-        }   
+            Err(_) => Err(RequestError::TimeOut(
+                "timeout after 15mins for complete in azure storage".to_owned(),
+            )),
+        }
     }
 
     fn get_timeout() -> Duration {
@@ -432,7 +444,7 @@ struct SharedKeyContainerBuilder {
 #[async_trait]
 impl ContainerBuilder for SharedKeyContainerBuilder {
     async fn get_client(&self) -> io::Result<Arc<ContainerClient>> {
-        return Ok(self.container_client.clone())
+        return Ok(self.container_client.clone());
     }
 }
 
@@ -447,7 +459,12 @@ struct TokenCredContainerBuilder {
 }
 
 impl TokenCredContainerBuilder {
-    fn new(account_name: String, container_name: String, token_resource: String, token_cred: Arc<ClientSecretCredential>) -> Self {
+    fn new(
+        account_name: String,
+        container_name: String,
+        token_resource: String,
+        token_cred: Arc<ClientSecretCredential>,
+    ) -> Self {
         return Self {
             account_name,
             container_name,
@@ -456,7 +473,7 @@ impl TokenCredContainerBuilder {
             token_cache: Arc::new(RwLock::new(None)),
 
             modify_place: Arc::new(Mutex::new(true)),
-        }
+        };
     }
 }
 
@@ -475,7 +492,7 @@ impl ContainerBuilder for TokenCredContainerBuilder {
                 if interval > chDuration::minutes(5) {
                     return Ok(t.1.clone());
                 }
-    
+
                 if interval > chDuration::minutes(2) {
                     // there still have time to use the token,
                     // and only need one thread to update token.
@@ -508,23 +525,30 @@ impl ContainerBuilder for TokenCredContainerBuilder {
             }
             // release read lock, the thread still have modify lock,
             // so no other threads can write the token_cache, so read lock is not blocked.
-            let token = self.token_cred
+            let token = self
+                .token_cred
                 .get_token(&self.token_resource)
                 .await
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?;
             let http_client = new_http_client();
-            let storage_client = 
-                StorageAccountClient::new_bearer_token(http_client, self.account_name.clone(), token.token.secret())
-                .as_storage_client()
-                .as_container_client(self.container_name.clone());
-            
+            let storage_client = StorageAccountClient::new_bearer_token(
+                http_client,
+                self.account_name.clone(),
+                token.token.secret(),
+            )
+            .as_storage_client()
+            .as_container_client(self.container_name.clone());
+
             {
                 let mut token_response = self.token_cache.write().unwrap();
                 *token_response = Some((token, storage_client.clone()));
             }
-            return Ok(storage_client)
+            return Ok(storage_client);
         } else {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "failed to get either modify_lock or client"))
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "failed to get either modify_lock or client",
+            ));
         }
     }
 }
@@ -551,15 +575,15 @@ impl AzureStorage {
         if let Some(connection_string) = config.parse_plaintext_account_url() {
             let bucket = (*config.bucket.bucket).to_owned();
             let http_client = new_http_client();
-            let container_client = 
-                StorageAccountClient::new_connection_string(http_client.clone(), connection_string.as_str())
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?
-                .as_storage_client()
-                .as_container_client(bucket);
+            let container_client = StorageAccountClient::new_connection_string(
+                http_client.clone(),
+                connection_string.as_str(),
+            )
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?
+            .as_storage_client()
+            .as_container_client(bucket);
 
-            let client_builder = Arc::new(SharedKeyContainerBuilder {
-                container_client,
-            });
+            let client_builder = Arc::new(SharedKeyContainerBuilder { container_client });
             Ok(AzureStorage {
                 config,
                 client_builder,
@@ -574,15 +598,13 @@ impl AzureStorage {
                 credential_info.client_secret.secret().clone(),
                 TokenCredentialOptions::default(),
             );
-            
-            let client_builder = Arc::new(
-                TokenCredContainerBuilder::new(
-                    account_name, 
-                    bucket, 
-                    token_resource, 
-                    Arc::new(cred),
-                )
-            );
+
+            let client_builder = Arc::new(TokenCredContainerBuilder::new(
+                account_name,
+                bucket,
+                token_resource,
+                Arc::new(cred),
+            ));
             // get token later
             Ok(AzureStorage {
                 config,
@@ -591,22 +613,25 @@ impl AzureStorage {
         } else if let Some(connection_string) = config.parse_env_plaintext_account_url() {
             let bucket = (*config.bucket.bucket).to_owned();
             let http_client = new_http_client();
-            let container_client = 
-                StorageAccountClient::new_connection_string(http_client.clone(), connection_string.as_str())
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?
-                .as_storage_client()
-                .as_container_client(bucket);
-            
-            let client_builder = Arc::new(SharedKeyContainerBuilder {
-                container_client,
-            });
+            let container_client = StorageAccountClient::new_connection_string(
+                http_client.clone(),
+                connection_string.as_str(),
+            )
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?
+            .as_storage_client()
+            .as_container_client(bucket);
+
+            let client_builder = Arc::new(SharedKeyContainerBuilder { container_client });
             Ok(AzureStorage {
                 config,
                 client_builder,
             })
         } else {
-            Err(io::Error::new(io::ErrorKind::InvalidInput, "credential info not found".to_owned()))
-        }   
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "credential info not found".to_owned(),
+            ))
+        }
     }
 
     fn maybe_prefix_key(&self, key: &str) -> String {
@@ -629,27 +654,20 @@ impl BlobStorage for AzureStorage {
         mut reader: PutResource,
         content_length: u64,
     ) -> io::Result<()> {
-
         let name = self.maybe_prefix_key(name);
         debug!("save file to Azure storage"; "key" => %name);
 
-        let uploader = AzureUploader::new(
-            self.client_builder.clone(),
-            &self.config, 
-            name,
-        );
-        
-        uploader.run(
-            &mut reader, 
-            content_length,
-        ).await
+        let uploader = AzureUploader::new(self.client_builder.clone(), &self.config, name);
+
+        uploader.run(&mut reader, content_length).await
     }
 
     fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
         let name = self.maybe_prefix_key(name);
         debug!("read file from Azure storage"; "key" => %name);
         let t = async move {
-            self.client_builder.get_client()
+            self.client_builder
+                .get_client()
                 .await?
                 .as_blob_client(name)
                 .get()
@@ -661,14 +679,13 @@ impl BlobStorage for AzureStorage {
         let k = stream::once(t);
         let t = k.boxed().into_async_read();
         Box::new(t)
-        
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_url_of_backend() {
         let container_name = StringNonEmpty::static_str("container");
@@ -700,7 +717,7 @@ mod tests {
         env::remove_var(ENV_TENANT_ID);
         env::remove_var(ENV_CLIENT_SECRET);
         let config = Config::default(bucket.clone());
-        
+
         assert_eq!(config.account_name.is_none(), true);
         assert_eq!(config.shared_key.is_none(), true);
         assert_eq!(config.credential_info.is_none(), true);
@@ -714,12 +731,23 @@ mod tests {
         env::set_var(ENV_CLIENT_SECRET, "<client_secret>");
 
         let config = Config::default(bucket);
-        
-        assert_eq!(config.env_account_name.as_ref().unwrap().to_string(), "user1");
-        assert_eq!(config.env_shared_key.as_ref().unwrap().to_string(), "cGFzc3dk");
+
+        assert_eq!(
+            config.env_account_name.as_ref().unwrap().to_string(),
+            "user1"
+        );
+        assert_eq!(
+            config.env_shared_key.as_ref().unwrap().to_string(),
+            "cGFzc3dk"
+        );
 
         let cred = config.credential_info.as_ref().unwrap();
-        let cred_str = format!("{}, {}, {}", cred.client_id.as_str(), &cred.tenant_id, cred.client_secret.secret());
+        let cred_str = format!(
+            "{}, {}, {}",
+            cred.client_id.as_str(),
+            &cred.tenant_id,
+            cred.client_secret.secret()
+        );
         assert_eq!(cred_str, "<client_id>, <tenant_id>, <client_secret>");
 
         let debug_str = format!("{:?}", config);
@@ -733,7 +761,6 @@ mod tests {
         env::remove_var(ENV_CLIENT_SECRET);
     }
 
-    
     #[tokio::test]
     #[cfg(feature = "azurite")]
     // test in Azurite emulator
@@ -749,18 +776,19 @@ mod tests {
         let storage = AzureStorage::from_input(input).unwrap();
         assert_eq!(storage.maybe_prefix_key("t"), "backup 01/prefix/t");
         let mut magic_contents = String::new();
-        for _ in 0..4096 { // 4 KiB
-            magic_contents.push_str("qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM1234567890\n"); 
+        for _ in 0..4096 {
+            // 4 KiB
+            magic_contents
+                .push_str("qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM1234567890\n");
         }
         let size = magic_contents.len() as u64;
-        let stream = stream::once(async move {Ok(magic_contents)}).boxed().into_async_read();
-        storage.put(
-            "t", 
-            PutResource(Box::new(stream)), 
-            size,
-        )
-        .await
-        .unwrap();
+        let stream = stream::once(async move { Ok(magic_contents) })
+            .boxed()
+            .into_async_read();
+        storage
+            .put("t", PutResource(Box::new(stream)), size)
+            .await
+            .unwrap();
 
         let mut reader = storage.get("t");
         let mut buf = Vec::new();
@@ -808,5 +836,4 @@ mod tests {
         cd.set_bucket(bucket);
         cd
     }
-
 }

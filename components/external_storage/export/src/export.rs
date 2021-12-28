@@ -9,16 +9,16 @@ use std::sync::Arc;
 
 #[cfg(feature = "cloud-aws")]
 pub use aws::{Config as S3Config, S3Storage};
+#[cfg(feature = "cloud-azure")]
+pub use azure::{AzureStorage, Config as AzureConfig};
 use engine_traits::FileEncryptionInfo;
 #[cfg(feature = "cloud-gcp")]
 pub use gcp::{Config as GCSConfig, GCSStorage};
-#[cfg(feature = "cloud-azure")]
-pub use azure::{Config as AzureConfig, AzureStorage};
 
 use kvproto::brpb::CloudDynamic;
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 #[cfg(any(feature = "cloud-gcp", feature = "cloud-aws", feature = "cloud-azure"))]
-use kvproto::brpb::{Gcs, S3, AzureBlobStorage};
+use kvproto::brpb::{AzureBlobStorage, Gcs, S3};
 
 #[cfg(feature = "cloud-storage-dylib")]
 use crate::dylib;

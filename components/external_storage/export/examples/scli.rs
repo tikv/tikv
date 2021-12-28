@@ -7,12 +7,12 @@ use std::{
 };
 
 use external_storage_export::{
-    create_storage, make_cloud_backend, make_gcs_backend, make_azblob_backend, make_hdfs_backend, make_local_backend,
-    make_noop_backend, make_s3_backend, ExternalStorage, UnpinReader,
+    create_storage, make_azblob_backend, make_cloud_backend, make_gcs_backend, make_hdfs_backend,
+    make_local_backend, make_noop_backend, make_s3_backend, ExternalStorage, UnpinReader,
 };
 use futures_util::io::{copy, AllowStdIo};
 use ini::ini::Ini;
-use kvproto::brpb::{Bucket, CloudDynamic, Gcs, StorageBackend, S3, AzureBlobStorage};
+use kvproto::brpb::{AzureBlobStorage, Bucket, CloudDynamic, Gcs, StorageBackend, S3};
 use structopt::clap::arg_enum;
 use structopt::StructOpt;
 use tikv_util::stream::block_on_external_io;
