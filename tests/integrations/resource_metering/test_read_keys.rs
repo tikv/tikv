@@ -25,7 +25,6 @@ use tikv::read_pool::ReadPool;
 use tikv::storage::{Engine, RocksEngine, TestEngineBuilder};
 use tikv_util::config::ReadableDuration;
 use tikv_util::thread_group::GroupProperties;
-use tikv_util::worker::Builder as WorkerBuilder;
 use tikv_util::HandyRwLock;
 use tipb::SelectResponse;
 
@@ -177,18 +176,16 @@ fn test_read_keys_coprocessor() {
     // Start resource metering.
     let mut cfg = resource_metering::Config::default();
     cfg.enabled = true;
-    cfg.receiver_address = "mock-receiver".to_owned();
     cfg.precision = ReadableDuration::millis(100);
     cfg.report_receiver_interval = ReadableDuration::millis(400);
-    let (_, crh, rtf) = resource_metering::init_recorder(cfg.enabled, cfg.precision.as_millis());
-    let mut worker = WorkerBuilder::new("resource-metering-reporter")
-        .pending_capacity(30)
-        .create()
-        .lazy_build("resource-metering-reporter");
+
+    let (_, collector_reg_handle, resource_tag_factory) =
+        resource_metering::init_recorder(cfg.enabled, cfg.precision.as_millis());
+    let (_, data_sink_reg_handle, worker) =
+        resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
+
     let client = MockClient::new();
-    let reporter =
-        resource_metering::Reporter::new(client.clone(), cfg.clone(), crh, worker.scheduler());
-    worker.start_with_timer(reporter);
+    let _handle = data_sink_reg_handle.register(Box::new(client.clone()));
 
     // Init data.
     let data = vec![
@@ -198,7 +195,7 @@ fn test_read_keys_coprocessor() {
         (5, Some("name:1"), 4),
     ];
     let product = ProductTable::new();
-    let endpoint = init_coprocessor_with_data(&product, &data, rtf);
+    let endpoint = init_coprocessor_with_data(&product, &data, resource_tag_factory);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap();
