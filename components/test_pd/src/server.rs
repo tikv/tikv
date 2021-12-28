@@ -202,12 +202,16 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         mut sink: ServerStreamingSink<WatchGlobalConfigResponse>,
     ) {
         ctx.spawn(async move {
+            let mut name: usize = 0;
             loop {
                 let mut change = GlobalConfigItem::new();
-                change.set_name("/global/config/name".to_owned());
-                change.set_value("changed".to_owned());
+                change.set_name(format!("/global/config/{:?}", name).to_owned());
+                change.set_value(format!("{:?}", name));
                 let mut wc = WatchGlobalConfigResponse::default();
                 wc.set_changes(vec![change].into());
+                // simulate network delay
+                std::thread::sleep(Duration::from_millis(10));
+                name += 1;
                 let _ = sink.send((wc, WriteFlags::default())).await;
                 let _ = sink.flush().await;
             }

@@ -295,24 +295,19 @@ impl PdClient for RpcClient {
             .load_global_config_async(&req)
         {
             Ok(grpc_response) => Box::pin(async move {
-                {
-                    let mut res = HashMap::new();
-                    match grpc_response.await {
-                        Ok(grpc_response) => {
-                            for c in grpc_response.get_items() {
-                                if c.has_error() {
-                                    error!(
-                                        "failed to load global config with key {:?}",
-                                        c.get_error()
-                                    );
-                                } else {
-                                    res.insert(c.get_name().to_owned(), c.get_value().to_owned());
-                                }
+                match grpc_response.await {
+                    Ok(grpc_response) => {
+                        let mut res = HashMap::with_capacity(grpc_response.get_items().len());
+                        for c in grpc_response.get_items() {
+                            if c.has_error() {
+                                error!("failed to load global config with key {:?}", c.get_error());
+                            } else {
+                                res.insert(c.get_name().to_owned(), c.get_value().to_owned());
                             }
-                            Ok(res)
                         }
-                        Err(err) => Err(box_err!("{:?}", err)),
+                        Ok(res)
                     }
+                    Err(err) => Err(box_err!("{:?}", err)),
                 }
             }) as PdFuture<_>,
             Err(err) => Box::pin(async move { Err(box_err!("{:?}", err)) }) as PdFuture<_>,
