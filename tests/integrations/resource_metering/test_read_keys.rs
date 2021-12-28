@@ -182,7 +182,7 @@ fn test_read_keys_coprocessor() {
         resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
 
     let data_sink = MockDataSink::new();
-    let _handle = data_sink_reg_handle.register(Box::new(data_sink.clone()));
+    let _reg_guard = data_sink_reg_handle.register(Box::new(data_sink.clone()));
 
     // Init data.
     let data = vec![
