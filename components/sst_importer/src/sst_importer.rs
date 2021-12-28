@@ -106,8 +106,17 @@ impl SSTImporter {
         self.dir.validate(meta, self.key_manager.clone())
     }
 
+    /// check if api version of sst files are compatible
+    pub fn check_api_version(&self, metas: &[SstMeta]) -> Result<bool> {
+        self.dir
+            .check_api_version(metas, self.key_manager.clone(), self.api_version)
+    }
+
     pub fn ingest<E: KvEngine>(&self, metas: &[SSTMetaInfo], engine: &E) -> Result<()> {
-        match self.dir.ingest(metas, engine, self.key_manager.clone()) {
+        match self
+            .dir
+            .ingest(metas, engine, self.key_manager.clone(), self.api_version)
+        {
             Ok(..) => {
                 info!("ingest"; "metas" => ?metas);
                 Ok(())
@@ -615,7 +624,9 @@ mod tests {
                 total_kvs: 0,
                 meta: meta.to_owned(),
             };
-            dir.ingest(&[info], &db, key_manager.clone()).unwrap();
+            let api_version = info.meta.api_version;
+            dir.ingest(&[info], &db, key_manager.clone(), api_version)
+                .unwrap();
             check_db_range(&db, range);
 
             ingested.push(meta);
