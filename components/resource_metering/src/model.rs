@@ -17,7 +17,7 @@ thread_local! {
 }
 
 /// Raw resource statistics record.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct RawRecord {
     pub cpu_time: u32, // ms
     pub read_keys: u32,

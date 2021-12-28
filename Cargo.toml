@@ -55,6 +55,7 @@ testing = []
 name = "tikv"
 
 [dependencies]
+api_version = { path = "components/api_version", default-features = false }
 anyhow = "1.0"
 async-stream = "0.2"
 async-trait = "0.1"
@@ -77,7 +78,6 @@ engine_traits_tests = { path = "components/engine_traits_tests", default-feature
 error_code = { path = "components/error_code", default-features = false }
 fail = "0.5"
 file_system = { path = "components/file_system", default-features = false }
-fs2 = "0.4"
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-timer = "3.0"
@@ -185,6 +185,9 @@ rusoto_mock = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr
 rusoto_s3 = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 
+# remove this when https://github.com/danburkert/fs2-rs/pull/42 is merged.
+fs2 = { git = "https://github.com/tabokie/fs2-rs", branch = "tikv" }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
 
@@ -254,6 +257,7 @@ members = [
   "components/coprocessor_plugin_api",
   "components/test_coprocessor_plugin/example_plugin",
   "components/resource_metering",
+  "components/api_version",
 ]
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 
