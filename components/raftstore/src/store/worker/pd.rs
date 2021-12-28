@@ -44,7 +44,7 @@ use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use protobuf::Message;
-use resource_metering::{Collector, CollectorHandle, CollectorRegHandle, RawRecords};
+use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -675,7 +675,7 @@ where
     scheduler: Scheduler<Task<EK, ER>>,
     stats_monitor: StatsMonitor<EK, ER>,
 
-    _region_cpu_records_collector: CollectorHandle,
+    _region_cpu_records_collector: CollectorGuard,
     // region_id -> total_cpu_time_ms (since last region heartbeat)
     region_cpu_records: HashMap<u64, u32>,
 
