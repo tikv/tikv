@@ -160,7 +160,6 @@ fn test_watch_global_config_on_closed_server() {
                     }
                 }
             }
-            ()
         });
     });
     thread::sleep(Duration::from_millis(200));
