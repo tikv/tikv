@@ -703,6 +703,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let batch_size = self.config_manager.0.read().unwrap().batch_size;
         let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
         let config = BackendConfig {
+            s3_multi_part_size: self.config_manager.0.read().unwrap().s3_multi_part_size.0 as usize,
             hdfs_config: HdfsConfig {
                 hadoop_home: self.config_manager.0.read().unwrap().hadoop.home.clone(),
                 linux_user: self
@@ -1147,6 +1148,15 @@ pub mod tests {
 
         sleep(Duration::from_millis(250));
         assert_eq!(counter.load(Ordering::SeqCst), 0xffff);
+    }
+
+    #[test]
+    fn test_s3_config() {
+        let (_tmp, endpoint) = new_endpoint();
+        assert_eq!(
+            endpoint.config_manager.0.read().unwrap().s3_multi_part_size,
+            ReadableSize::mb(5)
+        );
     }
 
     #[test]

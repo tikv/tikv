@@ -46,6 +46,7 @@ pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
 
 #[derive(Debug, Default)]
 pub struct BackendConfig {
+    pub s3_multi_part_size: usize,
     pub hdfs_config: HdfsConfig,
 }
 
