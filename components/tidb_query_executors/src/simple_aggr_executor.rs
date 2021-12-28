@@ -105,7 +105,10 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
     ) -> Result<Self> {
         // Empty states is fine because it will be re-initialized later according to the content
         // in entities.
-        let aggr_impl = SimpleAggregationImpl { states: Vec::new(), has_input_rows: false };
+        let aggr_impl = SimpleAggregationImpl {
+            states: Vec::new(),
+            has_input_rows: false,
+        };
 
         Ok(Self(AggregationExecutor::new(
             aggr_impl,
@@ -125,7 +128,7 @@ pub struct SimpleAggregationImpl {
     // the first stage agg, so it is safe to not return any thing if no input.
     // todo should add variable like agg_stage, and if there is no input rows,
     //  only return 1 row if the aggregation is in the final stage
-    has_input_rows : bool
+    has_input_rows: bool,
 }
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl {
@@ -201,7 +204,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
 
     #[inline]
     fn groups_len(&self) -> usize {
-        1
+        if self.has_input_rows { 1 } else { 0 }
     }
 
     #[inline]
