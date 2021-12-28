@@ -222,6 +222,10 @@ where
         &self,
         mut msg: RaftMessage,
     ) -> std::result::Result<(), TrySendError<RaftMessage>> {
+        fail_point!("send_raft_message_full", |_| Err(TrySendError::Full(
+            RaftMessage::default()
+        )));
+
         let id = msg.get_region_id();
         match self.try_send(id, PeerMsg::RaftMessage(msg)) {
             Either::Left(Ok(())) => return Ok(()),
@@ -2400,6 +2404,16 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
     fn on_check_leader(&self, leaders: Vec<LeaderInfo>, cb: Box<dyn FnOnce(Vec<u64>) + Send>) {
         let meta = self.ctx.store_meta.lock().unwrap();
+        fail_point!(
+            "before_check_leader_store_2",
+            meta.store_id == Some(2),
+            |_| {}
+        );
+        fail_point!(
+            "before_check_leader_store_3",
+            meta.store_id == Some(3),
+            |_| {}
+        );
         let regions = leaders
             .into_iter()
             .map(|leader_info| {

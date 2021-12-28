@@ -581,8 +581,13 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         ctx.spawn(async move {
             let res = stream.map_err(Error::from).try_for_each(move |msg| {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
-                let ret = ch.send_raft_msg(msg).map_err(Error::from);
-                future::ready(ret)
+                if let Err(e) = ch.send_raft_msg(msg) {
+                    // `send_raft_msg` may return `RaftStoreError::RegionNotFound` or
+                    // `RaftStoreError::Transport(DiscardReason::Full)`, return the error
+                    // here will cause the connection break which doesn't help the situation
+                    error!("dispatch raft msg from gRPC to raftstore fail"; "err" => ?e);
+                }
+                future::ok(())
             });
             let status = match res.await {
                 Err(e) => {
@@ -614,13 +619,17 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
                 for msg in msgs.take_msgs().into_iter() {
                     if let Err(e) = ch.send_raft_msg(msg) {
-                        return future::err(Error::from(e));
+                        // `send_raft_msg` may return `RaftStoreError::RegionNotFound` or
+                        // `RaftStoreError::Transport(DiscardReason::Full)`, return the error
+                        // here will cause the connection break which doesn't help the situation
+                        error!("dispatch raft msg from gRPC to raftstore fail"; "err" => ?e);
                     }
                 }
                 future::ok(())
             });
             let status = match res.await {
                 Err(e) => {
+                    fail_point!("on_batch_raft_stream_drop_by_err");
                     let msg = format!("{:?}", e);
                     error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
                     RpcStatus::new(RpcStatusCode::UNKNOWN, Some(msg))
