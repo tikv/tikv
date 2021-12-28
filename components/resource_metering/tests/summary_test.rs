@@ -72,7 +72,7 @@ fn test_summary() {
     );
 
     let client = MockClient::default();
-    let _handle = data_sink_reg_handle.register(Box::new(client.clone()));
+    let _reg_guard = data_sink_reg_handle.register(Box::new(client.clone()));
 
     /* At this point we are ready for everything except turning on the switch. */
 

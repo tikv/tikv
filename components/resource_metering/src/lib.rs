@@ -17,7 +17,7 @@ pub mod utils;
 
 pub(crate) mod metrics;
 
-pub use collector::{Collector, CollectorHandle, CollectorId, CollectorRegHandle};
+pub use collector::{Collector, CollectorGuard, CollectorId, CollectorRegHandle};
 pub use config::{Config, ConfigManager};
 pub use model::*;
 pub use recorder::{

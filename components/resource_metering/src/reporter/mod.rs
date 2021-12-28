@@ -4,7 +4,7 @@ pub mod data_sink;
 pub mod data_sink_reg;
 pub mod single_target;
 
-use crate::collector::{CollectorHandle, CollectorImpl, CollectorRegHandle};
+use crate::collector::{CollectorGuard, CollectorImpl, CollectorRegHandle};
 use crate::reporter::data_sink_reg::{DataSinkId, DataSinkReg, DataSinkRegHandle};
 use crate::{Config, DataSink, RawRecords, Records};
 
@@ -34,7 +34,7 @@ pub struct Reporter {
     config: Config,
     scheduler: Scheduler<Task>,
     collector_reg_handle: CollectorRegHandle,
-    collector: Option<CollectorHandle>,
+    collector: Option<CollectorGuard>,
 
     data_sinks: HashMap<DataSinkId, Box<dyn DataSink>>,
     records: Records,

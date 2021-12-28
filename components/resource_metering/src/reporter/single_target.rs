@@ -3,13 +3,14 @@
 use crate::error::Result;
 use crate::metrics::{IGNORED_DATA_COUNTER, REPORT_DATA_COUNTER, REPORT_DURATION_HISTOGRAM};
 use crate::reporter::data_sink::DataSink;
-use crate::reporter::data_sink_reg::{DataSinkHandle, DataSinkRegHandle};
+use crate::reporter::data_sink_reg::{DataSinkGuard, DataSinkRegHandle};
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use futures::SinkExt;
 use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
 use kvproto::resource_usage_agent::{ResourceUsageAgentClient, ResourceUsageRecord};
@@ -22,7 +23,6 @@ impl Runnable for SingleTargetDataSink {
     fn run(&mut self, task: Self::Task) {
         match task {
             Task::Records(records) => self.handle_records(records),
-            Task::ChangeAddress(address) => self.update_data_sink_and_client(address),
         }
     }
 
@@ -36,33 +36,35 @@ impl Runnable for SingleTargetDataSink {
 pub struct SingleTargetDataSink {
     scheduler: Scheduler<Task>,
     data_sink_reg: DataSinkRegHandle,
-    data_sink: Option<DataSinkHandle>,
+    data_sink: Option<DataSinkGuard>,
 
     env: Arc<Environment>,
-    address: String,
     client: Option<ResourceUsageAgentClient>,
     limiter: Limiter,
+
+    address: Arc<String>,
+    new_address: Arc<ArcSwap<String>>,
 }
 
 impl SingleTargetDataSink {
     pub fn new(
-        address: String,
+        address: Arc<ArcSwap<String>>,
         env: Arc<Environment>,
         data_sink_reg: DataSinkRegHandle,
         scheduler: Scheduler<Task>,
     ) -> Self {
-        let mut single_target = Self {
+        Self {
             scheduler,
             data_sink_reg,
             data_sink: None,
 
             env,
-            address: String::default(),
             client: None,
             limiter: Limiter::default(),
-        };
-        single_target.update_data_sink_and_client(address);
-        single_target
+
+            address: Arc::default(),
+            new_address: address,
+        }
     }
 
     fn handle_records(&mut self, records: Arc<Vec<ResourceUsageRecord>>) {
@@ -74,6 +76,8 @@ impl SingleTargetDataSink {
             warn!("the last report has not been completed");
             return;
         }
+
+        self.update_data_sink_and_client();
 
         if self.client.is_none() {
             IGNORED_DATA_COUNTER
@@ -118,7 +122,8 @@ impl SingleTargetDataSink {
         });
     }
 
-    fn update_data_sink_and_client(&mut self, new_address: String) {
+    fn update_data_sink_and_client(&mut self) {
+        let new_address = self.new_address.load_full();
         if new_address.is_empty() {
             self.reset();
             return;
@@ -146,14 +151,12 @@ impl SingleTargetDataSink {
     fn reset(&mut self) {
         self.data_sink = None;
         self.client = None;
-        self.address.clear();
     }
 }
 
 /// `Task` represents a task scheduled in [SingleTargetDataSink].
 pub enum Task {
     Records(Arc<Vec<ResourceUsageRecord>>),
-    ChangeAddress(String),
 }
 
 impl Display for Task {
@@ -161,9 +164,6 @@ impl Display for Task {
         match self {
             Task::Records(_) => {
                 write!(f, "Records")?;
-            }
-            Task::ChangeAddress(_) => {
-                write!(f, "AddressChange")?;
             }
         }
         Ok(())
@@ -189,20 +189,18 @@ impl DataSink for DataSinkImpl {
     }
 }
 
-/// [AddressChangeNotifier] for scheduling [Task::ChangeAddress]
+/// [AddressChangeNotifier] for notify address changed.
 pub struct AddressChangeNotifier {
-    scheduler: Scheduler<Task>,
+    address: Arc<ArcSwap<String>>,
 }
 
 impl AddressChangeNotifier {
-    fn new(scheduler: Scheduler<Task>) -> Self {
-        Self { scheduler }
+    fn new(address: Arc<ArcSwap<String>>) -> Self {
+        Self { address }
     }
 
     pub fn notify(&self, address: String) {
-        if let Err(err) = self.scheduler.schedule(Task::ChangeAddress(address)) {
-            warn!("failed to schedule Task::ChangeAddress"; "err" => ?err);
-        }
+        self.address.store(Arc::new(address));
     }
 }
 
@@ -243,11 +241,12 @@ pub fn init_single_target(
         .create()
         .lazy_build("resource-metering-single-target-data-sink");
     let single_target_scheduler = single_target_worker.scheduler();
+    let address = Arc::new(ArcSwap::new(Arc::new(address)));
     let single_target =
-        SingleTargetDataSink::new(address, env, data_sink_reg, single_target_scheduler.clone());
+        SingleTargetDataSink::new(address.clone(), env, data_sink_reg, single_target_scheduler);
     single_target_worker.start(single_target);
     (
-        AddressChangeNotifier::new(single_target_scheduler),
+        AddressChangeNotifier::new(address),
         Box::new(single_target_worker),
     )
 }
