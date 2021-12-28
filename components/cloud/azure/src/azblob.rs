@@ -249,10 +249,7 @@ impl From<RequestError> for io::Error {
 
 impl RetryError for RequestError {
     fn is_retryable(&self) -> bool {
-        match self {
-            Self::TimeOut(_) => true,
-            _ => false,
-        }
+        matches!(self, Self::TimeOut(_))
     }
 }
 
@@ -404,7 +401,7 @@ impl AzureUploader {
                 .map_err(|e| e.to_string())?
                 .as_blob_client(&self.name)
                 .put_block_blob(data.to_vec())
-                .access_tier(self.storage_class.clone())
+                .access_tier(self.storage_class)
                 .execute()
                 .await?;
             Ok(())
@@ -444,16 +441,17 @@ struct SharedKeyContainerBuilder {
 #[async_trait]
 impl ContainerBuilder for SharedKeyContainerBuilder {
     async fn get_client(&self) -> io::Result<Arc<ContainerClient>> {
-        return Ok(self.container_client.clone());
+        Ok(self.container_client.clone())
     }
 }
 
+type TokenCacheType = Arc<RwLock<Option<(TokenResponse, Arc<ContainerClient>)>>>;
 struct TokenCredContainerBuilder {
     account_name: String,
     container_name: String,
     token_resource: String,
     token_cred: Arc<ClientSecretCredential>,
-    token_cache: Arc<RwLock<Option<(TokenResponse, Arc<ContainerClient>)>>>,
+    token_cache: TokenCacheType,
 
     modify_place: Arc<Mutex<bool>>,
 }
@@ -465,7 +463,7 @@ impl TokenCredContainerBuilder {
         token_resource: String,
         token_cred: Arc<ClientSecretCredential>,
     ) -> Self {
-        return Self {
+        Self {
             account_name,
             container_name,
             token_resource,
@@ -473,7 +471,7 @@ impl TokenCredContainerBuilder {
             token_cache: Arc::new(RwLock::new(None)),
 
             modify_place: Arc::new(Mutex::new(true)),
-        };
+        }
     }
 }
 
@@ -543,12 +541,12 @@ impl ContainerBuilder for TokenCredContainerBuilder {
                 let mut token_response = self.token_cache.write().unwrap();
                 *token_response = Some((token, storage_client.clone()));
             }
-            return Ok(storage_client);
+            Ok(storage_client)
         } else {
-            return Err(io::Error::new(
+            Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "failed to get either modify_lock or client",
-            ));
+            ))
         }
     }
 }
@@ -698,7 +696,7 @@ mod tests {
             "azure://container/backup%2001/prefix/"
         );
         bucket.endpoint = Some(StringNonEmpty::static_str("http://endpoint.com"));
-        let config = Config::default(bucket.clone());
+        let config = Config::default(bucket);
         assert_eq!(
             config.url().unwrap().to_string(),
             "http://endpoint.com/container/backup%2001/prefix/"
