@@ -104,6 +104,39 @@ fn test_pd_client_deadlock() {
     fail::remove(pd_client_reconnect_fp);
 }
 
+#[test]
+fn test_watch_global_config_on_closed_server() {
+    let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
+    let client = Arc::new(client);
+    use futures::StreamExt;
+    let j = std::thread::spawn(move || {
+        let _ = futures::executor::block_on(async move {
+            let mut r = client.watch_global_config().unwrap();
+            while let Some(r) = r.next().await {
+                match r {
+                    Ok(i) => {
+                        println! {"received: {:?}",i};
+                    }
+                    Err(e) => {
+                        println! {"received error: {:?}",e};
+                        if let grpcio::Error::RpcFailure(e) = e {
+                            // 14-UNAVAILABLE
+                            assert_eq!(e.code(), grpcio::RpcStatusCode::from(14));
+                            break;
+                        } else {
+                            panic!("other error occur {:?}", e)
+                        }
+                    }
+                }
+            }
+            ()
+        });
+    });
+    thread::sleep(Duration::from_millis(200));
+    server.stop();
+    j.join().unwrap();
+}
+
 // Updating pd leader may be slow, we need to make sure it does not block other
 // RPC in the same gRPC Environment.
 #[test]

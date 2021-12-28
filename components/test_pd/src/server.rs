@@ -188,20 +188,30 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
 
     fn store_global_config(
         &mut self,
-        ctx: RpcContext<'_>,
-        req: StoreGlobalConfigRequest,
-        sink: UnarySink<StoreGlobalConfigResponse>,
+        _ctx: RpcContext<'_>,
+        _req: StoreGlobalConfigRequest,
+        _sink: UnarySink<StoreGlobalConfigResponse>,
     ) {
-        hijack_unary(self, ctx, sink, |c| c.store_global_config(&req))
+        unimplemented!()
     }
 
     fn watch_global_config(
         &mut self,
-        _ctx: RpcContext<'_>,
+        ctx: RpcContext<'_>,
         _req: WatchGlobalConfigRequest,
-        _sink: ServerStreamingSink<WatchGlobalConfigResponse>,
+        mut sink: ServerStreamingSink<WatchGlobalConfigResponse>,
     ) {
-        // TODO: hijack_streaming(self, ctx, sink, |c| c.watch_global_config())
+        ctx.spawn(async move {
+            loop {
+                let mut change = GlobalConfigItem::new();
+                change.set_name("/global/config/name".to_owned());
+                change.set_value("changed".to_owned());
+                let mut wc = WatchGlobalConfigResponse::default();
+                wc.set_changes(vec![change].into());
+                let _ = sink.send((wc, WriteFlags::default())).await;
+                let _ = sink.flush().await;
+            }
+        })
     }
 
     fn get_members(
