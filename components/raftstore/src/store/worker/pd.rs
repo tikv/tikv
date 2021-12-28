@@ -523,31 +523,49 @@ where
     }
 }
 
-const HOTSPOT_KEY_RATE_THRESHOLD: u64 = 128;
-const HOTSPOT_QUERY_RATE_THRESHOLD: u64 = 128;
-const HOTSPOT_BYTE_RATE_THRESHOLD: u64 = 8 * 1024;
+const HOTSPOT_READ_KEY_RATE_THRESHOLD: u64 = 128;
+const HOTSPOT_READ_QUERY_RATE_THRESHOLD: u64 = 128;
+const HOTSPOT_READ_BYTE_RATE_THRESHOLD: u64 = 8 * 1024;
+
+const HOTSPOT_WRITE_KEY_RATE_THRESHOLD: u64 = 32;
+const HOTSPOT_WRITE_BYTE_RATE_THRESHOLD: u64 = 1024;
+
 const HOTSPOT_REPORT_CAPACITY: usize = 1000;
 
 // TODO: support dynamic configure threshold in future.
-fn hotspot_key_report_threshold() -> u64 {
+fn hotspot_read_key_report_threshold() -> u64 {
     #[cfg(feature = "failpoints")]
     fail_point!("mock_hotspot_threshold", |_| { 0 });
 
-    HOTSPOT_KEY_RATE_THRESHOLD * 10
+    HOTSPOT_READ_KEY_RATE_THRESHOLD * 10
 }
 
-fn hotspot_byte_report_threshold() -> u64 {
+fn hotspot_read_byte_report_threshold() -> u64 {
     #[cfg(feature = "failpoints")]
     fail_point!("mock_hotspot_threshold", |_| { 0 });
 
-    HOTSPOT_BYTE_RATE_THRESHOLD * 10
+    HOTSPOT_READ_BYTE_RATE_THRESHOLD * 10
 }
 
-fn hotspot_query_num_report_threshold() -> u64 {
+fn hotspot_read_query_num_report_threshold() -> u64 {
     #[cfg(feature = "failpoints")]
     fail_point!("mock_hotspot_threshold", |_| { 0 });
 
-    HOTSPOT_QUERY_RATE_THRESHOLD * 10
+    HOTSPOT_READ_QUERY_RATE_THRESHOLD * 10
+}
+
+fn hotspot_write_key_report_threshold() -> u64 {
+    #[cfg(feature = "failpoints")]
+    fail_point!("mock_hotspot_threshold", |_| { 0 });
+
+    HOTSPOT_WRITE_KEY_RATE_THRESHOLD * 10
+}
+
+fn hotspot_write_byte_report_threshold() -> u64 {
+    #[cfg(feature = "failpoints")]
+    fail_point!("mock_hotspot_threshold", |_| { 0 });
+
+    HOTSPOT_WRITE_BYTE_RATE_THRESHOLD * 10
 }
 
 // Slow score is a value that represents the speed of a store and ranges in [1, 100].
@@ -975,11 +993,11 @@ where
             region_peer
                 .last_store_report_query_stats
                 .fill_query_stats(&region_peer.query_stats);
-            if read_bytes < hotspot_byte_report_threshold()
-                && read_keys < hotspot_key_report_threshold()
-                && written_bytes < hotspot_byte_report_threshold()
-                && written_keys < hotspot_key_report_threshold()
-                && query_stats.get_read_query_num() < hotspot_query_num_report_threshold()
+            if read_bytes < hotspot_read_byte_report_threshold()
+                && read_keys < hotspot_read_key_report_threshold()
+                && written_bytes < hotspot_write_byte_report_threshold()
+                && written_keys < hotspot_write_key_report_threshold()
+                && query_stats.get_read_query_num() < hotspot_read_query_num_report_threshold()
             {
                 continue;
             }
