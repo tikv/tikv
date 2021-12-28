@@ -17,7 +17,7 @@ pub mod utils;
 
 pub(crate) mod metrics;
 
-pub use collector::{Collector, CollectorHandle, CollectorId, CollectorRegHandle};
+pub use collector::{Collector, CollectorGuard, CollectorId, CollectorRegHandle};
 pub use config::{Config, ConfigManager};
 pub use model::*;
 pub use recorder::{
@@ -25,7 +25,9 @@ pub use recorder::{
     RecorderHandle, SummaryRecorder,
 };
 pub use reporter::data_sink::DataSink;
+pub use reporter::init_reporter;
 pub use reporter::single_target::SingleTargetDataSink;
+pub use reporter::single_target::{init_single_target, AddressChangeNotifier};
 pub use reporter::{Reporter, Task};
 
 pub const MAX_THREAD_REGISTER_RETRY: u32 = 10;

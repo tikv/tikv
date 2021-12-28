@@ -36,7 +36,5 @@ pub struct LocalStorage {
 #[derive(Clone)]
 pub struct LocalStorageRef {
     pub id: usize,
-
-    // TODO(zhongzc): change to `attached_tag` to keep `LocalStorage` one per thread.
     pub storage: LocalStorage,
 }
