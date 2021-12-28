@@ -178,7 +178,7 @@ impl ConfigChangeNotifier {
     }
 }
 
-/// Constructs a default [Recorder], start it and return the corresponding [Scheduler], [DataSinkRegHandle] and [LazyWorker].
+/// Constructs a default [Recorder], start it and return the corresponding [ConfigChangeNotifier], [DataSinkRegHandle] and [LazyWorker].
 ///
 /// This function is intended to simplify external use.
 pub fn init_reporter(

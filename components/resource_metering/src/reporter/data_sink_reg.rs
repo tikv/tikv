@@ -10,7 +10,7 @@ use tikv_util::worker::Scheduler;
 
 /// `DataSinkRegHandle` accepts registrations of [DataSink].
 ///
-/// [Collector]: crate::collector::Collector
+/// [DataSink]: crate::DataSink
 #[derive(Clone)]
 pub struct DataSinkRegHandle {
     reporter_scheduler: Scheduler<Task>,
