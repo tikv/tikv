@@ -1,12 +1,11 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     collections::{hash_map::RandomState, HashMap},
     time::Duration,
 };
 
-
 use tikv_util::time::Instant;
 use tokio::sync::{Mutex, RwLock};
-// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use txn_types::Key;
 
 /// wrap a user key with encoded data key.
