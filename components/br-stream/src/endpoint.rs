@@ -10,14 +10,17 @@ use tokio_stream::StreamExt;
 use crate::metadata::store::{EtcdStore, MetaStore};
 use crate::metadata::{MetadataClient, MetadataEvent, Task as MetaTask};
 use crate::router::{ApplyEvent, Router};
-use crate::utils;
+use crate::utils::{self, StopWatch};
 use crate::{errors::Result, observer::BackupStreamObserver};
 
 use online_config::ConfigChange;
 use raftstore::coprocessor::CmdBatch;
 use tikv::config::BackupStreamConfig;
+
 use tikv_util::worker::{Runnable, Scheduler};
 use tikv_util::{debug, error, info};
+
+use super::metrics::{HANDLE_EVENT_DURATION_HISTOGRAM, HANDLE_KV_HISTOGRAM};
 
 pub struct Endpoint<S: MetaStore + 'static> {
     #[allow(dead_code)]
@@ -148,18 +151,30 @@ where
     }
 
     fn backup_batch(&self, batch: CmdBatch) {
+        let mut sw = StopWatch::new();
         let kvs = ApplyEvent::from_cmd_batch(batch, /* TODO */ 0);
+        HANDLE_EVENT_DURATION_HISTOGRAM
+            .with_label_values(&["to_stream_event"])
+            .observe(sw.lap().as_secs_f64());
         let router = self.range_router.clone();
         self.pool.spawn(async move {
-            let mut router = router.lock().await;
+            HANDLE_EVENT_DURATION_HISTOGRAM
+                .with_label_values(&["get_router_lock"])
+                .observe(sw.lap().as_secs_f64());
+            let mut kv_count = 0;
             for kv in kvs {
                 // TODO build a error handle mechanism #error 6
                 if kv.should_record() {
                     if let Err(err) = router.on_event(kv).await {
                         error!("backup stream failed in backup batch"; "error" => ?err);
                     }
+                    kv_count += 1;
                 }
             }
+            HANDLE_KV_HISTOGRAM.observe(kv_count as _);
+            HANDLE_EVENT_DURATION_HISTOGRAM
+                .with_label_values(&["save_to_temp_file"])
+                .observe(sw.lap().as_secs_f64())
         });
     }
 
@@ -184,7 +199,7 @@ where
                             "ranges-count" => ranges.inner.len(),
                         );
                         // TODO implement register ranges
-                        range_router.lock().await.register_ranges(
+                        range_router.register_ranges(
                             task_name,
                             ranges
                                 .inner
@@ -205,13 +220,10 @@ where
     }
 
     pub async fn do_flush(router: Router, task: String) -> Result<()> {
-        let temp_files = {
-            let mut router = router.lock().await;
-            router.take_temporary_files(&task)?
-        };
+        let temp_files = router.take_temporary_files(&task).await?;
         let meta = temp_files.generate_metadata().await?;
         // TODO flush the files to external storage
-        info!("flushing data to external storage"; "local_files" => ?meta);
+        info!("flushing data to external storage"; "local_file_simple" => ?meta.files.get(0));
         Ok(())
     }
 
