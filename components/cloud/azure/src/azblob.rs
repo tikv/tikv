@@ -21,7 +21,6 @@ use tikv_util::debug;
 use tikv_util::stream::{retry, RetryError};
 use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
-use uuid::Uuid;
 
 use std::str::FromStr;
 use std::{
@@ -230,7 +229,6 @@ impl BlobConfig for Config {
 }
 
 enum RequestError {
-    IO(io::Error),
     InvalidInput(Box<dyn std::error::Error + Send + Sync>, String),
     TimeOut(String),
 }
@@ -238,7 +236,6 @@ enum RequestError {
 impl From<RequestError> for io::Error {
     fn from(err: RequestError) -> Self {
         match err {
-            RequestError::IO(e) => e,
             RequestError::InvalidInput(e, tag) => {
                 Self::new(io::ErrorKind::InvalidInput, format!("{}: {}", tag, &e))
             }
@@ -253,12 +250,6 @@ impl RetryError for RequestError {
     }
 }
 
-/// Specifies the minimum size to use multi-block upload.
-/// Azure requires each part to be at least 4 MiB compatible with 2016 version.
-/// https://docs.microsoft.com/en-us/rest/api/storageservices/understanding-block-blobs--append-blobs--and-page-blobs
-/// while azure-sdk-for-go use 256 MiB
-const MINIMUM_BLOCK_SIZE: usize = 128 * 1024 * 1024; // 128MB
-
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// A helper for uploading a large file to Azure storage.
@@ -267,7 +258,6 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 struct AzureUploader {
     client_builder: Arc<dyn ContainerBuilder>,
     name: String,
-    block_list: BlockList,
 
     storage_class: AccessTier,
 }
@@ -278,7 +268,6 @@ impl AzureUploader {
         AzureUploader {
             client_builder,
             name,
-            block_list: BlockList::default(),
 
             storage_class: Self::parse_storage_class(none_to_empty(
                 config.bucket.storage_class.clone(),
@@ -292,101 +281,15 @@ impl AzureUploader {
 
     /// Executes the upload process.
     async fn run(
-        mut self,
+        self,
         reader: &mut (dyn AsyncRead + Unpin + Send),
         est_len: u64,
     ) -> io::Result<()> {
-        if est_len <= MINIMUM_BLOCK_SIZE as u64 {
-            // For short files, execute one put_object to upload the entire thing.
-            let mut data = Vec::with_capacity(est_len as usize);
-            reader.read_to_end(&mut data).await?;
-            retry(|| self.upload(&data)).await?;
-            Ok(())
-        } else {
-            let upload_res = async {
-                let mut buf = vec![0; MINIMUM_BLOCK_SIZE];
-                loop {
-                    let data_size = reader.read(&mut buf).await?;
-                    if data_size == 0 {
-                        break;
-                    }
-                    // keep the length of the block_id the same
-
-                    let block_id =
-                        BlockId::new(base64::encode(Uuid::new_v4().to_hyphenated().to_string()));
-                    let _ =
-                        retry(|| self.upload_block(block_id.clone(), &buf[..data_size])).await?;
-                    self.block_list
-                        .blocks
-                        .push(BlobBlockType::new_uncommitted(block_id));
-                }
-                Ok(())
-            }
-            .await;
-
-            // The uncommitted blocks will be later deleted during garbage collection.
-            if upload_res.is_ok() {
-                retry(|| self.complete()).await?;
-            }
-            upload_res
-        }
-    }
-
-    /// Completes a multipart upload process, asking Azure to commit all the previously uploaded blocks.
-    async fn complete(&self) -> Result<(), RequestError> {
-        match timeout(
-            Self::get_timeout(),
-            self.client_builder
-                .get_client()
-                .await
-                .map_err(|e| RequestError::IO(e))?
-                .as_blob_client(&self.name)
-                .put_block_list(&self.block_list)
-                .access_tier(self.storage_class)
-                .execute(),
-        )
-        .await
-        {
-            Ok(res) => match res {
-                Ok(_) => Ok(()),
-                Err(err) => Err(RequestError::InvalidInput(
-                    err,
-                    "upload block_list failed".to_owned(),
-                )),
-            },
-            Err(_) => Err(RequestError::TimeOut(
-                "timeout after 15mins for complete in azure storage".to_owned(),
-            )),
-        }
-    }
-
-    /// Uploads a part of the file.
-    ///
-    /// The `block_number` must be between 1 to 50000.
-    async fn upload_block(&self, block_number: BlockId, data: &[u8]) -> Result<(), RequestError> {
-        match timeout(
-            Self::get_timeout(),
-            self.client_builder
-                .get_client()
-                .await
-                .map_err(|e| RequestError::IO(e))?
-                .as_blob_client(&self.name)
-                .put_block(block_number, data.to_vec())
-                .execute(),
-        )
-        .await
-        {
-            Ok(res) => match res {
-                Ok(_) => Ok(()),
-                Err(err) => Err(RequestError::InvalidInput(
-                    err,
-                    "upload block failed".to_owned(),
-                )),
-            },
-            Err(_) => Err(RequestError::TimeOut(
-                "timeout after 15mins for complete in azure storage".to_owned(),
-            )),
-        }
+        // upload the entire data.
+        let mut data = Vec::with_capacity(est_len as usize);
+        reader.read_to_end(&mut data).await?;
+        retry(|| self.upload(&data)).await?;
+        Ok(())
     }
 
     /// Uploads a file atomically.
