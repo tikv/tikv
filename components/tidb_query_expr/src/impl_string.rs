@@ -1021,7 +1021,7 @@ pub fn substring_2_args_utf8(
     pos: &Int,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    substring_utf8(input, *pos, input.chars().count() as Int, writer)
+    substring_utf8(input, *pos, Int::MAX, writer)
 }
 
 #[rpn_fn(writer)]
@@ -1037,27 +1037,20 @@ pub fn substring_3_args_utf8(
 
 #[inline]
 fn substring_utf8(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> Result<BytesGuard> {
+    let (pos, pos_positive) = i64_to_usize(pos, pos > 0);
     let (len, len_positive) = i64_to_usize(len, len > 0);
-    let (pos, positive_search) = i64_to_usize(pos, pos > 0);
     if pos == 0 || len == 0 || !len_positive {
         return Ok(writer.write_ref(Some(b"")));
     }
 
+    let input = str::from_utf8(input)?;
     let char_len = input.chars().count();
-    let start = if positive_search {
+    let start = if pos_positive {
         (pos - 1).min(char_len)
     } else {
         char_len.checked_sub(pos).unwrap_or(char_len)
     };
-    let input = str::from_utf8(input)?;
-    Ok(writer.write(Some(
-        input
-            .chars()
-            .skip(start)
-            .take(len)
-            .collect::<String>()
-            .into_bytes(),
-    )))
+    Ok(writer.write_from_char_iter(input.chars().skip(start).take(len)))
 }
 
 #[rpn_fn(writer)]
@@ -1079,13 +1072,13 @@ pub fn substring_3_args(
 
 #[inline]
 fn substring(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> Result<BytesGuard> {
+    let (pos, pos_positive) = i64_to_usize(pos, pos > 0);
     let (len, len_positive) = i64_to_usize(len, len > 0);
-    let (pos, positive_search) = i64_to_usize(pos, pos > 0);
     if pos == 0 || len == 0 || !len_positive {
         return Ok(writer.write_ref(Some(b"")));
     }
 
-    let start = if positive_search {
+    let start = if pos_positive {
         (pos - 1).min(input.len())
     } else {
         input.len().checked_sub(pos).unwrap_or_else(|| input.len())
@@ -4388,6 +4381,7 @@ mod tests {
             assert_eq!(output, exp);
         }
     }
+
     #[test]
     fn test_substring_3_args_utf8() {
         let cases = vec![
@@ -4442,6 +4436,42 @@ mod tests {
             (
                 Some("中文a测a试".as_bytes().to_vec()),
                 Some(4),
+                Some(100),
+                Some("测a试".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(100),
+                Some(1),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(100),
+                Some(i64::min_value()),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(100),
+                Some(i64::max_value()),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(i64::min_value()),
+                Some(1),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(i64::max_value()),
+                Some(1),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(4),
                 Some(4),
                 Some("测a试".as_bytes().to_vec()),
             ),
@@ -4450,6 +4480,18 @@ mod tests {
                 Some(-3),
                 Some(3),
                 Some("测a试".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(0),
+                Some(3),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(1),
+                Some(0),
+                Some("".as_bytes().to_vec()),
             ),
             (
                 Some("".as_bytes().to_vec()),
