@@ -28,7 +28,7 @@ impl DataSink for MockClient {
     fn try_send(&mut self, records: Arc<Vec<ResourceUsageRecord>>) -> Result<()> {
         let mut data = self.data.lock().unwrap();
         records.iter().for_each(|r| {
-            data.insert(r.resource_group_tag.clone(), r.clone());
+            data.insert(r.get_record().resource_group_tag.clone(), r.clone());
         });
         Ok(())
     }
@@ -118,8 +118,8 @@ fn test_summary() {
             }
             thread::sleep(Duration::from_millis(REPORT_INTERVAL_MS + 500)); // wait report
             let r = client.get(&b"TAG-1".to_vec()).unwrap();
-            assert_eq!(r.get_record_list_read_keys().iter().sum::<u32>(), 123);
-            assert_eq!(r.get_record_list_write_keys().iter().sum::<u32>(), 456);
+            assert_eq!(r.get_record().get_items().iter().map(|item| item.read_keys).sum::<u32>(), 123);
+            assert_eq!(r.get_record().get_items().iter().map(|item| item.write_keys).sum::<u32>(), 456);
             client.clear();
         })
         .join()
