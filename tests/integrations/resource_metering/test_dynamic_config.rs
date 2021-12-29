@@ -94,9 +94,9 @@ pub fn test_max_resource_groups() {
     let port = alloc_port();
     let mut test_suite = TestSuite::new(resource_metering::Config {
         receiver_address: format!("127.0.0.1:{}", port),
-        report_receiver_interval: ReadableDuration::secs(3),
+        report_receiver_interval: ReadableDuration::secs(4),
         max_resource_groups: 5000,
-        precision: ReadableDuration::secs(1),
+        precision: ReadableDuration::secs(2),
     });
     test_suite.start_receiver_at(port);
 

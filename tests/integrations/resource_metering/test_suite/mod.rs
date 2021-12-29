@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod mock_pubsub;
 mod mock_receiver_server;
 
 pub use mock_receiver_server::MockReceiverServer;
@@ -11,11 +12,14 @@ use std::time::Duration;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::channel::oneshot;
 use futures::{select, FutureExt};
-use grpcio::Environment;
+use grpcio::{ChannelBuilder, ClientSStreamReceiver, Environment};
 use kvproto::kvrpcpb::{ApiVersion, Context};
-use kvproto::resource_usage_agent::ResourceUsageRecord;
+use kvproto::resource_usage_agent::{
+    ResourceMeteringPubSubClient, ResourceMeteringRequest, ResourceUsageRecord,
+};
 use resource_metering::Config;
 use tempfile::TempDir;
+use test_util::alloc_port;
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{RocksEngine, Storage, TestEngineBuilder, TestStorageBuilder};
@@ -23,6 +27,7 @@ use tokio::runtime::{self, Runtime};
 use txn_types::{Key, TimeStamp};
 
 pub struct TestSuite {
+    pubsub_server_port: u16,
     receiver_server: Option<MockReceiverServer>,
 
     storage: Storage<RocksEngine, DummyLockManager>,
@@ -32,7 +37,7 @@ pub struct TestSuite {
     rx: Receiver<Vec<ResourceUsageRecord>>,
 
     env: Arc<Environment>,
-    rt: Runtime,
+    pub rt: Runtime,
     cancel_workload: Option<oneshot::Sender<()>>,
     wait_for_cancel: Option<oneshot::Receiver<()>>,
 
@@ -54,8 +59,15 @@ impl TestSuite {
         let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
             cfg.receiver_address.clone(),
             env.clone(),
+            data_sink_reg_handle.clone(),
+        );
+        let pubsub_server_port = alloc_port();
+        let mut pubsub_server = mock_pubsub::MockPubSubServer::new(
+            pubsub_server_port,
+            env.clone(),
             data_sink_reg_handle,
         );
+        pubsub_server.start();
 
         let cfg_manager = resource_metering::ConfigManager::new(
             cfg,
@@ -86,6 +98,7 @@ impl TestSuite {
             .unwrap();
 
         Self {
+            pubsub_server_port,
             receiver_server: None,
             storage,
             cfg_controller,
@@ -97,11 +110,29 @@ impl TestSuite {
             wait_for_cancel: None,
             _dir: dir,
             stop_workers: Some(Box::new(move || {
+                futures::executor::block_on(pubsub_server.shutdown()).unwrap();
                 single_target_worker.stop_worker();
                 reporter_worker.stop_worker();
                 recorder_worker.stop_worker();
             })),
         }
+    }
+
+    pub fn subscribe(
+        &self,
+    ) -> (
+        ResourceMeteringPubSubClient,
+        ClientSStreamReceiver<ResourceUsageRecord>,
+    ) {
+        let channel = {
+            let cb = ChannelBuilder::new(self.env.clone());
+            cb.connect(&format!("127.0.0.1:{}", self.pubsub_server_port))
+        };
+        let client = ResourceMeteringPubSubClient::new(channel);
+        let receiver = client
+            .subscribe(&ResourceMeteringRequest::default())
+            .unwrap();
+        (client, receiver)
     }
 
     pub fn cfg_receiver_address(&self, addr: impl Into<String>) {
