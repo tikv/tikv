@@ -8,19 +8,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arc_swap::ArcSwap;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::channel::oneshot;
 use futures::{select, FutureExt};
 use grpcio::Environment;
 use kvproto::kvrpcpb::{ApiVersion, Context};
 use kvproto::resource_usage_agent::ResourceUsageRecord;
-use resource_metering::{init_recorder, Config, ConfigManager, Task, TEST_TAG_PREFIX};
+use resource_metering::{Config, TEST_TAG_PREFIX};
 use tempfile::TempDir;
-use tikv::config::{ConfigController, Module, TiKvConfig};
+use tikv::config::{ConfigController, TiKvConfig};
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{RocksEngine, Storage, TestEngineBuilder, TestStorageBuilder};
-use tikv_util::worker::LazyWorker;
 use tokio::runtime::{self, Runtime};
 use txn_types::{Key, TimeStamp};
 
@@ -28,7 +26,6 @@ pub struct TestSuite {
     receiver_server: Option<MockReceiverServer>,
 
     storage: Storage<RocksEngine, DummyLockManager>,
-    reporter: Option<Box<LazyWorker<Task>>>,
     cfg_controller: ConfigController,
 
     tx: Sender<Vec<ResourceUsageRecord>>,
@@ -40,40 +37,38 @@ pub struct TestSuite {
     wait_for_cancel: Option<oneshot::Receiver<()>>,
 
     _dir: TempDir,
+    stop_workers: Option<Box<dyn FnOnce()>>,
 }
 
 impl TestSuite {
     pub fn new(cfg: resource_metering::Config) -> Self {
         fail::cfg("cpu-record-test-filter", "return").unwrap();
 
-        let mut reporter = Box::new(LazyWorker::new("resource-metering-reporter"));
-        let scheduler = reporter.scheduler();
-
         let (mut tikv_cfg, dir) = TiKvConfig::with_tmp().unwrap();
         tikv_cfg.resource_metering = cfg.clone();
-
-        let address = Arc::new(ArcSwap::new(Arc::new(cfg.receiver_address.clone())));
         let cfg_controller = ConfigController::new(tikv_cfg);
+
         let (recorder_handle, collector_reg_handle, resource_tag_factory) =
-            init_recorder(cfg.enabled, cfg.precision.as_millis());
-        cfg_controller.register(
-            Module::ResourceMetering,
-            Box::new(ConfigManager::new(
-                cfg.clone(),
-                scheduler.clone(),
-                recorder_handle,
-                address.clone(),
-            )),
+            resource_metering::init_recorder(cfg.enabled, cfg.precision.as_millis());
+        let (config_notifier, data_sink_reg_handle, reporter_worker) =
+            resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
+        let env = Arc::new(Environment::new(2));
+        let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
+            cfg.receiver_address.clone(),
+            env.clone(),
+            data_sink_reg_handle,
         );
 
-        let env = Arc::new(Environment::new(2));
-        let data_sink = resource_metering::SingleTargetDataSink::new(address.clone(), env.clone());
-        reporter.start_with_timer(resource_metering::Reporter::new(
-            data_sink,
+        let cfg_manager = resource_metering::ConfigManager::new(
             cfg,
-            collector_reg_handle,
-            scheduler.clone(),
-        ));
+            recorder_handle,
+            config_notifier,
+            address_change_notifier,
+        );
+        cfg_controller.register(
+            tikv::config::Module::ResourceMetering,
+            Box::new(cfg_manager),
+        );
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let storage = TestStorageBuilder::from_engine_and_lock_mgr(
@@ -95,7 +90,6 @@ impl TestSuite {
         Self {
             receiver_server: None,
             storage,
-            reporter: Some(reporter),
             cfg_controller,
             tx,
             rx,
@@ -104,6 +98,10 @@ impl TestSuite {
             cancel_workload: None,
             wait_for_cancel: None,
             _dir: dir,
+            stop_workers: Some(Box::new(move || {
+                reporter_worker.stop_worker();
+                single_target_worker.stop_worker();
+            })),
         }
     }
 
@@ -252,6 +250,6 @@ impl TestSuite {
 
 impl Drop for TestSuite {
     fn drop(&mut self) {
-        self.reporter.take().unwrap().stop_worker();
+        self.stop_workers.take().unwrap()();
     }
 }
