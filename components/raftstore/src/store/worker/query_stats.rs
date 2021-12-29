@@ -88,6 +88,15 @@ impl QueryStats {
         self.0.get_get() + self.0.get_coprocessor() + self.0.get_scan()
     }
 
+    pub fn get_write_query_num(&self) -> u64 {
+        self.0.get_delete()
+            + self.0.get_put()
+            + self.0.get_prewrite()
+            + self.0.get_commit()
+            + self.0.get_acquire_pessimistic_lock()
+            + self.0.get_rollback()
+    }
+
     pub fn pop(&mut self) -> pdpb::QueryStats {
         let mut query_stats = pdpb::QueryStats::default();
         mem::swap(&mut self.0, &mut query_stats);
