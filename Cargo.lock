@@ -247,6 +247,8 @@ dependencies = [
  "hyper",
  "hyper-tls",
  "kvproto",
+ "lazy_static",
+ "prometheus",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_kms",
@@ -758,7 +760,9 @@ dependencies = [
  "fail",
  "futures-io",
  "kvproto",
+ "lazy_static",
  "openssl",
+ "prometheus",
  "protobuf",
  "rusoto_core",
  "thiserror",
@@ -3633,7 +3637,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=master#90a50b7e7e8beb89039627c95483c8554145188d"
+source = "git+https://github.com/tikv/raft-engine?branch=master#7842aad23f36ffe836b47762f85fc752b5d7ad48"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -3646,7 +3650,7 @@ dependencies = [
  "libc 0.2.106",
  "log",
  "lz4-sys",
- "nix 0.19.0",
+ "nix 0.23.0",
  "num-derive",
  "num-traits",
  "parking_lot",
@@ -4209,6 +4213,8 @@ dependencies = [
  "bytes 1.0.1",
  "futures 0.3.15",
  "rusoto_core",
+ "serde",
+ "serde_derive",
  "xml-rs",
 ]
 
@@ -4564,7 +4570,6 @@ dependencies = [
 name = "server"
 version = "0.0.1"
 dependencies = [
- "arc-swap 1.5.0",
  "backup",
  "cdc",
  "chrono",
@@ -5107,7 +5112,6 @@ dependencies = [
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
- "arc-swap 1.5.0",
  "backtrace",
  "collections",
  "concurrency_manager",
@@ -5194,7 +5198,6 @@ name = "tests"
 version = "0.0.1"
 dependencies = [
  "api_version",
- "arc-swap 1.5.0",
  "arrow",
  "batch-system",
  "byteorder",

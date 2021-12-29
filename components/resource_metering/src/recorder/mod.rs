@@ -207,7 +207,7 @@ impl Recorder {
                 CollectorReg::Register { id, collector } => {
                     self.collectors.insert(id.0, collector);
                 }
-                CollectorReg::Unregister { id } => {
+                CollectorReg::Deregister { id } => {
                     self.collectors.remove(&id.0);
                 }
             }
