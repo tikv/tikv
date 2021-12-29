@@ -405,6 +405,7 @@ where
     /// Only contains items which is not `DiskUsage::Normal`.
     pub store_disk_usages: HashMap<u64, DiskUsage>,
     pub write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
+    // NOTE(TPC): reuse the async writer for async I/O, only the write in end() is asynchronous.
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
     pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
@@ -789,13 +790,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
-        // No readiness is generated and using sync write, skipping calling ready and release early.
-        if !delegate.collect_ready() && self.poll_ctx.sync_write_worker.is_some() {
-            if let HandleResult::StopAt { skip_end, .. } = &mut handle_result {
-                *skip_end = true;
-            }
-        }
-
+        delegate.collect_ready();
+        // TODO(TPC): fsm can always skip end in async I/O.
         handle_result
     }
 
@@ -804,6 +800,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             peer.update_memory_trace(&mut self.trace_event);
         }
 
+        // TODO(TPC): seems it can be batched in the end to reduce flush.
         if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
             if self.poll_ctx.trans.need_flush() && !write_worker.is_empty() {
                 self.poll_ctx.trans.flush();
@@ -831,17 +828,15 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         }
     }
 
-    fn end(&mut self, peers: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {
+    fn end(&mut self, _peers: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {
         let dur = if self.poll_ctx.has_ready {
             // Only enable the fail point when the store id is equal to 3, which is
             // the id of slow store in tests.
             fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
 
             if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
-                write_worker.write_to_db(false);
-
-                for peer in peers.iter_mut().flatten() {
-                    PeerFsmDelegate::new(peer, &mut self.poll_ctx).post_raft_ready_append();
+                if !write_worker.is_empty() {
+                    glommio::spawn_local(write_worker.write_to_db(true)).detach();
                 }
             }
 
@@ -1125,7 +1120,8 @@ where
     type Handler = RaftPoller<EK, ER, T>;
 
     fn build(&mut self, _: Priority) -> RaftPoller<EK, ER, T> {
-        let sync_write_worker = if self.write_senders.is_empty() {
+        // NOTE(TPC): always build the sync writer.
+        let sync_write_worker = {
             let (_, rx) = unbounded();
             Some(WriteWorker::new(
                 self.store.get_id(),
@@ -1136,8 +1132,6 @@ where
                 self.trans.clone(),
                 &self.cfg,
             ))
-        } else {
-            None
         };
         let mut ctx = PollContext {
             cfg: self.cfg.value().clone(),

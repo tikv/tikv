@@ -10,18 +10,20 @@ use crate::config::Config;
 use crate::fsm::{Fsm, FsmScheduler, Priority};
 use crate::mailbox::BasicMailbox;
 use crate::router::Router;
-use crossbeam::channel::{self, after, SendError};
 use fail::fail_point;
 use file_system::{set_io_type, IOType};
 use std::borrow::Cow;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
-use std::thread::{self, current, JoinHandle, ThreadId};
+use std::thread::{current, JoinHandle, ThreadId};
 use std::time::Duration;
 use tikv_util::mpsc;
 use tikv_util::time::Instant;
 use tikv_util::{debug, error, info, safe_panic, thd_name, warn};
+
+use async_channel::{self, Receiver, Sender, TrySendError};
+use glommio::{self, Latency, LocalExecutorBuilder, Placement, Shares};
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 pub enum FsmTypes<N, C> {
@@ -35,8 +37,8 @@ pub enum FsmTypes<N, C> {
 macro_rules! impl_sched {
     ($name:ident, $ty:path, Fsm = $fsm:tt) => {
         pub struct $name<N, C> {
-            sender: channel::Sender<FsmTypes<N, C>>,
-            low_sender: channel::Sender<FsmTypes<N, C>>,
+            sender: Sender<FsmTypes<N, C>>,
+            low_sender: Sender<FsmTypes<N, C>>,
         }
 
         impl<N, C> Clone for $name<N, C> {
@@ -61,10 +63,13 @@ macro_rules! impl_sched {
                     Priority::Normal => &self.sender,
                     Priority::Low => &self.low_sender,
                 };
-                match sender.send($ty(fsm)) {
+                // It's an unbounded queue so try_send is adequate.
+                match sender.try_send($ty(fsm)) {
                     Ok(()) => {}
                     // TODO: use debug instead.
-                    Err(SendError($ty(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
+                    Err(TrySendError::Full($ty(fsm))) | Err(TrySendError::Closed($ty(fsm))) => {
+                        warn!("failed to schedule fsm {:p}", fsm)
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -73,8 +78,8 @@ macro_rules! impl_sched {
                 // TODO: close it explicitly once it's supported.
                 // Magic number, actually any number greater than poll pool size works.
                 for _ in 0..256 {
-                    let _ = self.sender.send(FsmTypes::Empty);
-                    let _ = self.low_sender.send(FsmTypes::Empty);
+                    let _ = self.sender.try_send(FsmTypes::Empty);
+                    let _ = self.low_sender.try_send(FsmTypes::Empty);
                 }
             }
         }
@@ -329,7 +334,7 @@ pub trait PollHandler<N, C>: Send + 'static {
 /// Internal poller that fetches batch and call handler hooks for readiness.
 pub struct Poller<N: Fsm, C: Fsm, Handler> {
     pub router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
-    pub fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
+    pub fsm_receiver: Receiver<FsmTypes<N, C>>,
     pub handler: Handler,
     pub max_batch_size: usize,
     pub reschedule_duration: Duration,
@@ -355,8 +360,8 @@ enum ReschedulePolicy {
     Schedule,
 }
 
-impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
-    fn fetch_fsm(&mut self, batch: &mut Batch<N, C>) -> bool {
+impl<N: Fsm + 'static, C: Fsm + 'static, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
+    async fn fetch_fsm(&mut self, batch: &mut Batch<N, C>) -> bool {
         if batch.control.is_some() {
             return true;
         }
@@ -366,32 +371,34 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         }
 
         if batch.is_empty() {
-            if let Some(d) = self.before_pause_wait {
-                channel::select! {
-                    recv(self.fsm_receiver) -> msg => {
-                        if let Ok(fsm) = msg {
-                            return batch.push(fsm);
-                        }
-                    }
-                    recv(after(d)) -> _ => {
-                        self.handler.pause();
-                        if let Ok(fsm) = self.fsm_receiver.recv() {
-                            return batch.push(fsm);
-                        }
-                    }
-                }
-            } else {
-                self.handler.pause();
-                if let Ok(fsm) = self.fsm_receiver.recv() {
-                    return batch.push(fsm);
-                }
+            // TODO(TPC)
+            //
+            // if let Some(d) = self.before_pause_wait {
+            // select! {
+            // recv(self.fsm_receiver) -> msg => {
+            // if let Ok(fsm) = msg {
+            // return batch.push(fsm);
+            // }
+            // }
+            // recv(after(d)) -> _ => {
+            // self.handler.pause();
+            // if let Ok(fsm) = self.fsm_receiver.recv() {
+            // return batch.push(fsm);
+            // }
+            // }
+            // }
+            // } else {
+            self.handler.pause();
+            if let Ok(fsm) = self.fsm_receiver.recv().await {
+                return batch.push(fsm);
             }
+            // }
         }
         !batch.is_empty()
     }
 
     // Poll for readiness and forward to handler. Remove stale peer if necessary.
-    pub fn poll(&mut self) {
+    pub async fn poll(&mut self) {
         fail_point!("poll");
         let mut batch = Batch::with_capacity(self.max_batch_size);
         let mut reschedule_fsms = Vec::with_capacity(self.max_batch_size);
@@ -401,7 +408,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         // from becoming hungry if some regions are hot points. Since we fetch new fsm every time
         // calling `poll`, we do not need to configure a large value for `self.max_batch_size`.
         let mut run = true;
-        while run && self.fetch_fsm(&mut batch) {
+        while run && self.fetch_fsm(&mut batch).await {
             // If there is some region wait to be deal, we must deal with it even if it has overhead
             // max size of batch. It's helpful to protect regions from becoming hungry
             // if some regions are hot points.
@@ -416,6 +423,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     batch.release_control(&self.router.control_box, len);
                 }
             }
+            // TODO(TPC): latency goal and may be more frequent yield.
+            glommio::yield_if_needed().await;
 
             let mut hot_fsm_count = 0;
             for (i, p) in batch.normals.iter_mut().enumerate() {
@@ -448,6 +457,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     }
                 }
             }
+            glommio::yield_if_needed().await;
+
             let mut fsm_cnt = batch.normals.len();
             while batch.normals.len() < max_batch_size {
                 if let Ok(fsm) = self.fsm_receiver.try_recv() {
@@ -485,6 +496,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             while let Some(r) = reschedule_fsms.pop() {
                 batch.schedule(&self.router, r, false);
             }
+            glommio::yield_if_needed().await;
         }
         if let Some(fsm) = batch.control.take() {
             self.router.control_scheduler.schedule(fsm);
@@ -523,8 +535,8 @@ pub trait HandlerBuilder<N, C> {
 pub struct BatchSystem<N: Fsm, C: Fsm> {
     name_prefix: Option<String>,
     router: BatchRouter<N, C>,
-    receiver: channel::Receiver<FsmTypes<N, C>>,
-    low_receiver: channel::Receiver<FsmTypes<N, C>>,
+    receiver: Receiver<FsmTypes<N, C>>,
+    low_receiver: Receiver<FsmTypes<N, C>>,
     pool_size: usize,
     max_batch_size: usize,
     workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -583,12 +595,21 @@ where
             },
         };
         let props = tikv_util::thread_group::current_properties();
-        let t = thread::Builder::new()
-            .name(name)
-            .spawn(move || {
+        // TODO(TPC): pin CPU and tune.
+        let t = LocalExecutorBuilder::new(Placement::Unbound)
+            .name(&name)
+            .spawn(move || async move {
                 tikv_util::thread_group::set_properties(props);
                 set_io_type(IOType::ForegroundWrite);
-                poller.poll();
+                let store_tq = glommio::executor().create_task_queue(
+                    Shares::default(),
+                    // TODO(TPC): it should be important.
+                    Latency::NotImportant,
+                    "store-batch-system",
+                );
+                glommio::spawn_local_into(async move { poller.poll().await }, store_tq)
+                    .unwrap()
+                    .await
             })
             .unwrap();
         self.workers.lock().unwrap().push(t);
@@ -607,13 +628,14 @@ where
                 &mut builder,
             );
         }
-        for i in 0..self.low_priority_pool_size {
-            self.start_poller(
-                thd_name!(format!("{}-low-{}", name_prefix, i)),
-                Priority::Low,
-                &mut builder,
-            );
-        }
+        // TODO(TPC)
+        // for i in 0..self.low_priority_pool_size {
+        // self.start_poller(
+        // thd_name!(format!("{}-low-{}", name_prefix, i)),
+        // Priority::Low,
+        // &mut builder,
+        // );
+        // }
         self.name_prefix = Some(name_prefix);
     }
 
@@ -644,8 +666,8 @@ struct PoolStateBuilder<N, C> {
     max_batch_size: usize,
     reschedule_duration: Duration,
     before_pause_wait: Option<Duration>,
-    fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
-    fsm_sender: channel::Sender<FsmTypes<N, C>>,
+    fsm_receiver: Receiver<FsmTypes<N, C>>,
+    fsm_sender: Sender<FsmTypes<N, C>>,
     pool_size: usize,
 }
 
@@ -679,8 +701,8 @@ impl<N, C> PoolStateBuilder<N, C> {
 pub struct PoolState<N, C, H: HandlerBuilder<N, C>> {
     pub name_prefix: String,
     pub handler_builder: H,
-    pub fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
-    pub fsm_sender: channel::Sender<FsmTypes<N, C>>,
+    pub fsm_receiver: Receiver<FsmTypes<N, C>>,
+    pub fsm_sender: Sender<FsmTypes<N, C>>,
     pub low_priority_pool_size: usize,
     pub expected_pool_size: usize,
     pub workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -703,8 +725,8 @@ pub fn create_system<N: Fsm, C: Fsm>(
 ) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
     let state_cnt = Arc::new(AtomicUsize::new(0));
     let control_box = BasicMailbox::new(sender, controller, state_cnt.clone());
-    let (tx, rx) = channel::unbounded();
-    let (tx2, rx2) = channel::unbounded();
+    let (tx, rx) = async_channel::unbounded();
+    let (tx2, rx2) = async_channel::unbounded();
     let normal_scheduler = NormalScheduler {
         sender: tx.clone(),
         low_sender: tx2.clone(),

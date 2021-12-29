@@ -322,7 +322,8 @@ impl Default for Config {
             perf_level: PerfLevel::EnableTime,
             evict_cache_on_memory_ratio: 0.2,
             cmd_batch: true,
-            cmd_batch_concurrent_ready_max_count: 1,
+            // TODO(TPC): is it too large?
+            cmd_batch_concurrent_ready_max_count: 128,
             raft_write_size_limit: ReadableSize::mb(1),
             waterfall_metrics: false,
             io_reschedule_concurrent_max_count: 4,

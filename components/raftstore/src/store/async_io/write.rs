@@ -310,6 +310,7 @@ where
         }
     }
 
+    #[allow(dead_code)]
     fn after_write_to_raft_db(&mut self, metrics: &StoreWriteMetrics) {
         if metrics.waterfall_metrics {
             let now = Instant::now();
@@ -340,6 +341,7 @@ where
     cfg_tracker: Tracker<Config>,
     raft_write_size_limit: usize,
     metrics: StoreWriteMetrics,
+    #[allow(dead_code)]
     message_metrics: RaftSendMessageMetrics,
     perf_context: EK::PerfContext,
     pending_latency_inspect: Vec<(Instant, Vec<LatencyInspector>)>,
@@ -421,7 +423,7 @@ where
 
             STORE_WRITE_TRIGGER_SIZE_HISTOGRAM.observe(self.batch.get_raft_size() as f64);
 
-            self.write_to_db(true);
+            futures::executor::block_on(self.write_to_db(true));
 
             self.clear_latency_inspect();
 
@@ -465,11 +467,7 @@ where
         self.batch.add_write_task(task);
     }
 
-    pub fn write_to_db(&mut self, notify: bool) {
-        if self.batch.is_empty() {
-            return;
-        }
-
+    pub fn write_to_db(&mut self, notify: bool) -> impl std::future::Future<Output = ()> {
         let timer = Instant::now();
 
         self.batch.before_write_to_db(&self.metrics);
@@ -483,15 +481,15 @@ where
             };
             raft_before_save_kv_on_store_3();
             let now = Instant::now();
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
-            // TODO: Add perf context
+            let write_opts = WriteOptions::new();
+            self.perf_context.start_observe();
             self.batch.kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!(
                     "store {}: {} failed to write to kv engine: {:?}",
                     self.store_id, self.tag, e
                 );
             });
+            self.perf_context.report_metrics();
             if self.batch.kv_wb.data_size() > KV_WB_SHRINK_SIZE {
                 self.batch.kv_wb = self.engines.kv.write_batch_with_cap(KV_WB_DEFAULT_SIZE);
             }
@@ -503,112 +501,17 @@ where
 
         fail_point!("raft_between_save");
 
-        let mut write_raft_time = 0f64;
-        if !self.batch.raft_wb.is_empty() {
-            let raft_before_save_on_store_1 = || {
-                fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
-            };
-            raft_before_save_on_store_1();
-
-            let now = Instant::now();
-            self.perf_context.start_observe();
-            self.engines
-                .raft
-                .consume_and_shrink(
-                    &mut self.batch.raft_wb,
-                    true,
-                    RAFT_WB_SHRINK_SIZE,
-                    RAFT_WB_DEFAULT_SIZE,
-                )
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "store {}: {} failed to write to raft engine: {:?}",
-                        self.store_id, self.tag, e
-                    );
-                });
-            self.perf_context.report_metrics();
-            write_raft_time = duration_to_sec(now.saturating_elapsed());
-            STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);
-        }
-
-        fail_point!("raft_after_save");
-
-        self.batch.after_write_to_raft_db(&self.metrics);
-
-        fail_point!("raft_before_follower_send");
-
-        let mut now = Instant::now();
-        for task in &mut self.batch.tasks {
-            for msg in task.messages.drain(..) {
-                let msg_type = msg.get_message().get_msg_type();
-                let to_peer_id = msg.get_to_peer().get_id();
-                let to_store_id = msg.get_to_peer().get_store_id();
-
-                debug!(
-                    "send raft msg in write thread";
-                    "tag" => &self.tag,
-                    "region_id" => task.region_id,
-                    "peer_id" => task.peer_id,
-                    "msg_type" => ?msg_type,
-                    "msg_size" => msg.get_message().compute_size(),
-                    "to" => to_peer_id,
-                    "disk_usage" => ?msg.get_disk_usage(),
-                );
-
-                if let Err(e) = self.trans.send(msg) {
-                    // We use metrics to observe failure on production.
-                    debug!(
-                        "failed to send msg to other peer in async-writer";
-                        "region_id" => task.region_id,
-                        "peer_id" => task.peer_id,
-                        "target_peer_id" => to_peer_id,
-                        "target_store_id" => to_store_id,
-                        "err" => ?e,
-                        "error_code" => %e.error_code(),
-                    );
-                    self.message_metrics.add(msg_type, false);
-                    // If this msg is snapshot, it is unnecessary to send snapshot
-                    // status to this peer because it has already become follower.
-                    // (otherwise the snapshot msg should be sent in store thread other than here)
-                    // Also, the follower don't need flow control, so don't send
-                    // unreachable msg here.
-                } else {
-                    self.message_metrics.add(msg_type, true);
-                }
-            }
-        }
-        if self.trans.need_flush() {
-            self.trans.flush();
-            self.message_metrics.flush();
-        }
-        let now2 = Instant::now();
-        let send_time = duration_to_sec(now2.saturating_duration_since(now));
-        STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(send_time);
-
-        let mut callback_time = 0f64;
-        if notify {
-            for (region_id, (peer_id, ready_number)) in &self.batch.readies {
-                self.notifier
-                    .notify_persisted(*region_id, *peer_id, *ready_number);
-            }
-            now = Instant::now();
-            callback_time = duration_to_sec(now.saturating_duration_since(now2));
-            STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(callback_time);
-        }
-
-        let total_cost = now.saturating_duration_since(timer);
-        STORE_WRITE_TO_DB_DURATION_HISTOGRAM.observe(duration_to_sec(total_cost));
-
-        slow_log!(
-            total_cost,
-            "[store {}] async write too slow, write_kv: {}s, write_raft: {}s, send: {}s, callback: {}s thread: {}",
-            self.store_id,
-            write_kv_time,
-            write_raft_time,
-            send_time,
-            callback_time,
-            self.tag
+        // TODO(TPC): use Rc<RefCell<<Worker>>?
+        let raft_db = self.engines.raft.clone();
+        let mut trans = self.trans.clone();
+        let notifier = self.notifier.clone();
+        let mut raft_wb = std::mem::replace(
+            &mut self.batch.raft_wb,
+            // TODO(TPC): reduce allocation.
+            raft_db.log_batch(RAFT_WB_DEFAULT_SIZE),
         );
+        let mut tasks = std::mem::take(&mut self.batch.tasks);
+        let readies = std::mem::take(&mut self.batch.readies);
 
         self.batch.clear();
         self.metrics.flush();
@@ -617,6 +520,103 @@ where
         if let Some(incoming) = self.cfg_tracker.any_new() {
             self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
+        }
+
+        async move {
+            let mut write_raft_time = 0f64;
+            if raft_wb.is_empty() {
+                let now = Instant::now();
+                // TODO(TPC): await here.
+                raft_db
+                    .consume_and_shrink(
+                        &mut raft_wb,
+                        true,
+                        RAFT_WB_SHRINK_SIZE,
+                        RAFT_WB_DEFAULT_SIZE,
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!("failed to write to raft engine: {:?}", e);
+                    });
+                write_raft_time = duration_to_sec(now.saturating_elapsed());
+                STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);
+            }
+
+            fail_point!("raft_after_save");
+
+            // batch.after_write_to_raft_db(&self.metrics);
+
+            fail_point!("raft_before_follower_send");
+
+            let mut now = Instant::now();
+            for task in &mut tasks {
+                for msg in task.messages.drain(..) {
+                    let msg_type = msg.get_message().get_msg_type();
+                    let to_peer_id = msg.get_to_peer().get_id();
+                    let to_store_id = msg.get_to_peer().get_store_id();
+
+                    debug!(
+                        "send raft msg in write thread";
+                        "region_id" => task.region_id,
+                        "peer_id" => task.peer_id,
+                        "msg_type" => ?msg_type,
+                        "msg_size" => msg.get_message().compute_size(),
+                        "to" => to_peer_id,
+                        "disk_usage" => ?msg.get_disk_usage(),
+                    );
+
+                    if let Err(e) = trans.send(msg) {
+                        // We use metrics to observe failure on production.
+                        debug!(
+                            "failed to send msg to other peer in async-writer";
+                            "region_id" => task.region_id,
+                            "peer_id" => task.peer_id,
+                            "target_peer_id" => to_peer_id,
+                            "target_store_id" => to_store_id,
+                            "err" => ?e,
+                            "error_code" => %e.error_code(),
+                        );
+                        // self.message_metrics.add(msg_type, false);
+                        // If this msg is snapshot, it is unnecessary to send snapshot
+                        // status to this peer because it has already become follower.
+                        // (otherwise the snapshot msg should be sent in store thread other than here)
+                        // Also, the follower don't need flow control, so don't send
+                        // unreachable msg here.
+                        // } else {
+                        // self.message_metrics.add(msg_type, true);
+                    }
+                }
+            }
+            if trans.need_flush() {
+                trans.flush();
+                // self.message_metrics.flush();
+            }
+            let now2 = Instant::now();
+            let send_time = duration_to_sec(now2.saturating_duration_since(now));
+            STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(send_time);
+
+            let mut callback_time = 0f64;
+            if notify {
+                for (region_id, (peer_id, ready_number)) in readies {
+                    notifier.notify_persisted(region_id, peer_id, ready_number);
+                }
+                now = Instant::now();
+                callback_time = duration_to_sec(now.saturating_duration_since(now2));
+                STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(callback_time);
+            }
+
+            let total_cost = now.saturating_duration_since(timer);
+            STORE_WRITE_TO_DB_DURATION_HISTOGRAM.observe(duration_to_sec(total_cost));
+
+            slow_log!(
+                total_cost,
+                // "[store {}] async write too slow, write_kv: {}s, write_raft: {}s, send: {}s, callback: {}s thread: {}",
+                "async write too slow, write_kv: {}s, write_raft: {}s, send: {}s, callback: {}s",
+                // self.store_id,
+                write_kv_time,
+                write_raft_time,
+                send_time,
+                callback_time,
+            );
         }
     }
 

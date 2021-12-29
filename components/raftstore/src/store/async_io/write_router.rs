@@ -20,6 +20,7 @@ use engine_traits::{KvEngine, RaftEngine};
 use tikv_util::info;
 use tikv_util::time::Instant;
 
+#[allow(dead_code)]
 const RETRY_SCHEDULE_MILLISECONS: u64 = 10;
 
 pub trait WriteRouterContext<EK, ER>
@@ -90,6 +91,7 @@ where
     }
 
     /// Send write msg to write worker or push into inner buffer and wait for rescheduling.
+    #[allow(dead_code)]
     pub fn send_write_msg<C: WriteRouterContext<EK, ER>>(
         &mut self,
         ctx: &mut C,
@@ -107,6 +109,7 @@ where
     /// If there is some msgs need to be rescheduled, check the new persisted number and
     /// sending these msgs to a new write worker if persisted number is greater than
     /// `self.last_unpersisted`.
+    #[allow(dead_code)]
     pub fn check_new_persisted<C: WriteRouterContext<EK, ER>>(
         &mut self,
         ctx: &mut C,
@@ -147,6 +150,7 @@ where
     ///
     /// Returns false if the task should be pushed into `self.pending_write_msgs`.
     /// true means the task should be sent to the write worker.
+    #[allow(dead_code)]
     fn should_send<C: WriteRouterContext<EK, ER>>(
         &mut self,
         ctx: &mut C,

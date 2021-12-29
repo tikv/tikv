@@ -35,7 +35,7 @@ impl Default for Config {
             max_batch_size: None,
             pool_size: 2,
             reschedule_duration: ReadableDuration::secs(5),
-            low_priority_pool_size: 1,
+            low_priority_pool_size: 0,
             before_pause_wait: None,
         }
     }
