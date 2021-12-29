@@ -72,7 +72,6 @@ fn test_pd_client_deadlock() {
         request!(client => get_operator(0)),
         request!(client => block_on(get_tso())),
         request!(client => load_global_config(vec![])),
-        request!(client => watch_global_config()),
     ];
 
     for (name, func) in test_funcs {
