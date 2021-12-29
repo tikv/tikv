@@ -28,7 +28,7 @@ impl DataSink for MockClient {
     fn try_send(&mut self, records: Arc<Vec<ResourceUsageRecord>>) -> Result<()> {
         let mut data = self.data.lock().unwrap();
         records.iter().for_each(|r| {
-            data.insert(r.get_record().get_resource_group_tag().clone(), r.clone());
+            data.insert(r.get_record().get_resource_group_tag().to_vec(), r.clone());
         });
         Ok(())
     }
