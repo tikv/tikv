@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{endpoint::Task, errors::Error, metadata::store::EtcdStore, utils::SlotMap};
+use crate::{codec::Encoder, endpoint::Task, errors::Error};
 
 use super::errors::Result;
 use engine_traits::{CF_DEFAULT, CF_WRITE};
@@ -538,7 +538,7 @@ impl DataFile {
 
     /// Add a new KV pair to the file, returning its size.
     async fn on_event(&mut self, mut kv: ApplyEvent) -> Result<usize> {
-        let encoded = super::endpoint::Endpoint::<EtcdStore>::encode_event(&kv.key, &kv.value);
+        let encoded = Encoder::encode_event(&kv.key, &kv.value);
         let mut size = 0;
         for slice in encoded {
             let slice = slice.as_ref();

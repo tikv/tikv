@@ -138,17 +138,6 @@ where
             }
         }
     }
-    // TODO move this function to a indepentent module.
-    pub fn encode_event<'e>(key: &'e [u8], value: &'e [u8]) -> [impl AsRef<[u8]> + 'e; 4] {
-        let key_len = (key.len() as u32).to_le_bytes();
-        let val_len = (value.len() as u32).to_le_bytes();
-        [
-            Either::Left(key_len),
-            Either::Right(key),
-            Either::Left(val_len),
-            Either::Right(value),
-        ]
-    }
 
     fn backup_batch(&self, batch: CmdBatch) {
         let mut sw = StopWatch::new();
