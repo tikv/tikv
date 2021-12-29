@@ -27,7 +27,7 @@ pub fn test_basic() {
         let records = stream.collect::<Vec<_>>().await;
         for r in records {
             let r = r.unwrap();
-            let tag = String::from_utf8_lossy(&r.resource_group_tag).into_owned();
+            let tag = String::from_utf8_lossy(r.get_record().get_resource_group_tag()).into_owned();
             res.insert(tag);
         }
 
@@ -60,7 +60,8 @@ pub fn test_multiple_subscribers() {
                 let records = stream.collect::<Vec<_>>().await;
                 for r in records {
                     let r = r.unwrap();
-                    let tag = String::from_utf8_lossy(&r.resource_group_tag).into_owned();
+                    let tag = String::from_utf8_lossy(r.get_record().get_resource_group_tag())
+                        .into_owned();
                     res.insert(tag);
                 }
 
