@@ -135,6 +135,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-channel"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2114d64672151c0c5eaa5e131ec84a74f06e1e559830dabba01ca30605d66319"
+dependencies = [
+ "concurrent-queue",
+ "event-listener",
+ "futures-core",
+]
+
+[[package]]
 name = "async-speed-limit"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -218,6 +229,8 @@ dependencies = [
  "hyper",
  "hyper-tls",
  "kvproto",
+ "lazy_static",
+ "prometheus",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_kms",
@@ -251,6 +264,7 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
+ "async-channel",
  "collections",
  "concurrency_manager",
  "crc64fast",
@@ -287,6 +301,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio",
+ "tokio-stream",
  "txn_types",
  "yatp",
 ]
@@ -464,6 +479,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cache-padded"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "631ae5198c9be5e753e5cc215e1bd73c2b466a3565173db433f52bb9d3e66dba"
+
+[[package]]
 name = "callgrind"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -627,7 +648,9 @@ dependencies = [
  "fail",
  "futures-io",
  "kvproto",
+ "lazy_static",
  "openssl",
+ "prometheus",
  "protobuf",
  "rusoto_core",
  "thiserror",
@@ -681,6 +704,15 @@ dependencies = [
  "tikv_alloc",
  "tokio",
  "txn_types",
+]
+
+[[package]]
+name = "concurrent-queue"
+version = "1.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30ed07550be01594c6026cff2a1d7fe9c8f683caa798e12b68694ac9e88286a3"
+dependencies = [
+ "cache-padded",
 ]
 
 [[package]]
@@ -1242,6 +1274,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "event-listener"
+version = "2.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7531096570974c3a9dcf9e4b8e1cede1ec26cf5046219fb3b9d897503b9be59"
+
+[[package]]
 name = "example_plugin"
 version = "0.1.0"
 dependencies = [
@@ -1465,8 +1503,7 @@ dependencies = [
 [[package]]
 name = "fs2"
 version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+source = "git+https://github.com/tabokie/fs2-rs?branch=tikv#9e17642f4ddec02a8d7733d8c5977cf211de6552"
 dependencies = [
  "libc 0.2.106",
  "winapi 0.3.9",
@@ -2188,7 +2225,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#a412f7a319c347674f9fb42a2689eb0bb1c8588e"
+source = "git+https://github.com/pingcap/kvproto.git#47a2e9ec6efa20d9572fb92eccad69f091e305fb"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3443,7 +3480,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=master#90a50b7e7e8beb89039627c95483c8554145188d"
+source = "git+https://github.com/tikv/raft-engine?branch=master#7842aad23f36ffe836b47762f85fc752b5d7ad48"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -3456,7 +3493,7 @@ dependencies = [
  "libc 0.2.106",
  "log",
  "lz4-sys",
- "nix 0.19.0",
+ "nix 0.23.0",
  "num-derive",
  "num-traits",
  "parking_lot",
@@ -4018,6 +4055,8 @@ dependencies = [
  "bytes 1.0.1",
  "futures 0.3.15",
  "rusoto_core",
+ "serde",
+ "serde_derive",
  "xml-rs",
 ]
 
@@ -4343,7 +4382,6 @@ dependencies = [
 name = "server"
 version = "0.0.1"
 dependencies = [
- "arc-swap 1.5.0",
  "backup",
  "cdc",
  "chrono",
@@ -4880,7 +4918,6 @@ dependencies = [
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
- "arc-swap 1.5.0",
  "backtrace",
  "collections",
  "concurrency_manager",
@@ -4967,7 +5004,6 @@ name = "tests"
 version = "0.0.1"
 dependencies = [
  "api_version",
- "arc-swap 1.5.0",
  "arrow",
  "batch-system",
  "byteorder",
@@ -5264,7 +5300,6 @@ dependencies = [
  "example_plugin",
  "fail",
  "file_system",
- "fs2",
  "futures 0.3.15",
  "futures-executor",
  "futures-util",
@@ -5368,7 +5403,6 @@ dependencies = [
  "engine_traits",
  "error_code",
  "file_system",
- "fs2",
  "futures 0.3.15",
  "gag",
  "grpcio",
@@ -5655,6 +5689,17 @@ dependencies = [
  "futures 0.3.15",
  "openssl",
  "pin-project",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-stream"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50145484efff8818b5ccd256697f36863f587da82cf8b409c53adf1e840798e3"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
  "tokio",
 ]
 

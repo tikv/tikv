@@ -51,19 +51,19 @@ impl CollectorRegHandle {
         Self { tx }
     }
 
-    pub fn register(&self, collector: Box<dyn Collector>) -> CollectorHandle {
+    pub fn register(&self, collector: Box<dyn Collector>) -> CollectorGuard {
         static NEXT_COLLECTOR_ID: AtomicU64 = AtomicU64::new(1);
         let id = CollectorId(NEXT_COLLECTOR_ID.fetch_add(1, Ordering::SeqCst));
 
         let reg_msg = CollectorReg::Register { collector, id };
         match self.tx.send(reg_msg) {
-            Ok(_) => CollectorHandle {
+            Ok(_) => CollectorGuard {
                 id,
                 tx: Some(self.tx.clone()),
             },
             Err(err) => {
                 warn!("failed to register collector"; "err" => ?err);
-                CollectorHandle { id, tx: None }
+                CollectorGuard { id, tx: None }
             }
         }
     }
@@ -104,17 +104,17 @@ pub enum CollectorReg {
         id: CollectorId,
         collector: Box<dyn Collector>,
     },
-    Unregister {
+    Deregister {
         id: CollectorId,
     },
 }
 
-pub struct CollectorHandle {
+pub struct CollectorGuard {
     id: CollectorId,
     tx: Option<Sender<CollectorReg>>,
 }
 
-impl Drop for CollectorHandle {
+impl Drop for CollectorGuard {
     fn drop(&mut self) {
         if self.tx.is_none() {
             return;
@@ -124,7 +124,7 @@ impl Drop for CollectorHandle {
             .tx
             .as_ref()
             .unwrap()
-            .send(CollectorReg::Unregister { id: self.id })
+            .send(CollectorReg::Deregister { id: self.id })
         {
             warn!("failed to unregister collector"; "err" => ?err);
         }
