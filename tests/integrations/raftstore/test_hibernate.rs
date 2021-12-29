@@ -9,7 +9,6 @@ use futures::executor::block_on;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
-use tikv_util::config::ReadableDuration;
 use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
