@@ -229,6 +229,8 @@ dependencies = [
  "hyper",
  "hyper-tls",
  "kvproto",
+ "lazy_static",
+ "prometheus",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_kms",
@@ -646,7 +648,9 @@ dependencies = [
  "fail",
  "futures-io",
  "kvproto",
+ "lazy_static",
  "openssl",
+ "prometheus",
  "protobuf",
  "rusoto_core",
  "thiserror",
@@ -1499,8 +1503,7 @@ dependencies = [
 [[package]]
 name = "fs2"
 version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+source = "git+https://github.com/tabokie/fs2-rs?branch=tikv#9e17642f4ddec02a8d7733d8c5977cf211de6552"
 dependencies = [
  "libc 0.2.106",
  "winapi 0.3.9",
@@ -3477,7 +3480,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=master#90a50b7e7e8beb89039627c95483c8554145188d"
+source = "git+https://github.com/tikv/raft-engine?branch=master#7842aad23f36ffe836b47762f85fc752b5d7ad48"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -3490,7 +3493,7 @@ dependencies = [
  "libc 0.2.106",
  "log",
  "lz4-sys",
- "nix 0.19.0",
+ "nix 0.23.0",
  "num-derive",
  "num-traits",
  "parking_lot",
@@ -4052,6 +4055,8 @@ dependencies = [
  "bytes 1.0.1",
  "futures 0.3.15",
  "rusoto_core",
+ "serde",
+ "serde_derive",
  "xml-rs",
 ]
 
@@ -4377,7 +4382,6 @@ dependencies = [
 name = "server"
 version = "0.0.1"
 dependencies = [
- "arc-swap 1.5.0",
  "backup",
  "cdc",
  "chrono",
@@ -4914,7 +4918,6 @@ dependencies = [
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
- "arc-swap 1.5.0",
  "backtrace",
  "collections",
  "concurrency_manager",
@@ -5001,7 +5004,6 @@ name = "tests"
 version = "0.0.1"
 dependencies = [
  "api_version",
- "arc-swap 1.5.0",
  "arrow",
  "batch-system",
  "byteorder",
@@ -5298,7 +5300,6 @@ dependencies = [
  "example_plugin",
  "fail",
  "file_system",
- "fs2",
  "futures 0.3.15",
  "futures-executor",
  "futures-util",
@@ -5402,7 +5403,6 @@ dependencies = [
  "engine_traits",
  "error_code",
  "file_system",
- "fs2",
  "futures 0.3.15",
  "gag",
  "grpcio",
