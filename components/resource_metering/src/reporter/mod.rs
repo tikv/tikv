@@ -3,6 +3,7 @@
 pub mod collector_impl;
 pub mod data_sink;
 pub mod data_sink_reg;
+pub mod pubsub;
 pub mod single_target;
 
 use crate::recorder::{CollectorGuard, CollectorRegHandle};

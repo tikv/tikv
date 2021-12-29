@@ -23,6 +23,7 @@ pub use recorder::{CollectorGuard, CollectorId, CollectorRegHandle};
 use recorder::{LocalStorage, LocalStorageRef, STORAGE};
 pub use reporter::data_sink::DataSink;
 pub use reporter::init_reporter;
+pub use reporter::pubsub::PubSubService;
 pub use reporter::single_target::SingleTargetDataSink;
 pub use reporter::single_target::{init_single_target, AddressChangeNotifier};
 pub use reporter::{Reporter, Task};
