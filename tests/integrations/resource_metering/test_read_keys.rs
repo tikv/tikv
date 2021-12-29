@@ -172,7 +172,6 @@ fn recv_read_keys(rx: &Receiver<Vec<ResourceUsageRecord>>) -> u32 {
 fn test_read_keys_coprocessor() {
     // Start resource metering.
     let mut cfg = resource_metering::Config::default();
-    cfg.enabled = true;
     cfg.precision = ReadableDuration::millis(100);
     cfg.report_receiver_interval = ReadableDuration::millis(400);
 

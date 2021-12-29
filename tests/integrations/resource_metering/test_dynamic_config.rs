@@ -18,7 +18,6 @@ pub fn test_enable() {
         report_receiver_interval: ReadableDuration::millis(2500),
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(1),
-        ..Default::default()
     });
 
     let port = alloc_port();
@@ -64,7 +63,6 @@ pub fn test_report_interval() {
         report_receiver_interval: ReadableDuration::secs(3),
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(1),
-        ..Default::default()
     });
     test_suite.start_receiver_at(port);
 
@@ -100,7 +98,6 @@ pub fn test_max_resource_groups() {
         report_receiver_interval: ReadableDuration::secs(3),
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(1),
-        ..Default::default()
     });
     test_suite.start_receiver_at(port);
 
@@ -144,7 +141,6 @@ pub fn test_precision() {
         report_receiver_interval: ReadableDuration::secs(3),
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(1),
-        ..Default::default()
     });
     test_suite.start_receiver_at(port);
 

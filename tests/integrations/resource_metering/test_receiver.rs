@@ -16,7 +16,6 @@ pub fn test_alter_receiver_address() {
         report_receiver_interval: ReadableDuration::secs(3),
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(1),
-        ..Default::default()
     });
     test_suite.start_receiver_at(port);
 
@@ -53,7 +52,6 @@ pub fn test_receiver_blocking() {
         report_receiver_interval: ReadableDuration::secs(3),
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(1),
-        ..Default::default()
     });
     test_suite.start_receiver_at(port);
 
@@ -92,7 +90,6 @@ pub fn test_receiver_shutdown() {
         report_receiver_interval: ReadableDuration::secs(3),
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(1),
-        ..Default::default()
     });
     test_suite.start_receiver_at(port);
 

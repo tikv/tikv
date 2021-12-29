@@ -104,12 +104,6 @@ impl TestSuite {
         }
     }
 
-    pub fn cfg_enabled(&mut self, enabled: bool) {
-        self.cfg_controller
-            .update_config("resource-metering.enabled", &enabled.to_string())
-            .unwrap();
-    }
-
     pub fn cfg_receiver_address(&self, addr: impl Into<String>) {
         let addr = addr.into();
         self.cfg_controller

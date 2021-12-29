@@ -244,7 +244,6 @@ mod tests {
             data_sink: Box::new(client.clone()),
         }));
         r.run(Task::ConfigChange(Config {
-            enabled: false,
             receiver_address: "abc".to_string(),
             report_receiver_interval: ReadableDuration::minutes(2),
             max_resource_groups: 3000,

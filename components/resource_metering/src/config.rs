@@ -20,14 +20,6 @@ const MIN_REPORT_RECEIVER_INTERVAL: ReadableDuration = ReadableDuration::millis(
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    /// `enabled` is deprecated.
-    ///
-    /// Whether resource metering is enabled depends on the number of non-observed
-    /// collectors. See [CollectorRegHandle::register].
-    ///
-    /// [CollectorRegHandle::register]: crate::CollectorRegHandle::register
-    pub enabled: bool,
-
     /// Data reporting destination address.
     pub receiver_address: String,
 
@@ -46,7 +38,6 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            enabled: false,
             receiver_address: "".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
@@ -143,7 +134,6 @@ mod tests {
         let cfg = Config::default();
         assert!(cfg.validate().is_ok()); // Empty address is allowed.
         let cfg = Config {
-            enabled: false,
             receiver_address: "127.0.0.1:6666".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
@@ -151,7 +141,6 @@ mod tests {
         };
         assert!(cfg.validate().is_ok());
         let cfg = Config {
-            enabled: false,
             receiver_address: "127.0.0.1:6666".to_string(),
             report_receiver_interval: ReadableDuration::days(999), // invalid
             max_resource_groups: 2000,
@@ -159,7 +148,6 @@ mod tests {
         };
         assert!(cfg.validate().is_err());
         let cfg = Config {
-            enabled: false,
             receiver_address: "127.0.0.1:6666".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: usize::MAX, // invalid
@@ -167,7 +155,6 @@ mod tests {
         };
         assert!(cfg.validate().is_err());
         let cfg = Config {
-            enabled: false,
             receiver_address: "127.0.0.1:6666".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
