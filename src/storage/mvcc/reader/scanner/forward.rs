@@ -60,7 +60,7 @@ pub enum HandleRes<T> {
 }
 
 pub struct Cursors<S: Snapshot> {
-    lock: Cursor<S::Iter>,
+    lock: Option<Cursor<S::Iter>>,
     write: Cursor<S::Iter>,
     /// `default cursor` is lazy created only when it's needed.
     default: Option<Cursor<S::Iter>>,
@@ -126,7 +126,7 @@ pub struct ForwardScanner<S: Snapshot, P: ScanPolicy<S>> {
 impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
     pub fn new(
         cfg: ScannerConfig<S>,
-        lock_cursor: Cursor<S::Iter>,
+        lock_cursor: Option<Cursor<S::Iter>>,
         write_cursor: Cursor<S::Iter>,
         default_cursor: Option<Cursor<S::Iter>>,
         scan_policy: P,
@@ -171,13 +171,17 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     self.cfg.lower_bound.as_ref().unwrap(),
                     &mut self.statistics.write,
                 )?;
-                self.cursors.lock.seek(
-                    self.cfg.lower_bound.as_ref().unwrap(),
-                    &mut self.statistics.lock,
-                )?;
+                if let Some(lock_cursor) = self.cursors.lock.as_mut() {
+                    lock_cursor.seek(
+                        self.cfg.lower_bound.as_ref().unwrap(),
+                        &mut self.statistics.lock,
+                    )?;
+                }
             } else {
                 self.cursors.write.seek_to_first(&mut self.statistics.write);
-                self.cursors.lock.seek_to_first(&mut self.statistics.lock);
+                if let Some(lock_cursor) = self.cursors.lock.as_mut() {
+                    lock_cursor.seek_to_first(&mut self.statistics.lock);
+                }
             }
             self.is_started = true;
         }
@@ -205,8 +209,12 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 } else {
                     None
                 };
-                let l_key = if self.cursors.lock.valid()? {
-                    Some(self.cursors.lock.key(&mut self.statistics.lock))
+                let l_key = if let Some(lock_cursor) = self.cursors.lock.as_mut() {
+                    if lock_cursor.valid()? {
+                        Some(lock_cursor.key(&mut self.statistics.lock))
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -365,15 +373,15 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
         if cfg.isolation_level == IsolationLevel::Rc {
-            cursors.lock.next(&mut statistics.lock);
             return Ok(HandleRes::Skip(current_user_key));
         }
         // Only needs to check lock in SI
+        let lock_cursor = cursors.lock.as_mut().unwrap();
         let lock = {
-            let lock_value = cursors.lock.value(&mut statistics.lock);
+            let lock_value = lock_cursor.value(&mut statistics.lock);
             Lock::parse(lock_value)?
         };
-        cursors.lock.next(&mut statistics.lock);
+        lock_cursor.next(&mut statistics.lock);
         if let Err(e) = Lock::check_ts_conflict(
             Cow::Borrowed(&lock),
             &current_user_key,
@@ -593,32 +601,32 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
     cursors: &mut Cursors<S>,
     statistics: &mut Statistics,
 ) -> Result<HandleRes<T>> {
-    let result = match cfg.isolation_level {
-        IsolationLevel::Si => {
-            // Only needs to check lock in SI
-            let lock = {
-                let lock_value = cursors.lock.value(&mut statistics.lock);
-                Lock::parse(lock_value)?
-            };
-            Lock::check_ts_conflict(
-                Cow::Owned(lock),
-                &current_user_key,
-                cfg.ts,
-                &cfg.bypass_locks,
-            )
-        }
-        IsolationLevel::Rc => Ok(()),
-    };
-    cursors.lock.next(&mut statistics.lock);
-    // Even if there is a lock error, we still need to step the cursor for future
-    // calls.
-    if result.is_err() {
-        statistics.lock.processed_keys += 1;
-        cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
+    if cfg.isolation_level == IsolationLevel::Rc {
+        return Ok(HandleRes::Skip(current_user_key));
     }
-    result
-        .map(|_| HandleRes::Skip(current_user_key))
-        .map_err(Into::into)
+    // Only needs to check lock in SI
+    let lock_cursor = cursors.lock.as_mut().unwrap();
+    let lock = {
+        let lock_value = lock_cursor.value(&mut statistics.lock);
+        Lock::parse(lock_value)?
+    };
+    lock_cursor.next(&mut statistics.lock);
+
+    Lock::check_ts_conflict(
+        Cow::Owned(lock),
+        &current_user_key,
+        cfg.ts,
+        &cfg.bypass_locks,
+    )
+    .or_else(|e| {
+        // Even if there is a lock error, we still need to step the cursor for future
+        // calls.
+        statistics.lock.processed_keys += 1;
+        cursors
+            .move_write_cursor_to_next_user_key(&current_user_key, statistics)
+            .and(Err(e.into()))
+    })
+    .map(|_| HandleRes::Skip(current_user_key))
 }
 
 /// The ScanPolicy for outputting `TxnEntry` for every locks or commits in specified ts range.
@@ -646,8 +654,16 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
+        if cfg.isolation_level == IsolationLevel::Rc {
+            return Ok(HandleRes::Skip(current_user_key));
+        }
         // TODO: Skip pessimistic locks.
-        let lock_value = cursors.lock.value(&mut statistics.lock).to_owned();
+        let lock_value = cursors
+            .lock
+            .as_mut()
+            .unwrap()
+            .value(&mut statistics.lock)
+            .to_owned();
         let lock = Lock::parse(&lock_value)?;
         let result = if lock.ts > cfg.ts {
             Ok(HandleRes::Skip(current_user_key))
@@ -694,7 +710,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             })
         };
 
-        cursors.lock.next(&mut statistics.lock);
+        cursors.lock.as_mut().unwrap().next(&mut statistics.lock);
 
         result.map_err(Into::into)
     }
