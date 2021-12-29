@@ -648,7 +648,6 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     trace_event: TraceEvent,
     last_flush_time: TiInstant,
     need_flush_events: bool,
-    last_flush_msg_time: TiInstant,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
@@ -905,13 +904,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 self.poll_ctx.trans.flush();
             }
         } else if self.poll_ctx.trans.need_flush() || self.need_flush_events {
-            let now = TiInstant::now();
             if self.poll_ctx.trans.need_flush() {
-                self.last_flush_msg_time = now;
                 self.poll_ctx.trans.flush();
             }
             if self.need_flush_events {
-                self.last_flush_time = now;
+                self.last_flush_time = TiInstant::now();
                 self.need_flush_events = false;
                 self.flush_events();
             }
@@ -1190,7 +1187,6 @@ where
             trace_event: TraceEvent::default(),
             last_flush_time: TiInstant::now(),
             need_flush_events: false,
-            last_flush_msg_time: TiInstant::now(),
         }
     }
 }
