@@ -247,7 +247,7 @@ impl Default for Config {
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
             leader_transfer_max_log_lag: 128,
             snap_apply_batch_size: ReadableSize::mb(10),
-            snap_handle_pool_size: 4,
+            snap_handle_pool_size: 2,
             region_worker_tick_interval: ReadableDuration::millis(500),
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
@@ -428,7 +428,7 @@ impl Config {
                 return Err(box_err!("apply-max-batch-size should be greater than 0"));
             }
         } else {
-            self.apply_batch_system.max_batch_size = Some(512);
+            self.apply_batch_system.max_batch_size = Some(256);
         }
         if self.store_batch_system.pool_size == 0 {
             return Err(box_err!("store-pool-size should be greater than 0"));
